@@ -1,0 +1,30 @@
+# Local secrets and machine-specific authorization
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.mcp.json
+.claude/settings.local.json
+.codex/auth.json
+
+# Generated state and Python caches
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+
+# Local/editor artifacts
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json

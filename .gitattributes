@@ -1,0 +1,12 @@
+# tools/verify_seed.py checks seeded files byte-for-byte against SEED_MANIFEST.json
+# and task_manifest.json. Store and check them out verbatim, independent of a
+# host's core.autocrlf, so the integrity check passes on every fresh clone.
+/AI_Engineering_*        -text
+/README.md               -text
+/CLAUDE.md               -text
+/OVERSEER_START.md       -text
+/SEED_MANIFEST.json      -text
+/task_manifest.json      -text
+/.gitignore              -text
+/task_prompts/**         -text
+/tools/verify_seed.py    -text

@@ -1,0 +1,741 @@
+{
+  "package": "rschuft/ai-engineering-harness repo seed",
+  "created_date": "2026-11-05",
+  "origin_architecture": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
+  "canonical_plan": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
+  "task_count": 136,
+  "license_note": "Does not include or overwrite LICENSE from the target public MIT repository.",
+  "task_status_note": "All tasks remain not started; package generation is not implementation evidence.",
+  "files": [
+    {
+      "path": ".gitignore",
+      "sha256": "33eb0ac67d95a0372176c605c723cfc8d1bb6bf77cefef49876bf65d19c38d84",
+      "size_bytes": 389
+    },
+    {
+      "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
+      "sha256": "abd4510de9857044d5bda44b00f036effa452fddb5c7cf988185a34fecfc2ffb",
+      "size_bytes": 2000847
+    },
+    {
+      "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
+      "sha256": "079e5463d0b8f229c3b882d8ab1e187115f6ab3dc4455797c565c2e2eb037fb7",
+      "size_bytes": 1037534
+    },
+    {
+      "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
+      "sha256": "bd008a364271083889bff194e076820f7cbf4d997cb50bfdc6c207adccab0ceb",
+      "size_bytes": 156162
+    },
+    {
+      "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
+      "sha256": "e2209823fde191dc2201db07387d7d48ab9c6cde9c7db05e2586ca08682368ae",
+      "size_bytes": 559638
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "49d7431cd3f784d810e648e42be9967ae333af476dfb90d26418bf4545d0d666",
+      "size_bytes": 2876
+    },
+    {
+      "path": "OVERSEER_START.md",
+      "sha256": "1f2f13612ebcfec3fed4363164df5f5663c0e21947e43460957fff288b1c0949",
+      "size_bytes": 6791
+    },
+    {
+      "path": "README.md",
+      "sha256": "87f85b96103922e86a6a8a2e351c5a2289eafee154efaeeffba82682c41d9a24",
+      "size_bytes": 5183
+    },
+    {
+      "path": "task_manifest.json",
+      "sha256": "fc8e43d2578edf558965ac23419ae94deeed10182a856fb0039eb681b8490d9e",
+      "size_bytes": 40166
+    },
+    {
+      "path": "task_prompts/A-01.1.md",
+      "sha256": "d0de9c8e1d2ccf97e81cb419efdb4320476ef2c1ffbec85d5113853af175d068",
+      "size_bytes": 3847
+    },
+    {
+      "path": "task_prompts/A-01.2.md",
+      "sha256": "24e0d90935c0904074bd4110b37ad3c5f80040cca572fa5c90a24431a6cbcc2a",
+      "size_bytes": 3993
+    },
+    {
+      "path": "task_prompts/D-01.1.md",
+      "sha256": "bcc542b81fd61c2e3891f5bb93aa8da6d311a81d9c55444b2c23fb0b9b33fab5",
+      "size_bytes": 3800
+    },
+    {
+      "path": "task_prompts/D-01.2.md",
+      "sha256": "02dacc5629cb260281d317f026f43e9782a394e2aabe0495e5cdb3affd2b179d",
+      "size_bytes": 3829
+    },
+    {
+      "path": "task_prompts/E-01.1.1.md",
+      "sha256": "9feb10af2698441a9b04d46ee046a8852830bd2d6ce8ea7e1ce5488599896d3b",
+      "size_bytes": 4104
+    },
+    {
+      "path": "task_prompts/E-01.1.2.md",
+      "sha256": "488ef522d2a26440b0c3d23721f3b61c260ed53c310287eb53b4af45d6d38d18",
+      "size_bytes": 4109
+    },
+    {
+      "path": "task_prompts/E-01.2.1.md",
+      "sha256": "44c6ac231964da99b9e7b8009b2cf59d687b9c774f6a098a5485181d5b21900d",
+      "size_bytes": 4044
+    },
+    {
+      "path": "task_prompts/E-01.2.2.md",
+      "sha256": "a8243de2a339921e6093f2d396da524c59bd85cc95226985726b81037a4627ca",
+      "size_bytes": 4172
+    },
+    {
+      "path": "task_prompts/E-01.3.1.md",
+      "sha256": "52a7f88bb185e82f0263a9bb44fbaf9854d3c94b3bc62613a6e14b91e4ee0cea",
+      "size_bytes": 4121
+    },
+    {
+      "path": "task_prompts/E-01.3.2.md",
+      "sha256": "58aff397d145b9a832a7426d76ceac01c5d833ac1549d64e7a347b5b9a25bf42",
+      "size_bytes": 4163
+    },
+    {
+      "path": "task_prompts/E-01.4.1.md",
+      "sha256": "97319ffe36ec8f965dee3713466455b48a3202b91bc6805a1685ae0318dcfd5f",
+      "size_bytes": 4060
+    },
+    {
+      "path": "task_prompts/E-01.4.2.md",
+      "sha256": "0b37d9a029892a8c6b33e472885a649959a1ad99d6c77987c279af1ef891cf20",
+      "size_bytes": 4133
+    },
+    {
+      "path": "task_prompts/E-01.5.md",
+      "sha256": "344b514b132596597a04cfce63a637b76c23713d2dd4f7adc9e4619fd4774b90",
+      "size_bytes": 3891
+    },
+    {
+      "path": "task_prompts/E-02.1.md",
+      "sha256": "952a559fe0e8d45297722dd4714812c1c7fe37347168bfd00e6c282a3d391eab",
+      "size_bytes": 3842
+    },
+    {
+      "path": "task_prompts/E-02.2.md",
+      "sha256": "29319a4abb86f7d6125b2b78ca7d84d1b4cb82fb19036f5e60e1fc035626761c",
+      "size_bytes": 3852
+    },
+    {
+      "path": "task_prompts/E-03.1.md",
+      "sha256": "fa5ccd46bbda6da40cc61a3ed5452a14baec0d7d5eba9f552b9ea7c6259177ff",
+      "size_bytes": 3830
+    },
+    {
+      "path": "task_prompts/E-03.2.1.md",
+      "sha256": "5883c0a878c5a2cd2b4a0276ab905275218770baa52edd531329b8a4ac6b7bd5",
+      "size_bytes": 4034
+    },
+    {
+      "path": "task_prompts/E-03.2.2.md",
+      "sha256": "5ccce5108563bbe37ccd0222d8ceed32ee716541641a3dbfdf73cc4a398b79b5",
+      "size_bytes": 4120
+    },
+    {
+      "path": "task_prompts/E-03.3.1.md",
+      "sha256": "20f584a8e9be1cc09155a0838d0b0dc7d562a33fcf139f2f51a4be6f118b14ed",
+      "size_bytes": 3990
+    },
+    {
+      "path": "task_prompts/E-03.3.2.md",
+      "sha256": "7794217ea55bd9ba76f473358e687aeb89a2ecab74fd70d60e4eed6cacb70470",
+      "size_bytes": 4054
+    },
+    {
+      "path": "task_prompts/E-03.4.md",
+      "sha256": "96feb62ac981e0ff6f15142417de07613468c0d6f608a1c56321b02cdefd1ff8",
+      "size_bytes": 3825
+    },
+    {
+      "path": "task_prompts/E-04.1.md",
+      "sha256": "73bed52730d48ca0406fc42affff45a94272c336acc1fd26bfb6e7b758ece3c7",
+      "size_bytes": 3752
+    },
+    {
+      "path": "task_prompts/E-04.2.1.md",
+      "sha256": "7df809d792b9743e4d70ab7cdb09b8b88623ef216e5399a8b55a25447b81a4ce",
+      "size_bytes": 3975
+    },
+    {
+      "path": "task_prompts/E-04.2.2.md",
+      "sha256": "aa6849f153144f6262113b75788ce86729aa7bb139131f8a45404a8d273bc4bf",
+      "size_bytes": 4099
+    },
+    {
+      "path": "task_prompts/E-04.3.1.md",
+      "sha256": "08ff7a154e5389a2eea37c9edd76cd969f2ead1a51e3e07520d656827996abe3",
+      "size_bytes": 4003
+    },
+    {
+      "path": "task_prompts/E-04.3.2.md",
+      "sha256": "db7f5016506e5d7c3a38082523064d266af1c8cd7251b4dea2531b3e120d72d8",
+      "size_bytes": 4122
+    },
+    {
+      "path": "task_prompts/E-04.4.md",
+      "sha256": "6816ebf5c1d2b7a827f350ddc8af4ccfe089771be776d321357da28deb49cf0b",
+      "size_bytes": 3811
+    },
+    {
+      "path": "task_prompts/F-01.1.md",
+      "sha256": "d6a6b6f970cdb98c4397e60840b285ef24909594fb50992d95385ae3bb083443",
+      "size_bytes": 3937
+    },
+    {
+      "path": "task_prompts/F-01.2.md",
+      "sha256": "fac5a6f83ceee775b18a368536065000eef08cd615345f0e6bc92f8a360b92e9",
+      "size_bytes": 3899
+    },
+    {
+      "path": "task_prompts/F-02.md",
+      "sha256": "f88ed2ca9d0c6bfd23aa42238dc6397452ebd018f311165f703275f21b265866",
+      "size_bytes": 3533
+    },
+    {
+      "path": "task_prompts/F-03.1.md",
+      "sha256": "976b156a3e5fc86826a028c0c4c179d84b6b3d820ac88478c3a499ef1c323e3b",
+      "size_bytes": 3869
+    },
+    {
+      "path": "task_prompts/F-03.2.1.md",
+      "sha256": "4df2ac4dbf6f6c395a1897cf325ad81bd97ebf777216238e6daa6dc704b4c75a",
+      "size_bytes": 3977
+    },
+    {
+      "path": "task_prompts/F-03.2.2.md",
+      "sha256": "13e709caeec3aa084c5a5dc7886426de0076152c2b179613b221f9b764cb797d",
+      "size_bytes": 4090
+    },
+    {
+      "path": "task_prompts/F-03.3.1.md",
+      "sha256": "02deb175aa38dd6f57be3e8101a638f6a2e3723306eaf192f9abd6cd8ffe0639",
+      "size_bytes": 4022
+    },
+    {
+      "path": "task_prompts/F-03.3.2.md",
+      "sha256": "995f9da1eaaf509bb852e0163c2922316d313d29bbe14869939a8e3affe64c50",
+      "size_bytes": 4115
+    },
+    {
+      "path": "task_prompts/F-03.4.md",
+      "sha256": "600d8941dfd60512bc7d5f0f7b6d15165a056933a12b9eb92b949c5a48e5d16c",
+      "size_bytes": 3839
+    },
+    {
+      "path": "task_prompts/F-04.1.md",
+      "sha256": "827eb097557f4fe4d31df9b2aa73aa183e69857fbc528c9bec49772abf7d6b67",
+      "size_bytes": 3865
+    },
+    {
+      "path": "task_prompts/F-04.2.md",
+      "sha256": "6f67bbce2a20c4e83a1892bd1f8b53b3b2e9b99528a8f36c720a2ad8a6cb1e6d",
+      "size_bytes": 3945
+    },
+    {
+      "path": "task_prompts/F-05.1.md",
+      "sha256": "129c1da8dbb775f75300154d2152baf238716ad2e084730effacbb7f13e138bf",
+      "size_bytes": 3904
+    },
+    {
+      "path": "task_prompts/F-05.2.md",
+      "sha256": "3a660584e89409395977691a0356e2c62db41bd71cd57101f7cecd97c5d8adf0",
+      "size_bytes": 4023
+    },
+    {
+      "path": "task_prompts/G-01.1.md",
+      "sha256": "8bfe651b4debd503fd6c80f0e5dd27f828223991cb51af8e767c4ed9f7199884",
+      "size_bytes": 3874
+    },
+    {
+      "path": "task_prompts/G-01.2.md",
+      "sha256": "71451b524c0c45d0ad6230807d9eb94df4626952f4e5e5ba8a683446e77f2093",
+      "size_bytes": 3891
+    },
+    {
+      "path": "task_prompts/G-02.1.md",
+      "sha256": "3216003222471642dab195f1b9f4711de39aa3fc69b9979099fcd8ca70782e25",
+      "size_bytes": 3852
+    },
+    {
+      "path": "task_prompts/G-02.2.md",
+      "sha256": "e83395bc22cd4edc774ff227bb335bf2a919a4f85252487716d8b28c63ac75a6",
+      "size_bytes": 3880
+    },
+    {
+      "path": "task_prompts/G-03.1.md",
+      "sha256": "6e57732d662f2a31bcb4cf7fa07c6b0812ee9784f960b58fdeede019e70d5f0b",
+      "size_bytes": 3825
+    },
+    {
+      "path": "task_prompts/G-03.2.md",
+      "sha256": "6631eb3553620ee21602e97e81b3ed5b52dea8d2917ea100a760e4d06f52cc42",
+      "size_bytes": 3895
+    },
+    {
+      "path": "task_prompts/G-04.1.1.md",
+      "sha256": "c74fdd7248faceac56ad549ab7d2c4365251d88e794eb2fdb63b20b175077d22",
+      "size_bytes": 4026
+    },
+    {
+      "path": "task_prompts/G-04.1.2.md",
+      "sha256": "95c5dfebebbf795681c543628fc5795c674cc64eb5ffa861e7f94f90aaa65b28",
+      "size_bytes": 4049
+    },
+    {
+      "path": "task_prompts/G-04.2.1.md",
+      "sha256": "383b43f7308f39e9b7ba96758485d306703a838c5ab33d8963e852974fd32879",
+      "size_bytes": 3991
+    },
+    {
+      "path": "task_prompts/G-04.2.2.md",
+      "sha256": "cc8db804eacbfbe3f7409efc9f1065c39fcf5708be25c7ef6ff455582a007315",
+      "size_bytes": 4019
+    },
+    {
+      "path": "task_prompts/G-04.3.1.md",
+      "sha256": "f31f01f0abcf6096816e929e7446154446b21c6aff27861ef4174a5fc0c35a9d",
+      "size_bytes": 3982
+    },
+    {
+      "path": "task_prompts/G-04.3.2.md",
+      "sha256": "1e2a447018e9706425fcca5838dbce6cd404aaeb2334c1aad2bdf35185458d85",
+      "size_bytes": 4013
+    },
+    {
+      "path": "task_prompts/G-04.4.1.md",
+      "sha256": "32f47d318877a3e45531ff2b1ab80440a5b60524f50fac4aefcb360ba77a585a",
+      "size_bytes": 3966
+    },
+    {
+      "path": "task_prompts/G-04.4.2.md",
+      "sha256": "495bc7367c682a7fa66f8257f3d5d1ddc4e470e41551372585e6b7c90555e69b",
+      "size_bytes": 4074
+    },
+    {
+      "path": "task_prompts/G-04.5.md",
+      "sha256": "773bad11eecc8b98833253c5bf5a82054f732d4b524a6fe4be06b8932aa1a2ae",
+      "size_bytes": 3815
+    },
+    {
+      "path": "task_prompts/G-05.1.md",
+      "sha256": "9d0ba0de95435934ab3428a31ca7e482980199df90bb8b4e63f20deb6318da32",
+      "size_bytes": 3861
+    },
+    {
+      "path": "task_prompts/G-05.2.md",
+      "sha256": "32a8531204b6a7033809023cc0fa3e0931bb305988cb02c456de587bdc576c10",
+      "size_bytes": 3898
+    },
+    {
+      "path": "task_prompts/G-06.1.md",
+      "sha256": "bcfe32d2cc90c99cca3845a1ad9f17058ec8f11e73bd567fc6812abd585259f5",
+      "size_bytes": 3777
+    },
+    {
+      "path": "task_prompts/G-06.2.1.md",
+      "sha256": "1fc2fdfac3c9301c86abef3273f211ca961c7ae1158b145b6a3eb9ba241c4708",
+      "size_bytes": 4065
+    },
+    {
+      "path": "task_prompts/G-06.2.2.md",
+      "sha256": "00a5ac558e8e45cf617819c5b18d9b4cb0c1e786ade43dd506cab0188d9c0cf7",
+      "size_bytes": 4103
+    },
+    {
+      "path": "task_prompts/G-06.3.1.md",
+      "sha256": "fac6099ee2c99a807976477f9db1f69ddacecbb31aca26d867bc1ab13f596128",
+      "size_bytes": 4077
+    },
+    {
+      "path": "task_prompts/G-06.3.2.md",
+      "sha256": "440e1a4300f5be35cb2bee72ef7c58485166c1e394c940eb0f7fe2a2d0f6cceb",
+      "size_bytes": 4151
+    },
+    {
+      "path": "task_prompts/G-06.4.md",
+      "sha256": "1b387abc89e027ebb6fe2702a425158f840fb877c4e24ede2d0c31238ce70830",
+      "size_bytes": 3869
+    },
+    {
+      "path": "task_prompts/K-01.1.md",
+      "sha256": "a87f9bfe2785db744cceeed4b2f18ba20df2259878950ed4f84373a3af2e3365",
+      "size_bytes": 3874
+    },
+    {
+      "path": "task_prompts/K-01.2.md",
+      "sha256": "6d4de236f18b4ba292b16a5ad27ebfd80dfd61ec8959e257329042caab841268",
+      "size_bytes": 3907
+    },
+    {
+      "path": "task_prompts/K-02.1.md",
+      "sha256": "4184ea1bbc122669c6d919f4b62b0fd78503c7b26c141c8c1146f3d42e4d51d1",
+      "size_bytes": 3867
+    },
+    {
+      "path": "task_prompts/K-02.2.md",
+      "sha256": "12bf14da31b7ba096b19ce12fe0ecba91ff05b035467520a1b2a2694d3ca458f",
+      "size_bytes": 3987
+    },
+    {
+      "path": "task_prompts/K-03.1.md",
+      "sha256": "db200c6809862e8d6f16e4b17a4bd3e640666fc22a72e440ae2e1a8629d04f22",
+      "size_bytes": 3772
+    },
+    {
+      "path": "task_prompts/K-03.2.1.md",
+      "sha256": "df51c86b56c15e4c1a3bef7999e559003c8325e1ad279d64e187d3fe06a70d15",
+      "size_bytes": 4024
+    },
+    {
+      "path": "task_prompts/K-03.2.2.md",
+      "sha256": "a486e70284d7b7bba8ad4c6e0db704610e372ed1bfe070237f539936802d0daf",
+      "size_bytes": 4118
+    },
+    {
+      "path": "task_prompts/K-03.3.1.md",
+      "sha256": "fb2885cdf4396d18e7e546ae728dec6b925cbd2ba82633fe3678d8ec9c141833",
+      "size_bytes": 4088
+    },
+    {
+      "path": "task_prompts/K-03.3.2.md",
+      "sha256": "7e3899e8dbc401cf7d90d393955bf6969f3514002aa8daf5d769f2da614b8c5e",
+      "size_bytes": 4140
+    },
+    {
+      "path": "task_prompts/K-03.4.md",
+      "sha256": "116bb44792dfc158d0c0a14a423b17cfbc0080bc3eb8982e7dabaae9204f2481",
+      "size_bytes": 3862
+    },
+    {
+      "path": "task_prompts/O-01.1.md",
+      "sha256": "72e5a2d9302903e85a18f36d067a44930a3b5fc830507341165d5c0f38d4a9b4",
+      "size_bytes": 3894
+    },
+    {
+      "path": "task_prompts/O-01.2.md",
+      "sha256": "a067c9416d4a180c3c0915778d339aa25a96bdd682445f0c6e2ca3a2297dadf2",
+      "size_bytes": 3947
+    },
+    {
+      "path": "task_prompts/P-01.1.md",
+      "sha256": "3b16616273641a3f6d46bfbd7cf7e3e33fa0fe1b51759424af369b0cdfa1b69f",
+      "size_bytes": 3890
+    },
+    {
+      "path": "task_prompts/P-01.2.md",
+      "sha256": "6f807894e13fe8c00f580a2b00da2e9efc5bb657fd4a9a7221d6ed176c26253d",
+      "size_bytes": 4001
+    },
+    {
+      "path": "task_prompts/P-02.1.md",
+      "sha256": "5cf4c79f5430daf84ca38cd23ac20fb2aa146394a32e283eedafcec4aa84c366",
+      "size_bytes": 3840
+    },
+    {
+      "path": "task_prompts/P-02.2.md",
+      "sha256": "37789491d565c5a5fb78979210807b386c984345e526ec8ac35903d2512ba457",
+      "size_bytes": 3899
+    },
+    {
+      "path": "task_prompts/P-03.1.md",
+      "sha256": "c14b0c57a53afe481fa11d5217360243c80a6a1f3eac5b30605771191bac770f",
+      "size_bytes": 3866
+    },
+    {
+      "path": "task_prompts/P-03.2.md",
+      "sha256": "3609d0d8fef0792cd321640ac7187f09ab9e8357026e14f350cccde0aa461603",
+      "size_bytes": 3973
+    },
+    {
+      "path": "task_prompts/Q-01.1.md",
+      "sha256": "b7a00b640718f918135dbe2d35c7cfa542fcf83f50e108ebed1dfcec0045ebe4",
+      "size_bytes": 3830
+    },
+    {
+      "path": "task_prompts/Q-01.2.md",
+      "sha256": "d95ae84e03eae398096e0c2ebd470caa293e141093c0310308191a6ca57bbcc8",
+      "size_bytes": 3900
+    },
+    {
+      "path": "task_prompts/Q-02.1.md",
+      "sha256": "53f4f377b3572516d19ad840461a1bbedf5bb5d6e98ce8da324a94a6c252848a",
+      "size_bytes": 3700
+    },
+    {
+      "path": "task_prompts/Q-02.2.1.md",
+      "sha256": "69c7c066c404e47703b88d2d94c7db80117ac84cba122b891d56a716aa68e568",
+      "size_bytes": 3902
+    },
+    {
+      "path": "task_prompts/Q-02.2.2.md",
+      "sha256": "3a7d15e9184c030702c3f82d50fd97267e346dedf41361eabb06e4f260461d01",
+      "size_bytes": 3969
+    },
+    {
+      "path": "task_prompts/Q-02.3.1.md",
+      "sha256": "15509fe3ab5c40f34ddbae267fe23285e4c1878d0d06ddf773565b009399760e",
+      "size_bytes": 3972
+    },
+    {
+      "path": "task_prompts/Q-02.3.2.md",
+      "sha256": "43c9a359a4941b34e383db87f57e2263d6f5b99437fad1dc38679b25614f3c65",
+      "size_bytes": 4002
+    },
+    {
+      "path": "task_prompts/Q-02.4.md",
+      "sha256": "fc051ff86eb09bf731d39d52eb3b795272b6d30a79c1b16b57cae43a3a12a89c",
+      "size_bytes": 3759
+    },
+    {
+      "path": "task_prompts/Q-03.1.md",
+      "sha256": "bde3a9037bce983b7718bc42be15ab02a3479afe6b0332866835cd3b4fec28c9",
+      "size_bytes": 3823
+    },
+    {
+      "path": "task_prompts/Q-03.2.md",
+      "sha256": "ad033048e5d78b89f03af20b0d6c3474cadeb364f42d81821bfa0656cd85ac1f",
+      "size_bytes": 3829
+    },
+    {
+      "path": "task_prompts/R-01.1.md",
+      "sha256": "13ba460f7128c04ac1e7141b8611ce2732cca3792579a67fe0b71bc9d5a337e1",
+      "size_bytes": 3837
+    },
+    {
+      "path": "task_prompts/R-01.2.md",
+      "sha256": "30427d242af637388a95b1726a79443015d46d234eb7b4fd33ad656d6825a601",
+      "size_bytes": 3927
+    },
+    {
+      "path": "task_prompts/R-02.1.1.md",
+      "sha256": "d3e079c239b352fc7e38af1eb14d25ceb7c834c857d2627bb656c5bc2db7202b",
+      "size_bytes": 4109
+    },
+    {
+      "path": "task_prompts/R-02.1.2.md",
+      "sha256": "75cec236130372c15f38813cbdb69ec1d1c7f9a02b43e65c31bd341425e79694",
+      "size_bytes": 4141
+    },
+    {
+      "path": "task_prompts/R-02.2.1.md",
+      "sha256": "e3ee3d7385a20de7a3956e5ffb9d6875d96de9e65e3eabeedd4a22e443b19522",
+      "size_bytes": 4014
+    },
+    {
+      "path": "task_prompts/R-02.2.2.md",
+      "sha256": "b0e119d411709926488fbe376e935cbf52214dd4f1859e278a9bc77e212595e4",
+      "size_bytes": 4086
+    },
+    {
+      "path": "task_prompts/R-02.3.1.md",
+      "sha256": "27931be4a2e80b8ab4a1862386ab64ba200ceb9a697e9e4fb55e1741ce7eb4b7",
+      "size_bytes": 4017
+    },
+    {
+      "path": "task_prompts/R-02.3.2.md",
+      "sha256": "b6c1d78178c1269c17a23d413e40ff6a74e676bb98f9197d90e25df6237547ca",
+      "size_bytes": 4109
+    },
+    {
+      "path": "task_prompts/R-02.4.1.md",
+      "sha256": "59c299e4222f041a6d7dd04f0cbdd2664e13ca2dc5f4cb2787292f74c5d5affb",
+      "size_bytes": 4039
+    },
+    {
+      "path": "task_prompts/R-02.4.2.md",
+      "sha256": "7f520c687d4e766cce0a97f8c64ec1c074b8e618fcd04880f53e33145b6aa529",
+      "size_bytes": 4327
+    },
+    {
+      "path": "task_prompts/R-03.1.1.md",
+      "sha256": "003f33ff6edcd699b16b3f7cef828bbd0d71a007a6a1538d50e969534c93b991",
+      "size_bytes": 3936
+    },
+    {
+      "path": "task_prompts/R-03.1.2.md",
+      "sha256": "83ae29bfec341f7ad31759c2919472b30e374d3468e8ef098b634fe28a7ab12e",
+      "size_bytes": 4040
+    },
+    {
+      "path": "task_prompts/R-03.2.1.md",
+      "sha256": "fac434919f07c18abbb88232b638e92cdf9a8cac3aa8c4d50fcb04459102e6ea",
+      "size_bytes": 3993
+    },
+    {
+      "path": "task_prompts/R-03.2.2.md",
+      "sha256": "a793cfaf7b2569bfeb9f32af245eb4ee4f440aec329323b005e7b3d963edc3fb",
+      "size_bytes": 3992
+    },
+    {
+      "path": "task_prompts/R-03.3.1.md",
+      "sha256": "544067f575fda54c462d48a151255fd2fa2f44af4560c4b058f97640ac07b6b1",
+      "size_bytes": 4033
+    },
+    {
+      "path": "task_prompts/R-03.3.2.md",
+      "sha256": "ee73550d3817010c759171843428dbc63f3542f42dd4567c199f4bf662997a9b",
+      "size_bytes": 4070
+    },
+    {
+      "path": "task_prompts/R-03.4.1.md",
+      "sha256": "d17a4d8f6eb3b909723213d82d963110c6ddf516c23070a24d7536772f07a793",
+      "size_bytes": 4083
+    },
+    {
+      "path": "task_prompts/R-03.4.2.md",
+      "sha256": "0d743ca9b70844d97e3b5e843eb55858e218808eae79682fb5aab72008aa8cea",
+      "size_bytes": 4277
+    },
+    {
+      "path": "task_prompts/R-04.1.md",
+      "sha256": "005abaa793ee307dfe7b7051565a72af0421bcb42c5e80e0f75f5e25d1190981",
+      "size_bytes": 3836
+    },
+    {
+      "path": "task_prompts/R-04.2.md",
+      "sha256": "a9d768d44df10511d682535a700e4b41ea693dff7a28e2a0abc43abdfab62775",
+      "size_bytes": 3895
+    },
+    {
+      "path": "task_prompts/R-05.1.1.md",
+      "sha256": "465ae8878b475e7d2a76181eb58c2d95b05107425df8c7abc4c50c07e5d851dd",
+      "size_bytes": 4064
+    },
+    {
+      "path": "task_prompts/R-05.1.2.md",
+      "sha256": "c8efdfe4bf4131d687a390473d253c4011464fd28b5ede872d36b3b4cfa98bc8",
+      "size_bytes": 4100
+    },
+    {
+      "path": "task_prompts/R-05.2.1.md",
+      "sha256": "79854d8bb9c6afaaa8dee69474f1898ced919a07f2330d37f7787d08b5967545",
+      "size_bytes": 3993
+    },
+    {
+      "path": "task_prompts/R-05.2.2.md",
+      "sha256": "b5927a9842eaf0f51c95a3e0c41e0502565b3660d3937ed212da5bb0cedb3c82",
+      "size_bytes": 4075
+    },
+    {
+      "path": "task_prompts/R-05.3.md",
+      "sha256": "216897c63e0851cb27b94535711298e1ec9636a28c6016e88125afdd29707520",
+      "size_bytes": 3754
+    },
+    {
+      "path": "task_prompts/R-05.4.1.md",
+      "sha256": "2eacb5b4c23ed49342a2347e4f9c1316f52e44ea3de2325f321b7a900a0d3a8e",
+      "size_bytes": 4062
+    },
+    {
+      "path": "task_prompts/R-05.4.2.md",
+      "sha256": "954a86bc110de206efc20a4e2adaa6f152273085e6cd20f7bbd46e8403cb741f",
+      "size_bytes": 4312
+    },
+    {
+      "path": "task_prompts/S-01.1.md",
+      "sha256": "6ceb978d9308842fbf107547247d0bd3a0ae0b5db7d8103f3c88ee74039c166a",
+      "size_bytes": 3815
+    },
+    {
+      "path": "task_prompts/S-01.2.1.md",
+      "sha256": "1c2ee03a829ea11740102408794a8705f561b4b8d3ed89b927bb08e9a6d739f6",
+      "size_bytes": 4021
+    },
+    {
+      "path": "task_prompts/S-01.2.2.md",
+      "sha256": "d248baabd572da909b73870e648b8eb11653d070bacc2df214066fc9a6132be7",
+      "size_bytes": 4178
+    },
+    {
+      "path": "task_prompts/S-01.3.1.md",
+      "sha256": "5bee18a45cfb36b62f8100302800c26ab4df6f2f5719d282538b87d8a00a2c97",
+      "size_bytes": 3992
+    },
+    {
+      "path": "task_prompts/S-01.3.2.md",
+      "sha256": "15361e40afc5bb925d18944a3aac1651fbdccf1f6e03da0cc918ad46f6d5f11c",
+      "size_bytes": 4107
+    },
+    {
+      "path": "task_prompts/S-01.4.md",
+      "sha256": "90d6fc5fb65e6469bf2ff2e507e11ac04ae3a36b5ff48977bfd61aea3e50a91a",
+      "size_bytes": 3889
+    },
+    {
+      "path": "task_prompts/S-02.1.md",
+      "sha256": "2ac508745ad9cd65cdc91327191aee7774fda5550329ac857c4372c16d3e8101",
+      "size_bytes": 3856
+    },
+    {
+      "path": "task_prompts/S-02.2.md",
+      "sha256": "0046de716efae2e8eb7a953ee14340b0dc1aed6a3301c475b9e8bce461a3f713",
+      "size_bytes": 3967
+    },
+    {
+      "path": "task_prompts/U-01.1.md",
+      "sha256": "fc168934af1ee2ba9b11de876581a67e9cdbfb8b0a4ffa727cdc6f8f2696831a",
+      "size_bytes": 3776
+    },
+    {
+      "path": "task_prompts/U-01.2.md",
+      "sha256": "34c77a61cf75f87db4562ccd67a92dfec03341aa4b69ef625fe89134a1c433ca",
+      "size_bytes": 3861
+    },
+    {
+      "path": "task_prompts/U-02.1.md",
+      "sha256": "232559acffd33a20b065cd4c8edbf7bb8b9882d5539134b6e16141f20b03d7d0",
+      "size_bytes": 3775
+    },
+    {
+      "path": "task_prompts/U-02.2.md",
+      "sha256": "bf2a3d1c97b1aa99d9ed40e3796cf4ed644174e3b1e61675e24de08e07fb3628",
+      "size_bytes": 3824
+    },
+    {
+      "path": "task_prompts/U-03.1.md",
+      "sha256": "ac49f660b742466f3a956c5ad719a841ec7783fb46b13aa38c45c967ed97f09f",
+      "size_bytes": 3887
+    },
+    {
+      "path": "task_prompts/U-03.2.md",
+      "sha256": "bdb08ee16a2802091dff083f0d4b30906fefb0753459114120dbd35bc675e540",
+      "size_bytes": 4005
+    },
+    {
+      "path": "task_prompts/U-04.1.md",
+      "sha256": "2c2668569e47521582d1f1955a20cf0c4d94faa73bcefe1195937bf46b444b61",
+      "size_bytes": 3839
+    },
+    {
+      "path": "task_prompts/U-04.2.md",
+      "sha256": "022cb0c13f87b9e43fa4b4b29041c2a475a5b4cda130a7839efb80beedcf1c71",
+      "size_bytes": 3920
+    },
+    {
+      "path": "task_prompts/U-05.1.md",
+      "sha256": "7381a0e8f66a7cb04b8b4a17476c0645df0110522de898313d7a7dde5c5c41b1",
+      "size_bytes": 3851
+    },
+    {
+      "path": "task_prompts/U-05.2.md",
+      "sha256": "79855db566d237b10fa06c7f60b9bfb3c40275af4b8062ebd90089610c1f2d1e",
+      "size_bytes": 3890
+    },
+    {
+      "path": "tools/verify_seed.py",
+      "sha256": "397dca0b0f8eb12bd3c601f33140f554d0e3c0a37af01d292460a8e88d9fb6f0",
+      "size_bytes": 3777
+    }
+  ]
+}
