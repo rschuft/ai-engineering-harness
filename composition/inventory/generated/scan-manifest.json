@@ -1,0 +1,79 @@
+{
+  "tools": [
+    {
+      "name": "syft",
+      "version": "1.57.0",
+      "url": "https://github.com/anchore/syft/releases/download/v1.57.0/syft_1.57.0_windows_amd64.zip",
+      "sha256": "06e9663e55f7f38ff966710670fbe0763182c621f7ac2f191bcb209a6dfbd969"
+    },
+    {
+      "name": "grant",
+      "version": "0.7.0",
+      "url": "https://github.com/anchore/grant/releases/download/v0.7.0/grant_0.7.0_windows_amd64.zip",
+      "sha256": "fee8708d5145f2973b13369c69fd400e7438f84731273f0d13da20eb7a3bd766"
+    }
+  ],
+  "grant_policy": "grant-default-config.yaml = output of `grant config` (Grant 0.7.0 defaults, unmodified). Not a project policy.",
+  "results": [
+    {
+      "target": "python-host",
+      "source": "dir:<resolved>/python/site",
+      "platform": "host",
+      "syft_exit": 0,
+      "sbom": "sbom-python-host.cdx.json",
+      "sbom_sha256": "7c2d90b2e409e98f64179735f4deb37aff6b06c68db7cfff8aa45e27de6a816b",
+      "grant_exit": 1,
+      "grant": "grant-python-host.json"
+    },
+    {
+      "target": "npm",
+      "source": "dir:<resolved>/npm/project",
+      "platform": "host",
+      "syft_exit": 0,
+      "sbom": "sbom-npm.cdx.json",
+      "sbom_sha256": "208b89e8e73e27664c1380dfdddcd98d8f00763daeb5ef6fdcc2ffab0f65dd82",
+      "grant_exit": 1,
+      "grant": "grant-npm.json"
+    },
+    {
+      "target": "oci-agent-server-1.60.1-python",
+      "source": "registry:ghcr.io/openhands/agent-server@sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55",
+      "platform": "linux/amd64",
+      "syft_exit": 0,
+      "sbom": "sbom-oci-agent-server-1.60.1-python.cdx.json",
+      "sbom_sha256": "087797caa9516ecf651f9571a67178b97b398ee57a42dc67799e173b116e78a9",
+      "grant_exit": 1,
+      "grant": "grant-oci-agent-server-1.60.1-python.json"
+    },
+    {
+      "target": "oci-agent-canvas-1.36.0",
+      "source": "registry:ghcr.io/openhands/agent-canvas@sha256:27bce1829a469551dd24ab6d07ece64a1fb9ce485a64f4d65d49deb816e4241f",
+      "platform": "linux/amd64",
+      "syft_exit": 0,
+      "sbom": "sbom-oci-agent-canvas-1.36.0.cdx.json",
+      "sbom_sha256": "700c6a19deb7af70cf93ec824321d8ca96dbbc390fd01d5fbe336bddad441109",
+      "grant_exit": 1,
+      "grant": "grant-oci-agent-canvas-1.36.0.json"
+    },
+    {
+      "target": "oci-gitea-28.3.0",
+      "source": "registry:docker.io/gitea/gitea@sha256:8967bf9deaf3c5c4adae13519436dc1b20c646ac83fe37ae810c933a1045227d",
+      "platform": "linux/amd64",
+      "syft_exit": 0,
+      "sbom": "sbom-oci-gitea-28.3.0.cdx.json",
+      "sbom_sha256": "359fce88ad4a4e5fcaa9ea7c60e91c06e40f9cc3adaa82b7c29595b25cf142ad",
+      "grant_exit": 1,
+      "grant": "grant-oci-gitea-28.3.0.json"
+    },
+    {
+      "target": "oci-gitea-28.3.0-rootless",
+      "source": "registry:docker.io/gitea/gitea@sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d",
+      "platform": "linux/amd64",
+      "syft_exit": 0,
+      "sbom": "sbom-oci-gitea-28.3.0-rootless.cdx.json",
+      "sbom_sha256": "b9e812c52a48674e77badb35a0b316ff16c3eaee1589c8b473afb18604b97b58",
+      "grant_exit": 1,
+      "grant": "grant-oci-gitea-28.3.0-rootless.json"
+    }
+  ]
+}

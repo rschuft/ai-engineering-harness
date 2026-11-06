@@ -1,0 +1,32 @@
+# Grant License Compliance Configuration
+# Complete configuration file with all available options
+# See: https://github.com/anchore/grant
+
+format: table # Output format: "table" or "json" (default: "table")
+quiet: false # Suppress all non-essential output (default: false)
+verbose: false # Enable verbose output (default: false)
+# List of allowed license patterns (supports glob matching)
+# Default behavior: DENY all licenses except those explicitly permitted
+allow:
+    - MIT
+    - Apache-2.0
+    - BSD-3-Clause
+# List of package patterns to ignore from license checking
+# Supports glob patterns for flexible matching
+ignore-packages: []
+  # Add package patterns to ignore here
+  # Examples:
+  # - "github.com/mycompany/*"
+  # - "internal/*"
+# Policy enforcement options
+require-license: true # When true, deny packages with no detected licenses
+require-known-license: false # When true, deny non-SPDX / unparsable licenses
+
+# ============================================================================
+# COMMAND-SPECIFIC OPTIONS
+# ============================================================================
+disable-file-search: false # Disable filesystem license file search
+summary: false # Show only summary information for check command
+# Show only packages without licenses (default: false)
+only-unlicensed: false # maps to grant check --unlicensed || grant list --unlicensed
+

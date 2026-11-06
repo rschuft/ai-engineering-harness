@@ -1,2 +1,3 @@
 # Lock files are hashed (LF-normalised) by the resolver; keep LF on every host.
 * text eol=lf
+*.gz binary
