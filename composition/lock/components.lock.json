@@ -4,7 +4,8 @@
   "task": "F-01.2",
   "authority": [
     "decisions/0001-agent-server-dispatch-precondition-and-version-line.md (Accepted)",
-    "composition/candidates.json (F-01.1, accepted)"
+    "composition/candidates.json (F-01.1, accepted)",
+    "decisions/0002-reviewed-sdist-exception-for-resolution.md (Accepted)"
   ],
   "locked_at": "2026-11-06",
   "resolver": "python -I composition/resolve.py --work <empty dir outside the checkout>",
@@ -51,7 +52,8 @@
     "The four OpenHands Python packages are pinned ==1.60.1 explicitly with hashes; their PyPI metadata does not constrain each other, so only this lock holds them together.",
     "OCI images are locked by multi-arch index digest. Tags are recorded only as the lock-time observation; never consume them by tag. e99e5c7-python and latest-* are never used.",
     "No capability-token or runtime check belongs to this lock (decision 0001 s2 assigns those to F-04.1 / E-01.3.1 / E-01.5).",
-    "Signatures (Sigstore/Cosign/GPG) are not verified by this lock or the resolver; integrity is by digest only."
+    "Signatures (Sigstore/Cosign/GPG) are not verified by this lock or the resolver; integrity is by digest only.",
+    "Decision 0002: func-timeout 4.3.5 (sdist-only) is the single reviewed-sdist exception. The resolver builds it only after the sdist sha256 and the reviewed build-file hashes match, with a hash-locked setuptools backend, a scrubbed environment and no user site; every other package is wheels-only."
   ],
   "coverage": {
     "python": "CPython 3.12 only. Hash-locked per target: windows-x86_64 (win_amd64), linux-x86_64 and linux-aarch64 (manylinux, glibc >= 2.28). Other CPython minors and musl are not covered.",
@@ -135,7 +137,7 @@
         "UV_PYTHON_DOWNLOADS": "never",
         "UV_CACHE_DIR": "<empty scratch dir>"
       },
-      "note": "--no-build: no source distribution was built; resolution used wheels only. --excludes removes func-timeout (sdist-only, see known_gaps) so the remaining closure could be resolved wheel-only. Each pin lists the hashes of every file PyPI publishes for that version (wheels for all platforms and the sdist); installation uses wheels only."
+      "note": "--no-build: no source distribution was built during resolution; resolution used wheels only. --excludes removes func-timeout (sdist-only on PyPI, no dependencies) from the wheels-only resolution; it is installed through python.reviewed_sdists under decision 0002. Each pin lists the hashes of every file PyPI publishes for that version (wheels for all platforms and the sdist); installation of these files uses wheels only."
     },
     "platforms": {
       "windows-x86_64": {
@@ -222,17 +224,47 @@
         }
       }
     ],
-    "blocked": [
+    "build_requirements": {
+      "file": "python/build-requirements.txt",
+      "input": "python/build-requirements.in",
+      "purpose": "hash-locked PEP 517 build backend for python.reviewed_sdists; installed (wheel only, --require-hashes) into <work>/python/build-backend, never into the install target",
+      "generated_with": "uv pip compile python/build-requirements.in --python-version 3.12 --universal --no-build --generate-hashes --no-header --no-annotate -o python/build-requirements.txt"
+    },
+    "reviewed_sdists": [
       {
         "name": "func-timeout",
         "version": "4.3.5",
-        "required_by": "openhands-tools 1.60.1 (requires_dist func-timeout>=4.3.5)",
         "file": "func_timeout-4.3.5.tar.gz",
         "sha256": "74cd3c428ec94f4edfba81f9b2f14904846d5ffccc27c92433b8b5939b5575dd",
-        "reason": "sdist-only on PyPI at every release 3.0.0..4.3.5; no wheel exists. Installing it requires building the sdist (executes setup.py), which F-01.2 host-safety rules forbid.",
-        "declared_dependencies": "none (setup.py has no install_requires; read as data from the sdist)",
+        "required_by": "openhands-tools 1.60.1 (requires_dist func-timeout>=4.3.5)",
         "license": "LGPLv2 / LGPL-2.1 (PKG-INFO License: LGPLv2; setup.py header: LGPLv2.1)",
-        "status": "locked by sdist hash and verified by download; not installed"
+        "declared_dependencies": "none (setup.py has no install_requires; read as data from the sdist)",
+        "reason": "sdist-only on PyPI at every release 3.0.0..4.3.5; no wheel exists",
+        "archive": {
+          "members": 41,
+          "files": 35,
+          "links": 0,
+          "top_dir": "func_timeout-4.3.5"
+        },
+        "reviewed_build_files": {
+          "func_timeout-4.3.5/setup.py": "79b14e79da31bcf9ac21bdc350615c438868604b1f6a92f3cb12597f5cd4798b",
+          "func_timeout-4.3.5/setup.cfg": "1c473cbaee8da5fc46e7f0158794af5cea4414c34a3cf3f180c2001f5e38bd3e"
+        },
+        "reviewer": "Overseer",
+        "review_date": "2026-11-06",
+        "decision": "decisions/0002-reviewed-sdist-exception-for-resolution.md",
+        "build": {
+          "backend": "setuptools.build_meta:__legacy__ (no pyproject.toml in the sdist)",
+          "build_requirements": "python/build-requirements.txt",
+          "source_date_epoch": 1566250327,
+          "source_date_epoch_basis": "PyPI upload time of the sdist, 2019-08-19T21:32:07Z",
+          "require": "a single pure-Python wheel: python tag py3 (or py2.py3), abi none, platform any; WHEEL Root-Is-Purelib true; no compiled members"
+        },
+        "applies_to_targets": [
+          "windows-x86_64",
+          "linux-x86_64",
+          "linux-aarch64"
+        ]
       }
     ]
   },
@@ -508,12 +540,5 @@
       "checksum_source": "grant_0.7.0_checksums.txt (sha256 cfdf48ce316ab118e838c1ea532f1b34fc63b2eebdc482469a93fdc5dba6b1a7) line matched; GitHub asset digest matched. Sigstore bundle not verified."
     }
   ],
-  "known_gaps": [
-    {
-      "id": "python-func-timeout-sdist-only",
-      "blocks": "complete Python install",
-      "severity": "blocking",
-      "statement": "openhands-tools 1.60.1 requires func-timeout>=4.3.5, which PyPI publishes only as an sdist. The resolver verifies its hash but does not install it, so the installed Python set is the locked set minus func-timeout. Resolution needs an Overseer decision (e.g. a wheel built in an isolated guest and locked by hash, or another accepted disposition)."
-    }
-  ]
+  "known_gaps": []
 }

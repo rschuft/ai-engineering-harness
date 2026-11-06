@@ -14,8 +14,14 @@ files.pythonhosted.org, registry.npmjs.org, github.com, api.github.com,
 ghcr.io and registry-1.docker.io / auth.docker.io.
 
 Safety: Python is installed from binary wheels only (--only-binary :all:,
---require-hashes, --no-deps) with `pip install --target`; no source
-distribution is built. npm runs with --ignore-scripts and an isolated cache and
+--require-hashes, --no-deps) with `pip install --target`. The single exception
+is the lock's `python.reviewed_sdists` allowlist (decision 0002): such an sdist
+is built only after its sha256 and its reviewed build-file hashes match, with a
+hash-locked setuptools backend installed into its own directory, under
+`python -I -S` in a scrubbed environment inside the work directory, and the
+result must be one pure-Python (py3, none, any) wheel; any mismatch refuses the
+build (exit 1). Installed contents are checked against each RECORD and the
+installed digest is computed from RECORD rows, not wheel archive bytes. npm runs with --ignore-scripts and an isolated cache and
 config. No installed package is imported or executed; installed versions come
 from installer metadata (`pip inspect --path`, npm's hidden lockfile and
 `npm ls --json`). OCI images are not pulled: their resolution is a registry
@@ -249,9 +255,9 @@ def pypi_file_url(name, version, filename):
     raise Fail(f"{filename} not published for {name} {version}")
 
 
-def resolve_python(lock, checks, work: Path):
+def resolve_python(lock, checks, work: Path, observations):
     py = lock["python"]
-    res = {"interpreter": py["interpreter"], "targets": {}, "coupled_pins": [], "blocked": []}
+    res = {"interpreter": py["interpreter"], "targets": {}, "coupled_pins": [], "reviewed_sdists": []}
     installed = {}
     pins = {}
     for target, spec in py["platforms"].items():
@@ -266,9 +272,9 @@ def resolve_python(lock, checks, work: Path):
             checks.add(f"python.lock.{target}.direct.{d['name']}",
                        bool(e) and e["version"] == d["version"] and d["sha256"] in e["hashes"],
                        f"expected {d['name']}=={d['version']} with sha256 {d['sha256']}")
-        for b in py.get("blocked", []):
-            checks.add(f"python.lock.{target}.blocked-absent.{b['name']}", norm_name(b["name"]) not in p,
-                       "a blocked (sdist-only) package must not appear in an installable requirements file")
+        for b in py.get("reviewed_sdists", []):
+            checks.add(f"python.lock.{target}.reviewed-sdist-absent.{b['name']}", norm_name(b["name"]) not in p,
+                       "a reviewed sdist must not appear in a wheels-only requirements file")
     names = set().union(*[set(p) for p in pins.values()])
     for n in sorted(names):
         vs = {t: p[n]["version"] for t, p in pins.items() if n in p}
@@ -309,35 +315,224 @@ def resolve_python(lock, checks, work: Path):
                    f"missing={missing} duplicate={dup}")
         res["targets"][target] = {"file": spec["file"], "pins": len(pins[target]), "downloaded": files,
                                   "verification": "download + sha256 against lock" + (" + host install" if target == host else " (not installed: non-host target)")}
+    # reviewed sdists (decision 0002): verify, then build to a pure-Python wheel
+    built_dir = work / "python" / "built"
+    built = build_reviewed_sdists(py, checks, work, base, common, env, built_dir, res, observations)
     # host install
     if host:
         site = work / "python" / "site"
+        reqs = work / "python" / "install-requirements.txt"
+        lines = (LOCK_DIR / py["platforms"][host]["file"]).read_text(encoding="utf-8").replace("\r\n", "\n")
+        for b in built:
+            lines += f"{b['name']}=={b['version']} \\\n    --hash=sha256:{b['wheel_sha256']}\n"
+        reqs.write_text(lines, encoding="utf-8")
         cmd = base + ["install"] + common + ["--no-index", "--find-links", work / "python" / "download" / host,
+                                              "--find-links", built_dir,
                                               "--only-binary", ":all:", "--no-deps", "--require-hashes", "--no-compile",
-                                              "--target", site, "-r", LOCK_DIR / py["platforms"][host]["file"]]
+                                              "--target", site, "-r", reqs]
         p = run(cmd, env=env)
         checks.add("python.install.host", p.returncode == 0, (p.stderr or "")[-2000:])
         p = run(base + ["inspect", "--isolated", "--disable-pip-version-check", "--path", site], env=env)
         got = {}
+        packages = {}
         if checks.add("python.inspect.host", p.returncode == 0, (p.stderr or "")[-1000:]):
             for d in json.loads(p.stdout)["installed"]:
-                got[norm_name(d["metadata"]["name"])] = d["metadata"]["version"]
+                n = norm_name(d["metadata"]["name"])
+                got[n] = d["metadata"]["version"]
+                rec_ok, rec_digest, nfiles = record_digest(Path(d["metadata_location"]), site)
+                checks.add(f"python.installed.record.{n}", rec_ok, "an installed file does not match its RECORD hash")
+                packages[n] = {"version": d["metadata"]["version"], "record_sha256": rec_digest, "files": nfiles}
         want = {n: e["version"] for n, e in pins[host].items()}
+        want.update({norm_name(b["name"]): b["version"] for b in py.get("reviewed_sdists", [])})
         diff = {n: (want.get(n), got.get(n)) for n in set(want) | set(got) if want.get(n) != got.get(n)}
         checks.add("python.installed-equals-lock", not diff and bool(got), f"lock vs installed differences: {diff}")
-        installed = {"target": host, "path": "python/site", "source": "pip inspect --path", "count": len(got),
-                     "versions": dict(sorted(got.items()))}
-    # coupled pins and blocked sdists: download and verify, never install
-    for kind in ("coupled_pins", "blocked"):
-        for e in py.get(kind, []):
-            url, published = pypi_file_url(e["name"], e["version"], e["file"])
-            dest = work / "python" / kind / e["file"]
-            digest = download(url, dest)["sha256"].hex()
-            ok = digest == e["sha256"] == published
-            checks.add(f"python.{kind}.{e['name']}", ok, f"locked {e['sha256']} downloaded {digest} pypi {published}")
-            res[kind].append({"name": e["name"], "version": e["version"], "file": e["file"], "sha256": digest,
-                              "verified": ok, "installed": False})
+        installed = {"target": host, "path": "python/site", "source": "pip inspect --path + RECORD", "count": len(got),
+                     "versions": dict(sorted(got.items())),
+                     "contents": {"method": "per package: sha256 over the sorted (path, hash, size) rows of its RECORD, after "
+                                            "re-hashing every listed file on disk and checking it against RECORD",
+                                  "packages": dict(sorted(packages.items()))}}
+    # coupled pins: download and verify, never install
+    for e in py.get("coupled_pins", []):
+        url, published = pypi_file_url(e["name"], e["version"], e["file"])
+        dest = work / "python" / "coupled_pins" / e["file"]
+        digest = download(url, dest)["sha256"].hex()
+        ok = digest == e["sha256"] == published
+        checks.add(f"python.coupled_pins.{e['name']}", ok, f"locked {e['sha256']} downloaded {digest} pypi {published}")
+        res["coupled_pins"].append({"name": e["name"], "version": e["version"], "file": e["file"], "sha256": digest,
+                                    "verified": ok, "installed": False})
     return res, installed
+
+
+# ---------------------------------------------------------------- reviewed sdists (decision 0002)
+BUILD_CODE = """
+import os, sys
+backend, src, out = sys.argv[1:4]
+sys.path[:0] = [backend]
+os.chdir(src)
+from setuptools import build_meta
+print("WHEEL=" + build_meta.__legacy__.build_wheel(out))
+"""
+COMPILED_SUFFIXES = (".so", ".pyd", ".dll", ".dylib", ".exe", ".a", ".lib", ".o")
+
+
+def build_env(work: Path, epoch: int):
+    """A scrubbed environment built from nothing: no inherited variables, hence no credentials or tokens."""
+    home = work / "python" / "build-home"
+    tmp = work / "python" / "build-tmp"
+    for d in (home, tmp):
+        d.mkdir(parents=True, exist_ok=True)
+    env = {"SOURCE_DATE_EPOCH": str(epoch), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
+           "HOME": str(home), "USERPROFILE": str(home), "APPDATA": str(home), "LOCALAPPDATA": str(home),
+           "TMP": str(tmp), "TEMP": str(tmp), "TMPDIR": str(tmp), "LC_ALL": "C.UTF-8"}
+    if sys.platform == "win32":
+        sysroot = os.environ.get("SYSTEMROOT", "C:\\Windows")
+        env.update({"SYSTEMROOT": sysroot, "PATH": os.path.join(sysroot, "System32")})
+    else:
+        env["PATH"] = "/usr/bin:/bin"
+    return env
+
+
+def inspect_sdist(archive: Path, spec):
+    """Check the archive as data against the review: member count, no links, safe paths, build-file hashes."""
+    import tarfile
+    problems, observed = [], {}
+    top = spec["archive"]["top_dir"]
+    with tarfile.open(archive) as t:
+        members = t.getmembers()
+        for m in members:
+            if m.issym() or m.islnk() or not (m.isfile() or m.isdir()):
+                problems.append(f"non-regular member {m.name}")
+            if m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts or not (m.name == top or m.name.startswith(top + "/")):
+                problems.append(f"unsafe path {m.name}")
+        if len(members) != spec["archive"]["members"]:
+            problems.append(f"{len(members)} members, review recorded {spec['archive']['members']}")
+        for name, want in spec["reviewed_build_files"].items():
+            try:
+                got = hashlib.sha256(t.extractfile(name).read()).hexdigest()
+            except (KeyError, AttributeError):
+                got = None
+            observed[name] = got
+            if got != want:
+                problems.append(f"{name}: sha256 {got} != reviewed {want}")
+        names = {m.name for m in members}
+        for extra in ("pyproject.toml", "setup.py", "setup.cfg"):
+            n = f"{top}/{extra}"
+            if n in names and n not in spec["reviewed_build_files"]:
+                problems.append(f"unreviewed build file {n}")
+    return problems, observed
+
+
+def check_pure_wheel(path: Path, name: str, version: str):
+    import zipfile
+    problems = []
+    parts = path.name[:-4].split("-")
+    if len(parts) != 5 or norm_name(parts[0]) != norm_name(name) or parts[1] != version:
+        problems.append(f"unexpected wheel name {path.name}")
+    else:
+        py_tags, abi, plat = parts[2].split("."), parts[3], parts[4]
+        if not (set(py_tags) <= {"py3", "py2"} and "py3" in py_tags and abi == "none" and plat == "any"):
+            problems.append(f"wheel tag {parts[2]}-{abi}-{plat} is not pure Python")
+    with zipfile.ZipFile(path) as z:
+        for n in z.namelist():
+            if n.lower().endswith(COMPILED_SUFFIXES):
+                problems.append(f"compiled member {n}")
+        wheel_meta = [n for n in z.namelist() if n.endswith(".dist-info/WHEEL")]
+        text = z.read(wheel_meta[0]).decode() if len(wheel_meta) == 1 else ""
+        if "Root-Is-Purelib: true" not in text:
+            problems.append("WHEEL does not declare Root-Is-Purelib: true")
+        for line in text.splitlines():
+            if line.startswith("Tag:") and not line.strip().endswith("-none-any"):
+                problems.append(f"WHEEL {line.strip()}")
+    return problems
+
+
+def build_reviewed_sdists(py, checks, work, base, common, env, built_dir, res, observations):
+    import tarfile
+    specs = py.get("reviewed_sdists", [])
+    if not specs:
+        return []
+    built = []
+    # hash-locked build backend, wheels only, into its own directory (never the install target)
+    breq = LOCK_DIR / py["build_requirements"]["file"]
+    bwheels = work / "python" / "build-backend-wheels"
+    backend = work / "python" / "build-backend"
+    p = run(base + ["download"] + common + ["--index-url", PYPI_INDEX, "--only-binary", ":all:", "--no-deps", "--require-hashes",
+                                            "-r", breq, "-d", bwheels], env=env)
+    ok = checks.add("python.build-backend.download", p.returncode == 0, (p.stderr or "")[-1500:])
+    p = run(base + ["install"] + common + ["--no-index", "--find-links", bwheels, "--only-binary", ":all:", "--no-deps",
+                                           "--require-hashes", "--no-compile", "--target", backend, "-r", breq], env=env)
+    backend_ok = checks.add("python.build-backend.install", ok and p.returncode == 0, (p.stderr or "")[-1500:])
+    res["build_backend"] = {"file": py["build_requirements"]["file"],
+                            "wheels": [{"file": f.name, "sha256": file_hash(f, "sha256").hex()}
+                                       for f in sorted(bwheels.iterdir())] if bwheels.exists() else []}
+    for spec in specs:
+        cid = f"python.reviewed-sdist.{spec['name']}"
+        entry = {"name": spec["name"], "version": spec["version"], "file": spec["file"], "decision": spec["decision"],
+                 "reviewer": spec["reviewer"], "review_date": spec["review_date"]}
+        res["reviewed_sdists"].append(entry)
+        url, published = pypi_file_url(spec["name"], spec["version"], spec["file"])
+        archive = work / "python" / "reviewed-sdists" / spec["file"]
+        digest = download(url, archive)["sha256"].hex()
+        hash_ok = checks.add(f"{cid}.sdist-sha256", digest == spec["sha256"] == published,
+                             f"REFUSED to build: sdist sha256 {digest} (PyPI {published}) != reviewed {spec['sha256']}")
+        entry["sdist_sha256"] = digest if hash_ok else None
+        if not hash_ok:
+            continue
+        problems, observed = inspect_sdist(archive, spec)
+        review_ok = checks.add(f"{cid}.review", not problems, "REFUSED to build: " + "; ".join(problems))
+        entry["reviewed_build_files"] = observed if review_ok else None
+        if not (review_ok and backend_ok):
+            continue
+        src_root = work / "python" / "sdist-src" / spec["name"]
+        with tarfile.open(archive) as t:
+            t.extractall(src_root, filter="data")
+        src = src_root / spec["archive"]["top_dir"]
+        out = work / "python" / "sdist-out" / spec["name"]
+        out.mkdir(parents=True, exist_ok=True)
+        benv = build_env(work, spec["build"]["source_date_epoch"])
+        p = run([sys.executable, "-I", "-S", "-X", "utf8", "-c", BUILD_CODE, backend, src, out], cwd=src, env=benv)
+        wheels = sorted(out.glob("*.whl"))
+        build_ok = checks.add(f"{cid}.build", p.returncode == 0 and len(wheels) == 1,
+                              f"exit {p.returncode}, wheels {[w.name for w in wheels]}: {(p.stderr or '')[-1500:]}")
+        if not build_ok:
+            continue
+        whl = wheels[0]
+        pure = check_pure_wheel(whl, spec["name"], spec["version"])
+        if not checks.add(f"{cid}.pure-python", not pure, "REFUSED: " + "; ".join(pure)):
+            continue
+        built_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(whl, built_dir / whl.name)
+        wsha = file_hash(whl, "sha256").hex()
+        entry.update({"wheel": whl.name, "pure_python": True, "build_env_keys": sorted(benv),
+                      "source_date_epoch": spec["build"]["source_date_epoch"]})
+        observations.setdefault("reviewed_sdist_wheel_sha256", {})[whl.name] = wsha
+        built.append({"name": spec["name"], "version": spec["version"], "wheel_sha256": wsha})
+    return built
+
+
+def record_digest(dist_info: Path, site: Path):
+    """Re-hash every file listed in RECORD and digest the (path, hash, size) rows. Independent of wheel archive bytes."""
+    import csv
+    rows, ok = [], True
+    with open(dist_info / "RECORD", newline="", encoding="utf-8") as f:
+        for row in csv.reader(f):
+            if len(row) < 3 or not row[1]:
+                continue
+            path, h, size = row[0].replace("\\", "/"), row[1], row[2]
+            # pip --target records scripts relative to its temporary site-packages (e.g. ../../bin/x);
+            # it then moves them to <target>/bin, so strip the leading ../ components.
+            while path.startswith("../"):
+                path = path[3:]
+            algo, _, b64 = h.partition("=")
+            try:
+                actual = base64.urlsafe_b64encode(file_hash(site / path, algo)).rstrip(b"=").decode()
+            except (OSError, ValueError):
+                actual = None
+            if actual != b64:
+                ok = False
+            rows.append((path, h, size))
+    rows.sort()
+    return ok, hashlib.sha256("\n".join(",".join(r) for r in rows).encode()).hexdigest(), len(rows)
 
 
 # ---------------------------------------------------------------- npm
@@ -569,11 +764,12 @@ def main(argv=None):
                   for p in sorted(LOCK_DIR.rglob("*")) if p.is_file() and p.suffix in (".json", ".txt", ".in")}
     resolution = {"lock_files_sha256_lf": lock_files}
     installed = {}
+    observations = {}
     print("== sources", flush=True)
     resolution["sources"] = resolve_sources(lock, checks, git)
     print("== python", flush=True)
     try:
-        resolution["python"], installed["python"] = resolve_python(lock, checks, work)
+        resolution["python"], installed["python"] = resolve_python(lock, checks, work, observations)
     except (Fail, OSError, ValueError, urllib.error.HTTPError) as e:
         checks.add("python", False, f"{type(e).__name__}: {e}")
     print("== npm", flush=True)
@@ -609,8 +805,9 @@ def main(argv=None):
         "installed": installed,
         "failed_checks": failed,
         "checks": checks.items,
-        "observations": {"oci_tag_currently_resolves_to": observed_tags,
-                         "note": "informational, outside the digests; the lock never consumes tags"},
+        "observations": dict(observations, oci_tag_currently_resolves_to=observed_tags,
+                             note="informational, outside the digests: the lock never consumes tags, and a rebuilt "
+                                  "reviewed-sdist wheel's archive bytes may legitimately differ (decision 0002)"),
         "run": {"started": started, "finished": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
                 "host": host, "work": str(work), "checkout": str(CHECKOUT)},
     }

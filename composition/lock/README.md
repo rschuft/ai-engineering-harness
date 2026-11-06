@@ -15,9 +15,9 @@ python -I composition/resolve.py --work <empty-or-absent directory outside the c
 The resolver does five things:
 
 1. It runs `git ls-remote` against each pinned source tag and checks the tag → commit mapping.
-2. It downloads every locked Python wheel for each locked target and checks its sha256. It installs the host target's set with
+2. It downloads every locked Python wheel for each locked target and checks its sha256. It builds the one reviewed sdist (see [Reviewed sdist exception](#reviewed-sdist-exception-decision-0002)). It installs the host target's set with
    `pip install --target <work>/python/site --only-binary :all: --require-hashes --no-deps --no-index`
-   and reads the installed versions back with `pip inspect --path`.
+   and reads the installed versions back with `pip inspect --path`. It re-hashes every installed file against its RECORD.
 3. It runs `npm ci --ignore-scripts` from `npm/package-lock.json` with an isolated cache and empty npm config, so npm itself verifies each tarball's integrity. It then compares npm's hidden lockfile and `npm ls --all --json` with the lock. Every locked tarball that npm skips on this host (other OS or CPU optionals, such as `backlog.md-linux-x64` and `-arm64`) is downloaded and integrity-checked separately.
 4. It fetches each OCI index and its linux/amd64 and linux/arm64 manifests from the registry by digest and recomputes their sha256. This is a manifest-digest check. No image is pulled and nothing is run.
 5. It checks the GitHub release assets against the upstream checksum files, which it downloads and verifies by sha256. Where upstream publishes no checksum file, it uses the GitHub asset digest.
@@ -28,11 +28,11 @@ It writes `<work>/report.json`. The main fields are:
 |---|---|
 | `resolution` | Every verified digest. It is deterministic for a given lock and host. |
 | `resolution_digest` | sha256 of the canonical JSON of `resolution`. |
-| `installed` | The versions the installers report. |
-| `installed_digest` | sha256 of the canonical JSON of `installed`. |
+| `installed` | The versions the installers report. For Python, each package also carries `record_sha256`: the sha256 of its sorted RECORD rows (path, hash, size), taken after every listed file has been re-hashed on disk and matched. For npm, it is the version per installed path; npm ci has already checked each tarball's integrity. |
+| `installed_digest` | sha256 of the canonical JSON of `installed`. It depends on installed contents and versions, never on wheel archive bytes. |
 | `conversation_image` | The verified conversation image digest. |
 | `checks` | Each check with a pass or fail status. |
-| `observations` | Tag → digest lookups. These are informational and are not included in any digest. |
+| `observations` | Tag → digest lookups and the sha256 of the rebuilt reviewed-sdist wheel. These are informational and are not included in any digest. |
 | `run` | Timestamps and tool versions. |
 
 Two clean runs are equivalent when their `resolution_digest` and `installed_digest` values are equal.
@@ -41,10 +41,10 @@ Exit codes:
 
 | Code | Meaning |
 |---|---|
-| 0 | All artifacts verified and every locked set fully installed. |
-| 1 | Any mismatch or failure. |
+| 0 | All artifacts verified and every locked set fully installed. This is the current expected result. |
+| 1 | Any mismatch or failure, including a refused reviewed-sdist build. |
 | 2 | Usage or prerequisite error. |
-| 3 | All artifacts verified, but a `known_gaps` entry with severity `blocking` leaves an installed set incomplete. This is the current state; see [Known gaps](#known-gaps). |
+| 3 | All artifacts verified, but a `known_gaps` entry with severity `blocking` leaves an installed set incomplete. `known_gaps` is currently empty. |
 
 **Host prerequisites** (the resolver checks each one):
 
@@ -64,9 +64,10 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 
 | File | Pins | Count |
 |---|---|---|
-| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin and the blocked sdist</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps`</li></ul> | <ul><li>8 source tags</li><li>4 OCI indexes</li><li>12 release assets</li><li>3 tools</li></ul> |
+| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin, `reviewed_sdists` and `build_requirements`</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps` (empty)</li></ul> | <ul><li>8 source tags</li><li>4 OCI indexes</li><li>12 release assets</li><li>3 tools</li></ul> |
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
-| `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution (see Known gaps). | 1 |
+| `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
+| `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
 | `python/windows-x86_64.txt` | The hash-locked closure for win_amd64, CPython 3.12. | 195 pins: 4 direct, 191 transitive |
 | `python/linux-x86_64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) x86_64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
 | `python/linux-aarch64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) aarch64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
@@ -80,7 +81,7 @@ The three Python files contain the same version of every package they share. The
 | windows-x86_64 | `colorama`, `pywin32`, `pywin32-ctypes` |
 | linux | `jeepney`, `secretstorage` |
 
-Each pin lists the hashes of every file PyPI publishes for that version. Installation uses wheels only.
+Each pin lists the hashes of every file PyPI publishes for that version. Installation uses wheels only. The one exception is `func-timeout` 4.3.5, which is pure Python and applies to every target. It is not in these files and is installed from `reviewed_sdists`.
 
 ## Coverage
 
@@ -111,17 +112,29 @@ This lock does not configure any server. F-04.1 sets `conversation_image` to the
 - **Automation coherence.** Adding Automation to the Python resolution changes no existing pin; it adds 19 packages. The check is recorded in `components.lock.json`.
 - **Signatures.** No signature (Sigstore, Cosign or GPG) is verified. Integrity rests on digests only.
 
-## Known gaps
+## Reviewed sdist exception (decision 0002)
 
-`python-func-timeout-sdist-only` is **blocking** for a complete Python install. `openhands-tools` 1.60.1 requires `func-timeout>=4.3.5`. PyPI publishes every func-timeout release (3.0.0 through 4.3.5) as an sdist only, and building it would execute `setup.py`.
+`openhands-tools` 1.60.1 requires `func-timeout>=4.3.5`. PyPI publishes every func-timeout release (3.0.0 through 4.3.5) as an sdist only. [Decision 0002](../../decisions/0002-reviewed-sdist-exception-for-resolution.md) allows exactly one reviewed sdist. The lock records it in `python.reviewed_sdists`:
 
-What the lock and resolver do with func-timeout:
+| Field | Value |
+|---|---|
+| Package | `func-timeout` 4.3.5 |
+| sdist sha256 | `74cd3c428ec94f4edfba81f9b2f14904846d5ffccc27c92433b8b5939b5575dd` |
+| `setup.py` sha256 (in archive) | `79b14e79da31bcf9ac21bdc350615c438868604b1f6a92f3cb12597f5cd4798b` |
+| `setup.cfg` sha256 (in archive) | `1c473cbaee8da5fc46e7f0158794af5cea4414c34a3cf3f180c2001f5e38bd3e` |
+| Archive shape | 41 members (35 files), no links |
+| Reviewer | Overseer, 2026-11-06 |
+| Licence | LGPLv2/2.1. This is an open distribution item (see `../inventory/LEDGER.md`). |
 
-- The lock pins it by sdist sha256 `74cd3c42…5575dd`.
-- The resolver downloads that sdist and verifies its hash.
-- The resolver never builds or installs it.
+The resolver builds it only when every check passes:
 
-So the installed host set is the locked set minus func-timeout, and the resolver exits 3. The disposition needs an Overseer decision. Note also that func-timeout is LGPLv2/2.1.
+1. The downloaded sdist's sha256 equals the lock and PyPI.
+2. The archive matches the review: same member count, no links or unsafe paths, the reviewed build-file hashes match, and there is no unreviewed `pyproject.toml`, `setup.py` or `setup.cfg`.
+3. The backend (`python/build-requirements.txt`) installs from hash-verified wheels into `<work>/python/build-backend`. That is never the install target, and no build dependency is fetched unpinned.
+4. The build runs with `python -I -S` and the setuptools legacy backend. It uses an environment built from scratch, so no inherited variables or credentials reach it. HOME and TMP point into the work directory, and `SOURCE_DATE_EPOCH=1566250327` is set (the sdist's upload time).
+5. The build yields exactly one wheel. It must be tagged py3 (or py2.py3)-none-any, have `Root-Is-Purelib: true` and contain no compiled member.
+
+Any failure refuses the build and the resolver exits 1. The wheel's sha256 is recorded in `observations`. Reproducibility is judged on installed contents (RECORD) and versions. Every other package stays wheels-only. If upstream ever publishes a func-timeout wheel, prefer it and retire the exception.
 
 ## Regenerating the lock
 
@@ -139,6 +152,12 @@ UV_NO_CONFIG=1 UV_PYTHON_DOWNLOADS=never UV_CACHE_DIR=<empty dir> \
 # npm (from composition/lock/npm, with empty config files and an empty cache):
 npm install --package-lock-only --ignore-scripts --no-audit --no-fund \
   --registry https://registry.npmjs.org/ --cache <empty dir> --userconfig <empty file> --globalconfig <empty file>
+```
+
+The build backend is regenerated the same way, with `--universal` in place of `--python-platform`:
+
+```
+uv pip compile python/build-requirements.in --python-version 3.12 --universal --no-build --generate-hashes --no-header --no-annotate -o python/build-requirements.txt
 ```
 
 After regenerating, update `components.lock.json`, which records pin and entry counts and the direct integrities, and run the resolver.
