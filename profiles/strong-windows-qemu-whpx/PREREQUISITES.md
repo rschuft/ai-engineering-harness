@@ -241,10 +241,13 @@ without starting any untrusted workload. Run in an ordinary PowerShell 7 window,
      -RedirectStandardError "$I\stderr.log"
    ```
 
-   Then talk QMP (standard-library Python; the process stays paused meanwhile):
+   Then talk QMP (standard-library Python; the process stays paused meanwhile). Wait
+   until QEMU listens on the QMP port or exits, and skip asynchronous events: QEMU sends
+   the `SHUTDOWN` event before its reply to `quit`.
 
    ```powershell
-   python -I -c "import json,socket;s=socket.create_connection(('127.0.0.1',42023),30);f=s.makefile('rw');r=lambda:json.loads(f.readline());print(r());q=lambda c:(f.write(json.dumps({'execute':c})+'\n'),f.flush(),r())[2];print(q('qmp_capabilities'));print(q('query-version'));print(q('query-status'));print(q('query-cpus-fast'));print(q('query-memory-size-summary'));print(q('quit'))"
+   while (-not $proc.HasExited -and -not (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 42023 -State Listen -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 200 }
+   python -I -c "import json,socket;s=socket.create_connection(('127.0.0.1',42023),30);f=s.makefile('rw');r=lambda:next(m for m in iter(lambda:json.loads(f.readline()),None) if 'event' not in m);print(r());q=lambda c:(f.write(json.dumps({'execute':c})+'\n'),f.flush(),r())[2];print(q('qmp_capabilities'));print(q('query-version'));print(q('query-status'));print(q('query-cpus-fast'));print(q('query-memory-size-summary'));print(q('quit'))"
    $proc.WaitForExit(); $proc.ExitCode
    Get-Content "$I\stderr.log"
    ```
