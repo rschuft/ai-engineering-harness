@@ -1,0 +1,519 @@
+{
+  "schema": "ai-engineering-harness/component-lock",
+  "schema_version": 1,
+  "task": "F-01.2",
+  "authority": [
+    "decisions/0001-agent-server-dispatch-precondition-and-version-line.md (Accepted)",
+    "composition/candidates.json (F-01.1, accepted)"
+  ],
+  "locked_at": "2026-11-06",
+  "resolver": "python -I composition/resolve.py --work <empty dir outside the checkout>",
+  "release_line": {
+    "openhands": {
+      "version": "1.60.1",
+      "tag": "v1.60.1",
+      "commit": "e99e5c71ffe440a0b8d74b695f9307a7e34e4bbd",
+      "packages": [
+        "openhands-sdk",
+        "openhands-tools",
+        "openhands-workspace",
+        "openhands-agent-server",
+        "@openhands/typescript-client"
+      ]
+    },
+    "agent_canvas": {
+      "version": "1.36.0",
+      "tag": "v1.36.0",
+      "commit": "d30f1e45bbb67558ec2bfcd639b907ae525f162c"
+    },
+    "automation": {
+      "version": "1.30.1",
+      "status": "coupled pin, locked, not installed"
+    }
+  },
+  "conversation_image": {
+    "ref": "ghcr.io/openhands/agent-server@sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55",
+    "repository": "ghcr.io/openhands/agent-server",
+    "index_digest": "sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55",
+    "platform_digests": {
+      "linux/amd64": "sha256:8496d13f117827165af5a9c5c2b8ec5a1e52074aaff49a196ce9b000262d6b0c",
+      "linux/arm64": "sha256:89f694c3a3ec77efeaae7ab4c72352e7a5f2fd606544e6a7123d87be1d467665"
+    },
+    "tag_at_lock_time": "1.60.1-python",
+    "conformance": "Only this digest reference conforms. The Agent Server default conversation image ghcr.io/openhands/agent-server:latest-python (config.py DEFAULT_CONVERSATION_IMAGE) is a floating tag and is NON-CONFORMING; so is ghcr.io/openhands/agent-server:e99e5c7-python (a different index, sha256:8857fbd2...) and every latest-* or other floating tag.",
+    "enforcement": "Not configured here. F-04.1 sets conversation_image to this ref in server configuration; F-04.2 and E-01.5 observe it (decision 0001 s4).",
+    "resolution_method": "registry manifest-digest check only (no Docker on the resolving host; the image is not pulled)"
+  },
+  "provenance_notes": [
+    "Version line chosen by decision 0001 s1: OpenHands 1.60.1 (e99e5c7), Agent Canvas 1.36.0 (d30f1e4), openhands-automation 1.30.1 coupled pin.",
+    "Agent Canvas 1.36.0 compatibility.minimumAgentServer = 1.59.0 (Canvas floor). No Canvas release pins 1.58.2; the blueprint's v1.58.2 qualification pin is excluded.",
+    "Revisit rule (decision 0001 s1): re-resolve this lock on an upstream pin change before F-04.1; on a version-attributable live failure fall back to the 1.59.0 / Canvas 1.35.0 set, never to 1.58.2.",
+    "The four OpenHands Python packages are pinned ==1.60.1 explicitly with hashes; their PyPI metadata does not constrain each other, so only this lock holds them together.",
+    "OCI images are locked by multi-arch index digest. Tags are recorded only as the lock-time observation; never consume them by tag. e99e5c7-python and latest-* are never used.",
+    "No capability-token or runtime check belongs to this lock (decision 0001 s2 assigns those to F-04.1 / E-01.3.1 / E-01.5).",
+    "Signatures (Sigstore/Cosign/GPG) are not verified by this lock or the resolver; integrity is by digest only."
+  ],
+  "coverage": {
+    "python": "CPython 3.12 only. Hash-locked per target: windows-x86_64 (win_amd64), linux-x86_64 and linux-aarch64 (manylinux, glibc >= 2.28). Other CPython minors and musl are not covered.",
+    "npm": "One platform-independent package-lock.json (lockfileVersion 3) records every optional platform package with its integrity; npm installs only the host-matching ones. Node >= 24.",
+    "oci": "linux/amd64 and linux/arm64 platform manifests under each index digest.",
+    "install_verification": "Only the resolving host can be install-verified. Linux-guest installation (F-03/F-04) is UNKNOWN until run there; for non-host targets the resolver downloads and hash-verifies the artifacts without installing them."
+  },
+  "sources": [
+    {
+      "id": "openhands-sdk",
+      "repository": "https://github.com/OpenHands/software-agent-sdk",
+      "tag": "v1.60.1",
+      "tag_type": "lightweight",
+      "commit": "e99e5c71ffe440a0b8d74b695f9307a7e34e4bbd"
+    },
+    {
+      "id": "openhands-agent-canvas",
+      "repository": "https://github.com/OpenHands/OpenHands",
+      "tag": "v1.36.0",
+      "tag_type": "lightweight",
+      "commit": "d30f1e45bbb67558ec2bfcd639b907ae525f162c"
+    },
+    {
+      "id": "openhands-automation",
+      "repository": "https://github.com/OpenHands/automation",
+      "tag": "1.30.1",
+      "tag_type": "lightweight",
+      "commit": "3ddfee594d2177ab368772bc03c25f2dda103c9b"
+    },
+    {
+      "id": "openspec",
+      "repository": "https://github.com/Fission-AI/OpenSpec",
+      "tag": "v1.16.0",
+      "tag_type": "lightweight",
+      "commit": "27c0515724decc633818c735ee596481eec78a8b"
+    },
+    {
+      "id": "backlog-md",
+      "repository": "https://github.com/MrLesk/Backlog.md",
+      "tag": "v1.55.3",
+      "tag_type": "lightweight",
+      "commit": "0cf4fdbc70020327f4366a29d3f405f83d180301"
+    },
+    {
+      "id": "gitea",
+      "repository": "https://github.com/go-gitea/gitea",
+      "tag": "v28.3.0",
+      "tag_type": "annotated",
+      "commit": "4f5a3e13e5f3aca85d830e3a9024c893b0bbf1e1",
+      "tag_object": "f1cd050b55a46ae556cf992576d01b4a08bd793a"
+    },
+    {
+      "id": "assistant-ui-react",
+      "repository": "https://github.com/assistant-ui/assistant-ui",
+      "tag": "@assistant-ui/react@0.15.32",
+      "tag_type": "lightweight",
+      "commit": "2769cdf4db1b95f8e3f627910caf12b39a58216e"
+    },
+    {
+      "id": "assistant-ui-core",
+      "repository": "https://github.com/assistant-ui/assistant-ui",
+      "tag": "@assistant-ui/core@0.3.32",
+      "tag_type": "lightweight",
+      "commit": "2769cdf4db1b95f8e3f627910caf12b39a58216e"
+    }
+  ],
+  "python": {
+    "interpreter": {
+      "implementation": "CPython",
+      "version": "3.12",
+      "requires_python_of_selection": ">=3.12",
+      "canvas_launcher_range": ">=3.12,<3.15"
+    },
+    "input": "python/requirements.in",
+    "generated_with": {
+      "tool": "uv",
+      "version": "0.13.7",
+      "command": "uv pip compile python/requirements.in --excludes python/excludes.txt --python-version 3.12 --python-platform <target> --no-build --generate-hashes --no-header --no-annotate -o python/<file>",
+      "env": {
+        "UV_NO_CONFIG": "1",
+        "UV_PYTHON_DOWNLOADS": "never",
+        "UV_CACHE_DIR": "<empty scratch dir>"
+      },
+      "note": "--no-build: no source distribution was built; resolution used wheels only. --excludes removes func-timeout (sdist-only, see known_gaps) so the remaining closure could be resolved wheel-only. Each pin lists the hashes of every file PyPI publishes for that version (wheels for all platforms and the sdist); installation uses wheels only."
+    },
+    "platforms": {
+      "windows-x86_64": {
+        "file": "python/windows-x86_64.txt",
+        "uv_python_platform": "x86_64-pc-windows-msvc",
+        "pins": 195,
+        "pip_download": {
+          "platform": [
+            "win_amd64"
+          ]
+        }
+      },
+      "linux-x86_64": {
+        "file": "python/linux-x86_64.txt",
+        "uv_python_platform": "x86_64-manylinux_2_28",
+        "glibc_floor": "2.28",
+        "pins": 194,
+        "pip_download": {
+          "platform": [
+            "manylinux_2_28_x86_64",
+            "manylinux_2_17_x86_64",
+            "manylinux2014_x86_64",
+            "linux_x86_64"
+          ]
+        }
+      },
+      "linux-aarch64": {
+        "file": "python/linux-aarch64.txt",
+        "uv_python_platform": "aarch64-manylinux_2_28",
+        "glibc_floor": "2.28",
+        "pins": 194,
+        "pip_download": {
+          "platform": [
+            "manylinux_2_28_aarch64",
+            "manylinux_2_17_aarch64",
+            "manylinux2014_aarch64",
+            "linux_aarch64"
+          ]
+        }
+      }
+    },
+    "direct": [
+      {
+        "name": "openhands-sdk",
+        "version": "1.60.1",
+        "wheel": "openhands_sdk-1.60.1-py3-none-any.whl",
+        "sha256": "f6efa8f8428ccc8abebbcf4c424bf3008a66a46f9f2340d37b3b306fcb45eb6b"
+      },
+      {
+        "name": "openhands-tools",
+        "version": "1.60.1",
+        "wheel": "openhands_tools-1.60.1-py3-none-any.whl",
+        "sha256": "fc84a55630b46a88cd4b617b00c6511c0cadae5cfb0eeed6b6639e8ac67da93b"
+      },
+      {
+        "name": "openhands-workspace",
+        "version": "1.60.1",
+        "wheel": "openhands_workspace-1.60.1-py3-none-any.whl",
+        "sha256": "b4898196621032b67790b73fc013ea17cff19275066328b50b0188212ea6211d"
+      },
+      {
+        "name": "openhands-agent-server",
+        "version": "1.60.1",
+        "wheel": "openhands_agent_server-1.60.1-py3-none-any.whl",
+        "sha256": "df80a622059f3cce797ab2c08adfc5256a69d7c7a6b4712b2d5147df25be76f6"
+      }
+    ],
+    "coupled_pins": [
+      {
+        "name": "openhands-automation",
+        "version": "1.30.1",
+        "role": "coupled pin (Agent Canvas 1.36.0 config/defaults.json versions.automation); locked, NOT installed (decision 0001 s1)",
+        "file": "openhands_automation-1.30.1-py3-none-any.whl",
+        "sha256": "9bbc2bc8b160242139b905a2deedc2127a29a6ffd2cca27569a252c6e27613d8",
+        "requires_dist_pins": [
+          "openhands-sdk==1.60.1",
+          "openhands-workspace==1.60.1"
+        ],
+        "coherence_check": {
+          "method": "uv pip compile of requirements.in + openhands-automation==1.30.1 for x86_64-manylinux_2_28 (same flags) compared with python/linux-x86_64.txt",
+          "result": "no existing pin changed; 19 packages added: asn1crypto, asyncpg, cloud-sql-python-connector, croniter, google-cloud-core, google-cloud-sql, google-cloud-storage, google-crc32c, google-resumable-media, greenlet, grpcio-status, httptools, openhands-automation, pg8000, prometheus-client, scramp, slack-sdk, tzdata, uvloop",
+          "closure_locked": false,
+          "note": "Automation's own transitive closure is not locked here because Automation is not installed; lock it if and when a leaf installs Automation."
+        }
+      }
+    ],
+    "blocked": [
+      {
+        "name": "func-timeout",
+        "version": "4.3.5",
+        "required_by": "openhands-tools 1.60.1 (requires_dist func-timeout>=4.3.5)",
+        "file": "func_timeout-4.3.5.tar.gz",
+        "sha256": "74cd3c428ec94f4edfba81f9b2f14904846d5ffccc27c92433b8b5939b5575dd",
+        "reason": "sdist-only on PyPI at every release 3.0.0..4.3.5; no wheel exists. Installing it requires building the sdist (executes setup.py), which F-01.2 host-safety rules forbid.",
+        "declared_dependencies": "none (setup.py has no install_requires; read as data from the sdist)",
+        "license": "LGPLv2 / LGPL-2.1 (PKG-INFO License: LGPLv2; setup.py header: LGPLv2.1)",
+        "status": "locked by sdist hash and verified by download; not installed"
+      }
+    ]
+  },
+  "npm": {
+    "dir": "npm",
+    "package_json": "npm/package.json",
+    "lockfile": "npm/package-lock.json",
+    "lockfile_version": 3,
+    "generated_with": {
+      "tool": "npm",
+      "version": "11.17.0",
+      "node": "24.19.0",
+      "command": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund --registry https://registry.npmjs.org/ --cache <empty dir> --userconfig <empty file> --globalconfig <empty file>"
+    },
+    "counts": {
+      "lock_entries": 721,
+      "direct": 8,
+      "optional": 57,
+      "in_bundle_without_own_integrity": 6,
+      "with_install_scripts_never_run": [
+        "@heroui/shared-utils",
+        "@openhands/agent-canvas",
+        "@openrouter/sdk",
+        "core-js",
+        "fsevents"
+      ]
+    },
+    "direct_and_pinned": [
+      {
+        "name": "@openhands/typescript-client",
+        "version": "1.60.1",
+        "integrity": "sha512-LysixcYGpHnEcWToGeaNaiduytpo4TiytApBZqE4JSM3sCyu32wFa54R/ycgPwibuisgNpnhVcm+UZClYOYEUA==",
+        "lock_path": "node_modules/@openhands/typescript-client",
+        "role": "direct"
+      },
+      {
+        "name": "@openhands/agent-canvas",
+        "version": "1.36.0",
+        "integrity": "sha512-ZumCENrBTfztpXRtRulOmTB/l/pBoOjWUO5x3ySNgOmHkV8OTkbe1WTyZoRbyEVagux/vlEyztuPgz/Ia+ecGQ==",
+        "lock_path": "node_modules/@openhands/agent-canvas",
+        "role": "direct"
+      },
+      {
+        "name": "@assistant-ui/react",
+        "version": "0.15.32",
+        "integrity": "sha512-cw+8UQRnJocyHEaNc3+S+ulZaFp4UoVnbjyRmVFZcq8XSHpe4onz7ZkXkBl7L8IZftgvNdHS9ZEujnqohwzibw==",
+        "lock_path": "node_modules/@assistant-ui/react",
+        "role": "direct"
+      },
+      {
+        "name": "@assistant-ui/core",
+        "version": "0.3.32",
+        "integrity": "sha512-eEOuM3K0HWoetfFW8WwGJrhFu7lAfn/Su9us6xMk9HbHUc3/5jL6EOa2VsxrWeZbPqu/yXxGT2KaaFVvzZtCbA==",
+        "lock_path": "node_modules/@assistant-ui/core",
+        "role": "transitive of @assistant-ui/react, pinned by F-01.1"
+      },
+      {
+        "name": "@fission-ai/openspec",
+        "version": "1.16.0",
+        "integrity": "sha512-WQVhZoIR5PoacH/H0qh84VKMcXFbKCIKuAI96arHS3KiKYhJStlRrjUKGxLqLYKLym0j+2hAAY5MZUrPE5qXIA==",
+        "lock_path": "node_modules/@fission-ai/openspec",
+        "role": "direct"
+      },
+      {
+        "name": "backlog.md",
+        "version": "1.55.3",
+        "integrity": "sha512-HN37ifPKQR28QAEdKO9g9sF/DjmTaVkBSfMK2BleNrbIShe8evFqoPpGlyvQtAQM1XKW+5guPW3+c5Tt8Mrpew==",
+        "lock_path": "node_modules/backlog.md",
+        "role": "direct"
+      },
+      {
+        "name": "backlog.md-linux-x64",
+        "version": "1.55.3",
+        "integrity": "sha512-UBBNFDWmiJhkAqKy0jE39meVTF587EA8hh2qLk9Ag/mGosMpK5QdFqPqRafCIaowgxZCp0y++Vy5ZID2zoMpZg==",
+        "lock_path": "node_modules/backlog.md-linux-x64",
+        "role": "platform package via backlog.md optionalDependencies (os linux, cpu x64)"
+      },
+      {
+        "name": "backlog.md-linux-arm64",
+        "version": "1.55.3",
+        "integrity": "sha512-EoHqKYU80UNyCa7l/nhuEyztW1GCxG9O9S6wm167Vxf6ZRD8fwWrTgqGnvWbesbUrgOshw3OShAbGYRHyWie/g==",
+        "lock_path": "node_modules/backlog.md-linux-arm64",
+        "role": "platform package via backlog.md optionalDependencies (os linux, cpu arm64)"
+      },
+      {
+        "name": "react",
+        "version": "19.3.1",
+        "integrity": "sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==",
+        "lock_path": "node_modules/react",
+        "role": "direct: exact peer pin required by @openhands/agent-canvas 1.36.0 (react/react-dom 19.3.1, react-router 8.5.0)"
+      },
+      {
+        "name": "react-dom",
+        "version": "19.3.1",
+        "integrity": "sha512-Y0bARz53lhEC1NMCASs0/j+faB/zqt3R8hpvg1e8+61ZVJ4UL0UdC4cBbXfZMcIuhrfgeILTLe+ZeBCavQPtKQ==",
+        "lock_path": "node_modules/react-dom",
+        "role": "direct: exact peer pin required by @openhands/agent-canvas 1.36.0 (react/react-dom 19.3.1, react-router 8.5.0)"
+      },
+      {
+        "name": "react-router",
+        "version": "8.5.0",
+        "integrity": "sha512-9nEd/deifcTJIIcUaNIyQGkyXD0D6QVB9XD2O5GgHpP3xu3U5RXm87YQ8++Wn8JQWgMBM/5+PjWPM/7n7O7WHA==",
+        "lock_path": "node_modules/react-router",
+        "role": "direct: exact peer pin required by @openhands/agent-canvas 1.36.0 (react/react-dom 19.3.1, react-router 8.5.0)"
+      }
+    ],
+    "engines": {
+      "node": ">=24 (Agent Canvas), >=22.12.0 (OpenSpec)"
+    }
+  },
+  "oci": [
+    {
+      "id": "ghcr.io/openhands/agent-server:1.60.1-python",
+      "repository": "ghcr.io/openhands/agent-server",
+      "tag_at_lock_time": "1.60.1-python",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "index_digest": "sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55",
+      "platform_digests": {
+        "linux/amd64": "sha256:8496d13f117827165af5a9c5c2b8ec5a1e52074aaff49a196ce9b000262d6b0c",
+        "linux/arm64": "sha256:89f694c3a3ec77efeaae7ab4c72352e7a5f2fd606544e6a7123d87be1d467665"
+      },
+      "role": "conversation_image (decision 0001 s4) and Agent Server image"
+    },
+    {
+      "id": "ghcr.io/openhands/agent-canvas:1.36.0",
+      "repository": "ghcr.io/openhands/agent-canvas",
+      "tag_at_lock_time": "1.36.0",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "index_digest": "sha256:27bce1829a469551dd24ab6d07ece64a1fb9ce485a64f4d65d49deb816e4241f",
+      "platform_digests": {
+        "linux/amd64": "sha256:b1221a6face64ed0706ef0b4459114f14f1f067294c5f7c5f89a873da02f368d",
+        "linux/arm64": "sha256:2ebb1c0458906ba2afc29ebc05158502f45ea841032a484588285e3afd7c8ed2"
+      },
+      "role": "Agent Canvas all-in-one image (built FROM agent-server:1.60.1-python)"
+    },
+    {
+      "id": "docker.io/gitea/gitea:28.3.0",
+      "repository": "docker.io/gitea/gitea",
+      "tag_at_lock_time": "28.3.0",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "index_digest": "sha256:8967bf9deaf3c5c4adae13519436dc1b20c646ac83fe37ae810c933a1045227d",
+      "platform_digests": {
+        "linux/amd64": "sha256:411af83e9be78029c0047a5f5a72f1d91b7c793ba5e5813b4e70a6bb8e4a0738",
+        "linux/arm64": "sha256:0543eb2049bacecb24645d023c5b3cddbd77bc47d35b2761d0b4c63cc4667292"
+      },
+      "role": "Gitea"
+    },
+    {
+      "id": "docker.io/gitea/gitea:28.3.0-rootless",
+      "repository": "docker.io/gitea/gitea",
+      "tag_at_lock_time": "28.3.0-rootless",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "index_digest": "sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d",
+      "platform_digests": {
+        "linux/amd64": "sha256:481be76469179d4edd90e40209c14d63759be0e5fbc57d567c0fb860df762e24",
+        "linux/arm64": "sha256:226f6b90b42e9d9158d230f7b6015d7cca72c5e3018cc0f85cdeb30294fd0aaf"
+      },
+      "role": "Gitea (rootless variant)"
+    }
+  ],
+  "release_assets": [
+    {
+      "component": "openhands-agent-server",
+      "name": "SHA256SUMS",
+      "sha256": "6b6e6e3febe2e143f226886d9bac878855ddd3d6108517d815edb03c20fb37e9",
+      "method": "download",
+      "url": "https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/SHA256SUMS"
+    },
+    {
+      "component": "openhands-agent-server",
+      "name": "agent-server-1.60.1-linux-x86_64",
+      "sha256": "b2fbcf8cf1495bdbef97f26583917bc188b765c71c181effc3e47c14da08ce72",
+      "method": "checksum-file-line",
+      "checksum_file": "https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/SHA256SUMS"
+    },
+    {
+      "component": "openhands-agent-server",
+      "name": "agent-server-1.60.1-linux-arm64",
+      "sha256": "cacaf42a648011443f0eba182d4554493d4e000f79e0e9c9263007bb056fcdb0",
+      "method": "checksum-file-line",
+      "checksum_file": "https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/SHA256SUMS"
+    },
+    {
+      "component": "openhands-agent-server",
+      "name": "openapi.json",
+      "sha256": "3de49fac4670eff9c8b6635ffd8bc5b6d4219788877747135333cec9f8c5e0d0",
+      "method": "checksum-file-line",
+      "checksum_file": "https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/SHA256SUMS"
+    },
+    {
+      "component": "openspec",
+      "name": "SHA256SUMS",
+      "sha256": "6cc4af0875c3fb58a0e1ca1dc02873a976c6c9b811585d59f47d3c647ec76bf7",
+      "method": "download",
+      "url": "https://github.com/Fission-AI/OpenSpec/releases/download/v1.16.0/SHA256SUMS"
+    },
+    {
+      "component": "openspec",
+      "name": "openspec-linux-x64.tar.gz",
+      "sha256": "f27fb2ff5c6c4aafb207cb0b797189215adb3a1150d4b4600a2d6a0b6e192ae1",
+      "method": "checksum-file-line",
+      "checksum_file": "https://github.com/Fission-AI/OpenSpec/releases/download/v1.16.0/SHA256SUMS"
+    },
+    {
+      "component": "openspec",
+      "name": "openspec-linux-arm64.tar.gz",
+      "sha256": "b9b61371a7caa1819da34f766cc24896cfe7a743841f53121b66bd1e2f1b9e93",
+      "method": "checksum-file-line",
+      "checksum_file": "https://github.com/Fission-AI/OpenSpec/releases/download/v1.16.0/SHA256SUMS"
+    },
+    {
+      "component": "backlog-md",
+      "name": "backlog-bun-linux-x64",
+      "sha256": "c20d5c51aa95b66d5c89428927bb0a16dc7beb9110683d66387e0514925f274a",
+      "method": "github-asset-digest",
+      "release_api": "https://api.github.com/repos/MrLesk/Backlog.md/releases/tags/v1.55.3"
+    },
+    {
+      "component": "backlog-md",
+      "name": "backlog-bun-linux-arm64",
+      "sha256": "8b8928bf0dcbc83f82cbd2c77668799fe9b3463511acdf62fe3f02fb0a486aa9",
+      "method": "github-asset-digest",
+      "release_api": "https://api.github.com/repos/MrLesk/Backlog.md/releases/tags/v1.55.3"
+    },
+    {
+      "component": "gitea",
+      "name": "gitea-28.3.0-linux-amd64",
+      "sha256": "5f834e8f04986f3b9206cf14743b5a6e6996ceddc238dac6409866ebda2a0686",
+      "method": "per-asset-checksum-file",
+      "checksum_file": "https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-linux-amd64.sha256"
+    },
+    {
+      "component": "gitea",
+      "name": "gitea-28.3.0-linux-arm64",
+      "sha256": "24d146e8f5c986b86e5a3311e3ec349ded35202cba056952ab5b585511ace82d",
+      "method": "per-asset-checksum-file",
+      "checksum_file": "https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-linux-arm64.sha256"
+    },
+    {
+      "component": "gitea",
+      "name": "gitea-src-28.3.0.tar.gz",
+      "sha256": "a632833d5ae02a18e8f7ed79177763801604de6ef6f6d1c1405029d28de9d3a4",
+      "method": "github-asset-digest",
+      "release_api": "https://api.github.com/repos/go-gitea/gitea/releases/tags/v28.3.0"
+    }
+  ],
+  "tools": [
+    {
+      "name": "uv",
+      "version": "0.13.7",
+      "purpose": "lock generation (Python)",
+      "asset": "uv-x86_64-pc-windows-msvc.zip",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-pc-windows-msvc.zip",
+      "sha256": "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021",
+      "checksum_source": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-pc-windows-msvc.zip.sha256 (matched; GitHub asset digest matched)"
+    },
+    {
+      "name": "syft",
+      "version": "1.57.0",
+      "purpose": "SBOM",
+      "asset": "syft_1.57.0_windows_amd64.zip",
+      "url": "https://github.com/anchore/syft/releases/download/v1.57.0/syft_1.57.0_windows_amd64.zip",
+      "sha256": "06e9663e55f7f38ff966710670fbe0763182c621f7ac2f191bcb209a6dfbd969",
+      "checksum_source": "syft_1.57.0_checksums.txt (sha256 bec8ee399df0b23cb7b6fe7b72f290418bdbf91cab2e01bfa0a44f2a2e96d006) line matched; GitHub asset digest matched. Sigstore bundle not verified."
+    },
+    {
+      "name": "grant",
+      "version": "0.7.0",
+      "purpose": "license policy check",
+      "asset": "grant_0.7.0_windows_amd64.zip",
+      "url": "https://github.com/anchore/grant/releases/download/v0.7.0/grant_0.7.0_windows_amd64.zip",
+      "sha256": "fee8708d5145f2973b13369c69fd400e7438f84731273f0d13da20eb7a3bd766",
+      "checksum_source": "grant_0.7.0_checksums.txt (sha256 cfdf48ce316ab118e838c1ea532f1b34fc63b2eebdc482469a93fdc5dba6b1a7) line matched; GitHub asset digest matched. Sigstore bundle not verified."
+    }
+  ],
+  "known_gaps": [
+    {
+      "id": "python-func-timeout-sdist-only",
+      "blocks": "complete Python install",
+      "severity": "blocking",
+      "statement": "openhands-tools 1.60.1 requires func-timeout>=4.3.5, which PyPI publishes only as an sdist. The resolver verifies its hash but does not install it, so the installed Python set is the locked set minus func-timeout. Resolution needs an Overseer decision (e.g. a wheel built in an isolated guest and locked by hash, or another accepted disposition)."
+    }
+  ]
+}

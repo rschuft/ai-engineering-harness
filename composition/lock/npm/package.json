@@ -1,0 +1,17 @@
+{
+  "name": "ai-engineering-harness-component-lock",
+  "version": "0.0.0",
+  "private": true,
+  "description": "F-01.2 npm component lock (not an application). Resolved only by composition/resolve.py.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@openhands/typescript-client": "1.60.1",
+    "@openhands/agent-canvas": "1.36.0",
+    "@assistant-ui/react": "0.15.32",
+    "@fission-ai/openspec": "1.16.0",
+    "backlog.md": "1.55.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router": "8.5.0"
+  }
+}
