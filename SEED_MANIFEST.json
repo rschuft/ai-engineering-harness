@@ -734,8 +734,8 @@
     },
     {
       "path": "tools/verify_seed.py",
-      "sha256": "397dca0b0f8eb12bd3c601f33140f554d0e3c0a37af01d292460a8e88d9fb6f0",
-      "size_bytes": 3777
+      "sha256": "e4e5e0c8f5f09c8d509994c69aee8631d0635123f69086d50a5c5c1cfcbb2229",
+      "size_bytes": 10041
     }
   ]
 }
