@@ -176,6 +176,42 @@ class Negative(unittest.TestCase):
                     'socket,id=qmp,host=0.0.0.0,port={qmp_port},server=on,wait=off')
         self.assertFails(self.qemu, 'must bind to 127.0.0.1')
 
+    # monitors
+    def test_deprecated_mon_is_refused(self):
+        argv = self.qemu['launch']['argv']
+        index = argv.index('-object')
+        argv[index:index + 2] = ['-mon', 'chardev=qmp,mode=control']
+        self.assertFails(self.qemu, '-mon is not an allowed option')
+
+    def test_hmp_monitor_object_is_refused(self):
+        replace_arg(self.qemu, 'monitor-qmp,id=qmp-monitor,chardev=qmp',
+                    'monitor-hmp,id=qmp-monitor,chardev=qmp')
+        self.assertFails(self.qemu, "-object 'monitor-hmp' is not allowed")
+
+    def test_other_object_type_is_refused(self):
+        self.qemu['launch']['argv'] += [
+            '-object', 'memory-backend-file,id=m,size=1G,mem-path=C:/Users/x,share=on']
+        self.assertFails(self.qemu, "-object 'memory-backend-file' is not allowed")
+
+    def test_qmp_monitor_unknown_property(self):
+        replace_arg(self.qemu, 'monitor-qmp,id=qmp-monitor,chardev=qmp',
+                    'monitor-qmp,id=qmp-monitor,chardev=qmp,mode=readline')
+        self.assertFails(self.qemu, "property ['mode'] is not allowed")
+
+    def test_qmp_monitor_needs_id_and_chardev(self):
+        replace_arg(self.qemu, 'monitor-qmp,id=qmp-monitor,chardev=qmp', 'monitor-qmp,chardev=qmp')
+        self.assertFails(self.qemu, 'needs id= and chardev=')
+
+    def test_qmp_monitor_on_a_file_chardev(self):
+        replace_arg(self.qemu, 'monitor-qmp,id=qmp-monitor,chardev=qmp',
+                    'monitor-qmp,id=qmp-monitor,chardev=serial0')
+        self.assertFails(self.qemu, 'monitor-qmp must use a loopback socket chardev')
+
+    def test_qmp_monitor_on_an_undeclared_chardev(self):
+        replace_arg(self.qemu, 'monitor-qmp,id=qmp-monitor,chardev=qmp',
+                    'monitor-qmp,id=qmp-monitor,chardev=other')
+        self.assertFails(self.qemu, 'monitor-qmp must use a loopback socket chardev')
+
     def test_declared_endpoint_off_loopback(self):
         self.qemu['network']['endpoints'][0]['host_bind'] = '0.0.0.0'
         self.assertFails(self.qemu, 'management endpoint binds to 0.0.0.0')

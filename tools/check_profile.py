@@ -37,12 +37,19 @@ HEX128 = re.compile(r'^[0-9a-f]{128}$')
 LOOPBACK = '127.0.0.1'
 REQUIRED_INPUTS = ('image', 'firmware', 'kernel', 'seed', 'provider_binary', 'profile_revision')
 # QEMU options a profile may use. Anything else (-virtfs, -fsdev, -drive, -usb, -audio,
-# -vnc, -qmp, -monitor, -kernel, a second -accel through -machine ...) is refused, so a
-# share, device or interface cannot enter through an option this check does not parse.
+# -vnc, -qmp, -monitor, the deprecated -mon, -kernel, a second -accel through -machine
+# ...) is refused, so a share, device or interface cannot enter through an option this
+# check does not parse.
 QEMU_FLAGS = {'-no-user-config', '-nodefaults'}
 QEMU_VALUE_OPTIONS = {'-name', '-machine', '-accel', '-cpu', '-smp', '-m', '-L', '-bios',
                       '-blockdev', '-device', '-netdev', '-display', '-chardev', '-serial',
-                      '-mon', '-pidfile', '-rtc', '-boot', '-msg'}
+                      '-object', '-pidfile', '-rtc', '-boot', '-msg'}
+# -object types a profile may create: only the QMP monitor (QEMU 11.1 replaces
+# '-mon mode=control' with '-object monitor-qmp'). Its properties as the pinned binary
+# lists them ('-object monitor-qmp,help': chardev, close-action, pretty) plus the
+# required id. Other objects (memory backends with share=on, monitor-hmp, secrets,
+# filters ...) are refused.
+QEMU_OBJECTS = {'monitor-qmp': {'id', 'chardev', 'close-action', 'pretty'}}
 QEMU_DEVICES = {'virtio-blk-pci', 'virtio-net-pci', 'virtio-rng-pci'}
 QEMU_BLOCK_DRIVERS = {'file', 'qcow2', 'raw'}
 INCUS_ISO_SOURCES = {'cloud-init:config', 'agent:config'}
@@ -401,8 +408,18 @@ def check_qemu(report, profile, ceilings):
                 report.fail(f'launch.argv: -chardev backend {first!r} is not allowed')
         elif opt == '-serial' and not text.startswith('chardev:') and text != 'none':
             report.fail(f'launch.argv: -serial {text}: must use a declared chardev')
-        elif opt == '-mon' and (named.get('mode') != 'control' or not named.get('chardev')):
-            report.fail('launch.argv: -mon must be a QMP (mode=control) chardev')
+        elif opt == '-object':
+            allowed = QEMU_OBJECTS.get(first)
+            if allowed is None:
+                report.fail(f'launch.argv: -object {first!r} is not allowed (only a '
+                            'monitor-qmp QMP monitor; profiles P3, P6)')
+            else:
+                extra = sorted(key for key, _ in props[1:] if key not in allowed)
+                if extra or any(key == '' for key, _ in props[1:]):
+                    report.fail(f'launch.argv: -object {first} property {extra or text!r} '
+                                'is not allowed')
+                if not named.get('id') or not named.get('chardev'):
+                    report.fail(f'launch.argv: -object {first} needs id= and chardev=')
         elif opt == '-smp':
             cpus = named.get('cpus') or first
             if str(cpus) != str(ceilings.get('vcpu')):
@@ -416,10 +433,12 @@ def check_qemu(report, profile, ceilings):
                     report.fail(f'launch.argv: -cpu must turn {flag} off when '
                                 'nested_virt_exposed is false (profiles P12)')
     for opt, value in options:
-        if opt == '-mon':
-            backend = chardevs.get(dict(split_props(value or '')).get('chardev'))
+        props = split_props(value or '') if opt == '-object' else []
+        if props and props[0] == ('', 'monitor-qmp'):
+            backend = chardevs.get(dict(props).get('chardev'))
             if backend != 'socket':
-                report.fail('launch.argv: -mon must use a loopback socket chardev')
+                report.fail('launch.argv: -object monitor-qmp must use a loopback socket '
+                            'chardev')
     name = (profile.get('accelerator') or {}).get('name')
     if accels != [name]:
         report.fail(f'launch.argv: exactly one accelerator ({name}) required, found {accels} '

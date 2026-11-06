@@ -219,22 +219,33 @@ without starting any untrusted workload. Run in an ordinary PowerShell 7 window,
    `d25999de…f13b535` (the full value is in `profile.json`).
 
 4. **Paused boot with the full declared command line, then QMP `quit`.** The seed is a
-   placeholder because the generator lands in F-03.2.2; a paused boot runs no guest
-   code, so its content is never read.
+   real one from [`tools/nocloud_seed.py`](../../tools/nocloud_seed.py), carrying a
+   throwaway ed25519 key generated into the instance directory (never `~/.ssh`). A
+   paused boot (`-S`) runs no guest code, so the seed's content is not read yet.
+   First re-run in F-03.2.1b with a zero-filled placeholder seed and `-mon`; re-run in
+   F-03.2.2a with the generated seed and `-object monitor-qmp`
+   ([evidence](../../evidence/F-03.2.2a-seed-and-monitor.md)).
 
    ```powershell
-   $I = "$State\instances\f0321b-validate"
+   $Name = 'f0322a-validate'
+   $I = "$State\instances\$Name"
    if (Test-Path $I) { throw 'instance directory exists' }
-   New-Item -ItemType Directory -Path $I | Out-Null
+   foreach ($port in 42022, 42023) {
+     if (Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue) { throw "port $port is in use" } }
+   $P = Get-Content "$Repo\profiles\strong-windows-qemu-whpx\profile.json" -Raw | ConvertFrom-Json
+   $ImgHash = (Get-FileHash $Img -Algorithm SHA256).Hash.ToLower(); $ImgHash
+   if ($ImgHash -ne $P.boot_inputs.image.sha256) { throw 'image sha256 mismatch' }
+   New-Item -ItemType Directory -Path $I, "$I\ssh" | Out-Null
+   & "$env:SystemRoot\System32\OpenSSH\ssh-keygen.exe" -q -t ed25519 -N '' -C $Name -f "$I\ssh\id_ed25519"
    & "$Prefix\ucrt64\bin\qemu-img.exe" create -f qcow2 -b $Img -F qcow2 "$I\root.qcow2" 40G
    & "$Prefix\ucrt64\bin\qemu-img.exe" create -f qcow2 "$I\scratch.qcow2" 120G
-   [IO.File]::WriteAllBytes("$I\seed.iso", (New-Object byte[] 1048576))
+   python -I -B "$Repo\tools\nocloud_seed.py" --profile "$Repo\profiles\strong-windows-qemu-whpx" `
+     --instance-dir $I --instance-name $Name --public-key "$I\ssh\id_ed25519.pub"
    (Get-FileHash "$I\seed.iso" -Algorithm SHA256).Hash.ToLower()
-   $P = Get-Content "$Repo\profiles\strong-windows-qemu-whpx\profile.json" -Raw | ConvertFrom-Json
    $map = [ordered]@{
      '{input:image}' = $Img.Replace('\', '/'); '{input:firmware}' = "$Prefix/ucrt64/share/qemu/bios-256k.bin".Replace('\', '/')
      '{input:seed}' = "$I/seed.iso".Replace('\', '/'); '{instance_dir}' = $I.Replace('\', '/')
-     '{qemu_prefix}' = $Prefix.Replace('\', '/'); '{instance}' = 'f0321b-validate'
+     '{qemu_prefix}' = $Prefix.Replace('\', '/'); '{instance}' = $Name
      '{ssh_port}' = '42022'; '{qmp_port}' = '42023' }
    $argv = foreach ($a in $P.launch.argv) { foreach ($k in $map.Keys) { $a = $a.Replace($k, $map[$k]) }; $a }
    $proc = Start-Process -FilePath $Qemu -ArgumentList (@($argv) + '-S') -PassThru -NoNewWindow `
@@ -247,17 +258,49 @@ without starting any untrusted workload. Run in an ordinary PowerShell 7 window,
 
    ```powershell
    while (-not $proc.HasExited -and -not (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 42023 -State Listen -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 200 }
-   python -I -c "import json,socket;s=socket.create_connection(('127.0.0.1',42023),30);f=s.makefile('rw');r=lambda:next(m for m in iter(lambda:json.loads(f.readline()),None) if 'event' not in m);print(r());q=lambda c:(f.write(json.dumps({'execute':c})+'\n'),f.flush(),r())[2];print(q('qmp_capabilities'));print(q('query-version'));print(q('query-status'));print(q('query-cpus-fast'));print(q('query-memory-size-summary'));print(q('quit'))"
+   $Qmp = @'
+   import json, socket, sys
+   f = socket.create_connection(('127.0.0.1', int(sys.argv[1])), 30).makefile('rw')
+   def reply():
+       while True:
+           m = json.loads(f.readline())
+           if 'event' not in m:
+               return m
+   def q(cmd, **args):
+       f.write(json.dumps({'execute': cmd, **({'arguments': args} if args else {})}) + '\n')
+       f.flush()
+       return reply()
+   print('greeting', json.dumps(reply()))
+   for c in ('qmp_capabilities', 'query-version', 'query-status', 'query-accelerators',
+             'query-cpus-fast', 'query-memory-size-summary', 'query-block'):
+       print(c, json.dumps(q(c)))
+   print('query-named-block-nodes', json.dumps(q('query-named-block-nodes', flat=True)))
+   print('qom-list /objects', json.dumps(q('qom-list', path='/objects')))
+   print('quit', json.dumps(q('quit')))
+   '@
+   $Qmp | python -I - 42023
    $proc.WaitForExit(); $proc.ExitCode
    Get-Content "$I\stderr.log"
    ```
 
    Expected: the QMP greeting; `query-version` reports 11.1.3; `query-status` reports
-   `"running": false` with status `prelaunch`; `query-cpus-fast` lists 8 CPUs;
-   `query-memory-size-summary` reports `base-memory` 17179869184; `quit` returns `{}`;
-   the exit code is 0; `stderr.log` holds no error. Record the seed placeholder digest
-   `30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58`. Afterwards
-   delete `$I` (only that directory).
+   `"running": false` with status `prelaunch`; `query-accelerators` reports
+   `"enabled": "whpx"`; `query-cpus-fast` lists 8 CPUs; `query-memory-size-summary`
+   reports `base-memory` 17179869184; `query-block` lists exactly three devices, whose
+   top nodes are `root`, `scratch` (read-write) and `seed` (`"ro": true`), with `root`
+   backed by `base`; `query-named-block-nodes` shows `base`, `base-file`, `seed` and
+   `seed-file` with `"ro": true`; `qom-list /objects` includes `qmp-monitor` of type
+   `child<monitor-qmp>`; `quit` returns `{}`; the exit code is 0; `stderr.log` holds no
+   error and no `-mon` deprecation warning. Record the `seed.iso` digest the generator
+   prints. Afterwards confirm no `qemu-system-x86_64` process remains, and delete `$I`
+   (only that directory, including the throwaway key):
+
+   ```powershell
+   Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue
+   Remove-Item -Recurse -Force $I; Test-Path $I
+   ```
+
+   Expected: no process listed; `False`.
 
 5. **Negative check (falsification).** If `stderr.log` contains
    `WHPX: No accelerator found`, or any other `WHPX:` failure, or QEMU exits before

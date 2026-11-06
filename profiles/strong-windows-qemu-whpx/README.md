@@ -17,14 +17,19 @@ Not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
 
 ## Open items for F-03.2.2
 
-1. **`-mon` is deprecated in QEMU 11.1.3.** The paused boot warned: `'-mon' is
-   deprecated, use '-object' with 'monitor-hmp' or 'monitor-qmp' types instead`.
-   F-03.2.2 moves `launch.argv` to the non-deprecated QMP monitor form and re-runs the
-   paused-boot validation (PREREQUISITES.md, F-03.2.1b step 4) with the changed argv in
-   the same run. The argv is unchanged until then, so the recorded validation still
-   applies to it (Overseer decision, 2026-11-06).
+1. **`-mon` is deprecated in QEMU 11.1.3. Resolved in F-03.2.2a.** The paused boot
+   warned: `'-mon' is deprecated, use '-object' with 'monitor-hmp' or 'monitor-qmp'
+   types instead`. `launch.argv` now creates the QMP monitor with
+   `-object monitor-qmp,id=qmp-monitor,chardev=qmp`, the form the pinned binary
+   documents (`-object monitor-qmp,help`; `deprecated.html`: "`-mon mode=control` is
+   replaced by `-object monitor-qmp`"). The paused-boot validation (PREREQUISITES.md,
+   F-03.2.1b step 4) was re-run with the changed argv and a generated seed: no
+   deprecation warning, QMP answered on the new monitor
+   ([evidence](../../evidence/F-03.2.2a-seed-and-monitor.md)).
 2. **`warning: Ignoring request for interrupt vector 0`.** Printed once during the
-   paused boot, before any guest code ran. Observe on a real boot whether it recurs.
+   paused boot, before any guest code ran, and again in F-03.2.2a's paused boot.
+   Observe on a real boot (F-03.2.2 part b) whether it recurs and whether the guest is
+   affected.
 
 ## Choices
 
@@ -51,7 +56,8 @@ and the virtio-net option ROM is turned off.
 **Seed: a NoCloud volume on a read-only virtio disk.** No host filesystem share of any
 kind (contract section 6). The templates are pinned; the per-instance volume is
 deterministic, so its digest is recorded at `create`. The generator is specified in
-[`../seed/README.md`](../seed/README.md) and built in F-03.2.2.
+[`../seed/README.md`](../seed/README.md) and implemented in
+[`tools/nocloud_seed.py`](../../tools/nocloud_seed.py) (F-03.2.2a).
 
 **Ceilings: 8 vCPU, 16 GiB memory, 40 GiB root disk, 120 GiB scratch disk.** The host
 has 32 logical CPUs, 62 GB of RAM and about 750 GB free on D:. One guest leaves 24 CPUs
@@ -83,9 +89,10 @@ unobserved until F-03.2.2's guest-side check.
 **Other boot settings.** `-nodefaults` and `-no-user-config`; machine `pc-q35-11.1`
 (the versioned type, so the hardware is reproducible); `-display none`; no USB, audio,
 VGA, HMP monitor, virtio-serial or guest agent; serial console to a file in the
-instance directory; virtio-rng for first-boot key generation. The root overlay's
-backing node is bound explicitly to the pinned image, so the overlay header's backing
-path is never trusted.
+instance directory; virtio-rng for first-boot key generation. QMP is the only
+monitor, created with `-object monitor-qmp` on the loopback socket chardev (QEMU 11.1
+deprecates `-mon`). The root overlay's backing node is bound explicitly to the pinned
+image, so the overlay header's backing path is never trusted.
 
 ## QEMU for Windows: channels compared (2026-11-06)
 

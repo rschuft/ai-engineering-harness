@@ -31,12 +31,32 @@ directory, never to `~/.ssh`.
   computes that ISO, so its digest is observed, not pinned; the template digests are
   pinned.
 
-## Generator specification (implementation: F-03.2.2)
+## Generator specification (implemented: F-03.2.2a)
 
-Not implemented in F-03.2.1: a reviewed ISO 9660 writer with tests is larger than this
-leaf allows. F-03.2.1b's paused boot uses the placeholder in
-[`../strong-windows-qemu-whpx/PREREQUISITES.md`](../strong-windows-qemu-whpx/PREREQUISITES.md);
-a paused boot (`-S`) runs no guest code, so the seed's content is not read.
+**Implemented** in [`tools/nocloud_seed.py`](../../tools/nocloud_seed.py), tested by
+[`tools/tests/test_nocloud_seed.py`](../../tools/tests/test_nocloud_seed.py)
+(F-03.2.2a, [evidence](../../evidence/F-03.2.2a-seed-and-monitor.md)). F-03.2.1b's
+paused boot used a zero-filled placeholder; F-03.2.2a's paused boot used a generated
+`seed.iso` ([`PREREQUISITES.md`](../strong-windows-qemu-whpx/PREREQUISITES.md),
+step 4). A paused boot (`-S`) runs no guest code, so the seed's content is not read.
+
+```
+python -I -B tools/nocloud_seed.py --profile profiles/strong-windows-qemu-whpx \
+    --instance-dir <state_dir>/instances/<name> --instance-name <name> \
+    --public-key <state_dir>/instances/<name>/ssh/id_ed25519.pub [--instance-id <name>-<uuid>]
+```
+
+It prints one JSON object: `sha256` of `seed.iso` (for the launch record), `size_bytes`,
+`instance_id` (generated as the name plus a random UUID when not given), and the
+sha256 of each template and rendered file. A refused input prints `REFUSED: <reason>`
+on stderr, exits 1 and writes nothing; an existing `seed.iso` is never overwritten.
+Implementation choices within the specification: the primary (ISO 9660 level 1) names
+are `META_DAT.;1`, `NETWORK_.;1` and `USER_DAT.;1`, as `genisoimage` derives them; the
+Joliet names carry no `;1` version; the creation and modification dates are
+1970-01-01T00:00:00Z and the expiration and effective dates are "not specified"; the
+image is not padded beyond its last file block. The public key is one
+`ssh-ed25519 <base64> [comment]` line whose blob decodes to the type string and a
+32-byte key, with at most one comment token of `[A-Za-z0-9._@+=-]` (no options).
 
 The generator must:
 1. Be stdlib-only Python, run with `python -I`, need no host install, and write only
@@ -58,5 +78,7 @@ The generator must:
 
 Its tests must show: determinism (two runs, same digest); a different key gives a
 different digest; refusal on a tampered template; and a round-trip read of the volume
-descriptors and Joliet directory with a stdlib reader. Whether the Debian guest's
-cloud-init accepts the volume is observed in F-03.2.2 (UNKNOWN until then).
+descriptors and Joliet directory with a stdlib reader. `tools/tests/test_nocloud_seed.py`
+shows each, plus refusal of an unknown, missing or leftover placeholder and of malformed
+public keys, and a pinned digest for a fixed input. Whether the Debian guest's
+cloud-init accepts the volume is observed in F-03.2.2 part b (UNKNOWN until then).

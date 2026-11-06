@@ -12,7 +12,7 @@
   "status": {
     "operational": false,
     "operational_gate": "C6: not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass, cited by property id.",
-    "provider_validation": "PASS, 2026-11-06 (F-03.2.1b, evidence/F-03.2.1b-provider-validation.md): the paused boot (-S) with the full launch.argv answered QMP in prelaunch with 8 CPUs and 16 GiB, and quit exited 0. Observed warnings: -mon is deprecated; 'Ignoring request for interrupt vector 0' (open items for F-03.2.2 in README.md).",
+    "provider_validation": "PASS, 2026-11-06 (F-03.2.1b, evidence/F-03.2.1b-provider-validation.md): the paused boot (-S) with the full launch.argv answered QMP in prelaunch with 8 CPUs and 16 GiB, and quit exited 0. Observed warnings: -mon is deprecated; 'Ignoring request for interrupt vector 0' (open items for F-03.2.2 in README.md). Re-validated 2026-11-06 (F-03.2.2a, evidence/F-03.2.2a-seed-and-monitor.md) after -mon was replaced by -object monitor-qmp: the paused boot with a generated seed.iso answered QMP in prelaunch with enabled whpx, query-block listed root, scratch and seed (seed and base read-only), quit exited 0, and no deprecation warning was printed; 'Ignoring request for interrupt vector 0' recurred.",
     "schema_check": "tools/check_profile.py"
   },
   "host": {
@@ -120,7 +120,9 @@
       },
       "generator": {
         "spec": "profiles/seed/README.md",
-        "status": "specified; implemented and tested in F-03.2.2"
+        "module": "tools/nocloud_seed.py",
+        "tests": "tools/tests/test_nocloud_seed.py",
+        "status": "implemented and tested in F-03.2.2a; the Debian guest's cloud-init accepting the volume is observed in F-03.2.2 part b"
       },
       "local_path": "{instance_dir}/seed.iso",
       "record_at_create": "sha256 of seed.iso in the launch record; the same inputs give the same digest."
@@ -264,7 +266,7 @@
       "-chardev", "file,id=serial0,path={instance_dir}/serial.log",
       "-serial", "chardev:serial0",
       "-chardev", "socket,id=qmp,host=127.0.0.1,port={qmp_port},server=on,wait=off",
-      "-mon", "chardev=qmp,mode=control",
+      "-object", "monitor-qmp,id=qmp-monitor,chardev=qmp",
       "-pidfile", "{instance_dir}/qemu.pid",
       "-rtc", "base=utc",
       "-boot", "strict=on",
@@ -273,8 +275,8 @@
     "per_instance_files": {
       "root.qcow2": "qemu-img create -f qcow2 -b {input:image} -F qcow2 {instance_dir}/root.qcow2 40G",
       "scratch.qcow2": "qemu-img create -f qcow2 {instance_dir}/scratch.qcow2 120G",
-      "seed.iso": "seed generator (profiles/seed/README.md)"
+      "seed.iso": "python -I -B tools/nocloud_seed.py --profile profiles/strong-windows-qemu-whpx --instance-dir {instance_dir} --instance-name {instance} --public-key {instance_dir}/ssh/id_ed25519.pub (profiles/seed/README.md)"
     },
-    "notes": "No USB controller, audio device, display, VGA, monitor (HMP), file share, 9p, SMB or virtio-serial device is created: -nodefaults removes the defaults and none is added. The root overlay's backing node is bound explicitly to the pinned image, so the overlay header's backing path is not trusted."
+    "notes": "QMP is the one monitor, created with -object monitor-qmp on the loopback socket chardev (QEMU 11.1 deprecates -mon). No USB controller, audio device, display, VGA, monitor (HMP), file share, 9p, SMB or virtio-serial device is created: -nodefaults removes the defaults and none is added. The root overlay's backing node is bound explicitly to the pinned image, so the overlay header's backing path is not trusted."
   }
 }
