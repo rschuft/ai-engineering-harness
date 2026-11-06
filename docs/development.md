@@ -148,6 +148,7 @@ Only what is listed as verified has been exercised.
 | `guest:canaries OUT=<dir>` | `python -I -B tools/guest.py canaries --out <dir>` | no | Writes a synthetic canary set and fake home into a new directory outside the checkout. |
 | `guest:create-canaries PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | `create` with the canary set planted in its own environment first (the P5 test). |
 | `guest:check-surfaces PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py check-surfaces --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | Startup inspection test for profiles P3 to P6 (F-03.3.1): exit 0 only when all four PASS. |
+| `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
 | `scan:history [-- REVS]` | `python -I -B tools/publication_gate.py history [REVS]` | no | Read-only, redacted scan of every commit (default `--all`); exit 1 on findings. |
@@ -239,6 +240,26 @@ defaults them.
   is not reachable from the guest. The canary set comes from `canaries` and is planted
   by `create --canaries`; canary values never travel to the guest (the guest's files
   come to the host and are searched there), and records carry only their sha256.
+- `netprobe` (F-03.3.2) is a **test-only validation mode**, authorized by decision
+  0003, "Owner authorization: network validation". It starts one listener process
+  with three sockets on 127.0.0.1 at OS-chosen ports: the test listener, which only
+  answers a nonce exchange, and a TCP and a UDP decoy that are never forwarded. It
+  then creates a disposable guest whose seed carries a second user-data part, the
+  pinned probe script
+  [`validation/netprobe/netprobe.py`](../profiles/strong-windows-qemu-whpx/validation/netprobe/netprobe.py),
+  which cloud-init runs once as root. The guest's `-netdev` also gets one
+  `guestfwd=tcp:10.0.2.100:7000-tcp:127.0.0.1:<listener port>`. As root, the probe
+  adds a default route, resolvers and an IPv6 address and route, exchanges the nonce
+  through the forward, tries every denied path (public IPv4 and IPv6 literals, ICMP,
+  DNS, the host's addresses, the host's loopback through `10.0.2.2`, the decoys), and
+  repeats this from a network namespace behind guest NAT. `netprobe` collects the
+  result and the listener log, stops the listener, checks that its sockets were on
+  127.0.0.1 only and are gone, and gives the machine verdict for P7. `launch.json`
+  records the instance as a validation instance with the full effective argv. The
+  ordinary `create` takes none of these inputs, `launch` refuses a `guestfwd` that no
+  validation record declares, and `start` refuses a validation instance. `inspect` of
+  a validation instance adds the netprobe checks to P7; for an ordinary instance, P7
+  cites the enforcement point's qualification. Destroy the instance after the cycle.
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);

@@ -10,7 +10,11 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
 - the guest's approved volume and mount table (``guest_storage``) and the exchange
   bounds (``exchange``) are declared, and for QEMU the volume table matches
   ``launch.argv`` exactly (profiles P3, P4; F-03.3.1);
-- every forward and management endpoint binds to 127.0.0.1 (profiles P7);
+- every forward and management endpoint binds to 127.0.0.1 (profiles P7); a declared
+  enforcement point names its status, and a qualified or failed one cites its
+  evidence and, when qualified, a reachability table of permitted and denied paths;
+  an endpoint that is still deferred has no port and no guest forwarding rule
+  (F-03.3.2);
 - ceilings are declared and match the provider configuration (profiles P2);
 - exactly one accelerator and no TCG fallback (contract section 4);
 - the lifecycle is the contract's closed set (contract section 3).
@@ -285,7 +289,7 @@ def check_lifecycle(report, profile, properties):
         report.fail(f'lifecycle: no provider binding for {missing}')
 
 
-def check_network(report, profile, properties):
+def check_network(report, profile, properties, root=REPO):
     network = profile.get('network')
     if not isinstance(network, dict):
         report.fail('network: missing (profiles P7)')
@@ -306,6 +310,76 @@ def check_network(report, profile, properties):
     missing = set(properties['endpoint_classes']) - classes
     if missing:
         report.fail(f'network: endpoint classes not enumerated: {sorted(missing)}')
+    check_enforcement_point(report, profile, root)
+
+
+ENFORCEMENT_STATUSES = ('candidate', 'qualified', 'failed')
+EVIDENCE_PATH = re.compile(r'^evidence/[A-Za-z0-9._-]+\.md$')
+REACHABILITY_FIELDS = ('path', 'protocol', 'observed')
+
+
+def guestfwd_rules(argv):
+    rules = []
+    for i, arg in enumerate(argv or []):
+        if arg == '-netdev' and i + 1 < len(argv):
+            rules += [part for part in str(argv[i + 1]).split(',') if part.startswith('guestfwd=')]
+    return rules
+
+
+def check_enforcement_point(report, profile, root):
+    """profiles P7 (F-03.3.2): the enforcement point's status and its evidence."""
+    network = profile.get('network') or {}
+    point = network.get('enforcement_point')
+    deferred = [e for e in network.get('endpoints') or []
+                if str(e.get('status', '')).startswith('deferred')]
+    for endpoint in deferred:
+        if endpoint.get('host_port') is not None:
+            report.fail(f'network: deferred {endpoint.get("class")} endpoint declares a host port')
+    active_guestfwd = [e for e in network.get('endpoints') or [] if e not in deferred
+                       and 'guestfwd' in str(e.get('mechanism', ''))]
+    rules = guestfwd_rules((profile.get('launch') or {}).get('argv'))
+    if len(rules) != len(active_guestfwd):
+        report.fail(f'launch.argv: {len(rules)} guestfwd rule(s), but {len(active_guestfwd)} '
+                    'active guestfwd endpoint(s) are declared (profiles P7)')
+    if isinstance(point, str):
+        return                                   # a candidate, named in prose
+    if not isinstance(point, dict):
+        report.fail('network: enforcement_point must be a string or an object')
+        return
+    if not isinstance(point.get('mechanism'), str) or not point['mechanism'].strip():
+        report.fail('network: enforcement_point.mechanism must be named')
+    status = point.get('status')
+    if status not in ENFORCEMENT_STATUSES:
+        report.fail(f'network: enforcement_point.status must be one of {list(ENFORCEMENT_STATUSES)}')
+        return
+    if status == 'candidate':
+        return
+    evidence = point.get('evidence')
+    if not isinstance(evidence, str) or not EVIDENCE_PATH.match(evidence):
+        report.fail(f'network: a {status} enforcement point cites its evidence (evidence/<file>.md)')
+    elif not (root / evidence).is_file():
+        report.fail(f'network: enforcement_point.evidence {evidence} is missing')
+    if not point.get('qualified_by'):
+        report.fail(f'network: a {status} enforcement point names the leaf that tested it '
+                    '(qualified_by)')
+    if 'validation_overlay' in point:
+        check_repo_file(report, root, 'network.enforcement_point.validation_overlay',
+                        point['validation_overlay'])
+    if status != 'qualified':
+        return
+    table = network.get('reachability')
+    if not isinstance(table, dict):
+        report.fail('network: a qualified enforcement point needs a reachability table')
+        return
+    for kind in ('permitted', 'denied'):
+        rows = table.get(kind)
+        if not isinstance(rows, list) or not rows:
+            report.fail(f'network: reachability.{kind} must list at least one path')
+            continue
+        for n, row in enumerate(rows):
+            if not isinstance(row, dict) or any(not isinstance(row.get(f), str) or
+                                                not row[f].strip() for f in REACHABILITY_FIELDS):
+                report.fail(f'network: reachability.{kind}[{n}] needs {list(REACHABILITY_FIELDS)}')
 
 
 def check_isolation(report, profile):
@@ -822,7 +896,7 @@ def check(profile, root=REPO):
     ceilings = check_ceilings(report, profile)
     check_state_dir(report, profile)
     check_lifecycle(report, profile, properties)
-    check_network(report, profile, properties)
+    check_network(report, profile, properties, root)
     check_isolation(report, profile)
     check_guest_storage(report, profile)
     check_exchange(report, profile)

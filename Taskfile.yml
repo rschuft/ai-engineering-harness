@@ -173,6 +173,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py check-surfaces --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}"'
 
+  guest:netprobe:
+    desc: "TEST-ONLY network validation for profiles P7 (F-03.3.2; decision 0003, Owner authorization: network validation): a disposable guest with the pinned root probe and one test guestfwd to a 127.0.0.1 listener; exit 0 only on PASS (python -I -B tools/guest.py netprobe --profile PROFILE --state-dir STATE_DIR --name NAME)"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py netprobe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
   guest:stop:
     desc: Stop a guest (QMP system_powerdown, QMP quit after stop_timeout_s, then that process only) (python -I -B tools/guest.py stop --profile PROFILE --state-dir STATE_DIR --name NAME)
     requires:

@@ -1460,5 +1460,635 @@ class Exchange(TempState):
         self.assertNotIn('-p', argv)
 
 
+# ---------------------------------------------------------------- netprobe (F-03.3.2)
+
+NETPROBE_FILE = PROFILE_DIR / 'validation' / 'netprobe' / 'netprobe.py'
+NP_PORTS = {'listener': 40003, 'decoy_tcp': 40004, 'decoy_udp': 40005}
+
+
+def load_netprobe_module():
+    """The guest probe program, imported on the host (its main() never runs here)."""
+    spec = importlib.util.spec_from_file_location('aieh_netprobe', NETPROBE_FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+NP = load_netprobe_module()
+
+
+def sample_params():
+    return guest.netprobe_params(PORTS, NP_PORTS, ['192.0.2.10'], ['2001:db8::10'],
+                                 ('192.0.2.80', '2001:db8::80'))
+
+
+class NetprobeOverlay(unittest.TestCase):
+    def test_pin_matches_the_committed_script(self):
+        self.assertEqual(hashlib.sha256(NETPROBE_FILE.read_bytes()).hexdigest(),
+                         guest.NETPROBE_SCRIPT_SHA256)
+        self.assertEqual(guest.netprobe_script_path(PROFILE_DIR / 'profile.json'), NETPROBE_FILE)
+        self.assertEqual(NP.PARAMS_JSON, '{}')
+        self.assertEqual(NP.V6_ADDR, guest.NETPROBE_V6_ADDR)
+        self.assertEqual(NP.MARKER, guest.NETPROBE_MARKER)
+
+    def test_render_replaces_only_the_parameter_line(self):
+        raw = NETPROBE_FILE.read_bytes()
+        out = guest.render_netprobe_script(raw, sample_params())
+        old, new = raw.decode('ascii').split('\n'), out.decode('ascii').split('\n')
+        self.assertEqual(len(old), len(new))
+        diff = [(a, b) for a, b in zip(old, new) if a != b]
+        self.assertEqual(len(diff), 1)
+        self.assertEqual(diff[0][0], guest.NETPROBE_PARAMS_LINE)
+        namespace = {}
+        exec(diff[0][1], namespace)                              # one assignment of a literal
+        self.assertEqual(json.loads(namespace['PARAMS_JSON']), sample_params())
+        compile(out, 'aieh-netprobe.py', 'exec')
+
+    def test_render_refuses_a_changed_script(self):
+        raw = NETPROBE_FILE.read_bytes()
+        with self.assertRaises(guest.Refused) as cm:
+            guest.render_netprobe_script(raw + b'# extra\n', sample_params())
+        self.assertEqual(cm.exception.code, 'DIGEST_MISMATCH')
+        for variant in (raw.replace(b'\n', b'\r\n'),
+                        raw + guest.NETPROBE_PARAMS_LINE.encode('ascii') + b'\n',
+                        raw.replace(guest.NETPROBE_PARAMS_LINE.encode('ascii'), b'PARAMS_JSON = 1')):
+            with mock.patch.object(guest, 'NETPROBE_SCRIPT_SHA256',
+                                   hashlib.sha256(variant).hexdigest()):
+                with self.assertRaises(guest.Refused):
+                    guest.render_netprobe_script(variant, sample_params())
+
+    def test_params_are_literals_only(self):
+        good = sample_params()
+        mutations = [
+            lambda p: p['host_ipv4'].append('192.0.2.1; reboot'),
+            lambda p: p['host_ipv6'].append('192.0.2.1'),
+            lambda p: p['host_ports'].__setitem__('ssh', 0),
+            lambda p: p['host_ports'].__setitem__('qmp', True),
+            lambda p: p['guestfwd'].__setitem__('addr', '10.0.2.2'),
+            lambda p: p['guestfwd'].__setitem__('addr', '192.0.2.100'),
+            lambda p: p.__setitem__('extra', 1),
+            lambda p: p.__setitem__('marker', "x'; import os"),
+            lambda p: p['public_ipv4_tcp'].append(['1.1.1.1']),
+            lambda p: p.__setitem__('debian_ipv4', 'deb.debian.org'),
+        ]
+        for mutate in mutations:
+            params = copy.deepcopy(good)
+            mutate(params)
+            with self.assertRaises(guest.Refused):
+                guest.validate_netprobe_params(params)
+
+    def test_user_data_parts(self):
+        import email
+        ordinary = (REPO / 'profiles' / 'seed' / 'user-data.tmpl').read_bytes()
+        script = guest.render_netprobe_script(NETPROBE_FILE.read_bytes(), sample_params())
+        data = guest.netprobe_user_data(ordinary, script)
+        message = email.message_from_bytes(data)
+        self.assertTrue(message.is_multipart())
+        parts = message.get_payload()
+        self.assertEqual([p.get_content_type() for p in parts],
+                         ['text/cloud-config', 'text/x-shellscript'])
+        self.assertEqual([p.get_filename() for p in parts], ['cloud-config.yaml', 'aieh-netprobe.py'])
+        self.assertEqual(parts[0].get_payload(decode=True), ordinary)     # byte-identical
+        self.assertEqual(parts[1].get_payload(decode=True), script)
+        for bad in (ordinary + guest.NETPROBE_BOUNDARY.encode('ascii'), ordinary + b'\r\n',
+                    ordinary + '\u00e9'.encode('utf-8')):
+            with self.assertRaises(guest.Refused):
+                guest.netprobe_user_data(bad, script)
+
+
+class NetprobeSeed(TempState):
+    def test_seed_wraps_only_the_user_data(self):
+        idir = self.tmp / 'inst'
+        (idir / 'ssh').mkdir(parents=True)
+        key = keygen(idir / 'ssh')
+        script = guest.render_netprobe_script(NETPROBE_FILE.read_bytes(), sample_params())
+        seed = guest.netprobe_seed(PROFILE_DIR / 'profile.json', idir, 'abc',
+                                   key.with_suffix('.pub'), script)
+        gen = guest.load_seed_generator()
+        profile, root = gen.load_profile(str(PROFILE_DIR))
+        values = {'agent_ssh_public_key': gen.read_public_key(str(key.with_suffix('.pub'))),
+                  'scratch_device': gen.scratch_device(profile),
+                  'instance_id': seed['instance_id'], 'instance_name': 'abc'}
+        ordinary = gen.render(gen.read_templates(profile, root), values)
+        self.assertEqual(seed['validation']['ordinary_user_data_sha256'],
+                         hashlib.sha256(ordinary['user-data']).hexdigest())
+        for name in ('meta-data', 'network-config'):
+            self.assertEqual(seed['rendered_sha256'][name],
+                             hashlib.sha256(ordinary[name]).hexdigest(), name)
+        self.assertEqual(seed['templates'], {k: v['sha256'] for k, v in
+                                             PROFILE['boot_inputs']['seed']['templates'].items()})
+        image = (idir / 'seed.iso').read_bytes()
+        self.assertEqual(hashlib.sha256(image).hexdigest(), seed['sha256'])
+        self.assertIn(guest.netprobe_user_data(ordinary['user-data'], script), image)
+        with self.assertRaises(FileExistsError):                  # never overwritten
+            guest.netprobe_seed(PROFILE_DIR / 'profile.json', idir, 'abc',
+                                key.with_suffix('.pub'), script)
+
+
+class NetprobeArgv(unittest.TestCase):
+    def argv(self):
+        return guest.render_argv(PROFILE, guest.resolve_values(PROFILE, 'D:/state', 'abc', PORTS))
+
+    def test_one_guestfwd_appended_to_the_netdev(self):
+        argv = self.argv()
+        rule = guest.netprobe_guestfwd_rule(40003)
+        self.assertEqual(rule, 'tcp:10.0.2.100:7000-tcp:127.0.0.1:40003')
+        effective, changes = guest.netprobe_argv(argv, rule)
+        diffs = [i for i, (a, b) in enumerate(zip(argv, effective)) if a != b]
+        self.assertEqual(len(argv), len(effective))
+        self.assertEqual(diffs, [changes[0]['index']])
+        self.assertEqual(effective[diffs[0]], argv[diffs[0]] + ',guestfwd=' + rule)
+        self.assertEqual(effective[diffs[0] - 1], '-netdev')
+        self.assertEqual(guest.forwarding_rules(effective), [rule])
+        self.assertEqual(guest.forwarding_rules(argv), [])
+
+    def test_the_profile_and_the_seed_templates_carry_no_validation_input(self):
+        self.assertNotIn('guestfwd', json.dumps(PROFILE['launch']['argv']))
+        for name in ('user-data.tmpl', 'meta-data.tmpl', 'network-config.yaml'):
+            text = (REPO / 'profiles' / 'seed' / name).read_text(encoding='utf-8')
+            for word in ('netprobe', 'x-shellscript', 'multipart'):
+                self.assertNotIn(word, text, name)
+
+    def test_effective_netdev_passes_the_profile_network_rules(self):
+        spec = importlib.util.spec_from_file_location('check_profile', REPO / 'tools' / 'check_profile.py')
+        cp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cp)
+        effective, changes = guest.netprobe_argv(self.argv(), guest.netprobe_guestfwd_rule(40003))
+        report = cp.Report('x')
+        cp.check_qemu_net(report, '-netdev', changes[0]['effective'])
+        self.assertEqual(report.errors, [])
+
+    def test_refusals(self):
+        argv = self.argv()
+        rule = guest.netprobe_guestfwd_rule(40003)
+        for bad_rule in ('tcp:10.0.2.100:7000-tcp:192.0.2.1:80', 'tcp:10.0.2.100:7000-cmd:nc x 1',
+                         'tcp:192.0.2.100:7000-tcp:127.0.0.1:1'):
+            with self.assertRaises(guest.Refused, msg=bad_rule):
+                guest.netprobe_argv(argv, bad_rule)
+        no_netdev = [a for a in argv if not a.startswith('user,') and a != '-netdev']
+        with self.assertRaises(guest.Refused):
+            guest.netprobe_argv(no_netdev, rule)
+        twice, _ = guest.netprobe_argv(argv, rule)
+        with self.assertRaises(guest.Refused):
+            guest.netprobe_argv(twice, rule)
+
+
+def validation_record(record, listener_port=40003):
+    """A netprobe launch record built from an ordinary one, as create builds it."""
+    out = copy.deepcopy(record)
+    ports = dict(NP_PORTS, listener=listener_port)
+    script = guest.render_netprobe_script(NETPROBE_FILE.read_bytes(), sample_params())
+    out['argv'], out['validation'] = guest.netprobe_validation(
+        record['argv'], ports, 5000, 'profiles/strong-windows-qemu-whpx/validation/netprobe/netprobe.py',
+        script, {'ordinary_user_data_sha256': '0' * 64}, sample_params())
+    return out
+
+
+class ForwardingGuard(LaunchRecord):
+    def test_ordinary_record(self):
+        self.assertEqual(guest.check_forwarding(self.record), [])
+        bad = copy.deepcopy(self.record)
+        bad['argv'], _ = guest.netprobe_argv(bad['argv'], guest.netprobe_guestfwd_rule(40003))
+        with self.assertRaises(guest.Refused):
+            guest.check_forwarding(bad)                       # guestfwd without a validation mode
+
+    def test_validation_record_declares_exactly_its_rule(self):
+        rec = validation_record(self.record)
+        self.assertEqual(guest.check_forwarding(rec), [rec['validation']['guestfwd']['rule']])
+        other = copy.deepcopy(rec)
+        other['validation']['guestfwd']['rule'] = guest.netprobe_guestfwd_rule(40009)
+        with self.assertRaises(guest.Refused):
+            guest.check_forwarding(other)
+        twice = copy.deepcopy(rec)
+        i = rec['validation']['argv_changes'][0]['index']
+        twice['argv'][i] += ',guestfwd=' + guest.netprobe_guestfwd_rule(40009)
+        with self.assertRaises(guest.Refused):
+            guest.check_forwarding(twice)
+        wrong_mode = copy.deepcopy(rec)
+        wrong_mode['validation']['mode'] = 'other'
+        with self.assertRaises(guest.Refused):
+            guest.check_forwarding(wrong_mode)
+
+    def test_launch_refuses_before_starting_anything(self):
+        bad = copy.deepcopy(self.record)
+        bad['argv'], _ = guest.netprobe_argv(bad['argv'], guest.netprobe_guestfwd_rule(40003))
+        with mock.patch.object(guest.subprocess, 'Popen') as popen:
+            with self.assertRaises(guest.Refused):
+                guest.launch(None, self.tmp, bad, 'start')
+        popen.assert_not_called()
+
+
+class OrdinaryPathRefusesValidation(TempState):
+    def test_create_takes_no_overlay(self):
+        with self.assertRaises(guest.Refused):
+            guest.create(self.ctx(), 'abc', netprobe={'guestfwd': 'x'})
+        self.assertFalse((self.state / 'instances' / 'abc').exists())
+
+    def test_cli_create_has_no_netprobe_option(self):
+        import contextlib
+        err = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
+        out = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out),                 self.assertRaises(SystemExit) as cm:
+            guest.main(['create', '--profile', str(PROFILE_DIR), '--state-dir', str(self.state),
+                        '--name', 'abc', '--netprobe'])
+        self.assertEqual(cm.exception.code, 2)
+        err.flush()
+        self.assertIn('unrecognized arguments: --netprobe', err.buffer.getvalue().decode('utf-8'))
+        self.assertFalse((self.state / 'instances').exists())
+
+    def test_start_refuses_a_validation_instance(self):
+        idir = self.state / 'instances' / 'abc'
+        idir.mkdir(parents=True)
+        (idir / 'launch.json').write_text(json.dumps(
+            {'schema': guest.LAUNCH_SCHEMA, 'validation': {'mode': 'netprobe'}}), encoding='utf-8')
+        with mock.patch.object(guest, 'launch') as launch:
+            with self.assertRaises(guest.Refused) as cm:
+                guest.start(self.ctx(), 'abc')
+        launch.assert_not_called()
+        self.assertIn('single boot', str(cm.exception))
+
+
+class NetprobeListener(unittest.TestCase):
+    """The real listener process on 127.0.0.1, driven by the guest program's own client
+    functions (no QEMU, no guest, nothing beyond loopback)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-netprobe-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.log = self.tmp / 'listener.jsonl'
+        import sys
+        self.proc = subprocess.Popen([sys.executable, '-I', '-B', str(REPO / 'tools' / 'guest.py'),
+                                      'netprobe-listen', '--log', str(self.log)],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.addCleanup(self.cleanup)
+        self.ready = json.loads(self.proc.stdout.readline())
+
+    def cleanup(self):
+        if self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait(10)
+        self.proc.stdout.close()
+        if not self.proc.stdin.closed:
+            self.proc.stdin.close()
+
+    def stop(self):
+        self.proc.stdin.close()
+        rc = self.proc.wait(timeout=30)
+        return rc, [json.loads(line) for line in self.log.read_text(encoding='utf-8').splitlines()]
+
+    def test_exchange_decoys_and_stop(self):
+        out = NP.exchange('127.0.0.1', self.ready['listener'], 'guest')
+        self.assertEqual(out['result'], 'exchanged', out)
+        self.assertRegex(out['nonce'], r'^[0-9a-f]{32}$')
+        decoy = NP.tcp('127.0.0.1', self.ready['decoy_tcp'])
+        self.assertEqual((decoy['result'], decoy['banner']), ('connected', 'AIEH-DECOY\n'))
+        self.assertEqual(NP.udp_send('127.0.0.1', self.ready['decoy_udp'], 'guest')['result'],
+                         'no-reply')
+        rc, events = self.stop()
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[0]['event'], 'ready')
+        self.assertEqual(events[0]['bind'], '127.0.0.1')
+        self.assertEqual(events[-1]['event'], 'stop')
+        exchanges = [e for e in events if e.get('event') == 'exchange']
+        self.assertEqual([(e['label'], e['nonce'], e['echoed'], e['matched']) for e in exchanges],
+                         [('guest', out['nonce'], out['nonce'], True)])
+        self.assertTrue(any(e.get('socket') == 'decoy-tcp' and e.get('event') == 'accept'
+                            for e in events))
+        datagrams = [e for e in events if e.get('event') == 'datagram']
+        self.assertEqual([d['data'] for d in datagrams], ['AIEH-NETPROBE UDP guest\n'])
+        for e in events:
+            if 'peer' in e:
+                self.assertEqual(e['peer'][0], '127.0.0.1')
+
+    def test_one_stream_carries_consecutive_exchanges(self):
+        """QEMU's guestfwd chardev is one connection that carries every guest connection."""
+        with socket.create_connection(('127.0.0.1', self.ready['listener']), timeout=10) as s:
+            nonces = []
+            for label in ('guest', 'netns'):
+                s.sendall(f'AIEH-NETPROBE HELLO {label}\n'.encode())
+                nonce = NP.read_line(s, NP.time.monotonic() + 10).split()[2]
+                s.sendall(f'AIEH-NETPROBE ECHO {nonce}\n'.encode())
+                self.assertEqual(NP.read_line(s, NP.time.monotonic() + 10), f'AIEH-NETPROBE OK {label}')
+                nonces.append(nonce)
+            s.sendall(b'AIEH-NETPROBE HELLO guest\n')
+            NP.read_line(s, NP.time.monotonic() + 10)
+            s.sendall(b'AIEH-NETPROBE ECHO ' + b'0' * 32 + b'\n')      # a wrong echo
+            self.assertEqual(NP.read_line(s, NP.time.monotonic() + 10), 'AIEH-NETPROBE BAD')
+        rc, events = self.stop()
+        self.assertEqual(len(set(nonces)), 2)                           # a fresh nonce each time
+        self.assertEqual([(e['label'], e['matched']) for e in events if e.get('event') == 'exchange'],
+                         [('guest', True), ('netns', True), ('guest', False)])
+
+    def test_client_results(self):
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', 0))
+            closed = s.getsockname()[1]                                 # bound, not listening
+            self.assertEqual(NP.tcp('127.0.0.1', closed)['result'], 'refused')
+            self.assertEqual(NP.exchange('127.0.0.1', closed, 'guest')['result'], 'refused')
+        self.assertEqual(NP.exchange('127.0.0.1', self.ready['decoy_tcp'], 'guest')['result'],
+                         'connected-no-exchange')
+        self.stop()
+
+
+def link_stats(tx):
+    return {'out': json.dumps([{'ifname': 'enp0s4', 'stats64': {'tx': {'packets': tx}}}]), 'rc': 0}
+
+
+def snapshot(default, tx):
+    return {'ip_route': {'out': ('default via 10.0.2.2 dev enp0s4 \n' if default else '') +
+                         '10.0.2.0/24 dev enp0s4 proto kernel scope link src 10.0.2.15', 'rc': 0},
+            'ip6_route': {'out': 'fec0::/64 dev enp0s4 proto kernel metric 256 pref medium\n'
+                                 'default via fec0::2 dev enp0s4 metric 1024 pref medium'
+                          if default else '', 'rc': 0},
+            'link_stats': link_stats(tx)}
+
+
+DENIED_RESULT = {'tcp': 'timeout', 'tcp-dns': 'timeout', 'udp-dns': 'no-reply', 'udp': 'no-reply',
+                 'icmp': 'no-reply', 'resolve': 'not-found'}
+
+
+def passing_netprobe():
+    params = sample_params()
+
+    def probes(scope):
+        return [dict(row, result='reply' if row['expect'] == 'info' else DENIED_RESULT[row['kind']])
+                for row in NP.probe_table(params, scope)]
+
+    n1, n2 = 'a' * 32, 'b' * 32
+    gr = {'uid': 0, 'before': snapshot(False, 10), 'after_setup': snapshot(True, 100),
+          'after_probes': snapshot(True, 400), 'after': snapshot(True, 500),
+          'guest': {'positive': {'result': 'exchanged', 'nonce': n1, 'target': '10.0.2.100:7000',
+                                 'lines': []}, 'probes': probes('guest')},
+          'netns': {'configured': True, 'setup': [{'argv': ['ip'], 'rc': 0}],
+                    'positive': {'result': 'exchanged', 'nonce': n2, 'target': '10.0.2.100:7000',
+                                 'lines': []}, 'probes': probes('netns')}}
+    qemu_peer = ['127.0.0.1', 60000]
+    log = [{'event': 'ready', 'bind': '127.0.0.1', 'ports': NP_PORTS},
+           {'socket': 'decoy-tcp', 'event': 'accept', 'peer': ['127.0.0.1', 50001]},
+           {'socket': 'decoy-udp', 'event': 'datagram', 'peer': ['127.0.0.1', 50002], 'bytes': 20},
+           {'socket': 'listener', 'event': 'accept', 'peer': qemu_peer},
+           {'socket': 'listener', 'event': 'exchange', 'peer': qemu_peer, 'label': 'guest',
+            'nonce': n1, 'echoed': n1, 'matched': True},
+           {'socket': 'listener', 'event': 'exchange', 'peer': qemu_peer, 'label': 'netns',
+            'nonce': n2, 'echoed': n2, 'matched': True},
+           {'socket': 'decoy-tcp', 'event': 'accept', 'peer': ['127.0.0.1', 50003]},
+           {'socket': 'decoy-udp', 'event': 'datagram', 'peer': ['127.0.0.1', 50004], 'bytes': 19},
+           {'event': 'stop'}]
+    listener = {
+        'pid': 5000, 'ports': dict(NP_PORTS), 'exit': 0, 'killed': False, 'log': log,
+        'bindings_before': {
+            'tcp_by_pid': [{'LocalAddress': '127.0.0.1', 'LocalPort': 40003, 'State': 'Listen'},
+                           {'LocalAddress': '127.0.0.1', 'LocalPort': 40004, 'State': 'Listen'}],
+            'udp_by_pid': {'LocalAddress': '127.0.0.1', 'LocalPort': 40005}},   # one, unwrapped
+        'bindings_after': {'tcp_by_pid': [], 'udp_by_pid': [], 'tcp_by_port': [], 'udp_by_port': []},
+        'selfchecks': [{'phase': 'before', 'tcp_local_port': 50001, 'udp_local_port': 50002},
+                       {'phase': 'after', 'tcp_local_port': 50003, 'udp_local_port': 50004}]}
+    return {'guest_result': gr, 'listener': listener, 'qemu_pid': 4242,
+            'guestfwd_connections': {'tcp_to_listener': [
+                {'LocalAddress': '127.0.0.1', 'LocalPort': 60000, 'RemotePort': 40003,
+                 'OwningProcess': 4242, 'State': 'Established'}]}}
+
+
+class NetprobeVerdict(Evaluate):
+    """F-03.3.2 negative controls: one violation per sample observation, and P7 must FAIL
+    (or, where nothing is shown either way, must not PASS)."""
+
+    def setUp(self):
+        super().setUp()
+        self.vrecord = validation_record(self.record)
+
+    def observation(self):
+        obs = passing_observation(self.vrecord)
+        obs['qmp']['query-chardev'].append({'label': 'guestfwd.tcp.7000'})
+        obs['netprobe'] = passing_netprobe()
+        return obs
+
+    def p7(self, obs, profile=PROFILE, record=None):
+        props = guest.evaluate(profile, record or self.vrecord, obs)
+        return next(p for p in props if p['property'] == 'profiles P7')
+
+    def test_passing_validation_instance(self):
+        p7 = self.p7(self.observation())
+        self.assertEqual(p7['verdict'], 'PASS', [(c['check'], c['observed']) for c in p7['checks']
+                                                  if c['verdict'] != 'PASS'])
+        names = [c['check'] for c in p7['checks']]
+        for want in ('positive control: guest to the test listener through guestfwd',
+                     'decoy host-loopback services: no connection from the guest',
+                     'denied: IPv6, with an address and a default route added by guest root',
+                     'denied from the container namespace: IPv4, ICMP, DNS, host loopback, LAN, '
+                     'allowlist edges'):
+            self.assertIn(want, names)
+        v = {p['property']: p['verdict'] for p in guest.evaluate(PROFILE, self.vrecord,
+                                                                  self.observation())}
+        self.assertEqual(v['profiles P6'], 'PASS')                     # the guestfwd chardev
+
+    def assertP7(self, mutate, verdict='FAIL'):
+        obs = self.observation()
+        mutate(obs)
+        self.assertEqual(self.p7(obs)['verdict'], verdict)
+
+    def probe(self, obs, scope, cls, result, nth=0):
+        part = obs['netprobe']['guest_result'][scope]
+        rows = [p for p in part['probes'] if p['class'] == cls and p['expect'] == 'denied']
+        rows[nth]['result'] = result
+
+    def test_public_ipv4_reachable(self):
+        self.assertP7(lambda o: self.probe(o, 'guest', 'ipv4-direct', 'connected'))
+
+    def test_icmp_reply(self):
+        def mutate(o):
+            row = next(p for p in o['netprobe']['guest_result']['guest']['probes']
+                       if p['kind'] == 'icmp' and p['class'] == 'ipv4-direct')
+            row['result'] = 'reply'
+        self.assertP7(mutate)
+
+    def test_dns_reply_or_resolution(self):
+        def reply(o):
+            next(p for p in o['netprobe']['guest_result']['guest']['probes']
+                 if p['kind'] == 'udp-dns')['result'] = 'reply'
+        self.assertP7(reply)
+
+        def resolved(o):
+            next(p for p in o['netprobe']['guest_result']['guest']['probes']
+                 if p['kind'] == 'resolve')['result'] = 'resolved'
+        self.assertP7(resolved)
+
+    def test_host_loopback_through_slirp(self):
+        for nth in range(5):          # ssh, qmp, decoy_tcp, listener, decoy_udp via 10.0.2.2
+            with self.subTest(nth=nth):
+                self.assertP7(lambda o: self.probe(o, 'guest', 'host-loopback', 'connected', nth))
+
+    def test_host_lan_reachable(self):
+        self.assertP7(lambda o: self.probe(o, 'guest', 'host-lan', 'connected'))
+
+    def test_ipv6_reachable(self):
+        self.assertP7(lambda o: self.probe(o, 'guest', 'ipv6', 'connected'))
+
+    def test_allowlist_edge_reachable(self):
+        self.assertP7(lambda o: self.probe(o, 'guest', 'allowlist-edge', 'connected', 1))
+
+    def test_namespace_probe_reachable(self):
+        self.assertP7(lambda o: self.probe(o, 'netns', 'host-loopback', 'connected'))
+
+    def test_decoy_reached(self):
+        self.assertP7(lambda o: o['netprobe']['listener']['log'].append(
+            {'socket': 'decoy-tcp', 'event': 'accept', 'peer': ['127.0.0.1', 61000]}))
+        self.assertP7(lambda o: o['netprobe']['listener']['log'].append(
+            {'socket': 'decoy-udp', 'event': 'datagram', 'peer': ['127.0.0.1', 61001]}))
+
+    def test_positive_control_missing_or_mismatched(self):
+        def missing(o):
+            o['netprobe']['guest_result']['guest']['positive'] = {'result': 'timeout'}
+        self.assertP7(missing)
+
+        def mismatched(o):
+            ex = next(e for e in o['netprobe']['listener']['log'] if e.get('event') == 'exchange')
+            ex['matched'] = False
+        self.assertP7(mismatched)
+
+        def other_nonce(o):
+            o['netprobe']['guest_result']['guest']['positive']['nonce'] = 'c' * 32
+        self.assertP7(other_nonce)
+
+    def test_namespace_positive_control_failed(self):
+        def failed(o):
+            o['netprobe']['guest_result']['netns']['positive'] = {'result': 'timeout'}
+        self.assertP7(failed)
+
+    def test_listener_not_on_loopback_or_left_running(self):
+        self.assertP7(lambda o: o['netprobe']['listener']['bindings_before']['tcp_by_pid'].append(
+            {'LocalAddress': '0.0.0.0', 'LocalPort': 40003, 'State': 'Listen'}))
+        self.assertP7(lambda o: o['netprobe']['listener']['bindings_after']['tcp_by_port'].append(
+            {'LocalAddress': '127.0.0.1', 'LocalPort': 40003, 'State': 'Listen'}))
+
+    def test_listener_connection_not_from_qemu(self):
+        self.assertP7(lambda o: o['netprobe']['listener']['log'].append(
+            {'socket': 'listener', 'event': 'accept', 'peer': ['127.0.0.1', 62000]}))
+        self.assertP7(lambda o: o['netprobe'].__setitem__('qemu_pid', 9999))
+
+    def test_no_default_route(self):
+        def no_route(o):
+            o['netprobe']['guest_result']['after_setup'] = snapshot(False, 100)
+        self.assertP7(no_route)
+
+    def test_effective_argv_not_as_declared(self):
+        rec = copy.deepcopy(self.vrecord)
+        rec['validation']['argv_changes'][0]['profile'] += ',hostfwd=tcp:127.0.0.1:1-:23'
+        self.assertEqual(self.p7(self.observation(), record=rec)['verdict'], 'FAIL')
+
+    def test_not_shown_is_not_a_pass(self):
+        self.assertP7(lambda o: self.probe(o, 'guest', 'ipv4-direct', 'unreachable'), 'UNKNOWN')
+        self.assertP7(lambda o: o['netprobe']['guest_result'].__setitem__(
+            'netns', {'configured': False, 'setup': [{'argv': ['iptables'], 'rc': 4}]}), 'UNKNOWN')
+        self.assertP7(lambda o: o.__setitem__('netprobe', None), 'UNKNOWN')
+
+        def no_after_selfcheck(o):                    # the decoys were not shown listening after
+            lst = o['netprobe']['listener']
+            gone = lst['selfchecks'].pop()
+            lst['log'] = [e for e in lst['log'] if (e.get('peer') or [0, 0])[1] not in
+                          (gone['tcp_local_port'], gone['udp_local_port'])]
+        self.assertP7(no_after_selfcheck, 'UNKNOWN')
+        # an unknown peer on a decoy is a FAIL even when a self-check is missing
+        self.assertP7(lambda o: o['netprobe']['listener']['selfchecks'].pop())
+
+    def test_guest_error_or_not_root(self):
+        self.assertP7(lambda o: o['netprobe']['guest_result'].__setitem__('uid', 1000))
+        self.assertP7(lambda o: o['netprobe']['guest_result'].__setitem__('error', 'Traceback'))
+
+    def test_reachability_table(self):
+        rows = guest.netprobe_reachability(passing_netprobe())
+        self.assertEqual([r['result'] for r in rows if r['class'] == 'allowlisted'],
+                         ['exchanged', 'exchanged'])
+        self.assertTrue(all(r['verdict'] == 'denied' for r in rows if r['expect'] == 'denied'))
+        self.assertEqual({r['scope'] for r in rows}, {'guest', 'netns'})
+
+
+class OrdinaryP7(Evaluate):
+    def p7(self, profile, obs=None, record=None):
+        props = guest.evaluate(profile, record or self.record, obs or passing_observation(self.record))
+        return next(p for p in props if p['property'] == 'profiles P7')
+
+    def profile_with(self, status):
+        profile = copy.deepcopy(PROFILE)
+        profile['network']['enforcement_point'] = {'mechanism': 'x', 'status': status,
+                                                   'evidence': 'evidence/x.md'}
+        return profile
+
+    def test_enforcement_point_reference(self):
+        self.assertEqual(self.p7(self.profile_with('qualified'))['verdict'], 'PASS')
+        self.assertEqual(self.p7(self.profile_with('failed'))['verdict'], 'FAIL')
+        self.assertEqual(self.p7(self.profile_with('candidate'))['verdict'], 'UNKNOWN')
+
+    def test_ordinary_instance_has_no_guest_forwarding_or_extra_ipv6(self):
+        profile = self.profile_with('qualified')
+        rec = copy.deepcopy(self.record)
+        rec['argv'], _ = guest.netprobe_argv(rec['argv'], guest.netprobe_guestfwd_rule(40003))
+        self.assertEqual(self.p7(profile, record=rec)['verdict'], 'FAIL')
+        obs = passing_observation(self.record)
+        obs['guest']['ip6_addr'] = {'rc': 0, 'out': '2: enp0s4\n    inet6 fec0::15/64 scope site'}
+        self.assertEqual(self.p7(profile, obs)['verdict'], 'FAIL')
+
+    def test_ordinary_p6_refuses_a_guestfwd_chardev(self):
+        obs = passing_observation(self.record)
+        obs['qmp']['query-chardev'].append({'label': 'guestfwd.tcp.7000'})
+        self.assertEqual(self.verdicts(obs)['profiles P6'], 'FAIL')
+
+
+class NetprobeSessionSockets(TempState):
+    """NetprobeSession with the real listener process; the PowerShell binding queries are
+    replaced by fabricated observations (the binding verdict is binding_problems)."""
+
+    def bindings(self, pid, ports):
+        return {'tcp_by_pid': [{'LocalAddress': '127.0.0.1', 'LocalPort': ports['listener'],
+                                'State': 'Listen'},
+                               {'LocalAddress': '127.0.0.1', 'LocalPort': ports['decoy_tcp'],
+                                'State': 'Listen'}],
+                'udp_by_pid': [{'LocalAddress': '127.0.0.1', 'LocalPort': ports['decoy_udp']}]}
+
+    def test_start_selfcheck_stop_report(self):
+        idir = self.state / 'instances' / 'abc'
+        idir.mkdir(parents=True)
+        session = guest.NetprobeSession()
+        with mock.patch.object(guest, 'listener_bindings', side_effect=self.bindings):
+            ports = session.start(idir)
+            session.selfcheck('after')
+            session.stop()
+        report = session.report()
+        self.assertEqual(report['exit'], 0)
+        self.assertEqual(set(ports), {'listener', 'decoy_tcp', 'decoy_udp'})
+        accepts = {e['peer'][1] for e in report['log'] if e.get('socket') == 'decoy-tcp'
+                   and e.get('event') == 'accept'}
+        datagrams = {e['peer'][1] for e in report['log'] if e.get('event') == 'datagram'}
+        self.assertEqual(accepts, {s['tcp_local_port'] for s in report['selfchecks']})
+        self.assertEqual(datagrams, {s['udp_local_port'] for s in report['selfchecks']})
+        self.assertEqual([s['tcp_banner'] for s in report['selfchecks']], ['AIEH-DECOY'] * 2)
+
+    def test_start_refuses_a_non_loopback_binding(self):
+        idir = self.state / 'instances' / 'abc'
+        idir.mkdir(parents=True)
+
+        def wide(pid, ports):
+            out = self.bindings(pid, ports)
+            out['tcp_by_pid'][0]['LocalAddress'] = '0.0.0.0'
+            return out
+        session = guest.NetprobeSession()
+        with mock.patch.object(guest, 'listener_bindings', side_effect=wide):
+            with self.assertRaises(guest.Refused) as cm:
+                session.start(idir)
+        self.assertEqual(cm.exception.code, 'NETPROBE_LISTENER')
+        self.assertTrue(session.stopped)
+        self.assertIsNotNone(session.proc.poll())                # the listener was stopped
+
+    def test_binding_problems(self):
+        good = self.bindings(1, NP_PORTS)
+        self.assertEqual(guest.binding_problems(good, NP_PORTS), [])
+        extra = copy.deepcopy(good)
+        extra['tcp_by_pid'].append({'LocalAddress': '127.0.0.1', 'LocalPort': 5, 'State': 'Listen'})
+        udp6 = copy.deepcopy(good)
+        udp6['udp_by_pid'] = [{'LocalAddress': '::', 'LocalPort': NP_PORTS['decoy_udp']}]
+        for bad in (extra, udp6, {'error': 'x'}, None):
+            self.assertTrue(guest.binding_problems(bad, NP_PORTS), bad)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -68,6 +68,10 @@ class Negative(unittest.TestCase):
         shutil.copytree(REPO / 'profiles', self.tmp / 'profiles')
         self.qemu = load(QEMU, self.tmp)
         self.incus = load(INCUS, self.tmp)
+        point = self.qemu['network']['enforcement_point']
+        if isinstance(point, dict) and point.get('evidence'):       # cited evidence, read only
+            (self.tmp / 'evidence').mkdir(exist_ok=True)
+            shutil.copy(REPO / point['evidence'], self.tmp / point['evidence'])
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -319,6 +323,72 @@ class Negative(unittest.TestCase):
     def test_mutations_do_not_leak_between_tests(self):
         self.assertEqual(self.errors(copy.deepcopy(self.qemu)), [])
         self.assertEqual(self.errors(copy.deepcopy(self.incus)), [])
+
+    # enforcement point (profiles P7; F-03.3.2)
+    def qualified(self):
+        (self.tmp / 'evidence').mkdir(exist_ok=True)
+        (self.tmp / 'evidence' / 'net.md').write_text('x', encoding='utf-8')
+        net = self.qemu['network']
+        net['enforcement_point'] = {'mechanism': 'SLIRP restrict=on', 'status': 'qualified',
+                                    'qualified_by': 'F-03.3.2', 'evidence': 'evidence/net.md'}
+        net['reachability'] = {
+            'permitted': [{'path': 'guestfwd', 'protocol': 'tcp', 'observed': 'exchanged'}],
+            'denied': [{'path': '1.1.1.1:443', 'protocol': 'tcp', 'observed': 'timeout'}]}
+        return self.qemu
+
+    def test_qualified_enforcement_point_passes(self):
+        self.assertEqual(self.errors(self.qualified()), [])
+
+    def test_enforcement_point_status(self):
+        self.qualified()['network']['enforcement_point']['status'] = 'probably'
+        self.assertFails(self.qemu, 'enforcement_point.status must be one of')
+
+    def test_enforcement_point_mechanism(self):
+        self.qualified()['network']['enforcement_point']['mechanism'] = ' '
+        self.assertFails(self.qemu, 'enforcement_point.mechanism must be named')
+
+    def test_qualified_needs_evidence(self):
+        point = self.qualified()['network']['enforcement_point']
+        for value, fragment in ((None, 'cites its evidence'), ('notes/net.md', 'cites its evidence'),
+                                ('evidence/absent.md', 'evidence/absent.md is missing')):
+            point['evidence'] = value
+            self.assertFails(self.qemu, fragment)
+
+    def test_qualified_needs_the_leaf(self):
+        del self.qualified()['network']['enforcement_point']['qualified_by']
+        self.assertFails(self.qemu, 'names the leaf that tested it')
+
+    def test_qualified_needs_a_reachability_table(self):
+        net = self.qualified()['network']
+        net['reachability']['denied'] = []
+        self.assertFails(self.qemu, 'reachability.denied must list at least one path')
+        net['reachability']['denied'] = [{'path': 'x', 'protocol': 'tcp'}]
+        self.assertFails(self.qemu, 'reachability.denied[0] needs')
+        del net['reachability']
+        self.assertFails(self.qemu, 'needs a reachability table')
+
+    def test_failed_needs_evidence_not_a_table(self):
+        net = self.qualified()['network']
+        net['enforcement_point']['status'] = 'failed'
+        del net['reachability']
+        self.assertEqual(self.errors(self.qemu), [])
+
+    def test_validation_overlay_is_pinned(self):
+        point = self.qualified()['network']['enforcement_point']
+        point['validation_overlay'] = {
+            'path': 'profiles/strong-windows-qemu-whpx/validation/netprobe/netprobe.py',
+            'sha256': '0' * 64}
+        self.assertFails(self.qemu, 'does not match its pinned sha256')
+
+    def test_guestfwd_without_an_active_endpoint(self):
+        old = 'user,id=net0,restrict=on,ipv6=off,hostfwd=tcp:127.0.0.1:{ssh_port}-:22'
+        replace_arg(self.qemu, old, old + ',guestfwd=tcp:10.0.2.100:7000-tcp:127.0.0.1:4000')
+        self.assertFails(self.qemu, 'active guestfwd endpoint(s) are declared')
+
+    def test_deferred_endpoint_with_a_port(self):
+        endpoint = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'inference')
+        endpoint['host_port'] = 4000
+        self.assertFails(self.qemu, 'deferred inference endpoint declares a host port')
 
     # guest storage and exchange (profiles P3, P4; F-03.3.1)
     def test_guest_storage_required_for_qemu(self):

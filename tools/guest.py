@@ -27,6 +27,13 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                a new directory outside the checkout, for the profiles P5 test
     check-surfaces  inspect, then the startup inspection verdict for profiles P3 to P6;
                exit 0 only when all four PASS (F-03.3.1)
+    netprobe   TEST-ONLY validation cycle for profiles P7 (F-03.3.2; decision 0003,
+               "Owner authorization: network validation"): starts a test listener and
+               decoys on 127.0.0.1, creates a disposable guest whose seed carries the
+               pinned root probe script and whose -netdev carries one test guestfwd to
+               the listener, collects the guest's results and the listener log, stops
+               the listener, and gives the machine verdict. Ordinary create never
+               takes these inputs; a validation instance cannot be started again.
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -41,6 +48,7 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py canaries  --out DIR
     python -I -B tools/guest.py check-surfaces --profile PROFILE --state-dir STATE --name NAME
                                           --canaries DIR
+    python -I -B tools/guest.py netprobe  --profile PROFILE --state-dir STATE --name NAME
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
     before it launches anything, inspect searches the guest for it)
@@ -56,8 +64,10 @@ API through ctypes, so the lifecycle runs on Windows only (the profile's host).
 import argparse
 import base64
 import hashlib
+import copy
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import platform
@@ -69,6 +79,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -358,9 +369,11 @@ def read_launch_record(instance_dir):
 
 
 def build_launch_record(profile, profile_path, values, name, instance_id, ports, revision,
-                        inputs, argv, env, disk_commands):
-    """launch.json: every boot input with its digest, the argv and the profile revision."""
-    return {
+                        inputs, argv, env, disk_commands, validation=None):
+    """launch.json: every boot input with its digest, the argv and the profile revision.
+    A validation instance (netprobe) also records its validation block (Owner constraint 7:
+    the full effective configuration); an ordinary record has no such key."""
+    record = {
         'schema': LAUNCH_SCHEMA,
         'labels': labels(profile),
         'profile': {'name': profile['name'],
@@ -378,6 +391,9 @@ def build_launch_record(profile, profile_path, values, name, instance_id, ports,
         'argv': argv,
         'env': env,
     }
+    if validation is not None:
+        record['validation'] = validation
+    return record
 
 
 def verify_inputs(record):
@@ -1180,6 +1196,7 @@ def stderr_findings(instance_dir):
 def launch(ctx, instance_dir, record, operation):
     """Re-check every input digest, then start QEMU detached and wait for QMP."""
     digests = verify_inputs(record)
+    check_forwarding(record)
     if os.name != 'nt':
         raise Refused('REFUSED', 'launch is implemented for Windows only')
     if running_process(instance_dir, record['binary']):
@@ -1302,7 +1319,12 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
 # ---------------------------------------------------------------- operations
 
 
-def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None):
+def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=None):
+    """The create binding. ``netprobe`` is set only by the netprobe operation (a
+    NetprobeSession); the ordinary create takes no validation input."""
+    if netprobe is not None and not isinstance(netprobe, NetprobeSession):
+        raise Refused('REFUSED', 'create takes no validation overlay; only the netprobe '
+                      'operation creates a validation instance')
     t0 = time.time()
     idir = ctx.instance_dir(name)
     if os.path.lexists(idir):
@@ -1340,9 +1362,18 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None):
                        'stderr': result.stderr.strip()}
         if result.returncode != 0:
             raise Refused('REFUSED', f'qemu-img for {disk} failed: {result.stderr.strip()}')
-    seed = load_seed_generator().generate(str(ctx.profile_path.parent), str(idir), name,
-                                          str(idir / 'ssh' / 'id_ed25519.pub'))
-    ssh_port, qmp_port = allocate_ports(2)
+    if netprobe is None:
+        seed = load_seed_generator().generate(str(ctx.profile_path.parent), str(idir), name,
+                                              str(idir / 'ssh' / 'id_ed25519.pub'))
+        ssh_port, qmp_port = allocate_ports(2)
+    else:
+        listener_ports = netprobe.start(idir)       # holds its ports before ours are chosen
+        ssh_port, qmp_port = allocate_ports(2)
+        script_path = netprobe_script_path(ctx.profile_path)
+        params = netprobe_params({'ssh': ssh_port, 'qmp': qmp_port}, listener_ports,
+                                 *netprobe_host_addresses(), netprobe_debian_addresses())
+        script = render_netprobe_script(script_path.read_bytes(), params)
+        seed = netprobe_seed(ctx.profile_path, idir, name, idir / 'ssh' / 'id_ed25519.pub', script)
     ports = {'ssh': ssh_port, 'qmp': qmp_port}
     values = resolve_values(ctx.profile, ctx.state_dir, name, ports)
     bins = binaries(ctx.profile, values)
@@ -1369,9 +1400,14 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None):
         if 'pin' in entry and entry['pin'] != entry['sha256']:
             raise Refused('DIGEST_MISMATCH', f'{key}: {entry["sha256"]} differs from the pin')
     argv = render_argv(ctx.profile, values)
+    validation = None
+    if netprobe is not None:
+        argv, validation = netprobe_validation(
+            argv, listener_ports, netprobe.pid, posix(script_path.relative_to(ctx.repo)),
+            script, seed['validation'], params)
     record = build_launch_record(ctx.profile, ctx.profile_path, values, name,
                                  seed['instance_id'], ports, revision, inputs, argv, env,
-                                 disk_commands)
+                                 disk_commands, validation)
     write_json_exclusive(idir / 'launch.json', record)
     img_info = qemu_img_info(record, idir)
     launched = launch(ctx, idir, record, 'create')
@@ -1383,6 +1419,9 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None):
     if planted:
         result['canaries'] = {'planted_in_environment': planted,
                               'needles': canary_summary(canaries['needles'])}
+    if validation is not None:
+        result['validation'] = {k: validation[k] for k in ('mode', 'argv_changes', 'guestfwd',
+                                                           'listener', 'script', 'seed')}
     try:
         result['ready'] = wait_ready(ctx, idir, record, ready_timeout, need_host_keys=True)
         result['result'] = 'ready'
@@ -1400,6 +1439,9 @@ def start(ctx, name, ready_timeout=READY_TIMEOUT_S):
         raise Refused('REFUSED', f'{name}: no such instance')
     t0 = time.time()
     record = read_launch_record(idir)
+    if record.get('validation'):
+        raise Refused('REFUSED', f'{name} is a {record["validation"].get("mode")} validation '
+                      'instance: single boot only; destroy it')
     launched = launch(ctx, idir, record, 'start')
     result = {'operation': 'start', 'labels': labels(ctx.profile), 'instance': name,
               'launch': launched}
@@ -2579,6 +2621,10 @@ def p6_checks(profile, record, obs):
     q = obs.get('qmp', {})
     out_text = lambda key: (g.get(key) or {}).get('out', '')      # noqa: E731
     chardevs = sorted(c.get('label') for c in q.get('query-chardev') or [])
+    validation = record.get('validation') or {}
+    want_chardevs = sorted(['qmp', 'serial0'] + (
+        [(validation.get('guestfwd') or {}).get('chardev')]
+        if validation.get('mode') == 'netprobe' else []))
     virtio = parse_virtio(out_text('virtio_devices'))
     channels = sorted(k for k in (virtio or {}) if k in ('console', 'vsock', '9p', 'fs')
                       or k.startswith('id-'))
@@ -2593,8 +2639,7 @@ def p6_checks(profile, record, obs):
     qmp_probes = {k: v for k, v in g.items() if k.startswith('egress_tcp_') and k.endswith('_qmp')}
     agent = out_text('guest_ssh_agent')
     return [
-        check('chardevs', ['qmp', 'serial0'], chardevs, 'QMP query-chardev',
-              chardevs == ['qmp', 'serial0']),
+        check('chardevs', want_chardevs, chardevs, 'QMP query-chardev', chardevs == want_chardevs),
         check('virtio-serial ports', 'absent', out_text('virtio_ports'), 'guest: ls /dev/virtio-ports',
               (g.get('virtio_ports') or {}).get('rc') not in (0, None)),
         check('virtio channel devices', 'no console, vsock, 9p or fs device', virtio,
@@ -2711,7 +2756,12 @@ def evaluate(profile, record, obs):
     egress = {k: v for k, v in g.items() if k.startswith('egress_')}
     netdev = [a for a in profile['launch']['argv'] if a.startswith('user,')]
     ip6 = out_text('ip6_addr')
-    ip6_nonlo = [line for line in ip6.splitlines() if 'inet6' in line and '::1/128' not in line]
+    validation = record.get('validation') or {}
+    netprobe_mode = validation.get('mode') == 'netprobe'
+    ip6_nonlo = [line for line in ip6.splitlines() if 'inet6' in line and '::1/128' not in line
+                 and not (netprobe_mode and f'inet6 {NETPROBE_V6_ADDR}/' in line)]
+    rules = forwarding_rules(record.get('argv') or [])
+    declared_rules = [(validation.get('guestfwd') or {}).get('rule')] if netprobe_mode else []
     props.append(prop('P7', [
         check('netdev', 'user, restrict=on, ipv6=off', netdev, 'launch.argv',
               bool(netdev) and 'restrict=on' in netdev[0] and 'ipv6=off' in netdev[0]),
@@ -2731,11 +2781,18 @@ def evaluate(profile, record, obs):
         check('guest egress probes', 'all blocked', {k: v['rc'] for k, v in egress.items()},
               'guest: bash /dev/tcp with timeout, getent, python3 socket and http.client',
               bool(egress) and all(probe_blocked(k, v) for k, v in egress.items())),
-        check('guest IPv6 addresses beyond ::1', [], ip6_nonlo, 'guest: ip -6 addr', not ip6_nonlo),
-        check('allowlisted endpoint positive control', 'none declared yet (F-03.3.2)', None,
-              'not run', None),
-    ], formal='F-03.3.2; S-02.1, S-02.2',
-        note='Evidence toward F-03.3.2; not its formal suite.'))
+        check('guest IPv6 addresses beyond ::1', [], ip6_nonlo,
+              'guest: ip -6 addr' + (f' ({NETPROBE_V6_ADDR}, added by the netprobe root, '
+                                     'excluded)' if netprobe_mode else ''), not ip6_nonlo),
+        check('guest forwarding rules', declared_rules, rules, 'launch record argv (guestfwd=)',
+              rules == declared_rules),
+    ] + (netprobe_checks(record, obs.get('netprobe')) if netprobe_mode
+         else [enforcement_check(profile)]),
+        formal='F-03.3.2; S-02.1, S-02.2',
+        note=('Validation instance: the netprobe checks are the F-03.3.2 test (guest root, '
+              'routes, every denied path, both positive controls, decoys).' if netprobe_mode
+              else 'Ordinary instance: unprivileged probes; guest-root denial is shown by the '
+                   'netprobe validation (F-03.3.2), cited through the enforcement point.')))
 
     kh = obs.get('known_hosts_fingerprints') or []
     guest_fps = re.findall(r'(SHA256:[A-Za-z0-9+/]+)', out_text('host_keys'))
@@ -2850,6 +2907,8 @@ def inspect(ctx, name, canaries=None):
     kh = (idir / 'ssh' / 'known_hosts').read_text(encoding='ascii').split('\n')
     obs['known_hosts_fingerprints'] = [key_fingerprint(line.split()[2]) for line in kh if line.strip()]
     obs['stderr'] = stderr_findings(idir)
+    if record.get('validation'):
+        obs['netprobe'] = latest_record(idir, 'netprobe')
     properties = evaluate(ctx.profile, record, obs)
     out = {'schema': INSPECT_SCHEMA, 'operation': 'inspect', 'labels': labels(ctx.profile),
            'instance': name, 'instance_id': record['instance']['instance_id'],
@@ -2880,6 +2939,876 @@ def check_surfaces(ctx, name, canary_dir):
             'result': 'PASS' if all(v == 'PASS' for v in verdicts.values()) else 'FAIL'}
 
 
+# ---------------------------------------------------------------- netprobe (F-03.3.2, test only)
+#
+# A validation mode, never ordinary operation (decision 0003, "Owner authorization:
+# network validation (2026-11-06)"). `netprobe` creates one disposable guest whose seed
+# carries a second user-data part, the pinned test-only probe script (run once as root
+# at first boot), and whose -netdev carries one test-only guestfwd to a purpose-built
+# listener on 127.0.0.1 at an ephemeral port, beside decoys that are not forwarded.
+# The profile's launch.argv, the seed templates and the ordinary create are unchanged;
+# launch refuses a guestfwd that no validation record declares, and start refuses a
+# validation instance (single boot).
+
+NETPROBE_SCRIPT = ('validation', 'netprobe', 'netprobe.py')    # under the profile directory
+NETPROBE_SCRIPT_SHA256 = 'b90769744d289d31ba0ef4f9c9ae2095fc020b4e80c842a01ac48c5590edb6cd'
+NETPROBE_PARAMS_LINE = ("PARAMS_JSON = '{}'  # @@AIEH-NETPROBE-PARAMS@@ "
+                        "(tools/guest.py replaces this line)")
+NETPROBE_MARKER = 'AIEH-NETPROBE'
+NETPROBE_GUESTFWD = {'addr': '10.0.2.100', 'port': 7000}
+NETPROBE_SLIRP_NET = ipaddress.ip_network('10.0.2.0/24')
+NETPROBE_SLIRP_RESERVED = ('10.0.2.2', '10.0.2.3')
+NETPROBE_PUBLIC = {
+    'public_ipv4_tcp': [['1.1.1.1', 443], ['1.1.1.1', 80], ['8.8.8.8', 53], ['9.9.9.9', 443]],
+    'public_ipv4_icmp': ['1.1.1.1', '8.8.8.8'],
+    'public_dns_ipv4': ['1.1.1.1', '8.8.8.8', '9.9.9.9'],
+    'public_ipv6_tcp': [['2606:4700:4700::1111', 443], ['2001:4860:4860::8888', 53]],
+    'public_ipv6_icmp': ['2606:4700:4700::1111'],
+    'public_dns_ipv6': ['2606:4700:4700::1111', '2001:4860:4860::8888'],
+}
+NETPROBE_V6_ADDR = 'fec0::15'          # the one IPv6 address the probe adds (netprobe.py)
+NETPROBE_RESULT = '/var/lib/aieh-netprobe/result.json'
+NETPROBE_BOUNDARY = '==AIEH-NETPROBE-USER-DATA=='
+# Probe results (netprobe.py): a denied path times out, is refused (a reset from SLIRP,
+# never a host socket: the host ports probed all have live listeners) or gets no reply;
+# a name is not resolved. 'unreachable' means the guest's own stack gave up (no route,
+# no neighbour), which shows nothing about the enforcement point: it is UNKNOWN.
+NETPROBE_DENIED = frozenset({'timeout', 'refused', 'no-reply'})
+NETPROBE_RESOLVE_DENIED = frozenset({'not-found'})
+NETPROBE_REACHED = frozenset({'connected', 'reply', 'resolved', 'exchanged',
+                              'connected-no-exchange'})
+NETPROBE_LINE_MAX = 512
+NETPROBE_CONN_BYTES_MAX = 1 << 16
+NETPROBE_CONN_MAX = 64
+NETPROBE_LABEL = re.compile(r'^[a-z]{1,16}$')
+
+
+def netprobe_script_path(profile_path):
+    return Path(profile_path).parent.joinpath(*NETPROBE_SCRIPT)
+
+
+def netprobe_host_addresses():
+    """The host's own IPv4 and IPv6 addresses, without loopback and link-local ones."""
+    v4, v6 = set(), set()
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None)
+    except OSError:
+        infos = []
+    for info in infos:
+        addr = info[4][0]
+        if '%' in addr:
+            continue
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast:
+            continue
+        (v4 if ip.version == 4 else v6).add(str(ip))
+    return sorted(v4), sorted(v6)
+
+
+def netprobe_debian_addresses():
+    """deb.debian.org's first IPv4 and IPv6 address as the host resolves them, or None."""
+    out = []
+    for fam in (socket.AF_INET, socket.AF_INET6):
+        try:
+            out.append(socket.getaddrinfo('deb.debian.org', 443, fam)[0][4][0])
+        except (OSError, IndexError):
+            out.append(None)
+    return tuple(out)
+
+
+def validate_netprobe_params(params):
+    """Refuse anything but the documented keys, with literal IP addresses and ports."""
+    def ip(value, version, what):
+        try:
+            parsed = ipaddress.ip_address(value)
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is None or parsed.version != version or str(parsed) != value:
+            raise Refused('REFUSED', f'netprobe {what}: {value!r} is not an IPv{version} literal')
+
+    def port(value, what):
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+            raise Refused('REFUSED', f'netprobe {what}: {value!r} is not a port')
+
+    keys = set(NETPROBE_PUBLIC) | {'guestfwd', 'host_ports', 'host_ipv4', 'host_ipv6',
+                                   'debian_ipv4', 'debian_ipv6', 'marker'}
+    if not isinstance(params, dict) or set(params) != keys:
+        raise Refused('REFUSED', f'netprobe parameters: keys must be {sorted(keys)}')
+    if params['marker'] != NETPROBE_MARKER:
+        raise Refused('REFUSED', 'netprobe parameters: unexpected marker')
+    gf = params['guestfwd']
+    if not isinstance(gf, dict) or set(gf) != {'addr', 'port'}:
+        raise Refused('REFUSED', 'netprobe guestfwd: addr and port required')
+    ip(gf['addr'], 4, 'guestfwd address')
+    if ipaddress.ip_address(gf['addr']) not in NETPROBE_SLIRP_NET or \
+            gf['addr'] in NETPROBE_SLIRP_RESERVED:
+        raise Refused('REFUSED', f'netprobe guestfwd address {gf["addr"]} must be an unused '
+                      f'address of {NETPROBE_SLIRP_NET}')
+    port(gf['port'], 'guestfwd port')
+    host_ports = params['host_ports']
+    if not isinstance(host_ports, dict) or \
+            set(host_ports) != {'ssh', 'qmp', 'decoy_tcp', 'decoy_udp', 'listener'}:
+        raise Refused('REFUSED', 'netprobe host ports: ssh, qmp, decoy_tcp, decoy_udp, listener')
+    for key, value in host_ports.items():
+        port(value, f'host port {key}')
+    for version, key in ((4, 'public_ipv4_tcp'), (6, 'public_ipv6_tcp')):
+        for pair in params[key]:
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise Refused('REFUSED', f'netprobe {key}: [address, port] pairs')
+            ip(pair[0], version, key)
+            port(pair[1], key)
+    for version, keys_ in ((4, ('public_ipv4_icmp', 'public_dns_ipv4', 'host_ipv4')),
+                           (6, ('public_ipv6_icmp', 'public_dns_ipv6', 'host_ipv6'))):
+        for key in keys_:
+            if not isinstance(params[key], list):
+                raise Refused('REFUSED', f'netprobe {key}: a list')
+            for value in params[key]:
+                ip(value, version, key)
+    if len(params['public_dns_ipv4']) < 2:
+        raise Refused('REFUSED', 'netprobe public_dns_ipv4: at least two resolvers')
+    for version, key in ((4, 'debian_ipv4'), (6, 'debian_ipv6')):
+        if params[key] is not None:
+            ip(params[key], version, key)
+    return params
+
+
+def netprobe_params(ports, listener_ports, host_v4, host_v6, debian=(None, None)):
+    params = copy.deepcopy(NETPROBE_PUBLIC)
+    params.update({
+        'guestfwd': dict(NETPROBE_GUESTFWD),
+        'host_ports': {'ssh': int(ports['ssh']), 'qmp': int(ports['qmp']),
+                       'decoy_tcp': int(listener_ports['decoy_tcp']),
+                       'decoy_udp': int(listener_ports['decoy_udp']),
+                       'listener': int(listener_ports['listener'])},
+        'host_ipv4': list(host_v4), 'host_ipv6': list(host_v6),
+        'debian_ipv4': debian[0], 'debian_ipv6': debian[1], 'marker': NETPROBE_MARKER})
+    return validate_netprobe_params(params)
+
+
+def render_netprobe_script(raw, params):
+    """The pinned probe script with its one parameter line replaced."""
+    got = hashlib.sha256(raw).hexdigest()
+    if got != NETPROBE_SCRIPT_SHA256:
+        raise Refused('DIGEST_MISMATCH', f'netprobe script sha256 {got} differs from the pin '
+                      f'{NETPROBE_SCRIPT_SHA256}')
+    if b'\r' in raw:
+        raise Refused('REFUSED', 'netprobe script carries CR bytes')
+    try:
+        text = raw.decode('ascii')
+    except UnicodeDecodeError as exc:
+        raise Refused('REFUSED', f'netprobe script is not ASCII ({exc})') from exc
+    if text.split('\n').count(NETPROBE_PARAMS_LINE) != 1:
+        raise Refused('REFUSED', 'netprobe script: the parameter line must occur exactly once')
+    validate_netprobe_params(params)
+    literal = json.dumps(params, sort_keys=True, separators=(',', ':'))
+    return text.replace(NETPROBE_PARAMS_LINE, f'PARAMS_JSON = {literal!r}  '
+                        '# rendered by tools/guest.py netprobe', 1).encode('ascii')
+
+
+def netprobe_user_data(cloud_config, script):
+    """cloud-init multipart user-data: the ordinary cloud-config part, unchanged, then the
+    test-only script part (cloud-init runs a text/x-shellscript part once, as root)."""
+    boundary = NETPROBE_BOUNDARY.encode('ascii')
+    for what, body in (('cloud-config', cloud_config), ('script', script)):
+        if boundary in body or b'\r' in body:
+            raise Refused('REFUSED', f'netprobe user-data: the {what} part holds the boundary '
+                          'or a CR')
+        try:
+            body.decode('ascii')
+        except UnicodeDecodeError as exc:
+            raise Refused('REFUSED', f'netprobe user-data: the {what} part is not ASCII') from exc
+
+    def part(content_type, filename, body):
+        head = (f'--{NETPROBE_BOUNDARY}\n'
+                f'Content-Type: {content_type}; charset="us-ascii"\n'
+                'MIME-Version: 1.0\n'
+                'Content-Transfer-Encoding: 7bit\n'
+                f'Content-Disposition: attachment; filename="{filename}"\n\n')
+        # the newline before the next delimiter belongs to the delimiter (RFC 2046)
+        return head.encode('ascii') + body + b'\n'
+
+    return (f'Content-Type: multipart/mixed; boundary="{NETPROBE_BOUNDARY}"\n'
+            'MIME-Version: 1.0\n\n').encode('ascii') + \
+        part('text/cloud-config', 'cloud-config.yaml', cloud_config) + \
+        part('text/x-shellscript', 'aieh-netprobe.py', script) + \
+        f'--{NETPROBE_BOUNDARY}--\n'.encode('ascii')
+
+
+def netprobe_seed(profile_path, instance_dir, name, public_key, script):
+    """seed.iso for a validation instance: the generator's own steps (tools/nocloud_seed.py:
+    pinned templates, the same substitutions), with user-data wrapped by netprobe_user_data.
+    meta-data and network-config are the ordinary ones."""
+    gen = load_seed_generator()
+    try:
+        profile, root = gen.load_profile(str(Path(profile_path).parent))
+        name = gen.check_instance_name(profile, name)
+        instance_id = gen.new_instance_id(name)
+        templates = gen.read_templates(profile, root)
+        values = {'agent_ssh_public_key': gen.read_public_key(str(public_key)),
+                  'scratch_device': gen.scratch_device(profile),
+                  'instance_id': instance_id, 'instance_name': name}
+        rendered = gen.render(templates, values)
+    except gen.Refused as exc:
+        raise Refused('REFUSED', f'seed: {exc}') from exc
+    ordinary = rendered['user-data']
+    rendered['user-data'] = netprobe_user_data(ordinary, script)
+    image = gen.build_iso(rendered)
+    target = Path(instance_dir) / gen.SEED_NAME
+    with open(target, 'xb') as handle:
+        handle.write(image)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if sha256_file(target) != hashlib.sha256(image).hexdigest():
+        raise Refused('REFUSED', f'{target}: written bytes differ from the generated image')
+    return {'seed_iso': str(target), 'sha256': hashlib.sha256(image).hexdigest(),
+            'size_bytes': len(image), 'instance_id': instance_id,
+            'templates': {n: profile['boot_inputs']['seed']['templates'][n]['sha256']
+                          for n in gen.FILES},
+            'rendered_sha256': {n: hashlib.sha256(rendered[n]).hexdigest() for n in gen.FILES},
+            'validation': {'ordinary_user_data_sha256': hashlib.sha256(ordinary).hexdigest(),
+                           'script_part_sha256': hashlib.sha256(script).hexdigest(),
+                           'user_data': 'multipart/mixed: text/cloud-config (the ordinary '
+                                        'user-data), text/x-shellscript (aieh-netprobe.py)'}}
+
+
+def netprobe_guestfwd_rule(listener_port):
+    return (f'tcp:{NETPROBE_GUESTFWD["addr"]}:{NETPROBE_GUESTFWD["port"]}'
+            f'-tcp:{LOOPBACK}:{int(listener_port)}')
+
+
+def netprobe_chardev_label():
+    """QEMU names a guestfwd's chardev guestfwd.tcp.<guest port> (net/slirp.c)."""
+    return f'guestfwd.tcp.{NETPROBE_GUESTFWD["port"]}'
+
+
+def netprobe_argv(argv, rule):
+    """The rendered profile argv with one guestfwd appended to its user -netdev."""
+    idx = [i + 1 for i in range(len(argv) - 1)
+           if argv[i] == '-netdev' and argv[i + 1].startswith('user,')]
+    if len(idx) != 1:
+        raise Refused('REFUSED', f'netprobe: expected one user -netdev, found {len(idx)}')
+    i = idx[0]
+    if 'guestfwd=' in argv[i]:
+        raise Refused('REFUSED', 'netprobe: the profile -netdev already has a guestfwd')
+    if not re.fullmatch(r'tcp:10\.0\.2\.\d{1,3}:\d{1,5}-tcp:127\.0\.0\.1:\d{1,5}', rule):
+        raise Refused('REFUSED', f'netprobe: guestfwd {rule!r} is not tcp:<guest>-tcp:127.0.0.1')
+    effective = list(argv)
+    effective[i] = f'{argv[i]},guestfwd={rule}'
+    return effective, [{'index': i, 'profile': argv[i], 'effective': effective[i]}]
+
+
+def netprobe_validation(profile_argv, listener_ports, listener_pid, script_rel, script,
+                        seed_validation, params):
+    """The effective argv and the launch record's validation block (Owner constraint 7)."""
+    rule = netprobe_guestfwd_rule(listener_ports['listener'])
+    argv, changes = netprobe_argv(profile_argv, rule)
+    return argv, {
+        'mode': 'netprobe', 'test_only': True, 'plan_leaf': 'F-03.3.2',
+        'authority': 'decision 0003, "Owner authorization: network validation (2026-11-06)"',
+        'single_boot': True,
+        'profile_argv_sha256': argv_sha256(profile_argv),
+        'argv_changes': changes,
+        'guestfwd': {'rule': rule, 'guest_addr': NETPROBE_GUESTFWD['addr'],
+                     'guest_port': NETPROBE_GUESTFWD['port'], 'host': LOOPBACK,
+                     'host_port': listener_ports['listener'], 'chardev': netprobe_chardev_label()},
+        'listener': {'pid': listener_pid, 'bind': LOOPBACK, 'ports': dict(listener_ports)},
+        'script': {'path': script_rel, 'sha256': NETPROBE_SCRIPT_SHA256,
+                   'rendered_sha256': hashlib.sha256(script).hexdigest()},
+        'seed': seed_validation,
+        'params': params,
+    }
+
+
+def argv_sha256(argv):
+    return hashlib.sha256(json.dumps(argv, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def forwarding_rules(argv):
+    """The guestfwd values of every -netdev argument."""
+    rules = []
+    for i in range(len(argv) - 1):
+        if argv[i] == '-netdev':
+            rules += [part[len('guestfwd='):] for part in argv[i + 1].split(',')
+                      if part.startswith('guestfwd=')]
+    return rules
+
+
+def check_forwarding(record):
+    """Guest forwarding only where a validation record declares it (profiles P7)."""
+    rules = forwarding_rules(record.get('argv') or [])
+    validation = record.get('validation')
+    if validation is None:
+        if rules:
+            raise Refused('REFUSED', f'the launch record carries guestfwd {rules} without a '
+                          'validation mode; no profile endpoint enables guest forwarding')
+        return rules
+    want = [(validation.get('guestfwd') or {}).get('rule')]
+    if validation.get('mode') != 'netprobe' or rules != want:
+        raise Refused('REFUSED', f'validation record: guestfwd {rules} is not exactly {want}')
+    return rules
+
+
+def as_list(value):
+    if isinstance(value, list):
+        return value
+    return [value] if isinstance(value, dict) else []
+
+
+def powershell_json(script):
+    shell = Path(os.environ.get('SYSTEMROOT', r'C:\Windows')) / 'System32' / \
+        'WindowsPowerShell' / 'v1.0' / 'powershell.exe'
+    result = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-Command', script],
+                            capture_output=True, text=True, check=False, timeout=120)
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        return {'error': result.stderr.strip() or result.stdout.strip()}
+
+
+TCP_SELECT = ("Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,"
+              "@{n='State';e={[string]$_.State}},OwningProcess")
+
+
+def listener_bindings(pid, ports):
+    """Get-NetTCPConnection / Get-NetUDPEndpoint for the listener process and its ports."""
+    tcp_ports = ','.join(str(int(ports[k])) for k in ('listener', 'decoy_tcp'))
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$t=@(Get-NetTCPConnection -OwningProcess {int(pid)} | {TCP_SELECT});"
+        f"$u=@(Get-NetUDPEndpoint -OwningProcess {int(pid)} | "
+        "Select-Object LocalAddress,LocalPort,OwningProcess);"
+        f"$p=@(Get-NetTCPConnection -LocalPort {tcp_ports} | {TCP_SELECT});"
+        f"$q=@(Get-NetUDPEndpoint -LocalPort {int(ports['decoy_udp'])} | "
+        "Select-Object LocalAddress,LocalPort,OwningProcess);"
+        "ConvertTo-Json -Depth 4 -InputObject "
+        "@{tcp_by_pid=$t;udp_by_pid=$u;tcp_by_port=$p;udp_by_port=$q}")
+    return powershell_json(script)
+
+
+def guestfwd_connections(listener_port):
+    """The established connections to the listener, with their owning process."""
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$c=@(Get-NetTCPConnection -RemotePort {int(listener_port)} -RemoteAddress 127.0.0.1 | "
+        f"{TCP_SELECT});"
+        "ConvertTo-Json -Depth 4 -InputObject @{tcp_to_listener=$c}")
+    return powershell_json(script)
+
+
+def binding_problems(bindings, ports):
+    """What is wrong with the listener's sockets: anything but 127.0.0.1 on its ports."""
+    if not bindings or 'error' in bindings or not ports:
+        return [f'no binding observation: {bindings}']
+    tcp = as_list(bindings.get('tcp_by_pid'))
+    udp = as_list(bindings.get('udp_by_pid'))
+    listen = sorted({(c.get('LocalAddress'), c.get('LocalPort')) for c in tcp
+                     if c.get('State') == 'Listen'})
+    udp_eps = sorted({(u.get('LocalAddress'), u.get('LocalPort')) for u in udp})
+    problems = [f'tcp listen {a}:{p}' for a, p in listen if a != LOOPBACK]
+    problems += [f'udp {a}:{p}' for a, p in udp_eps if a != LOOPBACK]
+    want_tcp = sorted({(LOOPBACK, ports.get('listener')), (LOOPBACK, ports.get('decoy_tcp'))})
+    if listen != want_tcp:
+        problems.append(f'tcp listening sockets {listen} are not {want_tcp}')
+    if udp_eps != [(LOOPBACK, ports.get('decoy_udp'))]:
+        problems.append(f'udp endpoints {udp_eps} are not {[(LOOPBACK, ports.get("decoy_udp"))]}')
+    return problems
+
+
+def netprobe_listen(log_path):
+    """TEST-ONLY host side of one netprobe cycle, run as its own process by NetprobeSession.
+
+    Three sockets, all bound to 127.0.0.1 at ports the OS chooses:
+    - listener (TCP): the only guestfwd target. It speaks one line protocol and exposes
+      nothing else: '<marker> HELLO <label>' gets '<marker> NONCE <32 hex>' (a fresh
+      random nonce), and '<marker> ECHO <nonce>' gets '<marker> OK <label>' when the
+      nonce matches. QEMU's guestfwd chardev keeps one connection open and carries every
+      guest connection over it, so the protocol is line-based over one stream.
+    - decoy (TCP) and decoy (UDP): never forwarded. The TCP decoy sends a banner and reads
+      at most 256 bytes; the UDP decoy only logs. The harness's own self-checks are the
+      only expected peers.
+    Every connection, line and datagram is logged with its peer and byte count (JSON
+    lines). The process prints its ports on stdout, then serves until stdin reaches EOF,
+    which is the harness's stop signal.
+    """
+    lock = threading.Lock()
+    state = {'closed': False, 'conns': 0}
+    handle = open(log_path, 'x', encoding='utf-8', newline='\n')
+
+    def log(**event):
+        event['t'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        with lock:
+            if not state['closed']:
+                handle.write(json.dumps(event, sort_keys=True) + '\n')
+                handle.flush()
+
+    def admit(name, conn, peer):
+        with lock:
+            state['conns'] += 1
+            over = state['conns'] > NETPROBE_CONN_MAX
+        log(socket=name, event='accept', peer=list(peer[:2]), refused_over_limit=over)
+        if over:
+            conn.close()
+        return not over
+
+    def serve_listener(conn, peer):
+        buf, total, label, pending = b'', 0, None, None
+        try:
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    log(socket='listener', event='close', peer=list(peer[:2]), bytes=total)
+                    return
+                total += len(data)
+                log(socket='listener', event='recv', peer=list(peer[:2]), bytes=len(data))
+                if total > NETPROBE_CONN_BYTES_MAX:
+                    log(socket='listener', event='limit', peer=list(peer[:2]), bytes=total)
+                    return
+                buf += data
+                while b'\n' in buf:
+                    raw, buf = buf.split(b'\n', 1)
+                    text = raw.decode('ascii', 'replace')[:200]
+                    parts = text.split()
+                    if len(parts) == 3 and parts[:2] == [NETPROBE_MARKER, 'HELLO'] and \
+                            NETPROBE_LABEL.match(parts[2]):
+                        label, pending = parts[2], secrets.token_hex(16)
+                        conn.sendall(f'{NETPROBE_MARKER} NONCE {pending}\n'.encode('ascii'))
+                        log(socket='listener', event='hello', peer=list(peer[:2]), label=label,
+                            line=text, nonce=pending)
+                    elif len(parts) == 3 and parts[:2] == [NETPROBE_MARKER, 'ECHO']:
+                        matched = pending is not None and parts[2] == pending
+                        reply = f'{NETPROBE_MARKER} OK {label}' if matched else \
+                            f'{NETPROBE_MARKER} BAD'
+                        conn.sendall((reply + '\n').encode('ascii'))
+                        log(socket='listener', event='exchange', peer=list(peer[:2]),
+                            label=label, nonce=pending, echoed=parts[2], matched=matched,
+                            line=text, reply=reply)
+                        label, pending = None, None
+                    else:
+                        log(socket='listener', event='ignored', peer=list(peer[:2]), line=text)
+                if len(buf) > NETPROBE_LINE_MAX:
+                    log(socket='listener', event='overlong', peer=list(peer[:2]), bytes=len(buf))
+                    buf = b''
+        except OSError as exc:
+            log(socket='listener', event='error', peer=list(peer[:2]), error=str(exc))
+        finally:
+            conn.close()
+
+    def serve_decoy(conn, peer):
+        got = b''
+        try:
+            conn.sendall(b'AIEH-DECOY\n')
+            conn.settimeout(2.0)
+            got = conn.recv(256)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+        log(socket='decoy-tcp', event='close', peer=list(peer[:2]), bytes=len(got),
+            data=got[:64].decode('ascii', 'replace'))
+
+    def accept_loop(sock, name, serve):
+        while True:
+            try:
+                conn, peer = sock.accept()
+            except OSError:
+                return
+            if admit(name, conn, peer):
+                threading.Thread(target=serve, args=(conn, peer), daemon=True).start()
+
+    def udp_loop(sock):
+        while True:
+            try:
+                data, peer = sock.recvfrom(2048)
+            except OSError:
+                return
+            log(socket='decoy-udp', event='datagram', peer=list(peer[:2]), bytes=len(data),
+                data=data[:64].decode('ascii', 'replace'))
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    decoy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    decoy_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for sock in (listener, decoy, decoy_udp):
+        sock.bind((LOOPBACK, 0))
+    listener.listen(4)
+    decoy.listen(4)
+    ports = {'listener': listener.getsockname()[1], 'decoy_tcp': decoy.getsockname()[1],
+             'decoy_udp': decoy_udp.getsockname()[1]}
+    log(event='ready', pid=os.getpid(), bind=LOOPBACK, ports=ports)
+    for target, args in ((accept_loop, (listener, 'listener', serve_listener)),
+                         (accept_loop, (decoy, 'decoy-tcp', serve_decoy)),
+                         (udp_loop, (decoy_udp,))):
+        threading.Thread(target=target, args=args, daemon=True).start()
+    print(json.dumps(dict(ports, pid=os.getpid())), flush=True)
+    sys.stdin.buffer.read()              # EOF: the harness's stop signal
+    log(event='stop')
+    for sock in (listener, decoy, decoy_udp):
+        sock.close()
+    with lock:
+        state['closed'] = True
+        handle.close()
+    return 0
+
+
+class NetprobeSession:
+    """The listener process of one netprobe cycle, from create to the end of netprobe."""
+
+    def __init__(self):
+        self.proc = self.pid = self.ports = self.dir = None
+        self.bindings_before = self.bindings_after = None
+        self.selfchecks, self.exit, self.killed, self.stopped = [], None, False, False
+
+    def start(self, instance_dir):
+        self.dir = Path(instance_dir) / 'netprobe'
+        os.mkdir(self.dir)
+        self.log_path = self.dir / 'listener.jsonl'
+        argv = [sys.executable, '-I', '-B', str(Path(__file__).resolve()), 'netprobe-listen',
+                '--log', str(self.log_path)]
+        with open(self.dir / 'listener.stderr', 'xb') as err:
+            self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=err, cwd=str(self.dir))
+        line = self.proc.stdout.readline()      # the listener's ready line, or EOF if it died
+        try:
+            ready = json.loads(line)
+            self.pid = int(ready['pid'])
+            self.ports = {k: int(ready[k]) for k in ('listener', 'decoy_tcp', 'decoy_udp')}
+        except (ValueError, KeyError, TypeError) as exc:
+            self.stop()
+            raise Refused('NETPROBE_LISTENER', f'the test listener did not start: {line!r}') \
+                from exc
+        log(f'netprobe: listener pid {self.pid} on {LOOPBACK} {self.ports}')
+        self.bindings_before = listener_bindings(self.pid, self.ports)
+        problems = binding_problems(self.bindings_before, self.ports)
+        if problems:
+            self.stop()
+            raise Refused('NETPROBE_LISTENER', f'the test listener is not on {LOOPBACK} only: '
+                          f'{problems}', self.bindings_before)
+        self.selfcheck('before')
+        return self.ports
+
+    def selfcheck(self, phase):
+        """The decoys answer the harness (so their silence towards the guest means something)."""
+        entry = {'phase': phase}
+        try:
+            with socket.create_connection((LOOPBACK, self.ports['decoy_tcp']), timeout=5) as s:
+                entry['tcp_local_port'] = s.getsockname()[1]
+                entry['tcp_banner'] = s.recv(64).decode('ascii', 'replace').strip()
+                s.sendall(f'AIEH-SELFCHECK {phase}\n'.encode('ascii'))
+        except OSError as exc:
+            entry['tcp_error'] = str(exc)
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+                u.bind((LOOPBACK, 0))
+                entry['udp_local_port'] = u.getsockname()[1]
+                u.sendto(f'AIEH-SELFCHECK {phase}'.encode('ascii'),
+                         (LOOPBACK, self.ports['decoy_udp']))
+        except OSError as exc:
+            entry['udp_error'] = str(exc)
+        self.selfchecks.append(entry)
+        return entry
+
+    def stop(self):
+        if self.proc is None or self.stopped:
+            return
+        self.stopped = True
+        try:
+            self.proc.stdin.close()             # EOF: the listener's stop signal
+        except OSError:
+            pass
+        try:
+            self.exit = self.proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.killed = True
+            self.exit = self.proc.wait(timeout=10)
+        self.proc.stdout.close()
+        if self.pid and self.ports:
+            self.bindings_after = listener_bindings(self.pid, self.ports)
+        log(f'netprobe: listener stopped, exit {self.exit}')
+
+    def report(self):
+        events = []
+        if self.dir and self.log_path.is_file():
+            for line in self.log_path.read_text(encoding='utf-8').splitlines():
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    events.append({'unparsed': line[:200]})
+        stderr = self.dir / 'listener.stderr' if self.dir else None
+        return {'pid': self.pid, 'popen_pid': self.proc.pid if self.proc else None,
+                'bind': LOOPBACK, 'ports': self.ports, 'bindings_before': self.bindings_before,
+                'bindings_after': self.bindings_after, 'selfchecks': self.selfchecks,
+                'exit': self.exit, 'killed': self.killed, 'log': events,
+                'stderr': stderr.read_text(encoding='utf-8', errors='replace').strip()
+                if stderr and stderr.is_file() else None}
+
+
+def latest_record(instance_dir, operation):
+    records = sorted((Path(instance_dir) / 'records').glob(f'{operation}-*.json'))
+    if not records:
+        return None
+    return json.loads(records[-1].read_text(encoding='utf-8'))
+
+
+def netprobe_probe_ok(probe):
+    """True: denied as required; False: reached; None: neither is shown."""
+    result = probe.get('result')
+    if result in NETPROBE_REACHED:
+        return False
+    allowed = NETPROBE_RESOLVE_DENIED if probe.get('kind') == 'resolve' else NETPROBE_DENIED
+    return True if result in allowed else None
+
+
+def denied_check(name, probes, classes, method):
+    rows = [p for p in probes if p.get('class') in classes and p.get('expect') == 'denied']
+    verdicts = [netprobe_probe_ok(p) for p in rows]
+    reached = [p.get('id') for p, v in zip(rows, verdicts) if v is False]
+    unclear = [f'{p.get("id")}: {p.get("result")}' for p, v in zip(rows, verdicts) if v is None]
+    ok = None if not rows else (False if reached else (None if unclear else True))
+    return check(name, 'every probe denied: timeout, refused or no reply (a name: not resolved)',
+                 {'probes': len(rows), 'reached': reached, 'unclear': unclear,
+                  'results': {p.get('id'): p.get('result') for p in rows}}, method, ok)
+
+
+def snapshot_out(result, phase, key):
+    return (((result.get(phase) or {}).get(key)) or {}).get('out') or ''
+
+
+def tx_packets(result, phase):
+    try:
+        link = json.loads(snapshot_out(result, phase, 'link_stats'))[0]
+        stats = link.get('stats64') or link.get('stats')
+        return int(stats['tx']['packets'])
+    except (ValueError, IndexError, KeyError, TypeError):
+        return None
+
+
+def positive_check(name, scope_result, events, label, method):
+    pos = (scope_result or {}).get('positive') or {}
+    nonce = pos.get('nonce')
+    matched = [e for e in events if e.get('socket') == 'listener' and e.get('event') == 'exchange'
+               and e.get('label') == label and e.get('matched') is True and nonce
+               and e.get('nonce') == nonce and e.get('echoed') == nonce]
+    ok = None if not scope_result else (pos.get('result') == 'exchanged' and len(matched) == 1)
+    return check(name, 'the guest got a fresh nonce, echoed it, and the listener logged the match',
+                 {'guest': {'result': pos.get('result'), 'nonce': nonce, 'lines': pos.get('lines')},
+                  'listener': [{k: e.get(k) for k in ('t', 'label', 'nonce', 'matched', 'peer')}
+                               for e in matched]}, method, ok)
+
+
+def netprobe_checks(record, np):
+    """profiles P7 for a netprobe validation instance (F-03.3.2): the effective argv, the
+    guest-root routes, every denied path, the positive control on both sides, the decoys
+    and the listener's own sockets. np is the netprobe record (or None)."""
+    np = np or {}
+    validation = record.get('validation') or {}
+    gr = np.get('guest_result') or {}
+    lst = np.get('listener') or {}
+    events = [e for e in lst.get('log') or [] if isinstance(e, dict)]
+    checks = []
+
+    changes = validation.get('argv_changes') or []
+    gf = validation.get('guestfwd') or {}
+    argv = record.get('argv') or []
+    argv_ok = False
+    if len(changes) == 1 and gf.get('host_port'):
+        i = changes[0].get('index')
+        reverted = list(argv)
+        if isinstance(i, int) and 0 <= i < len(argv):
+            reverted[i] = changes[0].get('profile')
+        argv_ok = isinstance(i, int) and 0 <= i < len(argv) and \
+            gf.get('rule') == netprobe_guestfwd_rule(gf['host_port']) and \
+            argv[i] == f'{changes[0].get("profile")},guestfwd={gf.get("rule")}' and \
+            changes[0].get('effective') == argv[i] and \
+            argv_sha256(reverted) == validation.get('profile_argv_sha256') and \
+            forwarding_rules(argv) == [gf.get('rule')]
+    checks.append(check('effective argv: the profile argv plus one test guestfwd',
+                        f'guestfwd={NETPROBE_GUESTFWD["addr"]}:{NETPROBE_GUESTFWD["port"]} to '
+                        f'{LOOPBACK}:<listener port>, nothing else changed', changes,
+                        'launch record argv against validation.argv_changes and the profile '
+                        'argv digest', argv_ok))
+
+    if not np:
+        checks.append(check('netprobe record', 'records/netprobe-*.json', None,
+                            'instance records', None))
+        return checks
+
+    checks.append(check('probe ran as guest root', 'uid 0, no error',
+                        {'uid': gr.get('uid'), 'error': (gr.get('error') or '')[-400:] or None},
+                        'guest: /var/lib/aieh-netprobe/result.json',
+                        None if not gr else (gr.get('uid') == 0 and not gr.get('error'))))
+
+    routes4 = snapshot_out(gr, 'after_setup', 'ip_route')
+    routes6 = snapshot_out(gr, 'after_setup', 'ip6_route')
+    defaults = [line for line in (routes4 + '\n' + routes6).splitlines() if line.startswith('default')]
+    checks.append(check('default routes installed by guest root',
+                        'default via 10.0.2.2 and default via fec0::2',
+                        {'before': [line for line in (snapshot_out(gr, 'before', 'ip_route') + '\n' +
+                                                      snapshot_out(gr, 'before', 'ip6_route'))
+                                    .splitlines() if line.startswith('default')],
+                         'after_setup': defaults},
+                        'guest: ip route, ip -6 route', None if not gr else (
+                            any(line.startswith('default via 10.0.2.2 ') for line in defaults) and
+                            any(line.startswith('default via fec0::2 ') for line in defaults))))
+
+    tx0, tx1 = tx_packets(gr, 'after_setup'), tx_packets(gr, 'after_probes')
+    checks.append(check('frames left the guest NIC during the probes', 'tx packets rise',
+                        {'after_setup': tx0, 'after_probes': tx1},
+                        'guest: ip -s -j link (stats64.tx.packets)',
+                        None if tx0 is None or tx1 is None else tx1 > tx0))
+
+    checks.append(positive_check('positive control: guest to the test listener through guestfwd',
+                                 gr.get('guest'), events, 'guest',
+                                 'guest exchange; host listener log'))
+    probes = (gr.get('guest') or {}).get('probes') or []
+    for name, classes in (
+            ('denied: public IPv4 by IP literal, ICMP and DNS, with a default route',
+             {'ipv4-direct', 'dns'}),
+            ('denied: host loopback through SLIRP (10.0.2.2) and the allowlist edges',
+             {'host-loopback', 'allowlist-edge'}),
+            ("denied: the host's LAN addresses", {'host-lan'}),
+            ('denied: IPv6, with an address and a default route added by guest root', {'ipv6'})):
+        checks.append(denied_check(name, probes, classes, 'guest: netprobe.py as root'))
+
+    selfchecks = lst.get('selfchecks') or []
+    sc_tcp = {s.get('tcp_local_port') for s in selfchecks if s.get('tcp_local_port')}
+    sc_udp = {s.get('udp_local_port') for s in selfchecks if s.get('udp_local_port')}
+    decoy_tcp = [e for e in events if e.get('socket') == 'decoy-tcp' and e.get('event') == 'accept']
+    decoy_udp = [e for e in events if e.get('socket') == 'decoy-udp' and e.get('event') == 'datagram']
+    foreign = [e for e in decoy_tcp if (e.get('peer') or [None, None])[1] not in sc_tcp] + \
+        [e for e in decoy_udp if (e.get('peer') or [None, None])[1] not in sc_udp]
+    phases = {s.get('phase') for s in selfchecks if s.get('tcp_local_port') in
+              {(e.get('peer') or [None, None])[1] for e in decoy_tcp} and s.get('udp_local_port') in
+              {(e.get('peer') or [None, None])[1] for e in decoy_udp}}
+    checks.append(check('decoy host-loopback services: no connection from the guest',
+                        'only the harness self-checks, before and after the probes, reached them',
+                        {'tcp_accepts': len(decoy_tcp), 'udp_datagrams': len(decoy_udp),
+                         'selfcheck_phases_logged': sorted(p for p in phases if p),
+                         'foreign': foreign},
+                        'host: decoy log', False if foreign else (
+                            True if {'before', 'after'} <= phases else None)))
+
+    accepts = [e for e in events if e.get('socket') == 'listener' and e.get('event') == 'accept']
+    qemu_pid = np.get('qemu_pid')
+    conns = as_list((np.get('guestfwd_connections') or {}).get('tcp_to_listener'))
+    qemu_ports = {c.get('LocalPort') for c in conns
+                  if c.get('OwningProcess') == qemu_pid and c.get('LocalAddress') == LOOPBACK}
+    others = [e for e in accepts if (e.get('peer') or [None, None])[1] not in qemu_ports]
+    checks.append(check("test listener: connections only from QEMU's guestfwd chardev",
+                        'every accepted peer is a 127.0.0.1 port owned by the QEMU process',
+                        {'accepts': [e.get('peer') for e in accepts], 'qemu_pid': qemu_pid,
+                         'qemu_ports': sorted(p for p in qemu_ports if p), 'others': others},
+                        'host: listener log; Get-NetTCPConnection -RemotePort',
+                        None if not qemu_pid else (bool(accepts) and not others)))
+
+    problems = binding_problems(lst.get('bindings_before'), lst.get('ports'))
+    checks.append(check('test listener and decoys bound to 127.0.0.1 only', [],
+                        problems, 'host: Get-NetTCPConnection / Get-NetUDPEndpoint -OwningProcess',
+                        None if lst.get('bindings_before') is None else not problems))
+    after = lst.get('bindings_after')
+    left = None if after is None or 'error' in after else \
+        sum(len(as_list(after.get(k))) for k in ('tcp_by_pid', 'udp_by_pid', 'tcp_by_port',
+                                                  'udp_by_port'))
+    checks.append(check('listener stopped after the cycle', 'exit 0; no socket left',
+                        {'exit': lst.get('exit'), 'killed': lst.get('killed'), 'sockets_left': left},
+                        'host: process exit; Get-NetTCPConnection / Get-NetUDPEndpoint',
+                        None if left is None else (lst.get('exit') == 0 and left == 0)))
+
+    ns = gr.get('netns') or {}
+    if not ns.get('configured'):
+        failed = [s for s in ns.get('setup') or [] if s.get('rc') != 0]
+        checks.append(check('container namespace', 'configured: veth pair, guest NAT',
+                            {'failed_step': failed[-1:] or None},
+                            'guest: ip netns, veth, iptables MASQUERADE', None))
+    else:
+        pos = positive_check('positive control: container namespace through guest NAT and guestfwd',
+                             ns, events, 'netns', 'namespace exchange; host listener log')
+        checks.append(pos)
+        denied = denied_check('denied from the container namespace: IPv4, ICMP, DNS, host '
+                              'loopback, LAN, allowlist edges', ns.get('probes') or [],
+                              {'ipv4-direct', 'dns', 'host-loopback', 'allowlist-edge', 'host-lan'},
+                              'guest: netprobe.py in the namespace')
+        if pos['verdict'] != 'PASS' and denied['verdict'] == 'PASS':
+            denied['verdict'] = 'UNKNOWN'
+            denied['observed']['note'] = ('the namespace positive control did not pass, so no '
+                                          'denial is shown to be the enforcement point\'s')
+        checks.append(denied)
+    return checks
+
+
+def netprobe_reachability(np):
+    """The flat table of every probe: scope, id, class, expected and observed result."""
+    gr = (np or {}).get('guest_result') or {}
+    rows = []
+    for scope, part in (('guest', gr.get('guest')), ('netns', gr.get('netns'))):
+        part = part or {}
+        pos = part.get('positive')
+        if pos:
+            rows.append({'scope': scope, 'id': f'guestfwd {pos.get("target")}', 'class': 'allowlisted',
+                         'expect': 'permitted', 'result': pos.get('result')})
+        for p in part.get('probes') or []:
+            ok = netprobe_probe_ok(p) if p.get('expect') == 'denied' else None
+            rows.append({'scope': scope, 'id': p.get('id'), 'class': p.get('class'),
+                         'expect': p.get('expect'), 'result': p.get('result'),
+                         'verdict': {True: 'denied', False: 'REACHED', None: 'unclear'}[ok]
+                         if p.get('expect') == 'denied' else 'info'})
+    return rows
+
+
+def netprobe(ctx, name, ready_timeout=READY_TIMEOUT_S):
+    """TEST-ONLY validation cycle for profiles P7 (F-03.3.2). The guest stays running for
+    inspect, exchange and destroy; the listener is stopped before this returns."""
+    t0 = time.time()
+    idir = ctx.instance_dir(name)
+    session = NetprobeSession()
+    out = {'operation': 'netprobe', 'labels': labels(ctx.profile), 'instance': name,
+           'mode': 'validation, test only (F-03.3.2; decision 0003, Owner authorization: '
+                   'network validation)'}
+    try:
+        created = create(ctx, name, ready_timeout, netprobe=session)
+        out['create'] = {k: created.get(k) for k in (
+            'result', 'ports', 'instance_id', 'seed_sha256', 'launch_record_sha256', 'record',
+            'error', 'seconds', 'ready', 'launch')}
+        if created.get('result') == 'ready':
+            record = read_launch_record(idir)
+            proc = running_process(idir, record['binary'])
+            out['qemu_pid'] = proc.pid if proc else None
+            if proc:
+                proc.close()
+            out['guestfwd_connections'] = guestfwd_connections(session.ports['listener'])
+            ssh = Ssh(ctx.profile, idir, record['ports']['ssh'])
+            got = ssh.run(['cat', '--', NETPROBE_RESULT], timeout=60)
+            try:
+                out['guest_result'] = json.loads(got.stdout)
+            except ValueError:
+                out['guest_result'] = None
+                out['guest_result_error'] = f'rc {got.returncode}: {got.stderr.strip()[:500]}'
+            session.selfcheck('after')
+    finally:
+        session.stop()
+    out['listener'] = session.report()
+    record = read_launch_record(idir)
+    out['checks'] = netprobe_checks(record, out)
+    out['reachability'] = netprobe_reachability(out)
+    out['result'] = prop('P7', out['checks'])['verdict']
+    out['seconds'] = round(time.time() - t0, 1)
+    out['record'] = write_record(idir, 'netprobe', out)
+    return out
+
+
+def enforcement_check(profile):
+    """Ordinary instances: the enforcement point is qualified by the netprobe validation
+    (a declared reference; an ordinary guest has no root to repeat that test)."""
+    ep = (profile.get('network') or {}).get('enforcement_point')
+    status = ep.get('status') if isinstance(ep, dict) else None
+    return check('enforcement point qualified', 'qualified by the F-03.3.2 netprobe validation',
+                 {'status': status, 'evidence': ep.get('evidence') if isinstance(ep, dict) else None},
+                 'profile network.enforcement_point (declared reference)',
+                 {'qualified': True, 'failed': False}.get(status))
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -2898,8 +3827,10 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='operation', required=True)
     p = sub.add_parser('canaries')
     p.add_argument('--out', required=True, help='a new directory outside the checkout')
+    p = sub.add_parser('netprobe-listen', help=argparse.SUPPRESS)
+    p.add_argument('--log', required=True)
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
-               'exchange-push', 'exchange-pull', 'check-surfaces'):
+               'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -2916,7 +3847,7 @@ def main(argv=None):
             p.add_argument('--bundle-name', help='file name in the guest exchange directory')
         if op == 'exchange-pull':
             p.add_argument('--file', required=True, help='file name in the guest exchange directory')
-        if op in ('create', 'start', 'recreate'):
+        if op in ('create', 'start', 'recreate', 'netprobe'):
             p.add_argument('--ready-timeout', type=int, default=READY_TIMEOUT_S,
                            help='overall readiness ceiling in seconds')
         if op == 'stop':
@@ -2930,6 +3861,8 @@ def main(argv=None):
         if op == 'canaries':
             print(json.dumps(make_canaries(args.out), indent=2, sort_keys=True))
             return 0
+        if op == 'netprobe-listen':
+            return netprobe_listen(args.log)
         ctx = Context(args.profile, args.state_dir)
         canaries = load_canaries(args.canaries) \
             if op in ('create', 'inspect') and args.canaries else None
@@ -2954,6 +3887,8 @@ def main(argv=None):
             result = exchange_pull(ctx, args.name, args.file)
         elif op == 'check-surfaces':
             result = check_surfaces(ctx, args.name, args.canaries)
+        elif op == 'netprobe':
+            result = netprobe(ctx, args.name, args.ready_timeout)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:
@@ -2962,7 +3897,7 @@ def main(argv=None):
                           'detail': exc.detail}, indent=2, sort_keys=True, default=str))
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
-    if result.get('operation') == 'check-surfaces':
+    if result.get('operation') in ('check-surfaces', 'netprobe'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \
