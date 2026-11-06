@@ -3,7 +3,9 @@
 Status: Accepted (Overseer, under the Owner's adaptation directive) - 2026-11-06
 Gate: architecture consultation, gates A (undermined premise) and G (containment)
 Supersedes: none. Corrects the reading of blueprint #dispatch-contract and
-#dispatch-probe-qualification; the seed files are integrity-pinned and unchanged.
+#dispatch-probe-qualification. (Current fact, 2026-11-06: the blueprint was reconciled with this
+record at M-1, commit e1ed236, through the authority-class manifest update; the original
+import remains verifiable with `tools/verify_seed.py --baseline seed`.)
 
 ## Context
 The blueprint gates native Docker dispatch on a pinned Agent Server that
@@ -54,7 +56,7 @@ ghcr.io/openhands/agent-server:latest-python.
 - Intent of the blueprint precondition is preserved; its observable changes from
   a version capability to configuration plus observation, so F-04.1 owns the
   configuration and E-01.3.1/E-01.5 own the runtime check. The blueprint's token
-  is a documentation defect exposed by F-01.1; the seed is not edited.
+  is a documentation defect exposed by F-01.1, corrected in the blueprint at M-1 (e1ed236).
 - E-01's and F-01's acceptance criteria are unchanged.
 - Open: a public per-conversation runtime discriminator was not established at
   1.60.1; E-01.3.1/E-01.5 validate against the pinned OpenAPI.

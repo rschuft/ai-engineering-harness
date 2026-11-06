@@ -55,7 +55,7 @@ push never implies parent acceptance.
 
 | Item | Scope | Sequencing |
 |---|---|---|
-| M-1 | Reconcile the blueprint with decision 0001 and verified upstream behavior, preserving the decision's provenance. Update the blueprint's integrity metadata through the versioned process F-02 introduces. | After F-02's verifier re-scope |
+| M-1 | Reconcile the blueprint with decision 0001 and verified upstream behavior, preserving the decision's provenance. Update the blueprint's integrity metadata through the versioned process F-02 introduces. | **Done (2026-11-06), `e1ed236`; pushed.** 8 passages reconciled, each with a visible note linking decision 0001, plus a Reconciliation notes entry. The 31 October observations made at v1.58.2 are kept as history; forward-looking requirements are restated. The blueprint's sha256 and size are updated in `SEED_MANIFEST.json` in the same commit. Both verify modes pass; the 105 element ids are unchanged; style and script blocks are byte-identical. Overseer reviewed the word diff and independently ran both modes. Recorded but not changed: v1.57.0 release-note statements, and the claim that runtime never falls back to local, which is checkable only with docker inspect (owned by E-01.3.1 and E-01.5). |
 
 ## Open license and distribution items (owned by G-02.1, R-04.1, R-04.2)
 
