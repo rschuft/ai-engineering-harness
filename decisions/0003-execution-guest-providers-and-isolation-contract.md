@@ -143,6 +143,17 @@ conditions, recorded here and in the execution-profile contract:
     resolved here as version floors plus a pin rule, with the exact pins left to
     F-03.2.1.
 
+## Current facts (2026-11-06, F-03.1 source check)
+- Microsoft Learn lists the Hyper-V role for Windows 10/11 Pro and Enterprise. Education is not
+  listed, so the matrix marks it unverified.
+- The WHP API reference does not document the `HypervisorPlatform` optional-feature name, how to
+  enable it, or which editions provide it. The A1 decision rule therefore rests on this record and
+  on the elevated read the Owner performs.
+- Profile names carry the tier prefix: `strong-windows-qemu-whpx`, `trusted-workload-windows-wsl2-distro`.
+  The short names above are the host-provider part of those names.
+- macOS strong is not operational until F-03.3.2 qualifies an egress enforcement point: Lima has no
+  native egress allowlist (condition 6).
+
 ## Evidence
 - **Blueprint:** #infrastructure-state, #containment-architecture, #platforms, extracted
   2026-11-06.
