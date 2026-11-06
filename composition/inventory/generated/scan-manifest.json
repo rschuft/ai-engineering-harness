@@ -21,7 +21,7 @@
       "platform": "host",
       "syft_exit": 0,
       "sbom": "sbom-python-host.cdx.json",
-      "sbom_sha256": "7c2d90b2e409e98f64179735f4deb37aff6b06c68db7cfff8aa45e27de6a816b",
+      "sbom_sha256": "c48de7d487f86d1c7da06141fbe50b1b75e7d1df2aec015c825e00ee12a90410",
       "grant_exit": 1,
       "grant": "grant-python-host.json"
     },

@@ -35,7 +35,7 @@
    "BSD license (see license.txt for details), Copyright (c) 2000-2025, ReportLab Inc.": 1,
    "CC0-1.0 OR Apache-2.0": 1,
    "Dual License": 1,
-   "LGPLv2 / LGPL-2.1 (PKG-INFO License: LGPLv2; setup.py header: LGPLv2.1)": 1,
+   "LGPLv2": 1,
    "LicenseRef-Proprietary": 1,
    "MIT OR Apache-2.0": 1,
    "MIT license": 1,
@@ -2620,23 +2620,27 @@
   },
   {
    "ecosystem": "pypi",
+   "name": "func-timeout",
+   "version": "4.3.5",
+   "targets": [
+    "windows-x86_64",
+    "linux-x86_64",
+    "linux-aarch64"
+   ],
+   "status": "reviewed sdist, built to a pure-Python wheel and installed (decision 0002)",
+   "license_declared": "LGPLv2",
+   "license_source": "pip inspect (installed METADATA): License",
+   "digest": "sdist sha256:74cd3c428ec94f4edfba81f9b2f14904846d5ffccc27c92433b8b5939b5575dd"
+  },
+  {
+   "ecosystem": "pypi",
    "name": "openhands-automation",
    "version": "1.30.1",
    "targets": [],
    "status": "coupled_pins",
    "license_declared": "MIT",
-   "license_source": "lock (F-01.1 / sdist PKG-INFO)",
+   "license_source": "lock (F-01.1)",
    "digest": "sha256:9bbc2bc8b160242139b905a2deedc2127a29a6ffd2cca27569a252c6e27613d8"
-  },
-  {
-   "ecosystem": "pypi",
-   "name": "func-timeout",
-   "version": "4.3.5",
-   "targets": [],
-   "status": "blocked",
-   "license_declared": "LGPLv2 / LGPL-2.1 (PKG-INFO License: LGPLv2; setup.py header: LGPLv2.1)",
-   "license_source": "lock (F-01.1 / sdist PKG-INFO)",
-   "digest": "sha256:74cd3c428ec94f4edfba81f9b2f14904846d5ffccc27c92433b8b5939b5575dd"
   },
   {
    "ecosystem": "npm",

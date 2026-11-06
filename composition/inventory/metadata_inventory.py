@@ -74,11 +74,17 @@ def main():
             src = "PyPI JSON (not installed on host): " + src
         items.append({"ecosystem": "pypi", "name": n, "version": ver, "targets": sorted(t for t, v in targets.items() if n in v),
                       "license_declared": lic, "license_source": src, "digest": "sha256 (hash-locked per target file)"})
-    for kind in ("coupled_pins", "blocked"):
-        for e in lock["python"].get(kind, []):
-            items.append({"ecosystem": "pypi", "name": e["name"], "version": e["version"], "targets": [], "status": kind,
-                          "license_declared": e.get("license", "MIT" if e["name"] == "openhands-automation" else None),
-                          "license_source": "lock (F-01.1 / sdist PKG-INFO)", "digest": "sha256:" + e["sha256"]})
+    for e in lock["python"].get("reviewed_sdists", []):
+        n = norm(e["name"])
+        lic, src = py_license(inst[n]) if n in inst else (e.get("license"), "lock")
+        items.append({"ecosystem": "pypi", "name": n, "version": e["version"], "targets": e.get("applies_to_targets", []),
+                      "status": "reviewed sdist, built to a pure-Python wheel and installed (decision 0002)",
+                      "license_declared": lic, "license_source": ("pip inspect (installed METADATA): " + src) if n in inst else src,
+                      "digest": "sdist sha256:" + e["sha256"]})
+    for e in lock["python"].get("coupled_pins", []):
+        items.append({"ecosystem": "pypi", "name": e["name"], "version": e["version"], "targets": [], "status": "coupled_pins",
+                      "license_declared": e.get("license", "MIT" if e["name"] == "openhands-automation" else None),
+                      "license_source": "lock (F-01.1)", "digest": "sha256:" + e["sha256"]})
     # npm
     plock = json.loads((LOCK_DIR / "npm" / "package-lock.json").read_text(encoding="utf-8"))
     hidden_p = work / "npm" / "project" / "node_modules" / ".package-lock.json"

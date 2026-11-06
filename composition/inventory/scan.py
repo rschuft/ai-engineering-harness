@@ -2,7 +2,7 @@
 """Initial SBOM / licence inventory (F-01.2).
 
     python -I composition/inventory/scan.py --resolved <resolver --work dir> --tools <empty dir outside the checkout>
-                                            [--out composition/inventory/generated] [--skip-oci]
+                                            [--out composition/inventory/generated] [--skip-oci] [--only TARGET ...]
 
 Downloads Syft and Grant from the URLs pinned in composition/lock/components.lock.json
 ("tools"), verifies each archive's sha256 against the lock BEFORE extracting or running
@@ -66,6 +66,7 @@ def main():
     ap.add_argument("--tools", required=True)
     ap.add_argument("--out", default=str(HERE / "generated"))
     ap.add_argument("--skip-oci", action="store_true")
+    ap.add_argument("--only", nargs="+", help="rescan only these targets (e.g. python-host); other results in scan-manifest.json are kept")
     a = ap.parse_args()
     resolved, tools, out = Path(a.resolved).resolve(), Path(a.tools).resolve(), Path(a.out).resolve()
     if tools == CHECKOUT or CHECKOUT in tools.parents:
@@ -87,7 +88,12 @@ def main():
         for o in LOCK["oci"]:
             slug = o["id"].split("/")[-1].replace(":", "-")
             targets.append((f"oci-{slug}", f"registry:{o['repository']}@{o['index_digest']}", ["--platform", "linux/amd64"]))
-    results = []
+    order = [t[0] for t in targets]
+    if a.only:
+        targets = [t for t in targets if t[0] in a.only]
+    manifest = out / "scan-manifest.json"
+    previous = json.loads(manifest.read_text(encoding="utf-8"))["results"] if a.only and manifest.exists() else []
+    results = [r for r in previous if r["target"] not in {t[0] for t in targets}]
     for name, src, extra in targets:
         sbom = out / f"sbom-{name}.cdx.json"
         p = run([exes["syft"], "scan", src, *extra, "-o", f"cyclonedx-json={sbom}", "-q"], env, resolved)
@@ -107,7 +113,7 @@ def main():
         print(json.dumps(rec), flush=True)
     meta = {"tools": [{k: t[k] for k in ("name", "version", "url", "sha256")} for t in LOCK["tools"] if t["name"] in exes],
             "grant_policy": "grant-default-config.yaml = output of `grant config` (Grant 0.7.0 defaults, unmodified). Not a project policy.",
-            "results": results}
+            "results": sorted(results, key=lambda r: order.index(r["target"]) if r["target"] in order else len(order))}
     (out / "scan-manifest.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
