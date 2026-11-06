@@ -94,6 +94,64 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_profile.py {{.CLI_ARGS}}'
 
+  # Execution-guest lifecycle (plan leaf F-03.2.2; tools/guest.py). PROFILE and
+  # STATE_DIR are always named, never defaulted (profiles/README.md sections 4 and 11).
+  guest:preflight:
+    desc: Read-only strong-guest capability report (python -I -B tools/guest.py preflight --profile PROFILE --state-dir STATE_DIR)
+    requires:
+      vars: [PROFILE, STATE_DIR]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py preflight --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}"'
+
+  guest:create:
+    desc: Create and boot a disposable guest, then wait until it is ready (python -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME)
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py create --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
+  guest:start:
+    desc: Relaunch a stopped guest from its launch record after re-checking every digest (python -I -B tools/guest.py start --profile PROFILE --state-dir STATE_DIR --name NAME)
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py start --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
+  guest:inspect:
+    desc: Record a guest's declared and observed state per profiles P1-P12 (python -I -B tools/guest.py inspect --profile PROFILE --state-dir STATE_DIR --name NAME)
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py inspect --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
+  guest:exec:
+    desc: "Operators only: run a command in the guest over SSH (python -I -B tools/guest.py exec --profile PROFILE --state-dir STATE_DIR --name NAME -- CMD)"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py exec --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" -- {{.CLI_ARGS}}'
+
+  guest:stop:
+    desc: Stop a guest (QMP system_powerdown, QMP quit after stop_timeout_s, then that process only) (python -I -B tools/guest.py stop --profile PROFILE --state-dir STATE_DIR --name NAME)
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py stop --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
+  guest:destroy:
+    desc: Stop a guest if it runs, then delete its instance directory only (python -I -B tools/guest.py destroy --profile PROFILE --state-dir STATE_DIR --name NAME)
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py destroy --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
+  guest:recreate:
+    desc: destroy, then create with the same name and profile (python -I -B tools/guest.py recreate --profile PROFILE --state-dir STATE_DIR --name NAME)
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py recreate --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
     cmds:

@@ -104,7 +104,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "e7c0b9f4ce0b2a6f3cca5ba6422cd866705e5c527b83d442ae9fb7c7e83c85ac"
+          "sha256": "0dccb1da93478b3ecb9fddfdb6fe3b2f2ed0fdea7eaabc6da92534adcab03065"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",

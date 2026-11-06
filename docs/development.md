@@ -138,6 +138,10 @@ Only what is listed as verified has been exercised.
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
+| `guest:preflight PROFILE=<dir> STATE_DIR=<dir>` | `python -I -B tools/guest.py preflight --profile <dir> --state-dir <dir>` | no | Read-only capability report for a strong guest profile; each failure names its Owner act (A1, A2, A3). See [Execution guests](#execution-guests). |
+| `guest:create PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name>` | no | Creates, boots and waits for a disposable guest. Refuses an existing instance. |
+| `guest:start`, `guest:inspect`, `guest:stop`, `guest:destroy`, `guest:recreate` (same variables) | `python -I -B tools/guest.py <operation> --profile <dir> --state-dir <dir> --name <name>` | no | The rest of the lifecycle; `destroy` deletes only the instance directory. |
+| `guest:exec PROFILE=… STATE_DIR=… NAME=… -- CMD` | `python -I -B tools/guest.py exec --profile <dir> --state-dir <dir> --name <name> -- CMD` | no | Operators only: a command in the guest over the loopback SSH forward. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
 | `scan:history [-- REVS]` | `python -I -B tools/publication_gate.py history [REVS]` | no | Read-only, redacted scan of every commit (default `--all`); exit 1 on findings. |
@@ -182,6 +186,42 @@ needs it. Keep the file on local disk, outside the repository (the store refuses
 a path inside the checkout), out of agent workspaces and out of guest storage.
 Backup and restore come with F-05.2.
 
+## Execution guests
+
+[`tools/guest.py`](../tools/guest.py) implements the lifecycle bindings of the Windows
+strong profile, [`profiles/strong-windows-qemu-whpx`](../profiles/strong-windows-qemu-whpx/README.md)
+(plan leaf F-03.2.2), under the contract in [`profiles/README.md`](../profiles/README.md).
+It needs the Owner acts A1 to A3 in that profile's
+[`PREREQUISITES.md`](../profiles/strong-windows-qemu-whpx/PREREQUISITES.md), and runs on
+Windows only. The profile and the state directory are named on every call; nothing
+defaults them.
+
+- `create` refuses an existing instance, checks every pinned digest, generates a fresh
+  ed25519 key with Windows' built-in `ssh-keygen` into the instance's `ssh\` directory,
+  creates the disks and the seed, writes `launch.json` (every boot input with its
+  digest, the argv, the profile revision; it refuses uncommitted changes under
+  `profiles/`), and launches QEMU detached. It then waits on observable signals under
+  one ceiling (`--ready-timeout`, default 600 s): QMP answering with the profile's
+  accelerator, cloud-init's host-key block on the serial log (written to the
+  instance's `known_hosts`), the SSH banner, and `cloud-init status --wait`.
+- `inspect` prints, and writes under `<state>\instances\<name>\records\`, a record of
+  profiles P1 to P12: declared value, observed value, method and PASS, FAIL or UNKNOWN
+  per check. It includes the guest egress probes, which are evidence toward F-03.3.2,
+  not its formal suite.
+- `stop` is QMP `system_powerdown`, then QMP `quit` after the profile's
+  `stop_timeout_s`, then terminating that process id only. `destroy` stops with force
+  if needed and deletes the instance directory only; an absent instance reports
+  `absent`.
+- SSH always uses the profile's client options plus `BatchMode=yes`,
+  `IdentityAgent=none`, `GlobalKnownHostsFile=none` and the per-instance key. The tool
+  refuses to run `ssh` when that key is missing, because `ssh -i` with a missing file
+  silently falls back to the identities in `~/.ssh`.
+
+Each operation prints one JSON object. The first real boot cycles are in
+[`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md).
+The tier stays **not operational** until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass
+(C6).
+
 ## Task
 
 The Taskfile targets Task **3.54.0** (release `v3.54.0`, published 2026-10-01,
@@ -211,7 +251,7 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `publication_gate.py` and their `tests/` | seed, F-02, F-03.2.1, publication gate |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, publication gate |
 | `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/` | F-05.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |

@@ -1,7 +1,8 @@
 #cloud-config
 # Seed template for strong-tier execution guests (profiles P5, P8). It holds only
 # the per-instance public key and non-secret configuration. The generator
-# substitutes {{agent_ssh_public_key}} and the profile's {{scratch_device}}, nothing else.
+# substitutes exactly two placeholders, the agent's public key and the profile's
+# scratch device; profiles/seed/README.md names them. This comment names neither.
 users:
   - name: agent
     gecos: AI Engineering Harness agent
