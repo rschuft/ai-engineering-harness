@@ -137,6 +137,7 @@ Only what is listed as verified has been exercised.
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
+| `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
 | `guest:preflight PROFILE=<dir> STATE_DIR=<dir>` | `python -I -B tools/guest.py preflight --profile <dir> --state-dir <dir>` | no | Read-only capability report for a strong guest profile; each failure names its Owner act (A1, A2, A3). See [Execution guests](#execution-guests). |
 | `guest:create PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name>` | no | Creates, boots and waits for a disposable guest. Refuses an existing instance. |
@@ -245,6 +246,34 @@ the exchange and surface-test cycles (F-03.3.1) are in
 [`evidence/F-03.3.1-guest-surfaces.md`](../evidence/F-03.3.1-guest-surfaces.md).
 The tier stays **not operational** until F-03.3.2, F-03.4 and S-02.x also pass (C6).
 
+## Intent records
+
+Plan leaf P-01.1 adds two product artifacts under [`catalog/`](../catalog/README.md),
+for the projects the harness manages (this repository does not plan itself with
+OpenSpec):
+
+- the OpenSpec schema `intent-driven` (artifacts proposal, specs and design;
+  `apply.requires` lists all three and there is no `apply.tracks`, because Backlog.md
+  tracks implementation), whose proposal carries an intent record;
+- the Agent Skill `intent-normalization`, which writes that record: the requester's
+  words byte for byte, the objective, binding constraints (only with an acceptance
+  recorded separately from the request), proposed methods (the Owner's stay
+  hypotheses), hypotheses, acceptance criteria and open clarifications, each with a
+  claim type and an attribution. The grammar is in the Skill's
+  [`references/intent-record.md`](../catalog/skills/intent-normalization/references/intent-record.md).
+
+[`tools/check_intent_record.py`](../tools/check_intent_record.py) checks a proposal
+against the quoted source text, with the standard library only and no model. The
+verifier lives in `tools/`, outside the Skill, so that the Skill being qualified does
+not carry its own judge. Its tests (`tools/tests/test_check_intent_record.py`, part of
+`task test`) pass the builder-produced fixture in `tools/tests/fixtures/intent_record/`
+and fail its mutations. That fixture shows the format can express a confusing
+request; it is not a qualification of the Skill on model runs (P-01.2).
+
+OpenSpec 1.16.0 checks the schema (`openspec schema validate intent-driven`) and the
+readiness of a change's artifacts (`openspec status`), and `openspec validate` checks
+delta specs. It does not check the content of a proposal; that is this checker's job.
+
 ## Task
 
 The Taskfile targets Task **3.54.0** (release `v3.54.0`, published 2026-10-01,
@@ -274,7 +303,8 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, publication gate |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, publication gate, P-01.1 |
+| `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/` | F-05.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
@@ -289,7 +319,7 @@ external (pinned in `composition/`) unless adaptation is necessary.
 | Configuration (Agent Server and service configuration) | `config/` | F-04.1 |
 | Integrations (Integration Service adapters and schemas) | `integrations/` (created by F-05.1: `integrations/store/`) | F-05.1, then P-02.1 and E-01.x |
 | Policy (principals, permissions, controls) | `policy/` | S-01.1, S-01.2.1, G-01.1 |
-| Agent and Skill catalog | `catalog/` | A-01.1, E-03.1 |
+| Agent and Skill catalog | `catalog/` (created by P-01.1: the `intent-driven` OpenSpec schema and the `intent-normalization` Skill) | P-01.1, then A-01.1 and E-03.1 |
 | Contract tests | `tests/` | F-03.3.1, S-02.1, E-01.3.2 |
 
 ## Changing integrity-tracked files

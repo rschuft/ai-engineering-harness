@@ -1,0 +1,3 @@
+# The intent-record checker compares quotes with their source byte for byte. Keep these
+# fixtures LF on every host, whatever core.autocrlf says.
+* text eol=lf

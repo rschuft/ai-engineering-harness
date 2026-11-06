@@ -1,0 +1,1 @@
+Customers keep complaining that the invoice PDF download times out when they pick a whole year. Just bump the gateway timeout to 10 minutes and put a Redis cache in front of the `invoices` query — that’ll fix it. It has to work for the big accounts too, and it needs to be  fast.

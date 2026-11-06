@@ -1,0 +1,109 @@
+name: intent-driven
+version: 1
+description: >-
+  Intent-preserving OpenSpec workflow (proposal, specs, design). The proposal carries
+  an intent record that keeps the requester's words verbatim and keeps proposed
+  methods as attributed hypotheses until a separate acceptance makes them binding.
+  Implementation completion is tracked outside OpenSpec (Backlog.md), so apply has
+  no tracked file.
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Proposal with the intent record (original quote, objective, constraints, methods, hypotheses, acceptance criteria, open clarifications)
+    template: proposal.md
+    instruction: |
+      Create proposal.md from the template. It establishes what the requester wants
+      and keeps that separate from how anyone suggested doing it. If an
+      `intent-normalization` Agent Skill is available, follow it; this instruction is
+      its summary.
+
+      Fill `## Intent Record` first. Every item has an id, `claim_type`,
+      `attributed_to` and `source`:
+      - Original Quote (Q1, Q2, ...): the requester's words copied byte for byte from
+        the durable source (no corrections, no reflowed lines, no normalised quotes or
+        dashes), inside a backtick fence with info string `text` that is longer than
+        any backtick run in the quote. `source` is the durable reference
+        (for example `conversation:thread-42/message-8`); if there is none, write
+        `missing:<what you received>` and add an open clarification asking for it.
+      - Objective (O1, ...): the behaviour or outcome the requester wants, stated
+        without a mechanism. claim_type `requirement`, authority `proposed` until an
+        acceptance is recorded.
+      - Binding Constraints (C1, ...): only constraints that carry an `acceptance`
+        reference recorded separately from the request (a later explicit acceptance,
+        an accepted decision record, an authenticated review). The request itself is
+        never its own acceptance. claim_type `constraint`, authority `accepted`.
+      - Proposed Methods (M1, ...): every "how" anyone suggested. A method taken from
+        the requester's words is attributed to them and stays claim_type `hypothesis`,
+        authority `proposed`, linked to a hypothesis item, unless it carries a
+        separate `acceptance` reference.
+      - Hypotheses (H1, ...): the testable claims behind the methods or causes
+        suggested (for example "applying M1 achieves O1"), with how to test them.
+      - Acceptance Criteria (AC1, ...): observable checks that show the objective is
+        met. Derive them from the objective, never from a hypothesis.
+      - Open Clarifications (CL1, ...): every ambiguity whose readings would change
+        the objective, an acceptance criterion, scope, risk or the method that fits.
+        Record the question and its consequence; do not guess.
+      A section with no items contains the single line `None.`.
+
+      Then write `## Why` (50 to 1000 characters; restate the objective and cite its
+      id) and `## What Changes` (observable behaviour, from the objective and the
+      acceptance criteria; never a hypothesis as a commitment). OpenSpec reads both
+      headings. List capabilities under `## Capabilities` as usual: each becomes
+      `specs/<capability-path>/spec.md`; a change with no spec-level behaviour sets
+      `skip_specs: true` in its `.openspec.yaml`.
+
+      This artifact declares readiness, not approval: nothing in it is accepted
+      because it was written down.
+    requires: []
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: Delta specifications of the behaviour the accepted objective needs
+    template: spec.md
+    instruction: |
+      Write one delta spec per capability listed in the proposal, at
+      `specs/<capability-path>/spec.md`, in OpenSpec's delta format: `## ADDED
+      Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements` or
+      `## RENAMED Requirements`; each requirement as `### Requirement: <name>` with
+      SHALL or MUST, and at least one `#### Scenario: <name>` with WHEN and THEN
+      steps. A new capability starts with `## Purpose`.
+
+      Requirements come from the proposal's Objective, Acceptance Criteria and Binding
+      Constraints only. A proposed method or hypothesis is never a requirement; it may
+      be weighed in design.md. If a requirement depends on an open clarification, cite
+      its id (for example CL1) and keep the clarification open; do not resolve it by
+      assumption.
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: Technical design, including how proposed methods were evaluated
+    template: design.md
+    instruction: |
+      Explain how the change will meet the specs. Sections: Context, Goals and
+      Non-Goals, Decisions (each with the alternatives considered), Method Evaluation,
+      Risks and Trade-offs, Open Questions.
+
+      Method Evaluation: for every proposed method in the proposal (M1, ...), state
+      whether the design uses it, and why, citing its hypothesis (H1, ...) and the
+      evidence for or against it. A method attributed to the requester is an
+      alternative to evaluate, not an obligation, unless the proposal lists it as a
+      binding constraint with an acceptance reference.
+
+      Open Questions are only for unknowns that would not change the specs, the
+      approach or the work breakdown. Anything that would belongs in the proposal's
+      Open Clarifications and must be answered before the design depends on it.
+    requires:
+      - proposal
+
+apply:
+  requires:
+    - proposal
+    - specs
+    - design
+  instruction: |
+    The proposal, specs and design exist. OpenSpec does not track implementation
+    progress for this schema: the Work system (Backlog.md) holds the tasks and their
+    completion. Implement only what the specs require; a proposed method that is
+    still a hypothesis is not an instruction.

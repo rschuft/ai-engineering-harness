@@ -1,0 +1,3 @@
+# Catalog files are shipped to managed projects and compared byte for byte (the
+# Skill's template copy); keep LF on every host.
+* text eol=lf
