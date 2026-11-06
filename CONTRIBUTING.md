@@ -64,7 +64,7 @@ network.
 | `task setup` | PASS | PASS (under Python 3.14.4) | not yet verified | not yet verified |
 | The four raw setup commands | PASS | PASS (under Python 3.14.4) | not yet verified | not yet verified |
 | Node.js / npm | 24.19.0 / 11.17.0 | 22.22.1 / 9.2.0: below the component tier | not yet verified | not yet verified |
-| `task qualify` (resolver) | PASS: 348 checks, 0 failed, digests equal to the F-01.2 record; about 4 minutes | not met: no CPython 3.12, Node 22, npm 9 | not yet verified | not yet verified |
+| `task qualify` (resolver) | PASS: 348 checks, 0 failed, digests equal to the F-01.2 record; about 4 minutes | not met: no CPython 3.12 and no pip; Node 22, npm 9 | not yet verified | not yet verified |
 | `task inventory` | PASS: 924 items | not yet verified | not yet verified | not yet verified |
 | `task sbom` | PASS with `-- --skip-oci` (host Python and npm, about 6 minutes); the OCI scans are not yet verified through Task | not supported | not yet verified | not yet verified |
 
