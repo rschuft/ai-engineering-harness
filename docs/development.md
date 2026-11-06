@@ -297,8 +297,11 @@ Each operation prints one JSON object. The first real boot cycles are in
 the exchange and surface-test cycles (F-03.3.1) are in
 [`evidence/F-03.3.1-guest-surfaces.md`](../evidence/F-03.3.1-guest-surfaces.md); the
 network validation (F-03.3.2) is in
-[`evidence/F-03.3.2-guest-network.md`](../evidence/F-03.3.2-guest-network.md).
-The tier stays **not operational** until F-03.4 and S-02.x also pass (C6).
+[`evidence/F-03.3.2-guest-network.md`](../evidence/F-03.3.2-guest-network.md); the
+teardown test and the provider-profile qualification (F-03.4) are in
+[`evidence/F-03.4-teardown-qualification.md`](../evidence/F-03.4-teardown-qualification.md)
+and [`QUALIFICATION.md`](../profiles/strong-windows-qemu-whpx/QUALIFICATION.md).
+The tier stays **not operational** until S-02.x also passes (C6).
 
 ## Intent records
 

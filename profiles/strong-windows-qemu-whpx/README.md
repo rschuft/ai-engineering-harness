@@ -9,6 +9,7 @@ Owner (decision 0003, W1). Files:
 | [`qemu-msys2-ucrt64.lock.json`](qemu-msys2-ucrt64.lock.json) | The QEMU artifact pin: 159 MSYS2 packages with sha256, their signing key, how the closure was resolved, and the extraction and link policy. |
 | [`PREREQUISITES.md`](PREREQUISITES.md) | Owner acts A1, A2, A3 and the F-03.2.1b validation commands. |
 | [`validation/netprobe/netprobe.py`](validation/netprobe/netprobe.py) | **Test only.** The guest-root network probe of `tools/guest.py netprobe` (F-03.3.2), pinned by sha256. Ordinary operation never reads it. |
+| [`QUALIFICATION.md`](QUALIFICATION.md) | The provider-profile qualification record (F-03.4): P1 to P12 with verdict, leaf and evidence; the host it was qualified on; limitations; platform adaptation points. |
 | [`../seed/`](../seed/README.md) | Seed templates shared with `strong-incus-vm`, and the seed generator specification. |
 
 **Status.** Declared and pinned; `tools/check_profile.py --strict` passes. Provider
@@ -26,7 +27,13 @@ guest-to-host only through `guestfwd` to 127.0.0.1): with routes installed by gu
 root, every probed path was denied, also from a namespace behind guest NAT, while one
 test `guestfwd` carried a nonce exchange:
 [`evidence/F-03.3.2-guest-network.md`](../../evidence/F-03.3.2-guest-network.md).
-Not operational until F-03.4 and S-02.x also pass (C6).
+F-03.4 proved P10: `tools/guest.py smoke` (create, inspect, stop, start, inspect,
+forced stop, recreate, inspect, destroy) passed end to end twice, once beside a running
+sibling instance and once beside a stopped one. No durable source changed, and recreate
+reproduced the observed state except identity:
+[`evidence/F-03.4-teardown-qualification.md`](../../evidence/F-03.4-teardown-qualification.md);
+qualification record: [`QUALIFICATION.md`](QUALIFICATION.md).
+Not operational until S-02.x also passes (C6).
 
 ## Open items for F-03.2.2
 
@@ -82,14 +89,28 @@ The tier stays not operational (C6). The
    - **Impact:**
      - **Isolation properties P1 to P12:** none identified.
      - **Portability:** on Windows hosts without XSAVES, this profile with `-cpu max` is
-       expected to panic at boot. Preflight does not detect that today.
+       expected to panic at boot. **Detected since F-03.4:** `preflight`'s `host-xsaves`
+       check asks the hypervisor platform (`WHvGetCapability`,
+       `WHvCapabilityCodeProcessorXsaveFeatures`, bit `XsaveSupervisorSupport`;
+       read-only, nothing installed) and reports such a host `unavailable`, so `create`
+       refuses with `TIER_UNAVAILABLE`. If the query itself fails, the check is
+       `unknown`, disclosed and not refused. On this host the mask was `0x41ffffdf`
+       (XSAVES present). Its 24 named bits matched the guest's `/proc/cpuinfo` flags
+       exactly, which corroborates the bit layout used.
+     - **Detector (F-03.4):** `inspect` reads the guest kernel's messages from
+       `serial.log` on the host side (the guest's `dmesg_restrict=1` hides `dmesg` from
+       `agent`). It reports `XSAVE consistency problem` or `XSAVE disabled` as FAIL
+       (the operation exits 1, and `smoke` fails) and `x86/fpu: misordered xstate` as a
+       labelled LIMITATION. All 10 F-03.4 inspects showed `misordered-xstate` only, with
+       XSAVE enabled in the compacted format.
      - **Runtime correctness:** the misordered-offset warning means the kernel's layout
        assumption is violated on this host. Extended-register state correctness
        (AVX-512) under signal delivery and context switches is unqualified.
    - **Obligations carried:**
-     - F-03.4 and the Windows packaging leaves (R-03.x) qualify the CPU model choice
-       (`max` or a named model) with evidence. They add a preflight check for host
-       XSAVES, or disclose `TIER_UNAVAILABLE`.
+     - The Windows packaging leaves (R-03.x) qualify the CPU model choice (`max` or a
+       named model) with evidence. F-03.4 added the preflight XSAVES check and the
+       detector, and recorded `max` as qualified on this AMD host only, with the
+       misordered-offset limitation ([`QUALIFICATION.md`](QUALIFICATION.md)).
      - Re-evaluate when a QEMU containing the upstream fix is pinned.
      - No unreviewed upstream patch is applied.
 4. **Egress: off-link destinations never left the guest. Resolved in F-03.3.2.**
@@ -121,7 +142,8 @@ The tier stays not operational (C6). The
 ## Open items after F-03.3.1
 
 The [F-03.3.1 evidence](../../evidence/F-03.3.1-guest-surfaces.md) has the detail.
-P3 to P6 passed on two fresh guests; P7 (F-03.3.2), P10 (F-03.4) and S-02.x remain (C6).
+P3 to P6 passed on two fresh guests; P7 (F-03.3.2) and P10 (F-03.4) have since passed;
+S-02.x remains (C6).
 
 7. **Exchange staging is inside the instance directory.** Pushed bundles, pulled files
    and their verification repositories live in `<instance>\exchange\`, under the state
@@ -172,6 +194,34 @@ IPv6 statement.
 15. **Validation instances are marked and single-boot.** `launch.json` records the
     `validation` block and the full effective argv; `launch` refuses an undeclared
     `guestfwd`; `start` refuses a validation instance. Destroy it after the cycle.
+
+## Teardown and inspectability (F-03.4)
+
+The [F-03.4 evidence](../../evidence/F-03.4-teardown-qualification.md) has the detail.
+
+16. **`smoke` is the repeatable P10 test.** `tools/guest.py smoke` (Task `guest:smoke`)
+    runs preflight, create, inspect, graceful stop, start from `launch.json`, inspect,
+    forced stop, recreate, inspect, destroy and destroy again, and gives one verdict.
+    - It compares the inspect records across the start (every field equal) and across
+      the recreate: stable fields equal, per-instance fields (machine-id, host keys,
+      cloud-init instance id, SSH key, seed) different.
+    - It inventories the durable sources before and after each destroy and recreate:
+      the checkout, the pinned image, the provider prefix, the other `instances\`
+      entries and the operator's `--durable` roots.
+    - Two runs passed. The first run failed on a classification defect (MemTotal),
+      which was fixed forward.
+17. **Guest MemTotal varies per boot.** Observed between 16382784 and 16382796 kB, even
+    across a plain restart. The exact memory ceiling is QMP `base-memory`, so the guest
+    figure is volatile in the comparison, and its 85 to 100 % verdict must stay equal.
+18. **P11 covers the instance's records.** Each launch writes a labelled
+    `AIEH-LOG-HEADER` line to `stderr.log`. `inspect` checks the labels of
+    `launch.json`, `process.json`, every record and every header. `serial.log`, the
+    keys, `known_hosts`, the disks and `seed.iso` are not records and carry no labels.
+    A header on `serial.log` would need a change to `launch.argv`.
+19. **Line endings.** [`../.gitattributes`](../.gitattributes) (`/seed/**` and
+    `/strong-*/**` `-text`) already stores every file pinned by sha256 under `profiles/`
+    verbatim. An `autocrlf=true` clone reproduces every pinned digest, and
+    `git add --renormalize` changes nothing. Root `.gitattributes` needs no entry.
 
 ## Choices
 
