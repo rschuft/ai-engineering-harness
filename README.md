@@ -6,8 +6,8 @@ This repository is the **implementation target**, not a finished product. The bu
 
 ## Start the Overseer
 
-1. Clone [`rschuft/ai-engineering-harness`](https://github.com/rschuft/ai-engineering-harness) and extract the seed archive **into the clone root** (the directory containing `LICENSE`). The archive does not contain or change `LICENSE` or `.git/`.
-2. Optionally verify the seed with `python tools/verify_seed.py` (`py -3 tools\verify_seed.py` on Windows if `python` is unavailable). The Overseer can perform this check instead.
+1. Clone [`rschuft/ai-engineering-harness`](https://github.com/rschuft/ai-engineering-harness). Use a full clone: the seed was imported in commit `13197dd`.
+2. Optionally run `task setup`, or the commands it wraps (see [`CONTRIBUTING.md`](CONTRIBUTING.md)). It checks prerequisites, verifies the seed and runs the tool tests. The Overseer can perform this check instead.
 3. Launch Claude Code in the repository using your **existing Overseer agent**. Start a fresh session with `/clear` **before** giving the agent the startup instruction.
 4. Give the Overseer the contents of [`OVERSEER_START.md`](OVERSEER_START.md) as one prompt. It will read the authoritative architecture and plan, select a ready leaf, consult Architect only when justified, dispatch implementation to Builder, inspect evidence and continue when authorized.
 
@@ -24,7 +24,8 @@ This repository is the **implementation target**, not a finished product. The bu
 | [`task_manifest.json`](task_manifest.json) | Task-to-prompt mapping, dependencies and content hashes. |
 | [`AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html`](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html) | Human-readable, interactive projection of the plan. |
 | [`AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv`](AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv) | Importable CSV projection; not a second source of truth. |
-| [`tools/verify_seed.py`](tools/verify_seed.py) | Standard-library-only, read-only integrity/graph check. |
+| [`tools/verify_seed.py`](tools/verify_seed.py) | Standard-library-only, read-only integrity/graph check. `python -I tools/verify_seed.py` checks the working tree: contract and authority files must match `SEED_MANIFEST.json`, while ordinary files may evolve. `--baseline seed` verifies the original import strictly from git history. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md), [`Taskfile.yml`](Taskfile.yml) | Developer and operator commands, prerequisites, verified platforms, repository layout, and how to change integrity-tracked files. |
 
 The plan references the original artifacts by their exact filenames. **Keep the canonical filenames and relative locations together** unless you intentionally regenerate all task prompts, manifests and links.
 

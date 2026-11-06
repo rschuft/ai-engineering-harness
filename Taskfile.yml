@@ -1,0 +1,93 @@
+# Developer and operator entrypoints (plan leaf F-02). Requires Task 3.54.0
+# (https://taskfile.dev); the pinned version and its checksums are recorded in
+# CONTRIBUTING.md. Every target wraps one repository command, so each also runs
+# without Task: the command is shown in its description and in CONTRIBUTING.md.
+#
+#   task setup     supported setup command: fast, offline qualification smoke checks
+#   task qualify   setup, then full component resolution (network, several minutes)
+#
+# Override the interpreter with PYTHON, e.g.  task setup PYTHON="py -3"
+version: '3'
+
+vars:
+  PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
+
+env:
+  AIEH_TASK_VERSION: '{{.TASK_VERSION}}'
+
+tasks:
+  default:
+    desc: List the available tasks
+    cmds:
+      - '"{{.TASK_EXE}}" --list'
+
+  setup:
+    desc: Run the qualification smoke checks (prereqs, verify, verify:baseline, test)
+    cmds:
+      - task: prereqs
+      - task: verify
+      - task: verify:baseline
+      - task: test
+
+  qualify:
+    desc: setup, then component prerequisites and a full resolution into a new temporary directory
+    vars:
+      WORK:
+        sh: '{{.PYTHON}} -I -c "import pathlib, tempfile; print(pathlib.Path(tempfile.mkdtemp(prefix=''aieh-resolve-'')).as_posix())"'
+    cmds:
+      - task: setup
+      - task: prereqs:components
+      - task: resolve
+        vars:
+          WORK: '{{.WORK}}'
+
+  prereqs:
+    desc: Check basic prerequisites (python -I -B tools/check_prereqs.py)
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_prereqs.py --tier basic'
+
+  prereqs:components:
+    desc: Check component-verification prerequisites (python -I -B tools/check_prereqs.py --tier components)
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_prereqs.py --tier components'
+
+  prereqs:inventory:
+    desc: Check the optional SBOM scan's host platform (python -I -B tools/check_prereqs.py --tier inventory)
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_prereqs.py --tier inventory'
+
+  verify:
+    desc: Verify the seed against SEED_MANIFEST.json in the working tree (python -I tools/verify_seed.py)
+    cmds:
+      - '{{.PYTHON}} -I tools/verify_seed.py'
+
+  verify:baseline:
+    desc: Verify the original seed import from git history (python -I tools/verify_seed.py --baseline seed)
+    cmds:
+      - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
+
+  test:
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v)
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
+
+  resolve:
+    desc: Resolve and verify the component lock (python -I composition/resolve.py --work WORK); WORK must be empty or absent and outside the checkout
+    requires:
+      vars: [WORK]
+    cmds:
+      - '{{.PYTHON}} -I composition/resolve.py --work "{{.WORK}}"'
+
+  inventory:
+    desc: "Optional: component metadata inventory from a resolver work directory (python -I composition/inventory/metadata_inventory.py --resolved RESOLVED --out OUT)"
+    requires:
+      vars: [RESOLVED, OUT]
+    cmds:
+      - '{{.PYTHON}} -I composition/inventory/metadata_inventory.py --resolved "{{.RESOLVED}}" --out "{{.OUT}}"'
+
+  sbom:
+    desc: "Optional, Windows x86_64: Syft SBOMs and Grant licence findings (python -I composition/inventory/scan.py --resolved RESOLVED --tools TOOLS --out OUT)"
+    requires:
+      vars: [RESOLVED, TOOLS, OUT]
+    cmds:
+      - '{{.PYTHON}} -I composition/inventory/scan.py --resolved "{{.RESOLVED}}" --tools "{{.TOOLS}}" --out "{{.OUT}}" {{.CLI_ARGS}}'
