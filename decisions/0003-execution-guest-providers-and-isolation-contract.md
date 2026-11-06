@@ -97,6 +97,27 @@ nested WSL2 candidate or the trusted-workload profile as the F-03.2.x reference,
 choice is recorded here as an Owner clarification, because it changes what the F-03
 evidence establishes.
 
+## Owner authorization: guest validation (2026-11-06)
+The Owner approved F-03.2.2: create, boot, inspect, stop and destroy disposable Debian 13 guests using the
+pinned QEMU/WHPX configuration. The approval covers repeatable, non-privileged guest-validation cycles under
+these conditions, without approval for each routine boot:
+1. Use only the verified Debian image, the verified QEMU installation and the approved profile (8 vCPU, 16 GiB).
+2. Keep all instance-specific disks, SSH keys and execution records under `D:\aieh-guest-state\instances\`.
+3. Do not mount or share host folders, repositories, credentials or management interfaces with the guest.
+4. Restrict SSH to 127.0.0.1 and verify the effective binding.
+5. Keep guest networking blocked from outbound access, and verify the restriction is effective rather than
+   relying on configuration alone.
+6. Do not modify Windows, WSL2, host firewall rules, system services or other host configuration. Stop if
+   Windows requests firewall authorization.
+7. Use fresh per-instance credentials. Destroy each disposable instance and its credentials after validation,
+   preserving the verified base image and shared installation.
+8. Run no untrusted agent workloads during this infrastructure validation.
+9. Record actual boot, inspection, isolation and teardown evidence. Do not declare the strong tier verified
+   until its required negative tests pass (C6).
+
+Any expansion of host access, network permissions or VM privileges, or execution of untrusted workloads,
+needs separate authorization.
+
 ## Owner selection (2026-11-06)
 The Owner selected **W1**: QEMU with the Windows Hypervisor Platform (WHPX) is the
 reference Windows provider for the strong tier. The selection carries these binding
