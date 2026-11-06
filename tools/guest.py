@@ -2473,6 +2473,10 @@ def storage_checks(profile, record, obs):
     forbidden = storage.get('forbidden_fstypes') or SHARE_FSTYPES.split(',')
     share_count = re.search(r'count=(\d+)', out_text('findmnt_shares'))
     mounts = flatten_mounts(out_text('findmnt'))
+    validation_mounts = []
+    if mounts and (record.get('validation') or {}).get('mode') == 'netprobe':
+        validation_mounts = [m for m in mounts if netprobe_mount(m)]
+        mounts = [m for m in mounts if not netprobe_mount(m)]
     serials, disks = lsblk_disks(out_text('lsblk'))
     fstypes = sorted({m['fstype'] for m in mounts or [] if m.get('fstype')})
     bad_types = [t for t in fstypes if t in forbidden or t.split('.')[0] in forbidden]
@@ -2488,7 +2492,8 @@ def storage_checks(profile, record, obs):
               share_count is not None and int(share_count.group(1)) == 0),
         check('mount table file systems', f'none of {forbidden}', fstypes, 'guest: findmnt -J',
               not bad_types if mounts else None),
-        check('mount table equals the declared allowlist', 'profile guest_storage.mounts',
+        check('mount table equals the declared allowlist', 'profile guest_storage.mounts' +
+              (' (the netprobe namespace mounts excluded)' if validation_mounts else ''),
               None if diff is None else {'matched': diff['matched'], 'unlisted': diff['unlisted'],
                                          'missing': [e['target'] for e in diff['missing']]},
               'guest: findmnt -J, with lsblk -J for the disk of each block mount',
@@ -2758,8 +2763,9 @@ def evaluate(profile, record, obs):
     ip6 = out_text('ip6_addr')
     validation = record.get('validation') or {}
     netprobe_mode = validation.get('mode') == 'netprobe'
-    ip6_nonlo = [line for line in ip6.splitlines() if 'inet6' in line and '::1/128' not in line
-                 and not (netprobe_mode and f'inet6 {NETPROBE_V6_ADDR}/' in line)]
+    ip6_nonlo = [line for iface, line in ipv6_address_lines(ip6) if '::1/128' not in line
+                 and not (netprobe_mode and (f'inet6 {NETPROBE_V6_ADDR}/' in line or
+                                             iface.startswith(NETPROBE_IFACE_PREFIX)))]
     rules = forwarding_rules(record.get('argv') or [])
     declared_rules = [(validation.get('guestfwd') or {}).get('rule')] if netprobe_mode else []
     props.append(prop('P7', [
@@ -2782,8 +2788,9 @@ def evaluate(profile, record, obs):
               'guest: bash /dev/tcp with timeout, getent, python3 socket and http.client',
               bool(egress) and all(probe_blocked(k, v) for k, v in egress.items())),
         check('guest IPv6 addresses beyond ::1', [], ip6_nonlo,
-              'guest: ip -6 addr' + (f' ({NETPROBE_V6_ADDR}, added by the netprobe root, '
-                                     'excluded)' if netprobe_mode else ''), not ip6_nonlo),
+              'guest: ip -6 addr' + (f' ({NETPROBE_V6_ADDR} and the {NETPROBE_IFACE_PREFIX}* '
+                                     'namespace interfaces, added by the netprobe root, excluded)'
+                                     if netprobe_mode else ''), not ip6_nonlo),
         check('guest forwarding rules', declared_rules, rules, 'launch record argv (guestfwd=)',
               rules == declared_rules),
     ] + (netprobe_checks(record, obs.get('netprobe')) if netprobe_mode
@@ -2951,7 +2958,7 @@ def check_surfaces(ctx, name, canary_dir):
 # validation instance (single boot).
 
 NETPROBE_SCRIPT = ('validation', 'netprobe', 'netprobe.py')    # under the profile directory
-NETPROBE_SCRIPT_SHA256 = 'b90769744d289d31ba0ef4f9c9ae2095fc020b4e80c842a01ac48c5590edb6cd'
+NETPROBE_SCRIPT_SHA256 = '76e303027848909ee9d395a137cc30b680bd502b65dfa14315961982a3eb5ba1'
 NETPROBE_PARAMS_LINE = ("PARAMS_JSON = '{}'  # @@AIEH-NETPROBE-PARAMS@@ "
                         "(tools/guest.py replaces this line)")
 NETPROBE_MARKER = 'AIEH-NETPROBE'
@@ -2967,20 +2974,40 @@ NETPROBE_PUBLIC = {
     'public_dns_ipv6': ['2606:4700:4700::1111', '2001:4860:4860::8888'],
 }
 NETPROBE_V6_ADDR = 'fec0::15'          # the one IPv6 address the probe adds (netprobe.py)
+NETPROBE_IFACE_PREFIX = 'aieh-'        # its veth pair (netprobe.py VETH_HOST, VETH_NS)
+NETPROBE_NETNS = 'aieh-np'             # its network namespace (netprobe.py NETNS)
 NETPROBE_RESULT = '/var/lib/aieh-netprobe/result.json'
 NETPROBE_BOUNDARY = '==AIEH-NETPROBE-USER-DATA=='
 # Probe results (netprobe.py): a denied path times out, is refused (a reset from SLIRP,
 # never a host socket: the host ports probed all have live listeners) or gets no reply;
-# a name is not resolved. 'unreachable' means the guest's own stack gave up (no route,
+# a name is not resolved (not found, or no answer within the probe's ceiling). 'unreachable' means the guest's own stack gave up (no route,
 # no neighbour), which shows nothing about the enforcement point: it is UNKNOWN.
 NETPROBE_DENIED = frozenset({'timeout', 'refused', 'no-reply'})
-NETPROBE_RESOLVE_DENIED = frozenset({'not-found'})
+NETPROBE_RESOLVE_DENIED = frozenset({'not-found', 'timeout'})
 NETPROBE_REACHED = frozenset({'connected', 'reply', 'resolved', 'exchanged',
                               'connected-no-exchange'})
 NETPROBE_LINE_MAX = 512
 NETPROBE_CONN_BYTES_MAX = 1 << 16
 NETPROBE_CONN_MAX = 64
 NETPROBE_LABEL = re.compile(r'^[a-z]{1,16}$')
+
+
+def netprobe_mount(mount):
+    """The mounts `ip netns add` creates for the probe's namespace (validation only)."""
+    return (mount.get('target') == '/run/netns' and mount.get('fstype') == 'tmpfs') or \
+        (mount.get('target') == f'/run/netns/{NETPROBE_NETNS}' and mount.get('fstype') == 'nsfs')
+
+
+def ipv6_address_lines(text):
+    """(interface, line) for every inet6 line of `ip -6 addr`."""
+    out, iface = [], ''
+    for line in (text or '').splitlines():
+        header = re.match(r'^\d+: ([^:@\s]+)', line)
+        if header:
+            iface = header.group(1)
+        elif 'inet6' in line:
+            out.append((iface, line))
+    return out
 
 
 def netprobe_script_path(profile_path):
@@ -3708,13 +3735,20 @@ def netprobe_checks(record, np):
                         problems, 'host: Get-NetTCPConnection / Get-NetUDPEndpoint -OwningProcess',
                         None if lst.get('bindings_before') is None else not problems))
     after = lst.get('bindings_after')
-    left = None if after is None or 'error' in after else \
-        sum(len(as_list(after.get(k))) for k in ('tcp_by_pid', 'udp_by_pid', 'tcp_by_port',
-                                                  'udp_by_port'))
+    left = time_wait = None
+    if after is not None and 'error' not in after:
+        # TimeWait entries belong to no process (OwningProcess 0): the kernel's record of a
+        # connection already closed, not a socket of the listener
+        entries = [e for k in ('tcp_by_pid', 'udp_by_pid', 'tcp_by_port', 'udp_by_port')
+                   for e in as_list(after.get(k))]
+        time_wait = [e for e in entries if e.get('State') == 'TimeWait' and
+                     not e.get('OwningProcess')]
+        left = [e for e in entries if e not in time_wait]
     checks.append(check('listener stopped after the cycle', 'exit 0; no socket left',
-                        {'exit': lst.get('exit'), 'killed': lst.get('killed'), 'sockets_left': left},
+                        {'exit': lst.get('exit'), 'killed': lst.get('killed'), 'sockets_left': left,
+                         'time_wait': len(time_wait) if time_wait is not None else None},
                         'host: process exit; Get-NetTCPConnection / Get-NetUDPEndpoint',
-                        None if left is None else (lst.get('exit') == 0 and left == 0)))
+                        None if left is None else (lst.get('exit') == 0 and not left)))
 
     ns = gr.get('netns') or {}
     if not ns.get('configured'):

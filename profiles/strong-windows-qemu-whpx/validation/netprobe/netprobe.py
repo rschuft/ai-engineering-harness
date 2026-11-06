@@ -196,11 +196,14 @@ def ping(host):
 
 
 def resolve(name):
+    """The guest's own resolver path (NSS; systemd-resolved retries for a long time)."""
     r = run(['getent', 'ahosts', name], timeout=40)
     if r['rc'] == 0:
         return {'result': 'resolved', 'detail': ' | '.join(r['out'].splitlines()[:2])}
     if r['rc'] == 2:
         return {'result': 'not-found', 'detail': 'getent rc 2'}
+    if r['rc'] is None and r['err'].startswith('timeout after'):
+        return {'result': 'timeout', 'detail': f'getent: {r["err"]}'}
     return {'result': 'error', 'detail': f'getent rc {r["rc"]} {r["err"]}'}
 
 

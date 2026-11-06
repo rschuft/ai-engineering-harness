@@ -1849,10 +1849,7 @@ def passing_netprobe():
                  'OwningProcess': 4242, 'State': 'Established'}]}}
 
 
-class NetprobeVerdict(Evaluate):
-    """F-03.3.2 negative controls: one violation per sample observation, and P7 must FAIL
-    (or, where nothing is shown either way, must not PASS)."""
-
+class NetprobeFixture(Evaluate):
     def setUp(self):
         super().setUp()
         self.vrecord = validation_record(self.record)
@@ -1891,6 +1888,11 @@ class NetprobeVerdict(Evaluate):
         part = obs['netprobe']['guest_result'][scope]
         rows = [p for p in part['probes'] if p['class'] == cls and p['expect'] == 'denied']
         rows[nth]['result'] = result
+
+
+class NetprobeVerdict(NetprobeFixture):
+    """F-03.3.2 negative controls: one violation per sample observation, and P7 must FAIL
+    (or, where nothing is shown either way, must not PASS)."""
 
     def test_public_ipv4_reachable(self):
         self.assertP7(lambda o: self.probe(o, 'guest', 'ipv4-direct', 'connected'))
@@ -2001,6 +2003,63 @@ class NetprobeVerdict(Evaluate):
                          ['exchanged', 'exchanged'])
         self.assertTrue(all(r['verdict'] == 'denied' for r in rows if r['expect'] == 'denied'))
         self.assertEqual({r['scope'] for r in rows}, {'guest', 'netns'})
+
+
+NETNS_MOUNTS = [('/run/netns', 'tmpfs[/netns]', 'tmpfs'),
+                ('/run/netns/aieh-np', 'nsfs[net:[4026532443]]', 'nsfs'),
+                ('/run/netns/aieh-np', 'nsfs[net:[4026532443]]', 'nsfs')]
+NETNS_IPV6 = ('1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536\n    inet6 ::1/128 scope host noprefixroute\n'
+              '2: enp0s4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500\n'
+              '    inet6 fec0::15/64 scope site nodad\n'
+              '3: aieh-h@enp0s4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500\n'
+              '    inet6 fe80::a43e:daff:feaf:ffbe/64 scope link proto kernel_ll')
+
+
+class NetprobeCycleOneRegressions(NetprobeFixture):
+    """Defects found by the first real netprobe cycle (f0332-n), fixed forward."""
+
+    def test_time_wait_after_stop_is_not_a_listener_socket(self):
+        tw = {'LocalAddress': '127.0.0.1', 'LocalPort': 40004, 'RemoteAddress': '127.0.0.1',
+              'RemotePort': 58920, 'State': 'TimeWait', 'OwningProcess': 0}
+        self.assertP7(lambda o: o['netprobe']['listener']['bindings_after']['tcp_by_port'].append(tw),
+                      'PASS')
+        owned = dict(tw, State='Established', OwningProcess=5000)
+        self.assertP7(lambda o: o['netprobe']['listener']['bindings_after']['tcp_by_port'].append(
+            owned))
+
+    def test_resolver_timeout_is_a_denial(self):
+        def timed_out(o):
+            for scope in ('guest', 'netns'):
+                next(p for p in o['netprobe']['guest_result'][scope]['probes']
+                     if p['kind'] == 'resolve')['result'] = 'timeout'
+        self.assertP7(timed_out, 'PASS')
+        with mock.patch.object(NP, 'run', return_value={'rc': None, 'out': '',
+                                                        'err': 'timeout after 40 s'}):
+            self.assertEqual(NP.resolve('deb.debian.org')['result'], 'timeout')
+        with mock.patch.object(NP, 'run', return_value={'rc': 1, 'out': '', 'err': 'x'}):
+            self.assertEqual(NP.resolve('deb.debian.org')['result'], 'error')
+
+    def test_namespace_mounts_and_addresses_of_a_validation_instance(self):
+        obs = self.observation()
+        obs['guest']['findmnt'] = {'rc': 0, 'out': findmnt_json(RECON_MOUNTS + NETNS_MOUNTS)}
+        obs['guest']['ip6_addr'] = {'rc': 0, 'out': NETNS_IPV6}
+        v = {p['property']: p['verdict'] for p in guest.evaluate(PROFILE, self.vrecord, obs)}
+        self.assertEqual((v['profiles P3'], v['profiles P7']), ('PASS', 'PASS'))
+        # other mounts or addresses still fail
+        obs['guest']['findmnt'] = {'rc': 0, 'out': findmnt_json(
+            RECON_MOUNTS + NETNS_MOUNTS + [('/run/netns/other', 'nsfs[net:[1]]', 'nsfs')])}
+        obs['guest']['ip6_addr'] = {'rc': 0, 'out': NETNS_IPV6.replace(
+            'scope site nodad\n', 'scope site nodad\n    inet6 2001:db8::5/64 scope global\n')}
+        v = {p['property']: p['verdict'] for p in guest.evaluate(PROFILE, self.vrecord, obs)}
+        self.assertEqual((v['profiles P3'], v['profiles P7']), ('FAIL', 'FAIL'))
+
+    def test_ordinary_instance_gets_no_namespace_allowance(self):
+        obs = passing_observation(self.record)
+        obs['guest']['findmnt'] = {'rc': 0, 'out': findmnt_json(RECON_MOUNTS + NETNS_MOUNTS)}
+        self.assertEqual(self.verdicts(obs)['profiles P3'], 'FAIL')
+        obs = passing_observation(self.record)
+        obs['guest']['ip6_addr'] = {'rc': 0, 'out': NETNS_IPV6}
+        self.assertEqual(self.verdicts(obs)['profiles P7'], 'FAIL')
 
 
 class OrdinaryP7(Evaluate):
