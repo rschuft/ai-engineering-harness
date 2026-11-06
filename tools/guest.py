@@ -3273,7 +3273,10 @@ CHECK_CLASSES = {
     ('profiles P2', 'vcpu (QMP)'): (STABLE, None),
     ('profiles P2', 'vcpu (guest)'): (STABLE, None),
     ('profiles P2', 'memory (QMP)'): (STABLE, None),
-    ('profiles P2', 'memory (guest MemTotal kB)'): (STABLE, None),
+    # the kernel's MemTotal moves by a page or so between fresh boots (observed in F-03.4:
+    # 16382796 then 16382792 kB across recreate); the exact ceiling is 'memory (QMP)',
+    # and the 85-100 % band is this check's verdict, which must stay equal
+    ('profiles P2', 'memory (guest MemTotal kB)'): (VOLATILE, None),
     ('profiles P2', 'root disk (guest)'): (STABLE, None),
     ('profiles P2', 'scratch disk (guest)'): (STABLE, None),
     ('profiles P2', 'root disk (qemu-img)'): (STABLE, None),

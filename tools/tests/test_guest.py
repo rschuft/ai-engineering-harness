@@ -2335,7 +2335,7 @@ class HostXsaves(unittest.TestCase):
 # ---------------------------------------------------------------- F-03.4: inspect comparison
 
 
-def identity_record(base_record, token, pid=4242, port_shift=0):
+def identity_record(base_record, token, pid=4242, port_shift=0, memtotal_kb=None):
     """An ordinary inspect record whose identity (machine-id, host keys, instance id, seed,
     SSH key) derives from token; everything else is the passing observation."""
     record = copy.deepcopy(base_record)
@@ -2350,6 +2350,8 @@ def identity_record(base_record, token, pid=4242, port_shift=0):
     obs['input_digests']['seed']['sha256'] = digest('seed')
     obs['input_digests']['ssh_public_key'] = {'match': True, 'sha256': digest('pub')}
     obs['guest']['cpu_flags'] = {'rc': 0, 'out': 'flags : fpu xsave xsaves avx512f'}
+    if memtotal_kb is not None:
+        obs['guest']['meminfo']['out'] = f'MemTotal:       {memtotal_kb} kB'
     if port_shift:
         for c in obs['host']['bindings']['tcp_by_pid']:
             c['LocalPort'] += port_shift
@@ -2404,10 +2406,18 @@ class CompareInspect(LaunchRecord):
         d = identity_record(self.record, 'two')
         for p in d['properties']:
             for chk in p['checks']:
-                if chk['check'] == 'memory (guest MemTotal kB)':
-                    chk['observed'] -= 4          # still within 85-100 %: verdict unchanged
+                if chk['check'] == 'guest kernel':
+                    chk['observed'] = 'Linux 6.12.999-cloud-amd64'    # verdict still PASS
         out = guest.compare_inspect(PROFILE, a, d, 'recreate')
-        self.assertEqual(out['not_ok'], ['profiles P2 / memory (guest MemTotal kB)'])
+        self.assertEqual(out['not_ok'], ['profiles P1 / guest kernel'])
+
+    def test_memtotal_varies_within_its_band_only(self):
+        """Observed in F-03.4: MemTotal 16382796 kB, then 16382792 kB after recreate."""
+        a = identity_record(self.record, 'one', memtotal_kb=16382796)
+        for kb, expected in ((16382792, 'PASS'), (1000000, 'FAIL')):
+            c = identity_record(self.record, 'two', memtotal_kb=kb)
+            self.assertEqual(guest.compare_inspect(PROFILE, a, c, 'recreate')['result'],
+                             expected, kb)
 
     def test_volatile_and_normalised_differences_pass(self):
         a = identity_record(self.record, 'one')
