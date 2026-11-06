@@ -16,7 +16,11 @@ validation **passed** on 2026-11-06 (F-03.2.1b, after A1 to A3):
 Lifecycle: [`tools/guest.py`](../../tools/guest.py) and the `guest:*` Task targets
 (F-03.2.2). Two disposable guests were booted, inspected and destroyed on 2026-11-06:
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../../evidence/F-03.2.2b-guest-lifecycle.md).
-Not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
+F-03.3.1 declared the guest's volume and mount table (`guest_storage`) and the exchange
+bounds (`exchange`), and added `exchange-push`, `exchange-pull` and the startup test
+`check-surfaces`. On 2026-11-06 two fresh guests passed profiles P3, P4, P5 and P6:
+[`evidence/F-03.3.1-guest-surfaces.md`](../../evidence/F-03.3.1-guest-surfaces.md).
+Not operational until F-03.3.2, F-03.4 and S-02.x also pass (C6).
 
 ## Open items for F-03.2.2
 
@@ -98,12 +102,39 @@ The tier stays not operational (C6). The
    `/usr/lib/tmpfiles.d/x11.conf`, and `inspect` reported FAIL. The inspection now asks
    for **no socket under `/tmp/.X11-unix`**: nothing in it but directories, and the
    path not a symlink (`profiles/README.md` P6, decision 0003, "Current facts").
-   `tools/guest.py` checks exactly that. **Not yet observed on a real guest:** the
-   observed state (an empty directory, `ls -la` showing only `.` and `..`) satisfies the
-   new check, but no guest was booted after the change. F-03.3.1 owns the formal P6
-   suite.
+   `tools/guest.py` checks exactly that. **Observed on real guests in F-03.3.1:** the
+   probe printed `type=directory` then `end` on both guests, and the P6 check passed
+   ([evidence](../../evidence/F-03.3.1-guest-surfaces.md)).
 6. **Commit charge.** Whether Windows charges the full 16 GiB to the commit limit at
    launch remains UNKNOWN; it was not measured.
+
+## Open items after F-03.3.1
+
+The [F-03.3.1 evidence](../../evidence/F-03.3.1-guest-surfaces.md) has the detail.
+P3 to P6 passed on two fresh guests; P7 (F-03.3.2), P10 (F-03.4) and S-02.x remain (C6).
+
+7. **Exchange staging is inside the instance directory.** Pushed bundles, pulled files
+   and their verification repositories live in `<instance>\exchange\`, under the state
+   directory and never in an Owner repository, as the binding requires. `destroy`
+   removes them with the instance. Where exported evidence should be kept after a
+   `fresh`-mode guest is destroyed is not decided.
+8. **The P5 scan reads what `agent` can read.** Root-only guest files are not read:
+   `/proc/1/environ`, `/etc/shadow`, cloud-init's `user-data.txt` and logs, and the
+   journal. The seed they come from is scanned on the host. A guest-root view belongs
+   with the guest-root tests of F-03.3.2 and S-02.x.
+9. **The P6 socket check is a deny-list.** The guest's own sockets (systemd, dbus, udev,
+   uuidd, `/run/ssh-unix-local/socket`, the agent's user `openssh_agent`) are recorded,
+   but they are not compared with an exact allowlist. The decisive checks are the
+   absence of channel devices and of a guest-to-host vsock transport.
+   - `/dev/vsock` exists, and the `vsock`, `vsock_loopback` and
+     `vmw_vsock_vmci_transport` modules are loaded.
+   - The local CID is 1, so no transport reaches the host.
+10. **Pseudo mounts come from one image.** The pseudo-mount entries of `guest_storage`
+    were taken from the Debian 13 build pinned here. A re-pinned image or kernel needs
+    them re-derived; until then the exact comparison FAILs.
+11. **`strong-incus-vm` declares no volume table.** There is no Incus host, so its
+    effective mounts cannot be observed. `tools/check_profile.py` requires
+    `guest_storage` and `exchange` for QEMU profiles only.
 
 ## Choices
 

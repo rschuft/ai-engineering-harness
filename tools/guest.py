@@ -65,6 +65,7 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -1477,6 +1478,27 @@ def stop(ctx, name, force=False):
     return result
 
 
+def remove_tree(root):
+    """shutil.rmtree, clearing the read-only attribute of an entry it cannot delete.
+
+    Git for Windows writes pack files read-only (the exchange's verification
+    repositories live in the instance directory), and Windows refuses to delete a
+    read-only file. Only entries inside root are touched, and never through a link
+    (destroy has already refused any link inside root).
+    """
+    def retry(func, path, exc):
+        exc = exc[1] if isinstance(exc, tuple) else exc
+        if not isinstance(exc, PermissionError) or not inside(path, root) or \
+                os.path.islink(path) or not os.path.lexists(path):
+            raise exc
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(root, onexc=retry)
+    else:
+        shutil.rmtree(root, onerror=retry)
+
+
 def reparse_points(root):
     """Every symlink or junction under root (destroy never follows one)."""
     found, stack = [], [str(root)]
@@ -1514,7 +1536,7 @@ def destroy(ctx, name):
             proc.close()
     else:
         result['stop'] = 'not-running'
-    shutil.rmtree(idir)
+    remove_tree(idir)
     result['result'] = 'destroyed' if not os.path.lexists(idir) else 'incomplete'
     if result['result'] != 'destroyed':
         raise Refused('DESTROY_FAILED', f'{idir} still exists', result)

@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import struct
 import subprocess
 import tarfile
@@ -296,6 +297,28 @@ class Destroy(TempState):
         expected = {k: v for k, v in before.items()
                     if not k.startswith(os.path.join('instances', 'aa'))}
         self.assertEqual(after, expected)
+
+    def test_destroy_removes_read_only_files(self):
+        """Git for Windows writes pack files read-only; the exchange's verification
+        repository lives in the instance directory (F-03.3.1 defect, fixed forward)."""
+        self.populate()
+        pack = self.state / 'instances' / 'aa' / 'exchange' / 'verify' / 'x.git' / 'pack.idx'
+        pack.parent.mkdir(parents=True)
+        pack.write_bytes(b'pack')
+        os.chmod(pack, stat.S_IREAD)
+        outside = self.state / 'keep-read-only.txt'
+        outside.write_bytes(b'keep')
+        os.chmod(outside, stat.S_IREAD)
+        self.addCleanup(os.chmod, outside, stat.S_IWRITE | stat.S_IREAD)
+        result = guest.destroy(self.ctx(), 'aa')
+        self.assertEqual(result['result'], 'destroyed')
+        self.assertFalse((self.state / 'instances' / 'aa').exists())
+        self.assertTrue(outside.exists())
+        self.assertFalse(os.access(outside, os.W_OK))          # untouched outside the instance
+
+    def test_remove_tree_reraises_other_errors(self):
+        with self.assertRaises(FileNotFoundError):
+            guest.remove_tree(self.state / 'missing')
 
     def test_destroy_absent(self):
         self.populate()
