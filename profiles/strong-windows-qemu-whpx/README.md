@@ -8,6 +8,7 @@ Owner (decision 0003, W1). Files:
 | [`profile.json`](profile.json) | The declaration: labels, pins, ceilings, network, identity, lifecycle bindings and the QEMU command line. |
 | [`qemu-msys2-ucrt64.lock.json`](qemu-msys2-ucrt64.lock.json) | The QEMU artifact pin: 159 MSYS2 packages with sha256, their signing key, how the closure was resolved, and the extraction and link policy. |
 | [`PREREQUISITES.md`](PREREQUISITES.md) | Owner acts A1, A2, A3 and the F-03.2.1b validation commands. |
+| [`validation/netprobe/netprobe.py`](validation/netprobe/netprobe.py) | **Test only.** The guest-root network probe of `tools/guest.py netprobe` (F-03.3.2), pinned by sha256. Ordinary operation never reads it. |
 | [`../seed/`](../seed/README.md) | Seed templates shared with `strong-incus-vm`, and the seed generator specification. |
 
 **Status.** Declared and pinned; `tools/check_profile.py --strict` passes. Provider
@@ -20,7 +21,12 @@ F-03.3.1 declared the guest's volume and mount table (`guest_storage`) and the e
 bounds (`exchange`), and added `exchange-push`, `exchange-pull` and the startup test
 `check-surfaces`. On 2026-11-06 two fresh guests passed profiles P3, P4, P5 and P6:
 [`evidence/F-03.3.1-guest-surfaces.md`](../../evidence/F-03.3.1-guest-surfaces.md).
-Not operational until F-03.3.2, F-03.4 and S-02.x also pass (C6).
+F-03.3.2 qualified the network enforcement point (SLIRP `restrict=on`, `ipv6=off`,
+guest-to-host only through `guestfwd` to 127.0.0.1): with routes installed by guest
+root, every probed path was denied, also from a namespace behind guest NAT, while one
+test `guestfwd` carried a nonce exchange:
+[`evidence/F-03.3.2-guest-network.md`](../../evidence/F-03.3.2-guest-network.md).
+Not operational until F-03.4 and S-02.x also pass (C6).
 
 ## Open items for F-03.2.2
 
@@ -86,7 +92,11 @@ The tier stays not operational (C6). The
        XSAVES, or disclose `TIER_UNAVAILABLE`.
      - Re-evaluate when a QEMU containing the upstream fix is pinned.
      - No unreviewed upstream patch is applied.
-4. **Egress: off-link destinations never left the guest.** SLIRP's DHCP lease (with
+4. **Egress: off-link destinations never left the guest. Resolved in F-03.3.2.**
+   With a default route, resolvers and an IPv6 route installed by guest root, the NIC's
+   tx counter rose and SLIRP reset every off-link TCP connection and dropped UDP, ICMP
+   and IPv6; see "Network qualification" below.
+   SLIRP's DHCP lease (with
    `restrict=on`) carries no router and no DNS server, so the guest has no default
    route. Probes to 1.1.1.1, 8.8.8.8 and the host's LAN address failed in the guest
    with `Network is unreachable`. Only the on-link SLIRP addresses (10.0.2.2, 10.0.2.3)
@@ -136,6 +146,33 @@ P3 to P6 passed on two fresh guests; P7 (F-03.3.2), P10 (F-03.4) and S-02.x rema
     effective mounts cannot be observed. `tools/check_profile.py` requires
     `guest_storage` and `exchange` for QEMU profiles only.
 
+## Network qualification (F-03.3.2)
+
+The [F-03.3.2 evidence](../../evidence/F-03.3.2-guest-network.md) has the detail;
+`profile.json` `network` carries the enforcement point, the reachability table and the
+IPv6 statement.
+
+12. **The enforcement point is qualified.** `tools/guest.py netprobe` (test only;
+    decision 0003, "Owner authorization: network validation") booted a disposable guest
+    whose seed adds a pinned root probe and whose `-netdev` adds one
+    `guestfwd=tcp:10.0.2.100:7000-tcp:127.0.0.1:<test listener>`, beside a TCP and a
+    UDP decoy on 127.0.0.1. 58 denied paths from the guest and 30 from a namespace
+    behind guest NAT were denied; both positive controls exchanged a nonce that the
+    listener logged from QEMU's chardev only. The ordinary `launch.argv` and seed
+    templates are unchanged; an ordinary guest passed `check-surfaces` and its
+    unprivileged egress probes.
+13. **Containers were approximated.** A network namespace with a veth pair and guest
+    MASQUERADE stands in for Docker's default bridge; Docker is not in the image.
+    IPv6 was not configured in the namespace. A real container is S-02.x's.
+14. **`inference` and `provision` stay deferred.** They will use the qualified
+    mechanism, a `guestfwd` to a 127.0.0.1 broker or proxy, but each needs separate
+    Owner authorization to enter `launch.argv`; `tools/check_profile.py` FAILs a
+    `guestfwd` without an active endpoint. A guestfwd chardev is opened once when QEMU
+    starts, so the broker must run before the guest and for its whole life.
+15. **Validation instances are marked and single-boot.** `launch.json` records the
+    `validation` block and the full effective argv; `launch` refuses an undeclared
+    `guestfwd`; `start` refuses a validation instance. Destroy it after the cycle.
+
 ## Choices
 
 **Guest image: Debian 13 genericcloud amd64, build 20261103-2651.** A maintained
@@ -175,9 +212,8 @@ F-03.2.2.
 **Network: SLIRP user networking with `restrict=on` and `ipv6=off`.** Inbound only by
 `hostfwd` bound to `127.0.0.1` (management SSH, also used for exchange). QMP listens
 on `127.0.0.1` and is not reachable from the guest. `inference` and `provision`
-endpoints are declared as classes with `guestfwd` to `127.0.0.1` as the mechanism, and
-their addresses are left to F-03.3.2. Until then the guest has no outbound path at
-all. Loopback ports can be reached by any local process; that is disclosed. Python's
+endpoints are declared as classes with `guestfwd` to `127.0.0.1` as the mechanism,
+qualified by F-03.3.2; they stay deferred, so the guest has no outbound path at all. Loopback ports can be reached by any local process; that is disclosed. Python's
 standard library has no `AF_UNIX` on Windows, which rules out a socket file for QMP.
 
 **Accelerator: `-accel whpx`, exactly once, with no fallback.** QEMU uses TCG when no

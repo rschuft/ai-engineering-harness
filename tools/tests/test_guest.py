@@ -750,11 +750,10 @@ class Evaluate(LaunchRecord):
 
     def test_passing_observation(self):
         v = self.verdicts(passing_observation(self.record))
-        for pid in ('P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8', 'P9', 'P11', 'P12'):
+        # P7: the committed profile's enforcement point is qualified (F-03.3.2)
+        for pid in ('P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P11', 'P12'):
             self.assertEqual(v[f'profiles {pid}'], 'PASS', pid)
-        # owned by later leaves, or (P7) no allowlisted endpoint to positively control yet
-        for pid in ('P7', 'P10'):
-            self.assertEqual(v[f'profiles {pid}'], 'UNKNOWN', pid)
+        self.assertEqual(v['profiles P10'], 'UNKNOWN')            # owned by F-03.4
 
     def test_every_surface_check_passes(self):
         """Each P3-P6 check, not only the property verdict, is PASS on the recon shape."""
@@ -1486,6 +1485,9 @@ class NetprobeOverlay(unittest.TestCase):
     def test_pin_matches_the_committed_script(self):
         self.assertEqual(hashlib.sha256(NETPROBE_FILE.read_bytes()).hexdigest(),
                          guest.NETPROBE_SCRIPT_SHA256)
+        overlay = PROFILE['network']['enforcement_point']['validation_overlay']
+        self.assertEqual(overlay['sha256'], guest.NETPROBE_SCRIPT_SHA256)
+        self.assertEqual(REPO / overlay['path'], NETPROBE_FILE)
         self.assertEqual(guest.netprobe_script_path(PROFILE_DIR / 'profile.json'), NETPROBE_FILE)
         self.assertEqual(NP.PARAMS_JSON, '{}')
         self.assertEqual(NP.V6_ADDR, guest.NETPROBE_V6_ADDR)

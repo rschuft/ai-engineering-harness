@@ -15,6 +15,7 @@
     "provider_validation": "PASS, 2026-11-06 (F-03.2.1b, evidence/F-03.2.1b-provider-validation.md): the paused boot (-S) with the full launch.argv answered QMP in prelaunch with 8 CPUs and 16 GiB, and quit exited 0. Observed warnings: -mon is deprecated; 'Ignoring request for interrupt vector 0' (open items for F-03.2.2 in README.md). Re-validated 2026-11-06 (F-03.2.2a, evidence/F-03.2.2a-seed-and-monitor.md) after -mon was replaced by -object monitor-qmp: the paused boot with a generated seed.iso answered QMP in prelaunch with enabled whpx, query-block listed root, scratch and seed (seed and base read-only), quit exited 0, and no deprecation warning was printed; 'Ignoring request for interrupt vector 0' recurred.",
     "guest_validation": "Observed 2026-11-06 (F-03.2.2b, evidence/F-03.2.2b-guest-lifecycle.md), under the Owner's guest-validation authorization (decision 0003). Two disposable guests (f0322b-a, f0322b-b) were created with tools/guest.py, booted under enabled whpx, ready in 9.7 s, then stopped and destroyed; the instance directories are gone and the image and QEMU pins are unchanged. The F-03.2 proof (declared versus observed) has no mismatch: 8 vCPU, MemTotal 16382796 kB of 16 GiB, 40 and 120 GiB disks, seed and base read-only, no vmx/svm in guest /proc/cpuinfo, cloud-init accepted the seed (DataSourceNoCloud [seed=/dev/vdc]), machine-ids differ (systemd generated them at first boot), user agent without sudo, and root SSH refused. SSH and QMP listened on 127.0.0.1 only; the LAN address and ::1 refused the forwarded ports. Every guest egress probe from the unprivileged agent account was blocked, with positive controls passing, but off-link destinations failed in the guest for lack of a default route, so SLIRP restrict=on was exercised only for 10.0.2.2 and 10.0.2.3 (F-03.3.2). inspect P6 FAILed on the contract's then-literal /tmp/.X11-unix check (an empty directory from the guest's own tmpfiles.d); the contract now asks for no socket there (Overseer decision 2026-11-06, decision 0003 Current facts). 'Ignoring request for interrupt vector 0' printed once at each launch and the guest ran normally. Guest kernel warning 'x86/fpu: misordered xstate at 1408' (xstate.c:254) under -cpu max: a recorded provider compatibility limitation, not attributed to the upstream no-XSAVES WHPX defect (inference); hosts without XSAVES are expected to panic with -cpu max and preflight does not detect it; -cpu unchanged (README open item 3, decision 0003 Current facts). Evidence toward F-03.3.x and F-03.4 only; not operational (C6).",
     "surface_validation": "PASS for profiles P3, P4, P5 and P6, 2026-11-06 (F-03.3.1, evidence/F-03.3.1-guest-surfaces.md), under the Owner's guest-validation authorization (decision 0003). Two fresh guests (f0331-v, f0331-w), each with its own synthetic canary set planted in the launching process and a fake home, ran exchange push and pull and check-surfaces, then were destroyed. Each guest's effective findmnt -J table matched guest_storage exactly (29 of 29, none unlisted, none missing); QMP block nodes, guest disks and the exchange and scratch directories matched the declaration; no share type, /mnt/c or /mnt/wslg. No canary (13 per set), Owner-class pattern or per-instance private-key material was found in the guest data collected as agent, the seed, the launch record or the serial log, and the positive control found all five Owner classes. No virtio console, vsock or 9p device; vsock local CID 1 (no guest-to-host transport); no host-management socket, path or environment variable; no socket under /tmp/.X11-unix; QMP refused from the guest at 10.0.2.2. The fixture bundle (sha256 00093a51...221af18) was identical on the host, in the guest and after the pull, and the pull verified (pack checksum, ref, git fsck --strict). destroy needed a fix for read-only git pack files (defect fixed forward). Root-only guest files were not read (the scan runs as agent). Evidence toward C6 only; not operational.",
+    "network_validation": "PASS for profiles P7, 2026-11-06 (F-03.3.2, evidence/F-03.3.2-guest-network.md), under the Owner's guest-validation and network-validation authorizations (decision 0003). Validation guest f0332-p (tools/guest.py netprobe, test only, commit 948ed37): guest root installed default routes via 10.0.2.2 and fec0::2, resolvers and IPv6, then 58 denied paths from the guest and 30 from a network namespace behind guest NAT were all denied (refused, timeout or no reply; no decoy or listener-port connection), and the one test guestfwd carried a nonce exchange from both, logged by the 127.0.0.1 listener from the QEMU chardev only; the listener and decoys bound 127.0.0.1 only and were gone afterwards. The first cycle (f0332-n, commit 3b6305c) observed the same denials but its verdict failed on three defects in the new checks, fixed forward. An ordinary guest (f0332-o) passed check-surfaces and its unprivileged egress probes, and SSH and exchange worked in both kinds of guest. Containers were approximated by a network namespace (Docker not installed). Evidence toward C6 only; not operational.",
     "schema_check": "tools/check_profile.py"
   },
   "host": {
@@ -206,9 +207,45 @@
   },
   "network": {
     "mode": "user (SLIRP)",
-    "posture": "restrict=on: the guest cannot reach the host or the outside except through the explicit forwards below (qemu.org invocation: restrict=on 'does not affect any explicitly set forwarding rules').",
+    "posture": "restrict=on and ipv6=off. The guest reaches nothing on the host or outside except through the explicit forwards below (qemu.org invocation: restrict=on 'does not affect any explicitly set forwarding rules'). Qualified by F-03.3.2: with a default route, resolvers, an IPv6 address and an IPv6 default route installed by guest root, every probed IPv4, ICMP, DNS, IPv6, host-LAN and host-loopback path was denied, also from a network namespace behind guest NAT, while one test guestfwd to a 127.0.0.1 listener carried a nonce exchange from both.",
     "ipv6": false,
-    "enforcement_point": "QEMU SLIRP restrict=on, with guestfwd to host-side endpoints for inference and provision: candidate; qualified by F-03.3.2.",
+    "ipv6_statement": "IPv6 is off at the enforcement point (ipv6=off): SLIRP handles no IPv6 at all. The guest kernel has IPv6 enabled but no address on the NIC (addr_gen_mode 1, accept_ra 0, network-config dhcp6 false, link-local []). With fec0::15/64, a default route via fec0::2 and static neighbour entries sending IPv6 frames to SLIRP's MAC (all added by guest root in F-03.3.2), every IPv6 probe timed out while the NIC's tx counter rose. No IPv6 endpoint is listed.",
+    "enforcement_point": {
+      "mechanism": "QEMU SLIRP restrict=on with ipv6=off. Guest-to-host traffic only through explicit guestfwd rules, each to a listener on 127.0.0.1; host-to-guest only through hostfwd bound to 127.0.0.1.",
+      "status": "qualified",
+      "qualified_by": "F-03.3.2",
+      "qualified_at": "2026-11-06",
+      "evidence": "evidence/F-03.3.2-guest-network.md",
+      "method": "tools/guest.py netprobe (test only; decision 0003, 'Owner authorization: network validation'): a disposable guest whose seed adds the pinned root probe and whose -netdev adds one guestfwd=tcp:10.0.2.100:7000-tcp:127.0.0.1:<test listener port>, beside a TCP and a UDP decoy on 127.0.0.1 that are not forwarded. Machine verdict: profiles P7 in inspect.",
+      "validation_overlay": {
+        "path": "profiles/strong-windows-qemu-whpx/validation/netprobe/netprobe.py",
+        "sha256": "76e303027848909ee9d395a137cc30b680bd502b65dfa14315961982a3eb5ba1"
+      },
+      "observed_behaviour": "With restrict=on, SLIRP answered a guest TCP SYN to any address other than the guestfwd address and port with a reset (Connection refused, about 0 s), including public IP literals, 10.0.2.2 (the host-loopback alias), 10.0.2.3 and the host's LAN address; it dropped UDP (DNS included) and off-link ICMP without a reply; it answered ICMP echo to 10.0.2.2 itself (no host socket); it dropped IPv6 frames (timeouts). No connection or datagram reached either decoy or the test listener's host port, and the listener's only peer was the QEMU process's guestfwd chardev.",
+      "limits": [
+        "Containers were approximated by a Linux network namespace with a veth pair and iptables MASQUERADE in the guest (Docker's default-bridge shape); Docker itself is not in the image and was not installed (S-02.x tests a real container).",
+        "IPv6 was tested from the guest's root namespace only; the namespace has no IPv6 route (Docker's default bridge has none either).",
+        "A guestfwd chardev is one connection opened by QEMU at start (qemu.org invocation); after its listener stops it stays disconnected, and the QEMU process keeps a bound, non-listening client socket. An endpoint's broker must therefore run before the guest starts and for its whole life.",
+        "SLIRP's own ICMP echo reply for 10.0.2.2 and 10.0.2.3 remains (no host socket is involved)."
+      ]
+    },
+    "reachability": {
+      "permitted": [
+        {"path": "host 127.0.0.1:{ssh_port} to guest :22 (hostfwd)", "protocol": "tcp", "class": "management, exchange", "observed": "SSH exec, exchange push and exchange pull succeeded in the validation guest (with guest-root routes in place) and in an ordinary guest (F-03.3.2 cycles f0332-p, f0332-o)."},
+        {"path": "QMP on host 127.0.0.1:{qmp_port}", "protocol": "tcp", "class": "management (host only)", "observed": "Answered on 127.0.0.1 only; refused from the guest at 10.0.2.2 and on the host's LAN address and ::1."},
+        {"path": "guest 10.0.2.100:7000 to host 127.0.0.1:<test listener> (guestfwd; validation instances only, not in launch.argv)", "protocol": "tcp", "class": "allowlisted test endpoint", "observed": "HELLO/NONCE/ECHO exchanged from the guest and from the namespace behind guest NAT; the listener logged both nonces matched, from the QEMU process's chardev connection only."}
+      ],
+      "denied": [
+        {"path": "public IPv4 literals 1.1.1.1:443/80, 8.8.8.8:53, 9.9.9.9:443, deb.debian.org's address :80/:443, with a default route", "protocol": "tcp", "observed": "refused (reset from SLIRP), guest and namespace"},
+        {"path": "ICMP echo to 1.1.1.1, 8.8.8.8 and the host's LAN address", "protocol": "icmp", "observed": "no reply, guest and namespace"},
+        {"path": "DNS to 10.0.2.3, 1.1.1.1, 8.8.8.8, 9.9.9.9", "protocol": "udp/53, tcp/53", "observed": "udp: no reply; tcp: refused; name resolution through the guest resolver: timeout (40 s), guest and namespace"},
+        {"path": "host loopback through 10.0.2.2: the SSH-forward, QMP, test-listener and TCP-decoy ports", "protocol": "tcp", "observed": "refused; no connection in the decoy or listener log, guest and namespace"},
+        {"path": "host loopback through 10.0.2.2: the UDP decoy", "protocol": "udp", "observed": "no datagram in the decoy log, guest and namespace"},
+        {"path": "the host's LAN address on the same ports, TCP and UDP", "protocol": "tcp, udp", "observed": "refused / no datagram, guest and namespace"},
+        {"path": "allowlist edges: 10.0.2.100:7001 and 10.0.2.101:7000", "protocol": "tcp", "observed": "refused, guest and namespace"},
+        {"path": "IPv6: public literals (TCP, ICMP, DNS), fec0::2 and fec0::3 (SLIRP's IPv6 defaults), and the host's global and ULA addresses on the forwarded and decoy ports, with an IPv6 address and default route", "protocol": "tcp, udp, icmpv6", "observed": "timeout / no reply"}
+      ]
+    },
     "endpoints": [
       {
         "class": "management",
@@ -241,8 +278,8 @@
       },
       {
         "class": "inference",
-        "status": "deferred to F-03.3.2",
-        "mechanism": "guestfwd to a host-side broker",
+        "status": "deferred: the brokered endpoint does not exist yet, and enabling a guestfwd in this profile needs separate Owner authorization (decision 0003, 'Owner authorization: network validation')",
+        "mechanism": "guestfwd=tcp:<guest address>:<port>-tcp:127.0.0.1:<broker port> to a host-side broker (the mechanism qualified by F-03.3.2)",
         "protocol": "tcp",
         "host_bind": "127.0.0.1",
         "host_port": null,
@@ -250,8 +287,8 @@
       },
       {
         "class": "provision",
-        "status": "deferred to F-03.3.2; phase-limited",
-        "mechanism": "guestfwd to a host-side allowlisting proxy",
+        "status": "deferred: no allowlisting proxy exists yet, and enabling a guestfwd in this profile needs separate Owner authorization (decision 0003); phase-limited",
+        "mechanism": "guestfwd=tcp:<guest address>:<port>-tcp:127.0.0.1:<proxy port> to a host-side allowlisting proxy (the mechanism qualified by F-03.3.2)",
         "protocol": "tcp",
         "host_bind": "127.0.0.1",
         "host_port": null,
