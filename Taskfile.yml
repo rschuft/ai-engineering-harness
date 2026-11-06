@@ -201,6 +201,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py recreate --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
 
+  guest:smoke:
+    desc: "Provision/inspect/teardown smoke test (F-03.4, profiles P10) on a fresh instance name: preflight, create, inspect, stop, start, inspect, forced stop, recreate, inspect, destroy, with inspect-record and durable-source inventory comparisons; exit 0 only on PASS (python -I -B tools/guest.py smoke --profile PROFILE --state-dir STATE_DIR --name NAME --canaries CANARIES --durable DURABLE [-- --durable DIR --out FILE])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, CANARIES, DURABLE]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py smoke --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}" --durable "{{.DURABLE}}" {{.CLI_ARGS}}'
+
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
     cmds:

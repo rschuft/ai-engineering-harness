@@ -741,6 +741,9 @@ def passing_observation(record):
         'root_login': {'rc': 255, 'stderr': 'root@127.0.0.1: Permission denied (publickey).'},
         'known_hosts_fingerprints': kh,
         'p5': passing_p5(),
+        'artifacts': {name: {'labels': dict(record['labels']), 'problems': []}
+                      for name in ('launch.json', 'process.json', 'records/create-1.json',
+                                   'stderr.log#header1')},
     }
 
 
@@ -2149,6 +2152,549 @@ class NetprobeSessionSockets(TempState):
         udp6['udp_by_pid'] = [{'LocalAddress': '::', 'LocalPort': NP_PORTS['decoy_udp']}]
         for bad in (extra, udp6, {'error': 'x'}, None):
             self.assertTrue(guest.binding_problems(bad, NP_PORTS), bad)
+
+
+# ---------------------------------------------------------------- F-03.4: P11 over the artifacts
+
+
+LABELS = {'tier': 'strong', 'provider': 'qemu-whpx', 'nesting': 'none'}
+
+
+class ArtifactLabels(unittest.TestCase):
+    def setUp(self):
+        self.idir = Path(tempfile.mkdtemp(prefix='aieh-p11-'))
+        self.addCleanup(shutil.rmtree, self.idir, True)
+        (self.idir / 'records').mkdir()
+        for rel in ('launch.json', 'process.json', 'records/create-1.json', 'records/stop-2.json'):
+            (self.idir / rel).write_text(json.dumps({'labels': LABELS, 'x': 1}), encoding='utf-8')
+        header = guest.log_header(LABELS, 'create', 'abc')
+        (self.idir / 'stderr.log').write_text(
+            header + '2026-11-06T00:00:00.000Z qemu: warning: Ignoring request for interrupt '
+            'vector 0\n' + guest.log_header(LABELS, 'start', 'abc') + 'WHPX: something\n',
+            encoding='utf-8')
+
+    def test_label_problems(self):
+        self.assertEqual(guest.label_problems(LABELS, LABELS), [])
+        self.assertEqual(guest.label_problems(guest.labels(PROFILE)), [])
+        self.assertTrue(guest.label_problems(None))
+        self.assertTrue(guest.label_problems({'tier': 'strong', 'provider': 'qemu-whpx'}))
+        self.assertTrue(guest.label_problems(dict(LABELS, tier='weak')))
+        self.assertTrue(guest.label_problems(dict(LABELS, nesting='maybe')))
+        self.assertTrue(guest.label_problems(LABELS, dict(LABELS, provider='incus-vm')))
+
+    def test_stderr_headers_are_not_qemu_lines(self):
+        err = guest.stderr_findings(self.idir)
+        self.assertTrue(err['first_line_is_header'])
+        self.assertEqual([h['operation'] for h in err['headers']], ['create', 'start'])
+        self.assertEqual(err['headers'][0]['labels'], LABELS)
+        self.assertEqual(err['headers'][0]['schema'], guest.LOG_HEADER_SCHEMA)
+        self.assertEqual(len(err['lines']), 2)
+        self.assertEqual(err['interrupt_vector_0'], 1)
+        self.assertEqual(err['whpx'], ['WHPX: something'])
+
+    def test_every_artifact_is_clean(self):
+        arts = guest.artifact_labels(self.idir, LABELS)
+        self.assertEqual(sorted(arts), ['launch.json', 'process.json', 'records/create-1.json',
+                                        'records/stop-2.json', 'stderr.log#header1',
+                                        'stderr.log#header2'])
+        self.assertTrue(guest.artifacts_clean(arts))
+
+    def test_missing_labels_and_header(self):
+        (self.idir / 'records' / 'exec-3.json').write_text('{"operation": "exec"}', encoding='utf-8')
+        (self.idir / 'stderr.log').write_text('qemu output first\n', encoding='utf-8')
+        arts = guest.artifact_labels(self.idir, LABELS)
+        self.assertFalse(guest.artifacts_clean(arts))
+        self.assertEqual(arts['records/exec-3.json']['problems'], ['no labels'])
+        self.assertIn('stderr.log', arts)
+        self.assertFalse(guest.artifacts_clean({}))
+
+    def test_p11_verdicts(self):
+        rec = LaunchRecord('test_record_fields')
+        rec.setUp()
+        self.addCleanup(rec.doCleanups)
+        obs = passing_observation(rec.record)
+        prop = lambda o: next(p for p in guest.evaluate(PROFILE, rec.record, o)        # noqa: E731
+                              if p['property'] == 'profiles P11')
+        self.assertEqual(prop(obs)['verdict'], 'PASS')
+        obs['artifacts'] = guest.artifact_labels(self.idir, LABELS)
+        self.assertEqual(prop(obs)['verdict'], 'PASS')
+        obs['artifacts']['records/x.json'] = {'labels': None, 'problems': ['no labels']}
+        self.assertEqual(prop(obs)['verdict'], 'FAIL')
+        del obs['artifacts']
+        self.assertEqual(prop(obs)['verdict'], 'UNKNOWN')
+
+    def test_operation_results_carry_labels(self):
+        with mock.patch.object(guest, 'destroy', return_value={'result': 'absent'}), \
+                mock.patch.object(guest, 'create', return_value={'result': 'ready'}):
+            ctx = mock.Mock(profile=PROFILE)
+            self.assertEqual(guest.recreate(ctx, 'abc')['labels'], LABELS)
+
+    def test_launch_writes_the_header_first(self):
+        source = Path(guest.__file__).read_text(encoding='utf-8')
+        body = source[source.index('def launch(ctx'):source.index('def wait_ready(')]
+        self.assertLess(body.index('log_header('), body.index('subprocess.Popen('))
+
+
+# ---------------------------------------------------------------- F-03.4: XSAVE detector
+
+
+SERIAL_OK = ('[    0.000000] Linux version 6.12.115-cloud-amd64\n'
+             "[    0.827496] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'\n"
+             "[    0.841900] x86/fpu: Enabled xstate features 0x8e7, context size is 2440 bytes, "
+             "using 'compacted' format.\n")
+MISORDERED = '[    0.771086] x86/fpu: misordered xstate at 1408\n'
+CONSISTENCY = '[    0.771086] XSAVE consistency problem: size 832 != kernel_size 576\n'
+DISABLED = '[    0.771099] x86/fpu: XSAVE disabled\n'
+
+
+class XsaveDetector(unittest.TestCase):
+    def verdict(self, serial, dmesg=None):
+        return guest.xsave_findings({'serial': serial, 'dmesg': dmesg})
+
+    def test_clean_boot_passes(self):
+        out = self.verdict(SERIAL_OK)
+        self.assertEqual(out['verdict'], 'PASS')
+        self.assertEqual(out['labels'], [])
+        self.assertIn("'compacted' format", out['xstate_enabled'][0]['line'])
+        self.assertEqual(out['sources'], {'serial': 'kernel messages', 'dmesg': 'unavailable'})
+
+    def test_misordered_is_a_limitation(self):
+        out = self.verdict(MISORDERED + SERIAL_OK)
+        self.assertEqual(out['verdict'], 'LIMITATION')
+        self.assertEqual(out['labels'], ['misordered-xstate'])
+
+    def test_consistency_problem_and_disabled_fail(self):
+        for text, label in ((CONSISTENCY, 'xsave-consistency-problem'), (DISABLED, 'xsave-disabled')):
+            out = self.verdict(MISORDERED + text + SERIAL_OK)
+            self.assertEqual(out['verdict'], 'FAIL', label)
+            self.assertIn(label, out['labels'])
+        self.assertEqual(self.verdict(SERIAL_OK, CONSISTENCY)['verdict'], 'FAIL')    # guest side
+
+    def test_no_kernel_messages_is_unknown(self):
+        self.assertEqual(self.verdict(None)['verdict'], 'UNKNOWN')
+        self.assertEqual(self.verdict('cloud-init only\n')['verdict'], 'UNKNOWN')
+
+    def test_guest_kernel_log(self):
+        self.assertIsNone(guest.guest_kernel_log('dmesg unreadable\ndmesg_restrict=1'))
+        self.assertIsNone(guest.guest_kernel_log(''))
+        self.assertEqual(guest.guest_kernel_log('dmesg readable\n' + MISORDERED + 'dmesg_restrict=0'),
+                         MISORDERED.rstrip('\n'))
+
+    def test_probes_listed(self):
+        probes = dict(guest.guest_probes(PORTS, [], None))
+        self.assertIn('dmesg', probes['kernel_log'])
+        self.assertIn('^flags', probes['cpu_flags'])
+
+
+# ---------------------------------------------------------------- F-03.4: host XSAVES (preflight)
+
+
+def fake_whv(mask, vendor=0, hr=0):
+    def get(code):
+        value = {guest.WHV_CAP_HYPERVISOR_PRESENT: 1, guest.WHV_CAP_PROCESSOR_VENDOR: vendor,
+                 guest.WHV_CAP_PROCESSOR_XSAVE_FEATURES: mask}[code]
+        return hr, value.to_bytes(8, 'little')
+    return get
+
+
+class HostXsaves(unittest.TestCase):
+    def test_qualification_host_mask(self):
+        info = guest.whpx_xsave_features(fake_whv(0x41ffffdf))       # observed (F-03.4)
+        self.assertTrue(info['xsaves'])
+        self.assertEqual(info['vendor'], 'AMD')
+        self.assertIn('xsavec', info['features'])
+        self.assertIn('avx512_vp2intersect', info['features'])
+        self.assertNotIn('mpx', info['features'])
+        self.assertEqual(guest.xsaves_check(info)[0], 'ok')
+
+    def test_host_without_xsaves_fails(self):
+        info = guest.whpx_xsave_features(fake_whv(0x41ffffdf & ~(1 << 12), vendor=1))
+        self.assertFalse(info['xsaves'])
+        status, detail, act = guest.xsaves_check(info)
+        self.assertEqual(status, 'fail')
+        self.assertIn('-cpu max', detail)
+        self.assertTrue(act)
+
+    def test_query_failure_is_disclosed_unknown(self):
+        info = guest.whpx_xsave_features(fake_whv(0, hr=0x80070057))
+        self.assertIsNone(info['xsaves'])
+        status, detail, act = guest.xsaves_check(info)
+        self.assertEqual((status, act), ('unknown', None))
+        self.assertIn('disclosed', detail)
+
+        def broken(code):
+            raise OSError('no WinHvPlatform.dll')
+        self.assertIsNone(guest.whpx_xsave_features(broken)['xsaves'])
+
+    def test_availability(self):
+        ok = {'status': 'ok'}
+        self.assertTrue(guest.preflight_available([ok, {'status': 'unknown'}]))
+        self.assertFalse(guest.preflight_available([ok, {'status': 'fail'}]))
+
+
+# ---------------------------------------------------------------- F-03.4: inspect comparison
+
+
+def identity_record(base_record, token, pid=4242, port_shift=0):
+    """An ordinary inspect record whose identity (machine-id, host keys, instance id, seed,
+    SSH key) derives from token; everything else is the passing observation."""
+    record = copy.deepcopy(base_record)
+    digest = lambda s: hashlib.sha256(f'{token}:{s}'.encode()).hexdigest()        # noqa: E731
+    record['instance']['instance_id'] = f'abc-{digest("id")[:8]}-0000-4000-8000-000000000000'
+    record['inputs']['seed']['sha256'] = digest('seed')
+    obs = passing_observation(record)
+    key = ed25519_b64(hashlib.sha256(token.encode()).digest())
+    obs['guest']['machine_id']['out'] = digest('mid')[:32]
+    obs['guest']['host_keys']['out'] = f'256 {fingerprint(key)} root@abc (ED25519)'
+    obs['known_hosts_fingerprints'] = [fingerprint(key)]
+    obs['input_digests']['seed']['sha256'] = digest('seed')
+    obs['input_digests']['ssh_public_key'] = {'match': True, 'sha256': digest('pub')}
+    obs['guest']['cpu_flags'] = {'rc': 0, 'out': 'flags : fpu xsave xsaves avx512f'}
+    if port_shift:
+        for c in obs['host']['bindings']['tcp_by_pid']:
+            c['LocalPort'] += port_shift
+        record['ports'] = {k: (v + port_shift if isinstance(v, int) else v)
+                           for k, v in record['ports'].items()}
+        obs['host']['non_loopback'] = {f'192.0.2.10:{40001 + port_shift}': 'refused',
+                                       f'192.0.2.10:{40002 + port_shift}': 'refused'}
+    props = guest.evaluate(PROFILE, record, obs)
+    return {'schema': guest.INSPECT_SCHEMA, 'labels': dict(record['labels']),
+            'instance_id': record['instance']['instance_id'], 'pid': pid,
+            'launch_record_sha256': digest('launch'), 'inspected_at': f'{token}-time',
+            'seconds': 1.0, 'verdicts': {p['property']: p['verdict'] for p in props},
+            'compatibility': {'verdict': 'LIMITATION', 'xsave': {'labels': ['misordered-xstate']}},
+            'properties': props, 'observations': obs}
+
+
+class CompareInspect(LaunchRecord):
+    def test_every_ordinary_check_is_classified(self):
+        rec = identity_record(self.record, 'one')
+        keys = {(p['property'], c['check']) for p in rec['properties'] for c in p['checks']}
+        self.assertEqual(keys - set(guest.CHECK_CLASSES), set())
+        self.assertEqual(set(guest.CHECK_CLASSES) - keys, set())   # no stale entry either
+        for klass, norm in guest.CHECK_CLASSES.values():
+            self.assertIn(klass, (guest.STABLE, guest.PER_INSTANCE, guest.VOLATILE))
+            self.assertTrue(norm is None or norm in guest.NORMALIZERS)
+
+    def test_start_keeps_identity(self):
+        a = identity_record(self.record, 'one', pid=1)
+        b = identity_record(self.record, 'one', pid=2)
+        out = guest.compare_inspect(PROFILE, a, b, 'start')
+        self.assertEqual(out['result'], 'PASS', out['not_ok'])
+        self.assertEqual(guest.compare_inspect(PROFILE, a, b, 'recreate')['result'], 'FAIL')
+
+    def test_recreate_changes_identity_only(self):
+        a = identity_record(self.record, 'one')
+        c = identity_record(self.record, 'two', pid=99, port_shift=7)
+        out = guest.compare_inspect(PROFILE, a, c, 'recreate')
+        self.assertEqual(out['result'], 'PASS', out['not_ok'])
+        per = {f['field'] for f in out['fields'] if f['class'] == guest.PER_INSTANCE}
+        self.assertEqual(per, {'profiles P8 / machine-id', 'profiles P8 / cloud-init instance id',
+                               'profiles P8 / host keys', 'profiles P9 / seed digest recorded',
+                               'instance id', 'launch record sha256', 'ssh public key sha256',
+                               'seed sha256'})
+        self.assertEqual(guest.compare_inspect(PROFILE, a, c, 'start')['result'], 'FAIL')
+
+    def test_a_stable_difference_fails(self):
+        a = identity_record(self.record, 'one')
+        c = identity_record(self.record, 'two')
+        c['observations']['guest']['cpu_flags']['out'] = 'flags : fpu xsave'
+        out = guest.compare_inspect(PROFILE, a, c, 'recreate')
+        self.assertEqual(out['not_ok'], ['guest cpu flags'])
+        d = identity_record(self.record, 'two')
+        for p in d['properties']:
+            for chk in p['checks']:
+                if chk['check'] == 'memory (guest MemTotal kB)':
+                    chk['observed'] -= 4          # still within 85-100 %: verdict unchanged
+        out = guest.compare_inspect(PROFILE, a, d, 'recreate')
+        self.assertEqual(out['not_ok'], ['profiles P2 / memory (guest MemTotal kB)'])
+
+    def test_volatile_and_normalised_differences_pass(self):
+        a = identity_record(self.record, 'one')
+        c = identity_record(self.record, 'two')
+        for p in c['properties']:
+            for chk in p['checks']:
+                if chk['check'] == 'collection':
+                    chk['observed'] = dict(chk['observed'], bytes=123456, members=999)
+                if chk['check'] == 'mount table file systems':
+                    chk['observed'] = sorted(chk['observed'] + ['binfmt_misc'])
+                if chk['check'] == 'QMP from the guest':
+                    chk['observed'] = {k: 1 if v == 124 else 124 for k, v in chk['observed'].items()}
+        self.assertEqual(guest.compare_inspect(PROFILE, a, c, 'recreate')['result'], 'PASS')
+
+    def test_verdict_change_and_unclassified_check_fail(self):
+        a = identity_record(self.record, 'one')
+        c = identity_record(self.record, 'two')
+        c['properties'][0]['checks'][0]['verdict'] = 'FAIL'
+        self.assertIn('profiles P1 / accelerator',
+                      guest.compare_inspect(PROFILE, a, c, 'recreate')['not_ok'])
+        d = identity_record(self.record, 'two')
+        d['properties'][0]['checks'].append(guest.check('new', 1, 1, 'x', True))
+        out = guest.compare_inspect(PROFILE, a, d, 'recreate')
+        self.assertEqual(out['not_ok'], ['profiles P1 / new'])
+        with self.assertRaises(ValueError):
+            guest.compare_inspect(PROFILE, a, d, 'other')
+
+
+# ---------------------------------------------------------------- F-03.4: inventory
+
+
+def fake_state_shared(state):
+    """The profile's image and provider files at their layout paths in a temp state."""
+    values = guest.resolve_values(PROFILE, state)
+    paths = [values['input:image'], values['input:firmware']] + \
+        [e['path'] for e in guest.binaries(PROFILE, values).values()] + \
+        [values['qemu_prefix'] + '/ucrt64/share/doc/readme.txt']
+    for path in paths:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(path.encode())
+
+
+def sentinel_tree(root):
+    (root / 'nested' / 'deeper').mkdir(parents=True)
+    (root / 'a.txt').write_bytes(b'sentinel a\n')
+    (root / 'nested' / 'b.bin').write_bytes(bytes(range(256)))
+    (root / 'nested' / 'deeper' / 'c.txt').write_bytes(b'sentinel c\n')
+    ro = root / 'read-only.txt'
+    ro.write_bytes(b'read only\n')
+    os.chmod(ro, stat.S_IREAD)
+    return root
+
+
+def clear_read_only(root):
+    for dirpath, _, files in os.walk(root):
+        for f in files:
+            os.chmod(os.path.join(dirpath, f), stat.S_IWRITE | stat.S_IREAD)
+
+
+class Inventory(TempState):
+    def setUp(self):
+        super().setUp()
+        fake_state_shared(self.state)
+        self.durable = sentinel_tree(self.tmp / 'durable')
+        self.addCleanup(clear_read_only, self.tmp)
+
+    def populate(self, names=('aa', 'bb')):
+        for name in names:
+            idir = self.state / 'instances' / name
+            (idir / 'ssh').mkdir(parents=True)
+            (idir / 'root.qcow2').write_bytes(name.encode() * 1000)
+            (idir / 'launch.json').write_text('{}')
+        (self.state / 'instances' / 'sentinel_not.an-instance').mkdir()
+        (self.state / 'instances' / 'sentinel_not.an-instance' / 'keep.txt').write_text('keep')
+
+    def test_tree_inventory_records_content_mode_and_links(self):
+        inv = guest.tree_inventory(self.durable)
+        self.assertEqual(sorted(inv), ['.', 'a.txt', 'nested', 'nested/b.bin', 'nested/deeper',
+                                       'nested/deeper/c.txt', 'read-only.txt'])
+        self.assertEqual(inv['a.txt']['sha256'], hashlib.sha256(b'sentinel a\n').hexdigest())
+        self.assertFalse(inv['read-only.txt']['mode'] & stat.S_IWRITE)
+        vol = guest.tree_inventory(self.durable, volatile=('a.txt',))
+        self.assertEqual(vol['a.txt'], {'type': 'file', 'volatile': 'written by the running QEMU'})
+        self.assertIn('sha256', vol['nested/deeper/c.txt'])          # only top-level names
+
+    def test_diff_detects_each_kind_of_change(self):
+        before = guest.inventory(self.ctx(), 'aa', [self.durable])
+        self.assertEqual(guest.diff_inventory(before, guest.inventory(self.ctx(), 'aa', [self.durable])), [])
+        (self.durable / 'nested' / 'b.bin').write_bytes(b'changed')
+        os.chmod(self.durable / 'read-only.txt', stat.S_IWRITE | stat.S_IREAD)
+        (self.durable / 'new.txt').write_text('x')
+        after = guest.inventory(self.ctx(), 'aa', [self.durable])
+        paths = {d['path'] for d in guest.diff_inventory(before, after)}
+        root = guest.posix(self.durable)
+        self.assertIn(f'durable_roots/{root}/nested/b.bin/sha256', paths)
+        self.assertIn(f'durable_roots/{root}/read-only.txt/mode', paths)
+        self.assertIn(f'durable_roots/{root}/new.txt', paths)
+
+    def test_state_shared_and_provider_listing(self):
+        before = guest.state_inventory(self.ctx())
+        self.assertEqual(before['provider']['files'], 4)
+        self.assertEqual(set(before['provider']['binaries']), {'qemu-system-x86_64', 'qemu-img'})
+        doc = Path(guest.resolve_values(PROFILE, self.state)['qemu_prefix']) / 'ucrt64' / 'extra.dll'
+        doc.write_bytes(b'x')
+        after = guest.state_inventory(self.ctx())
+        self.assertNotEqual(before['provider']['listing_sha256'], after['provider']['listing_sha256'])
+
+    def test_destroy_leaves_every_other_source_unchanged(self):
+        self.populate()
+        roots = [self.durable]
+        before = guest.inventory(self.ctx(), 'aa', roots)
+        self.assertEqual(sorted(before['instances']), ['bb', 'sentinel_not.an-instance'])
+        self.assertEqual(before['instances']['bb']['state'], {'instance': False})   # '{}' is no record
+        self.assertEqual(guest.destroy(self.ctx(), 'aa')['result'], 'destroyed')
+        self.assertEqual(guest.diff_inventory(before, guest.inventory(self.ctx(), 'aa', roots)), [])
+        # the same inventory sees a destroy that reaches a sibling
+        (self.state / 'instances' / 'bb' / 'root.qcow2').unlink()
+        diff = guest.diff_inventory(before, guest.inventory(self.ctx(), 'aa', roots))
+        self.assertEqual([d['path'] for d in diff],
+                         ['instances/bb/tree/./mtime_ns', 'instances/bb/tree/root.qcow2'])
+
+    def test_running_sibling_files_are_volatile(self):
+        self.populate(('bb',))
+        idir = self.state / 'instances' / 'bb'
+        (idir / 'serial.log').write_text('boot')
+        running = {'instance': True, 'running': True, 'pid': 7, 'qmp_status': 'running',
+                   'qmp_error': None}
+        with mock.patch.object(guest, 'sibling_state', return_value=running):
+            before = guest.instances_inventory(self.ctx(), 'aa')
+            (idir / 'root.qcow2').write_bytes(b'guest wrote')
+            (idir / 'serial.log').write_text('boot and more console')
+            after = guest.instances_inventory(self.ctx(), 'aa')
+            self.assertEqual(guest.diff_inventory(before, after), [])
+            (idir / 'launch.json').write_text('{"changed": 1}')          # not volatile
+            changed = guest.instances_inventory(self.ctx(), 'aa')
+        self.assertTrue(any(d['path'].startswith('bb/tree/launch.json')
+                            for d in guest.diff_inventory(before, changed)))
+        stopped = guest.instances_inventory(self.ctx(), 'aa')          # stopped: hashed
+        self.assertIn('sha256', stopped['bb']['tree']['root.qcow2'])
+
+    def test_repository_inventory(self):
+        repo = self.tmp / 'repo'
+        head = fixture_repo(repo)
+        inv = guest.repo_inventory(repo)
+        self.assertEqual((inv['head'], inv['status_porcelain_v2'], inv['rc']), (head, [], [0, 0, 0]))
+        self.assertEqual(inv['ls_files_count'], 2)
+        (repo / 'file0.txt').write_text('edited\n', encoding='ascii')
+        self.assertNotEqual(guest.repo_inventory(repo)['status_porcelain_v2'], [])
+
+
+# ---------------------------------------------------------------- F-03.4: smoke orchestration
+
+
+class Smoke(TempState):
+    """The smoke sequence with the guest operations faked and destroy, recreate and the
+    inventories real (they act on the temporary state directory only)."""
+
+    def setUp(self):
+        super().setUp()
+        fake_state_shared(self.state)
+        self.durable = sentinel_tree(self.tmp / 'durable')
+        self.addCleanup(clear_read_only, self.tmp)
+        self.canaries = make_canaries_in(self.tmp)
+        rec = LaunchRecord('test_record_fields')
+        rec.setUp()
+        self.addCleanup(rec.doCleanups)
+        self.base = rec.record
+        self.token = None
+        self.calls = []
+        self.inspect_hook = None
+
+    def fake_create(self, ctx, name, ready_timeout=600, canaries=None):
+        self.calls.append(('create', canaries is not None))
+        idir = ctx.instance_dir(name)
+        idir.mkdir(parents=True)
+        (idir / 'launch.json').write_text('{}')
+        self.token = secrets_token()
+        return {'operation': 'create', 'result': 'ready', 'instance_id': self.token}
+
+    def fake_inspect(self, ctx, name, canaries=None):
+        self.calls.append(('inspect', canaries is not None))
+        record = identity_record(self.base, self.token, pid=len(self.calls))
+        if self.inspect_hook:
+            self.inspect_hook(record)
+        return record
+
+    def fake_stop(self, ctx, name, force=False):
+        self.calls.append(('stop', force))
+        return {'result': 'stopped', 'phases': [
+            {'exited_after': 'quit' if force else 'system_powerdown', 'seconds': 1.0}]}
+
+    def fake_start(self, ctx, name, ready_timeout=600):
+        self.calls.append(('start',))
+        return {'result': 'ready'}
+
+    def smoke(self, **kw):
+        avail = {'result': 'available', 'checks': [{'check': 'host-xsaves', 'status': 'ok',
+                                                    'detail': 'XSAVES'}]}
+        with mock.patch.object(guest, 'preflight', return_value=avail), \
+                mock.patch.object(guest, 'create', self.fake_create), \
+                mock.patch.object(guest, 'inspect', self.fake_inspect), \
+                mock.patch.object(guest, 'stop', self.fake_stop), \
+                mock.patch.object(guest, 'start', self.fake_start):
+            return guest.smoke(self.ctx(), 'abc', str(self.canaries), [str(self.durable)], **kw)
+
+    def test_pass_sequence_and_record(self):
+        out_file = self.tmp / 'smoke.json'
+        result = self.smoke(out_path=str(out_file))
+        self.assertEqual(result['result'], 'PASS', result['failed_steps'])
+        self.assertEqual(result['p10']['verdict'], 'PASS')
+        self.assertEqual([s['step'] for s in result['steps']], [
+            'preflight', 'inventory before create', 'create', 'inspect A (after create)',
+            'stop (graceful)', 'start', 'inspect B (after start)', 'compare A-B (start)',
+            'stop (forced)', 'inventory before recreate', 'recreate', 'inventory after recreate',
+            'inspect C (after recreate)', 'compare A-C (recreate)', 'destroy', 'destroy (absent)',
+            'inventory after destroy'])
+        self.assertEqual(self.calls, [('create', True), ('inspect', True), ('stop', False),
+                                      ('start',), ('inspect', True), ('stop', True),
+                                      ('create', True), ('inspect', True)])
+        self.assertFalse((self.state / 'instances' / 'abc').exists())
+        self.assertEqual(set(result['inventory_diffs']), {
+            'before create -> before recreate', 'before recreate -> after recreate',
+            'after recreate -> after destroy', 'before create -> after destroy'})
+        self.assertFalse(any(result['inventory_diffs'].values()))
+        saved = json.loads(out_file.read_text(encoding='utf-8'))
+        self.assertEqual(saved['schema'], guest.SMOKE_SCHEMA)
+        self.assertEqual(guest.label_problems(saved['labels'], LABELS), [])
+        self.assertEqual(saved['result'], 'PASS')
+
+    def test_a_failed_inspect_stops_and_cleans_up(self):
+        def hook(record):
+            record['verdicts']['profiles P6'] = 'FAIL'
+        self.inspect_hook = hook
+        result = self.smoke()
+        self.assertEqual(result['result'], 'FAIL')
+        self.assertEqual(result['failed_steps'], ['inspect A (after create)'])
+        self.assertIn({'step': 'stop (graceful)', 'skipped': 'an earlier step failed'}, result['steps'])
+        self.assertEqual(result['steps'][-2], {'step': 'cleanup destroy', 'result': 'destroyed'})
+        self.assertEqual(result['steps'][-1]['step'], 'inventory after destroy')
+        self.assertFalse((self.state / 'instances' / 'abc').exists())
+
+    def test_xsave_fail_fails_the_inspect_step(self):
+        def hook(record):
+            record['compatibility'] = {'verdict': 'FAIL', 'xsave': {'labels': ['xsave-disabled']}}
+        self.inspect_hook = hook
+        self.assertEqual(self.smoke()['failed_steps'], ['inspect A (after create)'])
+
+    def test_a_touched_durable_root_fails(self):
+        real_destroy = guest.destroy
+
+        def careless_destroy(ctx, name):
+            (self.durable / 'a.txt').write_bytes(b'overwritten')
+            return real_destroy(ctx, name)
+        with mock.patch.object(guest, 'destroy', careless_destroy):
+            result = self.smoke()
+        self.assertEqual(result['result'], 'FAIL')
+        self.assertIn('inventory comparison', result['failed_steps'])
+        self.assertEqual(result['p10']['verdict'], 'FAIL')
+        by_check = {c['check']: c['verdict'] for c in result['p10']['checks']}
+        self.assertEqual(by_check['Owner data roots untouched'], 'FAIL')
+
+    def test_refusals(self):
+        ctx = self.ctx()
+        with self.assertRaises(guest.Refused):
+            guest.smoke(ctx, 'abc', str(self.canaries), [])
+        with self.assertRaises(guest.Refused):
+            guest.smoke(ctx, 'abc', str(self.canaries), [str(self.tmp / 'missing')])
+        with self.assertRaises(guest.Refused):     # overlaps the instance directory
+            guest.smoke(ctx, 'abc', str(self.canaries), [str(self.state)])
+        with self.assertRaises(guest.Refused):     # the record never goes into the checkout
+            guest.smoke(ctx, 'abc', str(self.canaries), [str(self.durable)],
+                        out_path=str(REPO / 'smoke.json'))
+        (self.state / 'instances' / 'abc').mkdir(parents=True)
+        with self.assertRaises(guest.Refused):     # a fresh instance name only
+            guest.smoke(ctx, 'abc', str(self.canaries), [str(self.durable)])
+
+    def test_cli(self):
+        with mock.patch.object(guest, 'smoke', return_value={'operation': 'smoke', 'result': 'FAIL'}) as m:
+            rc = guest.main(['smoke', '--profile', str(PROFILE_DIR), '--state-dir', str(self.state),
+                             '--name', 'abc', '--canaries', str(self.canaries), '--durable', 'X',
+                             '--durable', 'Y'])
+        self.assertEqual(rc, 1)
+        self.assertEqual(m.call_args.args[3], ['X', 'Y'])
+
+
+def secrets_token():
+    return os.urandom(8).hex()
 
 
 if __name__ == '__main__':

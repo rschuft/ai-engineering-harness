@@ -106,9 +106,12 @@ Only what is listed as verified has been exercised.
 
 - **Line endings.** Git for Windows sets `core.autocrlf=true` by default. The
   root [`.gitattributes`](../.gitattributes) stores the seeded files verbatim
-  (`-text`), and [`composition/.gitattributes`](../composition/.gitattributes) keeps
-  LF everywhere under `composition/`, so the byte-level checks pass in a fresh
-  `core.autocrlf=true` clone. That has been verified. Other files, including
+  (`-text`), [`profiles/.gitattributes`](../profiles/.gitattributes) stores the profile
+  directories and seed templates verbatim (`-text`: everything pinned by sha256 under
+  `profiles/`, including the netprobe probe), and
+  [`composition/.gitattributes`](../composition/.gitattributes) keeps LF everywhere
+  under `composition/`, so the byte-level checks pass in a fresh
+  `core.autocrlf=true` clone. That has been verified (for `profiles/`, again in F-03.4). Other files, including
   `Taskfile.yml` and the tool tests, may be checked out with CRLF; they work
   either way.
 - **`python` and `py -3`.** The Taskfile calls `python` on Windows and `python3`
@@ -148,6 +151,7 @@ Only what is listed as verified has been exercised.
 | `guest:canaries OUT=<dir>` | `python -I -B tools/guest.py canaries --out <dir>` | no | Writes a synthetic canary set and fake home into a new directory outside the checkout. |
 | `guest:create-canaries PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | `create` with the canary set planted in its own environment first (the P5 test). |
 | `guest:check-surfaces PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py check-surfaces --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | Startup inspection test for profiles P3 to P6 (F-03.3.1): exit 0 only when all four PASS. |
+| `guest:smoke PROFILE=… STATE_DIR=… NAME=<name> CANARIES=<dir> DURABLE=<dir>` | `python -I -B tools/guest.py smoke --profile <dir> --state-dir <dir> --name <name> --canaries <dir> --durable <dir> [--durable <dir> …] [--out <file>]` | no | The F-03.4 provision/inspect/teardown smoke test (profiles P10) on a fresh instance name. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -215,10 +219,37 @@ defaults them.
   profiles P1 to P12: declared value, observed value, method and PASS, FAIL or UNKNOWN
   per check. It includes the guest egress probes, which are evidence toward F-03.3.2,
   not its formal suite.
+  The record also carries `compatibility`: the XSAVE detector reads the guest kernel's
+  messages from the instance's `serial.log` on the host (no guest privilege) and from
+  `dmesg` when `agent` may read it. `XSAVE consistency problem` or `XSAVE disabled` is
+  a FAIL (the operation exits 1); `x86/fpu: misordered xstate` is a recorded
+  limitation (profile README, open item 3). P11 checks that `launch.json`,
+  `process.json`, every record and every `stderr.log` header carry the profile's
+  labels; each launch writes one `AIEH-LOG-HEADER` line to `stderr.log` first.
+- `preflight` also asks the Windows Hypervisor Platform whether it offers XSAVES
+  (`WHvGetCapability`, read-only; nothing is installed). Without XSAVES the profile's
+  `-cpu max` is expected to panic the guest kernel, so preflight reports `unavailable`;
+  when the query itself fails the check is `unknown`, disclosed and not refused.
 - `stop` is QMP `system_powerdown`, then QMP `quit` after the profile's
-  `stop_timeout_s`, then terminating that process id only. `destroy` stops with force
-  if needed and deletes the instance directory only; an absent instance reports
-  `absent`.
+  `stop_timeout_s`, then terminating that process id only (`--force` skips
+  `system_powerdown`). `destroy` stops with force if needed and deletes the instance
+  directory only; an absent instance reports `absent`. `recreate` takes `--canaries`
+  like `create`.
+- `smoke` (F-03.4) is the provision/inspect/teardown test of profiles P10, on a fresh
+  instance name: preflight; create; inspect (P3 to P6 must PASS, every property PASS
+  except P10, no XSAVE FAIL); graceful stop; start from `launch.json`; inspect; forced
+  stop; recreate; inspect; destroy; destroy again (`absent`). The inspect records are
+  compared across the start (every field equal) and across the recreate: each check
+  is classified in `CHECK_CLASSES` as stable (equal after a named normalisation that
+  drops ports and optional mounts), per-instance (machine-id, host keys, instance id,
+  seed: equal across start, different across recreate) or volatile (recorded only).
+  Before and after each destroy and recreate it inventories the durable sources: the
+  checkout (HEAD, tracked status, `git ls-files -s` digest), the state directory's
+  pinned image and provider prefix, every other `instances\` entry (a running sibling's
+  disks and logs are volatile; its other files are hashed and its QMP status is
+  recorded), and the `--durable` roots the operator names, which stand for Owner data.
+  Any difference fails. It never lists the state directory itself. One verdict, PASS
+  or FAIL, is printed and, with `--out`, written to a new file outside the checkout.
 - SSH always uses the profile's client options plus `BatchMode=yes`,
   `IdentityAgent=none`, `GlobalKnownHostsFile=none` and the per-instance key. The tool
   refuses to run `ssh` when that key is missing, because `ssh -i` with a missing file

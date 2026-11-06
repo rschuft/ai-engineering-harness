@@ -34,6 +34,14 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                the listener, collects the guest's results and the listener log, stops
                the listener, and gives the machine verdict. Ordinary create never
                takes these inputs; a validation instance cannot be started again.
+    smoke      the F-03.4 provision/inspect/teardown test on a fresh instance name:
+               preflight, create, inspect, graceful stop, start, inspect, forced stop,
+               recreate, inspect, destroy, destroy again; inspect records compared
+               across start and recreate (stable, per-instance and volatile fields),
+               and inventories of the durable sources (the checkout, the state
+               directory's image and provider, the other instances/ entries and the
+               named --durable roots) compared across every destroy and recreate.
+               One machine verdict, PASS or FAIL, with profiles P10.
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -49,6 +57,9 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py check-surfaces --profile PROFILE --state-dir STATE --name NAME
                                           --canaries DIR
     python -I -B tools/guest.py netprobe  --profile PROFILE --state-dir STATE --name NAME
+    python -I -B tools/guest.py smoke     --profile PROFILE --state-dir STATE --name NAME
+                                          --canaries DIR --durable DIR [--durable DIR ...]
+                                          [--out FILE]
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
     before it launches anything, inspect searches the guest for it)
@@ -87,6 +98,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 LAUNCH_SCHEMA = 'ai-engineering-harness/profiles/launch-record/v1'
 INSPECT_SCHEMA = 'ai-engineering-harness/profiles/inspect-record/v1'
+SMOKE_SCHEMA = 'ai-engineering-harness/profiles/smoke-record/v1'
+LOG_HEADER_SCHEMA = 'ai-engineering-harness/profiles/log-header/v1'
+LOG_HEADER_PREFIX = 'AIEH-LOG-HEADER '
+# profiles P11: the label fields and their allowed values
+LABEL_VALUES = {'tier': ('strong', 'trusted-workload'), 'nesting': ('none', 'nested')}
 LOOPBACK = '127.0.0.1'
 GUEST_USER_HOST = '127.0.0.1'
 PLACEHOLDER = re.compile(r'\{([a-z_]+(?::[a-z_]+)?)\}')
@@ -170,6 +186,22 @@ def load_profile(profile_arg):
 def labels(profile):
     lab = profile.get('labels') or {}
     return {key: lab.get(key) for key in ('tier', 'provider', 'nesting')}
+
+
+def label_problems(lab, want=None):
+    """profiles P11 schema check of one artifact's labels: tier, provider and nesting
+    present with allowed values (and equal to ``want`` when given). [] when clean."""
+    if not isinstance(lab, dict):
+        return ['no labels']
+    problems = [f'{key} missing' for key in ('tier', 'provider', 'nesting') if not lab.get(key)]
+    for key, allowed in LABEL_VALUES.items():
+        if lab.get(key) and lab[key] not in allowed:
+            problems.append(f'{key} {lab[key]!r} not in {list(allowed)}')
+    if lab.get('provider') is not None and not isinstance(lab['provider'], str):
+        problems.append('provider is not a string')
+    if want is not None and {k: lab.get(k) for k in want} != want:
+        problems.append(f'differs from the profile labels {want}')
+    return problems
 
 
 def check_name(profile, name):
@@ -1129,12 +1161,90 @@ def exchange_pull(ctx, name, filename):
 # ---------------------------------------------------------------- preflight
 
 
-def preflight(ctx):
+# WHvGetCapability (WinHvPlatform.dll, Windows Hypervisor Platform API; WinHvPlatformDefs.h):
+# the capability codes and the WHV_PROCESSOR_XSAVE_FEATURES bit layout used by preflight.
+# It is a read-only query of what the hypervisor offers its partitions; it creates no
+# partition and needs no privilege. Observed on the qualification host (F-03.4): code
+# 0x1003 returned a mask whose decoded names matched the guest's /proc/cpuinfo flags,
+# and 0x1004 (processor clock frequency) a frequency, which fixes the code assignment.
+WHV_CAP_HYPERVISOR_PRESENT = 0x0000
+WHV_CAP_PROCESSOR_VENDOR = 0x1000
+WHV_CAP_PROCESSOR_XSAVE_FEATURES = 0x1003
+WHV_VENDORS = {0: 'AMD', 1: 'Intel', 2: 'Hygon', 3: 'ARM'}
+WHV_XSAVE_BITS = ('xsave', 'xsaveopt', 'avx', 'avx2', 'fma', 'mpx', 'avx512', 'avx512dq',
+                  'avx512cd', 'avx512bw', 'avx512vl', 'xsavec', 'xsaves', 'xcr1',
+                  'avx512_bitalg', 'avx512ifma', 'avx512vbmi', 'avx512_vbmi2', 'avx512_vnni',
+                  'gfni', 'vaes', 'avx512_vpopcntdq', 'vpclmulqdq', 'avx512_bf16',
+                  'avx512_vp2intersect', 'avx512_fp16', 'xfd', 'amx_tile', 'amx_bf16',
+                  'amx_int8', 'avx_vnni')
+XSAVES_BIT = WHV_XSAVE_BITS.index('xsaves')
+
+
+def whv_get_capability(code, size=64):
+    """(hresult, bytes written) of WHvGetCapability, from System32's WinHvPlatform.dll."""
+    import ctypes
+    dll = ctypes.WinDLL(str(Path(os.environ.get('SYSTEMROOT', r'C:\Windows')) / 'System32' /
+                            'WinHvPlatform.dll'))
+    func = dll.WHvGetCapability
+    func.restype = ctypes.c_long
+    func.argtypes = (ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                     ctypes.POINTER(ctypes.c_uint32))
+    buf = (ctypes.c_uint8 * size)()
+    written = ctypes.c_uint32(0)
+    hr = func(code, buf, size, ctypes.byref(written))
+    return hr & 0xffffffff, bytes(buf[:written.value])
+
+
+def whpx_xsave_features(get=None):
+    """Host XSAVE support as the Windows Hypervisor Platform reports it (README open item
+    3: on hosts without XSAVES, -cpu max is expected to panic the guest kernel).
+
+    Returns {'xsaves': True/False, ...} or {'xsaves': None, 'error': ...}. ``get`` is
+    whv_get_capability, injectable for tests."""
+    get = get or whv_get_capability
+    try:
+        out = {}
+        for key, code in (('hypervisor_present', WHV_CAP_HYPERVISOR_PRESENT),
+                          ('vendor', WHV_CAP_PROCESSOR_VENDOR),
+                          ('xsave_mask', WHV_CAP_PROCESSOR_XSAVE_FEATURES)):
+            hr, data = get(code)
+            if hr != 0 or not data:
+                return {'xsaves': None, 'error': f'WHvGetCapability(0x{code:04x}) returned '
+                        f'0x{hr:08x} with {len(data)} bytes'}
+            out[key] = int.from_bytes(data, 'little')
+    except (OSError, AttributeError) as exc:
+        return {'xsaves': None, 'error': f'{type(exc).__name__}: {exc}'}
+    mask = out['xsave_mask']
+    return {'xsaves': bool(mask >> XSAVES_BIT & 1),
+            'hypervisor_present': bool(out['hypervisor_present']),
+            'vendor': WHV_VENDORS.get(out['vendor'], out['vendor']),
+            'xsave_mask': f'0x{mask:x}',
+            'features': [n for i, n in enumerate(WHV_XSAVE_BITS) if mask >> i & 1],
+            'method': 'WHvGetCapability(WHvCapabilityCodeProcessorXsaveFeatures), '
+                      'bit XsaveSupervisorSupport'}
+
+
+def xsaves_check(info):
+    """(status, detail, owner act) of the preflight host-xsaves check."""
+    if info.get('xsaves') is None:
+        return ('unknown', 'host XSAVES not determined: ' + str(info.get('error')) +
+                '; disclosed, not refused (README open item 3)', None)
+    if info['xsaves']:
+        return ('ok', f'XSAVES offered by the hypervisor ({info["vendor"]}, xsave features '
+                f'{info["xsave_mask"]})', None)
+    return ('fail', f'no XSAVES ({info["vendor"]}, xsave features {info["xsave_mask"]}): with '
+            '-cpu max the guest kernel is expected to report an XSAVE consistency problem '
+            'and panic (README open item 3)',
+            'none: this host is not qualified for the profile\'s -cpu max (R-03.x qualifies '
+            'a CPU model)')
+
+
+def preflight(ctx, xsave_info=None):
     checks = []
 
-    def add(check, ok, detail, act):
-        checks.append({'check': check, 'status': 'ok' if ok else 'fail', 'detail': detail,
-                       'owner_act': None if ok else act})
+    def add(check, ok, detail, act, status=None):
+        checks.append({'check': check, 'status': status or ('ok' if ok else 'fail'),
+                       'detail': detail, 'owner_act': None if ok or status == 'unknown' else act})
 
     system, machine = platform.system(), platform.machine()
     add('os-arch', system == 'Windows' and machine.lower() in ('amd64', 'x86_64'),
@@ -1175,20 +1285,55 @@ def preflight(ctx):
     img_got = sha256_file(img_path) if Path(img_path).is_file() else None
     add('image', img_got == image['sha256'], f'{img_path} sha256 {img_got}',
         'A3: place the pinned image in the state directory (PREREQUISITES.md, F-03.2.1b step 3)')
-    available = all(c['status'] == 'ok' for c in checks)
+    if accel == 'whpx':
+        info = xsave_info if xsave_info is not None else (
+            whpx_xsave_features() if system == 'Windows' else
+            {'xsaves': None, 'error': 'not a Windows host'})
+        status, detail, act = xsaves_check(info)
+        add('host-xsaves', status == 'ok', detail, act, status=status)
+        checks[-1]['observed'] = info
     return {'operation': 'preflight', 'labels': labels(ctx.profile),
             'profile': ctx.profile['name'], 'provider': ctx.profile['provider']['name'],
-            'result': 'available' if available else 'unavailable', 'checks': checks}
+            'result': 'available' if preflight_available(checks) else 'unavailable',
+            'checks': checks}
+
+
+def preflight_available(checks):
+    """'unknown' is disclosed in the report and does not refuse (only host-xsaves uses it)."""
+    return all(c['status'] in ('ok', 'unknown') for c in checks)
 
 
 # ---------------------------------------------------------------- launch and readiness
 
 
+def log_header(labels_, operation, instance):
+    """One line written to stderr.log before each launch (profiles P11: a log header
+    carries the tier label). QEMU's own output follows it."""
+    return LOG_HEADER_PREFIX + json.dumps(
+        {'schema': LOG_HEADER_SCHEMA, 'labels': labels_, 'operation': operation,
+         'instance': instance, 'at': utc_now()}, sort_keys=True) + '\n'
+
+
+def parse_log_headers(lines):
+    """The header objects among stderr.log's lines (None for an unparsable header)."""
+    out = []
+    for line in lines:
+        if line.startswith(LOG_HEADER_PREFIX):
+            try:
+                out.append(json.loads(line[len(LOG_HEADER_PREFIX):]))
+            except ValueError:
+                out.append(None)
+    return out
+
+
 def stderr_findings(instance_dir):
     path = Path(instance_dir) / 'stderr.log'
     text = path.read_text(encoding='utf-8', errors='replace') if path.is_file() else ''
-    lines = [line for line in text.splitlines() if line.strip()]
+    every = [line for line in text.splitlines() if line.strip()]
+    lines = [line for line in every if not line.startswith(LOG_HEADER_PREFIX)]
     return {'lines': lines,
+            'headers': parse_log_headers(every),
+            'first_line_is_header': bool(every) and every[0].startswith(LOG_HEADER_PREFIX),
             'whpx': [line for line in lines if 'WHPX:' in line],
             'interrupt_vector_0': sum(INTERRUPT_WARNING in line for line in lines)}
 
@@ -1206,6 +1351,9 @@ def launch(ctx, instance_dir, record, operation):
             raise Refused('REFUSED', f'{key} port {record["ports"][key]} on {LOOPBACK} is in use')
     started = time.time()
     with open(Path(instance_dir) / 'stderr.log', 'ab') as err:
+        err.write(log_header(record['labels'], operation,
+                             record['instance']['name']).encode('utf-8'))
+        err.flush()
         proc = subprocess.Popen(record['argv'], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=err, cwd=str(instance_dir),
                                 env=record['env'], close_fds=True,
@@ -1585,9 +1733,9 @@ def destroy(ctx, name):
     return result
 
 
-def recreate(ctx, name, ready_timeout=READY_TIMEOUT_S):
-    return {'operation': 'recreate', 'destroy': destroy(ctx, name),
-            'create': create(ctx, name, ready_timeout)}
+def recreate(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None):
+    return {'operation': 'recreate', 'labels': labels(ctx.profile), 'instance': name,
+            'destroy': destroy(ctx, name), 'create': create(ctx, name, ready_timeout, canaries)}
 
 
 def exec_command(ctx, name, command):
@@ -2252,6 +2400,12 @@ def guest_probes(ports, host_ips, http_ip, storage=None):
         ('mnt_c', 'test -e /mnt/c && echo present || echo absent'),
         ('cpu_vmx_svm', "grep -c -E 'vmx|svm' /proc/cpuinfo"),
         ('cpu_model', "grep -m1 '^model name' /proc/cpuinfo; grep -c '^processor' /proc/cpuinfo"),
+        ('cpu_flags', "grep -m1 '^flags' /proc/cpuinfo"),
+        # README open item 3 (F-03.4): the kernel's XSAVE messages, as far as agent may
+        # read the kernel log; the host-side serial log is the decisive source
+        ('kernel_log', "if dmesg >/dev/null 2>&1; then echo 'dmesg readable'; "
+                       "dmesg | grep -E 'x86/fpu|XSAVE|xstate'; else echo 'dmesg unreadable'; fi; "
+                       'echo "dmesg_restrict=$(cat /proc/sys/kernel/dmesg_restrict 2>&1)"'),
         ('dev_kvm', 'test -e /dev/kvm && echo present || echo absent'),
         ('machine_id', 'cat /etc/machine-id'),
         ('hostname', 'hostname'),
@@ -2853,8 +3007,15 @@ def evaluate(profile, record, obs):
     props.append(prop('P10', [check('disposability', 'destroy removes only the instance', None,
                                     'not run by inspect', None)], formal='F-03.4'))
 
-    props.append(prop('P11', [check('labels', labels(profile), record.get('labels'),
-                                    'launch record', record.get('labels') == labels(profile))]))
+    artifacts = obs.get('artifacts')
+    props.append(prop('P11', [
+        check('labels', labels(profile), record.get('labels'),
+              'launch record', record.get('labels') == labels(profile)),
+        check('artifact labels', 'every record and log header carries the profile labels',
+              artifacts, 'instance directory: launch.json, process.json, records/*.json, '
+              'stderr.log headers (label_problems)',
+              None if not artifacts else artifacts_clean(artifacts)),
+    ]))
 
     flags = q.get('cpu-flags') or []
     vmx = out_text('cpu_vmx_svm').strip()
@@ -2914,14 +3075,22 @@ def inspect(ctx, name, canaries=None):
     kh = (idir / 'ssh' / 'known_hosts').read_text(encoding='ascii').split('\n')
     obs['known_hosts_fingerprints'] = [key_fingerprint(line.split()[2]) for line in kh if line.strip()]
     obs['stderr'] = stderr_findings(idir)
+    obs['artifacts'] = artifact_labels(idir, labels(ctx.profile))
     if record.get('validation'):
         obs['netprobe'] = latest_record(idir, 'netprobe')
     properties = evaluate(ctx.profile, record, obs)
+    serial = idir / 'serial.log'
+    compatibility = {'xsave': xsave_findings({
+        'serial.log (host side)': serial.read_text(encoding='utf-8', errors='replace')
+        if serial.is_file() else None,
+        'guest dmesg (as agent)': guest_kernel_log((obs['guest'].get('kernel_log') or {}).get('out'))})}
+    compatibility['verdict'] = compatibility['xsave']['verdict']
     out = {'schema': INSPECT_SCHEMA, 'operation': 'inspect', 'labels': labels(ctx.profile),
            'instance': name, 'instance_id': record['instance']['instance_id'],
            'launch_record_sha256': sha256_file(idir / 'launch.json'), 'pid': pid,
            'inspected_at': utc_now(), 'seconds': round(time.time() - t0, 1),
            'verdicts': {p['property']: p['verdict'] for p in properties},
+           'compatibility': compatibility,
            'properties': properties, 'observations': obs}
     out['record'] = write_record(idir, 'inspect', out)
     return out
@@ -2935,15 +3104,672 @@ def check_surfaces(ctx, name, canary_dir):
     for profiles P3 to P6. PASS only when all four PASS; UNKNOWN counts as not passed."""
     canaries = load_canaries(canary_dir)
     record = inspect(ctx, name, canaries)
+    verdicts, failing, result = surface_verdict(record)
+    return {'operation': 'check-surfaces', 'labels': labels(ctx.profile), 'instance': name,
+            'canaries': canary_summary(canaries['needles']), 'verdicts': verdicts,
+            'not_passed': failing, 'inspect_record': record['record'],
+            'all_verdicts': record['verdicts'], 'result': result}
+
+
+def surface_verdict(record):
+    """(verdicts, checks not passed, 'PASS'|'FAIL') for profiles P3 to P6 of one inspect
+    record; UNKNOWN counts as not passed."""
     verdicts = {p: record['verdicts'].get(p) for p in SURFACE_PROPERTIES}
     failing = [{'property': p['property'], 'check': c['check'], 'verdict': c['verdict']}
                for p in record['properties'] if p['property'] in SURFACE_PROPERTIES
                for c in p['checks'] if c['verdict'] != 'PASS']
-    return {'operation': 'check-surfaces', 'labels': labels(ctx.profile), 'instance': name,
-            'canaries': canary_summary(canaries['needles']), 'verdicts': verdicts,
-            'not_passed': failing, 'inspect_record': record['record'],
-            'all_verdicts': record['verdicts'],
-            'result': 'PASS' if all(v == 'PASS' for v in verdicts.values()) else 'FAIL'}
+    return verdicts, failing, 'PASS' if all(v == 'PASS' for v in verdicts.values()) else 'FAIL'
+
+
+# ---------------------------------------------------------------- P11 over the artifacts (F-03.4)
+
+
+def artifact_labels(instance_dir, want):
+    """profiles P11 over what guest.py wrote in one instance directory: for launch.json,
+    process.json, every records/*.json and every stderr.log header, the labels it
+    carries and their problems (label_problems against the profile's labels).
+
+    Not covered, because they are not records: the SSH key and known_hosts, the disks,
+    seed.iso, and serial.log (the guest console, written by QEMU from the first byte;
+    a header would need a change to launch.argv)."""
+    idir = Path(instance_dir)
+    out = {}
+    records = idir / 'records'
+    paths = [idir / 'launch.json', idir / 'process.json'] + \
+        (sorted(records.glob('*.json')) if records.is_dir() else [])
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            lab = data.get('labels') if isinstance(data, dict) else None
+        except (OSError, ValueError):
+            lab = None
+        out[posix(path.relative_to(idir))] = {'labels': lab, 'problems': label_problems(lab, want)}
+    if (idir / 'stderr.log').is_file():
+        err = stderr_findings(idir)
+        if not err['first_line_is_header']:
+            out['stderr.log'] = {'labels': None, 'problems': ['the log does not start with a header']}
+        for i, header in enumerate(err['headers'], 1):
+            lab = header.get('labels') if isinstance(header, dict) else None
+            out[f'stderr.log#header{i}'] = {'labels': lab, 'problems': label_problems(lab, want)}
+    return out
+
+
+def artifacts_clean(artifacts):
+    return bool(artifacts) and all(not a['problems'] for a in artifacts.values())
+
+
+# ---------------------------------------------------------------- XSAVE detector (README open item 3)
+
+# The guest kernel's XSAVE messages under WHPX with -cpu max. A consistency problem or
+# a disabled XSAVE is a FAIL; the misordered-offset warning, observed on the
+# qualification host, is a recorded limitation (decision 0003, "Current facts").
+XSAVE_PATTERNS = (
+    ('misordered-xstate', re.compile(r'x86/fpu: misordered xstate'), 'LIMITATION'),
+    ('xsave-consistency-problem', re.compile(r'XSAVE consistency problem'), 'FAIL'),
+    ('xsave-disabled', re.compile(r'XSAVE disabled'), 'FAIL'),
+)
+XSAVE_KERNEL_LINE = re.compile(r'x86/fpu: ')
+XSAVE_ENABLED = re.compile(r'x86/fpu: Enabled xstate features .*')
+
+
+def guest_kernel_log(probe_out):
+    """The kernel_log probe's dmesg lines, or None when agent may not read the log."""
+    lines = (probe_out or '').replace('\r', '').split('\n')
+    if lines[0].strip() != 'dmesg readable':
+        return None
+    return '\n'.join(line for line in lines[1:] if not line.startswith('dmesg_restrict='))
+
+
+def xsave_findings(sources):
+    """{source: text or None} -> the labelled XSAVE findings and their verdict.
+
+    PASS needs at least one source that holds the kernel's x86/fpu messages; without one
+    the verdict is UNKNOWN (a console that never reached the serial log proves nothing)."""
+    findings, enabled, read = [], [], {}
+    for source, text in sources.items():
+        if text is None:
+            read[source] = 'unavailable'
+            continue
+        lines = text.replace('\r', '').split('\n')
+        read[source] = 'kernel messages' if any(XSAVE_KERNEL_LINE.search(line) for line in lines) \
+            else 'no kernel x86/fpu messages'
+        for line in lines:
+            for label, regex, severity in XSAVE_PATTERNS:
+                if regex.search(line):
+                    findings.append({'label': label, 'severity': severity, 'source': source,
+                                     'line': line.strip()[:300]})
+            match = XSAVE_ENABLED.search(line)
+            if match:
+                enabled.append({'source': source, 'line': match.group(0).strip()[:300]})
+    severities = {f['severity'] for f in findings}
+    verdict = 'FAIL' if 'FAIL' in severities else 'LIMITATION' if 'LIMITATION' in severities \
+        else 'PASS' if 'kernel messages' in read.values() else 'UNKNOWN'
+    return {'verdict': verdict, 'labels': sorted({f['label'] for f in findings}),
+            'findings': findings, 'xstate_enabled': enabled, 'sources': read,
+            'rule': 'XSAVE consistency problem or XSAVE disabled: FAIL; misordered xstate: '
+                    'LIMITATION (recorded, README open item 3)'}
+
+
+# ---------------------------------------------------------------- inspect comparison (P10)
+
+def _n_addresses(value, profile):
+    return sorted(str(x[0]) for x in value) if isinstance(value, list) else value
+
+
+def _n_refusals(value, profile):
+    return sorted({(k.rsplit(':', 1)[0], r) for k, r in value.items()}) \
+        if isinstance(value, dict) else value
+
+
+def _n_blocked(value, profile):
+    return {k: probe_blocked(k, {'rc': rc}) for k, rc in value.items()} \
+        if isinstance(value, dict) else value
+
+
+def _n_mount_diff(value, profile):
+    return {k: value.get(k) for k in ('unlisted', 'missing')} if isinstance(value, dict) else value
+
+
+def _n_fstypes(value, profile):
+    mounts = (profile.get('guest_storage') or {}).get('mounts') or []
+    required = {m['fstype'] for m in mounts if not m.get('optional')}
+    optional_only = {m['fstype'] for m in mounts if m.get('optional')} - required
+    return [t for t in value if t not in optional_only] if isinstance(value, list) else value
+
+
+def _n_socket_matches(value, profile):
+    return value.get('matched') if isinstance(value, dict) else value
+
+
+def _n_artifact_labels(value, profile):
+    if not isinstance(value, dict):
+        return value
+    return {'labels': sorted({json.dumps(a.get('labels'), sort_keys=True) for a in value.values()}),
+            'problems': sorted({p for a in value.values() for p in a.get('problems') or []})}
+
+
+NORMALIZERS = {'addresses': _n_addresses, 'refusals': _n_refusals, 'blocked': _n_blocked,
+               'mount-diff': _n_mount_diff, 'fstypes': _n_fstypes,
+               'socket-matches': _n_socket_matches, 'artifact-labels': _n_artifact_labels}
+
+# Every check of an ordinary inspect record, classified for the comparison across a
+# restart (start) and across recreate (contract section 3: recreate "must match the
+# previous inspect record, except for identity"):
+#   stable        declared and observed equal (after the named normalisation, which
+#                 drops what is allocated per launch, such as ports, or what varies with
+#                 running services, such as optional mounts)
+#   per-instance  the identity of one instance (profiles P8): equal across start,
+#                 different across recreate
+#   volatile      recorded, not compared (content that grows while a guest runs)
+# Every check's verdict must be equal in both records; an unclassified check fails.
+STABLE, PER_INSTANCE, VOLATILE = 'stable', 'per-instance', 'volatile'
+CHECK_CLASSES = {
+    ('profiles P1', 'accelerator'): (STABLE, None),
+    ('profiles P1', 'guest kernel'): (STABLE, None),
+    ('profiles P1', 'host kernel'): (STABLE, None),
+    ('profiles P1', 'vm status'): (STABLE, None),
+    ('profiles P2', 'vcpu (QMP)'): (STABLE, None),
+    ('profiles P2', 'vcpu (guest)'): (STABLE, None),
+    ('profiles P2', 'memory (QMP)'): (STABLE, None),
+    ('profiles P2', 'memory (guest MemTotal kB)'): (STABLE, None),
+    ('profiles P2', 'root disk (guest)'): (STABLE, None),
+    ('profiles P2', 'scratch disk (guest)'): (STABLE, None),
+    ('profiles P2', 'root disk (qemu-img)'): (STABLE, None),
+    ('profiles P2', 'scratch disk (qemu-img)'): (STABLE, None),
+    ('profiles P3', 'share mounts'): (STABLE, None),
+    ('profiles P3', 'mount table file systems'): (STABLE, 'fstypes'),
+    ('profiles P3', 'mount table equals the declared allowlist'): (STABLE, 'mount-diff'),
+    ('profiles P3', 'forbidden paths'): (STABLE, None),
+    ('profiles P3', '/mnt/c'): (STABLE, None),
+    ('profiles P3', 'guest virtio devices'): (STABLE, None),
+    ('profiles P3', 'host shares declared'): (STABLE, None),
+    ('profiles P4', 'block devices (QMP)'): (STABLE, None),
+    ('profiles P4', 'block nodes: names, read-only flags and files'): (STABLE, None),
+    ('profiles P4', 'guest disks'): (STABLE, None),
+    ('profiles P4', 'pci virtio devices'): (STABLE, None),
+    ('profiles P4', 'pci devices outside virtio and the q35 chipset'): (STABLE, None),
+    ('profiles P4', 'seed read-only in the guest'): (STABLE, None),
+    ('profiles P4', 'scratch mounted'): (STABLE, None),
+    ('profiles P4', 'exchange and scratch directories'): (STABLE, None),
+    ('profiles P5', 'launch environment'): (STABLE, None),
+    ('profiles P5', 'collection'): (VOLATILE, None),
+    ('profiles P5', 'positive control'): (STABLE, None),
+    ('profiles P5', 'Owner-class scan'): (STABLE, None),
+    ('profiles P5', 'canaries'): (STABLE, None),
+    ('profiles P5', 'per-instance private key'): (STABLE, None),
+    ('profiles P6', 'chardevs'): (STABLE, None),
+    ('profiles P6', 'virtio-serial ports'): (STABLE, None),
+    ('profiles P6', 'virtio channel devices'): (STABLE, None),
+    ('profiles P6', 'vsock'): (STABLE, None),
+    ('profiles P6', 'host-management paths'): (STABLE, None),
+    ('profiles P6', 'socket inventory'): (STABLE, 'socket-matches'),
+    ('profiles P6', 'management environment'): (STABLE, None),
+    ('profiles P6', '/tmp/.X11-unix'): (STABLE, None),
+    ('profiles P6', 'QMP from the guest'): (STABLE, 'blocked'),
+    ('profiles P6', 'guest-local ssh-agent'): (STABLE, None),
+    ('profiles P6', 'guest agent'): (STABLE, None),
+    ('profiles P7', 'netdev'): (STABLE, None),
+    ('profiles P7', 'QEMU listening sockets'): (STABLE, 'addresses'),
+    ('profiles P7', 'QEMU UDP endpoints on non-loopback addresses'): (STABLE, None),
+    ('profiles P7', 'host non-loopback addresses on the forwarded ports'): (STABLE, 'refusals'),
+    ('profiles P7', 'positive controls in the guest'): (STABLE, None),
+    ('profiles P7', 'guest egress probes'): (STABLE, 'blocked'),
+    ('profiles P7', 'guest IPv6 addresses beyond ::1'): (STABLE, None),
+    ('profiles P7', 'guest forwarding rules'): (STABLE, None),
+    ('profiles P7', 'enforcement point qualified'): (STABLE, None),
+    ('profiles P8', 'machine-id'): (PER_INSTANCE, None),
+    ('profiles P8', 'hostname'): (STABLE, None),
+    ('profiles P8', 'cloud-init instance id'): (PER_INSTANCE, None),
+    ('profiles P8', 'agent groups'): (STABLE, None),
+    ('profiles P8', 'sudo'): (STABLE, None),
+    ('profiles P8', 'root ssh login'): (STABLE, None),
+    ('profiles P8', 'sshd drop-in'): (STABLE, None),
+    ('profiles P8', 'host keys'): (PER_INSTANCE, None),
+    ('profiles P8', 'host principal'): (STABLE, None),
+    ('profiles P9', 'launch-record inputs re-hashed'): (STABLE, None),
+    ('profiles P9', 'pinned inputs'): (STABLE, None),
+    ('profiles P9', 'seed digest recorded'): (PER_INSTANCE, None),
+    ('profiles P9', 'profile revision'): (STABLE, None),
+    ('profiles P9', 'root overlay backing'): (STABLE, None),
+    ('profiles P10', 'disposability'): (STABLE, None),
+    ('profiles P11', 'labels'): (STABLE, None),
+    ('profiles P11', 'artifact labels'): (STABLE, 'artifact-labels'),
+    ('profiles P12', 'declared'): (STABLE, None),
+    ('profiles P12', 'QOM vmx/svm'): (STABLE, None),
+    ('profiles P12', 'guest cpuinfo vmx|svm count'): (STABLE, None),
+    ('profiles P12', '/dev/kvm'): (STABLE, None),
+}
+
+
+def _guest_out(record, key):
+    return (((record.get('observations') or {}).get('guest') or {}).get(key) or {}).get('out')
+
+
+def _input_digest(record, key):
+    return (((record.get('observations') or {}).get('input_digests') or {}).get(key) or {}).get('sha256')
+
+
+# Record-level fields outside the checks, with their class.
+INSPECT_FACTS = (
+    ('instance id', PER_INSTANCE, lambda r: r.get('instance_id')),
+    ('launch record sha256', PER_INSTANCE, lambda r: r.get('launch_record_sha256')),
+    ('ssh public key sha256', PER_INSTANCE, lambda r: _input_digest(r, 'ssh_public_key')),
+    ('seed sha256', PER_INSTANCE, lambda r: _input_digest(r, 'seed')),
+    ('labels', STABLE, lambda r: r.get('labels')),
+    ('property verdicts', STABLE, lambda r: r.get('verdicts')),
+    ('xsave findings', STABLE,
+     lambda r: ((r.get('compatibility') or {}).get('xsave') or {}).get('labels')),
+    ('xsave verdict', STABLE, lambda r: (r.get('compatibility') or {}).get('verdict')),
+    ('qemu version', STABLE,
+     lambda r: ((r.get('observations') or {}).get('qmp') or {}).get('query-version')),
+    ('guest cpu flags', STABLE, lambda r: _guest_out(r, 'cpu_flags')),
+    ('guest cpu model', STABLE, lambda r: _guest_out(r, 'cpu_model')),
+    ('guest kernel command line', STABLE, lambda r: _guest_out(r, 'kernel_cmdline')),
+    ('guest addresses', STABLE, lambda r: _guest_out(r, 'ip_addr')),
+    ('guest routes', STABLE, lambda r: _guest_out(r, 'ip_route')),
+    ('qemu process id', VOLATILE, lambda r: r.get('pid')),
+    ('inspected at', VOLATILE, lambda r: r.get('inspected_at')),
+    ('inspect seconds', VOLATILE, lambda r: r.get('seconds')),
+)
+
+
+def compare_inspect(profile, before, after, mode):
+    """Compare two inspect records of one instance name. mode 'start': the same instance
+    after a stop and start (per-instance fields equal); mode 'recreate': a new instance
+    under the same name (per-instance fields differ). Returns the per-field table and
+    PASS or FAIL."""
+    if mode not in ('start', 'recreate'):
+        raise ValueError(mode)
+
+    def index(record):
+        return {(p['property'], c['check']): c for p in record.get('properties') or []
+                for c in p['checks']}
+
+    def per_instance_ok(a, b):
+        return a == b if mode == 'start' else (a is not None and b is not None and a != b)
+
+    a_checks, b_checks = index(before), index(after)
+    fields = []
+    for key in sorted(set(a_checks) | set(b_checks)):
+        entry = {'field': f'{key[0]} / {key[1]}', 'kind': 'check'}
+        cls = CHECK_CLASSES.get(key)
+        ca, cb = a_checks.get(key), b_checks.get(key)
+        if cls is None or ca is None or cb is None:
+            entry.update({'class': cls[0] if cls else None, 'ok': False,
+                          'reason': 'unclassified check' if cls is None else 'missing in one record'})
+            fields.append(entry)
+            continue
+        klass, norm = cls
+        f = NORMALIZERS[norm] if norm else (lambda v, p: v)
+        va, vb = f(ca['observed'], profile), f(cb['observed'], profile)
+        ok = ca['verdict'] == cb['verdict']
+        if klass == STABLE:
+            ok = ok and va == vb and f(ca['declared'], profile) == f(cb['declared'], profile)
+        elif klass == PER_INSTANCE:
+            ok = ok and per_instance_ok(va, vb)
+        entry.update({'class': klass, 'normalised': norm, 'verdicts': [ca['verdict'], cb['verdict']],
+                      'before': va, 'after': vb, 'ok': ok})
+        fields.append(entry)
+    for name, klass, get in INSPECT_FACTS:
+        va, vb = get(before), get(after)
+        ok = va == vb if klass == STABLE else per_instance_ok(va, vb) if klass == PER_INSTANCE \
+            else True
+        fields.append({'field': name, 'kind': 'record', 'class': klass, 'before': va,
+                       'after': vb, 'ok': ok})
+    counts = {}
+    for entry in fields:
+        counts[str(entry.get('class'))] = counts.get(str(entry.get('class')), 0) + 1
+    bad = [e['field'] for e in fields if not e['ok']]
+    return {'mode': mode, 'result': 'FAIL' if bad else 'PASS', 'not_ok': bad,
+            'counts': counts, 'fields': fields}
+
+
+# ---------------------------------------------------------------- inventory of durable sources (P10)
+
+# Files a running QEMU writes in its own instance directory: a running sibling's copies
+# are recorded as present, not hashed.
+VOLATILE_WHILE_RUNNING = ('root.qcow2', 'scratch.qcow2', 'serial.log', 'stderr.log')
+
+
+def is_link(entry):
+    return entry.is_symlink() or (hasattr(entry, 'is_junction') and entry.is_junction())
+
+
+def tree_inventory(root, volatile=()):
+    """Every entry under root, never through a link: type, mode, Windows attributes and
+    mtime; each file with its size and sha256. Top-level names in ``volatile`` are
+    recorded as present only."""
+    root = Path(root)
+    st = os.stat(root, follow_symlinks=False)
+    out = {'.': {'type': 'dir', 'mode': st.st_mode, 'mtime_ns': st.st_mtime_ns,
+                 'attributes': getattr(st, 'st_file_attributes', None)}}
+    stack = ['']
+    while stack:
+        rel_dir = stack.pop()
+        with os.scandir(root / rel_dir if rel_dir else root) as entries:
+            for entry in entries:
+                rel = f'{rel_dir}/{entry.name}' if rel_dir else entry.name
+                # os.lstat, not entry.stat: on Windows the directory listing's copy of a
+                # child directory's times is updated lazily and can lag the entry itself
+                st = os.lstat(entry.path)
+                info = {'mode': st.st_mode, 'attributes': getattr(st, 'st_file_attributes', None)}
+                if is_link(entry):
+                    info['type'] = 'link'
+                elif entry.is_dir(follow_symlinks=False):
+                    info.update(type='dir', mtime_ns=st.st_mtime_ns)
+                    stack.append(rel)
+                elif entry.is_file(follow_symlinks=False):
+                    if not rel_dir and entry.name in volatile:
+                        info = {'type': 'file', 'volatile': 'written by the running QEMU'}
+                    else:
+                        info.update(type='file', size=st.st_size, mtime_ns=st.st_mtime_ns,
+                                    sha256=sha256_file(entry.path))
+                else:
+                    info['type'] = 'other'
+                out[rel] = info
+    return dict(sorted(out.items()))
+
+
+def repo_inventory(repo):
+    """The checkout: HEAD, tracked-file status and the index listing's digest (git with no
+    global configuration, so the run's environment cannot change what it reports)."""
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull)
+
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *args], capture_output=True,
+                              check=False, env=env, timeout=300)
+    head, status, files = git('rev-parse', 'HEAD'), \
+        git('status', '--porcelain=v2', '--untracked-files=no'), git('ls-files', '-s')
+    return {'path': posix(repo), 'head': head.stdout.decode().strip(),
+            'status_porcelain_v2': status.stdout.decode('utf-8', 'replace').splitlines(),
+            'ls_files_s_sha256': hashlib.sha256(files.stdout).hexdigest(),
+            'ls_files_count': len(files.stdout.splitlines()),
+            'rc': [head.returncode, status.returncode, files.returncode]}
+
+
+def state_inventory(ctx):
+    """The state directory's shared, non-instance content the profile names: the pinned
+    image, and the provider prefix (file count, bytes, a digest of every file's path,
+    size and mtime, and the sha256 of the pinned binaries and firmware)."""
+    image = Path(ctx.values['input:image'])
+    st = image.stat()
+    prefix = Path(ctx.values['qemu_prefix'])
+    lines, count, total, stack = [], 0, 0, [prefix]
+    while stack:
+        with os.scandir(stack.pop()) as entries:
+            for entry in entries:
+                if is_link(entry):
+                    lines.append(f'{posix(Path(entry.path).relative_to(prefix))}\tlink')
+                elif entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+                else:
+                    est = entry.stat(follow_symlinks=False)
+                    count, total = count + 1, total + est.st_size
+                    lines.append(f'{posix(Path(entry.path).relative_to(prefix))}\t'
+                                 f'{est.st_size}\t{est.st_mtime_ns}')
+    listing = '\n'.join(sorted(lines)).encode('utf-8')
+    return {'image': {'path': posix(image), 'sha256': sha256_file(image), 'size': st.st_size,
+                      'mtime_ns': st.st_mtime_ns},
+            'provider': {'path': posix(prefix), 'files': count, 'bytes': total,
+                         'listing_sha256': hashlib.sha256(listing).hexdigest(),
+                         'binaries': {k: sha256_file(v['path'])
+                                      for k, v in sorted(binaries(ctx.profile, ctx.values).items())},
+                         'firmware': sha256_file(ctx.values['input:firmware'])}}
+
+
+def sibling_state(path):
+    """Whether a sibling directory is an instance, whether its QEMU runs, and its QMP status."""
+    try:
+        record = read_launch_record(path)
+    except Refused:
+        return {'instance': False}
+    proc = running_process(path, record['binary'])
+    if not proc:
+        return {'instance': True, 'running': False}
+    pid = proc.pid
+    proc.close()
+    status = qmp_try(record['ports']['qmp'], 'query-status')
+    return {'instance': True, 'running': True, 'pid': pid,
+            'qmp_status': (status.get('return') or {}).get('status'), 'qmp_error': status.get('error')}
+
+
+def instances_inventory(ctx, subject):
+    """Every entry of the state directory's instances/ except the subject instance."""
+    instances = Path(ctx.state_dir) / 'instances'
+    out = {}
+    if not instances.is_dir():
+        return out
+    with os.scandir(instances) as entries:
+        for entry in sorted(entries, key=lambda e: e.name):
+            if entry.name == subject:
+                continue
+            if is_link(entry):
+                out[entry.name] = {'type': 'link'}
+            elif entry.is_dir(follow_symlinks=False):
+                state = sibling_state(Path(entry.path))
+                out[entry.name] = {'type': 'dir', 'state': state, 'tree': tree_inventory(
+                    entry.path, VOLATILE_WHILE_RUNNING if state.get('running') else ())}
+            else:
+                st = entry.stat(follow_symlinks=False)
+                out[entry.name] = {'type': 'file', 'size': st.st_size, 'mtime_ns': st.st_mtime_ns,
+                                   'sha256': sha256_file(entry.path)}
+    return out
+
+
+def inventory(ctx, subject, durable_roots):
+    """The durable sources a destroy or recreate of ``subject`` must leave untouched."""
+    return {'taken_at': utc_now(), 'repository': repo_inventory(ctx.repo),
+            'state_shared': state_inventory(ctx),
+            'instances': instances_inventory(ctx, subject),
+            'durable_roots': {posix(r): tree_inventory(r) for r in durable_roots}}
+
+
+def _short(value):
+    text = json.dumps(value, sort_keys=True, default=str)
+    return value if len(text) <= 300 else text[:300] + '...'
+
+
+def diff_inventory(a, b, path=''):
+    """Every difference between two inventories (taken_at excluded), as path entries."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        out = []
+        for key in sorted(set(a) | set(b), key=str):
+            if not path and key == 'taken_at':
+                continue
+            sub = f'{path}/{key}' if path else str(key)
+            if key not in a:
+                out.append({'path': sub, 'change': 'added', 'after': _short(b[key])})
+            elif key not in b:
+                out.append({'path': sub, 'change': 'removed', 'before': _short(a[key])})
+            else:
+                out += diff_inventory(a[key], b[key], sub)
+        return out
+    return [] if a == b else [{'path': path, 'change': 'changed', 'before': _short(a),
+                               'after': _short(b)}]
+
+
+# ---------------------------------------------------------------- smoke (F-03.4)
+
+
+def inspect_ok(record):
+    """An inspect record fit for the smoke test: every property PASS except P10 (proved by
+    the smoke test itself, UNKNOWN in inspect), P3 to P6 PASS, and no XSAVE FAIL."""
+    verdicts = record['verdicts']
+    surfaces = surface_verdict(record)
+    bad = {p: v for p, v in verdicts.items()
+           if v != ('UNKNOWN' if p == 'profiles P10' else 'PASS')}
+    compat = (record.get('compatibility') or {}).get('verdict')
+    ok = not bad and surfaces[2] == 'PASS' and compat in ('PASS', 'LIMITATION')
+    return ok, {'verdicts': verdicts, 'not_as_expected': bad, 'surfaces': surfaces[2],
+                'surfaces_not_passed': surfaces[1], 'compatibility': compat,
+                'xsave_labels': ((record.get('compatibility') or {}).get('xsave') or {}).get('labels'),
+                'instance_id': record.get('instance_id'), 'pid': record.get('pid'),
+                'seconds': record.get('seconds')}
+
+
+def smoke(ctx, name, canary_dir, durable_roots, out_path=None, ready_timeout=READY_TIMEOUT_S):
+    """The F-03.4 provision/inspect/teardown smoke test on a fresh instance name: preflight,
+    create, inspect (check-surfaces), graceful stop, start, inspect, forced stop, recreate,
+    inspect, destroy, destroy again (absent), with inventories of the durable sources
+    before and after each destroy and recreate. One machine verdict: PASS or FAIL."""
+    idir = ctx.instance_dir(name)
+    if os.path.lexists(idir):
+        raise Refused('REFUSED', f'{idir} exists; the smoke test runs on a fresh instance name')
+    if not durable_roots:
+        raise Refused('REFUSED', 'name at least one durable root (--durable) to inventory')
+    roots = []
+    for root in durable_roots:
+        path = Path(root).resolve()
+        if not path.is_dir():
+            raise Refused('REFUSED', f'durable root {root} is not a directory')
+        if inside(path, idir) or inside(idir, path):
+            raise Refused('REFUSED', f'durable root {root} overlaps the instance directory')
+        roots.append(path)
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    canaries = load_canaries(canary_dir)
+    t0, started = time.time(), utc_now()
+    steps, failed, inspects, comparisons, inventories = [], [], {}, {}, {}
+    caught = (Refused, OSError, ValueError, QmpError, subprocess.SubprocessError)
+
+    def run(step, func, judge, always=False):
+        if failed and not always:
+            steps.append({'step': step, 'skipped': 'an earlier step failed'})
+            return None
+        s = time.time()
+        entry = {'step': step, 'started_at': utc_now()}
+        try:
+            result = func()
+            ok, summary = judge(result)
+        except caught as exc:
+            result, ok = None, False
+            summary = {'error': getattr(exc, 'code', type(exc).__name__), 'message': str(exc),
+                       'detail': getattr(exc, 'detail', None)}
+        entry.update(seconds=round(time.time() - s, 1), ok=ok, summary=summary)
+        steps.append(entry)
+        log(f'smoke: {step}: {"ok" if ok else "FAILED"} ({entry["seconds"]} s)')
+        if not ok:
+            failed.append(step)
+        return result
+
+    def take(label, always=False):
+        inv = run(f'inventory {label}', lambda: inventory(ctx, name, roots),
+                  lambda r: (True, {'instances': {k: (v.get('state') or {}).get('running')
+                                                  for k, v in r['instances'].items()},
+                                    'durable_roots': sorted(r['durable_roots'])}), always)
+        if inv is not None:
+            inventories[label] = inv
+
+    def do_inspect(label):
+        record = run(f'inspect {label}', lambda: inspect(ctx, name, canaries), inspect_ok)
+        if record is not None:
+            inspects[label] = record
+
+    def compare(label, a, b, mode):
+        result = run(f'compare {label}', lambda: compare_inspect(ctx.profile, inspects[a],
+                                                                inspects[b], mode),
+                     lambda r: (r['result'] == 'PASS', {'not_ok': r['not_ok'], 'counts': r['counts']}))
+        if result is not None:
+            comparisons[label] = result
+
+    def ready(r):
+        return r['result'] == 'ready', {'instance_id': r.get('instance_id'),
+                                        'ready': r.get('ready'), 'seconds': r.get('seconds'),
+                                        'error': r.get('error')}
+
+    def exited(r, how):
+        after = [p.get('exited_after') for p in r.get('phases') or [] if 'exited_after' in p]
+        return r['result'] == 'stopped' and bool(after) and after[-1] in how, \
+            {'result': r['result'], 'phases': r.get('phases')}
+
+    def destroyed(r):
+        return r['result'] == 'destroyed' and not os.path.lexists(idir), \
+            {'result': r['result'], 'stop': r.get('stop')}
+
+    run('preflight', lambda: preflight(ctx),
+        lambda r: (r['result'] == 'available',
+                   {'result': r['result'],
+                    'not_ok': [c for c in r['checks'] if c['status'] != 'ok'],
+                    'host_xsaves': next((c['detail'] for c in r['checks']
+                                         if c['check'] == 'host-xsaves'), None)}))
+    take('before create')
+    run('create', lambda: create(ctx, name, ready_timeout, canaries), ready)
+    do_inspect('A (after create)')
+    run('stop (graceful)', lambda: stop(ctx, name), lambda r: exited(r, ('system_powerdown',)))
+    run('start', lambda: start(ctx, name, ready_timeout), ready)
+    do_inspect('B (after start)')
+    compare('A-B (start)', 'A (after create)', 'B (after start)', 'start')
+    run('stop (forced)', lambda: stop(ctx, name, force=True),
+        lambda r: exited(r, ('quit', 'terminate')))
+    take('before recreate')
+    run('recreate', lambda: recreate(ctx, name, ready_timeout, canaries),
+        lambda r: (r['destroy']['result'] == 'destroyed' and r['create']['result'] == 'ready',
+                   {'destroy': {'result': r['destroy']['result'], 'stop': r['destroy'].get('stop')},
+                    'create': ready(r['create'])[1]}))
+    take('after recreate')
+    do_inspect('C (after recreate)')
+    compare('A-C (recreate)', 'A (after create)', 'C (after recreate)', 'recreate')
+    run('destroy', lambda: destroy(ctx, name), destroyed)
+    run('destroy (absent)', lambda: destroy(ctx, name),
+        lambda r: (r['result'] == 'absent', {'result': r['result']}))
+    if failed and os.path.lexists(idir):
+        cleanup = {'step': 'cleanup destroy'}
+        try:
+            cleanup['result'] = destroy(ctx, name)['result']
+        except caught as exc:
+            cleanup['result'] = f'{getattr(exc, "code", type(exc).__name__)}: {exc}'
+        steps.append(cleanup)
+    take('after destroy', always=True)        # also after a failure and its cleanup
+    pairs = [('before create', 'before recreate'), ('before recreate', 'after recreate'),
+             ('after recreate', 'after destroy'), ('before create', 'after destroy')]
+    diffs = {f'{a} -> {b}': diff_inventory(inventories[a], inventories[b])
+             for a, b in pairs if a in inventories and b in inventories}
+    if any(diffs.values()):
+        failed.append('inventory comparison')
+    inventory_ok = len(diffs) == len(pairs) and not any(diffs.values())
+    durable_changes = {k: [d for d in v if d['path'].startswith('durable_roots/')]
+                       for k, v in diffs.items()}
+    destroy_steps = {s['step']: (s.get('summary') or {}).get('result') for s in steps
+                     if s.get('step') in ('destroy', 'destroy (absent)')}
+    recreate_cmp = comparisons.get('A-C (recreate)', {}).get('result')
+    p10 = prop('P10', [
+        check('destroy removes the instance directory',
+              {'destroy': 'destroyed', 'destroy (absent)': 'absent'}, destroy_steps,
+              'smoke: destroy, then destroy again', destroy_steps == {'destroy': 'destroyed',
+                                                                     'destroy (absent)': 'absent'}),
+        check('destroy and recreate change no durable source', 'no difference',
+              {k: len(v) for k, v in diffs.items()},
+              'smoke: inventories of the repository, the state directory\'s image and provider, '
+              'the other instances/ entries and the durable roots', inventory_ok),
+        check('Owner data roots untouched', [posix(r) for r in roots],
+              {k: len(v) for k, v in durable_changes.items()}, 'smoke: durable-root inventories',
+              inventory_ok and not any(durable_changes.values())),
+        check('recreate reproduces the observed state',
+              'stable fields equal, per-instance fields different', recreate_cmp,
+              'smoke: compare_inspect A-C (recreate)', recreate_cmp == 'PASS'),
+    ], formal='F-03.4')
+    result = {'schema': SMOKE_SCHEMA, 'operation': 'smoke', 'labels': labels(ctx.profile),
+              'profile': ctx.profile['name'], 'instance': name, 'started_at': started,
+              'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
+              'host': {'os': platform.platform(),
+                       'processor': os.environ.get('PROCESSOR_IDENTIFIER')},
+              'result': 'PASS' if not failed and p10['verdict'] == 'PASS' else 'FAIL',
+              'failed_steps': failed, 'p10': p10, 'steps': steps,
+              'inspects': {k: dict(inspect_ok(v)[1], properties=v['properties'],
+                                   compatibility_detail=v.get('compatibility'))
+                           for k, v in inspects.items()},
+              'comparisons': comparisons, 'inventory_diffs': diffs, 'inventories': inventories}
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(result, default=str)))
+        result['out'] = str(out_file)
+    return result
 
 
 # ---------------------------------------------------------------- netprobe (F-03.3.2, test only)
@@ -3864,24 +4690,29 @@ def main(argv=None):
     p = sub.add_parser('netprobe-listen', help=argparse.SUPPRESS)
     p.add_argument('--log', required=True)
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
-               'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe'):
+               'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
         if op != 'preflight':
             p.add_argument('--name', required=True)
-        if op in ('create', 'inspect'):
+        if op in ('create', 'inspect', 'recreate'):
             p.add_argument('--canaries', help='a canary set written by the canaries operation')
-        if op == 'check-surfaces':
+        if op in ('check-surfaces', 'smoke'):
             p.add_argument('--canaries', required=True,
                            help='a canary set written by the canaries operation')
+        if op == 'smoke':
+            p.add_argument('--durable', action='append', required=True,
+                           help='a durable root to inventory before and after each destroy and '
+                                'recreate (repeatable; stands for Owner data)')
+            p.add_argument('--out', help='also write the smoke record to this new file')
         if op == 'exchange-push':
             p.add_argument('--repo', required=True, help='the repository to read the branch from')
             p.add_argument('--ref', required=True, help='one local branch')
             p.add_argument('--bundle-name', help='file name in the guest exchange directory')
         if op == 'exchange-pull':
             p.add_argument('--file', required=True, help='file name in the guest exchange directory')
-        if op in ('create', 'start', 'recreate', 'netprobe'):
+        if op in ('create', 'start', 'recreate', 'netprobe', 'smoke'):
             p.add_argument('--ready-timeout', type=int, default=READY_TIMEOUT_S,
                            help='overall readiness ceiling in seconds')
         if op == 'stop':
@@ -3899,7 +4730,7 @@ def main(argv=None):
             return netprobe_listen(args.log)
         ctx = Context(args.profile, args.state_dir)
         canaries = load_canaries(args.canaries) \
-            if op in ('create', 'inspect') and args.canaries else None
+            if op in ('create', 'inspect', 'recreate') and args.canaries else None
         if op == 'exec':
             command = args.command[1:] if args.command[:1] == ['--'] else args.command
             return exec_command(ctx, args.name, command)
@@ -3914,7 +4745,7 @@ def main(argv=None):
         elif op == 'destroy':
             result = destroy(ctx, args.name)
         elif op == 'recreate':
-            result = recreate(ctx, args.name, args.ready_timeout)
+            result = recreate(ctx, args.name, args.ready_timeout, canaries)
         elif op == 'exchange-push':
             result = exchange_push(ctx, args.name, args.repo, args.ref, args.bundle_name)
         elif op == 'exchange-pull':
@@ -3923,6 +4754,9 @@ def main(argv=None):
             result = check_surfaces(ctx, args.name, args.canaries)
         elif op == 'netprobe':
             result = netprobe(ctx, args.name, args.ready_timeout)
+        elif op == 'smoke':
+            result = smoke(ctx, args.name, args.canaries, args.durable, args.out,
+                           args.ready_timeout)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:
@@ -3931,10 +4765,11 @@ def main(argv=None):
                           'detail': exc.detail}, indent=2, sort_keys=True, default=str))
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
-    if result.get('operation') in ('check-surfaces', 'netprobe'):
+    if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \
+        (result.get('compatibility') or {}).get('verdict') == 'FAIL' or \
         result.get('create', {}).get('result') == 'not-ready'
     return 1 if failed else 0
 
