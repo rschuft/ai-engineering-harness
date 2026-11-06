@@ -502,6 +502,28 @@ class Probes(unittest.TestCase):
                                   'egress_tcp_1.1.1.1_443': {'rc': 124,
                                                              'out': 'bash: connect: timed out'}})
 
+    def test_ssh_sends_the_script_as_lf_bytes(self):
+        """Regression (F-03.2.2b cycle 1): a text-mode pipe on Windows sent CRLF to bash."""
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-guest-ssh-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / 'ssh').mkdir()
+        (tmp / 'ssh' / 'id_ed25519').write_text('k')
+        (tmp / 'ssh' / 'known_hosts').write_text('h')
+        ssh = guest.Ssh.__new__(guest.Ssh)
+        ssh.argv = lambda user, command: ['ssh', f'{user}@127.0.0.1'] + list(command)
+        script = guest.probe_script(guest.guest_probes(PORTS, [], None), '@@m')
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen.update(kwargs)
+            return subprocess.CompletedProcess(argv, 0, b'out\r\nline\n', b'')
+        with mock.patch.object(guest.subprocess, 'run', fake_run):
+            result = ssh.run(['bash', '-s'], input_text=script)
+        self.assertIsInstance(seen['input'], bytes)
+        self.assertNotIn(b'\r', seen['input'])
+        self.assertNotIn('text', seen)
+        self.assertEqual(result.stdout, 'out\nline\n')
+
     def test_probe_blocked(self):
         tcp, dns, udp = 'egress_tcp_1.1.1.1_443', 'egress_dns_getent', 'egress_udp_dns'
         self.assertTrue(guest.probe_blocked(tcp, {'rc': 124}))

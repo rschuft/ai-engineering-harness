@@ -13,6 +13,7 @@
     "operational": false,
     "operational_gate": "C6: not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass, cited by property id.",
     "provider_validation": "PASS, 2026-11-06 (F-03.2.1b, evidence/F-03.2.1b-provider-validation.md): the paused boot (-S) with the full launch.argv answered QMP in prelaunch with 8 CPUs and 16 GiB, and quit exited 0. Observed warnings: -mon is deprecated; 'Ignoring request for interrupt vector 0' (open items for F-03.2.2 in README.md). Re-validated 2026-11-06 (F-03.2.2a, evidence/F-03.2.2a-seed-and-monitor.md) after -mon was replaced by -object monitor-qmp: the paused boot with a generated seed.iso answered QMP in prelaunch with enabled whpx, query-block listed root, scratch and seed (seed and base read-only), quit exited 0, and no deprecation warning was printed; 'Ignoring request for interrupt vector 0' recurred.",
+    "guest_validation": "Observed 2026-11-06 (F-03.2.2b, evidence/F-03.2.2b-guest-lifecycle.md), under the Owner's guest-validation authorization (decision 0003). Two disposable guests (f0322b-a, f0322b-b) were created with tools/guest.py, booted under enabled whpx, ready in 9.7 s, then stopped and destroyed; the instance directories are gone and the image and QEMU pins are unchanged. The F-03.2 proof (declared versus observed) has no mismatch: 8 vCPU, MemTotal 16382796 kB of 16 GiB, 40 and 120 GiB disks, seed and base read-only, no vmx/svm in guest /proc/cpuinfo, cloud-init accepted the seed (DataSourceNoCloud [seed=/dev/vdc]), machine-ids differ (systemd generated them at first boot), user agent without sudo, and root SSH refused. SSH and QMP listened on 127.0.0.1 only; the LAN address and ::1 refused the forwarded ports. Every guest egress probe was blocked, with positive controls passing, but off-link destinations failed in the guest for lack of a default route, so SLIRP restrict=on was exercised only for 10.0.2.2 and 10.0.2.3 (F-03.3.2). inspect P6 FAILs on the contract's literal /tmp/.X11-unix check: the guest's systemd tmpfiles create an empty directory there. 'Ignoring request for interrupt vector 0' printed once at each launch and the guest ran normally. Guest kernel warning: 'x86/fpu: misordered xstate at 1408' under -cpu max. Evidence toward F-03.3.x and F-03.4 only; not operational (C6).",
     "schema_check": "tools/check_profile.py"
   },
   "host": {
@@ -122,7 +123,7 @@
         "spec": "profiles/seed/README.md",
         "module": "tools/nocloud_seed.py",
         "tests": "tools/tests/test_nocloud_seed.py",
-        "status": "implemented and tested in F-03.2.2a; the Debian guest's cloud-init accepting the volume is observed in F-03.2.2 part b"
+        "status": "implemented and tested in F-03.2.2a; observed in F-03.2.2b: the Debian guest's cloud-init 25.1.4 accepted the volume (DataSourceNoCloud [seed=/dev/vdc], status done, no errors) on two instances"
       },
       "local_path": "{instance_dir}/seed.iso",
       "record_at_create": "sha256 of seed.iso in the launch record; the same inputs give the same digest."

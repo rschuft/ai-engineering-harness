@@ -13,8 +13,11 @@ public key and non-secret configuration (`profiles P5`).
 **Identity (`profiles P8`).** Host keys: `ssh_deletekeys: true` with
 `ssh_genkeytypes: [ed25519]` regenerates them on first boot. machine-id: the guest's
 systemd generates it on first boot when the image ships an empty or uninitialized
-`/etc/machine-id`; each instance boots a fresh overlay of the pinned image. Whether the
-pinned image ships it empty is **UNKNOWN** until F-03.2.2 compares two instances.
+`/etc/machine-id`; each instance boots a fresh overlay of the pinned image. **Observed
+in F-03.2.2b** on two instances of the QEMU profile: systemd logged
+`Initializing machine ID from random generator.` on first boot, and the two
+machine-ids differed
+([evidence](../../evidence/F-03.2.2b-guest-lifecycle.md)).
 The host learns the regenerated host-key fingerprints from cloud-init's
 `BEGIN SSH HOST KEY FINGERPRINTS` block on the guest serial console (a log file in the
 instance directory), and writes them to a per-instance `known_hosts` in the state
@@ -80,5 +83,13 @@ Its tests must show: determinism (two runs, same digest); a different key gives 
 different digest; refusal on a tampered template; and a round-trip read of the volume
 descriptors and Joliet directory with a stdlib reader. `tools/tests/test_nocloud_seed.py`
 shows each, plus refusal of an unknown, missing or leftover placeholder and of malformed
-public keys, and a pinned digest for a fixed input. Whether the Debian guest's
-cloud-init accepts the volume is observed in F-03.2.2 part b (UNKNOWN until then).
+public keys, and a pinned digest for a fixed input. **Observed in F-03.2.2b:** the
+Debian guest's cloud-init 25.1.4 accepted the volume on two instances
+(`DataSourceNoCloud [seed=/dev/vdc]`, `status: done`, no errors), applied the
+instance id and hostname from meta-data, and applied the user, sshd drop-in, scratch
+file system and directories from user-data.
+
+The user-data template's header comment no longer names the placeholders as
+`{{…}}`: literal substitution used to copy the public key and the device path into
+that comment (F-03.2.2a defect, repaired in F-03.2.2b; the template is re-pinned in
+both profiles).

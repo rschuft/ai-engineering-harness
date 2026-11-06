@@ -714,9 +714,15 @@ class Ssh:
         self._checked = True
 
     def run(self, command, user='agent', input_text=None, timeout=300):
-        return subprocess.run(self.argv(user, command), input=input_text, capture_output=True,
-                              text=True, encoding='utf-8', errors='replace', timeout=timeout,
-                              check=False)
+        # Bytes, not text mode: on Windows a text-mode pipe writes '\r\n' for '\n', and the
+        # guest's bash would read '{\r' instead of '{'.
+        data = input_text.encode('utf-8') if input_text is not None else None
+        result = subprocess.run(self.argv(user, command), input=data, capture_output=True,
+                                timeout=timeout, check=False)
+        return subprocess.CompletedProcess(
+            result.args, result.returncode,
+            result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n'),
+            result.stderr.decode('utf-8', errors='replace').replace('\r\n', '\n'))
 
 
 # ---------------------------------------------------------------- preflight

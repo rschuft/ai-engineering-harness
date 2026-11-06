@@ -13,6 +13,9 @@ Owner (decision 0003, W1). Files:
 **Status.** Declared and pinned; `tools/check_profile.py --strict` passes. Provider
 validation **passed** on 2026-11-06 (F-03.2.1b, after A1 to A3):
 [`evidence/F-03.2.1b-provider-validation.md`](../../evidence/F-03.2.1b-provider-validation.md).
+Lifecycle: [`tools/guest.py`](../../tools/guest.py) and the `guest:*` Task targets
+(F-03.2.2). Two disposable guests were booted, inspected and destroyed on 2026-11-06:
+[`evidence/F-03.2.2b-guest-lifecycle.md`](../../evidence/F-03.2.2b-guest-lifecycle.md).
 Not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
 
 ## Open items for F-03.2.2
@@ -26,10 +29,37 @@ Not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
    F-03.2.1b step 4) was re-run with the changed argv and a generated seed: no
    deprecation warning, QMP answered on the new monitor
    ([evidence](../../evidence/F-03.2.2a-seed-and-monitor.md)).
-2. **`warning: Ignoring request for interrupt vector 0`.** Printed once during the
-   paused boot, before any guest code ran, and again in F-03.2.2a's paused boot.
-   Observe on a real boot (F-03.2.2 part b) whether it recurs and whether the guest is
-   affected.
+2. **`warning: Ignoring request for interrupt vector 0`. Observed in F-03.2.2b:
+   harmless so far.** Printed once during the paused boot, before any guest code ran,
+   and again in F-03.2.2a's paused boot. On the two real boots of F-03.2.2b it was
+   printed once per launch, in the same second as the QEMU start, and never again
+   while the guests ran. Both guests booted, ran and shut down normally
+   ([evidence](../../evidence/F-03.2.2b-guest-lifecycle.md)).
+
+## Open items after F-03.2.2b
+
+The tier stays not operational (C6). The
+[F-03.2.2b evidence](../../evidence/F-03.2.2b-guest-lifecycle.md) has the detail.
+
+3. **Guest kernel warning under `-cpu max`.** Each boot logs
+   `x86/fpu: misordered xstate at 1408` as a `WARNING` with a call trace
+   (`arch/x86/kernel/fpu/xstate.c:254`). The guest then enables x87, SSE, AVX, AVX-512
+   and CET user state and runs normally. Inference: WHPX reports an XSAVE layout under
+   `-cpu max` that Linux 6.12 considers out of order. Whether a named CPU model would
+   avoid it is a profile decision, not taken here.
+4. **Egress: off-link destinations never left the guest.** SLIRP's DHCP lease (with
+   `restrict=on`) carries no router and no DNS server, so the guest has no default
+   route. Probes to 1.1.1.1, 8.8.8.8 and the host's LAN address failed in the guest
+   with `Network is unreachable`. Only the on-link SLIRP addresses (10.0.2.2, 10.0.2.3)
+   exercised `restrict=on`: TCP was refused and UDP DNS got no reply. A guest root
+   could add a route, so F-03.3.2 must test the outside-the-guest enforcement for
+   off-link destinations with a route in place.
+5. **P6 wording: `/tmp/.X11-unix`.** The contract's P6 inspect expects that path to be
+   absent. In this guest it exists as an empty directory (no socket), created by the
+   guest's own `/usr/lib/tmpfiles.d/x11.conf`. `inspect` applies the contract wording
+   literally and reports FAIL. F-03.3.1 owns the formal P6 suite and the wording.
+6. **Commit charge.** Whether Windows charges the full 16 GiB to the commit limit at
+   launch remains UNKNOWN; it was not measured.
 
 ## Choices
 
