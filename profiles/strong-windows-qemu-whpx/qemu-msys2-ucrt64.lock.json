@@ -3,6 +3,8 @@
   "profile": "strong-windows-qemu-whpx",
   "plan_leaf": "F-03.2.1",
   "captured_utc": "2026-11-06",
+  "revised_utc": "2026-11-06",
+  "revision": "Fix forward of F-03.2.1a: its closure ignored provides, conflicts and replaces and pinned both sqlite and sqlite3, which sqlite replaces, conflicts with and provides (130 overlapping paths, 66 with different content). Re-resolved from the same signed database by tools/msys2_lock.py; hardlink policy recorded.",
   "provider": {
     "name": "qemu",
     "version": "11.1.3",
@@ -36,7 +38,7 @@
     ]
   },
   "extraction": {
-    "tool": "%SystemRoot%\\System32\\tar.exe (bsdtar 3.8.9, libarchive 3.8.9 with libzstd 1.5.7), built into Windows; no other tool is installed",
+    "tool": "tools/msys2_lock.py install. Windows' built-in %SystemRoot%\\System32\\tar.exe (bsdtar 3.8.9, libarchive 3.8.9 with libzstd 1.5.7) decodes each archive to an uncompressed pax stream on stdout and writes nothing; the tool validates every entry and writes the regular files and directories itself. No other tool is installed or run.",
     "exclude_members": [
       ".PKGINFO",
       ".BUILDINFO",
@@ -44,6 +46,13 @@
       ".INSTALL"
     ],
     "target": "{qemu_prefix}",
+    "entry_rules": "Every entry of every archive is listed and validated before anything is written: no absolute path, drive letter, '..', '.' or empty component, control or Windows-special character (\\ : * ? \" < > |), reserved device name or trailing dot or space; only regular files and directories, plus hardlinks under the link policy; metadata names only at the archive root; installed paths under 250 characters. Extraction re-reads each archive and refuses any entry that differs from its validated listing.",
+    "link_policy": {
+      "symlinks": "Refused. A package holding symlinks is extracted only if it is marked \"extract\": false (data only), in which case it is hash-checked and not extracted.",
+      "hardlinks": "materialise-as-copy: each hardlink is written as a regular-file copy of its target, after checking that the target is a regular file earlier in the same package, that link and target are both under ucrt64/, and that both resolved paths stay inside the install directory. Any other link stops the install. No link is created on disk. A package's \"hardlinks\" count must match its archive.",
+      "decided_by": "Overseer decision on A2 (2026-11-06), within the Owner's A2 condition 3."
+    },
+    "overlap_rule": "No two packages of the resolved set install the same path (compared case-insensitively; shared directories allowed). Checked over every package, including those not extracted, when the lock is made and again at install. Files are created exclusively, so nothing is overwritten.",
     "not_run": "pacman, its post-install hooks (usr/share/libalpm/hooks) and .INSTALL scripts. They refresh GTK, GIO, fontconfig and gdk-pixbuf caches, which a -display none guest does not use."
   },
   "extracted_files": {
@@ -51,7 +60,19 @@
     "ucrt64/bin/qemu-img.exe": "0f1ef935298612b06b1c2e71ee73023228221a296b509632d62447dc1b19e009",
     "ucrt64/share/qemu/bios-256k.bin": "ae6f6aa973aaccc143f57aa960fb035fd9de4daee4ad0cd713322f8c259e7650"
   },
-  "package_count": 160,
+  "resolution": {
+    "tool": "tools/msys2_lock.py lock",
+    "roots": [
+      "mingw-w64-ucrt-x86_64-qemu"
+    ],
+    "rules": "libalpm dependency semantics: a dependency is met by a selected package, else by the package of that name, else by its only provider; versioned dependencies use alpm vercmp; a package another repository package replaces and provides is never chosen; of two conflicting selected packages, the one the other provides is dropped, any other conflict stops; finally no two packages may install the same path",
+    "decisions": [
+      "mingw-w64-ucrt-x86_64-gettext -> mingw-w64-ucrt-x86_64-gettext-tools (provider)",
+      "mingw-w64-ucrt-x86_64-vulkan -> mingw-w64-ucrt-x86_64-vulkan-loader (provider)",
+      "mingw-w64-ucrt-x86_64-sqlite3 -> mingw-w64-ucrt-x86_64-sqlite (provider; mingw-w64-ucrt-x86_64-sqlite3 is replaced by mingw-w64-ucrt-x86_64-sqlite)"
+    ]
+  },
+  "package_count": 159,
   "packages": [
     {
       "name": "mingw-w64-ucrt-x86_64-SDL2",
@@ -424,7 +445,7 @@
       "sha256": "4e510fda4d64bcadf7d79d76f02f7080e016bf37759b0a5fe5b2e65553e49785",
       "license": "spdx:LGPL-2.1-or-later",
       "extract": false,
-      "extract_reason": "Data only (no executables or DLLs). Its 470 locale entries are symbolic links, which tar.exe cannot create without SeCreateSymbolicLinkPrivilege. Downloaded and hash-checked like every package, but not extracted."
+      "extract_reason": "Data only (no executables or DLLs). Its 470 locale entries are symbolic links, which the link policy refuses (no link is created on disk). Downloaded, hash-checked and validated like every package, but not extracted."
     },
     {
       "name": "mingw-w64-ucrt-x86_64-jack2",
@@ -522,7 +543,9 @@
       "version": "1.26-1",
       "filename": "mingw-w64-ucrt-x86_64-libdeflate-1.26-1-any.pkg.tar.zst",
       "sha256": "17720c77bd01641a3554801cafd71d96fb7fff7427f4cc20ac9f36efb8cb3da0",
-      "license": "spdx:MIT"
+      "license": "spdx:MIT",
+      "hardlinks": 1,
+      "link_policy": "materialise-as-copy"
     },
     {
       "name": "mingw-w64-ucrt-x86_64-libepoxy",
@@ -1064,13 +1087,6 @@
       "license": "PublicDomain"
     },
     {
-      "name": "mingw-w64-ucrt-x86_64-sqlite3",
-      "version": "3.54.1-1",
-      "filename": "mingw-w64-ucrt-x86_64-sqlite3-3.54.1-1-any.pkg.tar.zst",
-      "sha256": "78dd93bdcc858b051ccd695395284c4a3f4147d54b1d67f54bc85696f45a90c2",
-      "license": "PublicDomain"
-    },
-    {
       "name": "mingw-w64-ucrt-x86_64-svt-av1",
       "version": "4.3.0-1",
       "filename": "mingw-w64-ucrt-x86_64-svt-av1-4.3.0-1-any.pkg.tar.zst",
@@ -1089,7 +1105,9 @@
       "version": "8.6.18-1",
       "filename": "mingw-w64-ucrt-x86_64-tcl-8.6.18-1-any.pkg.tar.zst",
       "sha256": "0c3a50ea5be8c5190e58a1fdc46c09f8113ad1b855745875646b7a78a02215df",
-      "license": "custom"
+      "license": "custom",
+      "hardlinks": 593,
+      "link_policy": "materialise-as-copy"
     },
     {
       "name": "mingw-w64-ucrt-x86_64-termcap",
@@ -1103,7 +1121,9 @@
       "version": "8.6.18-1",
       "filename": "mingw-w64-ucrt-x86_64-tk-8.6.18-1-any.pkg.tar.zst",
       "sha256": "bfa011886032962833ddc93ae9b508798ec56625b9093cc6d0ff5c95507c79c6",
-      "license": "custom"
+      "license": "custom",
+      "hardlinks": 208,
+      "link_policy": "materialise-as-copy"
     },
     {
       "name": "mingw-w64-ucrt-x86_64-twolame",
@@ -1117,7 +1137,9 @@
       "version": "2026f-1",
       "filename": "mingw-w64-ucrt-x86_64-tzdata-2026f-1-any.pkg.tar.zst",
       "sha256": "dd8af2f770b3241d8c299343c12cd4d7e3b94c47195608158d28788a01575323",
-      "license": "custom: public domain"
+      "license": "custom: public domain",
+      "hardlinks": 760,
+      "link_policy": "materialise-as-copy"
     },
     {
       "name": "mingw-w64-ucrt-x86_64-usbredir",

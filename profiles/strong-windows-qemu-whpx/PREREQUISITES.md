@@ -68,71 +68,117 @@ then chooses another path, rather than elevating silently.
 ## A2: install QEMU 11.1.3, user-scoped (not elevated)
 
 Method: the MSYS2 `ucrt64` packages pinned in
-[`qemu-msys2-ucrt64.lock.json`](qemu-msys2-ucrt64.lock.json) (160 packages), each
-downloaded, checked against its pinned sha256, and extracted with Windows' built-in
-`tar.exe`. Nothing downloaded is executed during A2; no installer, no administrator
-rights, no registry, PATH or service change. Removal is deleting `$Prefix`.
+[`qemu-msys2-ucrt64.lock.json`](qemu-msys2-ucrt64.lock.json) (159 packages), installed
+by [`tools/msys2_lock.py`](../../tools/msys2_lock.py) `install` (standard-library
+Python). Windows' built-in `tar.exe` only decodes each archive to an uncompressed
+stream on stdout; the tool validates every entry and writes the files itself. Nothing
+downloaded is executed during A2: no installer, no `.INSTALL` script, no pacman hook,
+no administrator rights, no registry, PATH or service change. Removal is deleting
+`$Prefix`.
+
+The tool runs four phases and stops at the first finding:
+
+1. **fetch.** Each package missing from `$Dl` is downloaded from the lock's
+   `base_url` over HTTPS with redirects refused, hashed while it streams, and renamed
+   into place only when complete. A file already in `$Dl` is re-hashed in place and
+   never overwritten. Any sha256 that differs from the lock stops the install.
+2. **validate.** Before anything is written, every entry of every archive is listed
+   and checked (the lock's `extraction.entry_rules`): no absolute path, drive letter,
+   `..`, `.` or empty component, control or Windows-special character, reserved
+   device name or trailing dot or space; only regular files and directories;
+   installed paths under 250 characters. Links follow `extraction.link_policy`:
+   - **Symlinks are refused.** `iso-codes` (470 locale symlinks, data only) is marked
+     `"extract": false`: it is downloaded, hashed and validated, not extracted. A
+     symlink in any other package stops the install.
+   - **Hardlinks are materialised as regular-file copies** (Overseer decision on A2,
+     within the Owner's condition 3), and only after checking that the target is a
+     regular file earlier in the same package, that link and target are both under
+     `ucrt64/`, and that both resolve inside `$Prefix`. Each package's count must
+     match the lock's `hardlinks`: `libdeflate` 1, `tcl` 593, `tk` 208, `tzdata` 760.
+     No link is ever created on disk.
+
+   The whole resolved set must also pass the overlap check: no path, compared
+   case-insensitively, is installed by two packages (shared directories allowed).
+3. **extract.** `$Prefix` must not exist; the tool creates it (and only missing
+   parents) without `-Force` semantics. Each package except `iso-codes` is read again
+   and written entry by entry. Each entry must match its validated listing (name,
+   type, link target and order) and each file's bytes must hash to the validated
+   value. The members `.PKGINFO`, `.BUILDINFO`, `.MTREE` and `.INSTALL` are skipped.
+   Files are created exclusively, so nothing is overwritten.
+4. **verify.** Every installed file is compared with the manifest built in step 2
+   (sha256 and size, taken from the archives). The tool also checks the lock's
+   `extracted_files` pins, that no path is missing or extra, and that the tree holds
+   no reparse point and no file with more than one link.
 
 In an ordinary (not elevated) PowerShell 7 window:
 
 ```powershell
-$Repo   = 'D:\src\ai-engineering-harness'
-$State  = 'D:\aieh-guest-state'
+$Repo     = 'D:\src\ai-engineering-harness'
+$State    = 'D:\aieh-guest-state'
 $LockFile = "$Repo\profiles\strong-windows-qemu-whpx\qemu-msys2-ucrt64.lock.json"
-$Dl     = Join-Path $State 'downloads\msys2-ucrt64'
-$Prefix = Join-Path $State 'providers\qemu\msys2-ucrt64-11.1.3-1'
+$Dl       = Join-Path $State 'downloads\msys2-ucrt64'
+$Prefix   = Join-Path $State 'providers\qemu\msys2-ucrt64-11.1.3-1'
+$Report   = Join-Path $env:TEMP 'aieh-a2-report.json'
 
-# 1. The lock must be the pinned one.
+# 1. The lock must be the pinned one (profile.json provider.artifact_lock).
 (Get-FileHash $LockFile -Algorithm SHA256).Hash.ToLower()
 
-# 2. Download and check every package.
-$Lock = Get-Content $LockFile -Raw | ConvertFrom-Json
-New-Item -ItemType Directory -Force -Path $Dl, $Prefix | Out-Null
-$ProgressPreference = 'SilentlyContinue'
-$bad = 0
-foreach ($p in $Lock.packages) {
-  $file = Join-Path $Dl $p.filename
-  if (-not (Test-Path $file)) { Invoke-WebRequest -Uri ($Lock.repository.base_url + $p.filename) -OutFile $file }
-  if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLower() -ne $p.sha256) { "BAD $($p.filename)"; $bad++ }
-}
-"packages=$($Lock.packages.Count) bad=$bad"
+# 2. The install directory must not exist yet. If this prints True, stop.
+Test-Path $Prefix
 
-# 3. Extract, only if every package matched.
-if ($bad -eq 0) {
-  foreach ($p in $Lock.packages | Where-Object { $_.extract -ne $false }) {
-    & "$env:SystemRoot\System32\tar.exe" -xf (Join-Path $Dl $p.filename) -C $Prefix `
-      --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL
-    if ($LASTEXITCODE -ne 0) { "EXTRACT FAILED $($p.filename)"; $bad++ }
-  }
-  "extract failures=$bad"
-}
-
-# 4. The extracted provider files must match their pins.
-foreach ($f in $Lock.extracted_files.PSObject.Properties) {
-  '{0} {1}' -f ((Get-FileHash (Join-Path $Prefix $f.Name) -Algorithm SHA256).Hash.ToLower() -eq $f.Value), $f.Name
-}
+# 3. Install. Add --validate-only to stop after the validate phase.
+python -I -B "$Repo\tools\msys2_lock.py" install --lock $LockFile `
+  --lock-sha256 69e083362da92d413c56e687ac36300a8a51a913e7cae3c2126bcfb6e45df879 `
+  --downloads $Dl --prefix $Prefix --report $Report
 ```
 
 Expected:
 
 | Step | Output |
 |---|---|
-| 1 | `fc93531bc0225015e96c49130fe81ad9349df512990ae2719378401f4f43bb4b` |
-| 2 | `packages=160 bad=0` (about 270 MB downloaded) |
-| 3 | `extract failures=0` (159 packages extracted; `iso-codes` is checked but not extracted, see the lock) |
-| 4 | `True ucrt64/bin/qemu-system-x86_64.exe` (`d8d6aabc07aeaf8b4582269853933763f3e7d2cb651a703643308cf0ba763596`), `True ucrt64/bin/qemu-img.exe` (`0f1ef935298612b06b1c2e71ee73023228221a296b509632d62447dc1b19e009`), `True ucrt64/share/qemu/bios-256k.bin` (`ae6f6aa973aaccc143f57aa960fb035fd9de4daee4ad0cd713322f8c259e7650`) |
+| 1 | `69e083362da92d413c56e687ac36300a8a51a913e7cae3c2126bcfb6e45df879` |
+| 2 | `False` |
+| 3 | `fetch`: `"packages": 159`, `"bad": []`, 267,357,780 bytes |
+| 3 | `validate`: `"entries": 53966`, `"rejected": 470` (the `iso-codes` symlinks), the four hardlink counts above, `"overlaps": 0`, `"findings": []`, `"expected_files": 45742`, `"expected_dirs": 2577`, `"expected_bytes": 2598669728` |
+| 3 | `extract`: `"packages": 158`, `"failures": 0`, `"materialised_hardlinks"` equal to the four counts above |
+| 3 | `verify`: `"installed_files": 45742`, `"installed_bytes": 2598669728`, `"installed_dirs": 2577`; `missing`, `extra`, `missing_dirs`, `extra_dirs`, `mismatch`, `reparse_points`, `non_regular` and `multi_link_files` all 0 |
+| 3 | `True ucrt64/bin/qemu-system-x86_64.exe d8d6aabc07aeaf8b4582269853933763f3e7d2cb651a703643308cf0ba763596`, `True ucrt64/bin/qemu-img.exe 0f1ef935298612b06b1c2e71ee73023228221a296b509632d62447dc1b19e009`, `True ucrt64/share/qemu/bios-256k.bin ae6f6aa973aaccc143f57aa960fb035fd9de4daee4ad0cd713322f8c259e7650`, exit code 0 |
 
-Any `BAD`, `EXTRACT FAILED` or `False` line: stop and report; do not retry with other
-files.
+A `STOP:` line or a non-zero exit code: stop and report, with the report file. Do not
+retry with other files, and do not delete or overwrite anything to work around it.
 
-**Provenance already checked for this lock (F-03.2.1a, 2026-11-06 UTC).** The
-`ucrt64.db` repository database (sha256 `65ea9f22…d801`) carries a valid signature by
-`5F944B027F7FE2091985AA2EFA11531AA0AA7F57` (Christoph Reiter, MSYS2 development key),
-which three MSYS2 master keys certify. The fingerprints were taken from
-<https://www.msys2.org/dev/keyring/> and cross-checked with the `msys2-trusted` file in
-<https://github.com/msys2/MSYS2-keyring>. All 160 package files matched the database's
-sha256 and each carried a valid detached signature by the same key. The lock's sha256
-values are copied from that signed database.
+**How the lock is made.** `tools/msys2_lock.py lock` resolves the closure of
+`mingw-w64-ucrt-x86_64-qemu` from the signed `ucrt64.db` with libalpm's dependency
+semantics. It honours `depends` with versions, `provides`, `conflicts` and `replaces`:
+a package that another repository package replaces and provides is never chosen, and
+any conflict left in the set stops it. It checks every archive against the database
+sha256, applies the entry rules, link policy and overlap check, and writes the lock.
+The lock's `resolution` field records the roots and every provider decision. Run
+again with the lock as its own template, the command reproduces it byte for byte:
+
+```powershell
+python -I -B "$Repo\tools\msys2_lock.py" lock --db <verified ucrt64.db> `
+  --root mingw-w64-ucrt-x86_64-qemu --template $LockFile --downloads $Dl `
+  --out <new lock> --report <report>
+```
+
+**Provenance.** The `ucrt64.db` repository database (sha256 `65ea9f22…d801`) carries
+a valid signature by `5F944B027F7FE2091985AA2EFA11531AA0AA7F57` (Christoph Reiter,
+MSYS2 development key), which three MSYS2 master keys certify. The fingerprints were
+taken from <https://www.msys2.org/dev/keyring/> and cross-checked with the
+`msys2-trusted` file in <https://github.com/msys2/MSYS2-keyring> (F-03.2.1a, 2026-11-06
+UTC). All 160 package files of the first closure matched the database's sha256 and
+each carried a valid detached signature by the same key. The 159 now locked are
+among them. The signature was verified again for the re-resolution (2026-11-06 UTC,
+`VALIDSIG 5F944B02…7F57`, certified by `…CA25678A`, `…ACD22879` and `…1D3CFDDC`).
+The lock's sha256 values are copied from that signed database.
+
+**Correction (2026-11-06).** The first lock (sha256 `fc93531b…bb4b`, 160 packages)
+pinned both `sqlite` 3.54.1-2 and `sqlite3` 3.54.1-1. `sqlite` replaces, conflicts
+with and provides `sqlite3`, and the two install 130 of the same paths, 66 with
+different content. A2 stopped at entry validation before writing anything, and the
+lock was re-resolved as above. `sqlite3` is gone, `python` and `libsoup3` take
+`sqlite3` from `sqlite`, and nothing else changed.
 
 ## F-03.2.1b: provider configuration validation (after A1 to A3 are recorded)
 

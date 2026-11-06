@@ -6,7 +6,7 @@ Owner (decision 0003, W1). Files:
 | File | Holds |
 |---|---|
 | [`profile.json`](profile.json) | The declaration: labels, pins, ceilings, network, identity, lifecycle bindings and the QEMU command line. |
-| [`qemu-msys2-ucrt64.lock.json`](qemu-msys2-ucrt64.lock.json) | The QEMU artifact pin: 160 MSYS2 packages with sha256, their signing key and the extraction rule. |
+| [`qemu-msys2-ucrt64.lock.json`](qemu-msys2-ucrt64.lock.json) | The QEMU artifact pin: 159 MSYS2 packages with sha256, their signing key, how the closure was resolved, and the extraction and link policy. |
 | [`PREREQUISITES.md`](PREREQUISITES.md) | Owner acts A1, A2, A3 and the F-03.2.1b validation commands. |
 | [`../seed/`](../seed/README.md) | Seed templates shared with `strong-incus-vm`, and the seed generator specification. |
 
@@ -78,18 +78,20 @@ path is never trusted.
 | | MSYS2 `mingw-w64-ucrt-x86_64-qemu` | qemu.weilnetz.de installer | Scoop `main/qemu` | winget `SoftwareFreedomConservancy.QEMU` |
 |---|---|---|---|---|
 | Current release | **11.1.3-1** (QEMU's current stable is 11.1.3, download.qemu.org) | 11.1.0 (`qemu-w64-setup-20260811.exe`); "I typically only build installers based on the master branch, but not for bugfix releases" | 11.1.0: wraps the weilnetz installer | 11.1.0: wraps the weilnetz installer |
-| Checksum or signature | Signed repository database and a detached OpenPGP signature per package, by an MSYS2 developer key certified by three master keys. **Verified**: database signature good; 160/160 packages match the database sha256 and carry a valid signature. | `.sha512` beside the installer, served over HTTPS, unsigned. **Verified**: sha512 `5bcf9eed…16bf543` matches. Authenticode: the signing certificate (Universität Mannheim, GEANT Code Signing CA 4) expired 2023-12-09; `Get-AuthenticodeSignature` reports `UnknownError` ("not within its validity period"), so the signature does not verify. | sha512 in the manifest, equal to the weilnetz one | sha256 in the manifest, equal to the sha256 of the downloaded installer (`f98a8aeb…e59f`) |
+| Checksum or signature | Signed repository database and a detached OpenPGP signature per package, by an MSYS2 developer key certified by three master keys. **Verified**: database signature good; 160/160 packages of the first closure match the database sha256 and carry a valid signature; the 159 locked after the re-resolution (F-03.2.1 correction: `sqlite3` is replaced by `sqlite`) are among them. | `.sha512` beside the installer, served over HTTPS, unsigned. **Verified**: sha512 `5bcf9eed…16bf543` matches. Authenticode: the signing certificate (Universität Mannheim, GEANT Code Signing CA 4) expired 2023-12-09; `Get-AuthenticodeSignature` reports `UnknownError` ("not within its validity period"), so the signature does not verify. | sha512 in the manifest, equal to the weilnetz one | sha256 in the manifest, equal to the sha256 of the downloaded installer (`f98a8aeb…e59f`) |
 | Administrator rights | **No** | **Yes**: QEMU's `qemu.nsi` sets `RequestExecutionLevel admin`, installs to `$PROGRAMFILES64\qemu` and writes HKLM | No, but Scoop and its 7-Zip must be installed first | Yes: `Scope: machine`, `InstallerType: nullsoft` |
 | User-scoped or extract-only | **Yes**: plain `.pkg.tar.zst` archives, extracted by Windows' built-in `tar.exe` (bsdtar 3.8.9 with zstd); no MSYS2 or pacman install needed | Only by extracting the NSIS installer with 7-Zip, which is not on this host | Yes (7-Zip extraction into the user's Scoop directory) | No |
 | WHPX in the build | **Yes**: the package's `msys2.readme.txt` documents `-accel whpx`; the pinned binary contains the WHPX accelerator's messages, including `WHPX: No accelerator found` | Yes, documented as experimental in the weilnetz FAQ ("enabled with `--accel whpx`") | as weilnetz | as weilnetz |
 | Licence | QEMU: GPL-2.0 (its `LICENSE`); package metadata `GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-2-Clause AND BSD-3-Clause AND MIT`; dependencies under their own licences, listed per package in the lock | GPL-2.0 | GPL-2.0-only (manifest) | as weilnetz (same installer) |
 
-**Recommended: MSYS2 ucrt64, QEMU 11.1.3-1**, extracted by `tar.exe` into the A3
-directory. It is the only channel that is current, cryptographically signed end to
+**Recommended: MSYS2 ucrt64, QEMU 11.1.3-1**, installed into the A3 directory by
+`tools/msys2_lock.py` (the built-in `tar.exe` decodes the archives, the tool writes
+the files). It is the only channel that is current, cryptographically signed end to
 end, and installable without administrator rights or any new tool. Its cost is size:
-160 packages (about 270 MB compressed), because QEMU links its GTK, SDL, SPICE and
-GStreamer front ends even when `-display none` is used. The `iso-codes` package is
-checked but not extracted: its 470 entries are symbolic links, which `tar.exe` cannot
-create without `SeCreateSymbolicLinkPrivilege`, and it holds data only. pacman's
-post-install hooks (GTK, GIO, fontconfig and gdk-pixbuf caches) do not run; a
-`-display none` guest does not use them.
+159 packages (about 267 MB compressed), because QEMU links its GTK, SDL, SPICE and
+GStreamer front ends even when `-display none` is used. No link is created on disk.
+The `iso-codes` package is checked but not extracted: its 470 entries are symbolic
+links, which the link policy refuses, and it holds data only. The hardlinks in
+`libdeflate`, `tcl`, `tk` and `tzdata` (1,562) are written as copies of their
+in-package targets. pacman's post-install hooks (GTK, GIO, fontconfig and gdk-pixbuf
+caches) do not run; a `-display none` guest does not use them.
