@@ -1,0 +1,147 @@
+{
+  "schema": "ai-engineering-harness/profiles/properties/v1",
+  "source": "profiles/README.md",
+  "plan_leaf": "F-03.1",
+  "decision": "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+  "citation_prefix": "profiles",
+  "tiers": [
+    {
+      "id": "strong",
+      "boundary": "Separate guest kernel; provider-enforced ceilings; no shares beyond the allowlist; network enforced outside the guest; provider not controllable from inside.",
+      "blueprint_profiles": ["Standard autonomous", "Elevated isolation"]
+    },
+    {
+      "id": "trusted-workload",
+      "boundary": "Shared kernel (host, or the shared WSL utility VM). Not VM-grade; runs only when named explicitly, with a disclosure.",
+      "blueprint_profiles": ["Trusted fast path"]
+    }
+  ],
+  "lifecycle": {
+    "operations": [
+      "preflight",
+      "create",
+      "start",
+      "stop",
+      "destroy",
+      "recreate",
+      "inspect",
+      "exec",
+      "exchange push",
+      "exchange pull"
+    ],
+    "modes": ["shared", "fresh"],
+    "agent_visible_operations": [],
+    "notes": {
+      "create": "Refuses if the instance name exists.",
+      "stop": "Graceful, then forced after stop_timeout_s (default 120, maximum 300).",
+      "destroy": "Idempotent; removes only the instance and its storage.",
+      "exec": "Operator and provisioning only; never offered to agents.",
+      "snapshot_restore": "Not part of the lifecycle."
+    }
+  },
+  "refusal_codes": ["TIER_UNAVAILABLE"],
+  "endpoint_classes": ["management", "exchange", "inference", "provision"],
+  "artifact_labels": {
+    "tier": ["strong", "trusted-workload"],
+    "provider": "string, for example incus-vm, incus-container, qemu-whpx, lima-vz, lima-qemu, wsl2-distro",
+    "nesting": ["none", "nested"]
+  },
+  "properties": [
+    {
+      "id": "P1",
+      "name": "Separate kernel",
+      "strong": "The guest runs its own kernel under a hypervisor.",
+      "trusted_workload": "Kernel shared with the host (Incus container) or with the WSL utility VM.",
+      "inspection": "Provider type from a provider query; compare uname -r inside the guest with the host (or the Owner's WSL kernel).",
+      "tested_by": ["F-03.2.2", "F-03.4"]
+    },
+    {
+      "id": "P2",
+      "name": "Provider-enforced ceilings",
+      "strong": "vCPU, memory, root and scratch disk set outside the guest: Incus limits.cpu, limits.memory, root size; QEMU -smp, -m, image virtual size; Lima cpus, memory, disk. These are the outer caps for decision 0001's per-conversation overrides; Moby caps (F-04.1) sit inside them.",
+      "trusted_workload": "Incus container: cgroup limits. WSL: VM-wide, shared with every distribution, observed only.",
+      "inspection": "Provider query; inside: nproc equals declared vCPU, MemTotal between 85% and 100% of declared memory, lsblk -b shows declared root and scratch sizes.",
+      "tested_by": ["F-03.2.1", "F-03.2.2"]
+    },
+    {
+      "id": "P3",
+      "name": "No automatic host shares",
+      "strong": "No provider share except the single allowlisted exchange directory, if declared; none for the Windows QEMU profile.",
+      "trusted_workload": "Same allowlist; WSL automount and mountFsTab disabled in the distribution's own wsl.conf.",
+      "inspection": "findmnt -t 9p,virtiofs,drvfs,fuse.sshfs,cifs,nfs,smb3 shows nothing beyond the allowlist; /mnt/c absent; full findmnt -J compared with the declared mount table.",
+      "tested_by": ["F-03.3.1", "S-02.1", "S-02.2"]
+    },
+    {
+      "id": "P4",
+      "name": "Repository exchange and scratch only",
+      "strong": "Exchange is guest-owned storage populated over the management channel (git over SSH on a loopback forward, or incus file push); a provider share only as one explicit allowlisted directory outside the Owner's profile; scratch is a second guest disk. The Windows QEMU profile uses no host filesystem share.",
+      "trusted_workload": "Same model; the WSL exchange lives inside the dedicated distribution's filesystem, never under /mnt.",
+      "inspection": "Provider device list shows only root and scratch (plus the allowlisted share, if any); findmnt shows exchange and scratch at their declared mount points.",
+      "tested_by": ["F-03.3.1", "S-02.1", "S-02.2"]
+    },
+    {
+      "id": "P5",
+      "name": "No Owner secrets",
+      "strong": "Launch environment scrubbed to an allowlist; seed and cloud-init hold only the per-instance public key and non-secret config. Allowed and labelled: per-instance guest-local SSH keypair and OH_SECRET_KEY. Provider and LLM credentials only behind the brokered inference endpoint class.",
+      "trusted_workload": "Same rule.",
+      "inspection": "Scan pid 1 environment, the agent login shell environment, home directories and /etc for Owner-class patterns, with a planted positive control per class.",
+      "tested_by": ["F-03.3.1", "S-02.1", "S-02.2"]
+    },
+    {
+      "id": "P6",
+      "name": "No host-management sockets or interop",
+      "strong": "No docker, podman, incus or libvirt socket from the host; no X11 or WSLg sockets; any provider agent channel (incus-agent, QEMU guest agent) declared and host-to-guest only.",
+      "trusted_workload": "WSL: interop.enabled=false and appendWindowsPath=false in the distribution's wsl.conf; WSLg is VM-wide, observed and disclosed, never written.",
+      "inspection": "find / -xdev -type s and ss -xl against the declared agent channel; no DOCKER_HOST, host docker.sock, /tmp/.X11-unix or /mnt/wslg; for WSL, launching a Windows .exe fails.",
+      "tested_by": ["F-03.3.1", "S-02.1", "S-02.2"]
+    },
+    {
+      "id": "P7",
+      "name": "Network posture",
+      "strong": "NAT or managed bridge, never bridged onto the Owner's LAN; inbound only via explicit forwards bound to host 127.0.0.1; guest-to-host denied except the enumerated endpoint classes management, exchange, inference, provision (provision may be phase-limited); egress allowlist enforced outside the guest at a named enforcement point (candidates: Incus bridge ACLs; QEMU SLIRP restrict=on with guestfwd to a host-side allowlisting proxy); denial holds from inside a container in the guest; IPv6 off unless listed.",
+      "trusted_workload": "WSL networkingMode is VM-wide and observed only; no enforcement outside the distribution; network namespace shared with the Owner's distributions; disclosed.",
+      "inspection": "Connection attempts to the host gateway and other host addresses fail from the guest and from a container in it; positive control to an allowlisted endpoint succeeds; ip route, ip addr and ip -6 addr recorded.",
+      "tested_by": ["F-03.3.2", "S-02.1", "S-02.2"]
+    },
+    {
+      "id": "P8",
+      "name": "Identity",
+      "strong": "Unique instance name; machine-id and SSH host keys regenerated at create; guest user agent, non-root, no sudo by default; root SSH disabled; per-instance key in the harness state directory, never ~/.ssh; host-side provider principal recorded and disclosed (a kernel boundary, not a principal boundary).",
+      "trusted_workload": "Same rules inside the distribution or container.",
+      "inspection": "machine-id and host-key fingerprints differ across instances and recreate; id agent shows no sudo; sshd -T shows permitrootlogin no; provider query names the host principal.",
+      "tested_by": ["F-03.2.1", "F-03.2.2"]
+    },
+    {
+      "id": "P9",
+      "name": "Pinned boot inputs",
+      "strong": "Image URL and sha256, firmware, kernel/initrd if direct boot, seed digest, provider binary version and profile git revision are pinned; the provider reports the digest it booted.",
+      "trusted_workload": "WSL imports a pinned tar by sha256.",
+      "inspection": "Launch record lists each input with its digest; a mismatch refuses the launch.",
+      "tested_by": ["F-03.2.1", "F-03.2.2"]
+    },
+    {
+      "id": "P10",
+      "name": "Disposability",
+      "strong": "destroy removes the instance and its storage and nothing else; recreate reproduces the same observed state; the Owner's data roots are untouched.",
+      "trusted_workload": "Same; WSL destroy is wsl --unregister of the dedicated name only.",
+      "inspection": "Owner data-root inventory before and after; inspect records compared across recreate.",
+      "tested_by": ["F-03.4"]
+    },
+    {
+      "id": "P11",
+      "name": "Tier label",
+      "strong": "Every artifact carries tier, provider and nesting.",
+      "trusted_workload": "Same.",
+      "inspection": "Schema check of every artifact.",
+      "tested_by": ["F-03.2.1", "F-03.2.2", "F-03.3.1", "F-03.3.2", "F-03.4"]
+    },
+    {
+      "id": "P12",
+      "name": "Virtualization extensions",
+      "strong": "The guest never relies on them; exposure declared as nested_virt_exposed; strong profiles should mask them (for example Incus security.nesting=false); mask or declare is decided by F-03.2.1.",
+      "trusted_workload": "Observed and declared only; WSL nestedVirtualization is VM-wide and never written.",
+      "inspection": "grep -c -E 'vmx|svm' /proc/cpuinfo inside the guest, compared with nested_virt_exposed.",
+      "tested_by": ["F-03.2.1", "F-03.2.2"]
+    }
+  ]
+}

@@ -167,6 +167,7 @@ Directories exist only when they hold real content.
 | `composition/` | Component lock, compatibility matrix, resolver, licence/inventory ledger and generated inventory | F-01.1, F-01.2 |
 | `decisions/` | Accepted decision records | Overseer |
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
+| `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
 | `tools/` | `verify_seed.py`, `check_prereqs.py` and their `tests/` | seed, F-02 |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, this guide | seed, F-02 |
@@ -178,7 +179,6 @@ external (pinned in `composition/`) unless adaptation is necessary.
 | Concern | Planned home | Filled first by |
 |---|---|---|
 | Configuration (Agent Server and service configuration) | `config/` | F-04.1 |
-| Platform and execution profiles (guest VM, mounts, network) | `profiles/` | F-03.1, F-03.2.1, F-03.3.x; per-OS packaging in R-03.x |
 | Integrations (Integration Service adapters and schemas) | `integrations/` | F-05.1, then P-02.1 and E-01.x |
 | Policy (principals, permissions, controls) | `policy/` | S-01.1, S-01.2.1, G-01.1 |
 | Agent and Skill catalog | `catalog/` | A-01.1, E-03.1 |
