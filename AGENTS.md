@@ -88,14 +88,15 @@ unless adaptation is necessary.
   Check a tier with `python -I -B tools/check_prereqs.py --tier basic` (or
   `components`, `inventory`); it exits 0 when the tier is met. Use `python3`
   instead of `python` outside Windows.
-- Setup and verification (offline, seconds): `task setup`, or the four commands
-  it wraps:
+- Setup and verification (offline, seconds): `task setup`, or the commands it
+  wraps:
 
   ```
   python -I -B tools/check_prereqs.py --tier basic
   python -I tools/verify_seed.py
   python -I tools/verify_seed.py --baseline seed
   python -I -B -m unittest discover -s tools/tests -v
+  python -I -B -m unittest discover -s integrations/store/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the
@@ -108,9 +109,11 @@ unless adaptation is necessary.
 
 - Keep each change focused on the requested task and consistent with the
   existing patterns. Do not make unrelated changes.
-- Add or update tests for tool changes (stdlib `unittest`, in `tools/tests/`).
-  Run the checks relevant to the change; at least `verify_seed.py` and the tool
-  tests before you finish.
+- Add or update tests with every code change (stdlib `unittest`). Tests live
+  beside the code they test: `tools/tests/` for tools,
+  `integrations/<component>/tests/` for integrations. Run the checks relevant to
+  the change; at least `verify_seed.py` and the tests (`task test`) before you
+  finish.
 - Report what you changed, each check you ran with its result, and what remains
   unverified. Do not claim a check you did not run.
 - Integrity-tracked files (the blueprint, the plan and its projections,
