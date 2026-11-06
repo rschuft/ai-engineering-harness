@@ -118,6 +118,28 @@ these conditions, without approval for each routine boot:
 Any expansion of host access, network permissions or VM privileges, or execution of untrusted workloads,
 needs separate authorization.
 
+## Owner authorization: network validation (2026-11-06)
+The Owner authorized both F-03.3.2 network validation tests, repeatable under the guest-validation
+conditions above, with these further constraints:
+1. Guest-root testing only inside disposable test VMs. It may configure guest routes and interfaces, but must
+   not modify the Windows host, WSL2, the host firewall or the persistent VM profile.
+2. Prove outbound denial even when guest root establishes a default route. Test IPv4, IPv6, DNS and
+   direct-IP paths. Do not rely solely on the guest's lack of a default route.
+3. A temporary QEMU guestfwd only to a purpose-built test listener bound to 127.0.0.1, on an ephemeral port.
+4. The test listener exposes no credentials, files, repositories, management interfaces or existing host
+   services. It only exchanges a recognizable test payload.
+5. Positive and negative controls: the authorized test connection succeeds, while unrelated destinations
+   remain inaccessible, including other host-loopback services.
+6. No general host networking, unrestricted outbound access, host-folder sharing, elevated privileges or
+   persistent firewall exceptions.
+7. Capture the effective QEMU configuration and the observed network results. If isolation cannot be
+   demonstrated, report failure rather than weakening the profile.
+8. After each cycle, destroy disposable guests, terminate the temporary listener, remove temporary
+   credentials, and verify cleanup.
+
+Broader guest-to-host access, production network connectivity, or a change to the approved isolation
+profile needs separate authorization.
+
 ## Owner selection (2026-11-06)
 The Owner selected **W1**: QEMU with the Windows Hypervisor Platform (WHPX) is the
 reference Windows provider for the strong tier. The selection carries these binding
