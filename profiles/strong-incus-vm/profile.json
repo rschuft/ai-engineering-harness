@@ -1,0 +1,227 @@
+{
+  "schema": "ai-engineering-harness/profiles/profile/v1",
+  "name": "strong-incus-vm",
+  "plan_leaf": "F-03.2.1",
+  "contract": "profiles/README.md",
+  "decision": "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+  "labels": {
+    "tier": "strong",
+    "provider": "incus-vm",
+    "nesting": "none"
+  },
+  "status": {
+    "operational": false,
+    "operational_gate": "C6: not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass, cited by property id.",
+    "provider_validation": "UNKNOWN: no Incus server, local or remote, is available. Validation (contract section 10): the server accepts the profile and 'incus config show --expanded' round-trips it.",
+    "schema_check": "tools/check_profile.py"
+  },
+  "host": {
+    "os": "linux",
+    "arch": "x86_64",
+    "targets": ["local", "a named remote (contract section 8)"],
+    "requirements": "/dev/kvm on the Incus server; kernel >= 6.12 and QEMU >= 8.2 (Incus requirements); a dedicated project 'aieh', storage pool 'aieh-pool' and managed NAT bridge 'aieh-br0'.",
+    "host_principal": "The Incus daemon's own OS user on the server (root-run daemon, VMs under its unprivileged QEMU user); for a remote, never the Owner's account. Recorded by preflight."
+  },
+  "provider": {
+    "name": "incus",
+    "version": "7.0.2",
+    "series": "7.0 LTS (supported until June 2031, linuxcontainers.org news)",
+    "version_check": "preflight reads environment.server_version from the server API and refuses any other version (contract section 10).",
+    "binaries": {
+      "incus": {
+        "path": "incus (client on the operator host)",
+        "sha256": null,
+        "pin_status": "unknown",
+        "unpinned_reason": "Distribution-packaged; no host is available to read the installed binary. Pinned by version; the digest is recorded at preflight."
+      }
+    },
+    "remote_record": "Every record names the remote's hostname and server certificate fingerprint (contract section 8)."
+  },
+  "accelerator": {
+    "name": "kvm",
+    "fallback": "none",
+    "on_unavailable": "TIER_UNAVAILABLE",
+    "reason": "Incus runs VMs on KVM only; a server without /dev/kvm offers containers (trusted-workload), which this profile never substitutes (contract sections 4 and 12)."
+  },
+  "state_dir": {
+    "default": null,
+    "proposed": null,
+    "owner_act": "named by the Owner on the operator host (contract section 11)",
+    "rules": "Holds the remote client key and launch records: outside the checkout, outside $HOME and %USERPROFILE%. Instance storage lives in the server's 'aieh-pool'.",
+    "layout": {
+      "remote_client_key": "{state_dir}/incus/client.key",
+      "launch_records": "{state_dir}/instances/{instance}/launch.json"
+    }
+  },
+  "provider_files": {
+    "incus_profile": {
+      "path": "profiles/strong-incus-vm/incus-profile.yaml",
+      "sha256": "c2e04df4dae459d4fe51875b362480325578db9fb8189eedbe642626d6c56127"
+    },
+    "vendor_data": {
+      "path": "profiles/strong-incus-vm/vendor-data.yaml",
+      "sha256": "159d136f370a625a74e830ad196fe77dc1a1d7bb6a38a5f913d791c5b39e2abf"
+    }
+  },
+  "boot_inputs": {
+    "image": {
+      "kind": "disk-image",
+      "format": "qcow2 (Incus split image: metadata tarball + qcow2 disk)",
+      "distribution": "Debian 13 (trixie) genericcloud amd64, build 20261103-2651: the same file as strong-windows-qemu-whpx",
+      "url": "https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2",
+      "sha512": "d25999de0770d4cde1be72c299ba3ad94eac7ea8fd4d18f8cc86c69df69337e2e8a91d64465a9bfd8f2a78c566fcbcb0842eacc91c09efdef72d719d9f13b535",
+      "sha256": "de9d63f5e5ec5927d7548bc05b6043b87457b8c1cb9bcb95365168e8d0293b4f",
+      "metadata": {
+        "path": "profiles/strong-incus-vm/image-metadata.yaml",
+        "sha256": "0a902cf72efa7c70aa0f839d47ec3ac2b9b0ceec67e3fa6bf431ca421af16f5d",
+        "tarball": "metadata.yaml alone in an uncompressed ustar archive: owner 0:0, mode 0644, mtime 0."
+      },
+      "import": "incus image import <metadata.tar> <image.qcow2> --project aieh --alias aieh-debian-13-20261103-2651",
+      "incus_fingerprint": {
+        "sha256": null,
+        "pin_status": "unknown",
+        "unpinned_reason": "Computed by the Incus server at import; recorded at preflight and then required on every launch."
+      },
+      "check_before_launch": "The image is launched by its Incus fingerprint, never by alias; the provider reports the fingerprint it booted (profiles P9)."
+    },
+    "firmware": {
+      "kind": "firmware",
+      "type": "UEFI (edk2/OVMF shipped with the Incus server), secure boot on",
+      "sha256": null,
+      "pin_status": "unknown",
+      "unpinned_reason": "Supplied by the Incus server's packaging; no server is available. The firmware file digests are recorded at preflight."
+    },
+    "kernel": {
+      "kind": "direct-kernel-boot",
+      "used": false,
+      "reason": "The image's own shim, bootloader and kernel boot; they are covered by the image digest."
+    },
+    "seed": {
+      "kind": "nocloud-seed",
+      "per_instance": true,
+      "templates": {
+        "user-data": {
+          "path": "profiles/seed/user-data.tmpl",
+          "sha256": "e7c0b9f4ce0b2a6f3cca5ba6422cd866705e5c527b83d442ae9fb7c7e83c85ac"
+        },
+        "meta-data": {
+          "path": "profiles/seed/meta-data.tmpl",
+          "sha256": "257768cc2ef8363fbcb62234346edff07c3dba4c2e7f12892425dae7d778ab19"
+        },
+        "network-config": {
+          "path": "profiles/seed/network-config.yaml",
+          "sha256": "7e0dca5f39e239d2c0878033c07f60872557c3560f99a7864629948df1ec7a7d"
+        },
+        "vendor-data": {
+          "path": "profiles/strong-incus-vm/vendor-data.yaml",
+          "sha256": "159d136f370a625a74e830ad196fe77dc1a1d7bb6a38a5f913d791c5b39e2abf"
+        }
+      },
+      "substitutions": {
+        "scratch_device": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_incus_scratch"
+      },
+      "delivery": "Instance keys cloud-init.user-data, cloud-init.vendor-data and cloud-init.network-config, attached by Incus as the cloud-init:config ISO. meta-data comes from Incus itself (instance name).",
+      "record_at_create": "The rendered user-data's sha256 in the launch record. The ISO is generated by Incus, so its digest is observed, not pinned. The scratch device path is UNKNOWN until an Incus server shows it."
+    },
+    "provider_binary": {
+      "kind": "provider-binary",
+      "ref": "provider.binaries.incus",
+      "version": "7.0.2",
+      "sha256": null,
+      "pin_status": "unknown",
+      "unpinned_reason": "Pinned by version (contract P9: 'the provider binary version'); the digest is recorded at preflight."
+    },
+    "profile_revision": {
+      "kind": "git-revision",
+      "record_at_create": "git rev-parse HEAD of the checkout; create refuses when profiles/ has uncommitted changes."
+    }
+  },
+  "ceilings": {
+    "vcpu": 8,
+    "memory_mib": 16384,
+    "root_disk_gib": 40,
+    "scratch_disk_gib": 120,
+    "justification": "The same ceilings as strong-windows-qemu-whpx, so an instance's observed state is comparable across providers. A remote server's own capacity is unknown; its project quotas (contract section 8) must admit at least one instance at these ceilings."
+  },
+  "nested_virt_exposed": false,
+  "nested_virt_masking": "security.nesting=false: on a VM it turns off the svm and vmx CPU flags (Incus instance options; the VM default is true).",
+  "guest_agent": {
+    "used": true,
+    "channel": "incus-agent over vsock, host-to-guest only (profiles P6); installed at first boot from the read-only agent:config CD-ROM by vendor-data.",
+    "status": "UNKNOWN: no Incus server."
+  },
+  "host_shares": [],
+  "provider_implicit_shares": [
+    {
+      "name": "config",
+      "type": "9p",
+      "source": "Incus documentation (howto/instances_create): 'Incus provides the agent primarily through a remote 9p file system with mount name config.'",
+      "status": "UNKNOWN whether it is still attached when agent:config is used. Nothing in this profile mounts it; F-03.3.1 inspects the device list and findmnt (profiles P3).",
+      "contract_finding": "Contract P3/P4 and section 6 allow only root and scratch disk devices for Incus. A Debian cloud image needs the cloud-init:config ISO for its seed and agent:config (or this 9p share) for the agent. Reported to the Overseer; not resolved here."
+    }
+  ],
+  "storage": {
+    "root": "profile device 'root': pool aieh-pool, size 40GiB",
+    "scratch": "per-instance block volume created at create: incus storage volume create aieh-pool {instance}-scratch --type=block size=120GiB, attached as device 'scratch' (pool=aieh-pool, source={instance}-scratch); deleted by destroy."
+  },
+  "network": {
+    "mode": "managed NAT bridge aieh-br0 in project aieh",
+    "posture": "NAT, never bridged onto the Owner's LAN. Bridge settings (F-03.3.2): ipv4.nat=true, ipv6.address=none, and network ACLs as the egress allowlist.",
+    "ipv6": false,
+    "enforcement_point": "Incus bridge network ACLs: candidate; qualified by F-03.3.2, including the baseline DHCP/DNS caveat.",
+    "endpoints": [
+      {
+        "class": "management",
+        "purpose": "Incus API (lifecycle, inspect) and incus-agent (exec, file push)",
+        "direction": "host-to-guest",
+        "mechanism": "Incus API on the server; agent over vsock",
+        "protocol": "https / vsock",
+        "host_bind": "local unix socket, or the remote's core.https_address reached only over an authenticated path (contract section 8)"
+      },
+      {
+        "class": "exchange",
+        "purpose": "git bundle transfer",
+        "direction": "host-to-guest",
+        "mechanism": "incus file push / incus file pull",
+        "protocol": "Incus API"
+      },
+      {
+        "class": "inference",
+        "status": "deferred to F-03.3.2",
+        "mechanism": "bridge ACL allow to a brokered endpoint",
+        "host_bind": null
+      },
+      {
+        "class": "provision",
+        "status": "deferred to F-03.3.2; phase-limited",
+        "mechanism": "bridge ACL allow to an allowlisting proxy",
+        "host_bind": null
+      }
+    ]
+  },
+  "identity": {
+    "instance_name_pattern": "^[a-z][a-z0-9-]{1,40}$",
+    "guest_user": "agent",
+    "sudo": false,
+    "root_ssh_login": false,
+    "ssh_key": "ed25519, generated at create into {state_dir}/instances/{instance}/ssh/; its public half goes into the rendered user-data. Never ~/.ssh.",
+    "machine_id": "Generated by the guest's systemd at first boot; uniqueness observed when a server is available."
+  },
+  "lifecycle": {
+    "operations": ["preflight", "create", "start", "stop", "destroy", "recreate", "inspect", "exec", "exchange push", "exchange pull"],
+    "modes": ["shared", "fresh"],
+    "stop_timeout_s": 120,
+    "bindings": {
+      "preflight": "incus version and the server API environment (server_version, kernel_version, driver_version for qemu) against the floors; the project, pool and bridge exist; the image fingerprint is present; for a remote, record its hostname and certificate fingerprint.",
+      "create": "Refuse if 'incus info {instance}' finds it. Create the scratch volume; incus init <fingerprint> {instance} --vm --profile strong-incus-vm --project aieh -c cloud-init.user-data=... -c cloud-init.vendor-data=... -c cloud-init.network-config=...; attach scratch; incus start.",
+      "start": "incus start {instance}",
+      "stop": "incus stop {instance} --timeout 120, then incus stop {instance} --force",
+      "destroy": "incus delete {instance} --force, then incus storage volume delete aieh-pool {instance}-scratch. Absent: succeed and report absent.",
+      "recreate": "destroy, then create with the same name and profile.",
+      "inspect": "incus config show {instance} --expanded, incus info {instance}, incus config device show {instance}; guest probes through incus exec per profiles P1-P12; labelled per profiles P11.",
+      "exec": "incus exec {instance} -- <command>. Operator and provisioning only; never offered to agents.",
+      "exchange push": "incus file push of a git bundle into /home/agent/exchange.",
+      "exchange pull": "incus file pull into a harness-owned staging directory; never into the Owner's repositories."
+    }
+  }
+}

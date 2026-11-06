@@ -1,0 +1,9 @@
+architecture: x86_64
+creation_date: 1793711965
+properties:
+  os: debian
+  release: trixie
+  variant: genericcloud
+  architecture: amd64
+  serial: "20261103-2651"
+  description: Debian 13 genericcloud amd64 20261103-2651

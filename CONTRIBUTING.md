@@ -119,6 +119,7 @@ Only what is listed as verified has been exercised.
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
 | `test` | `python -I -B -m unittest discover -s tools/tests -v` | no | Tool tests (stdlib `unittest`). |
+| `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
 | `resolve WORK=<dir>` | `python -I composition/resolve.py --work <dir>` | yes | Component lock resolution and host install; see [`composition/lock/README.md`](composition/lock/README.md). `<dir>` must be empty or absent and outside the checkout. |
 | `inventory RESOLVED=<work> OUT=<file>` | `python -I composition/inventory/metadata_inventory.py --resolved <work> --out <file>` | yes | Component metadata inventory (declared licences). |
 | `sbom RESOLVED=<work> TOOLS=<dir> OUT=<dir> [-- --skip-oci]` | `python -I composition/inventory/scan.py --resolved <work> --tools <dir> --out <dir> [--skip-oci]` | yes | Syft SBOMs and Grant licence findings. Windows x86_64 only. Without `--skip-oci` it downloads the image layers of four OCI images. |

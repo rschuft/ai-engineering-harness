@@ -71,6 +71,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
 
+  profile:check:
+    desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_profile.py {{.CLI_ARGS}}'
+
   resolve:
     desc: Resolve and verify the component lock (python -I composition/resolve.py --work WORK); WORK must be empty or absent and outside the checkout
     requires:

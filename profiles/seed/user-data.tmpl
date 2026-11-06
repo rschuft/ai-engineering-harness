@@ -1,0 +1,41 @@
+#cloud-config
+# Seed template for strong-tier execution guests (profiles P5, P8). It holds only
+# the per-instance public key and non-secret configuration. The generator
+# substitutes {{agent_ssh_public_key}} and the profile's {{scratch_device}}, nothing else.
+users:
+  - name: agent
+    gecos: AI Engineering Harness agent
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{agent_ssh_public_key}}
+disable_root: true
+ssh_pwauth: false
+ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]
+package_update: false
+package_upgrade: false
+timezone: Etc/UTC
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-aieh.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AllowUsers agent
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      X11Forwarding no
+      PermitTunnel no
+fs_setup:
+  - label: scratch
+    filesystem: ext4
+    device: {{scratch_device}}
+    partition: none
+mounts:
+  - [LABEL=scratch, /srv/scratch, ext4, "defaults,nofail", "0", "2"]
+runcmd:
+  - [install, -d, -o, agent, -g, agent, -m, "0750", /srv/scratch/agent]
+  - [install, -d, -o, agent, -g, agent, -m, "0750", /home/agent/exchange]

@@ -1,0 +1,39 @@
+# Incus profile for strong-incus-vm (plan leaf F-03.2.1). Written in YAML's
+# JSON-compatible flow style so tools/check_profile.py reads it with the Python
+# standard library; Incus reads it as ordinary YAML:
+#   incus profile create strong-incus-vm --project aieh
+#   incus profile edit strong-incus-vm --project aieh < incus-profile.yaml
+# One profile for every target: the local server and a named remote (contract
+# sections 6 and 8). Per-instance values (seed, scratch volume) are added at create.
+{
+  "description": "AI Engineering Harness strong tier: Incus VM, no host shares, provider-enforced ceilings",
+  "config": {
+    "limits.cpu": "8",
+    "limits.memory": "16GiB",
+    "security.nesting": "false",
+    "security.secureboot": "true",
+    "security.csm": "false",
+    "migration.stateful": "false"
+  },
+  "devices": {
+    "root": {
+      "type": "disk",
+      "path": "/",
+      "pool": "aieh-pool",
+      "size": "40GiB"
+    },
+    "eth0": {
+      "type": "nic",
+      "network": "aieh-br0",
+      "name": "eth0"
+    },
+    "cloud-init": {
+      "type": "disk",
+      "source": "cloud-init:config"
+    },
+    "agent": {
+      "type": "disk",
+      "source": "agent:config"
+    }
+  }
+}

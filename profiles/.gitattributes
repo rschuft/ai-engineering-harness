@@ -1,0 +1,5 @@
+# Profile declarations, seed templates and provider locks are pinned by sha256
+# (profiles P9). Store and check them out byte-for-byte, independent of a host's
+# core.autocrlf, so a digest computed on one clone holds on every clone.
+/seed/**        -text
+/strong-*/**    -text

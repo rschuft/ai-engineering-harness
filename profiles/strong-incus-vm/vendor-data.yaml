@@ -1,0 +1,6 @@
+#cloud-config
+# Incus-only vendor data (plan leaf F-03.2.1): installs the Incus agent from the
+# read-only agent:config CD-ROM, as the Incus documentation describes for images
+# that do not ship it. The agent is the declared host-to-guest channel (profiles P6).
+runcmd:
+  - [sh, -c, "mount -o ro /dev/disk/by-label/incus-agent /mnt && cd /mnt && ./install.sh; cd /; umount /mnt"]

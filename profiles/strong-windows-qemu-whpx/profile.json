@@ -1,0 +1,280 @@
+{
+  "schema": "ai-engineering-harness/profiles/profile/v1",
+  "name": "strong-windows-qemu-whpx",
+  "plan_leaf": "F-03.2.1",
+  "contract": "profiles/README.md",
+  "decision": "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+  "labels": {
+    "tier": "strong",
+    "provider": "qemu-whpx",
+    "nesting": "none"
+  },
+  "status": {
+    "operational": false,
+    "operational_gate": "C6: not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass, cited by property id.",
+    "provider_validation": "UNKNOWN: runs in F-03.2.1b after the Owner acts A1, A2 and A3 (PREREQUISITES.md).",
+    "schema_check": "tools/check_profile.py"
+  },
+  "host": {
+    "os": "windows",
+    "os_floor": "Windows 11 (contract section 12: Windows 10 unsupported)",
+    "arch": "x86_64",
+    "owner_acts": ["A1", "A2", "A3"],
+    "host_principal": "The Owner's Windows account. QEMU runs as an ordinary user process: no service, no elevation, no installer. The strong tier buys a kernel boundary, not a principal boundary (profiles P8)."
+  },
+  "provider": {
+    "name": "qemu",
+    "version": "11.1.3",
+    "channel": "msys2-ucrt64",
+    "package_release": "11.1.3-1",
+    "install_method": "A2: download the locked MSYS2 packages, check each sha256, extract with the built-in tar.exe under {qemu_prefix}. No installer, no administrator rights, no registry or PATH change.",
+    "artifact_lock": {
+      "path": "profiles/strong-windows-qemu-whpx/qemu-msys2-ucrt64.lock.json",
+      "sha256": "fc93531bc0225015e96c49130fe81ad9349df512990ae2719378401f4f43bb4b"
+    },
+    "binaries": {
+      "qemu-system-x86_64": {
+        "path": "{qemu_prefix}/ucrt64/bin/qemu-system-x86_64.exe",
+        "sha256": "d8d6aabc07aeaf8b4582269853933763f3e7d2cb651a703643308cf0ba763596"
+      },
+      "qemu-img": {
+        "path": "{qemu_prefix}/ucrt64/bin/qemu-img.exe",
+        "sha256": "0f1ef935298612b06b1c2e71ee73023228221a296b509632d62447dc1b19e009"
+      }
+    },
+    "whpx_in_build": "MSYS2's qemu-common documentation (share/doc/qemu/msys2.readme.txt) shows '-accel whpx'; the pinned qemu-system-x86_64.exe contains the WHPX accelerator's messages, including 'WHPX: No accelerator found'. Runtime availability: UNKNOWN until F-03.2.1b."
+  },
+  "accelerator": {
+    "name": "whpx",
+    "fallback": "none",
+    "on_unavailable": "TIER_UNAVAILABLE",
+    "reason": "QEMU uses TCG when no -accel is given, and tries each listed accelerator in turn (qemu.org invocation, -accel). Exactly one -accel whpx, and no accel= on -machine, makes a missing WHPX a launch failure that the harness reports as TIER_UNAVAILABLE naming A1."
+  },
+  "state_dir": {
+    "default": null,
+    "proposed": "D:\\aieh-guest-state",
+    "owner_act": "A3",
+    "rules": "Named explicitly by the Owner on every invocation (contract section 11): outside the checkout, outside %USERPROFILE%, no comma (QEMU option syntax). Nothing in it is committed.",
+    "layout": {
+      "qemu_prefix": "{state_dir}/providers/qemu/msys2-ucrt64-11.1.3-1",
+      "images": "{state_dir}/images",
+      "instance_dir": "{state_dir}/instances/{instance}",
+      "launch_records": "{state_dir}/instances/{instance}/launch.json"
+    }
+  },
+  "boot_inputs": {
+    "image": {
+      "kind": "disk-image",
+      "format": "qcow2",
+      "distribution": "Debian 13 (trixie) genericcloud amd64, build 20261103-2651",
+      "url": "https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2",
+      "sha512": "d25999de0770d4cde1be72c299ba3ad94eac7ea8fd4d18f8cc86c69df69337e2e8a91d64465a9bfd8f2a78c566fcbcb0842eacc91c09efdef72d719d9f13b535",
+      "sha256": "de9d63f5e5ec5927d7548bc05b6043b87457b8c1cb9bcb95365168e8d0293b4f",
+      "size_bytes": 341180416,
+      "virtual_size_bytes": 3221225472,
+      "backing_file": null,
+      "publisher_checksum": {
+        "url": "https://cloud.debian.org/images/cloud/trixie/20261103-2651/SHA512SUMS",
+        "sha256": "b09e7d86ec8a7d7724ed5c774616fbf68a397d343365a952386020a9a67467f6",
+        "algorithm": "sha512"
+      },
+      "signature": {
+        "published": false,
+        "evidence": "https://cloud.debian.org/images/cloud/ states that for the current images 'the safest method is to download the image and checksum files over TLS from cloud.debian.org or cdimage.debian.org'; only the legacy OpenStack images carry SHA512SUMS.sign. The same SHA512SUMS was fetched from both hosts and was identical; the image's JSON manifest carries the same sha512."
+      },
+      "local_path": "{state_dir}/images/debian-13-genericcloud-amd64-20261103-2651.qcow2",
+      "check_before_launch": "sha256 of the local file, immediately before every launch; a mismatch refuses the launch (profiles P9)."
+    },
+    "firmware": {
+      "kind": "firmware",
+      "type": "SeaBIOS (bios-256k.bin as shipped in the pinned QEMU package)",
+      "path": "{qemu_prefix}/ucrt64/share/qemu/bios-256k.bin",
+      "sha256": "ae6f6aa973aaccc143f57aa960fb035fd9de4daee4ad0cd713322f8c259e7650",
+      "covered_by": "provider.artifact_lock (package mingw-w64-ucrt-x86_64-qemu-11.1.3-1)",
+      "reason": "The image boots by BIOS or UEFI (it ships grub-pc-bin and grub-efi-amd64). BIOS needs no per-instance writable firmware variable store. Other data files QEMU may load (ACPI and option ROMs) come from the same pinned package; the virtio-net option ROM is disabled (romfile=)."
+    },
+    "kernel": {
+      "kind": "direct-kernel-boot",
+      "used": false,
+      "reason": "The image's own bootloader and kernel boot; they are covered by the image digest."
+    },
+    "seed": {
+      "kind": "nocloud-seed",
+      "per_instance": true,
+      "templates": {
+        "user-data": {
+          "path": "profiles/seed/user-data.tmpl",
+          "sha256": "e7c0b9f4ce0b2a6f3cca5ba6422cd866705e5c527b83d442ae9fb7c7e83c85ac"
+        },
+        "meta-data": {
+          "path": "profiles/seed/meta-data.tmpl",
+          "sha256": "257768cc2ef8363fbcb62234346edff07c3dba4c2e7f12892425dae7d778ab19"
+        },
+        "network-config": {
+          "path": "profiles/seed/network-config.yaml",
+          "sha256": "7e0dca5f39e239d2c0878033c07f60872557c3560f99a7864629948df1ec7a7d"
+        }
+      },
+      "substitutions": {
+        "scratch_device": "/dev/disk/by-id/virtio-scratch"
+      },
+      "generator": {
+        "spec": "profiles/seed/README.md",
+        "status": "specified; implemented and tested in F-03.2.2"
+      },
+      "local_path": "{instance_dir}/seed.iso",
+      "record_at_create": "sha256 of seed.iso in the launch record; the same inputs give the same digest."
+    },
+    "provider_binary": {
+      "kind": "provider-binary",
+      "ref": "provider.binaries.qemu-system-x86_64",
+      "sha256": "d8d6aabc07aeaf8b4582269853933763f3e7d2cb651a703643308cf0ba763596"
+    },
+    "profile_revision": {
+      "kind": "git-revision",
+      "record_at_create": "git rev-parse HEAD of the checkout; create refuses when profiles/ has uncommitted changes."
+    }
+  },
+  "ceilings": {
+    "vcpu": 8,
+    "memory_mib": 16384,
+    "root_disk_gib": 40,
+    "scratch_disk_gib": 120,
+    "justification": "Host: 32 logical CPUs, 62 GB RAM, about 750 GB free on D:. One guest takes 25 % of the logical CPUs and 16 GiB (about 26 % of RAM), leaving 24 CPUs and about 46 GB for Windows and the Owner's WSL VM (whose default ceiling is half of RAM). Disks are thin qcow2: an instance can grow to at most 160 GiB, so the state directory holds four instances at full allocation. Two instances at full memory beside a fully used WSL VM would overcommit RAM; the reference mode is one shared instance. These are the outer caps for decision 0001's per-conversation overrides; Moby's caps (F-04.1) sit inside them."
+  },
+  "nested_virt_exposed": false,
+  "nested_virt_masking": "-cpu max,vmx=off,svm=off. Whether WHPX accepts the max model with these flags off is UNKNOWN until F-03.2.1b; inside the guest, grep -c -E 'vmx|svm' /proc/cpuinfo must be 0 (F-03.2.2).",
+  "guest_agent": {
+    "used": false,
+    "reason": "Management is SSH over the loopback forward. No virtio-serial device, so no QEMU guest agent channel (profiles P6)."
+  },
+  "host_shares": [],
+  "network": {
+    "mode": "user (SLIRP)",
+    "posture": "restrict=on: the guest cannot reach the host or the outside except through the explicit forwards below (qemu.org invocation: restrict=on 'does not affect any explicitly set forwarding rules').",
+    "ipv6": false,
+    "enforcement_point": "QEMU SLIRP restrict=on, with guestfwd to host-side endpoints for inference and provision: candidate; qualified by F-03.3.2.",
+    "endpoints": [
+      {
+        "class": "management",
+        "purpose": "SSH (operator exec, provisioning, inspect)",
+        "direction": "host-to-guest",
+        "mechanism": "hostfwd",
+        "protocol": "tcp",
+        "host_bind": "127.0.0.1",
+        "host_port": "{ssh_port}",
+        "guest_port": 22
+      },
+      {
+        "class": "management",
+        "purpose": "QMP (lifecycle and inspect); host-side only, not reachable from the guest",
+        "direction": "host-only",
+        "mechanism": "chardev socket",
+        "protocol": "tcp",
+        "host_bind": "127.0.0.1",
+        "host_port": "{qmp_port}"
+      },
+      {
+        "class": "exchange",
+        "purpose": "git bundle transfer by SFTP over the management SSH forward",
+        "direction": "host-to-guest",
+        "mechanism": "hostfwd (shared with management SSH)",
+        "protocol": "tcp",
+        "host_bind": "127.0.0.1",
+        "host_port": "{ssh_port}",
+        "guest_port": 22
+      },
+      {
+        "class": "inference",
+        "status": "deferred to F-03.3.2",
+        "mechanism": "guestfwd to a host-side broker",
+        "protocol": "tcp",
+        "host_bind": "127.0.0.1",
+        "host_port": null,
+        "guest_address": null
+      },
+      {
+        "class": "provision",
+        "status": "deferred to F-03.3.2; phase-limited",
+        "mechanism": "guestfwd to a host-side allowlisting proxy",
+        "protocol": "tcp",
+        "host_bind": "127.0.0.1",
+        "host_port": null,
+        "guest_address": null
+      }
+    ],
+    "port_allocation": "{ssh_port} and {qmp_port} are free ports on 127.0.0.1 chosen at create and kept in the launch record.",
+    "local_exposure": "Loopback ports are reachable by any local process of any user on the host; disclosed, not prevented (Python's standard library has no AF_UNIX socket on Windows, so QMP uses loopback TCP)."
+  },
+  "identity": {
+    "instance_name_pattern": "^[a-z][a-z0-9-]{1,40}$",
+    "guest_user": "agent",
+    "sudo": false,
+    "root_ssh_login": false,
+    "ssh_key": "ed25519, generated at create with Windows' built-in OpenSSH ssh-keygen into {instance_dir}/ssh/; never ~/.ssh.",
+    "ssh_client_options": ["-F", "none", "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile={instance_dir}/ssh/known_hosts"],
+    "host_key_trust": "Fingerprints read from cloud-init's block on the serial log ({instance_dir}/serial.log), written to {instance_dir}/ssh/known_hosts.",
+    "machine_id": "Generated by the guest's systemd at first boot of a fresh overlay; uniqueness observed in F-03.2.2."
+  },
+  "lifecycle": {
+    "operations": ["preflight", "create", "start", "stop", "destroy", "recreate", "inspect", "exec", "exchange push", "exchange pull"],
+    "modes": ["shared", "fresh"],
+    "stop_timeout_s": 120,
+    "bindings": {
+      "preflight": "Read-only capability report: OS and arch; state directory named, existing, outside the checkout and %USERPROFILE%; provider binaries match their sha256; 'qemu-system-x86_64 -accel help' lists whpx; the image file matches its sha256. Each failure names its Owner act (A1, A2, A3).",
+      "create": "Refuse if {instance_dir} exists. Create it; generate the SSH key; check the image sha256; qemu-img create the root overlay (40 GiB, backing the pinned image) and the scratch disk (120 GiB); generate seed.iso; allocate ports; write launch.json (every boot input with its digest, the argv, the profile revision); launch QEMU detached.",
+      "start": "Relaunch from launch.json after re-checking every digest in it.",
+      "stop": "QMP system_powerdown; after stop_timeout_s, QMP quit; if the process still runs, terminate that process id only.",
+      "destroy": "Stop with force if running, then delete {instance_dir} only. Absent: succeed and report absent. The image, the provider and every other path are untouched.",
+      "recreate": "destroy, then create with the same name and profile.",
+      "inspect": "QMP query-version, query-cpus-fast, query-memory-size-summary, query-block, query-pci, query-chardev; qemu-img info of root and scratch; guest probes over SSH per profiles P1-P12; labelled per profiles P11.",
+      "exec": "ssh with identity.ssh_client_options to agent@127.0.0.1 -p {ssh_port}. Operator and provisioning only; never offered to agents.",
+      "exchange push": "A git bundle of a bounded snapshot, copied by SFTP into /home/agent/exchange.",
+      "exchange pull": "A git bundle and evidence copied by SFTP into a harness-owned staging directory under {state_dir}; never into the Owner's repositories."
+    }
+  },
+  "launch": {
+    "binary": "provider.binaries.qemu-system-x86_64",
+    "argv": [
+      "-name", "guest={instance}",
+      "-no-user-config",
+      "-nodefaults",
+      "-machine", "type=pc-q35-11.1",
+      "-accel", "whpx",
+      "-cpu", "max,vmx=off,svm=off",
+      "-smp", "cpus=8,sockets=1,cores=8,threads=1",
+      "-m", "size=16384M",
+      "-L", "{qemu_prefix}/ucrt64/share/qemu",
+      "-bios", "{input:firmware}",
+      "-blockdev", "driver=file,node-name=base-file,filename={input:image},read-only=on",
+      "-blockdev", "driver=qcow2,node-name=base,file=base-file,read-only=on",
+      "-blockdev", "driver=file,node-name=root-file,filename={instance_dir}/root.qcow2",
+      "-blockdev", "driver=qcow2,node-name=root,file=root-file,backing=base",
+      "-device", "virtio-blk-pci,drive=root,serial=root,bootindex=0",
+      "-blockdev", "driver=file,node-name=scratch-file,filename={instance_dir}/scratch.qcow2",
+      "-blockdev", "driver=qcow2,node-name=scratch,file=scratch-file",
+      "-device", "virtio-blk-pci,drive=scratch,serial=scratch",
+      "-blockdev", "driver=file,node-name=seed-file,filename={input:seed},read-only=on",
+      "-blockdev", "driver=raw,node-name=seed,file=seed-file,read-only=on",
+      "-device", "virtio-blk-pci,drive=seed,serial=cidata",
+      "-netdev", "user,id=net0,restrict=on,ipv6=off,hostfwd=tcp:127.0.0.1:{ssh_port}-:22",
+      "-device", "virtio-net-pci,netdev=net0,romfile=",
+      "-device", "virtio-rng-pci",
+      "-display", "none",
+      "-chardev", "file,id=serial0,path={instance_dir}/serial.log",
+      "-serial", "chardev:serial0",
+      "-chardev", "socket,id=qmp,host=127.0.0.1,port={qmp_port},server=on,wait=off",
+      "-mon", "chardev=qmp,mode=control",
+      "-pidfile", "{instance_dir}/qemu.pid",
+      "-rtc", "base=utc",
+      "-boot", "strict=on",
+      "-msg", "timestamp=on"
+    ],
+    "per_instance_files": {
+      "root.qcow2": "qemu-img create -f qcow2 -b {input:image} -F qcow2 {instance_dir}/root.qcow2 40G",
+      "scratch.qcow2": "qemu-img create -f qcow2 {instance_dir}/scratch.qcow2 120G",
+      "seed.iso": "seed generator (profiles/seed/README.md)"
+    },
+    "notes": "No USB controller, audio device, display, VGA, monitor (HMP), file share, 9p, SMB or virtio-serial device is created: -nodefaults removes the defaults and none is added. The root overlay's backing node is bound explicitly to the pinned image, so the overlay header's backing path is not trusted."
+  }
+}
