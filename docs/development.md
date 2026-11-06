@@ -28,15 +28,17 @@ task setup
 ```
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
-verifies the seed in both modes and runs the tool tests. It is offline and takes
-seconds. Before your first commit, also run `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the four commands it wraps:
+verifies the seed in both modes and runs the tool tests and the integration store
+tests. It is offline and takes seconds. Before your first commit, also run
+`task hooks:install` once per clone
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the five commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
 python -I tools/verify_seed.py
 python -I tools/verify_seed.py --baseline seed
 python -I -B -m unittest discover -s tools/tests -v
+python -I -B -m unittest discover -s integrations/store/tests -v
 ```
 
 Use `python3` instead of `python` outside Windows.
@@ -124,14 +126,17 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the four commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the five commands in [Quick start](#quick-start) | no | Supported setup command. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v` | no | Tool tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test` | no | Tool tests and integration store tests (stdlib `unittest`). |
+| `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
+| `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
+| `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -156,6 +161,26 @@ compliance is not verified**; see
 items.
 
 **Formatting and linting.** No formatter or linter is configured yet.
+
+## Integration store
+
+[`integrations/store/`](../integrations/store/README.md) holds the Integration
+Service's trusted-host SQLite store (`integration.sqlite`, plan leaf F-05.1):
+attempt reservations, their append-only transition history, versioned migrations
+and rebuildable `proj_` projection tables. It uses the standard library `sqlite3`
+and needs SQLite 3.38.0 or newer, which it checks when it opens a store. The
+transaction policy, schema and states are in its README.
+
+Always pass an explicit database path. The default trusted-host location, which
+`store:path` prints, is per-user application data:
+
+- Windows: `%LOCALAPPDATA%\ai-engineering-harness\state\integration.sqlite`
+- elsewhere: `${XDG_DATA_HOME:-~/.local/share}/ai-engineering-harness/state/integration.sqlite`
+
+Neither setup nor the tests create it: a consumer initialises it when it first
+needs it. Keep the file on local disk, outside the repository (the store refuses
+a path inside the checkout), out of agent workspaces and out of guest storage.
+Backup and restore come with F-05.2.
 
 ## Task
 
@@ -187,6 +212,7 @@ Directories exist only when they hold real content.
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
 | `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `publication_gate.py` and their `tests/` | seed, F-02, F-03.2.1, publication gate |
+| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/` | F-05.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |
@@ -198,7 +224,7 @@ external (pinned in `composition/`) unless adaptation is necessary.
 | Concern | Planned home | Filled first by |
 |---|---|---|
 | Configuration (Agent Server and service configuration) | `config/` | F-04.1 |
-| Integrations (Integration Service adapters and schemas) | `integrations/` | F-05.1, then P-02.1 and E-01.x |
+| Integrations (Integration Service adapters and schemas) | `integrations/` (created by F-05.1: `integrations/store/`) | F-05.1, then P-02.1 and E-01.x |
 | Policy (principals, permissions, controls) | `policy/` | S-01.1, S-01.2.1, G-01.1 |
 | Agent and Skill catalog | `catalog/` | A-01.1, E-03.1 |
 | Contract tests | `tests/` | F-03.3.1, S-02.1, E-01.3.2 |

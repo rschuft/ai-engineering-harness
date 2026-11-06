@@ -67,9 +67,27 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v)
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
+      - task: store:test
+
+  store:test:
+    desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/store/tests -v'
+
+  store:init:
+    desc: Create or migrate the integration store at an explicit path (python -I -B integrations/store/integration_store.py init --db DB)
+    requires:
+      vars: [DB]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/store/integration_store.py init --db "{{.DB}}"'
+
+  store:path:
+    desc: Print the default trusted-host store location without creating anything (python -I -B integrations/store/integration_store.py default-path)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/store/integration_store.py default-path'
 
   profile:check:
     desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins

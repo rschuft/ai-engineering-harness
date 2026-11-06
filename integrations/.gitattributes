@@ -1,0 +1,2 @@
+# Migration checksums are taken over LF-normalised text; keep LF on every host anyway.
+* text eol=lf
