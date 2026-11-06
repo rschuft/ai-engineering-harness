@@ -23,6 +23,7 @@ PLAN = 'AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.j
 PLAN_HTML = 'AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html'
 CSV = 'AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv'
 BLUEPRINT = 'AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html'
+ORDINARY = ('README.md', 'CLAUDE.md', '.gitignore')
 
 # Isolated git: no user/system config (autocrlf, signing, hooks), fixed identity.
 GIT_ENV = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
@@ -63,6 +64,10 @@ class SeedCopy(unittest.TestCase):
             dst = self.root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / rel, dst)
+        # Ordinary files evolve after the seed; record the checkout's current
+        # bytes in the copy's manifest so the copy starts out fully consistent.
+        for rel in ORDINARY:
+            self.rehash(rel)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -190,9 +195,12 @@ class DefaultMode(SeedCopy):
         self.assertFail(run_verifier(self.root), 'a non-Small executable task is present')
 
     def test_works_without_git(self):
-        # The copy is not a repository, and PATH holds only Python's own directory.
+        # The copy is not a repository, and PATH holds only an empty directory
+        # (Python's own directory may also hold git, e.g. /usr/bin on Linux).
+        empty = self.root.parent / 'empty-path'
+        empty.mkdir()
         no_git = {k: v for k, v in os.environ.items() if k.upper() != 'PATH'}
-        no_git['PATH'] = str(Path(sys.executable).parent)
+        no_git['PATH'] = str(empty)
         no_git['GIT_CEILING_DIRECTORIES'] = str(self.root.parent)
         probe = subprocess.run([sys.executable, '-I', '-c',
                                 'import shutil; print(shutil.which("git"))'],
