@@ -51,11 +51,21 @@ push never implies parent acceptance.
   A reviewed, hash-pinned sdist exception for `func-timeout` 4.3.5, which has no wheel
   on PyPI. Every other package stays wheels-only.
 
+- **2026-11-06: [0003](../decisions/0003-execution-guest-providers-and-isolation-contract.md) Accepted.**
+  Architect consulted at gates C and G before F-03.1. The decision sets the execution-guest providers and
+  the isolation contract (P1-P12, strong vs trusted-workload tiers, disclose-and-refuse). **Owner selected
+  W1** (QEMU + WHPX as the Windows strong-tier reference) with seven conditions. Selecting the provider
+  authorizes no host change: A1 (enable `HypervisorPlatform` and restart), A2 (QEMU install) and A3 (the
+  guest-state directory) each still need their own Owner approval when required. Until then F-03.2.1+
+  cannot be realized on this host. Disclosure: the consultation briefly started the Owner's WSL Ubuntu distro
+  for read-only inspection and stopped it again. Later dispatches treat that distro as untouchable.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
 |---|---|---|
 | M-1 | Reconcile the blueprint with decision 0001 and verified upstream behavior, preserving the decision's provenance. Update the blueprint's integrity metadata through the versioned process F-02 introduces. | **Done (2026-11-06), `e1ed236`; pushed.** 8 passages reconciled, each with a visible note linking decision 0001, plus a Reconciliation notes entry. The 31 October observations made at v1.58.2 are kept as history; forward-looking requirements are restated. The blueprint's sha256 and size are updated in `SEED_MANIFEST.json` in the same commit. Both verify modes pass; the 105 element ids are unchanged; style and script blocks are byte-identical. Overseer reviewed the word diff and independently ran both modes. Recorded but not changed: v1.57.0 release-note statements, and the claim that runtime never falls back to local, which is checkable only with docker inspect (owned by E-01.3.1 and E-01.5). |
+| M-2 | Reconcile blueprint `#platforms` and SHIP-01 wording, which reads WSL2 as a peer of a VM, with SEC-01 and decision 0003's tiers. Use the authority-class process. | After F-03.1 |
 
 ## Open license and distribution items (owned by G-02.1, R-04.1, R-04.2)
 
