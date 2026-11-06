@@ -1,0 +1,369 @@
+{
+  "schema": "ai-engineering-harness/composition-candidates",
+  "schema_version": 1,
+  "task": "F-01.1",
+  "purpose": "Candidate upstream selections with immutable identifiers for F-01.2 to lock and verify. Not a lockfile, not an install record, not evidence of runtime compatibility.",
+  "human_readable": "composition/compatibility-matrix.md",
+  "retrieved_at": "2026-11-05T23:52:10Z",
+  "reverified_at": "2026-11-06T00:02:28Z",
+  "vocabulary": {
+    "verification": {
+      "pass": "identifier observed from the upstream primary source and cross-checked against at least one independent upstream record (see per-check evidence)",
+      "fail": "identifier could not be obtained or two upstream records disagree",
+      "unknown": "no upstream record exists to establish it, or establishing it requires installing/running (F-01.2)",
+      "not_run": "check deliberately not performed in F-01.1 (e.g. cryptographic signature verification)"
+    },
+    "coupling_verdict": {
+      "compatible": "upstream primary source explicitly declares this pairing at these exact versions (metadata/source only; never runtime-tested here)",
+      "incompatible": "an upstream declared constraint excludes the pairing",
+      "unknown": "no upstream declaration, or only provable by installing and running"
+    }
+  },
+  "components": [
+    {
+      "id": "openhands-sdk",
+      "blueprint_name": "OpenHands Software Agent SDK",
+      "selection": "selected",
+      "release_unit": "openhands-v1.60.1",
+      "source": {
+        "repository": "https://github.com/OpenHands/software-agent-sdk",
+        "tag": "v1.60.1",
+        "tag_type": "lightweight",
+        "commit": "e99e5c71ffe440a0b8d74b695f9307a7e34e4bbd",
+        "command": "git ls-remote https://github.com/OpenHands/software-agent-sdk.git 'refs/tags/v1.60.1' 'refs/tags/v1.60.1^{}'"
+      },
+      "version": "1.60.1",
+      "release_date": "2026-11-05T16:32:39Z",
+      "license": "MIT",
+      "license_evidence": "LICENSE at tag v1.60.1 is MIT; GitHub repo spdx_id MIT. PyPI metadata carries no license field.",
+      "runtime": {"python": ">=3.12", "os_arch": "pure-python wheels (py3-none-any)"},
+      "artifacts": [
+        {"channel": "pypi", "name": "openhands-sdk", "file": "openhands_sdk-1.60.1-py3-none-any.whl", "digest": "sha256:f6efa8f8428ccc8abebbcf4c424bf3008a66a46f9f2340d37b3b306fcb45eb6b", "command": "curl -s https://pypi.org/pypi/openhands-sdk/1.60.1/json"},
+        {"channel": "pypi", "name": "openhands-sdk", "file": "openhands_sdk-1.60.1.tar.gz", "digest": "sha256:9fed8b24997b083709347ec7a1927249090f3c1af4a28e9cbe06959ae48900fb", "command": "curl -s https://pypi.org/pypi/openhands-sdk/1.60.1/json"},
+        {"channel": "pypi", "name": "openhands-tools", "file": "openhands_tools-1.60.1-py3-none-any.whl", "digest": "sha256:fc84a55630b46a88cd4b617b00c6511c0cadae5cfb0eeed6b6639e8ac67da93b", "command": "curl -s https://pypi.org/pypi/openhands-tools/1.60.1/json"},
+        {"channel": "pypi", "name": "openhands-tools", "file": "openhands_tools-1.60.1.tar.gz", "digest": "sha256:df2f00296875b91911803673db1944040f62afd23ce7207d73143d05961b0135", "command": "curl -s https://pypi.org/pypi/openhands-tools/1.60.1/json"},
+        {"channel": "pypi", "name": "openhands-workspace", "file": "openhands_workspace-1.60.1-py3-none-any.whl", "digest": "sha256:b4898196621032b67790b73fc013ea17cff19275066328b50b0188212ea6211d", "command": "curl -s https://pypi.org/pypi/openhands-workspace/1.60.1/json"},
+        {"channel": "pypi", "name": "openhands-workspace", "file": "openhands_workspace-1.60.1.tar.gz", "digest": "sha256:9cfde9a4fd347342b7602519052a0837d38f0b36cbd9a09a85f38f47d7bc1e15", "command": "curl -s https://pypi.org/pypi/openhands-workspace/1.60.1/json"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "tag_to_commit_evidence": "git ls-remote (two runs identical); GitHub release target_commitish e99e5c7; npm provenance of @openhands/typescript-client 1.60.1 and agent-server image provenance both name e99e5c7",
+        "artifact_digest": "pass",
+        "artifact_to_commit": "unknown",
+        "artifact_to_commit_evidence": "PyPI serves no PEP 740 provenance for these files (HTTP 404); only version string and upload time (16:46Z, 14 min after the release) link them to the tag",
+        "signature": "not_run"
+      }
+    },
+    {
+      "id": "openhands-agent-server",
+      "blueprint_name": "OpenHands Agent Server",
+      "selection": "selected",
+      "release_unit": "openhands-v1.60.1",
+      "source": {
+        "repository": "https://github.com/OpenHands/software-agent-sdk",
+        "path": "openhands-agent-server/",
+        "tag": "v1.60.1",
+        "tag_type": "lightweight",
+        "commit": "e99e5c71ffe440a0b8d74b695f9307a7e34e4bbd",
+        "command": "git ls-remote https://github.com/OpenHands/software-agent-sdk.git 'refs/tags/v1.60.1' 'refs/tags/v1.60.1^{}'"
+      },
+      "version": "1.60.1",
+      "release_date": "2026-11-05T16:32:39Z",
+      "license": "MIT",
+      "license_evidence": "Same repository LICENSE (MIT). The OCI image additionally installs third-party ACP provider CLIs (build-arg INSTALL_ACP_PROVIDERS=claude-code,codex,gemini-cli) whose licenses are not MIT-certified here.",
+      "runtime": {
+        "python": ">=3.12",
+        "container_api": "Docker Engine API via python 'docker<8,>=7.1' for conversation_runtime=docker",
+        "oci_platforms": ["linux/amd64", "linux/arm64"],
+        "binary_platforms": ["linux-x86_64", "linux-arm64", "macos-x86_64", "macos-arm64", "windows-x86_64"]
+      },
+      "interface": {
+        "api": "REST + WebSocket; release asset openapi.json",
+        "openapi_json_digest": "sha256:3de49fac4670eff9c8b6635ffd8bc5b6d4219788877747135333cec9f8c5e0d0",
+        "advertised_capabilities_subset": ["conversation_runtime_routes_v1", "idempotent_conversation_create_v1"],
+        "docker_selection": "advertised through ServerInfo.available_conversation_runtimes == ['local','docker'] only when server config conversation_runtime_selectable is true (default false)",
+        "default_conversation_image": "ghcr.io/openhands/agent-server:latest-python (floating; config.py DEFAULT_CONVERSATION_IMAGE)"
+      },
+      "artifacts": [
+        {"channel": "pypi", "name": "openhands-agent-server", "file": "openhands_agent_server-1.60.1-py3-none-any.whl", "digest": "sha256:df80a622059f3cce797ab2c08adfc5256a69d7c7a6b4712b2d5147df25be76f6", "command": "curl -s https://pypi.org/pypi/openhands-agent-server/1.60.1/json"},
+        {"channel": "pypi", "name": "openhands-agent-server", "file": "openhands_agent_server-1.60.1.tar.gz", "digest": "sha256:345d3f89680aaf04a9d595a1ca3a09c33dedde8ea30c88bc4cccef865b0e2484", "command": "curl -s https://pypi.org/pypi/openhands-agent-server/1.60.1/json"},
+        {"channel": "oci", "name": "ghcr.io/openhands/agent-server", "tag": "1.60.1-python", "media_type": "application/vnd.oci.image.index.v1+json", "digest": "sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55", "platform_digests": {"linux/amd64": "sha256:8496d13f117827165af5a9c5c2b8ec5a1e52074aaff49a196ce9b000262d6b0c", "linux/arm64": "sha256:89f694c3a3ec77efeaae7ab4c72352e7a5f2fd606544e6a7123d87be1d467665"}, "command": "anonymous token from https://ghcr.io/token?scope=repository:openhands/agent-server:pull, then curl -H 'Accept: application/vnd.oci.image.index.v1+json' https://ghcr.io/v2/openhands/agent-server/manifests/1.60.1-python (Docker-Content-Digest header == sha256 of body)"},
+        {"channel": "github-release", "name": "agent-server-1.60.1-linux-x86_64", "digest": "sha256:b2fbcf8cf1495bdbef97f26583917bc188b765c71c181effc3e47c14da08ce72", "command": "curl -s https://api.github.com/repos/OpenHands/software-agent-sdk/releases (assets[].digest) and curl -sL https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/SHA256SUMS"},
+        {"channel": "github-release", "name": "agent-server-1.60.1-linux-arm64", "digest": "sha256:cacaf42a648011443f0eba182d4554493d4e000f79e0e9c9263007bb056fcdb0", "command": "same as above"},
+        {"channel": "github-release", "name": "SHA256SUMS", "digest": "sha256:6b6e6e3febe2e143f226886d9bac878855ddd3d6108517d815edb03c20fb37e9", "command": "curl -sL https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/SHA256SUMS | sha256sum"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "artifact_digest": "pass",
+        "artifact_digest_evidence": "OCI: registry Docker-Content-Digest equals locally computed sha256 of manifest body. Release assets: GitHub asset digest equals upstream SHA256SUMS line.",
+        "artifact_to_commit": "pass (oci, github-release); unknown (pypi)",
+        "artifact_to_commit_evidence": "OCI index 1.60.1-python carries BuildKit SLSA provenance with OPENHANDS_BUILD_GIT_REF=refs/tags/v1.60.1 and OPENHANDS_BUILD_GIT_SHA=e99e5c7...; GitHub release target_commitish=e99e5c7. PyPI: no provenance.",
+        "signature": "not_run"
+      }
+    },
+    {
+      "id": "openhands-typescript-client",
+      "blueprint_name": "@openhands/typescript-client (maintained OpenHands TypeScript client)",
+      "selection": "selected",
+      "release_unit": "openhands-v1.60.1",
+      "source": {
+        "repository": "https://github.com/OpenHands/software-agent-sdk",
+        "path": "clients/typescript/",
+        "tag": "v1.60.1",
+        "commit": "e99e5c71ffe440a0b8d74b695f9307a7e34e4bbd",
+        "command": "curl -s https://registry.npmjs.org/@openhands%2Ftypescript-client (versions['1.60.1'].gitHead) and curl -s https://registry.npmjs.org/-/npm/v1/attestations/@openhands%2Ftypescript-client@1.60.1"
+      },
+      "version": "1.60.1",
+      "release_date": "2026-11-05T16:47:05Z",
+      "license": "MIT",
+      "license_evidence": "npm license MIT; clients/typescript/LICENSE present at tag",
+      "runtime": {"node": "no engines field", "dependencies": {"@openrouter/sdk": "^1.2.11", "ws": "^8.20.0"}},
+      "interface": {"contract_pin": "package.json config.agentServerImage = ghcr.io/openhands/agent-server:1.60.1-python"},
+      "artifacts": [
+        {"channel": "npm", "name": "@openhands/typescript-client", "version": "1.60.1", "digest": "sha512-LysixcYGpHnEcWToGeaNaiduytpo4TiytApBZqE4JSM3sCyu32wFa54R/ycgPwibuisgNpnhVcm+UZClYOYEUA==", "command": "curl -s https://registry.npmjs.org/@openhands%2Ftypescript-client (versions['1.60.1'].dist.integrity)"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "artifact_digest": "pass",
+        "artifact_to_commit": "pass",
+        "artifact_to_commit_evidence": "npm gitHead and SLSA provenance gitCommit both e99e5c7...; provenance subject sha512 equals dist.integrity",
+        "signature": "not_run"
+      },
+      "note": "Former repository github.com/OpenHands/typescript-client is archived; the package is now built from software-agent-sdk/clients/typescript."
+    },
+    {
+      "id": "openhands-agent-canvas",
+      "blueprint_name": "Agent Canvas",
+      "selection": "selected",
+      "source": {
+        "repository": "https://github.com/OpenHands/OpenHands",
+        "tag": "v1.36.0",
+        "tag_type": "lightweight",
+        "commit": "d30f1e45bbb67558ec2bfcd639b907ae525f162c",
+        "command": "git ls-remote https://github.com/OpenHands/OpenHands.git 'refs/tags/v1.36.0' 'refs/tags/v1.36.0^{}'"
+      },
+      "version": "1.36.0",
+      "release_date": "2026-11-05T21:38:50Z",
+      "license": "MIT",
+      "license_evidence": "LICENSE at tag is MIT (only license file in tree at d30f1e4); npm license MIT",
+      "runtime": {
+        "node": ">=24",
+        "package_manager": "npm@11.12.1",
+        "peer": {"react": "19.3.1", "react-dom": "19.3.1", "react-router": "8.5.0"},
+        "launcher_python": ">=3.12,<3.15 (config/defaults.json python.uvxRequest)",
+        "oci_platforms": ["linux/amd64", "linux/arm64"]
+      },
+      "interface": {
+        "library_exports": [".", "./browser", "./conversation", "./files", "./settings", "./sidebar", "./terminal", "./i18n", "./styles.css"],
+        "embedding_components": ["AgentServerUIProviders", "AgentServerUIRoot"],
+        "backend_pins": {"versions.agentServer": "1.60.1", "versions.automation": "1.30.1", "compatibility.minimumAgentServer": "1.59.0", "@openhands/typescript-client": "1.60.1"}
+      },
+      "artifacts": [
+        {"channel": "npm", "name": "@openhands/agent-canvas", "version": "1.36.0", "digest": "sha512-ZumCENrBTfztpXRtRulOmTB/l/pBoOjWUO5x3ySNgOmHkV8OTkbe1WTyZoRbyEVagux/vlEyztuPgz/Ia+ecGQ==", "command": "curl -s https://registry.npmjs.org/@openhands%2Fagent-canvas (versions['1.36.0'].dist.integrity)"},
+        {"channel": "oci", "name": "ghcr.io/openhands/agent-canvas", "tag": "1.36.0", "media_type": "application/vnd.oci.image.index.v1+json", "digest": "sha256:27bce1829a469551dd24ab6d07ece64a1fb9ce485a64f4d65d49deb816e4241f", "platform_digests": {"linux/amd64": "sha256:b1221a6face64ed0706ef0b4459114f14f1f067294c5f7c5f89a873da02f368d", "linux/arm64": "sha256:2ebb1c0458906ba2afc29ebc05158502f45ea841032a484588285e3afd7c8ed2"}, "command": "anonymous token from https://ghcr.io/token?scope=repository:openhands/agent-canvas:pull, then curl manifest https://ghcr.io/v2/openhands/agent-canvas/manifests/1.36.0"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "artifact_digest": "pass",
+        "artifact_to_commit": "pass",
+        "artifact_to_commit_evidence": "npm gitHead and SLSA provenance gitCommit d30f1e4...; provenance subject equals dist.integrity; OCI label org.opencontainers.image.revision=d30f1e4... and BuildKit provenance OPENHANDS_BUILD_GIT_REF=refs/tags/v1.36.0",
+        "signature": "not_run"
+      },
+      "note": "The OCI image is an all-in-one stack (Agent Server + Automation + frontend) built FROM ghcr.io/openhands/agent-server:1.60.1-python by tag reference, with AUTOMATION_VERSION=1.30.1 and a PostHog telemetry key baked in at build time. Desktop/deb/AppImage release assets exist but are not a channel this architecture consumes."
+    },
+    {
+      "id": "openhands-automation",
+      "blueprint_name": "OpenHands Automation (optional extension; recorded only because Agent Canvas pins it)",
+      "selection": "coupled-dependency-not-selected",
+      "source": {
+        "repository": "https://github.com/OpenHands/automation",
+        "tag": "1.30.1",
+        "tag_type": "lightweight",
+        "commit": "3ddfee594d2177ab368772bc03c25f2dda103c9b",
+        "command": "git ls-remote https://github.com/OpenHands/automation.git 'refs/tags/1.30.1' 'refs/tags/1.30.1^{}'"
+      },
+      "version": "1.30.1",
+      "release_date": "2026-11-05T17:49:25Z",
+      "license": "MIT",
+      "license_evidence": "PyPI license_expression MIT",
+      "runtime": {"python": ">=3.12", "requires": ["openhands-sdk==1.60.1", "openhands-workspace==1.60.1"]},
+      "artifacts": [
+        {"channel": "pypi", "name": "openhands-automation", "file": "openhands_automation-1.30.1-py3-none-any.whl", "digest": "sha256:9bbc2bc8b160242139b905a2deedc2127a29a6ffd2cca27569a252c6e27613d8", "command": "curl -s https://pypi.org/pypi/openhands-automation/1.30.1/json"},
+        {"channel": "pypi", "name": "openhands-automation", "file": "openhands_automation-1.30.1.tar.gz", "digest": "sha256:b1fc3f93d1e05d5f5191cbc501837ba18a0784dddba708f0dae2a6f561ee620a", "command": "curl -s https://pypi.org/pypi/openhands-automation/1.30.1/json"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "artifact_digest": "pass",
+        "artifact_to_commit": "unknown",
+        "artifact_to_commit_evidence": "PyPI PEP 740 provenance exists (publisher GitHub OpenHands/automation, workflow pypi-release.yml, subject digest equals wheel sha256) but the statement does not name a commit; tag-to-wheel linkage not established",
+        "signature": "not_run"
+      }
+    },
+    {
+      "id": "assistant-ui",
+      "blueprint_name": "assistant-ui",
+      "selection": "selected",
+      "source": {
+        "repository": "https://github.com/assistant-ui/assistant-ui",
+        "tag": "@assistant-ui/react@0.15.32",
+        "tag_type": "lightweight",
+        "commit": "2769cdf4db1b95f8e3f627910caf12b39a58216e",
+        "command": "git ls-remote https://github.com/assistant-ui/assistant-ui.git 'refs/tags/@assistant-ui/react@0.15.32' 'refs/tags/@assistant-ui/core@0.3.32'"
+      },
+      "version": "0.15.32",
+      "release_date": "2026-10-28T00:51:23Z",
+      "license": "MIT",
+      "license_evidence": "npm license MIT; LICENSE at commit is MIT. Depends on assistant-cloud ^0.2.9 (hosted-service client; licence/terms not assessed here).",
+      "runtime": {"peer": {"react": "^18 || ^19", "react-dom": "^18 || ^19"}, "node": "no engines field"},
+      "interface": {"exports_at_commit": ["useLocalRuntime", "ChatModelAdapter", "ThreadHistoryAdapter", "RemoteThreadListAdapter", "useRemoteThreadListRuntime", "useExternalStoreRuntime", "ExternalStoreAdapter"]},
+      "artifacts": [
+        {"channel": "npm", "name": "@assistant-ui/react", "version": "0.15.32", "digest": "sha512-cw+8UQRnJocyHEaNc3+S+ulZaFp4UoVnbjyRmVFZcq8XSHpe4onz7ZkXkBl7L8IZftgvNdHS9ZEujnqohwzibw==", "command": "curl -s https://registry.npmjs.org/@assistant-ui%2Freact (versions['0.15.32'].dist.integrity)"},
+        {"channel": "npm", "name": "@assistant-ui/core", "version": "0.3.32", "digest": "sha512-eEOuM3K0HWoetfFW8WwGJrhFu7lAfn/Su9us6xMk9HbHUc3/5jL6EOa2VsxrWeZbPqu/yXxGT2KaaFVvzZtCbA==", "command": "curl -s https://registry.npmjs.org/@assistant-ui%2Fcore (versions['0.3.32'].dist.integrity)"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "artifact_digest": "pass",
+        "artifact_to_commit": "pass",
+        "artifact_to_commit_evidence": "npm SLSA provenance gitCommit 2769cdf... (workflow ref refs/heads/main) equals both package tags; provenance subjects equal dist.integrity. npm gitHead absent.",
+        "signature": "not_run"
+      }
+    },
+    {
+      "id": "openspec",
+      "blueprint_name": "OpenSpec",
+      "selection": "selected",
+      "source": {
+        "repository": "https://github.com/Fission-AI/OpenSpec",
+        "tag": "v1.16.0",
+        "tag_type": "lightweight",
+        "commit": "27c0515724decc633818c735ee596481eec78a8b",
+        "command": "git ls-remote https://github.com/Fission-AI/OpenSpec.git 'refs/tags/v1.16.0' 'refs/tags/v1.16.0^{}'"
+      },
+      "version": "1.16.0",
+      "release_date": "2026-10-30T23:38:25Z",
+      "license": "MIT",
+      "license_evidence": "npm license MIT; LICENSE at tag MIT",
+      "runtime": {"node": ">=22.12.0", "standalone_binaries": ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-musl", "windows-arm64", "windows-x64"]},
+      "interface": {"cli": "openspec status --change <name> [--json]; list/show/validate/instructions/templates/schemas --json", "change_metadata": "top-level x- extension fields documented in docs/cli.md at v1.16.0"},
+      "artifacts": [
+        {"channel": "npm", "name": "@fission-ai/openspec", "version": "1.16.0", "digest": "sha512-WQVhZoIR5PoacH/H0qh84VKMcXFbKCIKuAI96arHS3KiKYhJStlRrjUKGxLqLYKLym0j+2hAAY5MZUrPE5qXIA==", "command": "curl -s https://registry.npmjs.org/@fission-ai%2Fopenspec (versions['1.16.0'].dist.integrity)"},
+        {"channel": "github-release", "name": "openspec-linux-x64.tar.gz", "digest": "sha256:f27fb2ff5c6c4aafb207cb0b797189215adb3a1150d4b4600a2d6a0b6e192ae1", "command": "curl -s https://api.github.com/repos/Fission-AI/OpenSpec/releases (assets[].digest) and curl -sL https://github.com/Fission-AI/OpenSpec/releases/download/v1.16.0/SHA256SUMS"},
+        {"channel": "github-release", "name": "openspec-linux-arm64.tar.gz", "digest": "sha256:b9b61371a7caa1819da34f766cc24896cfe7a743841f53121b66bd1e2f1b9e93", "command": "same as above"},
+        {"channel": "github-release", "name": "SHA256SUMS", "digest": "sha256:6cc4af0875c3fb58a0e1ca1dc02873a976c6c9b811585d59f47d3c647ec76bf7", "command": "curl -sL https://github.com/Fission-AI/OpenSpec/releases/download/v1.16.0/SHA256SUMS | sha256sum"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "artifact_digest": "pass",
+        "artifact_to_commit": "pass (npm); pass (github-release via target_commitish)",
+        "artifact_to_commit_evidence": "npm SLSA provenance gitCommit 27c0515... equals tag; GitHub release target_commitish 27c0515...; GitHub asset digests equal SHA256SUMS lines",
+        "signature": "not_run"
+      }
+    },
+    {
+      "id": "backlog-md",
+      "blueprint_name": "Backlog.md",
+      "selection": "selected",
+      "source": {
+        "repository": "https://github.com/MrLesk/Backlog.md",
+        "tag": "v1.55.3",
+        "tag_type": "lightweight",
+        "commit": "0cf4fdbc70020327f4366a29d3f405f83d180301",
+        "command": "git ls-remote https://github.com/MrLesk/Backlog.md.git 'refs/tags/v1.55.3' 'refs/tags/v1.55.3^{}'"
+      },
+      "version": "1.55.3",
+      "release_date": "2026-10-23T16:21:16Z",
+      "license": "MIT",
+      "license_evidence": "npm license MIT (wrapper); LICENSE at tag MIT. Platform packages backlog.md-<os>-<cpu> carry no license field.",
+      "runtime": {"node": "no engines field; npm wrapper selects a Bun-compiled platform binary via optionalDependencies", "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "windows-x64", "windows-arm64"]},
+      "interface": {"cli": "backlog task list --json / backlog task view <id> --json; envelope {schemaVersion: 1, kind, ...}; fields isReady, readiness, dependencyGraph documented in CLI-INSTRUCTIONS.md at v1.55.3"},
+      "artifacts": [
+        {"channel": "npm", "name": "backlog.md", "version": "1.55.3", "digest": "sha512-HN37ifPKQR28QAEdKO9g9sF/DjmTaVkBSfMK2BleNrbIShe8evFqoPpGlyvQtAQM1XKW+5guPW3+c5Tt8Mrpew==", "command": "curl -s https://registry.npmjs.org/backlog.md (versions['1.55.3'].dist.integrity)"},
+        {"channel": "npm", "name": "backlog.md-linux-x64", "version": "1.55.3", "digest": "sha512-UBBNFDWmiJhkAqKy0jE39meVTF587EA8hh2qLk9Ag/mGosMpK5QdFqPqRafCIaowgxZCp0y++Vy5ZID2zoMpZg==", "command": "curl -s https://registry.npmjs.org/backlog.md-linux-x64/1.55.3 (dist.integrity)"},
+        {"channel": "npm", "name": "backlog.md-linux-arm64", "version": "1.55.3", "digest": "sha512-EoHqKYU80UNyCa7l/nhuEyztW1GCxG9O9S6wm167Vxf6ZRD8fwWrTgqGnvWbesbUrgOshw3OShAbGYRHyWie/g==", "command": "curl -s https://registry.npmjs.org/backlog.md-linux-arm64/1.55.3 (dist.integrity)"},
+        {"channel": "github-release", "name": "backlog-bun-linux-x64", "digest": "sha256:c20d5c51aa95b66d5c89428927bb0a16dc7beb9110683d66387e0514925f274a", "command": "curl -s https://api.github.com/repos/MrLesk/Backlog.md/releases (assets[].digest)"},
+        {"channel": "github-release", "name": "backlog-bun-linux-arm64", "digest": "sha256:8b8928bf0dcbc83f82cbd2c77668799fe9b3463511acdf62fe3f02fb0a486aa9", "command": "same as above"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "artifact_digest": "pass (npm); pass (github-release, GitHub-computed digest only; no upstream checksum file published)",
+        "artifact_to_commit": "pass (npm); unknown (github-release)",
+        "artifact_to_commit_evidence": "npm gitHead and SLSA provenance (workflow ref refs/tags/v1.55.3) gitCommit 0cf4fdb...; platform packages gitHead 0cf4fdb.... GitHub release target_commitish reads a9d4ab6... which differs from the tag commit; the tag ref governs, but release-binary-to-commit linkage is therefore not established.",
+        "signature": "not_run"
+      }
+    },
+    {
+      "id": "gitea",
+      "blueprint_name": "Gitea",
+      "selection": "selected",
+      "source": {
+        "repository": "https://github.com/go-gitea/gitea",
+        "tag": "v28.3.0",
+        "tag_type": "annotated",
+        "tag_object": "f1cd050b55a46ae556cf992576d01b4a08bd793a",
+        "commit": "4f5a3e13e5f3aca85d830e3a9024c893b0bbf1e1",
+        "command": "git ls-remote https://github.com/go-gitea/gitea.git 'refs/tags/v28.3.0' 'refs/tags/v28.3.0^{}'"
+      },
+      "version": "28.3.0",
+      "release_date": "2026-11-01T09:55:07Z",
+      "license": "MIT",
+      "license_evidence": "LICENSE at tag is MIT text; GitHub repo spdx_id MIT",
+      "runtime": {"go_source_build": "go 1.27 (toolchain go1.27.3), module gitea.dev", "oci_platforms": ["linux/amd64", "linux/arm64", "linux/riscv64"]},
+      "interface": {"api": "REST /api/v1 (per upstream docs; OpenAPI document for 28.3.0 not retrieved)", "security": "28.3.0 is above the patched versions of GHSA-r9ch-mqjm-g67v (1.27.2) and GHSA-w5pg-649r-p6gg (1.27.0)"},
+      "artifacts": [
+        {"channel": "oci", "name": "docker.io/gitea/gitea", "tag": "28.3.0", "media_type": "application/vnd.oci.image.index.v1+json", "digest": "sha256:8967bf9deaf3c5c4adae13519436dc1b20c646ac83fe37ae810c933a1045227d", "platform_digests": {"linux/amd64": "sha256:411af83e9be78029c0047a5f5a72f1d91b7c793ba5e5813b4e70a6bb8e4a0738", "linux/arm64": "sha256:0543eb2049bacecb24645d023c5b3cddbd77bc47d35b2761d0b4c63cc4667292"}, "mirror": "docker.gitea.com/gitea:28.3.0 serves the identical index digest", "command": "anonymous token from https://auth.docker.io/token?service=registry.docker.io&scope=repository:gitea/gitea:pull, then curl manifest https://registry-1.docker.io/v2/gitea/gitea/manifests/28.3.0"},
+        {"channel": "oci", "name": "docker.io/gitea/gitea", "tag": "28.3.0-rootless", "media_type": "application/vnd.oci.image.index.v1+json", "digest": "sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d", "platform_digests": {"linux/amd64": "sha256:481be76469179d4edd90e40209c14d63759be0e5fbc57d567c0fb860df762e24", "linux/arm64": "sha256:226f6b90b42e9d9158d230f7b6015d7cca72c5e3018cc0f85cdeb30294fd0aaf"}, "command": "as above with tag 28.3.0-rootless"},
+        {"channel": "github-release", "name": "gitea-28.3.0-linux-amd64", "digest": "sha256:5f834e8f04986f3b9206cf14743b5a6e6996ceddc238dac6409866ebda2a0686", "command": "curl -sL https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-linux-amd64.sha256 ; curl -s https://dl.gitea.com/gitea/28.3.0/gitea-28.3.0-linux-amd64.sha256"},
+        {"channel": "github-release", "name": "gitea-28.3.0-linux-arm64", "digest": "sha256:24d146e8f5c986b86e5a3311e3ec349ded35202cba056952ab5b585511ace82d", "command": "curl -sL https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-linux-arm64.sha256"},
+        {"channel": "github-release", "name": "gitea-src-28.3.0.tar.gz", "digest": "sha256:a632833d5ae02a18e8f7ed79177763801604de6ef6f6d1c1405029d28de9d3a4", "command": "curl -s https://api.github.com/repos/go-gitea/gitea/releases (assets[].digest)"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "tag_to_commit_evidence": "git ls-remote peeled tag (two runs identical); GitHub git/tags API object.sha 4f5a3e1...; tag signature verification on GitHub reports unknown_key",
+        "artifact_digest": "pass",
+        "artifact_digest_evidence": "Binary: GitHub asset digest == upstream .sha256 file (GitHub) == dl.gitea.com .sha256. OCI: Docker Hub and docker.gitea.com return identical index digest.",
+        "artifact_to_commit": "unknown",
+        "artifact_to_commit_evidence": "OCI images carry no revision label/provenance; release target_commitish is 'main'; GitHub marks the release immutable=true but that does not name a commit",
+        "signature": "not_run"
+      }
+    }
+  ],
+  "couplings": [
+    {"a": "openhands-sdk@1.60.1", "b": "openhands-agent-server@1.60.1", "contract": "same release unit (one tag, one commit); agent-server imports SDK/tools in-process", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "both built from v1.60.1 @ e99e5c7; BUT agent-server/workspace/tools declare openhands-sdk/openhands-tools/openhands-agent-server WITHOUT version constraints on PyPI, so the pairing is only held by an explicit lock"},
+    {"a": "openhands-agent-server@1.60.1", "b": "openhands-typescript-client@1.60.1", "contract": "Agent Server REST/WebSocket OpenAPI", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "client built from the same commit e99e5c7; client package.json config.agentServerImage = agent-server:1.60.1-python"},
+    {"a": "openhands-agent-canvas@1.36.0", "b": "openhands-agent-server@1.60.1", "contract": "config/defaults.json versions.agentServer + compatibility.minimumAgentServer; runtime assertAgentServerVersionIsSupported()", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "defaults.json pins agentServer 1.60.1, floor 1.59.0; Canvas OCI image built FROM agent-server:1.60.1-python. Feature-specific floors inside the client are not enumerated: per-feature parity unknown"},
+    {"a": "openhands-agent-canvas@1.36.0", "b": "openhands-typescript-client@1.60.1", "contract": "exact npm pin in Canvas package.json", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "package.json dependencies['@openhands/typescript-client'] = '1.60.1'"},
+    {"a": "openhands-agent-canvas@1.36.0", "b": "openhands-automation@1.30.1", "contract": "config/defaults.json versions.automation; automation requires openhands-sdk==1.60.1", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "defaults.json pins 1.30.1; PyPI requires_dist openhands-sdk==1.60.1, openhands-workspace==1.60.1"},
+    {"a": "openhands-agent-canvas@1.36.0", "b": "assistant-ui@0.15.32", "contract": "co-hosted in one React host app (UI-01/UI-02)", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "peer ranges intersect only at react/react-dom 19.3.1 (Canvas exact) within assistant-ui ^18||^19; zustand ^5.0.16 vs Canvas 5.0.16 intersect; Canvas also requires react-router 8.5.0. Bundle collision, CSS isolation and existing-session selection are runtime questions"},
+    {"a": "assistant-ui@0.15.32", "b": "react@19.3.1", "contract": "peerDependencies", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "@assistant-ui/react peer react '^18 || ^19'"},
+    {"a": "node-runtime", "b": "agent-canvas + openspec", "contract": "engines.node", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "Canvas >=24, OpenSpec >=22.12.0: a single Node >=24 satisfies both; assistant-ui and the TS client declare no engines; Backlog.md ships its own Bun-compiled binary"},
+    {"a": "python-runtime", "b": "openhands-sdk/agent-server/automation + canvas launcher", "contract": "requires_python and defaults.json python.uvxRequest", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "all >=3.12; Canvas launcher caps <3.15 => CPython 3.12-3.14"},
+    {"a": "openspec@1.16.0", "b": "backlog-md@1.55.3", "contract": "none upstream; cross-references are owned integration (blueprint #integration-contracts)", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "no upstream coupling exists; both are file/CLI tools in Git repositories"},
+    {"a": "gitea@28.3.0", "b": "all other components", "contract": "Git hosting + REST /api/v1 + webhooks; no upstream version coupling to OpenHands, OpenSpec, Backlog.md or assistant-ui", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "no upstream declares a pairing; integration is owned"},
+    {"a": "openhands-agent-server@1.60.1", "b": "Docker Engine (conversation_runtime=docker)", "contract": "Docker API via python docker<8,>=7.1; selectable runtime gated by server config", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "selection advertised through available_conversation_runtimes only when conversation_runtime_selectable=true (default false); Moby version range not declared upstream"}
+  ],
+  "exclusions": [
+    {"combination": "openhands-agent-canvas@1.36.0 with openhands-agent-server < 1.59.0 (incl. the blueprint's qualification pin v1.58.2)", "reason": "below Canvas compatibility.minimumAgentServer 1.59.0; rejected at runtime by assertAgentServerVersionIsSupported()"},
+    {"combination": "openhands-agent-canvas@1.36.0 with @openhands/typescript-client != 1.60.1", "reason": "Canvas pins the client exactly; upstream DEVELOPMENT.md calls mixed client/backend pins unsupported"},
+    {"combination": "openhands-automation@1.30.1 with openhands-sdk or openhands-workspace != 1.60.1", "reason": "PyPI requires_dist pins ==1.60.1"},
+    {"combination": "openhands-sdk / -tools / -workspace / -agent-server at differing versions", "reason": "single release unit from one commit; Canvas launcher installs all four from the same version/ref so inter-package APIs stay in sync; PyPI metadata does not enforce this"},
+    {"combination": "any OpenHands component taken from a floating main branch or a floating image tag (latest-python, sha-tags of main builds)", "reason": "upstream DEVELOPMENT.md and blueprint #components forbid floating mains; Agent Server's default conversation image is the floating latest-python tag"},
+    {"combination": "host React other than 19.3.1 / react-router other than 8.5.0 when Canvas is embedded", "reason": "Canvas peerDependencies are exact"},
+    {"combination": "Node < 24 for the Canvas host/launcher; Node < 22.12.0 for OpenSpec", "reason": "engines.node"},
+    {"combination": "CPython < 3.12 or >= 3.15 for the OpenHands Python stack under the Canvas launcher", "reason": "requires_python >=3.12; defaults.json uvxRequest <3.15 (upstream issue OpenHands/OpenHands#18654)"},
+    {"combination": "@openhands/typescript-client from the archived github.com/OpenHands/typescript-client repository", "reason": "repository archived; current releases are built from software-agent-sdk/clients/typescript"},
+    {"combination": "Gitea <= 1.27.1", "reason": "affected by GHSA-r9ch-mqjm-g67v (patched 1.27.2) and/or GHSA-w5pg-649r-p6gg (patched 1.27.0), both cited by the blueprint"},
+    {"combination": "OpenHands/OpenHands release 'pr19394-evidence'", "reason": "temporary PR-evidence release, not a version tag"}
+  ],
+  "notes_for_F-01.2": [
+    "Pin all four OpenHands Python packages (openhands-sdk, openhands-tools, openhands-workspace, openhands-agent-server) to 1.60.1 explicitly with hashes; their PyPI metadata does not constrain each other.",
+    "Override the Agent Server per-conversation image (config conversation_image / OH_CONVERSATION_IMAGE) with the pinned digest ghcr.io/openhands/agent-server@sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55; the upstream default is the floating latest-python tag.",
+    "Pin OCI images by index digest (multi-arch), not by tag. ghcr.io/openhands/agent-server:e99e5c7-python resolves to a different index (sha256:8857fbd2cae6798678f208f18a85d23dc2730a3df8ecdf074373624b69ce675f) than 1.60.1-python for the same commit; use the 1.60.1-python digest, which carries tag provenance and is the Canvas image's base.",
+    "OCI index entries with platform unknown/unknown are BuildKit attestation manifests (SLSA provenance; Canvas also has a Syft SBOM scanner in its provenance) - usable as SBOM/provenance input.",
+    "npm: lock by dist.integrity (sha512). Backlog.md resolves a platform package (backlog.md-linux-x64 / -arm64) via optionalDependencies; lock those too.",
+    "PyPI SDK wheels have no PEP 740 provenance; wheel-to-commit linkage is unknown unless F-01.2 rebuilds from e99e5c7 and compares.",
+    "Licence inputs for Grant: SDK packages have no PyPI licence metadata; Backlog.md platform packages have no licence field; agent-server image bundles third-party ACP CLIs (claude-code, codex, gemini-cli); assistant-ui depends on assistant-cloud.",
+    "Agent Canvas image and launcher embed PostHog telemetry configuration; egress/telemetry policy is a qualification item.",
+    "No signature (Sigstore/Cosign/GPG) was verified in F-01.1; npm provenance payloads and BuildKit provenance were decoded, not cryptographically verified.",
+    "Freshness: openhands v1.60.1 and Canvas v1.36.0 were published on 2026-11-05 (<1 day before retrieval). The previous coherent upstream set is Canvas v1.35.0 (agentServer 1.59.0, typescript-client 1.59.0, automation 1.26.1, floor 1.59.0); its identifiers were not resolved here."
+  ]
+}
