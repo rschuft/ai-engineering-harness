@@ -76,7 +76,7 @@
       "name": "Repository exchange and scratch only",
       "strong": "Exchange is guest-owned storage populated over the management channel (git over SSH on a loopback forward, or incus file push); a provider share only as one explicit allowlisted directory outside the Owner's profile; scratch is a second guest disk. The Windows QEMU profile uses no host filesystem share.",
       "trusted_workload": "Same model; the WSL exchange lives inside the dedicated distribution's filesystem, never under /mnt.",
-      "inspection": "Provider device list shows only root and scratch (plus the allowlisted share, if any); findmnt shows exchange and scratch at their declared mount points.",
+      "inspection": "Provider device list shows only the root and scratch disks and the declared configuration media, each medium read-only (plus the allowlisted share, if any); findmnt shows exchange and scratch at their declared mount points.",
       "tested_by": ["F-03.3.1", "S-02.1", "S-02.2"]
     },
     {

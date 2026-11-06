@@ -11,8 +11,20 @@ Owner (decision 0003, W1). Files:
 | [`../seed/`](../seed/README.md) | Seed templates shared with `strong-incus-vm`, and the seed generator specification. |
 
 **Status.** Declared and pinned; `tools/check_profile.py --strict` passes. Provider
-validation is **UNKNOWN** until F-03.2.1b runs after A1 to A3. Not operational until
-F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
+validation **passed** on 2026-11-06 (F-03.2.1b, after A1 to A3):
+[`evidence/F-03.2.1b-provider-validation.md`](../../evidence/F-03.2.1b-provider-validation.md).
+Not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
+
+## Open items for F-03.2.2
+
+1. **`-mon` is deprecated in QEMU 11.1.3.** The paused boot warned: `'-mon' is
+   deprecated, use '-object' with 'monitor-hmp' or 'monitor-qmp' types instead`.
+   F-03.2.2 moves `launch.argv` to the non-deprecated QMP monitor form and re-runs the
+   paused-boot validation (PREREQUISITES.md, F-03.2.1b step 4) with the changed argv in
+   the same run. The argv is unchanged until then, so the recorded validation still
+   applies to it (Overseer decision, 2026-11-06).
+2. **`warning: Ignoring request for interrupt vector 0`.** Printed once during the
+   paused boot, before any guest code ran. Observe on a real boot whether it recurs.
 
 ## Choices
 
@@ -63,8 +75,10 @@ command line names exactly one and `-machine` names none. A missing WHPX is a la
 failure, reported as `TIER_UNAVAILABLE` naming A1.
 
 **Virtualization extensions (`profiles P12`): masked.** `-cpu max,vmx=off,svm=off`
-and `nested_virt_exposed: false`. WHPX's acceptance of `max` with these flags off is
-UNKNOWN until F-03.2.1b's paused boot; the guest-side check is F-03.2.2.
+and `nested_virt_exposed: false`. F-03.2.1b's paused boot observed this at the
+configuration level: WHPX accepted `max` with these flags off, QOM `vmx` and `svm` are
+false on every vCPU, and `filtered-features` is all zero. The guest-visible CPUID is
+unobserved until F-03.2.2's guest-side check.
 
 **Other boot settings.** `-nodefaults` and `-no-user-config`; machine `pc-q35-11.1`
 (the versioned type, so the hardware is reproducible); `-display none`; no USB, audio,

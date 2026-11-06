@@ -157,7 +157,7 @@
       "type": "9p",
       "source": "Incus documentation (howto/instances_create): 'Incus provides the agent primarily through a remote 9p file system with mount name config.'",
       "status": "UNKNOWN whether it is still attached when agent:config is used. Nothing in this profile mounts it; F-03.3.1 inspects the device list and findmnt (profiles P3).",
-      "contract_finding": "Contract P3/P4 and section 6 allow only root and scratch disk devices for Incus. A Debian cloud image needs the cloud-init:config ISO for its seed and agent:config (or this 9p share) for the agent. Reported to the Overseer; not resolved here."
+      "contract_finding": "Resolved by the contract amendment in dcef745 (decision 0003, Current facts, 2026-11-06): profiles P4 and sections 6 and 7 now allow the read-only cloud-init:config and agent:config configuration media this profile declares. This 9p config share stays forbidden (profiles P3, P4); whether Incus still attaches it is UNKNOWN (status above)."
     }
   ],
   "storage": {

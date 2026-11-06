@@ -56,13 +56,14 @@ config and devices. Expected outcome: UNKNOWN.
 
 ## Findings for the Overseer
 
-- **Disk devices beyond root and scratch.** The contract allows only root and scratch
-  disk devices for Incus (sections 6 and 7, `profiles P4`). A Debian cloud image needs
-  the `cloud-init:config` CD-ROM for its seed, and the Incus agent needs `agent:config`
-  or Incus's default 9p share named `config`. Incus documents that it "provides the
-  agent primarily through a remote 9p file system with mount name config". This
-  profile declares both CD-ROMs (generated, read-only, not host paths), and the 9p
-  share as `provider_implicit_shares` with status UNKNOWN. The contract text is
-  unchanged.
+- **Disk devices beyond root and scratch: resolved.** A Debian cloud image needs the
+  `cloud-init:config` CD-ROM for its seed, and the Incus agent needs `agent:config` or
+  Incus's default 9p share named `config`. Incus documents that it "provides the agent
+  primarily through a remote 9p file system with mount name config". The contract
+  amendment in `dcef745` (decision 0003, "Current facts", 2026-11-06) allows the two
+  read-only configuration media this profile declares (`profiles P4`, sections 6 and
+  7). The 9p `config` share stays forbidden (`profiles P3`, `profiles P4`). It is
+  declared as `provider_implicit_shares` with status UNKNOWN: whether Incus still
+  attaches it is for F-03.3.1 to inspect. The four unresolved pins above are unchanged.
 - **The bridge, its ACLs and IPv6 off** are network-level objects outside this profile
   (`aieh-br0`); F-03.3.2 qualifies them.
