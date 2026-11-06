@@ -47,3 +47,15 @@ same review and an amendment to this record.
   The lock only references these packages; it does not redistribute them.
 - If a later upstream release publishes a `func-timeout` wheel, prefer the wheel and
   retire the exception.
+
+## Current facts (2026-11-06, licensing audit)
+The Context above states the licence as "LGPLv2/2.1", which is incorrect. The licence
+is LGPL-3.0:
+- the `LICENSE` file shipped in the sdist is the LGPL version 3 text, byte-identical to
+  upstream tag 4.3.5;
+- every module header says LGPLv3.
+
+Only `PKG-INFO` (LGPLv2) and the `setup.py` header (LGPLv2.1) say otherwise. Upstream
+is inconsistent, and the shipped text governs; see
+`composition/inventory/PUBLICATION-AUDIT.md`, finding C8. The decision and its other
+consequences are unchanged: the LGPL licence remains an open distribution item.

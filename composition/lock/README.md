@@ -124,7 +124,7 @@ This lock does not configure any server. F-04.1 sets `conversation_image` to the
 | `setup.cfg` sha256 (in archive) | `1c473cbaee8da5fc46e7f0158794af5cea4414c34a3cf3f180c2001f5e38bd3e` |
 | Archive shape | 41 members (35 files), no links |
 | Reviewer | Overseer, 2026-11-06 |
-| Licence | LGPLv2/2.1. This is an open distribution item (see `../inventory/LEDGER.md`). |
+| Licence | LGPL-3.0: the shipped `LICENSE` text and the module headers say so, while `PKG-INFO` and the `setup.py` header say LGPLv2/2.1. The shipped text governs ([audit](../inventory/PUBLICATION-AUDIT.md) C8). This is an open distribution item (see `../inventory/LEDGER.md`). |
 
 The resolver builds it only when every check passes:
 
