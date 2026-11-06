@@ -10,3 +10,5 @@
 /.gitignore              -text
 /task_prompts/**         -text
 /tools/verify_seed.py    -text
+# The publication-safety gate hooks run under sh, including Git for Windows: keep LF.
+/.githooks/**            text eol=lf

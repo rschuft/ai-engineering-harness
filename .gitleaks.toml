@@ -1,0 +1,173 @@
+# Publication-safety gate configuration for Gitleaks 8.30.1.
+# Read by tools/publication_gate.py from the index (pre-commit) or from HEAD
+# (pre-push, history). It extends the Gitleaks default rules with narrow rules
+# for private machine information. See CONTRIBUTING.md, "Publication-safety gate".
+#
+# Changing this file is a reviewed change, like code. Every allowlist entry
+# states why it is safe. Prefer the narrowest form: an exact value or an exact
+# path, never a broad pattern. Inline "gitleaks:allow" comments and
+# .gitleaksignore files are ignored by the gate.
+
+title = "ai-engineering-harness publication gate"
+minVersion = "v8.30.1"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Binary and archive allowlist (read by tools/publication_gate.py, not Gitleaks).
+# Content that cannot be inspected as text is refused unless its exact
+# repository path is listed here with a reason. gzip data is never exempted:
+# it is always decompressed and its content scanned, listed or not.
+#
+#   binary_allowlist = [
+#     { path = "docs/diagram.png", reason = "Generated from docs/diagram.dot; reviewed in PR N." },
+#   ]
+#
+# Tracked binaries at the time the gate was introduced: only the twelve gzip
+# files under composition/inventory/generated/, which are decompressed and
+# scanned, so no entry is needed.
+# ---------------------------------------------------------------------------
+[publication_gate]
+binary_allowlist = []
+
+# ---------------------------------------------------------------------------
+# Personal absolute paths. The captured user name is the "secret"; generic
+# placeholders are allowed by exact name. Placeholders that begin with < % $ {
+# (such as C:\Users\<user>, %USERPROFILE%, $HOME, ${USER}) never match at all,
+# and ~ is not a path to a named profile. Repository-relative paths never match.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "personal-windows-profile-path"
+description = "Absolute path into a personal Windows user profile (backslash, forward-slash or JSON-escaped)."
+regex = '''(?i)\b[a-z]:(?:\\|/)+users(?:\\|/)+([^\\/\s"'`<>|:*?%${}\[\](),;=]+)'''
+secretGroup = 1
+keywords = ["users"]
+tags = ["personal-path"]
+[[rules.allowlists]]
+description = "Generic profile names used in documentation: C:\\Users\\you, \\user, \\username, \\Public, \\Default."
+regexTarget = "secret"
+regexes = ['''(?i)^(?:you|user|username|public|default)$''']
+[[rules.allowlists]]
+description = "Synthetic profile name 'owner' in the Windows-path fixtures of tools/tests/test_check_profile.py."
+condition = "AND"
+paths = ['''(?:^|/)tools/tests/test_check_profile\.py$''']
+regexTarget = "secret"
+regexes = ['''^owner$''']
+
+[[rules]]
+id = "personal-posix-home-path"
+description = "Absolute path into a personal Linux, WSL, macOS or MSYS home (/home/<name>, /Users/<name>, /mnt/c/Users/<name>, /c/Users/<name>)."
+regex = '''(?m)(?:^|[^A-Za-z0-9_.~\-])(?:/mnt|/cygdrive)?(?:/[A-Za-z])?/(?:home|Users)/([A-Za-z0-9_][A-Za-z0-9_.\-]*)'''
+secretGroup = 1
+keywords = ["/home/", "/users/"]
+tags = ["personal-path"]
+[[rules.allowlists]]
+description = "Generic homes: /home/user (documentation), /home/agent (the guest user in profiles/), /Users/Shared (macOS shared folder)."
+regexTarget = "secret"
+regexes = ['''^(?:user|agent|Shared)$''']
+[[rules.allowlists]]
+description = "Synthetic home name 'owner' in the POSIX-path fixtures of tools/tests/test_check_profile.py."
+condition = "AND"
+paths = ['''(?:^|/)tools/tests/test_check_profile\.py$''']
+regexTarget = "secret"
+regexes = ['''^owner$''']
+
+[[rules]]
+id = "personal-wsl-unc-home-path"
+description = "Windows UNC path into a WSL home (\\\\wsl$\\<distro>\\home\\<name> or \\\\wsl.localhost\\...)."
+regex = '''(?i)(?:\\|/){2,}wsl(?:\$|\.localhost)(?:\\|/)+[^\\/\s]+(?:\\|/)+home(?:\\|/)+([^\\/\s"'`<>|:*?%${}]+)'''
+secretGroup = 1
+keywords = ["wsl"]
+tags = ["personal-path"]
+[[rules.allowlists]]
+description = "Generic homes, as for personal-posix-home-path."
+regexTarget = "secret"
+regexes = ['''^(?:user|agent)$''']
+
+# ---------------------------------------------------------------------------
+# Local credential and token stores, matched by the path of the staged or
+# committed file, so documentation and .gitignore lines that merely mention
+# these names still pass.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "credential-store-claude"
+description = "Claude Code credential store (.claude/.credentials.json)."
+path = '''(?:^|/)\.claude/\.credentials\.json$'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-claude-local"
+description = "Claude Code machine-local settings and agent memory (.claude/settings.local.json, .claude/agent-memory-local/); local-only per .gitignore."
+path = '''(?:^|/)\.claude/(?:settings\.local\.json$|agent-memory-local/)'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-codex"
+description = "Codex CLI credential store (.codex/auth.json)."
+path = '''(?:^|/)\.codex/auth\.json$'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-mcp"
+description = "Project MCP server configuration (.mcp.json), which commonly carries tokens; local-only per .gitignore."
+path = '''(?:^|/)\.mcp\.json$'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-git"
+description = "Git credential store (.git-credentials)."
+path = '''(?:^|/)\.git-credentials$'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-netrc"
+description = "netrc credential file (.netrc, _netrc)."
+path = '''(?:^|/)[._]netrc$'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-npmrc-auth"
+description = "npm configuration carrying an auth token or password (.npmrc with _authToken, _auth or _password)."
+path = '''(?:^|/)\.npmrc$'''
+regex = '''(?i)(?:_authToken|_auth|_password)\s*='''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-pypirc"
+description = "Python package index credentials (.pypirc)."
+path = '''(?:^|/)\.pypirc$'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-cloud-cli"
+description = "Cloud CLI credential stores (.aws/credentials, .azure/, .config/gcloud/, .config/gh/hosts.yml, .docker/config.json, .kube/config)."
+path = '''(?:^|/)(?:\.aws/credentials$|\.azure/|\.config/gcloud/|\.config/gh/hosts\.ya?ml$|\.docker/config\.json$|\.kube/config$)'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-ssh"
+description = "SSH private keys and SSH client state (id_rsa, id_dsa, id_ecdsa, id_ed25519, .ssh/)."
+path = '''(?:^|/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?$|\.ssh/)'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-key-file"
+description = "Key and certificate containers (*.pem, *.key, *.p12, *.pfx, *.ppk)."
+path = '''(?i)\.(?:pem|key|p12|pfx|ppk)$'''
+tags = ["credential-store"]
+
+[[rules]]
+id = "credential-store-dotenv"
+description = "Environment files (.env, .env.*); .env.example is a documented template and allowed."
+path = '''(?:^|/)\.env(?:\.[^/]*)?$'''
+tags = ["credential-store"]
+[[rules.allowlists]]
+description = "The documented template name."
+paths = ['''(?:^|/)\.env\.example$''']
+
+[[rules]]
+id = "credential-store-keyring"
+description = "GnuPG homes and keyrings (.gnupg/, keyrings/, *.keyring, pubring/secring)."
+path = '''(?:^|/)(?:\.gnupg/|keyrings/|[^/]+\.keyring$|(?:pub|sec)ring\.(?:gpg|kbx)$)'''
+tags = ["credential-store"]

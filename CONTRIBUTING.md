@@ -17,7 +17,8 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests. It is offline and takes
-seconds. Without Task, run the four commands it wraps:
+seconds. Before your first commit, also run `task hooks:install` once per clone
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the four commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -120,6 +121,9 @@ Only what is listed as verified has been exercised.
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
 | `test` | `python -I -B -m unittest discover -s tools/tests -v` | no | Tool tests (stdlib `unittest`). |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
+| `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
+| `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
+| `scan:history [-- REVS]` | `python -I -B tools/publication_gate.py history [REVS]` | no | Read-only, redacted scan of every commit (default `--all`); exit 1 on findings. |
 | `resolve WORK=<dir>` | `python -I composition/resolve.py --work <dir>` | yes | Component lock resolution and host install; see [`composition/lock/README.md`](composition/lock/README.md). `<dir>` must be empty or absent and outside the checkout. |
 | `inventory RESOLVED=<work> OUT=<file>` | `python -I composition/inventory/metadata_inventory.py --resolved <work> --out <file>` | yes | Component metadata inventory (declared licences). |
 | `sbom RESOLVED=<work> TOOLS=<dir> OUT=<dir> [-- --skip-oci]` | `python -I composition/inventory/scan.py --resolved <work> --tools <dir> --out <dir> [--skip-oci]` | yes | Syft SBOMs and Grant licence findings. Windows x86_64 only. Without `--skip-oci` it downloads the image layers of four OCI images. |
@@ -170,7 +174,8 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py` and their `tests/` | seed, F-02 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `publication_gate.py` and their `tests/` | seed, F-02, F-03.2.1, publication gate |
+| `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, this guide | seed, F-02 |
 
 Planned homes are documented here and created by the leaf that first fills them.
@@ -209,10 +214,146 @@ This is a **public, MIT-licensed** repository.
 - Use throwaway work directories outside the checkout, and run Python tools with
   `python -I` (add `-B` where a module is imported from the checkout).
 - Put no credentials in commands, files, or logs. Registry access is anonymous.
-- Before each commit and push, review the diff for secrets, personal machine
-  paths and private data.
+- Install the [publication-safety gate](#publication-safety-gate) in every
+  clone you commit from. It does not replace review: before each commit and
+  push, still review the diff for secrets, personal machine paths and private
+  data.
 - Third-party code and artifacts keep their own licences; preserve their
   notices.
+
+## Publication-safety gate
+
+This repository is public, and anything pushed to it should be assumed copied
+at once. The gate is a pair of repository-local git hooks that stop secrets and
+private machine information before they are committed or pushed. Its logic is
+in [`tools/publication_gate.py`](tools/publication_gate.py) (stdlib Python); the
+hooks in [`.githooks/`](.githooks/) only locate CPython 3.12+ and call it. The
+detector is [Gitleaks](https://github.com/gitleaks/gitleaks) (MIT), run locally:
+nothing is sent to an external scanning service.
+
+### Install and verify
+
+```
+task hooks:install     # python -I -B tools/publication_gate.py install
+task hooks:verify      # python -I -B tools/publication_gate.py verify, then the gate's tests
+```
+
+`hooks:install` downloads the pinned Gitleaks **8.30.1** release asset for the
+host, checks it against the sha256 pinned in the gate (which was checked against
+the release's `gitleaks_8.30.1_checksums.txt` and GitHub's asset digest when
+pinned) and against that checksums file (itself pinned by sha256), extracts the
+executable, checks its pinned sha256, and caches it per user, outside the
+checkout:
+
+- Windows: `%LOCALAPPDATA%\ai-engineering-harness\tools\gitleaks\8.30.1\`
+- elsewhere: `${XDG_CACHE_HOME:-~/.cache}/ai-engineering-harness/tools/gitleaks/8.30.1/`
+
+It then sets `git config --local core.hooksPath .githooks` (this clone only).
+Gitleaks publishes no release signature, so none is checked. Builds are pinned
+for Windows, Linux and macOS on x86_64 and arm64; only the Windows x86_64 build
+has been run here. Every hook run re-checks the cached binary's sha256 before
+using it.
+
+`hooks:verify` checks the cached binary's hash and version, the hook wiring and
+the configuration, then runs the synthetic test suite
+(`tools/tests/test_publication_gate.py`) with `AIEH_GATE_REQUIRE_SCANNER=1`, so
+the tests that need the real scanner fail instead of skipping. In `task test`
+those tests skip when the scanner is not installed.
+
+`task scan:history` (`python -I -B tools/publication_gate.py history [REVS]`)
+scans every commit reachable from `REVS` (default `--all`), read-only, and
+prints findings without values. It exits 1 when it finds anything.
+
+### What it checks
+
+- **pre-commit** scans the exact staged content: every added or modified blob in
+  the index, read from git, not from the working tree.
+- **pre-push** scans every commit being introduced, read from the ref lines git
+  passes on stdin: for an existing remote ref, the commits not reachable from
+  its current tip; for a new remote ref, the commits not reachable from any
+  remote-tracking ref. Each commit's changed blobs and its message are scanned,
+  so a secret added in one commit and removed in a later one is still caught.
+- Only what git actually stages or commits is inspected. `.gitignore` is not
+  relied on: `git add -f .env` is caught.
+- Rules: the Gitleaks default rules (tokens, API keys, private keys and many
+  more), extended in the committed [`.gitleaks.toml`](.gitleaks.toml) with
+  narrow rules for absolute paths into personal Windows profiles
+  (`<drive>:\Users\<name>`, with forward slashes, or JSON-escaped), personal
+  Linux, WSL, MSYS and macOS homes (`/home/<name>`, `/Users/<name>`,
+  `/mnt/<drive>/Users/<name>`, `/c/Users/<name>`, `\\wsl$\...\home\<name>`), and
+  local credential and token stores matched **by file path** (for example
+  `.claude/.credentials.json`, `.codex/auth.json`, `.mcp.json`,
+  `.git-credentials`, `.netrc`, `.npmrc` with an auth token, `.aws/credentials`,
+  `.kube/config`, SSH keys, `*.pem`/`*.key`, `.env` and `.env.*` but not
+  `.env.example`, keyrings and `.gnupg/`). Documentation and `.gitignore` lines
+  that merely mention those names pass. Generic placeholders pass and are listed
+  in the configuration with a reason each: names beginning with `<`, `%`, `$`
+  or `{` (`C:\Users\<user>`, `%USERPROFILE%`, `$HOME`), `~`, `C:\Users\you`,
+  `C:\Users\Public`, `/home/user`, `/home/agent` (the guest user in
+  `profiles/`). Repository-relative paths never match.
+- **Archives and binaries.** gzip data is decompressed and its content scanned.
+  Any other binary or archive (zip, tar, 7z, disk images, executables, PDFs,
+  images and the like) is refused unless its exact path is listed in
+  `binary_allowlist` in `.gitleaks.toml` with a reason; a listed binary is still
+  subject to the path rules. The list is empty: the only tracked binaries are the
+  gzip files under `composition/inventory/generated/`, which are scanned.
+- **Fails closed.** A missing scanner, a wrong hash, a scanner error or timeout,
+  a missing or invalid configuration, or a scan that cannot complete blocks the
+  commit or push (exit 2). Each scanned file carries a per-run marker the
+  scanner must report, so a scanner that silently skips a file or "succeeds"
+  without output is caught. A file that Gitleaks would skip by a default path
+  allowlist (lock files, `node_modules/`) is rescanned under a neutral name.
+  Inline `gitleaks:allow` comments and `.gitleaksignore` files are ignored.
+- Output names the category, rule, file, line and commit only. Values are never
+  printed (`--redact`, and the gate prints no match text).
+
+### What it cannot detect
+
+- Secrets in formats no rule knows, including novel or custom token formats and
+  low-entropy passwords.
+- Secrets split across lines, files or commits, or encoded in ways the scanner
+  does not decode.
+- Private information that is not a recognisable path or credential: names,
+  hostnames, internal URLs, customer data, screenshots.
+- Content of allowlisted binaries.
+- Anything that does not pass through these hooks: content outside git, other
+  clones without the gate, edits made on GitHub, issue and PR text, and tags'
+  annotation messages.
+- A bypass. `git commit --no-verify`, `git push --no-verify`, or unsetting
+  `core.hooksPath` turns the gate off. Never do that; agents must not either.
+
+### False positives
+
+Change the committed `.gitleaks.toml` with the narrowest possible allowlist
+entry: an exact value or name, scoped to an exact path where possible, with a
+`description` stating why it is safe. Prefer value- or line-based entries:
+global path allowlists are not honoured (the file is rescanned under a neutral
+name). The change is reviewed like code. Never use `--no-verify` to get past a
+finding.
+
+Known false positives: `generic-api-key` matches English prose in the seed plan
+(`AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json`
+and its `.html` projection). They are already published, so they block nothing
+unless those files change; the history scan reports them.
+
+### If the gate finds a credential
+
+1. Do not push. Unstage or amend the unpushed commit to remove it; for an
+   earlier unpushed commit, rewrite only the unpushed commits.
+2. If the credential ever left this machine (pushed anywhere, pasted, logged,
+   shared), treat it as compromised: **revoke and rotate it** at its issuer.
+   Removing it from git does not undo the exposure.
+3. Never rewrite published history or force-push without the Owner's
+   authorization.
+
+### GitHub push protection
+
+Keep GitHub's server-side secret scanning and push protection enabled for this
+repository. It is an independent backstop: it applies to pushes from any clone,
+including ones without these hooks or where they were bypassed, and to edits
+made on GitHub, and it uses GitHub's own provider-verified patterns. The local
+gate adds what GitHub does not check (personal paths, local credential files,
+refused binaries) and stops content before it leaves the machine.
 
 ## How progress is recorded
 

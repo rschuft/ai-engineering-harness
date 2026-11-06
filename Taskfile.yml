@@ -76,6 +76,24 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_profile.py {{.CLI_ARGS}}'
 
+  hooks:install:
+    desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
+    cmds:
+      - '{{.PYTHON}} -I -B tools/publication_gate.py install'
+
+  hooks:verify:
+    desc: Verify the gate (python -I -B tools/publication_gate.py verify, then its synthetic test suite with AIEH_GATE_REQUIRE_SCANNER=1)
+    env:
+      AIEH_GATE_REQUIRE_SCANNER: '1'
+    cmds:
+      - '{{.PYTHON}} -I -B tools/publication_gate.py verify'
+      - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -p test_publication_gate.py -v'
+
+  scan:history:
+    desc: Read-only, redacted scan of every commit (python -I -B tools/publication_gate.py history); pass -- REVS to narrow it
+    cmds:
+      - '{{.PYTHON}} -I -B tools/publication_gate.py history {{.CLI_ARGS}}'
+
   resolve:
     desc: Resolve and verify the component lock (python -I composition/resolve.py --work WORK); WORK must be empty or absent and outside the checkout
     requires:
