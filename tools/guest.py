@@ -1280,8 +1280,11 @@ def guest_probes(ports, host_ips, http_ip):
         ('virtio_ports', 'ls /dev/virtio-ports'),
         ('unix_sockets', 'ss -xlH'),
         ('host_sockets', 'test -e /var/run/docker.sock && echo docker.sock present || echo '
-                         'docker.sock absent; echo "DOCKER_HOST=${DOCKER_HOST-unset}"; test -e '
-                         '/tmp/.X11-unix && echo X11 present || echo X11 absent'),
+                         'docker.sock absent; echo "DOCKER_HOST=${DOCKER_HOST-unset}"'),
+        # P6 (amended 2026-11-06): no socket under /tmp/.X11-unix; see x11_unix_clean
+        ('x11_unix', 'x=/tmp/.X11-unix; if [ -L "$x" ]; then echo symlink; elif [ ! -e "$x" ]; '
+                     'then echo absent; else echo "type=$(stat -c %F "$x")"; '
+                     "find \"$x\" -mindepth 1 ! -type d -printf '%y %p\\n'; echo end; fi"),
         ('tools', 'for t in bash timeout getent python3 curl wget; do printf "%s=%s\\n" "$t" '
                   '"$(command -v $t || echo absent)"; done'),
         # egress probes (Owner condition 5; evidence toward F-03.3.2): positive controls first
@@ -1403,6 +1406,20 @@ def lsblk_by_serial(lsblk_json):
     except ValueError:
         pass
     return out
+
+
+def x11_unix_clean(text):
+    """P6 as amended on 2026-11-06 (decision 0003, "Current facts").
+
+    No socket under /tmp/.X11-unix: the path is absent, or it is a directory whose
+    entries are all directories (the x11_unix probe lists every other entry, one per
+    line, between the type line and "end"). A symlink, a non-directory at the path,
+    any listed entry, an error line or unparsable output is not clean.
+    """
+    lines = [line for line in text.replace('\r', '').split('\n') if line.strip()]
+    if lines == ['absent']:
+        return True
+    return lines == ['type=directory', 'end']
 
 
 def truthy(value):
@@ -1559,9 +1576,13 @@ def evaluate(profile, record, obs):
         check('chardevs', ['qmp', 'serial0'], chardevs, 'QMP query-chardev', chardevs == ['qmp', 'serial0']),
         check('virtio-serial ports', 'absent', out_text('virtio_ports'), 'guest: ls /dev/virtio-ports',
               (g.get('virtio_ports') or {}).get('rc') not in (0, None)),
-        check('host sockets', 'docker.sock absent, DOCKER_HOST unset, X11 absent',
+        check('host sockets', 'docker.sock absent, DOCKER_HOST unset',
               out_text('host_sockets'), 'guest: test -e',
-              out_text('host_sockets') == 'docker.sock absent\nDOCKER_HOST=unset\nX11 absent'),
+              out_text('host_sockets') == 'docker.sock absent\nDOCKER_HOST=unset'),
+        check('/tmp/.X11-unix', 'absent, or a directory holding no socket or other '
+              'non-directory entry; not a symlink', out_text('x11_unix'),
+              "guest: test -L, stat -c %F, find -mindepth 1 ! -type d",
+              x11_unix_clean(out_text('x11_unix'))),
         check('guest agent declared', False, (profile.get('guest_agent') or {}).get('used'),
               'profile', (profile.get('guest_agent') or {}).get('used') is False),
     ], formal='F-03.3.1; S-02.1, S-02.2'))

@@ -183,6 +183,38 @@ conditions, recorded here and in the execution-profile contract:
   (read-only CD-ROMs). Their content stays bound by P5, and each is listed in the profile's
   declared devices so `inspect` can compare against it. The Incus 9p `config` share and any host
   filesystem share remain forbidden (P3, P4).
+- **2026-11-06, F-03.2.2b: P6 wording amended (Overseer decision as contract owner).** P6's
+  inspection asked for "the absence of … `/tmp/.X11-unix`". The first real boots found that
+  path as an empty directory (no socket), created by the guest's own
+  `/usr/lib/tmpfiles.d/x11.conf`, so `inspect` reported P6 FAIL
+  (`evidence/F-03.2.2b-guest-lifecycle.md`, Findings 3). P6 protects against host display
+  and IPC channels, and an empty directory is not one. The inspection now asks for **no
+  socket under `/tmp/.X11-unix`**: nothing in it but directories, and the path itself not a
+  symlink (`profiles/README.md` P6, `profiles/properties.json`, `tools/guest.py`).
+- **2026-11-06, F-03.2.2b: WHPX XSAVE limitation of the reference profile.** Recorded only;
+  `-cpu` and `launch.argv` are unchanged.
+  - **Observed** on this host (AMD, XSAVES present) with QEMU 11.1.3 WHPX,
+    `-cpu max,vmx=off,svm=off` and the Debian 13 kernel: every boot logs
+    `x86/fpu: misordered xstate at 1408` and the WARN at `xstate.c:254`
+    (`fpu__init_system_xstate`). That is the kernel's one-time warning that the XSAVE
+    component offsets in CPUID leaf 0xD are not ascending. There is no
+    `XSAVE consistency problem`: XSAVE stays enabled, and the guests ran normally in both
+    cycles (`evidence/F-03.2.2b-guest-lifecycle.md`, Findings 4).
+  - **Upstream, related but distinct:** qemu-devel "[PATCH v2 12/18] whpx: i386: forward
+    the dynamic EBX of CPUID[0xD] sub-leaves 0 and 1, not 1 and 2" (2026-10-27). It reports
+    that hosts *without* XSAVES get `XSAVE consistency problem` (`xstate.c:638`) and a
+    kernel panic with XSAVE-capable models, including `max`. **Inference:** our symptom
+    differs, so the warning is not attributed to that defect. The pinned 11.1.3 is presumed
+    to carry it (**UNKNOWN**: its source is not verified).
+  - **Impact:** no isolation property (P1 to P12) is affected that we know of. On hosts
+    without XSAVES, `max` is expected to panic at boot, and preflight does not detect that.
+    Extended-register state correctness on this host is unqualified.
+  - **Carried:**
+    - F-03.4 and R-03.x qualify the CPU model (`max` or a named model), and add a host
+      XSAVES preflight check or disclose `TIER_UNAVAILABLE`;
+    - re-evaluate when a QEMU with the upstream fix is pinned;
+    - no unreviewed upstream patch is applied.
+    Detail: `profiles/strong-windows-qemu-whpx/README.md`, open item 3.
 
 ## Evidence
 - **Blueprint:** #infrastructure-state, #containment-architecture, #platforms, extracted

@@ -567,7 +567,8 @@ def passing_observation(record):
         'exchange_dirs': '/home/agent/exchange agent 750\n/srv/scratch/agent agent 750',
         'ip6_addr': '1: lo: <LOOPBACK,UP>\n    inet6 ::1/128 scope host',
         'virtio_ports': 'ls: cannot access',
-        'host_sockets': 'docker.sock absent\nDOCKER_HOST=unset\nX11 absent',
+        'host_sockets': 'docker.sock absent\nDOCKER_HOST=unset',
+        'x11_unix': 'type=directory\nend',
         'control_tcp_guest_sshd': '',
         'control_dns_localhost': '::1 localhost',
         'egress_tcp_1.1.1.1_443': '',
@@ -640,6 +641,37 @@ class Evaluate(LaunchRecord):
         obs = passing_observation(self.record)
         mutate(obs)
         self.assertEqual(self.verdicts(obs)[f'profiles {pid}'], 'FAIL')
+
+    def test_x11_unix_cases(self):
+        """P6 as amended 2026-11-06: no socket under /tmp/.X11-unix (x11_unix probe output)."""
+        cases = {
+            'absent': True,                                          # path does not exist
+            'type=directory\nend': True,                             # empty, as tmpfiles.d makes it
+            'type=directory\r\nend\r\n': True,                       # CRLF-tolerant
+            'type=directory\ns /tmp/.X11-unix/X0\nend': False,       # an X11 socket
+            'type=directory\nf /tmp/.X11-unix/.X0-lock\nend': False,  # another non-directory entry
+            'type=directory\nl /tmp/.X11-unix/X0\nend': False,       # a symlink inside
+            'symlink': False,                                        # the path is a symlink
+            'type=socket\nend': False,                               # the path is a socket
+            'type=regular empty file\nend': False,
+            'type=directory\nfind: permission denied\nend': False,   # incomplete listing
+            'type=directory': False,                                 # truncated output
+            '': False,                                               # probe missing
+        }
+        for text, clean in cases.items():
+            self.assertEqual(guest.x11_unix_clean(text), clean, repr(text))
+        # and through the P6 verdict
+        for text, verdict in (('type=directory\nend', 'PASS'), ('absent', 'PASS'),
+                              ('type=directory\ns /tmp/.X11-unix/X0\nend', 'FAIL'),
+                              ('symlink', 'FAIL')):
+            obs = passing_observation(self.record)
+            obs['guest']['x11_unix'] = {'rc': 0, 'out': text}
+            self.assertEqual(self.verdicts(obs)['profiles P6'], verdict, repr(text))
+
+    def test_x11_unix_probe_is_listed(self):
+        snippet = dict(guest.guest_probes(PORTS, [], None))['x11_unix']
+        self.assertIn('[ -L "$x" ]', snippet)
+        self.assertIn("! -type d -printf '%y %p\\n'", snippet)
 
     def test_failures(self):
         g = lambda obs, k, v, rc=0: obs['guest'].__setitem__(k, {'rc': rc, 'out': v})  # noqa: E731

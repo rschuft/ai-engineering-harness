@@ -41,12 +41,47 @@ Not operational until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
 The tier stays not operational (C6). The
 [F-03.2.2b evidence](../../evidence/F-03.2.2b-guest-lifecycle.md) has the detail.
 
-3. **Guest kernel warning under `-cpu max`.** Each boot logs
-   `x86/fpu: misordered xstate at 1408` as a `WARNING` with a call trace
-   (`arch/x86/kernel/fpu/xstate.c:254`). The guest then enables x87, SSE, AVX, AVX-512
-   and CET user state and runs normally. Inference: WHPX reports an XSAVE layout under
-   `-cpu max` that Linux 6.12 considers out of order. Whether a named CPU model would
-   avoid it is a profile decision, not taken here.
+3. **Provider compatibility limitation: XSAVE under WHPX with `-cpu max`.** Recorded
+   only. `-cpu` and `launch.argv` are unchanged (Overseer decision, 2026-11-06;
+   decision 0003, "Current facts").
+   - **Observed** on this host (AMD, XSAVES present) with QEMU 11.1.3 WHPX,
+     `-cpu max,vmx=off,svm=off` and the Debian 13 kernel 6.12.115:
+     - every boot logs `x86/fpu: misordered xstate at 1408`, then
+       `WARNING: … at arch/x86/kernel/fpu/xstate.c:254 fpu__init_system_xstate` with a
+       call trace;
+     - this is the kernel's one-time warning that the XSAVE component offsets reported
+       in CPUID leaf 0xD are not ascending;
+     - no `XSAVE consistency problem` was logged. XSAVE stayed enabled (x87, SSE, AVX,
+       AVX-512 opmask, Hi256 and ZMM_Hi256, CET user), and the guest ran normally in
+       both F-03.2.2b cycles.
+   - **Upstream, related but distinct.** The qemu-devel patch
+     "[PATCH v2 12/18] whpx: i386: forward the dynamic EBX of CPUID[0xD] sub-leaves 0 and
+     1, not 1 and 2" (2026-10-27,
+     <https://www.mail-archive.com/qemu-devel@nongnu.org/msg1238937.html>) reports:
+     - on hosts **without** XSAVES (reproduced on Intel Haswell, Windows 11 build 26300,
+       QEMU 11.1.2, "unchanged on master"), XSAVE-capable CPU models, including `max`,
+       give `XSAVE consistency problem: size 832 != kernel_size 576` at `xstate.c:638`,
+       XSAVE disabled, and a kernel panic;
+     - an AMD host with XSAVES was unaffected.
+
+     Our symptom differs (another line, another message, no consistency failure), so
+     the warning is **not** attributed to that defect (inference). The pinned 11.1.3 is
+     presumed to carry that defect: the patch postdates 11.1.2 and says the code is
+     unchanged on master. We have not verified the 11.1.3 source, so this is
+     **UNKNOWN**.
+   - **Impact:**
+     - **Isolation properties P1 to P12:** none identified.
+     - **Portability:** on Windows hosts without XSAVES, this profile with `-cpu max` is
+       expected to panic at boot. Preflight does not detect that today.
+     - **Runtime correctness:** the misordered-offset warning means the kernel's layout
+       assumption is violated on this host. Extended-register state correctness
+       (AVX-512) under signal delivery and context switches is unqualified.
+   - **Obligations carried:**
+     - F-03.4 and the Windows packaging leaves (R-03.x) qualify the CPU model choice
+       (`max` or a named model) with evidence. They add a preflight check for host
+       XSAVES, or disclose `TIER_UNAVAILABLE`.
+     - Re-evaluate when a QEMU containing the upstream fix is pinned.
+     - No unreviewed upstream patch is applied.
 4. **Egress: off-link destinations never left the guest.** SLIRP's DHCP lease (with
    `restrict=on`) carries no router and no DNS server, so the guest has no default
    route. Probes to 1.1.1.1, 8.8.8.8 and the host's LAN address failed in the guest
@@ -54,10 +89,19 @@ The tier stays not operational (C6). The
    exercised `restrict=on`: TCP was refused and UDP DNS got no reply. A guest root
    could add a route, so F-03.3.2 must test the outside-the-guest enforcement for
    off-link destinations with a route in place.
-5. **P6 wording: `/tmp/.X11-unix`.** The contract's P6 inspect expects that path to be
-   absent. In this guest it exists as an empty directory (no socket), created by the
-   guest's own `/usr/lib/tmpfiles.d/x11.conf`. `inspect` applies the contract wording
-   literally and reports FAIL. F-03.3.1 owns the formal P6 suite and the wording.
+   From the unprivileged `agent` account, egress was observed blocked. The case of a
+   guest root with a default route is owned by F-03.3.2, and is required before any
+   strong-tier claim.
+5. **P6 wording: `/tmp/.X11-unix`. Resolved 2026-11-06 (Overseer decision as contract
+   owner).** The contract's P6 inspection asked for that path to be absent. In this
+   guest it exists as an empty directory (no socket), created by the guest's own
+   `/usr/lib/tmpfiles.d/x11.conf`, and `inspect` reported FAIL. The inspection now asks
+   for **no socket under `/tmp/.X11-unix`**: nothing in it but directories, and the
+   path not a symlink (`profiles/README.md` P6, decision 0003, "Current facts").
+   `tools/guest.py` checks exactly that. **Not yet observed on a real guest:** the
+   observed state (an empty directory, `ls -la` showing only `.` and `..`) satisfies the
+   new check, but no guest was booted after the change. F-03.3.1 owns the formal P6
+   suite.
 6. **Commit charge.** Whether Windows charges the full 16 GiB to the commit limit at
    launch remains UNKNOWN; it was not measured.
 

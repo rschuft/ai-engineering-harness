@@ -144,8 +144,11 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     never written (C1).
 - **Inspect:**
   - `find / -xdev -type s` and `ss -xl`, checked against the declared agent channel;
-  - the absence of `DOCKER_HOST`, `/var/run/docker.sock` from the host, `/tmp/.X11-unix`
-    and `/mnt/wslg`;
+  - the absence of `DOCKER_HOST`, `/var/run/docker.sock` from the host and `/mnt/wslg`;
+  - no socket under `/tmp/.X11-unix`: nothing in it but directories, and the path
+    itself not a symlink. The guest's own `tmpfiles.d` may create it as an empty
+    directory, which is not a display or IPC channel (amended 2026-11-06, decision
+    0003 "Current facts");
   - for WSL, launching a Windows `.exe` from inside the guest fails.
 
 ### P7 Network posture

@@ -1,6 +1,7 @@
 # Sourced by the publication-safety gate hooks. Locates CPython >= 3.12 and runs
 # tools/publication_gate.py; all logic lives there. Fails closed: when Python or
-# the gate cannot be found, the hook blocks. See CONTRIBUTING.md.
+# the gate cannot be found, the hook blocks. See docs/development.md,
+# "Publication-safety gate".
 
 run_gate() {
     top=$(git rev-parse --show-toplevel) || {

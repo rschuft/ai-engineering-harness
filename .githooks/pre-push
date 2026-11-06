@@ -1,6 +1,6 @@
 #!/bin/sh
 # Publication-safety gate: scans every commit being pushed (ref lines on stdin).
-# Never bypass it with --no-verify; see CONTRIBUTING.md.
+# Never bypass it with --no-verify; see docs/development.md, "Publication-safety gate".
 . "$(dirname -- "$0")/gate-common.sh" || {
     echo "publication-gate: cannot load gate-common.sh; blocking (fail closed)" >&2
     exit 2
