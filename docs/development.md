@@ -395,7 +395,11 @@ strictly at any time, whatever has changed since.
 
 ## Security expectations
 
-This is a **public, MIT-licensed** repository.
+This is a **public** repository. Repository-owned code is MIT-licensed
+([`LICENSE`](../LICENSE)). Third-party components keep their own licences. The
+SBOM and Grant outputs under `composition/inventory/generated/` are metadata about
+third-party packages, not copies of them
+([publication audit](../composition/inventory/PUBLICATION-AUDIT.md)).
 
 - Dependencies are hash-locked. Python installs are wheels only, with one
   reviewed sdist exception ([decision 0002](../decisions/0002-reviewed-sdist-exception-for-resolution.md)).

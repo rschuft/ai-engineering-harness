@@ -36,3 +36,16 @@ proposal template in `assets/`. It names no particular agent product, and an age
 that supports Agent Skills loads it from wherever that agent reads Skills.
 `assets/proposal-template.md` must stay identical to the schema's
 `templates/proposal.md`; a test enforces it.
+
+## Licence
+
+The catalog is repository-owned and licensed under the repository's
+[MIT License](../LICENSE); `SKILL.md` declares the same licence.
+
+The schema follows the OpenSpec schema format. So that OpenSpec can parse its
+templates, they reuse the section headings of OpenSpec 1.16.0's built-in
+`spec-driven` templates ([Fission-AI/OpenSpec](https://github.com/Fission-AI/OpenSpec),
+MIT, Copyright (c) 2024 OpenSpec Contributors). Their text is otherwise original. The
+Skill follows the [Agent Skills format](https://agentskills.io/specification) and
+copies no text from it. See the
+[publication audit](../composition/inventory/PUBLICATION-AUDIT.md), items C4 and C5.

@@ -110,4 +110,4 @@ python -I tools/verify_seed.py --baseline seed
 
 - This project is separate from the existing custom Tarinala Control Plane.
 - Repository-owned code is licensed under the [MIT License](LICENSE).
-- Third-party components and artifacts keep their own licences and distribution obligations. Licence compliance of the composition is not yet verified; open items are tracked in the [licence ledger](composition/inventory/LEDGER.md).
+- Third-party components and artifacts keep their own licences and distribution obligations. Licence compliance of the composition is not yet verified; open items are tracked in the [licence ledger](composition/inventory/LEDGER.md). What this repository itself publishes is covered by the [publication audit](composition/inventory/PUBLICATION-AUDIT.md).
