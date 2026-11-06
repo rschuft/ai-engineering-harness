@@ -7,6 +7,9 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
   profile pins still has that digest;
 - the tier, provider and nesting labels are present and valid (profiles P11);
 - no host share is declared or configured (profiles P3, P4);
+- the guest's approved volume and mount table (``guest_storage``) and the exchange
+  bounds (``exchange``) are declared, and for QEMU the volume table matches
+  ``launch.argv`` exactly (profiles P3, P4; F-03.3.1);
 - every forward and management endpoint binds to 127.0.0.1 (profiles P7);
 - ceilings are declared and match the provider configuration (profiles P2);
 - exactly one accelerator and no TCG fallback (contract section 4);
@@ -312,6 +315,253 @@ def check_isolation(report, profile):
         report.fail('nested_virt_exposed: must be declared true or false (profiles P12)')
 
 
+# --- guest storage and exchange (profiles P3, P4; F-03.3.1) ----------------
+
+STORAGE_ROLES = {'root', 'scratch', 'configuration-medium'}
+# The share types the contract's P3 inspection names; forbidden_fstypes must cover them.
+CONTRACT_SHARE_FSTYPES = {'9p', 'virtiofs', 'drvfs', 'fuse.sshfs', 'cifs', 'nfs', 'smb3'}
+DIRECTORY_ROLES = ('exchange', 'scratch')
+STORAGE_FILE = re.compile(r'^(\{instance_dir\}/[A-Za-z0-9._-]+|\{input:[a-z_]+\})$')
+
+
+def block_specs(device):
+    """The format node and, for an overlay, its backing node, of one declared device."""
+    return [spec for spec in (device, device.get('backing')) if isinstance(spec, dict)]
+
+
+def check_guest_storage(report, profile):
+    """guest_storage: the approved volume and mount table that inspect compares with."""
+    storage = profile.get('guest_storage')
+    provider = (profile.get('provider') or {}).get('name')
+    if storage is None:
+        if provider == 'qemu':
+            report.fail('guest_storage: missing (profiles P3, P4 compare the guest with a '
+                        'declared volume and mount table)')
+        return
+    if not isinstance(storage, dict):
+        report.fail('guest_storage: must be an object')
+        return
+    devices = storage.get('block_devices')
+    if not isinstance(devices, dict) or not devices:
+        report.fail('guest_storage.block_devices: missing')
+        devices = {}
+    roles = [d.get('role') for d in devices.values() if isinstance(d, dict)]
+    for role in ('root', 'scratch'):
+        if roles.count(role) != 1:
+            report.fail(f'guest_storage.block_devices: exactly one {role} device required')
+    serials = []
+    for key, dev in devices.items():
+        label = f'guest_storage.block_devices.{key}'
+        if not isinstance(dev, dict):
+            report.fail(f'{label}: must be an object')
+            continue
+        if dev.get('role') not in STORAGE_ROLES:
+            report.fail(f'{label}: role {dev.get("role")!r} is not one of {sorted(STORAGE_ROLES)}')
+        if not isinstance(dev.get('serial'), str) or not dev.get('serial'):
+            report.fail(f'{label}: serial missing')
+        serials.append(dev.get('serial'))
+        if not isinstance(dev.get('read_only'), bool):
+            report.fail(f'{label}: read_only must be true or false')
+        if dev.get('role') == 'configuration-medium' and (dev.get('read_only') is not True or
+                                                          dev.get('mounted') is not False):
+            report.fail(f'{label}: a configuration medium must be read-only and not mounted '
+                        '(profiles P4)')
+        if dev.get('role') in ('root', 'scratch') and dev.get('read_only') is not False:
+            report.fail(f'{label}: the {dev.get("role")} disk is writable')
+        backing = dev.get('backing')
+        if backing is not None and (not isinstance(backing, dict) or
+                                    backing.get('read_only') is not True):
+            report.fail(f'{label}.backing: a backing image must be read-only')
+        for spec in block_specs(dev):
+            for field in ('node', 'file_node'):
+                if not isinstance(spec.get(field), str) or not spec.get(field):
+                    report.fail(f'{label}: {field} missing')
+            if not STORAGE_FILE.match(str(spec.get('file', ''))):
+                report.fail(f'{label}: file {spec.get("file")!r} must be a per-instance file or '
+                            'a declared boot input (no host path)')
+    if len(set(serials)) != len(serials):
+        report.fail('guest_storage.block_devices: serials must be distinct')
+
+    mounts = storage.get('mounts')
+    if not isinstance(mounts, list) or not mounts:
+        report.fail('guest_storage.mounts: missing')
+        mounts = []
+    forbidden = storage.get('forbidden_fstypes')
+    if not isinstance(forbidden, list) or not CONTRACT_SHARE_FSTYPES <= set(forbidden):
+        report.fail(f'guest_storage.forbidden_fstypes: must include {sorted(CONTRACT_SHARE_FSTYPES)}')
+        forbidden = []
+    forbidden_paths = storage.get('forbidden_paths')
+    if not isinstance(forbidden_paths, list) or '/mnt/c' not in forbidden_paths:
+        report.fail('guest_storage.forbidden_paths: must include /mnt/c (profiles P3)')
+        forbidden_paths = []
+    targets = set()
+    for i, mount in enumerate(mounts):
+        label = f'guest_storage.mounts[{i}]'
+        if not isinstance(mount, dict):
+            report.fail(f'{label}: must be an object')
+            continue
+        target, fstype = mount.get('target'), mount.get('fstype')
+        if not isinstance(target, str) or not target.startswith('/'):
+            report.fail(f'{label}: target must be an absolute path')
+            continue
+        if '*' in target.rsplit('/', 1)[0] or ('*' in target and target.rsplit('/', 1)[1] != '*'):
+            report.fail(f'{label}: a wildcard is allowed only as a whole last component')
+        targets.add(target)
+        if not isinstance(fstype, str) or not fstype or fstype in forbidden or \
+                fstype.split('.')[0] in forbidden:
+            report.fail(f'{label}: file system type {fstype!r} is a share type or missing '
+                        '(profiles P3)')
+        if ('disk' in mount) == ('source' in mount):
+            report.fail(f'{label}: name exactly one of disk or source')
+        if 'disk' in mount:
+            dev = devices.get(mount['disk'])
+            if not isinstance(dev, dict) or dev.get('role') not in ('root', 'scratch'):
+                report.fail(f'{label}: disk {mount["disk"]!r} is not the root or scratch device')
+        if 'optional' in mount and (not isinstance(mount['optional'], str) or
+                                    not mount['optional'].strip()):
+            report.fail(f'{label}: optional must give the reason the mount may be absent')
+        for path in forbidden_paths:
+            if target == path or target.startswith(path.rstrip('/') + '/'):
+                report.fail(f'{label}: {target} is a forbidden path')
+    if mounts and not any(m.get('target') == '/' and devices.get(m.get('disk'), {}).get('role')
+                          == 'root' for m in mounts if isinstance(m, dict)):
+        report.fail('guest_storage.mounts: / must be on the root device')
+
+    directories = storage.get('directories')
+    if not isinstance(directories, list):
+        report.fail('guest_storage.directories: missing')
+        directories = []
+    by_role = {}
+    for i, entry in enumerate(directories):
+        label = f'guest_storage.directories[{i}]'
+        if not isinstance(entry, dict):
+            report.fail(f'{label}: must be an object')
+            continue
+        by_role.setdefault(entry.get('role'), []).append(entry)
+        path, mount = str(entry.get('path', '')), entry.get('mount')
+        if not path.startswith('/'):
+            report.fail(f'{label}: path must be absolute')
+        if not entry.get('owner') or not entry.get('group'):
+            report.fail(f'{label}: owner and group required')
+        if not re.match(r'^[0-7]{3,4}$', str(entry.get('mode', ''))):
+            report.fail(f'{label}: mode must be octal digits')
+        if mount not in targets or not (mount == '/' or path.startswith(mount.rstrip('/') + '/')):
+            report.fail(f'{label}: mount {mount!r} must be a declared mount that holds {path}')
+    for role in DIRECTORY_ROLES:
+        if len(by_role.get(role, [])) != 1:
+            report.fail(f'guest_storage.directories: exactly one {role} directory required '
+                        '(profiles P4)')
+    if set(by_role) - set(DIRECTORY_ROLES):
+        report.fail(f'guest_storage.directories: unknown roles {sorted(set(by_role) - set(DIRECTORY_ROLES))}')
+    scratch_dir = (by_role.get('scratch') or [{}])[0]
+    scratch_mounts = [m for m in mounts if isinstance(m, dict) and
+                      m.get('target') == scratch_dir.get('mount')]
+    if scratch_dir and not any(devices.get(m.get('disk'), {}).get('role') == 'scratch'
+                               for m in scratch_mounts):
+        report.fail('guest_storage.directories: the scratch directory must be on the scratch disk')
+    exchange_dir = (by_role.get('exchange') or [{}])[0].get('path')
+    declared_exchange = (profile.get('exchange') or {}).get('guest_dir')
+    if declared_exchange is not None and exchange_dir != declared_exchange:
+        report.fail(f'guest_storage.directories: exchange {exchange_dir!r} differs from '
+                    f'exchange.guest_dir {declared_exchange!r}')
+    virtio = storage.get('virtio_devices')
+    if not isinstance(virtio, dict) or not all(isinstance(v, int) and not isinstance(v, bool)
+                                               and v > 0 for v in virtio.values()):
+        report.fail('guest_storage.virtio_devices: a map of virtio device kinds to counts')
+    if provider == 'qemu':
+        check_qemu_storage(report, profile, devices, virtio if isinstance(virtio, dict) else {})
+
+
+def check_qemu_storage(report, profile, devices, virtio):
+    """guest_storage.block_devices against launch.argv: the same nodes, files, read-only
+    flags and serials, and no -blockdev or virtio-blk device that is not declared."""
+    argv = (profile.get('launch') or {}).get('argv') or []
+    blockdevs, blk, models = {}, [], {}
+    for opt, value in qemu_options(argv):
+        named = dict(split_props(value or ''))
+        if opt == '-blockdev' and named.get('node-name'):
+            blockdevs[named['node-name']] = named
+        if opt == '-device':
+            model = split_props(value or '')[0][1]
+            models[model] = models.get(model, 0) + 1
+            if model == 'virtio-blk-pci':
+                blk.append((named.get('drive'), named.get('serial')))
+    declared = {}
+    for key, dev in devices.items():
+        if not isinstance(dev, dict):
+            continue
+        for spec in block_specs(dev):
+            declared[spec.get('node')] = (key, spec, 'format')
+            declared[spec.get('file_node')] = (key, spec, 'file')
+    for node in sorted(set(blockdevs) - set(declared)):
+        report.fail(f'launch.argv: -blockdev {node} is not in guest_storage.block_devices '
+                    '(profiles P4)')
+    for node, (key, spec, kind) in sorted(declared.items(), key=lambda x: str(x[0])):
+        props = blockdevs.get(node)
+        label = f'guest_storage.block_devices.{key}'
+        if props is None:
+            report.fail(f'{label}: node {node} has no -blockdev in launch.argv')
+            continue
+        if (props.get('read-only') == 'on') != bool(spec.get('read_only')):
+            report.fail(f'{label}: read_only differs from -blockdev {node} read-only')
+        if kind == 'file' and props.get('filename') != spec.get('file'):
+            report.fail(f'{label}: file differs from -blockdev {node} filename')
+        if kind == 'format' and props.get('file') != spec.get('file_node'):
+            report.fail(f'{label}: -blockdev {node} file= is not {spec.get("file_node")}')
+    for key, dev in devices.items():
+        if isinstance(dev, dict) and dev.get('backing'):
+            props = blockdevs.get(dev.get('node')) or {}
+            if props.get('backing') != dev['backing'].get('node'):
+                report.fail(f'guest_storage.block_devices.{key}: backing node differs from '
+                            'launch.argv')
+    want = sorted((d.get('node'), d.get('serial')) for d in devices.values() if isinstance(d, dict))
+    if sorted(blk, key=str) != sorted(want, key=str):
+        report.fail(f'launch.argv: virtio-blk devices {sorted(blk, key=str)} differ from '
+                    f'guest_storage.block_devices {want}')
+    counts = {'block': models.get('virtio-blk-pci', 0), 'net': models.get('virtio-net-pci', 0),
+              'entropy': models.get('virtio-rng-pci', 0)}
+    if virtio and virtio != {k: v for k, v in counts.items() if v}:
+        report.fail(f'guest_storage.virtio_devices {virtio} differs from launch.argv {counts}')
+
+
+def check_exchange(report, profile):
+    """exchange: the guest directory, the staging location and the transfer bounds."""
+    ex = profile.get('exchange')
+    if ex is None:
+        if (profile.get('provider') or {}).get('name') == 'qemu':
+            report.fail('exchange: missing (lifecycle exchange push and pull)')
+        return
+    if not isinstance(ex, dict):
+        report.fail('exchange: must be an object')
+        return
+    if not str(ex.get('guest_dir', '')).startswith('/'):
+        report.fail('exchange.guest_dir: must be an absolute guest path')
+    if not str(ex.get('host_staging', '')).startswith(('{instance_dir}/', '{state_dir}/')):
+        report.fail('exchange.host_staging: must be under {instance_dir} or {state_dir} '
+                    '(never an Owner repository)')
+    for part in ('push', 'pull'):
+        bounds = ex.get(part)
+        if not isinstance(bounds, dict):
+            report.fail(f'exchange.{part}: missing')
+            continue
+        keys = ('max_bytes', 'max_commits') if part == 'push' else ('max_bytes',)
+        for key in keys:
+            value = bounds.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                report.fail(f'exchange.{part}.{key}: must be a positive integer')
+        if part == 'push' and bounds.get('refs') != 1:
+            report.fail('exchange.push.refs: a push carries exactly one branch')
+        pattern = bounds.get('name_pattern')
+        try:
+            ok = isinstance(pattern, str) and pattern.startswith('^') and pattern.endswith('$') \
+                and not any(re.fullmatch(pattern, bad) for bad in ('a/b', 'a\\b', '..', '.', ''))
+        except re.error:
+            ok = False
+        if not ok:
+            report.fail(f'exchange.{part}.name_pattern: must be an anchored pattern that admits '
+                        'no path separator, "." or ".."')
+
+
 # --- QEMU -----------------------------------------------------------------
 
 def qemu_options(argv):
@@ -574,6 +824,8 @@ def check(profile, root=REPO):
     check_lifecycle(report, profile, properties)
     check_network(report, profile, properties)
     check_isolation(report, profile)
+    check_guest_storage(report, profile)
+    check_exchange(report, profile)
     provider = (profile.get('provider') or {}).get('name')
     if provider == 'qemu':
         check_qemu(report, profile, ceilings)

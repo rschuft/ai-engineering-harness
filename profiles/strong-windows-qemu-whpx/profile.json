@@ -152,6 +152,57 @@
     "reason": "Management is SSH over the loopback forward. No virtio-serial device, so no QEMU guest agent channel (profiles P6)."
   },
   "host_shares": [],
+  "guest_storage": {
+    "contract": "profiles P3, P4 (F-03.3.1): the guest's complete approved volume and mount table. inspect compares the effective table with it exactly: every observed mount must match an entry, and every entry not marked optional must be observed.",
+    "derivation": "The block devices and directories follow launch.argv and the seed (profiles/seed/user-data.tmpl). The pseudo and tmpfs mounts are the Debian 13 genericcloud image's own (kernel and systemd), as observed by findmnt -J on a fresh guest of this profile on 2026-11-06 (F-03.3.1 reconnaissance guest f0331-r).",
+    "block_devices": {
+      "root": {"role": "root", "serial": "root", "read_only": false, "node": "root", "file_node": "root-file", "file": "{instance_dir}/root.qcow2", "backing": {"node": "base", "file_node": "base-file", "file": "{input:image}", "read_only": true}},
+      "scratch": {"role": "scratch", "serial": "scratch", "read_only": false, "node": "scratch", "file_node": "scratch-file", "file": "{instance_dir}/scratch.qcow2"},
+      "seed": {"role": "configuration-medium", "serial": "cidata", "read_only": true, "node": "seed", "file_node": "seed-file", "file": "{input:seed}", "mounted": false}
+    },
+    "mounts": [
+      {"target": "/", "fstype": "ext4", "disk": "root"},
+      {"target": "/boot/efi", "fstype": "vfat", "disk": "root"},
+      {"target": "/srv/scratch", "fstype": "ext4", "disk": "scratch"},
+      {"target": "/proc", "fstype": "proc", "source": "proc"},
+      {"target": "/proc/sys/fs/binfmt_misc", "fstype": "autofs", "source": "systemd-1"},
+      {"target": "/proc/sys/fs/binfmt_misc", "fstype": "binfmt_misc", "source": "binfmt_misc", "optional": "mounted by the autofs trigger on first access"},
+      {"target": "/sys", "fstype": "sysfs", "source": "sysfs"},
+      {"target": "/sys/kernel/security", "fstype": "securityfs", "source": "securityfs"},
+      {"target": "/sys/fs/cgroup", "fstype": "cgroup2", "source": "cgroup2"},
+      {"target": "/sys/fs/pstore", "fstype": "pstore", "source": "pstore"},
+      {"target": "/sys/fs/bpf", "fstype": "bpf", "source": "bpf"},
+      {"target": "/sys/kernel/debug", "fstype": "debugfs", "source": "debugfs"},
+      {"target": "/sys/kernel/tracing", "fstype": "tracefs", "source": "tracefs"},
+      {"target": "/sys/kernel/config", "fstype": "configfs", "source": "configfs"},
+      {"target": "/sys/fs/fuse/connections", "fstype": "fusectl", "source": "fusectl"},
+      {"target": "/dev", "fstype": "devtmpfs", "source": "udev"},
+      {"target": "/dev/pts", "fstype": "devpts", "source": "devpts"},
+      {"target": "/dev/shm", "fstype": "tmpfs", "source": "tmpfs"},
+      {"target": "/dev/mqueue", "fstype": "mqueue", "source": "mqueue"},
+      {"target": "/dev/hugepages", "fstype": "hugetlbfs", "source": "hugetlbfs"},
+      {"target": "/run", "fstype": "tmpfs", "source": "tmpfs"},
+      {"target": "/run/lock", "fstype": "tmpfs", "source": "tmpfs"},
+      {"target": "/tmp", "fstype": "tmpfs", "source": "tmpfs"},
+      {"target": "/run/credentials/*", "fstype": "tmpfs", "source": "tmpfs", "optional": "one per systemd service that is passed credentials; the set depends on the running services"},
+      {"target": "/run/user/1000", "fstype": "tmpfs", "source": "tmpfs", "optional": "the agent user's runtime directory, present while agent has a session"}
+    ],
+    "directories": [
+      {"role": "exchange", "path": "/home/agent/exchange", "owner": "agent", "group": "agent", "mode": "750", "mount": "/"},
+      {"role": "scratch", "path": "/srv/scratch/agent", "owner": "agent", "group": "agent", "mode": "750", "mount": "/srv/scratch"}
+    ],
+    "forbidden_fstypes": ["9p", "virtiofs", "drvfs", "fuse", "fuse.sshfs", "cifs", "smb3", "nfs", "nfs4"],
+    "forbidden_paths": ["/mnt/c", "/mnt/wslg"],
+    "virtio_devices": {"block": 3, "net": 1, "entropy": 1}
+  },
+  "exchange": {
+    "contract": "profiles P4 and the lifecycle bindings 'exchange push' and 'exchange pull' (F-03.3.1).",
+    "transport": "sftp.exe (Windows' built-in OpenSSH) over the management SSH forward, with identity.ssh_client_options, the per-instance key and no ssh_config (-F none).",
+    "guest_dir": "/home/agent/exchange",
+    "host_staging": "{instance_dir}/exchange",
+    "push": {"refs": 1, "max_commits": 10000, "max_bytes": 268435456, "name_pattern": "^[a-z0-9][a-z0-9._-]{0,63}\\.bundle$"},
+    "pull": {"max_bytes": 268435456, "name_pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"}
+  },
   "network": {
     "mode": "user (SLIRP)",
     "posture": "restrict=on: the guest cannot reach the host or the outside except through the explicit forwards below (qemu.org invocation: restrict=on 'does not affect any explicitly set forwarding rules').",
@@ -230,10 +281,10 @@
       "stop": "QMP system_powerdown; after stop_timeout_s, QMP quit; if the process still runs, terminate that process id only.",
       "destroy": "Stop with force if running, then delete {instance_dir} only. Absent: succeed and report absent. The image, the provider and every other path are untouched.",
       "recreate": "destroy, then create with the same name and profile.",
-      "inspect": "QMP query-version, query-cpus-fast, query-memory-size-summary, query-block, query-pci, query-chardev; qemu-img info of root and scratch; guest probes over SSH per profiles P1-P12; labelled per profiles P11.",
+      "inspect": "QMP query-version, query-cpus-fast, query-memory-size-summary, query-block, query-named-block-nodes, query-pci, query-chardev; qemu-img info of root and scratch; guest probes over SSH per profiles P1-P12; labelled per profiles P11. P3 and P4 compare the guest's mounts, disks, block nodes and directories with guest_storage exactly. P5 plants a synthetic sample of each Owner class in the scratch directory, collects the guest's /etc, homes, scratch, cloud-init files, logs and process environments (as agent) to the host, scans them there with the seed and the serial log, then removes the sample; with --canaries it also searches for a canary set planted in the create process. P6 checks virtio channel devices, vsock, host-management socket paths, environment and the guest's socket inventory, and QMP reachability from the guest. check-surfaces is the F-03.3.1 startup test: PASS only when P3 to P6 all PASS.",
       "exec": "ssh with identity.ssh_client_options to agent@127.0.0.1 -p {ssh_port}. Operator and provisioning only; never offered to agents.",
-      "exchange push": "A git bundle of a bounded snapshot, copied by SFTP into /home/agent/exchange.",
-      "exchange pull": "A git bundle and evidence copied by SFTP into a harness-owned staging directory under {state_dir}; never into the Owner's repositories."
+      "exchange push": "A git bundle of a bounded snapshot, copied by SFTP into /home/agent/exchange. Implemented (F-03.3.1): exactly one local branch, as a complete bundle with no prerequisites, within exchange.push (commits, bytes); built read-only from the named repository with git under no system or global configuration; header, pack checksum and git bundle verify checked; put under a new name (.partial, then rename) and its guest sha256 compared.",
+      "exchange pull": "A git bundle and evidence copied by SFTP into a harness-owned staging directory under {state_dir}; never into the Owner's repositories. Implemented (F-03.3.1): one regular file of /home/agent/exchange within exchange.pull, into exchange.host_staging/inbound, sha256 compared with the guest's; a bundle is checked (header, pack checksum) and fetched into a fresh bare repository in the staging directory (after the pushed bundles when it has prerequisites), its references compared with its header, then git fsck --strict. Staging is inside the instance directory, so destroy removes it."
     }
   },
   "launch": {

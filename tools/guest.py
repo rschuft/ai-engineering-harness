@@ -17,8 +17,16 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                per profiles P1-P12 and labelled per profiles P11
     exec       ssh to agent@127.0.0.1 with the profile's client options (operators
                and provisioning only; never offered to agents)
-
-The exchange operations are F-03.3.1 and are not implemented here.
+    exchange-push  one local branch of a named repository as a git bundle (bounded by
+               the profile's exchange.push), copied by SFTP into the guest's exchange
+               directory under a new name; digests checked on both sides (F-03.3.1)
+    exchange-pull  one file from the guest's exchange directory, copied by SFTP into
+               the instance's harness-owned staging directory; a bundle is verified
+               in a fresh bare repository there, never in an Owner repository
+    canaries   write a synthetic canary set (environment values and a fake home) into
+               a new directory outside the checkout, for the profiles P5 test
+    check-surfaces  inspect, then the startup inspection verdict for profiles P3 to P6;
+               exit 0 only when all four PASS (F-03.3.1)
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -26,7 +34,16 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME
     python -I -B tools/guest.py inspect   --profile PROFILE --state-dir STATE --name NAME
     python -I -B tools/guest.py exec      --profile PROFILE --state-dir STATE --name NAME -- CMD
-    (start, stop, destroy and recreate take the same arguments as inspect)
+    python -I -B tools/guest.py exchange-push --profile PROFILE --state-dir STATE --name NAME
+                                          --repo REPO --ref BRANCH [--bundle-name FILE]
+    python -I -B tools/guest.py exchange-pull --profile PROFILE --state-dir STATE --name NAME
+                                          --file FILE
+    python -I -B tools/guest.py canaries  --out DIR
+    python -I -B tools/guest.py check-surfaces --profile PROFILE --state-dir STATE --name NAME
+                                          --canaries DIR
+    (start, stop, destroy and recreate take the same arguments as inspect; create and
+    inspect also take --canaries DIR: create plants the set in its own environment
+    before it launches anything, inspect searches the guest for it)
 
 Every operation prints one JSON object on stdout; progress goes to stderr. Records
 are written under STATE/instances/NAME/records/. Exit status 0 on success, 1 on a
@@ -40,6 +57,7 @@ import argparse
 import base64
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import platform
@@ -49,6 +67,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -714,15 +733,380 @@ class Ssh:
         self._checked = True
 
     def run(self, command, user='agent', input_text=None, timeout=300):
+        result = self.run_raw(command, user, input_text, timeout)
+        return subprocess.CompletedProcess(
+            result.args, result.returncode,
+            result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n'),
+            result.stderr)
+
+    def run_raw(self, command, user='agent', input_text=None, timeout=300):
+        """stdout as bytes (for example a tar stream); stderr decoded."""
         # Bytes, not text mode: on Windows a text-mode pipe writes '\r\n' for '\n', and the
         # guest's bash would read '{\r' instead of '{'.
         data = input_text.encode('utf-8') if input_text is not None else None
         result = subprocess.run(self.argv(user, command), input=data, capture_output=True,
                                 timeout=timeout, check=False)
         return subprocess.CompletedProcess(
-            result.args, result.returncode,
-            result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n'),
+            result.args, result.returncode, result.stdout,
             result.stderr.decode('utf-8', errors='replace').replace('\r\n', '\n'))
+
+
+class Sftp:
+    """sftp.exe in batch mode over the same forward, options and key as Ssh.
+
+    sftp passes -F and every -o to the ssh it spawns; -S names Windows' built-in ssh.exe
+    so no other ssh on PATH is used. The effective configuration is checked with
+    ``ssh -G`` (Ssh.check_effective) before the first transfer.
+    """
+
+    def __init__(self, ssh):
+        self.ssh = ssh
+        self.exe = openssh('sftp.exe')
+
+    def argv(self, batch_file):
+        base = self.ssh.argv('agent', [])[:-1]            # checks the key and ssh -G
+        options = base[1:base.index('-p')]                  # profile options, extras, -i KEY
+        return [self.exe, '-S', self.ssh.exe] + options + \
+            ['-P', str(self.ssh.port), '-b', str(batch_file), f'agent@{GUEST_USER_HOST}']
+
+    def batch(self, commands, work_dir, timeout=600):
+        """Run sftp commands; '-b' stops at the first failing command (exit 1)."""
+        batch_file = Path(work_dir) / f'sftp-{secrets.token_hex(6)}.batch'
+        with open(batch_file, 'x', encoding='utf-8', newline='\n') as handle:
+            handle.write('\n'.join(commands) + '\n')
+        try:
+            result = subprocess.run(self.argv(batch_file), capture_output=True,
+                                    stdin=subprocess.DEVNULL, timeout=timeout, check=False)
+        finally:
+            batch_file.unlink()
+        return {'rc': result.returncode, 'commands': commands,
+                'stderr': result.stderr.decode('utf-8', errors='replace').strip()}
+
+
+def sftp_quote(path):
+    text = posix(path)
+    if '"' in text or '\n' in text:
+        raise Refused('REFUSED', f'path {text!r} cannot be quoted for sftp')
+    return f'"{text}"'
+
+
+# ---------------------------------------------------------------- git (host side)
+
+
+def git_binary():
+    path = shutil.which('git')
+    if not path:
+        raise Refused('REFUSED', 'git not found on PATH (the exchange builds and verifies '
+                      'bundles with the host git)')
+    return path
+
+
+def git_env(home):
+    """git without system or global configuration, prompts or the caller's environment."""
+    env = {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'PATH')
+           if key in os.environ}
+    env.update({'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+                'GIT_TERMINAL_PROMPT': '0', 'GIT_ATTR_NOSYSTEM': '1', 'HOME': str(home)})
+    return env
+
+
+def run_git(args, home, repo=None, timeout=600):
+    argv = [git_binary(), '-c', f'core.hooksPath={os.devnull}', '-c', 'core.fsmonitor=false']
+    if repo is not None:
+        argv += ['-C', str(repo)]
+    result = subprocess.run(argv + list(args), capture_output=True, env=git_env(home),
+                            stdin=subprocess.DEVNULL, timeout=timeout, check=False)
+    return subprocess.CompletedProcess(
+        argv + list(args), result.returncode,
+        result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n'),
+        result.stderr.decode('utf-8', errors='replace').replace('\r\n', '\n'))
+
+
+def git_ok(args, home, repo=None, what=None):
+    result = run_git(args, home, repo)
+    if result.returncode != 0:
+        raise Refused('EXCHANGE', f'{what or "git " + " ".join(args)} failed: '
+                      f'{result.stderr.strip() or result.stdout.strip()}')
+    return result.stdout.strip()
+
+
+BUNDLE_SIGNATURES = {b'# v2 git bundle\n': 2, b'# v3 git bundle\n': 3}
+BUNDLE_REF = re.compile(r'([0-9a-f]{40}|[0-9a-f]{64}) (refs/\S+|HEAD)')
+BUNDLE_HEADER_MAX = 1 << 20
+
+
+def parse_bundle_header(path):
+    """The header of a git bundle file (gitformat-bundle): version, capabilities,
+    prerequisites and references. Anything else is refused."""
+    with open(path, 'rb') as handle:
+        first = handle.readline(64)
+        if first not in BUNDLE_SIGNATURES:
+            raise Refused('BUNDLE', f'{path}: not a v2 or v3 git bundle')
+        out = {'version': BUNDLE_SIGNATURES[first], 'capabilities': [],
+               'prerequisites': [], 'refs': []}
+        total = len(first)
+        while True:
+            line = handle.readline(4096)
+            total += len(line)
+            if not line or not line.endswith(b'\n') or total > BUNDLE_HEADER_MAX:
+                raise Refused('BUNDLE', f'{path}: bundle header not terminated')
+            if line == b'\n':
+                out['pack_offset'] = total
+                return out
+            try:
+                text = line[:-1].decode('ascii')
+            except UnicodeDecodeError as exc:
+                raise Refused('BUNDLE', f'{path}: non-ASCII header line') from exc
+            if text.startswith('@') and out['version'] == 3:
+                out['capabilities'].append(text[1:])
+            elif text.startswith('-'):
+                out['prerequisites'].append(text[1:].split(' ', 1)[0])
+            else:
+                match = BUNDLE_REF.fullmatch(text)
+                if not match:
+                    raise Refused('BUNDLE', f'{path}: unparsable header line {text!r}')
+                out['refs'].append([match.group(1), match.group(2)])
+
+
+def pack_trailer(path, header):
+    """The bundle's packfile checksum, recomputed: the pack starts with 'PACK' after the
+    header and ends with the hash of everything before the trailer (SHA-1, or SHA-256
+    when the v3 header says object-format=sha256)."""
+    sha256 = 'object-format=sha256' in header.get('capabilities', [])
+    size = 32 if sha256 else 20
+    digest = hashlib.sha256() if sha256 else hashlib.sha1()
+    with open(path, 'rb') as handle:
+        handle.seek(header['pack_offset'])
+        magic = handle.read(4)
+        digest.update(magic)
+        tail = b''
+        for block in iter(lambda: handle.read(1 << 20), b''):
+            data = tail + block
+            digest.update(data[:-size])
+            tail = data[-size:]
+    ok = magic == b'PACK' and len(tail) == size and digest.digest() == tail
+    return {'ok': ok, 'algorithm': 'sha256' if sha256 else 'sha1', 'trailer': tail.hex()}
+
+
+# ---------------------------------------------------------------- exchange
+
+
+def exchange_config(profile):
+    ex = profile.get('exchange')
+    if not isinstance(ex, dict) or not ex.get('guest_dir') or not ex.get('host_staging'):
+        raise Refused('REFUSED', f'profile {profile.get("name")} declares no exchange')
+    return ex
+
+
+def staging_dir(ctx, name, part):
+    """{exchange.host_staging}/<part>: harness-owned, inside the instance directory."""
+    idir = ctx.instance_dir(name)
+    values = resolve_values(ctx.profile, ctx.state_dir, name)
+    path = Path(expand(exchange_config(ctx.profile)['host_staging'], values))
+    if not inside(path, idir):
+        raise Refused('REFUSED', f'exchange staging {path} is not inside {idir}')
+    path = path / part
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def running_instance(ctx, name):
+    idir = ctx.instance_dir(name)
+    if not idir.is_dir():
+        raise Refused('REFUSED', f'{name}: no such instance')
+    record = read_launch_record(idir)
+    if not running_process(idir, record['binary']):
+        raise Refused('NOT_RUNNING', f'{name} is not running')
+    return idir, record
+
+
+def guest_file_state(ssh, guest_path):
+    """'absent', 'symlink', 'other', or ('file', size, sha256) for one guest path."""
+    script = (f"p='{guest_path}'\n"
+              'if [ -L "$p" ]; then echo symlink; elif [ ! -e "$p" ]; then echo absent; '
+              'elif [ -f "$p" ]; then printf "file %s %s\\n" "$(stat -c %s -- "$p")" '
+              '"$(sha256sum -- "$p" | cut -c1-64)"; else echo other; fi\n')
+    result = ssh.run(['bash', '-s'], input_text=script, timeout=300)
+    words = result.stdout.split()
+    if result.returncode != 0 or not words:
+        raise Refused('EXCHANGE', f'guest stat of {guest_path} failed: {result.stderr.strip()}')
+    if words[0] == 'file' and len(words) == 3 and words[1].isdigit() and \
+            re.fullmatch(r'[0-9a-f]{64}', words[2]):
+        return ('file', int(words[1]), words[2])
+    if words[0] in ('absent', 'symlink', 'other') and len(words) == 1:
+        return words[0]
+    raise Refused('EXCHANGE', f'unexpected guest stat output for {guest_path}: {result.stdout!r}')
+
+
+def check_exchange_name(name, pattern, what):
+    if not isinstance(name, str) or not re.fullmatch(pattern, name) or name.endswith('.partial'):
+        raise Refused('REFUSED', f'{what} {name!r} does not match {pattern} (or ends in .partial)')
+    return name
+
+
+def exchange_push(ctx, name, repo, ref, bundle_name=None):
+    """exchange push: one local branch as a complete git bundle, bounded and verified."""
+    t0 = time.time()
+    idir, record = running_instance(ctx, name)
+    ex = exchange_config(ctx.profile)
+    bounds = ex.get('push') or {}
+    outbound = staging_dir(ctx, name, 'outbound')
+    home = staging_dir(ctx, name, 'git-home')
+    repo = Path(repo).resolve()
+    if inside(repo, ctx.state_dir):
+        raise Refused('REFUSED', f'{repo} is inside the state directory')
+    git_ok(['rev-parse', '--git-dir'], home, repo, f'{repo}: not a git repository;')
+    if not isinstance(ref, str) or not ref or ref.startswith('-'):
+        raise Refused('REFUSED', f'{ref!r} is not a branch name')
+    full = run_git(['rev-parse', '--verify', '--quiet', '--symbolic-full-name', ref], home,
+                   repo).stdout.strip()
+    if not re.fullmatch(r'refs/heads/[^\s]+', full):
+        raise Refused('REFUSED', f'{ref!r} is not a local branch (resolved to {full!r}); '
+                      'exchange push sends exactly one refs/heads/ branch')
+    commit = git_ok(['rev-parse', '--verify', f'{full}^{{commit}}'], home, repo)
+    commits = int(git_ok(['rev-list', '--count', full], home, repo))
+    if commits > bounds.get('max_commits', 0):
+        raise Refused('BOUNDS', f'{full} has {commits} commits; exchange.push.max_commits is '
+                      f'{bounds.get("max_commits")}')
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dt%H%M%Sz')
+    bname = check_exchange_name(bundle_name or f'{name}-{stamp}-{commit[:12]}.bundle',
+                                bounds.get('name_pattern', r'^$'), 'bundle name')
+    local = outbound / bname
+    if os.path.lexists(local):
+        raise Refused('REFUSED', f'{local} exists; a bundle is never overwritten')
+    git_ok(['bundle', 'create', '--quiet', str(local), full], home, repo, 'git bundle create')
+    try:
+        size = local.stat().st_size
+        if size > bounds.get('max_bytes', 0):
+            raise Refused('BOUNDS', f'bundle is {size} bytes; exchange.push.max_bytes is '
+                          f'{bounds.get("max_bytes")}')
+        header = parse_bundle_header(local)
+        if header['refs'] != [[commit, full]] or header['prerequisites'] or \
+                len(header['refs']) != bounds.get('refs', 1):
+            raise Refused('BOUNDS', f'bundle header is not exactly {full} at {commit} with no '
+                          f'prerequisites: {header}')
+        if not pack_trailer(local, header)['ok']:
+            raise Refused('BUNDLE', f'{local}: pack checksum mismatch')
+        git_ok(['bundle', 'verify', '--quiet', str(local)], home, repo, 'git bundle verify')
+    except Refused:
+        local.unlink()
+        raise
+    digest = sha256_file(local)
+    ssh = Ssh(ctx.profile, idir, record['ports']['ssh'])
+    guest_path = f'{ex["guest_dir"]}/{bname}'
+    for path in (guest_path, guest_path + '.partial'):
+        state = guest_file_state(ssh, path)
+        if state != 'absent':
+            raise Refused('REFUSED', f'guest {path} is {state}; never overwritten')
+    transfer = Sftp(ssh).batch([f'put {sftp_quote(local)} {guest_path}.partial',
+                                f'rename {guest_path}.partial {guest_path}'], outbound)
+    if transfer['rc'] != 0:
+        raise Refused('EXCHANGE', f'sftp push failed: {transfer["stderr"]}', transfer)
+    landed = guest_file_state(ssh, guest_path)
+    result = {'operation': 'exchange-push', 'labels': labels(ctx.profile), 'instance': name,
+              'source': {'ref': full, 'commit': commit, 'commits': commits},
+              'bundle': {'name': bname, 'host_path': str(local), 'bytes': size,
+                         'sha256': digest, 'header': header},
+              'guest': {'path': guest_path, 'state': list(landed) if isinstance(landed, tuple)
+                        else landed},
+              'transfer': transfer, 'bounds': bounds}
+    ok = isinstance(landed, tuple) and landed[1] == size and landed[2] == digest
+    result['result'] = 'pushed' if ok else 'mismatch'
+    result['seconds'] = round(time.time() - t0, 1)
+    result['record'] = write_record(idir, 'exchange-push', result)
+    if not ok:
+        raise Refused('EXCHANGE', f'guest copy differs: {landed}', result)
+    return result
+
+
+def verify_pulled_bundle(ctx, name, path):
+    """A pulled bundle, verified in a fresh bare repository in the staging directory.
+
+    The repository first fetches every bundle this instance was pushed (the possible
+    prerequisites), then ``git bundle verify``, fetches the bundle's references under
+    refs/pulled/ and checks each one, then ``git fsck --strict``.
+    """
+    home = staging_dir(ctx, name, 'git-home')
+    header = parse_bundle_header(path)
+    vrepo = staging_dir(ctx, name, 'verify') / f'{Path(path).name}.git'
+    if os.path.lexists(vrepo):
+        raise Refused('REFUSED', f'{vrepo} exists')
+    git_ok(['init', '--bare', '--quiet', str(vrepo)], home, None, 'git init --bare')
+    pack = pack_trailer(path, header)
+    if not pack['ok']:
+        raise Refused('BUNDLE', f'{path}: pack checksum mismatch ({pack})')
+    # Only a bundle with prerequisites needs the pushed history first; a complete bundle
+    # is fetched into an empty repository, so every object is read from its own pack.
+    outbound = sorted(staging_dir(ctx, name, 'outbound').glob('*.bundle')) \
+        if header['prerequisites'] else []
+    for index, bundle in enumerate(outbound):
+        git_ok(['fetch', '--quiet', '--no-tags', str(bundle),
+                f'+refs/*:refs/outbound/{index}/*'], home, vrepo, f'fetch of pushed {bundle.name}')
+    git_ok(['bundle', 'verify', '--quiet', str(path)], home, vrepo, 'git bundle verify')
+    git_ok(['fetch', '--quiet', '--no-tags', str(path), '+refs/*:refs/pulled/*'], home, vrepo,
+           'fetch of the pulled bundle')
+    refs = []
+    for sha, ref in header['refs']:
+        local_ref = 'refs/pulled/' + ref[len('refs/'):] if ref.startswith('refs/') else None
+        got = git_ok(['rev-parse', '--verify', '--end-of-options', local_ref], home, vrepo) \
+            if local_ref else None
+        refs.append({'ref': ref, 'header': sha, 'fetched': got, 'match': got == sha})
+    fsck = run_git(['fsck', '--strict', '--no-progress', '--no-dangling'], home, vrepo)
+    return {'header': header, 'pack': pack, 'verify_repo': str(vrepo), 'prerequisite_sources':
+            [b.name for b in outbound], 'bundle_verify': 'ok', 'refs': refs,
+            'fsck': {'rc': fsck.returncode, 'out': (fsck.stdout + fsck.stderr).strip()},
+            'verified': bool(refs) and all(r['match'] for r in refs) and fsck.returncode == 0}
+
+
+def exchange_pull(ctx, name, filename):
+    """exchange pull: one file from the guest's exchange directory into staging, as data."""
+    t0 = time.time()
+    idir, record = running_instance(ctx, name)
+    ex = exchange_config(ctx.profile)
+    bounds = ex.get('pull') or {}
+    check_exchange_name(filename, bounds.get('name_pattern', r'^$'), 'file name')
+    inbound = staging_dir(ctx, name, 'inbound')
+    local = inbound / filename
+    partial = inbound / (filename + '.partial')
+    if os.path.lexists(local) or os.path.lexists(partial):
+        raise Refused('REFUSED', f'{local} (or its .partial) exists; never overwritten')
+    ssh = Ssh(ctx.profile, idir, record['ports']['ssh'])
+    guest_path = f'{ex["guest_dir"]}/{filename}'
+    state = guest_file_state(ssh, guest_path)
+    if not isinstance(state, tuple):
+        raise Refused('REFUSED', f'guest {guest_path} is {state}, not a regular file')
+    if state[1] > bounds.get('max_bytes', 0):
+        raise Refused('BOUNDS', f'guest {guest_path} is {state[1]} bytes; exchange.pull.max_bytes '
+                      f'is {bounds.get("max_bytes")}')
+    transfer = Sftp(ssh).batch([f'get {guest_path} {sftp_quote(partial)}'], inbound)
+    if transfer['rc'] != 0 or not partial.is_file():
+        if partial.exists():
+            partial.unlink()
+        raise Refused('EXCHANGE', f'sftp pull failed: {transfer["stderr"]}', transfer)
+    size = partial.stat().st_size
+    if size > bounds.get('max_bytes', 0):
+        partial.unlink()
+        raise Refused('BOUNDS', f'pulled {size} bytes; exchange.pull.max_bytes is '
+                      f'{bounds.get("max_bytes")}')
+    os.rename(partial, local)          # Windows: fails if the target appeared meanwhile
+    digest = sha256_file(local)
+    result = {'operation': 'exchange-pull', 'labels': labels(ctx.profile), 'instance': name,
+              'guest': {'path': guest_path, 'bytes': state[1], 'sha256': state[2]},
+              'staged': {'path': str(local), 'bytes': size, 'sha256': digest},
+              'transfer': transfer, 'bounds': bounds,
+              'digest_match': digest == state[2] and size == state[1]}
+    if filename.endswith('.bundle'):
+        try:
+            result['bundle'] = verify_pulled_bundle(ctx, name, local)
+        except Refused as exc:
+            result['bundle'] = {'verified': False, 'error': f'{exc.code}: {exc}'}
+    ok = result['digest_match'] and result.get('bundle', {'verified': True})['verified']
+    result['result'] = 'pulled' if ok else 'unverified'
+    result['seconds'] = round(time.time() - t0, 1)
+    result['record'] = write_record(idir, 'exchange-pull', result)
+    if not ok:
+        raise Refused('EXCHANGE', f'pulled {filename} did not verify', result)
+    return result
 
 
 # ---------------------------------------------------------------- preflight
@@ -917,11 +1301,12 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
 # ---------------------------------------------------------------- operations
 
 
-def create(ctx, name, ready_timeout=READY_TIMEOUT_S):
+def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None):
     t0 = time.time()
     idir = ctx.instance_dir(name)
     if os.path.lexists(idir):
         raise Refused('REFUSED', f'{idir} exists; create never reuses an instance directory')
+    planted = apply_canaries(canaries) if canaries else None   # the P5 test: before anything
     report = preflight(ctx)
     if report['result'] != 'available':
         raise Refused('TIER_UNAVAILABLE', f'{ctx.profile["name"]}: strong provider unavailable',
@@ -994,6 +1379,9 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S):
               'launch_record_sha256': sha256_file(idir / 'launch.json'),
               'seed_sha256': seed['sha256'], 'disks': disks, 'qemu_img_info': img_info,
               'launch': launched}
+    if planted:
+        result['canaries'] = {'planted_in_environment': planted,
+                              'needles': canary_summary(canaries['needles'])}
     try:
         result['ready'] = wait_ready(ctx, idir, record, ready_timeout, need_host_keys=True)
         result['result'] = 'ready'
@@ -1155,6 +1543,496 @@ def exec_command(ctx, name, command):
     return rc
 
 
+# ---------------------------------------------------------------- canaries (profiles P5)
+
+CANARY_SCHEMA = 'ai-engineering-harness/profiles/canaries/v1'
+# PEM armour for synthetic key-shaped text, assembled at run time so that no literal
+# private-key block appears in the source (the publication gate scans it).
+ARMOR = '-' * 5 + '{} OPENSSH PRIVATE KEY' + '-' * 5
+
+
+def make_canaries(out_dir, repo_root=REPO):
+    """A synthetic canary set: environment values and a fake home with credential-shaped
+    files. Every value carries a fresh random core; nothing here is a real secret.
+
+    The environment names include credential-looking ones, and LC_AIEH_CANARY, which
+    the guest's sshd would accept (AcceptEnv LC_*) if a client ever sent it. The fake
+    home is where a careless implementation would look (HOME for git and MSYS tools;
+    an ssh_config that sets SetEnv and ForwardAgent; a private key; stored git and AWS
+    credentials).
+    """
+    out = Path(out_dir).resolve()
+    if os.path.lexists(out):
+        raise Refused('REFUSED', f'{out} exists; a canary set is always new')
+    if inside(out, repo_root):
+        raise Refused('REFUSED', f'{out} is inside the checkout; canaries are never committed')
+    core = lambda: secrets.token_hex(16)                                   # noqa: E731
+    alnum = lambda n: ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')  # noqa: E731
+                              for _ in range(n))
+    env = {
+        'AIEH_CANARY_ENV': f'aieh-canary-env-{core()}',
+        'AIEH_CANARY_API_TOKEN': f'aieh-canary-token-{core()}',
+        'GITHUB_TOKEN': f'ghp_{core()}{alnum(4)}',
+        'ANTHROPIC_API_KEY': f'sk-ant-api03-{core()}-aieh-canary',
+        'AWS_SECRET_ACCESS_KEY': f'aieh-canary-aws-{core()}',
+        'LC_AIEH_CANARY': f'aieh-canary-lc-{core()}',
+        'DOCKER_HOST': f'tcp://aieh-canary-docker-{core()}.invalid:2375',
+    }
+    files = {
+        '.ssh/id_ed25519': f'aieh-canary-ssh-key-{core()}',
+        '.ssh/config': f'aieh-canary-ssh-config-{core()}',
+        '.git-credentials': f'aieh-canary-git-credentials-{core()}',
+        '.aws/credentials': f'aieh-canary-aws-file-{core()}',
+        '.gitconfig': f'aieh-canary-gitconfig-{core()}',
+    }
+    akia = f'AKIA{alnum(16)}'
+    content = {
+        '.ssh/id_ed25519': ARMOR.format('BEGIN') + '\n{v}\n' + ARMOR.format('END') + '\n',
+        '.ssh/config': 'Host *\n  # {v}\n  SetEnv LC_AIEH_CANARY_SSHCONFIG={v}\n'
+                       '  ForwardAgent yes\n  IdentityFile ~/.ssh/id_ed25519\n',
+        '.git-credentials': 'https://aieh:{v}@example.invalid\n',
+        '.aws/credentials': '[default]\naws_access_key_id = ' + akia +
+                            '\naws_secret_access_key = {v}\n',
+        '.gitconfig': '[user]\n\tname = {v}\n[credential]\n\thelper = store\n',
+    }
+    home = out / 'home'
+    home.mkdir(parents=True)
+    for rel, value in files.items():
+        path = home / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content[rel].format(v=value), encoding='ascii', newline='\n')
+    needles = {f'env:{k}': v for k, v in env.items()}
+    needles.update({f'home:{k}': v for k, v in files.items()})
+    needles['home:.aws/credentials:access-key-id'] = akia
+    data = {'schema': CANARY_SCHEMA, 'created_at': utc_now(), 'home': str(home),
+            'env': env, 'needles': needles}
+    write_json_exclusive(out / 'canaries.json', data)
+    return {'operation': 'canaries', 'dir': str(out), 'home': str(home),
+            'canaries': canary_summary(needles)}
+
+
+def canary_summary(needles):
+    """Labels with the sha256 of each value; the values themselves are never printed."""
+    return [{'label': label, 'sha256': hashlib.sha256(value.encode()).hexdigest()}
+            for label, value in sorted(needles.items())]
+
+
+def load_canaries(canary_dir, repo_root=REPO):
+    path = Path(canary_dir).resolve() / 'canaries.json'
+    if inside(path, repo_root):
+        raise Refused('REFUSED', f'{path} is inside the checkout')
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise Refused('REFUSED', f'{path}: cannot read the canary set ({exc})') from exc
+    if data.get('schema') != CANARY_SCHEMA or not data.get('needles'):
+        raise Refused('REFUSED', f'{path}: not a canary set')
+    return data
+
+
+def apply_canaries(data, environ=None):
+    """Plant the set in this process: the environment values, and HOME at the fake home.
+    Child processes that inherit the environment (git, ssh-keygen) see them; QEMU is
+    launched with the scrubbed environment (profiles P5)."""
+    environ = os.environ if environ is None else environ
+    environ.update(data['env'])
+    environ['HOME'] = data['home']
+    return sorted(data['env']) + ['HOME']
+
+
+# ---------------------------------------------------------------- P5 collection and scan
+
+# Owner-class patterns (profiles P5): private-key headers, Git-host and cloud tokens,
+# LLM-provider keys. The host account name and profile path are added at run time.
+OWNER_PATTERNS = {
+    'private-key-header': [rb'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----',
+                           rb'PuTTY-User-Key-File-\d'],
+    'git-host-token': [rb'gh[pousr]_[A-Za-z0-9]{36}', rb'github_pat_[A-Za-z0-9_]{50,}',
+                       rb'glpat-[A-Za-z0-9_-]{20}'],
+    'cloud-token': [rb'(?:AKIA|ASIA)[0-9A-Z]{16}', rb'AIza[0-9A-Za-z_-]{35}'],
+    'llm-provider-key': [rb'sk-ant-[A-Za-z0-9_-]{20,}', rb'sk-proj-[A-Za-z0-9_-]{20,}',
+                         rb'sk-[A-Za-z0-9]{48}'],
+}
+OWNER_CLASSES = sorted(list(OWNER_PATTERNS) + ['host-account'])
+CONTROL_DIR = '/srv/scratch/agent'
+COLLECT_MAX_BYTES = 512 << 20
+MEMBER_MAX_BYTES = 64 << 20
+# What the collection reads, as the agent user (no sudo): the contract's /etc and home
+# directories, the scratch disk, cloud-init's run, state and log files, every readable
+# process environment, and the login shell's environment.
+COLLECT_ROOTS = ('etc', 'home', 'root', 'srv/scratch', 'run/cloud-init', 'var/lib/cloud',
+                 'var/log')
+COLLECT_SCRIPT = r'''set -u
+d=$(mktemp -d /tmp/aieh-p5.XXXXXX) || exit 70
+trap 'rm -rf "$d"' EXIT
+mkdir "$d/aieh-env"
+env > "$d/aieh-env/ssh-session.env"
+bash -lc env > "$d/aieh-env/login-shell.env" 2>&1
+if cat /proc/1/environ > /dev/null 2>"$d/aieh-env/pid1.err"; then echo readable; else echo unreadable; fi > "$d/aieh-env/pid1.status"
+for p in /proc/[0-9]*; do
+  n=${p#/proc/}
+  if cat "$p/environ" > "$d/aieh-env/proc-$n.environ" 2>/dev/null; then :; else rm -f "$d/aieh-env/proc-$n.environ"; echo "$n" >> "$d/aieh-env/unreadable-pids"; fi
+done
+tar -czf - --ignore-failed-read -C / @ROOTS@ -C "$d" aieh-env
+'''
+
+
+def collect_script():
+    return COLLECT_SCRIPT.replace('@ROOTS@', ' '.join(COLLECT_ROOTS))
+
+
+def control_samples(token):
+    """One synthetic sample per Owner class for the positive control. Returns the file
+    text and the stand-in account name the host-account class must also match."""
+    rnd = lambda n, chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789': \
+        ''.join(secrets.choice(chars) for _ in range(n))                   # noqa: E731
+    account = f'aiehctl{token}'
+    lines = [
+        ARMOR.format('BEGIN'), rnd(64), ARMOR.format('END'),
+        f'ghp_{rnd(36)}',
+        f'AKIA{rnd(16, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")}',
+        f'sk-ant-api03-{rnd(40)}',
+        f'C:\\Users\\{account}\\AppData',
+    ]
+    return '\n'.join(lines) + '\n', account
+
+
+def plant_control_script(path, text):
+    return (f"set -e\numask 077\ncat > '{path}' <<'AIEHCONTROL'\n{text}AIEHCONTROL\n"
+            f"stat -c '%n %s' '{path}'\n")
+
+
+def host_account_literals(environ=None, principal=None):
+    """The Owner's host account name and profile path, as byte literals to search for."""
+    environ = os.environ if environ is None else environ
+    names = {n for n in (environ.get('USERNAME'), (principal or '').split('\\')[-1]) if n}
+    out = set()
+    for n in names:
+        out.add(n)
+    profile = environ.get('USERPROFILE')
+    if profile:
+        out.add(profile)
+        out.add(profile.replace('\\', '/'))
+        drive, rest = profile[:1].lower(), profile[2:].replace('\\', '/')
+        out.update({f'/{drive}{rest}', f'/mnt/{drive}{rest}'})
+    return sorted(out, key=len, reverse=True)
+
+
+def private_key_needles(key_path):
+    """Byte strings that occur only if the per-instance private key's secret material
+    is present: every base64 body line of the OpenSSH key file, and the ed25519 seed as
+    raw bytes, hex, and base64 at each of the three alignments."""
+    text = Path(key_path).read_text(encoding='ascii')
+    body = [line.strip() for line in text.splitlines()
+            if line.strip() and not line.startswith('-----')]
+    needles = {line.encode() for line in body if len(line) >= 20}
+    blob = base64.b64decode(''.join(body))
+    if not blob.startswith(b'openssh-key-v1\0'):
+        raise Refused('REFUSED', f'{key_path}: not an OpenSSH private key')
+    off = len(b'openssh-key-v1\0')
+
+    def take():
+        nonlocal off
+        size = int.from_bytes(blob[off:off + 4], 'big')
+        value = blob[off + 4:off + 4 + size]
+        off += 4 + size
+        return value
+
+    take(), take(), take()                       # cipher, kdf, kdf options
+    off += 4                                     # number of keys
+    take()                                       # public key
+    private = take()
+    off = 0
+    blob = private
+    off += 8                                     # two check integers
+    take(), take()                               # key type, public key
+    secret = take()                              # 64 bytes: seed then public key
+    seed = secret[:32]
+    needles.update({seed, seed.hex().encode()})
+    for shift in range(3):
+        part = seed[shift:]
+        encoded = base64.b64encode(part)[:4 * (len(part) // 3)]
+        needles.add(encoded)
+    return sorted(needles)
+
+
+def scan_bytes(data, literals, patterns):
+    """Labels of the literals and pattern classes found in one byte string."""
+    found = {label for label, needle in literals if needle in data}
+    for label, regexes in patterns.items():
+        if any(re.search(rx, data) for rx in regexes):
+            found.add(label)
+    return found
+
+
+def scan_tar(tar_bytes, literals, patterns):
+    """Search every member (name and content) of a gzip tar stream.
+
+    Returns {'members': n, 'bytes': total, 'hits': [{'label', 'member'}], 'truncated': [..]}.
+    """
+    hits, members, total, truncated = [], 0, 0, []
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode='r:gz') as tar:
+        for member in tar:
+            members += 1
+            data = member.name.encode('utf-8', errors='replace')
+            if member.isfile():
+                handle = tar.extractfile(member)
+                content = handle.read(MEMBER_MAX_BYTES + 1) if handle else b''
+                if len(content) > MEMBER_MAX_BYTES:
+                    truncated.append(member.name)
+                total += len(content)
+                data += b'\n' + content
+            elif member.issym() or member.islnk():
+                data += b'\n' + member.linkname.encode('utf-8', errors='replace')
+            for label in sorted(scan_bytes(data, literals, patterns)):
+                hits.append({'label': label, 'member': member.name})
+    return {'members': members, 'bytes': total, 'hits': hits, 'truncated': truncated}
+
+
+def tar_member_names(tar_bytes):
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode='r:gz') as tar:
+        return [m.name for m in tar]
+
+
+def tar_member_text(tar_bytes, name):
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode='r:gz') as tar:
+        try:
+            handle = tar.extractfile(name)
+        except KeyError:
+            return None
+        return handle.read().decode('utf-8', errors='replace') if handle else None
+
+
+def p5_needles(canaries, key_path, environ=None, principal=None, control_account=None):
+    """(literals, patterns): literals are (label, bytes); the canary values are labelled
+    by their canary label only."""
+    literals = []
+    if canaries:
+        for label, value in sorted(canaries['needles'].items()):
+            literals.append((f'canary:{label}', value.encode()))
+            for core in re.findall(r'[0-9a-f]{32}', value):
+                literals.append((f'canary:{label}', core.encode()))
+    if key_path:
+        literals += [('instance-private-key', n) for n in private_key_needles(key_path)]
+    patterns = {f'owner:{k}': [re.compile(rx) for rx in v] for k, v in OWNER_PATTERNS.items()}
+    # the account name and profile path: case-insensitive, not inside a longer word
+    accounts = host_account_literals(environ, principal) + \
+        ([control_account] if control_account else [])
+    patterns['owner:host-account'] = [
+        re.compile(rb'(?i)(?<![A-Za-z0-9])' + re.escape(a.encode('utf-8')) + rb'(?![A-Za-z0-9])')
+        for a in accounts]
+    return literals, patterns
+
+
+def owner_class(label):
+    """'owner:cloud-token' -> 'cloud-token'; anything else -> None."""
+    parts = label.split(':')
+    return parts[1] if parts[0] == 'owner' else None
+
+
+def summarize_p5(scan, control_member, host_scans):
+    """Split the hits into the positive control, Owner-class hits, canaries and key."""
+    out = {'members': scan['members'], 'bytes': scan['bytes'], 'truncated': scan['truncated'],
+           'control_classes': sorted({owner_class(h['label']) for h in scan['hits']
+                                      if h['member'] == control_member and owner_class(h['label'])}),
+           'owner_hits': [], 'canary_hits': [], 'key_hits': []}
+    for source, hits in [('guest', scan['hits'])] + [(f'host:{k}', v) for k, v in host_scans.items()]:
+        for hit in hits:
+            label, where = hit['label'], f'{source}:{hit.get("member", "")}'
+            if source == 'guest' and hit['member'] == control_member:
+                continue
+            if label.startswith('canary:'):
+                out['canary_hits'].append({'label': label, 'where': where})
+            elif label == 'instance-private-key':
+                out['key_hits'].append({'where': where})
+            elif label.startswith('owner:'):
+                out['owner_hits'].append({'class': owner_class(label), 'where': where})
+    return out
+
+
+def scan_host_file(path, literals, patterns, owner=True):
+    data = Path(path).read_bytes()
+    use = [(lab, n) for lab, n in literals if owner or not lab.startswith('owner:')]
+    pats = patterns if owner else {}
+    return [{'label': lab, 'member': Path(path).name} for lab in sorted(scan_bytes(data, use, pats))]
+
+
+def collect_p5(ssh, idir, record, canaries):
+    """The P5 test: plant the positive control, collect, remove it, scan on the host.
+
+    Canary values never travel to the guest: the guest's data comes to the host and is
+    searched here. The control file holds synthetic samples of each Owner class only.
+    """
+    token = secrets.token_hex(6)
+    control_path = f'{CONTROL_DIR}/.aieh-p5-control-{token}'
+    text, account = control_samples(token)
+    planted = ssh.run(['bash', '-s'], input_text=plant_control_script(control_path, text),
+                      timeout=120)
+    collected = ssh.run_raw(['bash', '-s'], input_text=collect_script(), timeout=900)
+    removed = ssh.run(['bash', '-s'], input_text=f"rm -f -- '{control_path}'\n"
+                      f"test -e '{control_path}' && echo present || echo absent\n", timeout=120)
+    out = {'control': {'path': control_path, 'planted_rc': planted.returncode,
+                       'planted': planted.stdout.strip(), 'removed': removed.stdout.strip(),
+                       'expected_classes': OWNER_CLASSES},
+           'collection': {'rc': collected.returncode, 'bytes': len(collected.stdout),
+                          'roots': list(COLLECT_ROOTS),
+                          'stderr': [line for line in collected.stderr.splitlines()
+                                     if line.strip()]},
+           'canaries': canary_summary(canaries['needles']) if canaries else None}
+    if len(collected.stdout) > COLLECT_MAX_BYTES:
+        out['collection']['error'] = f'more than {COLLECT_MAX_BYTES} bytes'
+        return out
+    literals, patterns = p5_needles(canaries, Path(idir) / 'ssh' / 'id_ed25519',
+                                    principal=record.get('host_principal'),
+                                    control_account=account)
+    try:
+        scan = scan_tar(collected.stdout, literals, patterns)
+        names = tar_member_names(collected.stdout)
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        out['collection']['error'] = f'{type(exc).__name__}: {exc}'
+        return out
+    out['collection']['env_files'] = sorted(n for n in names if n.startswith('aieh-env/'))
+    out['collection']['pid1_environ'] = (tar_member_text(collected.stdout, 'aieh-env/pid1.status')
+                                         or '').strip()
+    out['collection']['pid1_error'] = (tar_member_text(collected.stdout, 'aieh-env/pid1.err')
+                                       or '').strip()
+    host = {'seed.iso': record['inputs']['seed']['path'],
+            'launch.json': str(Path(idir) / 'launch.json'),
+            'serial.log': str(Path(idir) / 'serial.log')}
+    host_scans = {}
+    for key, path in host.items():
+        # launch.json records the host principal by design (profiles P8); it is searched
+        # for canaries and the private key only. The seed and the guest's serial
+        # console output are searched for everything.
+        host_scans[key] = scan_host_file(path, literals, patterns, owner=key != 'launch.json')
+    out['host_files'] = sorted(host)
+    out['summary'] = summarize_p5(scan, control_path.lstrip('/'), host_scans)
+    return out
+
+
+# ---------------------------------------------------------------- guest storage (P3, P4)
+
+
+def flatten_mounts(findmnt_text):
+    out = []
+
+    def walk(nodes):
+        for node in nodes:
+            out.append({k: node.get(k) for k in ('target', 'source', 'fstype', 'options')})
+            walk(node.get('children') or [])
+    try:
+        walk(json.loads(findmnt_text or '{}').get('filesystems') or [])
+    except (ValueError, AttributeError):
+        return None
+    return out
+
+
+def lsblk_disks(lsblk_text):
+    """{device path: disk serial} for every disk and its partitions, plus the disk list."""
+    paths, disks = {}, []
+    try:
+        top = json.loads(lsblk_text or '{}').get('blockdevices') or []
+    except (ValueError, AttributeError):
+        return None, None
+
+    def walk(node, serial):
+        if node.get('path'):
+            paths[node['path']] = serial
+        for child in node.get('children') or []:
+            walk(child, serial)
+    for dev in top:
+        disks.append({'serial': dev.get('serial'), 'type': dev.get('type'), 'ro': dev.get('ro'),
+                      'mountpoints': [m for m in dev.get('mountpoints') or [] if m]})
+        walk(dev, dev.get('serial'))
+    return paths, disks
+
+
+def target_matches(pattern, target):
+    regex = '^' + re.escape(pattern).replace(r'\*', '[^/]+') + '$'
+    return bool(re.match(regex, target or ''))
+
+
+def compare_mounts(storage, mounts, device_serials):
+    """The effective mount table against guest_storage.mounts, exactly.
+
+    Every observed mount must match one entry (target, file system type, and the disk
+    or source); every entry that is not optional must be observed. Returns
+    {'unlisted': [...], 'missing': [...], 'matched': n}.
+    """
+    devices = storage.get('block_devices') or {}
+    entries = storage.get('mounts') or []
+    used = [0] * len(entries)
+    unlisted = []
+    for mount in mounts:
+        hit = None
+        for i, entry in enumerate(entries):
+            if entry.get('fstype') != mount['fstype'] or not target_matches(entry['target'],
+                                                                             mount['target']):
+                continue
+            if 'disk' in entry:
+                serial = (devices.get(entry['disk']) or {}).get('serial')
+                if device_serials.get(mount['source']) != serial or serial is None:
+                    continue
+            elif entry.get('source') != mount['source']:
+                continue
+            if '*' not in entry['target'] and used[i]:
+                continue
+            hit = i
+            break
+        if hit is None:
+            unlisted.append(mount)
+        else:
+            used[hit] += 1
+    missing = [e for e, n in zip(entries, used) if not n and not e.get('optional')]
+    return {'unlisted': unlisted, 'missing': missing, 'matched': sum(used)}
+
+
+def declared_block_nodes(storage, values):
+    """{node-name: {'ro': bool, 'file': path or None}} from guest_storage.block_devices."""
+    out = {}
+    for dev in (storage.get('block_devices') or {}).values():
+        for spec in (dev, dev.get('backing')):
+            if not spec:
+                continue
+            ro = bool(spec.get('read_only'))
+            out[spec['node']] = {'ro': ro, 'file': None}
+            out[spec['file_node']] = {'ro': ro, 'file': expand(spec['file'], values)}
+    return out
+
+
+def record_values(record):
+    """Placeholder values for an instance, from its launch record."""
+    return {'instance_dir': record['instance']['instance_dir'],
+            'input:image': record['inputs']['image']['path'],
+            'input:seed': record['inputs']['seed']['path'],
+            'input:firmware': record['inputs']['firmware']['path']}
+
+
+VIRTIO_LINUX_IDS = {1: 'net', 2: 'block', 3: 'console', 4: 'entropy', 9: '9p',
+                    19: 'vsock', 26: 'fs'}
+# Host-management sockets and display channels that must not exist in the guest
+# (profiles P6): container engines, Incus/LXD, libvirt, X11, Wayland, WSLg, PulseAudio.
+MGMT_PATHS = ('/var/run/docker.sock', '/run/docker.sock', '/run/podman/podman.sock',
+              '/run/containerd/containerd.sock', '/var/lib/incus/unix.socket',
+              '/var/snap/lxd/common/lxd/unix.socket', '/var/lib/lxd/unix.socket',
+              '/run/libvirt/libvirt-sock', '/var/run/libvirt/libvirt-sock', '/mnt/wslg',
+              '/run/user/1000/docker.sock', '/run/user/1000/podman/podman.sock')
+MGMT_SOCKET_NAMES = re.compile(r'(^|/)(docker\.sock|podman\.sock|containerd\.sock|'
+                               r'unix\.socket|libvirt-sock(-ro)?|X\d+|wayland-\d+|'
+                               r'PulseServer|wslg[^/]*)$')
+MGMT_ENV = ('DOCKER_HOST', 'CONTAINER_HOST', 'DISPLAY', 'WAYLAND_DISPLAY', 'SSH_AUTH_SOCK',
+            'PULSE_SERVER', 'LIBVIRT_DEFAULT_URI', 'INCUS_SOCKET', 'LXD_SOCKET')
+
+
+def parse_kv_lines(text):
+    out = {}
+    for line in (text or '').splitlines():
+        key, sep, value = line.partition('=')
+        if sep:
+            out[key.strip()] = value.strip()
+    return out
+
+
 # ---------------------------------------------------------------- inspect
 
 
@@ -1244,14 +2122,66 @@ def tcp_probe(host, port, timeout=5):
     return f"timeout {timeout} bash -c 'exec 3<>\"/dev/tcp/$0/$1\"' {host} {port}"
 
 
-def guest_probes(ports, host_ips, http_ip):
+VSOCK_PROBE = r'''import errno, fcntl, socket, struct
+try:
+    with open('/dev/vsock', 'rb') as f:
+        buf = bytearray(4)
+        fcntl.ioctl(f, 0x7b9, buf)       # IOCTL_VM_SOCKETS_GET_LOCAL_CID
+        print('local_cid', struct.unpack('I', buf)[0])
+except FileNotFoundError:
+    print('local_cid absent')
+try:
+    s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    s.settimeout(3)
+    s.connect((2, 1024))
+    print('cid2 CONNECTED')
+except OSError as exc:
+    print('cid2', errno.errorcode.get(exc.errno, exc.errno))
+'''
+
+
+def storage_probes(storage):
+    """Probes for the declared directories and forbidden paths (guest_storage)."""
+    storage = storage or {}
+    dirs = ' '.join(f"'{d['path']}'" for d in storage.get('directories') or [])
+    forbidden = ' '.join(f"'{p}'" for p in storage.get('forbidden_paths') or [])
+    return [
+        ('storage_dirs', f"stat -c '%n|%U|%G|%a|%F|%m' -- {dirs}" if dirs else 'echo none'),
+        ('forbidden_paths', f'for p in {forbidden}; do if [ -e "$p" ] || [ -L "$p" ]; then '
+                            'echo "present $p"; else echo "absent $p"; fi; done' if forbidden
+         else 'echo none'),
+    ]
+
+
+def guest_probes(ports, host_ips, http_ip, storage=None):
     """(name, bash snippet) pairs: read-only inspection and egress probes."""
+    mgmt_paths = ' '.join(MGMT_PATHS)
+    env_names = ' '.join(MGMT_ENV)
     probes = [
         ('uname', 'uname -srvmo'),
         ('virt', 'systemd-detect-virt'),
         ('nproc', 'nproc'),
         ('meminfo', 'grep -E "^(MemTotal|SwapTotal):" /proc/meminfo'),
-        ('lsblk', 'lsblk -J -b -o NAME,SIZE,TYPE,RO,SERIAL,FSTYPE,LABEL,MOUNTPOINTS'),
+        ('lsblk', 'lsblk -J -b -o NAME,PATH,SIZE,TYPE,RO,SERIAL,FSTYPE,LABEL,MOUNTPOINTS'),
+        # P3, P4, P6 (F-03.3.1): devices, directories and host-management surfaces
+        ('virtio_devices', 'for d in /sys/bus/virtio/devices/*; do [ -e "$d/device" ] && '
+                           'printf "%s %s\\n" "$(cat "$d/vendor")" "$(cat "$d/device")"; '
+                           'done; echo end'),
+        ('vsock', "timeout 20 python3 - <<'PYEOF'\n" + VSOCK_PROBE + 'PYEOF'),
+        ('socket_inventory', 'find / \\( -path /proc -o -path /sys \\) -prune -o -type s '
+                             '-print 2>/dev/null | sort; echo end'),
+        ('mgmt_paths', f'for p in {mgmt_paths}; do if [ -e "$p" ] || [ -L "$p" ]; then '
+                       'echo "present $p"; fi; done; echo end'),
+        ('mgmt_env', f'for v in {env_names}; do if [ -n "${{!v+x}}" ]; then echo "session $v=set"; '
+                     'else echo "session $v=unset"; fi; done; '
+                     f"bash -lc 'for v in {env_names}; do if [ -n \"${{!v+x}}\" ]; then "
+                     "echo \"login $v=set\"; else echo \"login $v=unset\"; fi; done'"),
+        ('guest_ssh_agent', 's="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/openssh_agent"; '
+                            'if [ -S "$s" ]; then SSH_AUTH_SOCK="$s" timeout 10 ssh-add -l; '
+                            'else echo "no guest agent socket"; fi'),
+        ('qemu_ga', 'command -v qemu-ga || echo "qemu-ga absent"; '
+                    'systemctl is-active qemu-guest-agent'),
+    ] + storage_probes(storage) + [
         ('findmnt', 'findmnt -J -o TARGET,SOURCE,FSTYPE,OPTIONS'),
         ('findmnt_shares', f'findmnt -n -t {SHARE_FSTYPES}; echo "count=$(findmnt -n -t '
                            f'{SHARE_FSTYPES} | wc -l)"'),
@@ -1279,8 +2209,6 @@ def guest_probes(ports, host_ips, http_ip):
         ('resolv_conf', 'cat /etc/resolv.conf'),
         ('virtio_ports', 'ls /dev/virtio-ports'),
         ('unix_sockets', 'ss -xlH'),
-        ('host_sockets', 'test -e /var/run/docker.sock && echo docker.sock present || echo '
-                         'docker.sock absent; echo "DOCKER_HOST=${DOCKER_HOST-unset}"'),
         # P6 (amended 2026-11-06): no socket under /tmp/.X11-unix; see x11_unix_clean
         ('x11_unix', 'x=/tmp/.X11-unix; if [ -L "$x" ]; then echo symlink; elif [ ! -e "$x" ]; '
                      'then echo absent; else echo "type=$(stat -c %F "$x")"; '
@@ -1447,6 +2375,240 @@ def probe_blocked(name, result):
         result['rc'] in BLOCKED_RC[probe_kind(name)]
 
 
+def parse_virtio(text):
+    """{'block': 3, 'net': 1, ...} from the virtio_devices probe; None if incomplete."""
+    lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
+    if not lines or lines[-1] != 'end':
+        return None
+    out = {}
+    for line in lines[:-1]:
+        parts = line.split()
+        if len(parts) != 2:
+            return None
+        try:
+            ident = int(parts[1], 16)
+        except ValueError:
+            return None
+        name = VIRTIO_LINUX_IDS.get(ident, f'id-{ident}')
+        out[name] = out.get(name, 0) + 1
+    return out
+
+
+def listed_until_end(text):
+    """The lines of a probe that ends with 'end'; None if the listing is incomplete."""
+    lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
+    return lines[:-1] if lines and lines[-1] == 'end' else None
+
+
+def storage_checks(profile, record, obs):
+    """profiles P3 and P4 against guest_storage (F-03.3.1). Returns (p3, p4) checks."""
+    g = obs.get('guest', {})
+    q = obs.get('qmp', {})
+    out_text = lambda key: (g.get(key) or {}).get('out', '')      # noqa: E731
+    storage = profile.get('guest_storage') or {}
+    forbidden = storage.get('forbidden_fstypes') or SHARE_FSTYPES.split(',')
+    share_count = re.search(r'count=(\d+)', out_text('findmnt_shares'))
+    mounts = flatten_mounts(out_text('findmnt'))
+    serials, disks = lsblk_disks(out_text('lsblk'))
+    fstypes = sorted({m['fstype'] for m in mounts or [] if m.get('fstype')})
+    bad_types = [t for t in fstypes if t in forbidden or t.split('.')[0] in forbidden]
+    diff = compare_mounts(storage, mounts, serials) \
+        if storage.get('mounts') and mounts and serials is not None else None
+    virtio = parse_virtio(out_text('virtio_devices'))
+    declared_virtio = storage.get('virtio_devices')
+    forbidden_paths = storage.get('forbidden_paths') or []
+    fp_lines = out_text('forbidden_paths').splitlines()
+    p3 = [
+        check('share mounts', 0, int(share_count.group(1)) if share_count else None,
+              f'guest: findmnt -t {SHARE_FSTYPES}',
+              share_count is not None and int(share_count.group(1)) == 0),
+        check('mount table file systems', f'none of {forbidden}', fstypes, 'guest: findmnt -J',
+              not bad_types if mounts else None),
+        check('mount table equals the declared allowlist', 'profile guest_storage.mounts',
+              None if diff is None else {'matched': diff['matched'], 'unlisted': diff['unlisted'],
+                                         'missing': [e['target'] for e in diff['missing']]},
+              'guest: findmnt -J, with lsblk -J for the disk of each block mount',
+              None if diff is None else not diff['unlisted'] and not diff['missing']),
+        check('forbidden paths', [f'absent {p}' for p in forbidden_paths], fp_lines,
+              'guest: test -e, test -L',
+              fp_lines == [f'absent {p}' for p in forbidden_paths] if forbidden_paths else None),
+        check('/mnt/c', 'absent', out_text('mnt_c'), 'guest: test -e', out_text('mnt_c') == 'absent'),
+        check('guest virtio devices', declared_virtio, virtio,
+              'guest: /sys/bus/virtio/devices/*/device (no 9p or virtiofs device)',
+              virtio == declared_virtio if virtio is not None and declared_virtio else None),
+        check('host shares declared', [], profile.get('host_shares'), 'profile',
+              profile.get('host_shares') == []),
+    ]
+
+    values = record_values(record)
+    devices = storage.get('block_devices') or {}
+    declared_nodes = declared_block_nodes(storage, values) if devices else None
+    observed_nodes = {n.get('node-name'): {'ro': n.get('ro'), 'file': n.get('file')}
+                      for n in q.get('query-named-block-nodes') or []}
+    nodes_ok = None
+    if declared_nodes is not None and observed_nodes:
+        nodes_ok = set(observed_nodes) == set(declared_nodes) and all(
+            observed_nodes[k]['ro'] is v['ro'] and
+            (v['file'] is None or same_path(str(observed_nodes[k]['file']), v['file']))
+            for k, v in declared_nodes.items())
+    top = sorted(str((b.get('inserted') or {}).get('node-name')) for b in q.get('query-block') or [])
+    declared_top = sorted(d['node'] for d in devices.values()) or ['root', 'scratch', 'seed']
+    disk_list = [d for d in disks or [] if d.get('type') == 'disk']
+    declared_disks = {d['serial']: {'ro': bool(d.get('read_only')),
+                                    'mounted': d.get('mounted', True)} for d in devices.values()}
+    disks_ok = None
+    if disks is not None and declared_disks:
+        disks_ok = len(disk_list) == len(disks) and \
+            sorted(str(d.get('serial')) for d in disk_list) == sorted(declared_disks) and all(
+                truthy(d.get('ro')) == declared_disks[d['serial']]['ro'] and
+                (declared_disks[d['serial']]['mounted'] or not d['mountpoints'])
+                for d in disk_list if d.get('serial') in declared_disks)
+    dirs = storage.get('directories') or []
+    want_dirs = [f"{d['path']}|{d['owner']}|{d['group']}|{d['mode']}|directory|{d['mount']}"
+                 for d in dirs]
+    got_dirs = out_text('storage_dirs').splitlines()
+    pci = flatten_pci(q.get('query-pci'))
+    virtio_pci, unknown = {}, []
+    for dev in pci:
+        ident = dev.get('id') or {}
+        vendor, device = ident.get('vendor'), ident.get('device')
+        if vendor == 0x1af4 and device in VIRTIO_IDS:
+            virtio_pci[VIRTIO_IDS[device]] = virtio_pci.get(VIRTIO_IDS[device], 0) + 1
+        elif (vendor, device) not in Q35_BUILTIN:
+            unknown.append({'vendor': vendor, 'device': device,
+                            'class': (dev.get('class_info') or {}).get('class'),
+                            'qdev_id': dev.get('qdev_id')})
+    declared_dev = {}
+    argv = profile['launch']['argv']
+    for i, arg in enumerate(argv[:-1]):
+        if arg == '-device':
+            model = argv[i + 1].split(',')[0]
+            declared_dev[model] = declared_dev.get(model, 0) + 1
+    seed_dev = lsblk_by_serial(out_text('lsblk')).get('cidata') or {}
+    p4 = [
+        check('block devices (QMP)', declared_top, top, 'QMP query-block', top == declared_top),
+        check('block nodes: names, read-only flags and files', declared_nodes, observed_nodes,
+              'QMP query-named-block-nodes flat=true', nodes_ok),
+        check('guest disks', declared_disks, disk_list, 'guest: lsblk -J (type disk, by serial)',
+              disks_ok),
+        check('pci virtio devices', declared_dev, virtio_pci, 'QMP query-pci',
+              virtio_pci == declared_dev),
+        check('pci devices outside virtio and the q35 chipset', [], unknown, 'QMP query-pci',
+              not unknown),
+        check('seed read-only in the guest', True, seed_dev.get('ro'), 'guest: lsblk (serial cidata)',
+              truthy(seed_dev.get('ro')) if seed_dev else None),
+        check('scratch mounted', '/srv/scratch ext4', out_text('scratch_mount'), 'guest: findmnt',
+              ' ext4 ' in f' {out_text("scratch_mount")} '),
+        check('exchange and scratch directories', want_dirs, got_dirs,
+              "guest: stat -c '%n|%U|%G|%a|%F|%m'", got_dirs == want_dirs if dirs else None),
+    ]
+    return p3, p4
+
+
+LAUNCH_ENV_ALLOWED = set(ENV_ALLOW) | {'PATH', 'TEMP', 'TMP'}
+
+
+def p5_checks(record, obs):
+    """profiles P5 (F-03.3.1): the Owner-class scan with its positive control, the
+    canaries, the per-instance private key and the launch environment."""
+    env_keys = sorted((record.get('env') or {}).keys())
+    checks = [check('launch environment', f'a subset of {sorted(LAUNCH_ENV_ALLOWED)}', env_keys,
+                    'launch record env (QEMU and qemu-img)',
+                    set(env_keys) <= LAUNCH_ENV_ALLOWED)]
+    p5 = obs.get('p5')
+    summary = (p5 or {}).get('summary')
+    if not summary:
+        reason = (p5 or {}).get('collection', {}).get('error') if p5 else 'not run'
+        return checks + [check('guest scan', 'collected and scanned', reason,
+                               'guest tar over SSH, scanned on the host', None)]
+    coll = p5['collection']
+    needed = {'aieh-env/ssh-session.env', 'aieh-env/login-shell.env', 'aieh-env/pid1.status'}
+    control = p5['control']
+    checks += [
+        check('collection', f'complete: {COLLECT_ROOTS} and the process environments',
+              {'rc': coll.get('rc'), 'bytes': coll.get('bytes'), 'members': summary['members'],
+               'env_files': len(coll.get('env_files') or []), 'truncated': summary['truncated']},
+              'guest: tar -czf - as agent over SSH; host: tarfile',
+              coll.get('rc') in (0, 1) and summary['members'] > 0 and not summary['truncated']
+              and needed <= set(coll.get('env_files') or [])),
+        check('positive control', {'classes': OWNER_CLASSES, 'removed': 'absent'},
+              {'classes': summary['control_classes'], 'planted_rc': control.get('planted_rc'),
+               'removed': control.get('removed')},
+              f'guest: a synthetic sample of each class in {CONTROL_DIR}, scanned, then removed',
+              control.get('planted_rc') == 0 and summary['control_classes'] == OWNER_CLASSES
+              and control.get('removed') == 'absent'),
+        check('Owner-class scan', [], summary['owner_hits'],
+              'host: regex and literal search of the collection, the seed and serial.log',
+              not summary['owner_hits']),
+        check('canaries', 'none found', None if p5.get('canaries') is None else
+              {'planted': len(p5['canaries']), 'hits': summary['canary_hits']},
+              'host: literal search of the collection, seed.iso, launch.json and serial.log',
+              None if p5.get('canaries') is None else not summary['canary_hits']),
+        check('per-instance private key', 'not in the guest', summary['key_hits'],
+              'host: key body lines and the ed25519 seed (raw, hex, base64 at 3 alignments)',
+              not summary['key_hits']),
+    ]
+    return checks
+
+
+def p6_checks(profile, record, obs):
+    """profiles P6 (F-03.3.1): no host-management socket, channel or display."""
+    g = obs.get('guest', {})
+    q = obs.get('qmp', {})
+    out_text = lambda key: (g.get(key) or {}).get('out', '')      # noqa: E731
+    chardevs = sorted(c.get('label') for c in q.get('query-chardev') or [])
+    virtio = parse_virtio(out_text('virtio_devices'))
+    channels = sorted(k for k in (virtio or {}) if k in ('console', 'vsock', '9p', 'fs')
+                      or k.startswith('id-'))
+    vsock = dict(line.split(' ', 1) for line in out_text('vsock').splitlines() if ' ' in line)
+    sockets = listed_until_end(out_text('socket_inventory'))
+    listening = [line.split()[4] for line in out_text('unix_sockets').splitlines()
+                 if len(line.split()) > 4]
+    mgmt_sockets = sorted({s for s in (sockets or []) + listening if MGMT_SOCKET_NAMES.search(s)})
+    present = listed_until_end(out_text('mgmt_paths'))
+    env = out_text('mgmt_env').splitlines()
+    want_env = [f'{scope} {v}=unset' for scope in ('session', 'login') for v in MGMT_ENV]
+    qmp_probes = {k: v for k, v in g.items() if k.startswith('egress_tcp_') and k.endswith('_qmp')}
+    agent = out_text('guest_ssh_agent')
+    return [
+        check('chardevs', ['qmp', 'serial0'], chardevs, 'QMP query-chardev',
+              chardevs == ['qmp', 'serial0']),
+        check('virtio-serial ports', 'absent', out_text('virtio_ports'), 'guest: ls /dev/virtio-ports',
+              (g.get('virtio_ports') or {}).get('rc') not in (0, None)),
+        check('virtio channel devices', 'no console, vsock, 9p or fs device', virtio,
+              'guest: /sys/bus/virtio/devices/*/device', None if virtio is None else not channels),
+        check('vsock', 'no guest-to-host transport: local CID 1 (loopback) or -1; CID 2 not '
+              'connected', vsock, 'guest: AF_VSOCK ioctl and connect to CID 2',
+              vsock.get('local_cid') in ('1', '4294967295', 'absent') and 'cid2' in vsock
+              and vsock.get('cid2') != 'CONNECTED'),
+        check('host-management paths', [], present, f'guest: test -e {list(MGMT_PATHS)}',
+              present == [] if present is not None else None),
+        check('socket inventory', 'no container-engine, Incus, libvirt, X11, Wayland, WSLg or '
+              'PulseAudio socket', {'sockets': sockets, 'listening': listening,
+                                    'matched': mgmt_sockets},
+              'guest: find / -type s (excluding /proc, /sys); ss -xlH',
+              None if sockets is None else not mgmt_sockets),
+        check('management environment', 'unset in the session and the login shell', env,
+              f'guest: {list(MGMT_ENV)}', env == want_env),
+        check('/tmp/.X11-unix', 'absent, or a directory holding no socket or other '
+              'non-directory entry; not a symlink', out_text('x11_unix'),
+              "guest: test -L, stat -c %F, find -mindepth 1 ! -type d",
+              x11_unix_clean(out_text('x11_unix'))),
+        check('QMP from the guest', 'blocked', {k: v.get('rc') for k, v in qmp_probes.items()},
+              'guest: bash /dev/tcp to 10.0.2.2 and the host addresses on the QMP port',
+              bool(qmp_probes) and all(probe_blocked(k, v) for k, v in qmp_probes.items())),
+        check('guest-local ssh-agent', 'no identities (no agent is forwarded)', agent,
+              'guest: ssh-add -l on $XDG_RUNTIME_DIR/openssh_agent',
+              'The agent has no identities.' in agent or agent == 'no guest agent socket'),
+        check('guest agent', 'not declared; qemu-ga absent',
+              {'declared': (profile.get('guest_agent') or {}).get('used'),
+               'observed': out_text('qemu_ga').splitlines()[:1]},
+              'profile; guest: command -v qemu-ga',
+              (profile.get('guest_agent') or {}).get('used') is False and
+              out_text('qemu_ga').startswith('qemu-ga absent')),
+    ]
+
+
 def evaluate(profile, record, obs):
     """The P1-P12 record: declared, observed, method and verdict for each check."""
     g = obs.get('guest', {})
@@ -1507,85 +2669,15 @@ def evaluate(profile, record, obs):
               if 'virtual-size' in (img.get('scratch.qcow2') or {}) else None),
     ]))
 
-    share_count = re.search(r'count=(\d+)', out_text('findmnt_shares'))
-    fstypes = set()
-    try:
-        def walk(nodes):
-            for node in nodes:
-                fstypes.add(node.get('fstype'))
-                walk(node.get('children', []))
-        walk(json.loads(out_text('findmnt') or '{}').get('filesystems', []))
-    except ValueError:
-        pass
-    bad_types = sorted(t for t in fstypes if t and t.split('.')[0] in SHARE_FSTYPES.split(','))
-    props.append(prop('P3', [
-        check('share mounts', 0, int(share_count.group(1)) if share_count else None,
-              f'guest: findmnt -t {SHARE_FSTYPES}',
-              share_count is not None and int(share_count.group(1)) == 0),
-        check('mount table file systems', 'no share type', sorted(t for t in fstypes if t),
-              'guest: findmnt -J', not bad_types if fstypes else None),
-        check('/mnt/c', 'absent', out_text('mnt_c'), 'guest: test -e', out_text('mnt_c') == 'absent'),
-        check('host shares declared', [], profile.get('host_shares'), 'profile', profile.get('host_shares') == []),
-    ], formal='F-03.3.1; S-02.1, S-02.2'))
-
-    nodes = {n.get('node-name'): n for n in q.get('query-named-block-nodes') or []}
-    top = sorted((b.get('inserted') or {}).get('node-name') for b in q.get('query-block') or [])
-    pci = flatten_pci(q.get('query-pci'))
-    virtio, unknown = {}, []
-    for dev in pci:
-        ident = dev.get('id') or {}
-        vendor, device = ident.get('vendor'), ident.get('device')
-        if vendor == 0x1af4 and device in VIRTIO_IDS:
-            virtio[VIRTIO_IDS[device]] = virtio.get(VIRTIO_IDS[device], 0) + 1
-        elif (vendor, device) not in Q35_BUILTIN:
-            unknown.append({'vendor': vendor, 'device': device, 'class': (dev.get('class_info') or {}).get('class'),
-                            'qdev_id': dev.get('qdev_id')})
-    declared_dev = {}
-    argv = profile['launch']['argv']
-    for i, arg in enumerate(argv[:-1]):
-        if arg == '-device':
-            model = argv[i + 1].split(',')[0]
-            declared_dev[model] = declared_dev.get(model, 0) + 1
-    seed_dev = blk.get('cidata') or {}
-    props.append(prop('P4', [
-        check('block devices', ['root', 'scratch', 'seed'], top, 'QMP query-block',
-              top == ['root', 'scratch', 'seed']),
-        check('read-only nodes', {'seed': True, 'seed-file': True, 'base': True, 'base-file': True,
-                                  'root': False, 'scratch': False},
-              {k: (nodes.get(k) or {}).get('ro') for k in
-               ('seed', 'seed-file', 'base', 'base-file', 'root', 'scratch')},
-              'QMP query-named-block-nodes',
-              all((nodes.get(k) or {}).get('ro') is True for k in ('seed', 'seed-file', 'base', 'base-file'))
-              and (nodes.get('root') or {}).get('ro') is False),
-        check('pci virtio devices', declared_dev, virtio, 'QMP query-pci', virtio == declared_dev),
-        check('pci devices outside virtio and the q35 chipset', [], unknown, 'QMP query-pci', not unknown),
-        check('seed read-only in the guest', True, seed_dev.get('ro'), 'guest: lsblk (serial cidata)',
-              truthy(seed_dev.get('ro')) if seed_dev else None),
-        check('scratch mounted', '/srv/scratch ext4', out_text('scratch_mount'), 'guest: findmnt',
-              ' ext4 ' in f' {out_text("scratch_mount")} '),
-        check('exchange directory', '/home/agent/exchange agent 750', out_text('exchange_dirs'),
-              'guest: stat', '/home/agent/exchange agent 750' in out_text('exchange_dirs')),
-    ], formal='F-03.3.1; S-02.1, S-02.2'))
-
-    props.append(prop('P5', [check('no Owner secrets', 'none', None,
-                                   'not run: needs the canary positive control', None)],
-                      formal='F-03.3.1; S-02.1, S-02.2'))
-
-    chardevs = sorted(c.get('label') for c in q.get('query-chardev') or [])
-    props.append(prop('P6', [
-        check('chardevs', ['qmp', 'serial0'], chardevs, 'QMP query-chardev', chardevs == ['qmp', 'serial0']),
-        check('virtio-serial ports', 'absent', out_text('virtio_ports'), 'guest: ls /dev/virtio-ports',
-              (g.get('virtio_ports') or {}).get('rc') not in (0, None)),
-        check('host sockets', 'docker.sock absent, DOCKER_HOST unset',
-              out_text('host_sockets'), 'guest: test -e',
-              out_text('host_sockets') == 'docker.sock absent\nDOCKER_HOST=unset'),
-        check('/tmp/.X11-unix', 'absent, or a directory holding no socket or other '
-              'non-directory entry; not a symlink', out_text('x11_unix'),
-              "guest: test -L, stat -c %F, find -mindepth 1 ! -type d",
-              x11_unix_clean(out_text('x11_unix'))),
-        check('guest agent declared', False, (profile.get('guest_agent') or {}).get('used'),
-              'profile', (profile.get('guest_agent') or {}).get('used') is False),
-    ], formal='F-03.3.1; S-02.1, S-02.2'))
+    p3, p4 = storage_checks(profile, record, obs)
+    formal = 'F-03.3.1; S-02.1, S-02.2'
+    props.append(prop('P3', p3, formal=formal))
+    props.append(prop('P4', p4, formal=formal))
+    props.append(prop('P5', p5_checks(record, obs), formal=formal, note=(
+        'Scanned as the unprivileged agent user: root-only files in the guest (for example '
+        '/proc/1/environ, /etc/shadow and the user-data.txt of cloud-init) are not read there; '
+        'their source, the seed, is scanned on the host (seed.iso).')))
+    props.append(prop('P6', p6_checks(profile, record, obs), formal=formal))
 
     host = obs.get('host', {})
     listeners = [c for c in (host.get('bindings') or {}).get('tcp_by_pid') or []
@@ -1692,7 +2784,9 @@ def evaluate(profile, record, obs):
     return props
 
 
-def inspect(ctx, name):
+def inspect(ctx, name, canaries=None):
+    """The P1-P12 record. ``canaries`` is a loaded canary set (load_canaries) or None;
+    without it the P5 canary check is UNKNOWN."""
     idir = ctx.instance_dir(name)
     record = read_launch_record(idir)
     proc = running_process(idir, record['binary'])
@@ -1723,13 +2817,14 @@ def inspect(ctx, name):
     obs['host']['deb.debian.org'] = http_ip
     ssh = Ssh(ctx.profile, idir, record['ports']['ssh'])
     marker = '@@' + secrets.token_hex(8)
-    probes = guest_probes(record['ports'], ips, http_ip)
+    probes = guest_probes(record['ports'], ips, http_ip, ctx.profile.get('guest_storage'))
     result = ssh.run(['bash', '-s'], input_text=probe_script(probes, marker), timeout=600)
     obs['guest'] = parse_probe_output(result.stdout, marker)
     obs['guest_ssh'] = {'rc': result.returncode, 'stderr': result.stderr.strip(),
                         'probes_expected': len(probes), 'probes_parsed': len(obs['guest'])}
     root = ssh.run(['true'], user='root', timeout=60)
     obs['root_login'] = {'rc': root.returncode, 'stderr': root.stderr.strip()}
+    obs['p5'] = collect_p5(ssh, idir, record, canaries)
     kh = (idir / 'ssh' / 'known_hosts').read_text(encoding='ascii').split('\n')
     obs['known_hosts_fingerprints'] = [key_fingerprint(line.split()[2]) for line in kh if line.strip()]
     obs['stderr'] = stderr_findings(idir)
@@ -1742,6 +2837,25 @@ def inspect(ctx, name):
            'properties': properties, 'observations': obs}
     out['record'] = write_record(idir, 'inspect', out)
     return out
+
+
+SURFACE_PROPERTIES = ('profiles P3', 'profiles P4', 'profiles P5', 'profiles P6')
+
+
+def check_surfaces(ctx, name, canary_dir):
+    """The startup inspection test (F-03.3.1): inspect with a canary set, then the verdict
+    for profiles P3 to P6. PASS only when all four PASS; UNKNOWN counts as not passed."""
+    canaries = load_canaries(canary_dir)
+    record = inspect(ctx, name, canaries)
+    verdicts = {p: record['verdicts'].get(p) for p in SURFACE_PROPERTIES}
+    failing = [{'property': p['property'], 'check': c['check'], 'verdict': c['verdict']}
+               for p in record['properties'] if p['property'] in SURFACE_PROPERTIES
+               for c in p['checks'] if c['verdict'] != 'PASS']
+    return {'operation': 'check-surfaces', 'labels': labels(ctx.profile), 'instance': name,
+            'canaries': canary_summary(canaries['needles']), 'verdicts': verdicts,
+            'not_passed': failing, 'inspect_record': record['record'],
+            'all_verdicts': record['verdicts'],
+            'result': 'PASS' if all(v == 'PASS' for v in verdicts.values()) else 'FAIL'}
 
 
 # ---------------------------------------------------------------- CLI
@@ -1760,12 +2874,26 @@ def main(argv=None):
         sys.stderr.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     sub = parser.add_subparsers(dest='operation', required=True)
-    for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec'):
+    p = sub.add_parser('canaries')
+    p.add_argument('--out', required=True, help='a new directory outside the checkout')
+    for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
+               'exchange-push', 'exchange-pull', 'check-surfaces'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
         if op != 'preflight':
             p.add_argument('--name', required=True)
+        if op in ('create', 'inspect'):
+            p.add_argument('--canaries', help='a canary set written by the canaries operation')
+        if op == 'check-surfaces':
+            p.add_argument('--canaries', required=True,
+                           help='a canary set written by the canaries operation')
+        if op == 'exchange-push':
+            p.add_argument('--repo', required=True, help='the repository to read the branch from')
+            p.add_argument('--ref', required=True, help='one local branch')
+            p.add_argument('--bundle-name', help='file name in the guest exchange directory')
+        if op == 'exchange-pull':
+            p.add_argument('--file', required=True, help='file name in the guest exchange directory')
         if op in ('create', 'start', 'recreate'):
             p.add_argument('--ready-timeout', type=int, default=READY_TIMEOUT_S,
                            help='overall readiness ceiling in seconds')
@@ -1776,15 +2904,20 @@ def main(argv=None):
             p.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     try:
-        ctx = Context(args.profile, args.state_dir)
         op = args.operation
+        if op == 'canaries':
+            print(json.dumps(make_canaries(args.out), indent=2, sort_keys=True))
+            return 0
+        ctx = Context(args.profile, args.state_dir)
+        canaries = load_canaries(args.canaries) \
+            if op in ('create', 'inspect') and args.canaries else None
         if op == 'exec':
             command = args.command[1:] if args.command[:1] == ['--'] else args.command
             return exec_command(ctx, args.name, command)
         if op == 'preflight':
             result = preflight(ctx)
         elif op == 'create':
-            result = create(ctx, args.name, args.ready_timeout)
+            result = create(ctx, args.name, args.ready_timeout, canaries)
         elif op == 'start':
             result = start(ctx, args.name, args.ready_timeout)
         elif op == 'stop':
@@ -1793,14 +2926,22 @@ def main(argv=None):
             result = destroy(ctx, args.name)
         elif op == 'recreate':
             result = recreate(ctx, args.name, args.ready_timeout)
+        elif op == 'exchange-push':
+            result = exchange_push(ctx, args.name, args.repo, args.ref, args.bundle_name)
+        elif op == 'exchange-pull':
+            result = exchange_pull(ctx, args.name, args.file)
+        elif op == 'check-surfaces':
+            result = check_surfaces(ctx, args.name, args.canaries)
         else:
-            result = inspect(ctx, args.name)
+            result = inspect(ctx, args.name, canaries)
     except Refused as exc:
         print(f'REFUSED {exc.code}: {exc}', file=sys.stderr)
         print(json.dumps({'result': 'refused', 'code': exc.code, 'message': str(exc),
                           'detail': exc.detail}, indent=2, sort_keys=True, default=str))
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    if result.get('operation') == 'check-surfaces':
+        return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \
         result.get('create', {}).get('result') == 'not-ready'

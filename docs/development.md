@@ -142,6 +142,11 @@ Only what is listed as verified has been exercised.
 | `guest:create PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name>` | no | Creates, boots and waits for a disposable guest. Refuses an existing instance. |
 | `guest:start`, `guest:inspect`, `guest:stop`, `guest:destroy`, `guest:recreate` (same variables) | `python -I -B tools/guest.py <operation> --profile <dir> --state-dir <dir> --name <name>` | no | The rest of the lifecycle; `destroy` deletes only the instance directory. |
 | `guest:exec PROFILE=… STATE_DIR=… NAME=… -- CMD` | `python -I -B tools/guest.py exec --profile <dir> --state-dir <dir> --name <name> -- CMD` | no | Operators only: a command in the guest over the loopback SSH forward. |
+| `guest:push PROFILE=… STATE_DIR=… NAME=… REPO=<repo> REF=<branch>` | `python -I -B tools/guest.py exchange-push --profile <dir> --state-dir <dir> --name <name> --repo <repo> --ref <branch>` | no | Exchange push: one local branch as a bounded git bundle, by SFTP into `/home/agent/exchange`. Reads the repository only. |
+| `guest:pull PROFILE=… STATE_DIR=… NAME=… FILE=<file>` | `python -I -B tools/guest.py exchange-pull --profile <dir> --state-dir <dir> --name <name> --file <file>` | no | Exchange pull: one file into the instance's staging directory; a bundle is verified in a fresh bare repository there. |
+| `guest:canaries OUT=<dir>` | `python -I -B tools/guest.py canaries --out <dir>` | no | Writes a synthetic canary set and fake home into a new directory outside the checkout. |
+| `guest:create-canaries PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | `create` with the canary set planted in its own environment first (the P5 test). |
+| `guest:check-surfaces PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py check-surfaces --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | Startup inspection test for profiles P3 to P6 (F-03.3.1): exit 0 only when all four PASS. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
 | `scan:history [-- REVS]` | `python -I -B tools/publication_gate.py history [REVS]` | no | Read-only, redacted scan of every commit (default `--all`); exit 1 on findings. |
@@ -216,6 +221,23 @@ defaults them.
   `IdentityAgent=none`, `GlobalKnownHostsFile=none` and the per-instance key. The tool
   refuses to run `ssh` when that key is missing, because `ssh -i` with a missing file
   silently falls back to the identities in `~/.ssh`.
+- `exchange-push` and `exchange-pull` (F-03.3.1) use Windows' built-in `sftp.exe` with
+  the same options and key (`-S` names the built-in `ssh.exe`). A push is one local
+  branch as a complete git bundle within the profile's `exchange.push` bounds, built
+  with git under no system or global configuration and checked (header, pack checksum,
+  `git bundle verify`) before it is copied under a new name. A pull copies one regular
+  file of the guest's exchange directory into `<instance>\exchange\inbound\`; a bundle
+  is verified in a fresh bare repository there, never in an Owner repository. Both
+  directories are inside the instance directory, so `destroy` removes them.
+- `check-surfaces` is the startup inspection test for profiles P3 to P6. It runs
+  `inspect` and passes only when all four properties PASS: the guest's mounts, disks,
+  block nodes and directories equal the profile's `guest_storage` table exactly; the
+  Owner-class scan with its positive control finds nothing, and no value of the canary
+  set appears in the guest, its seed, its launch record or its serial log; no
+  host-management socket, channel, display or environment variable is present, and QMP
+  is not reachable from the guest. The canary set comes from `canaries` and is planted
+  by `create --canaries`; canary values never travel to the guest (the guest's files
+  come to the host and are searched there), and records carry only their sha256.
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md).
@@ -251,7 +273,7 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, publication gate |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, publication gate |
 | `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/` | F-05.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |

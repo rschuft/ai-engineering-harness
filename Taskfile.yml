@@ -131,6 +131,41 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py exec --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" -- {{.CLI_ARGS}}'
 
+  guest:push:
+    desc: "Exchange push: one local branch of REPO as a bounded git bundle, by SFTP into the guest's exchange directory (python -I -B tools/guest.py exchange-push --profile PROFILE --state-dir STATE_DIR --name NAME --repo REPO --ref REF)"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, REPO, REF]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py exchange-push --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --repo "{{.REPO}}" --ref "{{.REF}}"'
+
+  guest:pull:
+    desc: "Exchange pull: one file of the guest's exchange directory into the instance's staging directory; a bundle is verified there (python -I -B tools/guest.py exchange-pull --profile PROFILE --state-dir STATE_DIR --name NAME --file FILE)"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, FILE]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py exchange-pull --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --file "{{.FILE}}"'
+
+  guest:canaries:
+    desc: Write a synthetic canary set (environment values and a fake home) into a new directory outside the checkout (python -I -B tools/guest.py canaries --out OUT)
+    requires:
+      vars: [OUT]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py canaries --out "{{.OUT}}"'
+
+  guest:create-canaries:
+    desc: create, with a canary set planted in the launching process first (python -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME --canaries CANARIES)
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, CANARIES]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py create --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}"'
+
+  guest:check-surfaces:
+    desc: "Startup inspection test for profiles P3-P6 (F-03.3.1): inspect with the canary set; exit 0 only when all four PASS (python -I -B tools/guest.py check-surfaces --profile PROFILE --state-dir STATE_DIR --name NAME --canaries CANARIES)"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, CANARIES]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py check-surfaces --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}"'
+
   guest:stop:
     desc: Stop a guest (QMP system_powerdown, QMP quit after stop_timeout_s, then that process only) (python -I -B tools/guest.py stop --profile PROFILE --state-dir STATE_DIR --name NAME)
     requires:

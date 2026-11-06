@@ -320,6 +320,113 @@ class Negative(unittest.TestCase):
         self.assertEqual(self.errors(copy.deepcopy(self.qemu)), [])
         self.assertEqual(self.errors(copy.deepcopy(self.incus)), [])
 
+    # guest storage and exchange (profiles P3, P4; F-03.3.1)
+    def test_guest_storage_required_for_qemu(self):
+        del self.qemu['guest_storage']
+        self.assertFails(self.qemu, 'guest_storage: missing')
+
+    def test_exchange_required_for_qemu(self):
+        del self.qemu['exchange']
+        self.assertFails(self.qemu, 'exchange: missing')
+
+    def test_share_fstype_in_mount_table(self):
+        self.qemu['guest_storage']['mounts'].append(
+            {'target': '/mnt/host', 'fstype': '9p', 'source': 'host0'})
+        self.assertFails(self.qemu, "file system type '9p' is a share type")
+
+    def test_fuse_subtype_in_mount_table(self):
+        self.qemu['guest_storage']['mounts'].append(
+            {'target': '/mnt/host', 'fstype': 'fuse.sshfs', 'source': 'x'})
+        self.assertFails(self.qemu, 'is a share type')
+
+    def test_forbidden_path_in_mount_table(self):
+        self.qemu['guest_storage']['mounts'].append(
+            {'target': '/mnt/c', 'fstype': 'ext4', 'disk': 'scratch'})
+        self.assertFails(self.qemu, '/mnt/c is a forbidden path')
+
+    def test_contract_share_types_must_be_forbidden(self):
+        self.qemu['guest_storage']['forbidden_fstypes'].remove('virtiofs')
+        self.assertFails(self.qemu, 'forbidden_fstypes: must include')
+
+    def test_mount_on_configuration_medium(self):
+        self.qemu['guest_storage']['mounts'].append(
+            {'target': '/mnt/seed', 'fstype': 'iso9660', 'disk': 'seed'})
+        self.assertFails(self.qemu, "disk 'seed' is not the root or scratch device")
+
+    def test_writable_configuration_medium(self):
+        self.qemu['guest_storage']['block_devices']['seed']['read_only'] = False
+        self.assertFails(self.qemu, 'configuration medium must be read-only')
+
+    def test_optional_mount_needs_a_reason(self):
+        self.qemu['guest_storage']['mounts'][-1]['optional'] = True
+        self.assertFails(self.qemu, 'optional must give the reason')
+
+    def test_wildcard_only_as_last_component(self):
+        self.qemu['guest_storage']['mounts'].append(
+            {'target': '/run/*/x', 'fstype': 'tmpfs', 'source': 'tmpfs'})
+        self.assertFails(self.qemu, 'wildcard is allowed only')
+
+    def test_block_device_host_path(self):
+        self.qemu['guest_storage']['block_devices']['scratch']['file'] = 'C:/Users/x/disk.qcow2'
+        self.assertFails(self.qemu, 'no host path')
+
+    def test_undeclared_blockdev_in_argv(self):
+        self.qemu['launch']['argv'] += [
+            '-blockdev', 'driver=file,node-name=extra-file,filename={instance_dir}/scratch.qcow2']
+        self.assertFails(self.qemu, '-blockdev extra-file is not in guest_storage')
+
+    def test_undeclared_virtio_blk_device(self):
+        self.qemu['launch']['argv'] += ['-device', 'virtio-blk-pci,drive=base,serial=base']
+        self.assertFails(self.qemu, 'virtio-blk devices')
+
+    def test_declared_node_missing_from_argv(self):
+        self.qemu['guest_storage']['block_devices']['extra'] = {
+            'role': 'configuration-medium', 'serial': 'extra', 'read_only': True, 'mounted': False,
+            'node': 'extra', 'file_node': 'extra-file', 'file': '{instance_dir}/extra.iso'}
+        self.assertFails(self.qemu, 'node extra has no -blockdev')
+
+    def test_read_only_flag_disagrees_with_argv(self):
+        self.qemu['guest_storage']['block_devices']['scratch']['read_only'] = True
+        self.assertFails(self.qemu, 'the scratch disk is writable')
+        self.assertFails(self.qemu, 'read_only differs from -blockdev scratch')
+
+    def test_serial_disagrees_with_argv(self):
+        self.qemu['guest_storage']['block_devices']['seed']['serial'] = 'seed'
+        self.assertFails(self.qemu, 'virtio-blk devices')
+
+    def test_exchange_directory_must_match(self):
+        self.qemu['guest_storage']['directories'][0]['path'] = '/home/agent/other'
+        self.assertFails(self.qemu, 'differs from exchange.guest_dir')
+
+    def test_scratch_directory_on_scratch_disk(self):
+        self.qemu['guest_storage']['directories'][1]['mount'] = '/'
+        self.qemu['guest_storage']['directories'][1]['path'] = '/srv/agent'
+        self.assertFails(self.qemu, 'scratch directory must be on the scratch disk')
+
+    def test_directory_mode(self):
+        self.qemu['guest_storage']['directories'][0]['mode'] = 'rwx'
+        self.assertFails(self.qemu, 'mode must be octal digits')
+
+    def test_virtio_counts_match_argv(self):
+        self.qemu['guest_storage']['virtio_devices']['block'] = 4
+        self.assertFails(self.qemu, 'virtio_devices')
+
+    def test_exchange_staging_outside_state(self):
+        self.qemu['exchange']['host_staging'] = 'C:/Users/x/staging'
+        self.assertFails(self.qemu, 'exchange.host_staging')
+
+    def test_exchange_name_pattern_admits_separator(self):
+        self.qemu['exchange']['pull']['name_pattern'] = '^[A-Za-z0-9/._-]+$'
+        self.assertFails(self.qemu, 'exchange.pull.name_pattern')
+
+    def test_exchange_push_one_branch(self):
+        self.qemu['exchange']['push']['refs'] = 2
+        self.assertFails(self.qemu, 'exactly one branch')
+
+    def test_exchange_bounds_positive(self):
+        self.qemu['exchange']['push']['max_bytes'] = 0
+        self.assertFails(self.qemu, 'exchange.push.max_bytes')
+
 
 class CommandLine(unittest.TestCase):
     def test_unpinned_input_fails_the_command(self):
