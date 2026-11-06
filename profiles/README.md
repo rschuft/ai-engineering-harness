@@ -99,11 +99,19 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   one explicit, allowlisted directory outside the Owner's profile.
 - **The Windows QEMU strong profile uses no host filesystem share at all.**
 - **Scratch** is a second guest disk, sized by `profiles P2` and removed by `destroy`.
+- **Configuration media** are the only other disk devices allowed: read-only media that
+  the harness or the provider generates to deliver configuration. They are the QEMU
+  NoCloud seed on a read-only virtio disk, and the Incus `cloud-init:config` and
+  `agent:config` disk devices, which Incus presents as read-only CD-ROMs. Their content
+  is limited by `profiles P5`, and each one is listed in the profile's declared devices
+  (QEMU: `launch.argv`; Incus: the Incus profile's `devices`). They are not shares: the
+  Incus 9p `config` share and any host filesystem share stay forbidden.
 - **trusted-workload:** the same model. For WSL, the exchange is inside the dedicated
   distribution's own filesystem, never under `/mnt`.
-- **Inspect:** the provider's device list shows only the root and scratch disks (plus
-  the allowlisted share, if any). Inside the guest, `findmnt` shows exchange and scratch
-  at their declared mount points.
+- **Inspect:** the provider's device list shows only the root and scratch disks and the
+  declared configuration media, each medium read-only (plus the allowlisted share, if
+  any). Inside the guest, `findmnt` shows exchange and scratch at their declared mount
+  points.
 
 ### P5 No Owner secrets
 - **Launch:** the provider's launch environment is scrubbed to an allowlist. The seed
@@ -332,7 +340,7 @@ Each requirement cites the Owner conditions in section 9.
   generated from the profile, so it is reproducible (C3).
 - **Storage:** guest images, scratch disks and keys live under the A3 directory (C4).
 - **No host filesystem share** of any kind: no `-virtfs`, no SMB, no 9p (`profiles P4`,
-  C5).
+  C5). The NoCloud seed is a read-only configuration medium (`profiles P4`), not a share.
 - **Network:** user-mode networking with `restrict=on`. `hostfwd` binds only to
   `127.0.0.1` (management, exchange). `guestfwd` points to host-side endpoints for
   `inference` and `provision` (`profiles P7`, C5).
@@ -359,7 +367,9 @@ Each requirement cites the Owner conditions in section 9.
 
 ### Linux and remote: Incus virtual machine
 - **Instance:** an Incus VM instance with `limits.cpu`, `limits.memory`, a sized root
-  disk and one scratch disk. **No other disk devices** (`profiles P3`, `profiles P4`).
+  disk and one scratch disk. **No other disk devices** except the read-only
+  configuration media `cloud-init:config` and `agent:config`. The 9p `config` share is
+  not allowed (`profiles P3`, `profiles P4`).
 - **Masking:** `security.nesting=false` is the candidate mask for `profiles P12`.
 - **Network:** a managed NAT bridge with network ACLs as the candidate enforcement
   point (`profiles P7`, with the baseline-service caveat).
@@ -391,7 +401,7 @@ Each requirement cites the Owner conditions in section 9.
 | Lima | `mounts: []` (and no `_default/mounts` base). `propagateProxyEnv: false`. `ssh.forwardAgent: false`. `nestedVirtualization: false`. A catch-all `portForwards` rule with `ignore: true` after any explicit forwards. `images[].digest` is mandatory. `plain: true` is preferred, to be qualified in F-03.2.1. |
 | Colima | **Excluded from the strong tier.** By default it mounts `$HOME` writable and publishes the guest's Docker socket on the host at `$HOME/.colima/<profile>/docker.sock`. |
 | WSL (trusted-workload) | In the distribution's own `/etc/wsl.conf`: `automount.enabled=false`, `automount.mountFsTab=false`, `interop.enabled=false`, `interop.appendWindowsPath=false`. |
-| Incus | No disk devices beyond root and scratch. |
+| Incus | No disk devices beyond root, scratch and the read-only `cloud-init:config` and `agent:config` media (`profiles P4`). No 9p `config` share. |
 | QEMU | No `-virtfs`, no SMB, no host-directory block device. `-nic user,restrict=on` with loopback-bound `hostfwd` only. |
 
 ## 8. Remote-Linux fallback: minimum contract
