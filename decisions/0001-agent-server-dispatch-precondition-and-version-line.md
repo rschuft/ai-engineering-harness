@@ -60,6 +60,17 @@ ghcr.io/openhands/agent-server:latest-python.
   1.60.1; E-01.3.1/E-01.5 validate against the pinned OpenAPI.
 - Migrate this record into OpenSpec when adopted.
 
+## Clarification (2026-11-06, Owner direction; no change to the decision)
+`conversation_runtime=docker` names the Agent Server's Docker-API runtime path, and
+"docker-only" is an implementation safety setting for the current execution path. It
+does not architecturally exclude Podman's Docker-compatible API (an ADAPT/QUALIFY
+alternative per blueprint #infrastructure-state), the dedicated-VM LocalWorkspace
+profile, or other approved providers. Any material change to isolation guarantees,
+provider choices, or authority boundaries still requires architectural evaluation.
+The blueprint passages this record corrects will be reconciled with it at maintenance
+item M-1, after F-02 makes the blueprint's integrity metadata updatable through a
+versioned process.
+
 ## Evidence
 composition/compatibility-matrix.md s2.1, s4, s5, s6; composition/candidates.json;
 blueprint #dispatch-contract, #dispatch-probe-qualification, #infrastructure-state,
