@@ -1,7 +1,7 @@
 # Developer and operator entrypoints (plan leaf F-02). Requires Task 3.54.0
 # (https://taskfile.dev); the pinned version and its checksums are recorded in
-# CONTRIBUTING.md. Every target wraps one repository command, so each also runs
-# without Task: the command is shown in its description and in CONTRIBUTING.md.
+# docs/development.md. Every target wraps one repository command, so each also runs
+# without Task: the command is shown in its description and in docs/development.md.
 #
 #   task setup     supported setup command: fast, offline qualification smoke checks
 #   task qualify   setup, then full component resolution (network, several minutes)

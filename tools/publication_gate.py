@@ -6,7 +6,7 @@ pushed. It runs Gitleaks locally, at a pinned and hash-verified release, from a
 per-user cache outside the checkout. Nothing is sent to any external scanning
 service; the only network access is ``install`` downloading the pinned release.
 
-Modes (see CONTRIBUTING.md, "Publication-safety gate"):
+Modes (see docs/development.md, "Publication-safety gate"):
 
   install      download, verify and cache the pinned Gitleaks; set core.hooksPath
   verify       check the cached binary's hash, its version and the hook wiring
@@ -601,7 +601,7 @@ def report(mode, findings, refusals, allowed, scanned, stream):
         out(f'  [{cat}] {rule}  {loc}  ({origin})')
     out('  Remove the content before it is published. A credential that has ever left this machine')
     out('  is compromised: revoke and rotate it. False positive: propose a narrow, reasoned allowlist')
-    out('  change in .gitleaks.toml. Never bypass with --no-verify. See CONTRIBUTING.md.')
+    out('  change in .gitleaks.toml. Never bypass with --no-verify. See docs/development.md.')
     return 1
 
 
@@ -808,7 +808,7 @@ def mode_verify():
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(errors='backslashreplace')
-    parser = argparse.ArgumentParser(description='Publication-safety gate (see CONTRIBUTING.md).')
+    parser = argparse.ArgumentParser(description='Publication-safety gate (see docs/development.md).')
     sub = parser.add_subparsers(dest='mode', required=True)
     install = sub.add_parser('install', help='download, verify and cache Gitleaks; set core.hooksPath')
     install.add_argument('--force', action='store_true', help='download again even if the cache verifies')

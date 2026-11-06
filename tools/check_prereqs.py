@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-PINNED_TASK_VERSION = '3.54.0'  # recorded with its checksums in CONTRIBUTING.md
+PINNED_TASK_VERSION = '3.54.0'  # recorded with its checksums in docs/development.md
 
 
 def load(name, path):

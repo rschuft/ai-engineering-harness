@@ -1,7 +1,7 @@
 # Publication-safety gate configuration for Gitleaks 8.30.1.
 # Read by tools/publication_gate.py from the index (pre-commit) or from HEAD
 # (pre-push, history). It extends the Gitleaks default rules with narrow rules
-# for private machine information. See CONTRIBUTING.md, "Publication-safety gate".
+# for private machine information. See docs/development.md, "Publication-safety gate".
 #
 # Changing this file is a reviewed change, like code. Every allowlist entry
 # states why it is safe. Prefer the narrowest form: an exact value or an exact

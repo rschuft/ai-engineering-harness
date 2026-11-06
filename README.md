@@ -68,23 +68,19 @@ The [evidence log](evidence/bootstrap-log.md) records each verdict with its revi
 
 ## Getting started
 
-[`CONTRIBUTING.md`](CONTRIBUTING.md) is the onboarding reference: prerequisites, verified platforms, every developer command, and how to change integrity-tracked files. The minimal start is:
+Clone the repository, open it with a coding agent such as Claude Code or Codex, and describe the change you want. The agent discovers the project's tooling, implements and verifies the change, and you review the result. [`CONTRIBUTING.md`](CONTRIBUTING.md) walks through this. Coding agents follow [`AGENTS.md`](AGENTS.md) (Claude Code reads it through [`CLAUDE.md`](CLAUDE.md)).
 
-```
-git clone https://github.com/rschuft/ai-engineering-harness
-cd ai-engineering-harness
-task setup
-```
+[`docs/development.md`](docs/development.md) is the technical reference: prerequisites, verified platforms, every developer command and its direct equivalent, and how to change integrity-tracked files.
 
-## Agent orchestration
+## How work is done here
 
-This section is for operators who coordinate agent work on the repository. Ordinary contributors do not need it.
+Three different workflows touch this repository:
 
-Implementation is coordinated by an Overseer agent, which delegates bounded tasks, one per dispatch, to a Builder agent and consults an Architect agent when a design question warrants it.
-
-- [`CLAUDE.md`](CLAUDE.md): repository instructions for agents, including source precedence and authority boundaries.
-- [`OVERSEER_START.md`](OVERSEER_START.md): Overseer startup, delegation, continuation and recovery instructions.
-- [`task_prompts/`](task_prompts/): one scoped implementation prompt per plan task, indexed by [`task_manifest.json`](task_manifest.json). They are used through Overseer coordination, which handles dependencies and parent acceptance. They are not a batch execution script, but they do support targeted execution and recovery of an individual task.
+1. **Ordinary contribution.** A developer clones the repository, opens a capable coding agent, and describes the change they want. One coding agent is enough; see [`CONTRIBUTING.md`](CONTRIBUTING.md). Agent instructions are in [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md).
+2. **The current implementation arrangement.** The Owner is carrying out the initial implementation plan through an Overseer agent, which delegates bounded tasks, one per dispatch, to a Builder agent and consults an Architect agent when a design question warrants it. These agents are defined in the Owner's own environment; they are not part of this repository and are not prerequisites for contributing. Their operating resources are temporary:
+   - [`OVERSEER_START.md`](OVERSEER_START.md): Overseer startup, delegation, continuation and recovery instructions.
+   - [`task_prompts/`](task_prompts/): one scoped implementation prompt per plan task, indexed by [`task_manifest.json`](task_manifest.json). They are used through Overseer coordination, which handles dependencies and parent acceptance. They are not a batch execution script, but they do support targeted execution and recovery of an individual task.
+3. **Future native orchestration.** The completed AI Engineering Harness will provide its own engineering orchestration and execution (see [Architecture overview](#architecture-overview)). It will not depend on these temporary, Claude-specific roles.
 
 ## Repository guide
 
@@ -92,13 +88,15 @@ Implementation is coordinated by an Overseer agent, which delegates bounded task
 |---|---|
 | Architecture | [Blueprint](AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html) |
 | The plan | [Canonical JSON](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json), with an [HTML view](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html#roadmap) and a [CSV view](AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv) |
-| Developer setup and commands | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`Taskfile.yml`](Taskfile.yml) |
+| How to contribute | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Developer setup and commands | [`docs/development.md`](docs/development.md), [`Taskfile.yml`](Taskfile.yml) |
 | Implementation evidence | [`evidence/`](evidence/) |
 | Decisions | [`decisions/`](decisions/) |
 | Component selection, locks and licence inventory | [`composition/`](composition/) |
-| Agent operating instructions | [`CLAUDE.md`](CLAUDE.md), [`OVERSEER_START.md`](OVERSEER_START.md), [`task_prompts/`](task_prompts/) |
+| Coding agent instructions | [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md) |
+| The Owner's current implementation arrangement | [`OVERSEER_START.md`](OVERSEER_START.md), [`task_prompts/`](task_prompts/); see [How work is done here](#how-work-is-done-here) |
 
-The blueprint, plan and task prompts are integrity-tracked; [`CONTRIBUTING.md`](CONTRIBUTING.md#changing-integrity-tracked-files) explains how to change them.
+The blueprint, plan and task prompts are integrity-tracked; [`docs/development.md`](docs/development.md#changing-integrity-tracked-files) explains how to change them.
 
 ## Provenance
 
