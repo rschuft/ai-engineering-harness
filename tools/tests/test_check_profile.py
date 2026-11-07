@@ -470,9 +470,65 @@ class Negative(unittest.TestCase):
         self.qemu['guest_storage']['mounts'][-1]['optional'] = True
         self.assertFails(self.qemu, 'optional must give the reason')
 
-    def test_wildcard_only_as_last_component(self):
+    # provisioning (F-04.1b)
+    def test_provisioning_daemon_json_tcp_socket(self):
+        self.qemu['provisioning']['moby']['daemon_json']['hosts'] = ['tcp://0.0.0.0:2375']
+        self.assertFails(self.qemu, 'hosts is not allowed')
+
+    def test_provisioning_no_new_privileges(self):
+        self.qemu['provisioning']['moby']['daemon_json']['no-new-privileges'] = False
+        self.assertFails(self.qemu, 'no-new-privileges must be true')
+
+    def test_provisioning_data_root_off_scratch(self):
+        self.qemu['provisioning']['moby']['daemon_json']['data-root'] = '/var/lib/docker'
+        self.assertFails(self.qemu, 'data-root differs from moby.data_root')
+        dirs = self.qemu['guest_storage']['directories']
+        next(d for d in dirs if d['role'] == 'moby-data-root')['mount'] = '/'
+        self.assertFails(self.qemu, 'must be on the scratch disk')
+
+    def test_provisioning_socket_open_to_others(self):
+        self.qemu['provisioning']['moby']['sockets'][0]['mode'] = '666'
+        self.assertFails(self.qemu, 'no access for others')
+        self.qemu['provisioning']['moby']['sockets'][0].update(mode='660', group='agent')
+        self.assertFails(self.qemu, 'no access for others')
+
+    def test_provisioning_agent_in_docker_group(self):
+        self.qemu['provisioning']['moby']['agent_in_docker_group'] = True
+        self.assertFails(self.qemu, 'agent_in_docker_group: must be false')
+
+    def test_provisioning_image_tag(self):
+        for tag in ('aieh/agent-server:latest', 'ghcr.io/openhands/agent-server:1.60.1',
+                    'agent-server:1', 'aieh/agent-server'):
+            self.qemu['provisioning']['image']['local_tag'] = tag
+            self.assertFails(self.qemu, 'local repository:tag')
+
+    def test_provisioning_server_version_follows_the_lock(self):
+        self.qemu['provisioning']['moby']['server_version'] = '27.0.0'
+        self.assertFails(self.qemu, 'upstream version of the locked docker.io')
+
+    def test_provisioning_upload_outside_scratch_and_bounds(self):
+        self.qemu['provisioning']['upload']['guest_dir'] = '/tmp/provision'
+        self.assertFails(self.qemu, 'inside the agent scratch directory')
+        self.qemu['provisioning']['upload']['max_bytes'] = 0
+        self.assertFails(self.qemu, 'upload.max_bytes: must be a positive integer')
+        self.qemu['provisioning']['upload']['roles'] = ['deb', 'script']
+        self.assertFails(self.qemu, 'provisioning.upload.roles')
+
+    def test_provisioned_only_directories(self):
+        dirs = self.qemu['guest_storage']['directories']
+        next(d for d in dirs if d['role'] == 'moby-data-root').pop('provisioned_only')
+        self.assertFails(self.qemu, 'marked provisioned_only: true')
+        next(d for d in dirs if d['role'] == 'scratch')['provisioned_only'] = True
+        self.assertFails(self.qemu, 'never provisioned_only')
+        del self.qemu['provisioning']
+        self.assertFails(self.qemu, 'needs a provisioning block')
+
+    def test_committed_provisioning_passes(self):
+        self.assertEqual([e for e in self.errors(self.qemu) if 'provision' in e], [])
+
+    def test_wildcard_only_as_whole_component(self):
         self.qemu['guest_storage']['mounts'].append(
-            {'target': '/run/*/x', 'fstype': 'tmpfs', 'source': 'tmpfs'})
+            {'target': '/run/x*/y', 'fstype': 'tmpfs', 'source': 'tmpfs'})
         self.assertFails(self.qemu, 'wildcard is allowed only')
 
     def test_block_device_host_path(self):

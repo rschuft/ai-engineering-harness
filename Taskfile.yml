@@ -271,6 +271,20 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py provision-fetch --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}"'
 
+  guest:create-provisioned:
+    desc: "create with --provision (F-04.1b): re-verify the provision-fetch stage and seed its manifest, so the guest's single-use root step can install Moby and the image (python -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME --provision)"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py create --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --provision'
+
+  guest:provision:
+    desc: "Guest side of provisioning (F-04.1b): SFTP the staged .deb files, image archive and release binary into a --provision guest, create READY, wait on the root step's RESULT.json and check it; single use (python -I -B tools/guest.py provision --profile PROFILE --state-dir STATE_DIR --name NAME)"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py provision --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
+
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
     cmds:

@@ -18,6 +18,9 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
   evidence and, when qualified, a reachability table of permitted and denied paths;
   an endpoint that is still deferred has no port and no guest forwarding rule
   (F-03.3.2);
+- a provisioning block (F-04.1b) bounds the upload, names the root step's paths and
+  declares Moby with no TCP socket, its data root on scratch, root-owned sockets closed
+  to others, the locked docker.io version and a local immutable image tag;
 - ceilings are declared and match the provider configuration (profiles P2);
 - exactly one accelerator and no TCG fallback (contract section 4);
 - the lifecycle is the contract's closed set (contract section 3).
@@ -493,6 +496,9 @@ STORAGE_ROLES = {'root', 'scratch', 'configuration-medium'}
 # The share types the contract's P3 inspection names; forbidden_fstypes must cover them.
 CONTRACT_SHARE_FSTYPES = {'9p', 'virtiofs', 'drvfs', 'fuse.sshfs', 'cifs', 'nfs', 'smb3'}
 DIRECTORY_ROLES = ('exchange', 'scratch')
+# Directories present only on a provisioned instance (F-04.1): Moby's data root and the
+# root step's state. Each carries "provisioned_only": true.
+PROVISIONED_DIRECTORY_ROLES = ('moby-data-root', 'provisioning-state')
 STORAGE_FILE = re.compile(r'^(\{instance_dir\}/[A-Za-z0-9._-]+|\{input:[a-z_]+\})$')
 
 
@@ -576,8 +582,8 @@ def check_guest_storage(report, profile):
         if not isinstance(target, str) or not target.startswith('/'):
             report.fail(f'{label}: target must be an absolute path')
             continue
-        if '*' in target.rsplit('/', 1)[0] or ('*' in target and target.rsplit('/', 1)[1] != '*'):
-            report.fail(f'{label}: a wildcard is allowed only as a whole last component')
+        if any('*' in part and part != '*' for part in target.split('/')):
+            report.fail(f'{label}: a wildcard is allowed only as a whole path component')
         targets.add(target)
         if not isinstance(fstype, str) or not fstype or fstype in forbidden or \
                 fstype.split('.')[0] in forbidden:
@@ -623,8 +629,18 @@ def check_guest_storage(report, profile):
         if len(by_role.get(role, [])) != 1:
             report.fail(f'guest_storage.directories: exactly one {role} directory required '
                         '(profiles P4)')
-    if set(by_role) - set(DIRECTORY_ROLES):
-        report.fail(f'guest_storage.directories: unknown roles {sorted(set(by_role) - set(DIRECTORY_ROLES))}')
+        if any('provisioned_only' in e for e in by_role.get(role, [])):
+            report.fail(f'guest_storage.directories: the {role} directory is never provisioned_only')
+    known = set(DIRECTORY_ROLES) | set(PROVISIONED_DIRECTORY_ROLES)
+    if set(by_role) - known:
+        report.fail(f'guest_storage.directories: unknown roles {sorted(set(by_role) - known)}')
+    for role in PROVISIONED_DIRECTORY_ROLES:
+        entries = by_role.get(role, [])
+        if len(entries) > 1 or any(e.get('provisioned_only') is not True for e in entries):
+            report.fail(f'guest_storage.directories: at most one {role} directory, marked '
+                        'provisioned_only: true')
+        if entries and not isinstance(profile.get('provisioning'), dict):
+            report.fail(f'guest_storage.directories: a {role} directory needs a provisioning block')
     scratch_dir = (by_role.get('scratch') or [{}])[0]
     scratch_mounts = [m for m in mounts if isinstance(m, dict) and
                       m.get('target') == scratch_dir.get('mount')]
@@ -694,6 +710,109 @@ def check_qemu_storage(report, profile, devices, virtio):
               'entropy': models.get('virtio-rng-pci', 0)}
     if virtio and virtio != {k: v for k, v in counts.items() if v}:
         report.fail(f'guest_storage.virtio_devices {virtio} differs from launch.argv {counts}')
+
+
+LOCAL_TAG = re.compile(r'^[a-z0-9]+(?:[._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$')
+PROVISION_UPLOAD_ROLES = {'deb', 'image-archive', 'release-binary'}
+
+
+def check_provisioning(report, profile, root=REPO):
+    """provisioning (F-04.1b, decision 0006): the upload bounds, the root step's paths, and
+    the declared Moby configuration: unix socket only (no hosts), data root on the scratch
+    disk as a provisioned_only directory, no-new-privileges, the server version of the
+    locked docker.io, root-owned sockets closed to others, agent never in group docker and
+    a local immutable image tag."""
+    conf = profile.get('provisioning')
+    if conf is None:
+        return
+    if not isinstance(conf, dict):
+        report.fail('provisioning: must be an object')
+        return
+    provider = profile.get('provider') or {}
+    if not isinstance(provider.get('provision_lock'), dict):
+        report.fail('provisioning: needs provider.provision_lock')
+
+    def positive(label, value):
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            report.fail(f'provisioning.{label}: must be a positive integer')
+
+    def absolute(label, value):
+        if not isinstance(value, str) or not value.startswith('/') or '..' in value.split('/'):
+            report.fail(f'provisioning.{label}: must be an absolute guest path')
+
+    storage = profile.get('guest_storage') or {}
+    directories = [d for d in storage.get('directories') or [] if isinstance(d, dict)]
+    up = conf.get('upload') or {}
+    absolute('upload.guest_dir', up.get('guest_dir'))
+    scratch = [d.get('path') for d in directories if d.get('role') == 'scratch']
+    if scratch and not str(up.get('guest_dir', '')).startswith(str(scratch[0]).rstrip('/') + '/'):
+        report.fail('provisioning.upload.guest_dir: must be inside the agent scratch directory')
+    if not re.match(r'^[A-Za-z0-9][A-Za-z0-9._-]*$', str(up.get('ready_marker', ''))):
+        report.fail('provisioning.upload.ready_marker: must be one file name')
+    if not isinstance(up.get('roles'), list) or not set(up['roles']) <= PROVISION_UPLOAD_ROLES:
+        report.fail(f'provisioning.upload.roles: a subset of {sorted(PROVISION_UPLOAD_ROLES)}')
+    for key in ('max_files', 'max_bytes', 'timeout_s'):
+        positive(f'upload.{key}', up.get(key))
+    step = conf.get('root_step') or {}
+    for key in ('script', 'manifest', 'staging', 'result'):
+        absolute(f'root_step.{key}', step.get(key))
+    positive('root_step.timeout_s', step.get('timeout_s'))
+    facts = conf.get('facts') or {}
+    absolute('facts.path', facts.get('path'))
+    if not str(facts.get('path', '')).startswith('/run/'):
+        report.fail('provisioning.facts.path: the boot-time report lives on /run (per boot)')
+    moby = conf.get('moby') or {}
+    daemon = moby.get('daemon_json')
+    if not isinstance(daemon, dict):
+        report.fail('provisioning.moby.daemon_json: must be an object')
+        daemon = {}
+    for key in ('hosts', 'tls', 'tlsverify', 'insecure-registries', 'registry-mirrors'):
+        if key in daemon:
+            report.fail(f'provisioning.moby.daemon_json: {key} is not allowed (unix socket only, '
+                        'no registry; profiles P6, P7)')
+    if daemon.get('no-new-privileges') is not True:
+        report.fail('provisioning.moby.daemon_json: no-new-privileges must be true')
+    for key, field in (('data-root', 'data_root'), ('default-runtime', 'default_runtime'),
+                       ('storage-driver', 'storage_driver')):
+        if daemon.get(key) != moby.get(field):
+            report.fail(f'provisioning.moby.daemon_json: {key} differs from moby.{field}')
+    data_roots = [d for d in directories if d.get('role') == 'moby-data-root']
+    scratch_targets = {m.get('target') for m in storage.get('mounts') or []
+                       if isinstance(m, dict) and m.get('disk') == 'scratch'}
+    if [d.get('path') for d in data_roots] != [moby.get('data_root')]:
+        report.fail('provisioning.moby.data_root: must be the moby-data-root directory of '
+                    'guest_storage')
+    elif data_roots[0].get('mount') not in scratch_targets:
+        report.fail('provisioning.moby.data_root: must be on the scratch disk')
+    sockets = moby.get('sockets')
+    if not isinstance(sockets, list) or not sockets:
+        report.fail("provisioning.moby.sockets: must list the guest's own sockets")
+        sockets = []
+    for i, entry in enumerate(sockets):
+        mode = str((entry or {}).get('mode', '')) if isinstance(entry, dict) else ''
+        if not isinstance(entry, dict) or not str(entry.get('path', '')).startswith('/run/') or                 entry.get('owner') != 'root' or entry.get('group') not in ('root', 'docker') or                 not re.match(r'^[0-7]{3}$', mode) or int(mode, 8) & 0o007:
+            report.fail(f'provisioning.moby.sockets[{i}]: a /run socket owned by root, group '
+                        'root or docker, no access for others (profiles P6)')
+    if moby.get('agent_in_docker_group') is not False:
+        report.fail('provisioning.moby.agent_in_docker_group: must be false (decision 0006)')
+    if not isinstance(moby.get('required_security_options'), list) or             'name=no-new-privileges' not in moby['required_security_options']:
+        report.fail('provisioning.moby.required_security_options: must include '
+                    'name=no-new-privileges')
+    tag = str((conf.get('image') or {}).get('local_tag', ''))
+    repo = tag.split(':')[0]
+    if not LOCAL_TAG.match(tag) or tag.endswith(':latest') or '.' in repo.split('/')[0] or             '/' not in repo:
+        report.fail('provisioning.image.local_tag: a local repository:tag with no registry '
+                    'host and no "latest"')
+    entry = provider.get('provision_lock') or {}
+    try:
+        lock = json.loads((root / entry['path']).read_text(encoding='utf-8'))
+    except (OSError, ValueError, KeyError, TypeError):
+        return                                   # reported by check_provision_lock
+    docker = [p for p in (lock.get('debian') or {}).get('packages') or []
+              if p.get('name') == 'docker.io']
+    if len(docker) != 1 or str(docker[0].get('version', '')).rsplit('-', 1)[0] !=             moby.get('server_version'):
+        report.fail('provisioning.moby.server_version: must be the upstream version of the '
+                    'locked docker.io')
 
 
 def check_exchange(report, profile):
@@ -998,6 +1117,7 @@ def check(profile, root=REPO):
     check_isolation(report, profile)
     check_guest_storage(report, profile)
     check_exchange(report, profile)
+    check_provisioning(report, profile, root)
     provider = (profile.get('provider') or {}).get('name')
     if provider == 'qemu':
         check_qemu(report, profile, ceilings)

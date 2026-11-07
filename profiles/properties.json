@@ -58,7 +58,7 @@
     {
       "id": "P2",
       "name": "Provider-enforced ceilings",
-      "strong": "vCPU, memory, root and scratch disk set outside the guest: Incus limits.cpu, limits.memory, root size; QEMU -smp, -m, image virtual size; Lima cpus, memory, disk. These are the outer caps for decision 0001's per-conversation overrides; Moby caps (F-04.1) sit inside them.",
+      "strong": "vCPU, memory, root and scratch disk set outside the guest: Incus limits.cpu, limits.memory, root size; QEMU -smp, -m, image virtual size; Lima cpus, memory, disk. These are the outer caps for decision 0001's per-conversation overrides; Moby caps (F-04.1) sit inside them. In a provisioned guest Moby's daemon, containers and data root (on scratch) consume the guest's own resources and add no provider resource (amended 2026-11-06).",
       "trusted_workload": "Incus container: cgroup limits. WSL: VM-wide, shared with every distribution, observed only.",
       "inspection": "Provider query; inside: nproc equals declared vCPU, MemTotal between 85% and 100% of declared memory, lsblk -b shows declared root and scratch sizes.",
       "tested_by": ["F-03.2.1", "F-03.2.2"]
@@ -90,9 +90,9 @@
     {
       "id": "P6",
       "name": "No host-management sockets or interop",
-      "strong": "No docker, podman, incus or libvirt socket from the host; no X11 or WSLg sockets; any provider agent channel (incus-agent, QEMU guest agent) declared and host-to-guest only.",
+      "strong": "No docker, podman, incus or libvirt socket from the host; no X11 or WSLg sockets; any provider agent channel (incus-agent, QEMU guest agent) declared and host-to-guest only. A provisioned guest's own Moby sockets (/run/docker.sock root:docker 0660, containerd's root:root 0660, all under /run/docker and /run/containerd root-owned and closed to others) are declared and allowed; no TCP listener; agent is not in group docker and cannot connect (amended 2026-11-06, F-04.1).",
       "trusted_workload": "WSL: interop.enabled=false and appendWindowsPath=false in the distribution's wsl.conf; WSLg is VM-wide, observed and disclosed, never written.",
-      "inspection": "find / -xdev -type s and ss -xl against the declared agent channel; no DOCKER_HOST, host docker.sock or /mnt/wslg; no socket under /tmp/.X11-unix (only directories in it, and the path not a symlink; the guest's own tmpfiles.d may create it empty; amended 2026-11-06); for WSL, launching a Windows .exe fails.",
+      "inspection": "find / -xdev -type s and ss -xl against the declared agent channel; no DOCKER_HOST, host docker.sock or /mnt/wslg; no socket under /tmp/.X11-unix (only directories in it, and the path not a symlink; the guest's own tmpfiles.d may create it empty; amended 2026-11-06); for WSL, launching a Windows .exe fails; for a provisioned guest, the declared Moby sockets' owner, group and mode, none open to others, agent connect() EACCES and docker info refused, agent not in group docker, no TCP listener of dockerd, containerd or docker-proxy.",
       "tested_by": ["F-03.3.1", "S-02.1", "S-02.2"]
     },
     {

@@ -6,10 +6,13 @@ Implements the generator specification in ``profiles/seed/README.md``:
    only ``seed.iso`` inside an existing instance directory.
 2. Reads the three seed templates a profile pins (``boot_inputs.seed.templates``) and
    refuses when a template's sha256 differs from its pin.
-3. Substitutes exactly the documented placeholders: ``{{agent_ssh_public_key}}`` and
-   ``{{scratch_device}}`` in user-data, ``{{instance_id}}`` and ``{{instance_name}}``
-   in meta-data, nothing in network-config. A remaining ``{{`` or an unknown
-   placeholder is an error. The public key must be one OpenSSH ``ssh-ed25519`` line.
+3. Substitutes exactly the documented placeholders: ``{{agent_ssh_public_key}}``,
+   ``{{scratch_device}}`` and ``{{provision_manifest}}`` in user-data,
+   ``{{instance_id}}`` and ``{{instance_name}}`` in meta-data, nothing in
+   network-config. A remaining ``{{`` or an unknown placeholder is an error. The public
+   key must be one OpenSSH ``ssh-ed25519`` line. The provisioning manifest (F-04.1,
+   decision 0006) is one JSON object, written base64-encoded; without one the value is
+   empty and the seeded provisioning units stay inert.
 4. Writes ``seed.iso``: ISO 9660 (ECMA-119) with a Joliet supplementary volume
    descriptor, primary volume identifier ``CIDATA``, Joliet volume identifier
    ``cidata``, the files ``user-data``, ``meta-data`` and ``network-config`` in the
@@ -21,7 +24,7 @@ Usage (from the repository root):
     python -I -B tools/nocloud_seed.py --profile profiles/strong-windows-qemu-whpx \
         --instance-dir <state_dir>/instances/<name> --instance-name <name> \
         --public-key <state_dir>/instances/<name>/ssh/id_ed25519.pub \
-        [--instance-id <name>-<uuid>]
+        [--instance-id <name>-<uuid>] [--provision-manifest <file>]
 
 Without ``--instance-id`` a fresh one (the instance name, ``-``, a random UUID) is
 generated and printed. Exit status 0 on success; 1 with a ``REFUSED:`` line on stderr
@@ -51,7 +54,7 @@ PRIMARY_NAMES = {'meta-data': 'META_DAT.;1', 'network-config': 'NETWORK_.;1',
                  'user-data': 'USER_DAT.;1'}
 # The placeholders each template must carry, exactly (profiles/seed/README.md).
 PLACEHOLDERS = {
-    'user-data': ('agent_ssh_public_key', 'scratch_device'),
+    'user-data': ('agent_ssh_public_key', 'scratch_device', 'provision_manifest'),
     'meta-data': ('instance_id', 'instance_name'),
     'network-config': (),
 }
@@ -60,6 +63,8 @@ INSTANCE_NAME_DEFAULT = r'^[a-z][a-z0-9-]{1,40}$'
 SCRATCH_DEVICE = re.compile(r'^/dev/[A-Za-z0-9._/-]+$')
 KEY_LINE = re.compile(r'^ssh-ed25519 ([A-Za-z0-9+/]+={0,2})(?: ([A-Za-z0-9._@+=-]{1,64}))?$')
 KEY_FILE_MAX = 4096
+MANIFEST_MAX = 64 * 1024
+MANIFEST_SCHEMA = 'ai-engineering-harness/profiles/provision-manifest/v1'
 # 7-byte directory-record date (ECMA-119 9.1.5): 1970-01-01 00:00:00, offset 0.
 DIR_DATE = bytes([70, 1, 1, 0, 0, 0, 0])
 # 17-byte volume-descriptor dates (ECMA-119 8.4.26.1).
@@ -169,6 +174,34 @@ def read_public_key(path):
     except UnicodeDecodeError as exc:
         raise Refused(f'public key {path}: not ASCII') from exc
     return parse_public_key(text)
+
+
+def provision_manifest_value(manifest):
+    """The base64 text substituted for {{provision_manifest}}: '' without a manifest, else
+    the manifest bytes, which must be one ASCII JSON object of the provision-manifest
+    schema, LF only, at most MANIFEST_MAX bytes."""
+    if manifest is None:
+        return ''
+    if not isinstance(manifest, bytes):
+        raise Refused('provision manifest: bytes required')
+    if not manifest or len(manifest) > MANIFEST_MAX or b'\r' in manifest:
+        raise Refused(f'provision manifest: empty, larger than {MANIFEST_MAX} bytes or has CR')
+    try:
+        data = json.loads(manifest.decode('ascii'))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise Refused(f'provision manifest: not one ASCII JSON document ({exc})') from exc
+    if not isinstance(data, dict) or data.get('schema') != MANIFEST_SCHEMA:
+        raise Refused(f'provision manifest: not a {MANIFEST_SCHEMA} object')
+    return base64.b64encode(manifest).decode('ascii')
+
+
+def read_provision_manifest(path):
+    try:
+        with open(path, 'rb') as handle:
+            raw = handle.read(MANIFEST_MAX + 1)
+    except OSError as exc:
+        raise Refused(f'provision manifest {path}: cannot read ({exc})') from exc
+    return raw
 
 
 def check_instance_name(profile, name):
@@ -376,11 +409,13 @@ def build_iso(files):
 # ---------------------------------------------------------------- generator
 
 
-def generate(profile_path, instance_dir, instance_name, public_key_path, instance_id=None):
+def generate(profile_path, instance_dir, instance_name, public_key_path, instance_id=None,
+             provision_manifest=None):
     """Validate every input, then write <instance_dir>/seed.iso exclusively.
 
-    Returns a dict for the launch record: the seed path, its sha256, the instance id
-    and the sha256 of each template and rendered file.
+    ``provision_manifest`` is the manifest bytes of a provisioned instance (F-04.1) or None.
+    Returns a dict for the launch record: the seed path, its sha256, the instance id,
+    the sha256 of each template and rendered file and of the manifest (None without one).
     """
     profile, root = load_profile(profile_path)
     name = check_instance_name(profile, instance_name)
@@ -391,6 +426,7 @@ def generate(profile_path, instance_dir, instance_name, public_key_path, instanc
     values = {
         'agent_ssh_public_key': read_public_key(public_key_path),
         'scratch_device': scratch_device(profile),
+        'provision_manifest': provision_manifest_value(provision_manifest),
         'instance_id': instance_id,
         'instance_name': name,
     }
@@ -418,6 +454,8 @@ def generate(profile_path, instance_dir, instance_name, public_key_path, instanc
         'templates': {n: profile['boot_inputs']['seed']['templates'][n]['sha256']
                       for n in FILES},
         'rendered_sha256': {n: sha256_bytes(rendered[n]) for n in FILES},
+        'provision_manifest_sha256': None if provision_manifest is None
+        else sha256_bytes(provision_manifest),
     }
 
 
@@ -432,10 +470,14 @@ def main(argv=None):
     ap.add_argument('--public-key', required=True,
                     help='file holding one OpenSSH ssh-ed25519 public-key line')
     ap.add_argument('--instance-id', help='<name>-<uuid>; generated when omitted')
+    ap.add_argument('--provision-manifest',
+                    help='a provision-manifest JSON file (F-04.1); omitted for an ordinary guest')
     args = ap.parse_args(argv)
     try:
+        manifest = read_provision_manifest(args.provision_manifest) \
+            if args.provision_manifest else None
         result = generate(args.profile, args.instance_dir, args.instance_name,
-                          args.public_key, args.instance_id)
+                          args.public_key, args.instance_id, manifest)
     except Refused as exc:
         print(f'REFUSED: {exc}', file=sys.stderr)
         return 1

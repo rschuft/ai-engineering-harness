@@ -237,6 +237,33 @@ conditions, recorded here and in the execution-profile contract:
     - re-evaluate when a QEMU with the upstream fix is pinned;
     - no unreviewed upstream patch is applied.
     Detail: `profiles/strong-windows-qemu-whpx/README.md`, open item 3.
+- **2026-11-06, F-04.1b: contract and profile amendments for a provisioned guest
+  (Overseer decision as contract owner, under the Owner's F-04.1 authorization).** The
+  Owner authorized a single-use root provisioning step and the Moby/Agent Server
+  inspection workload in the qualified guest, repeatable under the guest-validation
+  conditions above as amended for that step and workload only (decision 0006, "Owner
+  authorization (2026-11-06)", Part B). Guest network, a `guestfwd`, a host share, an LLM
+  credential or a new host port still need separate approval; `launch.argv` is unchanged
+  and the tier stays not operational (C6). The contract and the QEMU profile now say:
+  - **P6:** a provisioned guest's own Moby sockets (`/run/docker.sock` `root:docker`
+    `0660`, containerd's socket `root:root` `0660`, and every socket under `/run/docker`
+    and `/run/containerd` root-owned and closed to others) are declared
+    (`provisioning.moby.sockets`) and allowed; they are not host sockets. Negative checks:
+    `agent` is not in group `docker`, its `connect()` to each declared socket fails with
+    `EACCES`, `docker info` as `agent` is refused, and no TCP listener belongs to dockerd,
+    containerd or docker-proxy (`profiles/README.md` P6, `profiles/properties.json`).
+  - **P2:** Moby's daemon, containers and data root consume the guest's own resources
+    inside the ceilings; they add no provider resource.
+  - **P3, P4 (`guest_storage`):** Moby's own mounts are declared as optional patterns
+    (overlay under `/srv/scratch/docker/overlay2/*/merged`, `nsfs` under
+    `/run/docker/netns/*`, container `shm` under `/srv/scratch/docker/containers/*/mounts/shm`),
+    and the root-owned directories `/srv/scratch/docker` (data root, on scratch) and
+    `/var/lib/aieh` (the root step's state, on root) are declared `provisioned_only`.
+    `tools/check_profile.py` checks them and the new `provisioning` block.
+  - **P5:** unchanged. Slice (b) generates no secret; the session API key and
+    `OH_SECRET_KEY` belong to slice (c).
+  - Ordinary guests are unaffected: their seed carries an empty manifest and the seeded
+    units stay inert (`profiles/seed/README.md`).
 
 ## Evidence
 - **Blueprint:** #infrastructure-state, #containment-architecture, #platforms, extracted

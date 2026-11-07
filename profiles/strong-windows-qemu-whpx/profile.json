@@ -113,7 +113,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "0dccb1da93478b3ecb9fddfdb6fe3b2f2ed0fdea7eaabc6da92534adcab03065"
+          "sha256": "635e4977090f3b4f0eaf4311651d20a7a3b4dd09de97df161e464aae8768f393"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -193,11 +193,16 @@
       {"target": "/run/lock", "fstype": "tmpfs", "source": "tmpfs"},
       {"target": "/tmp", "fstype": "tmpfs", "source": "tmpfs"},
       {"target": "/run/credentials/*", "fstype": "tmpfs", "source": "tmpfs", "optional": "one per systemd service that is passed credentials; the set depends on the running services"},
-      {"target": "/run/user/1000", "fstype": "tmpfs", "source": "tmpfs", "optional": "the agent user's runtime directory, present while agent has a session"}
+      {"target": "/run/user/1000", "fstype": "tmpfs", "source": "tmpfs", "optional": "the agent user's runtime directory, present while agent has a session"},
+      {"target": "/run/docker/netns/*", "fstype": "nsfs", "source": "nsfs[net:[*]]", "optional": "provisioned instances only (F-04.1): Moby's network-namespace handles, the host namespace ('default') while dockerd runs and one per running container"},
+      {"target": "/srv/scratch/docker/overlay2/*/merged", "fstype": "overlay", "source": "overlay", "optional": "provisioned instances only (F-04.1): the root file system of a running container, under Moby's data root on scratch"},
+      {"target": "/srv/scratch/docker/containers/*/mounts/shm", "fstype": "tmpfs", "source": "shm", "optional": "provisioned instances only (F-04.1): a running container's /dev/shm"}
     ],
     "directories": [
       {"role": "exchange", "path": "/home/agent/exchange", "owner": "agent", "group": "agent", "mode": "750", "mount": "/"},
-      {"role": "scratch", "path": "/srv/scratch/agent", "owner": "agent", "group": "agent", "mode": "750", "mount": "/srv/scratch"}
+      {"role": "scratch", "path": "/srv/scratch/agent", "owner": "agent", "group": "agent", "mode": "750", "mount": "/srv/scratch"},
+      {"role": "moby-data-root", "path": "/srv/scratch/docker", "owner": "root", "group": "root", "mode": "710", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "provisioning-state", "path": "/var/lib/aieh", "owner": "root", "group": "root", "mode": "755", "mount": "/", "provisioned_only": true}
     ],
     "forbidden_fstypes": ["9p", "virtiofs", "drvfs", "fuse", "fuse.sshfs", "cifs", "smb3", "nfs", "nfs4"],
     "forbidden_paths": ["/mnt/c", "/mnt/wslg"],
@@ -210,6 +215,66 @@
     "host_staging": "{instance_dir}/exchange",
     "push": {"refs": 1, "max_commits": 10000, "max_bytes": 268435456, "name_pattern": "^[a-z0-9][a-z0-9._-]{0,63}\\.bundle$"},
     "pull": {"max_bytes": 268435456, "name_pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"}
+  },
+  "provisioning": {
+    "plan_leaf": "F-04.1",
+    "decision": "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+    "authority": "decision 0006, 'Owner authorization (2026-11-06)', Part B: a single-use root step seeded by cloud-init, Moby and the agent-server image for inspection only, under the guest-validation conditions of decision 0003 as that authorization amends them. No guest network, no guestfwd, no host share and no launch.argv change.",
+    "scope": "slice (b): Moby (Debian docker.io and its closure) and the pinned agent-server image. The Agent Server service, its configuration and its guest-local secrets are slice (c).",
+    "lock": "provider.provision_lock",
+    "create": "create --provision re-verifies the host stage of the lock (provision-fetch) and writes the manifest into the seed (profiles/seed/README.md, placeholder provision_manifest). An ordinary create writes an empty manifest: the seeded units carry ConditionFileNotEmpty on it and the trigger is never enabled.",
+    "upload": {
+      "transport": "sftp.exe over the management SSH forward, as agent, with the exchange's client options and the per-instance key (no new endpoint)",
+      "guest_dir": "/srv/scratch/agent/provision",
+      "ready_marker": "READY",
+      "roles": ["deb", "image-archive", "release-binary"],
+      "max_files": 8,
+      "max_bytes": 1610612736,
+      "timeout_s": 3600
+    },
+    "root_step": {
+      "script": "/usr/local/sbin/aieh-provision",
+      "manifest": "/etc/aieh/provision.json",
+      "trigger": "aieh-provision.path",
+      "service": "aieh-provision.service",
+      "staging": "/var/lib/aieh/provision-staging",
+      "result": "/var/lib/aieh/provision/RESULT.json",
+      "timeout_s": 3600,
+      "sequence": ["copy", "verify", "daemon-json", "apt-install", "docker-ready", "docker-load", "image-id", "tag", "run", "facts", "cleanup"],
+      "single_use": "the trigger is disabled, stopped and its unit file removed in every outcome; the service refuses to run once RESULT.json or the staging directory exists"
+    },
+    "facts": {
+      "service": "aieh-docker-facts.service",
+      "path": "/run/aieh/docker-facts.json",
+      "use": "Enabled by a successful root step. At every boot, after docker.service, root writes a read-only report (docker version and info, the image store, containers, daemon.json, TCP listeners, Moby's sockets, kernel modules) that inspect reads as agent. It takes no input from the guest user."
+    },
+    "moby": {
+      "server_version": "26.1.5+dfsg1",
+      "data_root": "/srv/scratch/docker",
+      "storage_driver": "overlay2",
+      "default_runtime": "runc",
+      "daemon_json": {
+        "data-root": "/srv/scratch/docker",
+        "default-runtime": "runc",
+        "storage-driver": "overlay2",
+        "no-new-privileges": true,
+        "log-driver": "json-file",
+        "log-opts": {"max-size": "10m", "max-file": "3"}
+      },
+      "required_security_options": ["name=no-new-privileges"],
+      "sockets": [
+        {"path": "/run/docker.sock", "owner": "root", "group": "docker", "mode": "660"},
+        {"path": "/run/containerd/containerd.sock", "owner": "root", "group": "root", "mode": "660"}
+      ],
+      "socket_rule": "profiles P6 (amended 2026-11-06): the guest's own Moby sockets, never a host socket. Every socket under /run/docker and /run/containerd is owned by root with group root or docker and no access for others; agent is not in group docker and cannot connect.",
+      "tcp_listeners": "none: no hosts entry in daemon.json (unix socket only); no listener owned by dockerd, containerd or docker-proxy",
+      "agent_in_docker_group": false
+    },
+    "image": {
+      "local_tag": "aieh/agent-server:1.60.1-b43ee580",
+      "rule": "decision 0006 item 3: the image ID equals the locked config digest; after docker load the archive's placeholder tag is removed and only this local immutable tag remains",
+      "verify_run": "docker run --rm --entrypoint true <local_tag>, as root inside the root step: proves the runtime without starting the agent-server entrypoint (slice (c))"
+    }
   },
   "network": {
     "mode": "user (SLIRP)",

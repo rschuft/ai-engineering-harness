@@ -6,7 +6,7 @@ public key and non-secret configuration (`profiles P5`).
 
 | File | Content | Substituted at `create` |
 |---|---|---|
-| [`user-data.tmpl`](user-data.tmpl) | user `agent` (no password, no sudo group, no `sudo:` rule), `disable_root`, sshd drop-in with `PermitRootLogin no`, host keys deleted and regenerated (`ssh_deletekeys`), scratch disk formatted and mounted at `/srv/scratch`, exchange directory `/home/agent/exchange` | `{{agent_ssh_public_key}}`; `{{scratch_device}}` from the profile |
+| [`user-data.tmpl`](user-data.tmpl) | user `agent` (no password, no sudo group, no `sudo:` rule), `disable_root`, sshd drop-in with `PermitRootLogin no`, host keys deleted and regenerated (`ssh_deletekeys`), scratch disk formatted and mounted at `/srv/scratch`, exchange directory `/home/agent/exchange`; the provisioning files of F-04.1 (below), inert in an ordinary guest | `{{agent_ssh_public_key}}`; `{{scratch_device}}` from the profile; `{{provision_manifest}}` (base64; empty unless `create --provision`) |
 | [`meta-data.tmpl`](meta-data.tmpl) | NoCloud `instance-id` and `local-hostname` | `{{instance_id}}` (instance name plus a fresh UUID at each `create`), `{{instance_name}}` |
 | [`network-config.yaml`](network-config.yaml) | network config v2: DHCPv4 on the single NIC; DHCPv6, router advertisements and IPv6 link-local addresses off (`profiles P7`: IPv6 off unless listed) | nothing |
 
@@ -66,7 +66,7 @@ The generator must:
    inside the instance directory.
 2. Read the three templates, check each against the sha256 pinned in the profile, and
    refuse on a mismatch.
-3. Substitute exactly the placeholders listed above. A remaining `{{` or an unknown
+3. Substitute exactly the placeholders listed above (three in user-data since F-04.1b). A remaining `{{` or an unknown
    placeholder is an error. The public key must be one OpenSSH `ssh-ed25519` line.
 4. Write `seed.iso`: ISO 9660 (ECMA-119) with a Joliet supplementary volume
    descriptor, as `cloud-localds` produces with `genisoimage -volid cidata -joliet`:
@@ -88,6 +88,28 @@ Debian guest's cloud-init 25.1.4 accepted the volume on two instances
 (`DataSourceNoCloud [seed=/dev/vdc]`, `status: done`, no errors), applied the
 instance id and hostname from meta-data, and applied the user, sshd drop-in, scratch
 file system and directories from user-data.
+
+## Provisioning files (F-04.1 slice (b), decision 0006)
+
+The user-data template also writes the single-use root provisioning step. Every guest
+gets the files; only a guest made with `tools/guest.py create --provision` gets a
+manifest, and without one nothing runs:
+
+| Path | Content |
+|---|---|
+| `/etc/aieh/provision.json` (root, `0600`) | the manifest: `{{provision_manifest}}`, base64 of one JSON object of schema `ai-engineering-harness/profiles/provision-manifest/v1` (each file to upload with role, size and sha256; the packages; the image's locked config digest, the archive's tags and the local immutable tag; the declared `daemon.json`). Empty in an ordinary guest. |
+| `/usr/local/sbin/aieh-provision` (root, `0755`) | the root step (Python 3, standard library): `provision` copies the upload into `/var/lib/aieh/provision-staging` (root `0700`), verifies every sha256 against the manifest, writes `/etc/docker/daemon.json`, installs the `.deb` files with `apt-get install --no-install-recommends ./…` (no `apt-get update`, no network), `docker load`s the image, checks its ID, keeps only the local tag, runs it once (`--entrypoint true`), enables the facts unit, deletes the staging directory and the upload, disables the trigger, and writes `/var/lib/aieh/provision/RESULT.json` last; `facts` writes the boot-time report `/run/aieh/docker-facts.json` |
+| `/etc/systemd/system/aieh-provision.path` | `PathExists=/srv/scratch/agent/provision/READY`, single use |
+| `/etc/systemd/system/aieh-provision.service` | oneshot, output to the journal and the console |
+| `/etc/systemd/system/aieh-docker-facts.service` | oneshot at every boot after `docker.service`; enabled only by a successful root step |
+
+**Ordinary guests are unaffected.** The manifest is empty, both provisioning units carry
+`ConditionFileNotEmpty=/etc/aieh/provision.json`, and `runcmd` enables the trigger only
+when the manifest is not empty (`[ -s … ]`), so no unit watches the upload path and no
+root code can be triggered from the guest. The root step also refuses to run twice
+(`ConditionPathExists=!…/RESULT.json`, and it checks for the result and the staging
+directory itself). The generator's refusals apply to the manifest too: it must be one
+ASCII JSON object of the manifest schema, without CR, at most 64 KiB.
 
 The user-data template's header comment no longer names the placeholders as
 `{{…}}`: literal substitution used to copy the public key and the device path into

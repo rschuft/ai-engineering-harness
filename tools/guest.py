@@ -52,6 +52,16 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                STATE/provision/<lock sha256>/ with a staged.json manifest; a staged
                directory is re-verified and reused. No guest is involved and nothing
                downloaded is unpacked or run on the host except crane.
+    provision  guest side of provisioning (F-04.1b; decision 0006): for an instance made
+               with create --provision (whose seed carries the manifest of the verified
+               stage and the single-use root step), re-verify the stage, SFTP the .deb
+               files, the image archive and the release binary into the agent-owned
+               upload directory within provisioning.upload's bounds, check each in the
+               guest, create the READY marker, wait on the root step's RESULT.json (an
+               inotify event, under a ceiling), fetch it and check it. The root step
+               copies, verifies, installs Moby with apt from the local files, docker
+               loads the image, checks its ID, keeps only the local immutable tag, runs it
+               once, deletes the upload and disables itself. No network at any point.
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -71,9 +81,12 @@ never defaulted, contract sections 4 and 11):
                                           --canaries DIR --durable DIR [--durable DIR ...]
                                           [--out FILE]
     python -I -B tools/guest.py provision-fetch --profile PROFILE --state-dir STATE
+    python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision
+    python -I -B tools/guest.py provision --profile PROFILE --state-dir STATE --name NAME
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
-    before it launches anything, inspect searches the guest for it)
+    before it launches anything, inspect searches the guest for it; create, recreate
+    and smoke also take --provision)
 
 Every operation prints one JSON object on stdout; progress goes to stderr. Records
 are written under STATE/instances/NAME/records/. Exit status 0 on success, 1 on a
@@ -415,10 +428,11 @@ def read_launch_record(instance_dir):
 
 
 def build_launch_record(profile, profile_path, values, name, instance_id, ports, revision,
-                        inputs, argv, env, disk_commands, validation=None):
+                        inputs, argv, env, disk_commands, validation=None, provisioning=None):
     """launch.json: every boot input with its digest, the argv and the profile revision.
     A validation instance (netprobe) also records its validation block (Owner constraint 7:
-    the full effective configuration); an ordinary record has no such key."""
+    the full effective configuration); an ordinary record has no such key. An instance
+    created with --provision (F-04.1) records its provisioning manifest; others do not."""
     record = {
         'schema': LAUNCH_SCHEMA,
         'labels': labels(profile),
@@ -439,6 +453,8 @@ def build_launch_record(profile, profile_path, values, name, instance_id, ports,
     }
     if validation is not None:
         record['validation'] = validation
+    if provisioning is not None:
+        record['provisioning'] = provisioning
     return record
 
 
@@ -1481,12 +1497,17 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
 # ---------------------------------------------------------------- operations
 
 
-def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=None):
+def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=None,
+           provision=False):
     """The create binding. ``netprobe`` is set only by the netprobe operation (a
-    NetprobeSession); the ordinary create takes no validation input."""
+    NetprobeSession); the ordinary create takes no validation input. ``provision`` (F-04.1)
+    writes the provisioning manifest of the verified host stage into the seed; the
+    provision operation then transfers the files and the seeded root step installs them."""
     if netprobe is not None and not isinstance(netprobe, NetprobeSession):
         raise Refused('REFUSED', 'create takes no validation overlay; only the netprobe '
                       'operation creates a validation instance')
+    if provision and netprobe is not None:
+        raise Refused('REFUSED', 'a validation instance is never provisioned')
     t0 = time.time()
     idir = ctx.instance_dir(name)
     if os.path.lexists(idir):
@@ -1497,6 +1518,7 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         raise Refused('TIER_UNAVAILABLE', f'{ctx.profile["name"]}: strong provider unavailable',
                       [c for c in report['checks'] if c['status'] != 'ok'])
     revision = profile_revision(ctx.repo)
+    manifest = build_provision_manifest(ctx) if provision else None
     instances = idir.parent
     if not instances.is_dir():
         os.mkdir(instances)
@@ -1525,8 +1547,13 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         if result.returncode != 0:
             raise Refused('REFUSED', f'qemu-img for {disk} failed: {result.stderr.strip()}')
     if netprobe is None:
-        seed = load_seed_generator().generate(str(ctx.profile_path.parent), str(idir), name,
-                                              str(idir / 'ssh' / 'id_ed25519.pub'))
+        gen = load_seed_generator()
+        try:
+            seed = gen.generate(str(ctx.profile_path.parent), str(idir), name,
+                                str(idir / 'ssh' / 'id_ed25519.pub'),
+                                provision_manifest=manifest['bytes'] if manifest else None)
+        except gen.Refused as exc:
+            raise Refused('REFUSED', f'seed: {exc}') from exc
         ssh_port, qmp_port = allocate_ports(2)
     else:
         listener_ports = netprobe.start(idir)       # holds its ports before ours are chosen
@@ -1567,9 +1594,14 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         argv, validation = netprobe_validation(
             argv, listener_ports, netprobe.pid, posix(script_path.relative_to(ctx.repo)),
             script, seed['validation'], params)
+    provisioning = None
+    if manifest is not None:
+        if seed.get('provision_manifest_sha256') != manifest['sha256']:
+            raise Refused('REFUSED', 'seed: the provisioning manifest digest differs')
+        provisioning = manifest['record']
     record = build_launch_record(ctx.profile, ctx.profile_path, values, name,
                                  seed['instance_id'], ports, revision, inputs, argv, env,
-                                 disk_commands, validation)
+                                 disk_commands, validation, provisioning)
     write_json_exclusive(idir / 'launch.json', record)
     img_info = qemu_img_info(record, idir)
     launched = launch(ctx, idir, record, 'create')
@@ -1578,6 +1610,8 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
               'launch_record_sha256': sha256_file(idir / 'launch.json'),
               'seed_sha256': seed['sha256'], 'disks': disks, 'qemu_img_info': img_info,
               'launch': launched}
+    if provisioning is not None:
+        result['provisioning'] = provisioning
     if planted:
         result['canaries'] = {'planted_in_environment': planted,
                               'needles': canary_summary(canaries['needles'])}
@@ -1747,9 +1781,14 @@ def destroy(ctx, name):
     return result
 
 
-def recreate(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None):
+def recreate(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, provision=False):
+    """destroy, then create with the same name and profile (with --provision, the new
+    instance carries the provisioning manifest again; the provision operation follows)."""
+    destroyed = destroy(ctx, name)
+    created = create(ctx, name, ready_timeout, canaries, provision=True) if provision \
+        else create(ctx, name, ready_timeout, canaries)
     return {'operation': 'recreate', 'labels': labels(ctx.profile), 'instance': name,
-            'destroy': destroy(ctx, name), 'create': create(ctx, name, ready_timeout, canaries)}
+            'destroy': destroyed, 'create': created}
 
 
 def exec_command(ctx, name, command):
@@ -2178,6 +2217,16 @@ def target_matches(pattern, target):
     return bool(re.match(regex, target or ''))
 
 
+def source_matches(pattern, source):
+    """A declared mount source: literal, or with '*' standing for any run of characters
+    other than '/' (for example nsfs[net:[*]], whose namespace inode varies)."""
+    if not isinstance(pattern, str) or not isinstance(source, str):
+        return pattern == source
+    if '*' not in pattern:
+        return pattern == source
+    return bool(re.fullmatch(re.escape(pattern).replace(r'\*', '[^/]*'), source))
+
+
 def compare_mounts(storage, mounts, device_serials):
     """The effective mount table against guest_storage.mounts, exactly.
 
@@ -2199,7 +2248,7 @@ def compare_mounts(storage, mounts, device_serials):
                 serial = (devices.get(entry['disk']) or {}).get('serial')
                 if device_serials.get(mount['source']) != serial or serial is None:
                     continue
-            elif entry.get('source') != mount['source']:
+            elif not source_matches(entry.get('source'), mount['source']):
                 continue
             if '*' not in entry['target'] and used[i]:
                 continue
@@ -2366,10 +2415,17 @@ except OSError as exc:
 '''
 
 
-def storage_probes(storage):
+def declared_directories(storage, provisioned=False):
+    """guest_storage.directories that apply to an instance: those marked provisioned_only
+    (F-04.1, Moby's data root and the root step's state) only on a provisioned one."""
+    return [d for d in (storage or {}).get('directories') or []
+            if provisioned or not d.get('provisioned_only')]
+
+
+def storage_probes(storage, provisioned=False):
     """Probes for the declared directories and forbidden paths (guest_storage)."""
     storage = storage or {}
-    dirs = ' '.join(f"'{d['path']}'" for d in storage.get('directories') or [])
+    dirs = ' '.join(f"'{d['path']}'" for d in declared_directories(storage, provisioned))
     forbidden = ' '.join(f"'{p}'" for p in storage.get('forbidden_paths') or [])
     return [
         ('storage_dirs', f"stat -c '%n|%U|%G|%a|%F|%m' -- {dirs}" if dirs else 'echo none'),
@@ -2379,8 +2435,10 @@ def storage_probes(storage):
     ]
 
 
-def guest_probes(ports, host_ips, http_ip, storage=None):
-    """(name, bash snippet) pairs: read-only inspection and egress probes."""
+def guest_probes(ports, host_ips, http_ip, storage=None, provisioning=None):
+    """(name, bash snippet) pairs: read-only inspection and egress probes. ``provisioning``
+    (the profile's provisioning block, for a provisioned instance only) adds the Moby
+    probes, all run as agent (provisioning_probes)."""
     mgmt_paths = ' '.join(MGMT_PATHS)
     env_names = ' '.join(MGMT_ENV)
     probes = [
@@ -2407,7 +2465,7 @@ def guest_probes(ports, host_ips, http_ip, storage=None):
                             'else echo "no guest agent socket"; fi'),
         ('qemu_ga', 'command -v qemu-ga || echo "qemu-ga absent"; '
                     'systemctl is-active qemu-guest-agent'),
-    ] + storage_probes(storage) + [
+    ] + storage_probes(storage, provisioning is not None) + [
         ('findmnt', 'findmnt -J -o TARGET,SOURCE,FSTYPE,OPTIONS'),
         ('findmnt_shares', f'findmnt -n -t {SHARE_FSTYPES}; echo "count=$(findmnt -n -t '
                            f'{SHARE_FSTYPES} | wc -l)"'),
@@ -2468,6 +2526,8 @@ def guest_probes(ports, host_ips, http_ip, storage=None):
     if http_ip:
         probes.append(('egress_http_ip', "timeout 20 python3 - <<'PYEOF'\n" +
                        HTTP_PROBE.replace('@TARGET@', http_ip) + 'PYEOF'))
+    if provisioning is not None:
+        probes += provisioning_probes(provisioning)
     return probes
 
 
@@ -2700,7 +2760,7 @@ def storage_checks(profile, record, obs):
                 truthy(d.get('ro')) == declared_disks[d['serial']]['ro'] and
                 (declared_disks[d['serial']]['mounted'] or not d['mountpoints'])
                 for d in disk_list if d.get('serial') in declared_disks)
-    dirs = storage.get('directories') or []
+    dirs = declared_directories(storage, bool(record.get('provisioning')))
     want_dirs = [f"{d['path']}|{d['owner']}|{d['group']}|{d['mode']}|directory|{d['mount']}"
                  for d in dirs]
     got_dirs = out_text('storage_dirs').splitlines()
@@ -2805,8 +2865,14 @@ def p6_checks(profile, record, obs):
     sockets = listed_until_end(out_text('socket_inventory'))
     listening = [line.split()[4] for line in out_text('unix_sockets').splitlines()
                  if len(line.split()) > 4]
-    mgmt_sockets = sorted({s for s in (sockets or []) + listening if MGMT_SOCKET_NAMES.search(s)})
+    # profiles P6 (amended 2026-11-06): a provisioned instance's own Moby sockets are
+    # declared (provisioning.moby.sockets) and checked by moby_p6_checks; nothing else
+    own = guest_moby_socket_paths(profile, record)
+    mgmt_sockets = sorted({s for s in (sockets or []) + listening if MGMT_SOCKET_NAMES.search(s)
+                           and s not in own})
     present = listed_until_end(out_text('mgmt_paths'))
+    if present is not None:
+        present = [line for line in present if line.split(' ', 1)[-1] not in own]
     env = out_text('mgmt_env').splitlines()
     want_env = [f'{scope} {v}=unset' for scope in ('session', 'login') for v in MGMT_ENV]
     qmp_probes = {k: v for k, v in g.items() if k.startswith('egress_tcp_') and k.endswith('_qmp')}
@@ -2846,7 +2912,7 @@ def p6_checks(profile, record, obs):
               'profile; guest: command -v qemu-ga',
               (profile.get('guest_agent') or {}).get('used') is False and
               out_text('qemu_ga').startswith('qemu-ga absent')),
-    ]
+    ] + (moby_p6_checks(profile, obs) if record.get('provisioning') else [])
 
 
 def evaluate(profile, record, obs):
@@ -2962,7 +3028,8 @@ def evaluate(profile, record, obs):
         check('guest forwarding rules', declared_rules, rules, 'launch record argv (guestfwd=)',
               rules == declared_rules),
     ] + (netprobe_checks(record, obs.get('netprobe')) if netprobe_mode
-         else [enforcement_check(profile)]),
+         else [enforcement_check(profile)]) +
+        (moby_p7_checks(obs) if record.get('provisioning') else []),
         formal='F-03.3.2; S-02.1, S-02.2',
         note=('Validation instance: the netprobe checks are the F-03.3.2 test (guest root, '
               'routes, every denied path, both positive controls, decoys).' if netprobe_mode
@@ -2995,7 +3062,7 @@ def evaluate(profile, record, obs):
               bool(kh) and sorted(kh) == sorted(guest_fps)),
         check('host principal', 'the Owner\'s Windows account', record.get('host_principal'),
               'launch record', bool(record.get('host_principal'))),
-    ], note='Uniqueness across instances is compared outside a single inspect record.'))
+    ] + (moby_p8_checks(obs) if record.get('provisioning') else []), note='Uniqueness across instances is compared outside a single inspect record.'))
 
     now = obs.get('input_digests') or {}
     pins = {'image': profile['boot_inputs']['image']['sha256'],
@@ -3042,6 +3109,8 @@ def evaluate(profile, record, obs):
               vmx == '0'),
         check('/dev/kvm', 'absent', out_text('dev_kvm'), 'guest: test -e', out_text('dev_kvm') == 'absent'),
     ]))
+    if record.get('provisioning'):
+        props.append(provisioning_property(profile, record, obs))
     return props
 
 
@@ -3078,7 +3147,8 @@ def inspect(ctx, name, canaries=None):
     obs['host']['deb.debian.org'] = http_ip
     ssh = Ssh(ctx.profile, idir, record['ports']['ssh'])
     marker = '@@' + secrets.token_hex(8)
-    probes = guest_probes(record['ports'], ips, http_ip, ctx.profile.get('guest_storage'))
+    probes = guest_probes(record['ports'], ips, http_ip, ctx.profile.get('guest_storage'),
+                          provisioning_config(ctx.profile) if record.get('provisioning') else None)
     result = ssh.run(['bash', '-s'], input_text=probe_script(probes, marker), timeout=600)
     obs['guest'] = parse_probe_output(result.stdout, marker)
     obs['guest_ssh'] = {'rc': result.returncode, 'stderr': result.stderr.strip(),
@@ -3626,11 +3696,14 @@ def inspect_ok(record):
                 'seconds': record.get('seconds')}
 
 
-def smoke(ctx, name, canary_dir, durable_roots, out_path=None, ready_timeout=READY_TIMEOUT_S):
+def smoke(ctx, name, canary_dir, durable_roots, out_path=None, ready_timeout=READY_TIMEOUT_S,
+          with_provision=False):
     """The F-03.4 provision/inspect/teardown smoke test on a fresh instance name: preflight,
     create, inspect (check-surfaces), graceful stop, start, inspect, forced stop, recreate,
     inspect, destroy, destroy again (absent), with inventories of the durable sources
-    before and after each destroy and recreate. One machine verdict: PASS or FAIL."""
+    before and after each destroy and recreate. One machine verdict: PASS or FAIL.
+    ``with_provision`` (F-04.1) creates and recreates with --provision and runs the
+    provision operation after each, before the inspect."""
     idir = ctx.instance_dir(name)
     if os.path.lexists(idir):
         raise Refused('REFUSED', f'{idir} exists; the smoke test runs on a fresh instance name')
@@ -3717,7 +3790,15 @@ def smoke(ctx, name, canary_dir, durable_roots, out_path=None, ready_timeout=REA
                     'host_xsaves': next((c['detail'] for c in r['checks']
                                          if c['check'] == 'host-xsaves'), None)}))
     take('before create')
-    run('create', lambda: create(ctx, name, ready_timeout, canaries), ready)
+    def provisioned(r):
+        return r['result'] == 'provisioned', {'checks': r.get('checks'),
+                                              'timings': r.get('timings')}
+
+    if with_provision:
+        run('create', lambda: create(ctx, name, ready_timeout, canaries, provision=True), ready)
+        run('provision', lambda: provision(ctx, name), provisioned)
+    else:
+        run('create', lambda: create(ctx, name, ready_timeout, canaries), ready)
     do_inspect('A (after create)')
     run('stop (graceful)', lambda: stop(ctx, name), lambda r: exited(r, ('system_powerdown',)))
     run('start', lambda: start(ctx, name, ready_timeout), ready)
@@ -3726,11 +3807,14 @@ def smoke(ctx, name, canary_dir, durable_roots, out_path=None, ready_timeout=REA
     run('stop (forced)', lambda: stop(ctx, name, force=True),
         lambda r: exited(r, ('quit', 'terminate')))
     take('before recreate')
-    run('recreate', lambda: recreate(ctx, name, ready_timeout, canaries),
+    run('recreate', lambda: recreate(ctx, name, ready_timeout, canaries, with_provision)
+        if with_provision else recreate(ctx, name, ready_timeout, canaries),
         lambda r: (r['destroy']['result'] == 'destroyed' and r['create']['result'] == 'ready',
                    {'destroy': {'result': r['destroy']['result'], 'stop': r['destroy'].get('stop')},
                     'create': ready(r['create'])[1]}))
     take('after recreate')
+    if with_provision:
+        run('provision (after recreate)', lambda: provision(ctx, name), provisioned)
     do_inspect('C (after recreate)')
     compare('A-C (recreate)', 'A (after create)', 'C (after recreate)', 'recreate')
     run('destroy', lambda: destroy(ctx, name), destroyed)
@@ -4019,6 +4103,7 @@ def netprobe_seed(profile_path, instance_dir, name, public_key, script):
         templates = gen.read_templates(profile, root)
         values = {'agent_ssh_public_key': gen.read_public_key(str(public_key)),
                   'scratch_device': gen.scratch_device(profile),
+                  'provision_manifest': gen.provision_manifest_value(None),
                   'instance_id': instance_id, 'instance_name': name}
         rendered = gen.render(templates, values)
     except gen.Refused as exc:
@@ -5168,6 +5253,509 @@ def provision_fetch(ctx, opener=None, crane=None):
     return result
 
 
+# ---------------------------------------------------------------- provision (F-04.1b)
+#
+# Guest side of the provisioning channel (decision 0006, Proposed; the Owner's F-04.1
+# authorization, Part B). create --provision writes a manifest of the verified host stage
+# into the seed; the seed also carries the single-use root step (profiles/seed/
+# user-data.tmpl: /usr/local/sbin/aieh-provision, aieh-provision.path and .service, and
+# aieh-docker-facts.service). provision copies the files by SFTP into the agent-owned
+# upload directory, creates the READY marker, waits on RESULT.json and checks it. The
+# root step copies, verifies against the seeded sha256 values, installs with apt and
+# docker load, and disables itself. No network, no guestfwd, no launch.argv change.
+
+PROVISION_MANIFEST_SCHEMA = 'ai-engineering-harness/profiles/provision-manifest/v1'
+PROVISION_RESULT_SCHEMA = 'ai-engineering-harness/profiles/provision-result/v1'
+MOBY_FACTS_SCHEMA = 'ai-engineering-harness/profiles/moby-facts/v1'
+PROVISION_ROLES = ('deb', 'image-archive', 'release-binary')
+PROVISION_IMAGE_ARCHIVE = 'agent-server.tar'
+# processes whose TCP listener would break 'unix socket only' (profiles P6, P7)
+MOBY_PROCESSES = ('dockerd', 'containerd', 'docker-proxy', 'containerd-shim')
+MOBY_SOCKET_DIRS = ('/run/docker', '/run/containerd')
+PROVISION_TRIGGER_UNIT = 'aieh-provision.path'
+# the inspect entry of a provisioned instance, beside the contract's P1-P12
+PROVISIONING_PROPERTY = 'provisioning (F-04.1)'
+
+# The guest-side wait for RESULT.json, run as agent: the root step writes it last, by a
+# rename, so the inotify event on its directory is the completion signal. Between
+# events the loop wakes at most every 10 s only to re-check the unit for a failure that
+# left no result, under the stated ceiling.
+RESULT_WAIT_SCRIPT = r'''import ctypes, os, select, subprocess, sys, time
+path, unit, ceiling = sys.argv[1], sys.argv[2], float(sys.argv[3])
+libc = ctypes.CDLL(None, use_errno=True)
+fd = libc.inotify_init1(os.O_CLOEXEC)
+if fd < 0:
+    print('inotify_init1 failed', ctypes.get_errno()); sys.exit(3)
+if libc.inotify_add_watch(fd, os.path.dirname(path).encode(), 0x80 | 0x100 | 0x8) < 0:
+    print('inotify_add_watch failed', ctypes.get_errno()); sys.exit(3)
+deadline = time.monotonic() + ceiling
+while True:
+    if os.path.exists(path):
+        print('result present'); sys.exit(0)
+    state = subprocess.run(['systemctl', 'show', '-p', 'ActiveState', '--value', unit],
+                           capture_output=True, text=True).stdout.strip()
+    if state == 'failed' and not os.path.exists(path):
+        print('unit failed without a result'); sys.exit(4)
+    left = deadline - time.monotonic()
+    if left <= 0:
+        print('ceiling reached; unit', state); sys.exit(5)
+    ready, _, _ = select.select([fd], [], [], min(10.0, left))
+    if ready:
+        os.read(fd, 65536)
+'''
+
+SOCKET_CONNECT_PROBE = r'''import errno, socket, sys
+for path in sys.argv[1:]:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(5)
+    try:
+        s.connect(path)
+        print(path, 'CONNECTED')
+    except OSError as exc:
+        print(path, errno.errorcode.get(exc.errno, exc.errno))
+    finally:
+        s.close()
+'''
+
+
+def provisioning_config(profile):
+    conf = profile.get('provisioning')
+    if not isinstance(conf, dict) or not all(isinstance(conf.get(k), dict) for k in
+                                             ('upload', 'root_step', 'facts', 'moby', 'image')):
+        raise Refused('REFUSED', f'profile {profile.get("name")} declares no provisioning')
+    return conf
+
+
+def guest_moby_socket_paths(profile, record):
+    """The provisioned instance's own declared Moby sockets, with their /var/run aliases
+    (Debian's /var/run is a link to /run); empty for any other instance."""
+    if not record.get('provisioning'):
+        return set()
+    paths = set()
+    for entry in ((profile.get('provisioning') or {}).get('moby') or {}).get('sockets') or []:
+        path = entry.get('path', '')
+        paths.add(path)
+        if path.startswith('/run/'):
+            paths.add('/var' + path)
+    return paths
+
+
+def build_provision_manifest(ctx):
+    """The seeded manifest of a provisioned instance, from the committed lock and the
+    re-verified host stage (provision-fetch): every file to upload with its role, size
+    and sha256, the packages, the image (locked config digest, the archive's tags, the
+    local immutable tag) and the declared daemon.json. Deterministic for one stage."""
+    conf = provisioning_config(ctx.profile)
+    lock, lock_rel, lock_sha = provision_lock(ctx)
+    items = provision_items(lock)
+    image = provision_image(lock)
+    staged_dir = Path(ctx.state_dir) / 'provision' / lock_sha
+    _plain_dir(staged_dir)
+    if not staged_dir.is_dir():
+        raise Refused('REFUSED', f'{staged_dir}: no stage for this lock; run provision-fetch')
+    verified = verify_staged(staged_dir, lock_sha, items, image)
+    staged = json.loads((staged_dir / PROVISION_STAGED_FILE).read_text(encoding='utf-8'))
+    by_path = {f['path']: f for f in staged['files']}
+    files, sources = [], {}
+    for rel, _url, size, sha256, role in items:
+        if role not in ('deb', 'release-binary'):
+            continue
+        name = rel.rsplit('/', 1)[-1]
+        files.append({'name': name, 'role': role, 'size': size, 'sha256': sha256})
+        sources[name] = staged_dir / rel
+    tar = by_path['image/' + PROVISION_IMAGE_ARCHIVE]
+    files.insert(len([f for f in files if f['role'] == 'deb']),
+                 {'name': PROVISION_IMAGE_ARCHIVE, 'role': 'image-archive',
+                  'size': tar['size'], 'sha256': tar['sha256']})
+    sources[PROVISION_IMAGE_ARCHIVE] = staged_dir / 'image' / PROVISION_IMAGE_ARCHIVE
+    repo_tags = verified['image'].get('repo_tags') or []
+    if not isinstance(repo_tags, list) or not repo_tags or \
+            not all(isinstance(t, str) and t for t in repo_tags):
+        raise Refused('REFUSED', 'the staged image archive names no tag; docker load would '
+                      'leave the image untagged')
+    moby = conf['moby']
+    manifest = {
+        'schema': PROVISION_MANIFEST_SCHEMA,
+        'profile': ctx.profile['name'],
+        'lock': {'path': lock_rel, 'sha256': lock_sha},
+        'lock_sha256': lock_sha,
+        'files': files,
+        'packages': [{'name': p['name'], 'version': p['version'], 'file': p['filename']}
+                     for p in (lock.get('debian') or {}).get('packages') or []],
+        'image': {'archive': PROVISION_IMAGE_ARCHIVE, 'id': image['config_digest'],
+                  'index_digest': image['index_digest'],
+                  'manifest_digest': image['manifest_digest'],
+                  'archive_repo_tags': repo_tags,
+                  'local_tag': conf['image']['local_tag']},
+        'docker': {'server_version': moby['server_version'], 'daemon_json': moby['daemon_json']},
+    }
+    data = (json.dumps(manifest, indent=1, sort_keys=True) + '\n').encode('ascii')
+    digest = hashlib.sha256(data).hexdigest()
+    return {'bytes': data, 'sha256': digest, 'manifest': manifest, 'sources': sources,
+            'record': {'manifest_sha256': digest, 'lock_sha256': lock_sha,
+                       'image_id': image['config_digest'],
+                       'local_tag': conf['image']['local_tag'],
+                       'files': len(files), 'bytes': sum(f['size'] for f in files),
+                       'staged_dir': posix(staged_dir), 'stage_verify_seconds':
+                       verified['seconds']}}
+
+
+def provisioning_probes(conf):
+    """Agent-side probes of a provisioned instance (inspect). Root-only facts come from
+    the facts unit's report, read as agent; nothing here needs or gains privilege."""
+    moby, root, facts = conf['moby'], conf['root_step'], conf['facts']
+    sockets = ' '.join(f"'{s['path']}'" for s in moby.get('sockets') or [])
+    leftovers = ' '.join(f"'{p}'" for p in (conf['upload']['guest_dir'], root['staging']))
+    units = ' '.join([PROVISION_TRIGGER_UNIT, root['service'], facts['service']])
+    return [
+        ('boot_id', 'cat /proc/sys/kernel/random/boot_id'),
+        # the facts unit writes at every boot; wait until the boot has finished first
+        ('moby_facts', 'timeout 300 systemctl is-system-running --wait >/dev/null 2>&1; '
+                       f"cat '{facts['path']}'"),
+        ('provision_result', f"cat '{root['result']}'"),
+        ('moby_sockets', f"stat -c '%n|%U|%G|%a|%F' -- {sockets}"),
+        ('moby_agent_connect', f"timeout 30 python3 - {sockets} <<'PYEOF'\n" +
+         SOCKET_CONNECT_PROBE + 'PYEOF'),
+        ('docker_as_agent', 'timeout 30 docker info'),
+        ('tcp_listeners', 'ss -ltnH'),
+        ('agent_docker_group', 'id -nG agent; getent group docker'),
+        ('provision_leftovers', f'for p in {leftovers}; do if [ -e "$p" ] || [ -L "$p" ]; '
+                                'then echo "present $p"; else echo "absent $p"; fi; done'),
+        ('provision_units', f'for u in {units}; do printf "%s %s %s\\n" "$u" '
+                            '"$(systemctl is-enabled "$u" 2>&1 | head -n1)" '
+                            '"$(systemctl is-active "$u" 2>&1 | head -n1)"; done'),
+    ]
+
+
+def _probe_json(obs, key):
+    text = ((obs.get('guest') or {}).get(key) or {}).get('out')
+    try:
+        return json.loads(text) if text else None
+    except ValueError:
+        return None
+
+
+def _listener_addresses(lines):
+    """'LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*' -> the local address field."""
+    out = []
+    for line in lines or []:
+        parts = line.split()
+        if len(parts) >= 4:
+            out.append(parts[3])
+    return sorted(set(out))
+
+
+def moby_p6_checks(profile, obs):
+    """profiles P6 (amended 2026-11-06) for a provisioned instance: the guest's own Moby
+    sockets are the declared ones, root-owned with no access for others, and agent can
+    reach none of them."""
+    g = obs.get('guest', {})
+    out_text = lambda key: (g.get(key) or {}).get('out', '')      # noqa: E731
+    moby = (profile.get('provisioning') or {}).get('moby') or {}
+    declared = [f"{s['path']}|{s['owner']}|{s['group']}|{s['mode']}|socket"
+                for s in moby.get('sockets') or []]
+    got = out_text('moby_sockets').splitlines()
+    facts = _probe_json(obs, 'moby_facts') or {}
+    found = facts.get('sockets') if isinstance(facts.get('sockets'), list) else None
+    open_to_others = None if found is None else [
+        s for s in found if s.get('state') == 'socket' and (
+            s.get('owner') != 'root' or s.get('group') not in ('root', 'docker') or
+            int(str(s.get('mode', '7')), 8) & 0o007)]
+    connect = dict(line.rsplit(' ', 1) for line in out_text('moby_agent_connect').splitlines()
+                   if ' ' in line)
+    cli = g.get('docker_as_agent') or {}
+    return [
+        check('guest Moby sockets', {'declared': declared, 'others': 'root-owned, group root '
+                                     'or docker, no access for others'},
+              {'stat': got, 'root_view': found, 'open_to_others': open_to_others},
+              f"guest: stat -c '%n|%U|%G|%a|%F' (agent); the facts report's sockets under "
+              f'{list(MOBY_SOCKET_DIRS)} (root)',
+              None if found is None else got == declared and not open_to_others),
+        check('agent cannot reach Moby', 'connect EACCES on every declared socket; docker info '
+              'refused', {'connect': connect, 'docker_info_rc': cli.get('rc'),
+                          'docker_info': (cli.get('out') or '').strip().splitlines()[-1:]},
+              'guest, as agent: AF_UNIX connect; docker info',
+              bool(connect) and len(connect) == len(declared) and
+              all(v == 'EACCES' for v in connect.values()) and cli.get('rc') not in (0, None)
+              and 'permission denied' in (cli.get('out') or '').lower()),
+    ]
+
+
+def moby_p7_checks(obs):
+    """profiles P7 for a provisioned instance: no TCP listener of Moby (unix socket only),
+    and none appeared since the boot-time report."""
+    g = obs.get('guest', {})
+    facts = _probe_json(obs, 'moby_facts') or {}
+    root_lines = facts.get('tcp_listeners') if isinstance(facts.get('tcp_listeners'), list) else None
+    moby_owned = None if root_lines is None else [
+        line for line in root_lines if any(f'(("{p}' in line or f'"{p}"' in line
+                                           for p in MOBY_PROCESSES)]
+    agent_view = _listener_addresses((g.get('tcp_listeners') or {}).get('out', '').splitlines())
+    root_view = None if root_lines is None else _listener_addresses(root_lines)
+    return [check('guest TCP listeners (Moby)',
+                  'none owned by dockerd, containerd or docker-proxy; none new since boot',
+                  {'agent_view': agent_view, 'boot_root_view': root_view,
+                   'moby_owned': moby_owned},
+                  'guest: ss -ltnH (agent, now); ss -ltnpH in the facts report (root, at boot)',
+                  None if root_lines is None else not moby_owned and agent_view == root_view)]
+
+
+def moby_p8_checks(obs):
+    g = obs.get('guest', {})
+    lines = ((g.get('agent_docker_group') or {}).get('out') or '').splitlines()
+    groups = lines[0].split() if lines else []
+    docker_group = lines[1] if len(lines) > 1 else ''
+    members = docker_group.split(':')[3].split(',') if docker_group.count(':') >= 3 else None
+    return [check('agent not in group docker', {'agent_groups': 'without docker',
+                                                 'docker_members': 'without agent'},
+                  {'agent_groups': groups, 'docker_group': docker_group},
+                  'guest: id -nG agent; getent group docker',
+                  bool(groups) and 'docker' not in groups and members is not None and
+                  'agent' not in members)]
+
+
+def provisioning_property(profile, record, obs):
+    """The provisioned instance's Moby state against the profile and the lock (F-04.1):
+    an inspect entry beside P1-P12, not a contract property."""
+    g = obs.get('guest', {})
+    out_text = lambda key: (g.get(key) or {}).get('out', '')      # noqa: E731
+    conf = profile.get('provisioning') or {}
+    moby, image_conf = conf.get('moby') or {}, conf.get('image') or {}
+    prov = record.get('provisioning') or {}
+    result = _probe_json(obs, 'provision_result') or {}
+    facts = _probe_json(obs, 'moby_facts') or {}
+    info = facts.get('info') if isinstance(facts.get('info'), dict) else {}
+    version = facts.get('version') if isinstance(facts.get('version'), dict) else {}
+    image = facts.get('image') if isinstance(facts.get('image'), dict) else {}
+    images = facts.get('images') if isinstance(facts.get('images'), list) else None
+    leftovers = out_text('provision_leftovers').splitlines()
+    want_left = [f"absent {conf.get('upload', {}).get('guest_dir')}",
+                 f"absent {conf.get('root_step', {}).get('staging')}"]
+    units = {line.split()[0]: line.split()[1:] for line in out_text('provision_units').splitlines()
+             if len(line.split()) >= 3}
+    trigger = units.get(PROVISION_TRIGGER_UNIT, [])
+    service = units.get((conf.get('root_step') or {}).get('service'), [])
+    facts_unit = units.get((conf.get('facts') or {}).get('service'), [])
+    security = info.get('SecurityOptions') if isinstance(info.get('SecurityOptions'), list) else []
+    modules = facts.get('modules') if isinstance(facts.get('modules'), dict) else {}
+    checks = [
+        check('root step result', {'result': 'provisioned', 'manifest_sha256':
+                                   prov.get('manifest_sha256')},
+              {'result': result.get('result'), 'failed_step': result.get('failed_step'),
+               'manifest_sha256': (result.get('manifest') or {}).get('sha256'),
+               'upload_present': result.get('upload_present'),
+               'staging_present': result.get('staging_present')},
+              f"guest: {(conf.get('root_step') or {}).get('result')} (root-owned, read as agent)",
+              result.get('schema') == PROVISION_RESULT_SCHEMA and
+              result.get('result') == 'provisioned' and result.get('failed_step') is None and
+              (result.get('manifest') or {}).get('sha256') == prov.get('manifest_sha256') and
+              result.get('upload_present') is False and result.get('staging_present') is False),
+        check('facts report of this boot', 'written by root at this boot',
+              {'schema_ok': facts.get('schema') == MOBY_FACTS_SCHEMA,
+               'same_boot': bool(facts) and facts.get('boot_id') == out_text('boot_id').strip()},
+              f"guest: {(conf.get('facts') or {}).get('path')} and the kernel boot_id",
+              facts.get('schema') == MOBY_FACTS_SCHEMA and
+              facts.get('boot_id') == out_text('boot_id').strip()),
+        check('Moby server version', moby.get('server_version'),
+              (version.get('Server') or {}).get('Version'), 'facts: docker version (root)',
+              (version.get('Server') or {}).get('Version') == moby.get('server_version')),
+        check('Moby daemon', {'DockerRootDir': moby.get('data_root'),
+                              'Driver': moby.get('storage_driver'),
+                              'DefaultRuntime': moby.get('default_runtime'),
+                              'SecurityOptions': f"including {moby.get('required_security_options')}",
+                              'daemon.json': moby.get('daemon_json')},
+              {'DockerRootDir': info.get('DockerRootDir'), 'Driver': info.get('Driver'),
+               'DefaultRuntime': info.get('DefaultRuntime'), 'SecurityOptions': security,
+               'daemon.json': facts.get('daemon_json')},
+              'facts: docker info, /etc/docker/daemon.json (root)',
+              bool(info) and info.get('DockerRootDir') == moby.get('data_root') and
+              info.get('Driver') == moby.get('storage_driver') and
+              info.get('DefaultRuntime') == moby.get('default_runtime') and
+              set(moby.get('required_security_options') or []) <= set(security) and
+              facts.get('daemon_json') == moby.get('daemon_json')),
+        check('image', {'Id': prov.get('image_id'), 'RepoTags': [image_conf.get('local_tag')],
+                        'store': 'that image only'},
+              {'Id': image.get('Id'), 'RepoTags': image.get('RepoTags'),
+               'RepoDigests': image.get('RepoDigests'),
+               'store': None if images is None else sorted(
+                   f"{i.get('ID')} {i.get('Repository')}:{i.get('Tag')}" for i in images)},
+              'facts: docker image inspect, docker image ls --all (root)',
+              image.get('Id') == prov.get('image_id') and image.get('RepoTags') == [image_conf.get('local_tag')] and
+              images is not None and [i.get('ID') for i in images] == [prov.get('image_id')]),
+        check('containers', [], facts.get('containers'), 'facts: docker ps --all (root, at boot)',
+              facts.get('containers') == []),
+        check('kernel modules for Moby', 'overlay loaded', modules,
+              'facts: /proc/modules, /proc/filesystems (root)',
+              bool(modules) and ('overlay' in (modules.get('loaded') or []) or
+                                 modules.get('overlay_filesystem') is True)),
+        check('upload and staging removed', want_left, leftovers, 'guest: test -e, test -L',
+              leftovers == want_left),
+        check('root step disabled', {PROVISION_TRIGGER_UNIT: 'not enabled, inactive',
+                                     'service': 'not enabled, inactive',
+                                     'facts unit': 'enabled'},
+              units, 'guest: systemctl is-enabled, is-active',
+              bool(trigger) and trigger[0] in ('not-found', 'disabled') and
+              trigger[1] == 'inactive' and bool(service) and
+              service[0] in ('static', 'disabled', 'not-found') and service[1] in
+              ('inactive', 'failed') and bool(facts_unit) and facts_unit[0] == 'enabled'),
+    ]
+    out = prop('provisioning', checks, formal='F-04.1 slice (b)', note=(
+        'Not a contract property: the provisioned instance\'s Moby and image state against '
+        'the profile\'s provisioning block and the provision lock. Root-only facts come '
+        'from the boot-time report of aieh-docker-facts.service, read as agent.'))
+    out['property'] = PROVISIONING_PROPERTY
+    return out
+
+
+CHECK_CLASSES.update({
+    ('profiles P6', 'guest Moby sockets'): (STABLE, None),
+    ('profiles P6', 'agent cannot reach Moby'): (STABLE, None),
+    ('profiles P7', 'guest TCP listeners (Moby)'): (STABLE, None),
+    ('profiles P8', 'agent not in group docker'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'root step result'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'facts report of this boot'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'Moby server version'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'Moby daemon'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'image'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'containers'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'kernel modules for Moby'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'upload and staging removed'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'root step disabled'): (STABLE, None),
+})
+
+
+def _guest_states(ssh, paths):
+    script = ''.join(f"p='{p}'; if [ -L \"$p\" ]; then echo \"symlink $p\"; elif [ -e \"$p\" ]; "
+                     f'then echo "present $p"; else echo "absent $p"; fi\n' for p in paths)
+    result = ssh.run(['bash', '-s'], input_text=script, timeout=120)
+    if result.returncode != 0:
+        raise Refused('PROVISION', f'guest state check failed: {result.stderr.strip()}')
+    return dict(reversed(line.split(' ', 1)) for line in result.stdout.splitlines() if ' ' in line)
+
+
+def provision(ctx, name):
+    """provision (F-04.1b): transfer the stage of a --provision instance and wait for the
+    seeded root step. Refuses unless the instance was created with --provision, the stage
+    still gives the manifest seeded at create, the trigger is armed, and neither the upload
+    nor a result exists yet. Every file is checked in the guest after the transfer."""
+    t0 = time.time()
+    idir, record = running_instance(ctx, name)
+    prov = record.get('provisioning')
+    if not prov:
+        raise Refused('REFUSED', f'{name} was not created with --provision; its seed holds no '
+                      'manifest and its root step is inert')
+    conf = provisioning_config(ctx.profile)
+    up, root = conf['upload'], conf['root_step']
+    manifest = build_provision_manifest(ctx)
+    if manifest['sha256'] != prov.get('manifest_sha256'):
+        raise Refused('STAGED_MISMATCH', f'the stage now gives manifest {manifest["sha256"]}; '
+                      f'{name} was seeded with {prov.get("manifest_sha256")}')
+    files = manifest['manifest']['files']
+    total = sum(f['size'] for f in files)
+    if len(files) > up['max_files'] or total > up['max_bytes'] or \
+            any(f['role'] not in up['roles'] for f in files):
+        raise Refused('BOUNDS', f'{len(files)} files, {total} bytes exceed provisioning.upload '
+                      f'({up["max_files"]} files, {up["max_bytes"]} bytes, roles {up["roles"]})')
+    ssh = Ssh(ctx.profile, idir, record['ports']['ssh'])
+    guest_dir, result_path = up['guest_dir'], root['result']
+    states = _guest_states(ssh, [guest_dir, result_path, root['staging']])
+    armed = ssh.run(['systemctl', 'is-active', PROVISION_TRIGGER_UNIT], timeout=60).stdout.strip()
+    if any(v != 'absent' for v in states.values()) or armed != 'active':
+        raise Refused('REFUSED', f'{name}: not ready to provision (guest paths {states}, '
+                      f'trigger {armed!r}); provisioning is single use: recreate --provision',
+                      {'paths': states, 'trigger': armed})
+    work = idir / 'provision'
+    work.mkdir(exist_ok=True)
+    out = {'operation': 'provision', 'labels': labels(ctx.profile), 'instance': name,
+           'manifest_sha256': manifest['sha256'], 'lock_sha256': prov.get('lock_sha256'),
+           'files': [dict(f) for f in files], 'bytes': total}
+    commands = [f'mkdir {sftp_quote(guest_dir)}'] + [
+        f'put {sftp_quote(manifest["sources"][f["name"]])} {sftp_quote(guest_dir + "/" + f["name"])}'
+        for f in files]
+    log(f'provision: uploading {len(files)} files, {total} bytes')
+    t1 = time.time()
+    transfer = Sftp(ssh).batch(commands, work, timeout=up['timeout_s'])
+    upload_s = time.time() - t1
+    out['upload'] = {'rc': transfer['rc'], 'seconds': round(upload_s, 1),
+                     'mib_per_s': round(total / (1 << 20) / upload_s, 1) if upload_s else None,
+                     'stderr': transfer['stderr'][-1000:]}
+    if transfer['rc'] != 0:
+        out['result'] = 'upload-failed'
+        out['record'] = write_record(idir, 'provision', out)
+        raise Refused('PROVISION', f'sftp upload failed: {transfer["stderr"][-500:]}', out)
+    t2 = time.time()
+    names = ' '.join(f"'{f['name']}'" for f in files)
+    check_script = (f"cd '{guest_dir}' && for f in {names}; do printf '%s %s\\n' \"$f\" "
+                    "\"$(stat -c %s -- \"$f\")\"; done && sha256sum -- " + names + '\n')
+    landed = ssh.run(['bash', '-s'], input_text=check_script, timeout=up['timeout_s'])
+    sizes, digests = {}, {}
+    for line in landed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            sizes[parts[0]] = int(parts[1])
+        elif len(parts) == 2 and re.fullmatch(r'[0-9a-f]{64}', parts[0]):
+            digests[parts[1]] = parts[0]
+    mismatched = [f['name'] for f in files if sizes.get(f['name']) != f['size'] or
+                  digests.get(f['name']) != f['sha256']]
+    out['guest_check'] = {'rc': landed.returncode, 'seconds': round(time.time() - t2, 1),
+                          'mismatched': mismatched}
+    if landed.returncode != 0 or mismatched:
+        out['result'] = 'transfer-mismatch'
+        out['record'] = write_record(idir, 'provision', out)
+        raise Refused('HASH_MISMATCH', f'guest copies differ: {mismatched}', out)
+    ready = ssh.run(['bash', '-c', f"set -C; : > '{guest_dir}/{up['ready_marker']}'"], timeout=60)
+    if ready.returncode != 0:
+        raise Refused('PROVISION', f'READY marker not created: {ready.stderr.strip()}')
+    t3 = time.time()
+    log(f'provision: READY; waiting for {result_path} (ceiling {root["timeout_s"]} s)')
+    waited = ssh.run(['python3', '-', result_path, root['service'], str(root['timeout_s'])],
+                     input_text=RESULT_WAIT_SCRIPT, timeout=root['timeout_s'] + 120)
+    out['root_step_wait'] = {'rc': waited.returncode, 'seconds': round(time.time() - t3, 1),
+                             'out': waited.stdout.strip()[-500:],
+                             'stderr': waited.stderr.strip()[-500:]}
+    fetched, result = None, None
+    if waited.returncode == 0:
+        fetched = work / f'RESULT-{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")}.json'
+        get = Sftp(ssh).batch([f'get {sftp_quote(result_path)} {sftp_quote(fetched)}'], work)
+        if get['rc'] == 0 and fetched.is_file():
+            result = json.loads(fetched.read_text(encoding='utf-8'))
+    out['result_file'] = str(fetched) if fetched else None
+    out['root_step'] = result
+    image = (manifest['manifest'].get('image') or {})
+    steps = {s.get('step'): s for s in (result or {}).get('steps') or []}
+    tagged = ((steps.get('tag') or {}).get('detail') or {}).get('image') or {}
+    verdict = {
+        'schema': (result or {}).get('schema') == PROVISION_RESULT_SCHEMA,
+        'provisioned': (result or {}).get('result') == 'provisioned',
+        'manifest': ((result or {}).get('manifest') or {}).get('sha256') == manifest['sha256'],
+        'all_files_verified': [f.get('name') for f in ((steps.get('verify') or {}).get('detail')
+                                                     or {}).get('files') or [] if f.get('match')]
+        == [f['name'] for f in files],
+        'image_id': tagged.get('Id') == image.get('id'),
+        'tags': tagged.get('RepoTags') == [image.get('local_tag')],
+        'run': ((steps.get('run') or {}).get('detail') or {}).get('rc') == 0,
+        'cleanup': (result or {}).get('upload_present') is False and
+        (result or {}).get('staging_present') is False,
+        'trigger_removed': ((result or {}).get('trigger') or {}).get('path_unit_file') == 'absent',
+    }
+    out['checks'] = verdict
+    out['timings'] = {'upload_s': out['upload']['seconds'],
+                      'guest_check_s': out['guest_check']['seconds'],
+                      'root_step_s': (result or {}).get('seconds'),
+                      'wait_s': out['root_step_wait']['seconds'],
+                      'steps_s': {k: v.get('seconds') for k, v in steps.items()},
+                      'total_s': round(time.time() - t0, 1)}
+    out['result'] = 'provisioned' if all(verdict.values()) else 'failed'
+    out['seconds'] = round(time.time() - t0, 1)
+    out['record'] = write_record(idir, 'provision', out)
+    if out['result'] != 'provisioned':
+        raise Refused('PROVISION_FAILED', f'{name}: root step '
+                      f'{(result or {}).get("result")!r} at step '
+                      f'{(result or {}).get("failed_step")!r}: {(result or {}).get("error")}; '
+                      f'checks {verdict}', out)
+    return out
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -5190,7 +5778,7 @@ def main(argv=None):
     p.add_argument('--log', required=True)
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
-               'provision-fetch'):
+               'provision-fetch', 'provision'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -5212,6 +5800,10 @@ def main(argv=None):
             p.add_argument('--bundle-name', help='file name in the guest exchange directory')
         if op == 'exchange-pull':
             p.add_argument('--file', required=True, help='file name in the guest exchange directory')
+        if op in ('create', 'recreate', 'smoke'):
+            p.add_argument('--provision', action='store_true',
+                           help='F-04.1: seed the provisioning manifest of the verified host '
+                                'stage (smoke: and run provision after create and recreate)')
         if op in ('create', 'start', 'recreate', 'netprobe', 'smoke'):
             p.add_argument('--ready-timeout', type=int, default=READY_TIMEOUT_S,
                            help='overall readiness ceiling in seconds')
@@ -5239,7 +5831,10 @@ def main(argv=None):
         elif op == 'provision-fetch':
             result = provision_fetch(ctx)
         elif op == 'create':
-            result = create(ctx, args.name, args.ready_timeout, canaries)
+            result = create(ctx, args.name, args.ready_timeout, canaries, provision=True) \
+                if args.provision else create(ctx, args.name, args.ready_timeout, canaries)
+        elif op == 'provision':
+            result = provision(ctx, args.name)
         elif op == 'start':
             result = start(ctx, args.name, args.ready_timeout)
         elif op == 'stop':
@@ -5247,7 +5842,7 @@ def main(argv=None):
         elif op == 'destroy':
             result = destroy(ctx, args.name)
         elif op == 'recreate':
-            result = recreate(ctx, args.name, args.ready_timeout, canaries)
+            result = recreate(ctx, args.name, args.ready_timeout, canaries, args.provision)
         elif op == 'exchange-push':
             result = exchange_push(ctx, args.name, args.repo, args.ref, args.bundle_name)
         elif op == 'exchange-pull':
@@ -5258,7 +5853,7 @@ def main(argv=None):
             result = netprobe(ctx, args.name, args.ready_timeout)
         elif op == 'smoke':
             result = smoke(ctx, args.name, args.canaries, args.durable, args.out,
-                           args.ready_timeout)
+                           args.ready_timeout, args.provision)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:

@@ -82,6 +82,10 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   - `lsblk -b` shows the root and scratch disks at their declared sizes.
 - **Why it matters:** these are the outer caps that decision 0001's uncapped
   per-conversation overrides rely on. Moby's per-container caps (F-04.1) sit inside them.
+- **Moby inside the ceilings (amended 2026-11-06, F-04.1):** in a provisioned guest,
+  Moby's daemon, its containers and its data root (on the scratch disk) consume the
+  guest's own vCPU, memory and disks. They add no provider resource: the ceilings above
+  bound them all, and any per-container caps are set inside them.
 
 ### P3 No automatic host shares
 - **strong:** no provider share exists except the one allowlisted exchange directory, if
@@ -135,6 +139,14 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
 - **strong:**
   - No docker, podman, incus or libvirt socket from the host is reachable in the guest.
   - No X11 or WSLg sockets.
+  - **The guest's own Moby (amended 2026-11-06, F-04.1).** A provisioned guest runs Moby
+    inside its own kernel. Its daemon socket `/run/docker.sock` (`root:docker`, `0660`),
+    containerd's `/run/containerd/containerd.sock` (`root:root`, `0660`) and every other
+    socket under `/run/docker` and `/run/containerd` are the guest's own, declared in the
+    profile (`provisioning.moby.sockets`). They are not host sockets and are allowed. Each
+    is owned by root, with group root or docker and no access for others. The daemon
+    listens on no TCP port. `agent` is not in group `docker` and cannot connect to any of
+    them.
   - A provider agent channel (incus-agent, QEMU guest agent) is declared, and is
     host→guest only.
 - **trusted-workload (WSL):**
@@ -149,7 +161,12 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     itself not a symlink. The guest's own `tmpfiles.d` may create it as an empty
     directory, which is not a display or IPC channel (amended 2026-11-06, decision
     0003 "Current facts");
-  - for WSL, launching a Windows `.exe` from inside the guest fails.
+  - for WSL, launching a Windows `.exe` from inside the guest fails;
+  - for a provisioned guest: the declared Moby sockets with their owner, group and mode;
+    from root's boot-time report, no socket under `/run/docker` or `/run/containerd` open
+    to others; as `agent`, `connect()` to each declared socket fails with `EACCES` and
+    `docker info` is refused; `agent` is not in group `docker`; and no TCP listener
+    belongs to dockerd, containerd or docker-proxy.
 
 ### P7 Network posture
 - **Shape:** NAT or a managed bridge, never bridged onto the Owner's LAN. Inbound

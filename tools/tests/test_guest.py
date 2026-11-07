@@ -1572,7 +1572,7 @@ class NetprobeSeed(TempState):
         gen = guest.load_seed_generator()
         profile, root = gen.load_profile(str(PROFILE_DIR))
         values = {'agent_ssh_public_key': gen.read_public_key(str(key.with_suffix('.pub'))),
-                  'scratch_device': gen.scratch_device(profile),
+                  'scratch_device': gen.scratch_device(profile), 'provision_manifest': '',
                   'instance_id': seed['instance_id'], 'instance_name': 'abc'}
         ordinary = gen.render(gen.read_templates(profile, root), values)
         self.assertEqual(seed['validation']['ordinary_user_data_sha256'],
@@ -2372,8 +2372,11 @@ class CompareInspect(LaunchRecord):
     def test_every_ordinary_check_is_classified(self):
         rec = identity_record(self.record, 'one')
         keys = {(p['property'], c['check']) for p in rec['properties'] for c in p['checks']}
-        self.assertEqual(keys - set(guest.CHECK_CLASSES), set())
-        self.assertEqual(set(guest.CHECK_CLASSES) - keys, set())   # no stale entry either
+        prov = provisioned_identity_record(self.record, 'one')
+        prov_keys = {(p['property'], c['check']) for p in prov['properties'] for c in p['checks']}
+        self.assertTrue(keys < prov_keys)                         # provisioning only adds checks
+        self.assertEqual(prov_keys - set(guest.CHECK_CLASSES), set())
+        self.assertEqual(set(guest.CHECK_CLASSES) - prov_keys, set())   # no stale entry either
         for klass, norm in guest.CHECK_CLASSES.values():
             self.assertIn(klass, (guest.STABLE, guest.PER_INSTANCE, guest.VOLATILE))
             self.assertTrue(norm is None or norm in guest.NORMALIZERS)
@@ -2705,6 +2708,261 @@ class Smoke(TempState):
 
 def secrets_token():
     return os.urandom(8).hex()
+
+
+# ---------------------------------------------------------------- provisioned instances (F-04.1b)
+
+PCONF = PROFILE['provisioning']
+IMAGE_ID = 'sha256:e8959dfc8e184f629b63dcd709f39b1cb0c804c8d19f34ba7a9e2cc8854042cb'
+LOCAL_TAG = PCONF['image']['local_tag']
+MANIFEST_SHA = 'f' * 64
+LISTENERS = ['LISTEN 0      128          0.0.0.0:22        0.0.0.0:*',
+             'LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*',
+             'LISTEN 0      128             [::]:22           [::]:*']
+MOBY_SOCKETS = ['/run/docker.sock', '/run/containerd/containerd.sock']
+
+
+def moby_facts(boot_id='boot-1', **override):
+    facts = {
+        'schema': guest.MOBY_FACTS_SCHEMA, 'boot_id': boot_id, 'collected_at': 'x',
+        'version': {'Server': {'Version': PCONF['moby']['server_version']},
+                    'Client': {'Version': PCONF['moby']['server_version']}},
+        'info': {'DockerRootDir': '/srv/scratch/docker', 'Driver': 'overlay2',
+                 'DefaultRuntime': 'runc', 'SecurityOptions': [
+                     'name=apparmor', 'name=seccomp,profile=builtin', 'name=cgroupns',
+                     'name=no-new-privileges']},
+        'image': {'Id': IMAGE_ID, 'RepoTags': [LOCAL_TAG], 'RepoDigests': []},
+        'images': [{'ID': IMAGE_ID, 'Repository': LOCAL_TAG.split(':')[0],
+                    'Tag': LOCAL_TAG.split(':')[1]}],
+        'containers': [],
+        'daemon_json': copy.deepcopy(PCONF['moby']['daemon_json']),
+        'tcp_listeners': [line + ' users:(("sshd",pid=600,fd=3))' for line in LISTENERS],
+        'sockets': [
+            {'path': '/run/containerd/containerd.sock', 'state': 'socket', 'owner': 'root',
+             'group': 'root', 'mode': '660'},
+            {'path': '/run/containerd/containerd.sock.ttrpc', 'state': 'socket', 'owner': 'root',
+             'group': 'root', 'mode': '660'},
+            {'path': '/run/docker.sock', 'state': 'socket', 'owner': 'root', 'group': 'docker',
+             'mode': '660'}],
+        'modules': {'loaded': ['br_netfilter', 'bridge', 'overlay'], 'overlay_filesystem': True},
+    }
+    facts.update(override)
+    return facts
+
+
+def provisioned_record(base_record):
+    record = copy.deepcopy(base_record)
+    record['provisioning'] = {'manifest_sha256': MANIFEST_SHA, 'lock_sha256': 'e' * 64,
+                              'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG, 'files': 7,
+                              'bytes': 1476711620, 'staged_dir': 'D:/x/provision/e'}
+    return record
+
+
+def provisioned_observation(record):
+    obs = passing_observation(record)
+    g = obs['guest']
+
+    def put(key, out, rc=0):
+        g[key] = {'rc': rc, 'out': out}
+    put('boot_id', 'boot-1')
+    put('moby_facts', json.dumps(moby_facts()))
+    put('provision_result', json.dumps({
+        'schema': guest.PROVISION_RESULT_SCHEMA, 'result': 'provisioned', 'failed_step': None,
+        'manifest': {'sha256': MANIFEST_SHA}, 'upload_present': False, 'staging_present': False}))
+    put('moby_sockets', '/run/docker.sock|root|docker|660|socket\n'
+                        '/run/containerd/containerd.sock|root|root|660|socket')
+    put('moby_agent_connect', '\n'.join(f'{s} EACCES' for s in MOBY_SOCKETS))
+    put('docker_as_agent', 'permission denied while trying to connect to the Docker daemon '
+                           'socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2F'
+                           'docker.sock/v1.45/info": dial unix /var/run/docker.sock: connect: '
+                           'permission denied', rc=1)
+    put('tcp_listeners', '\n'.join(LISTENERS))
+    put('agent_docker_group', 'agent\ndocker:x:104:')
+    put('provision_leftovers', 'absent /srv/scratch/agent/provision\n'
+                               'absent /var/lib/aieh/provision-staging')
+    put('provision_units', 'aieh-provision.path not-found inactive\n'
+                           'aieh-provision.service static inactive\n'
+                           'aieh-docker-facts.service enabled active')
+    g['storage_dirs']['out'] += ('\n/srv/scratch/docker|root|root|710|directory|/srv/scratch\n'
+                                 '/var/lib/aieh|root|root|755|directory|/')
+    g['socket_inventory']['out'] = '\n'.join(RECON_SOCKETS + MOBY_SOCKETS + ['end'])
+    g['unix_sockets']['out'] += ''.join(f'\nu_str LISTEN 0      4096 {s} {7000 + i} * 0'
+                                        for i, s in enumerate(MOBY_SOCKETS))
+    g['mgmt_paths']['out'] = ('present /var/run/docker.sock\npresent /run/docker.sock\n'
+                              'present /run/containerd/containerd.sock\nend')
+    g['findmnt']['out'] = findmnt_json(RECON_MOUNTS + [
+        ('/run/docker/netns/default', 'nsfs[net:[4026531840]]', 'nsfs')])
+    return obs
+
+
+def provisioned_identity_record(base_record, token):
+    record = identity_record(base_record, token)
+    prov = provisioned_record(base_record)
+    obs = provisioned_observation(prov)
+    for key in ('machine_id', 'host_keys', 'cpu_flags'):
+        obs['guest'][key] = record['observations']['guest'][key]
+    obs['known_hosts_fingerprints'] = record['observations']['known_hosts_fingerprints']
+    obs['input_digests'] = record['observations']['input_digests']
+    prov['instance']['instance_id'] = record['instance_id']
+    prov['inputs']['seed']['sha256'] = obs['input_digests']['seed']['sha256']
+    obs['guest']['cloud_init_query']['out'] = f'{record["instance_id"]} abc nocloud config-disk'
+    props = guest.evaluate(PROFILE, prov, obs)
+    return dict(record, properties=props, observations=obs,
+                verdicts={p['property']: p['verdict'] for p in props})
+
+
+class ProvisionedInspect(LaunchRecord):
+    """F-04.1b: a provisioned instance's added checks, with negative controls."""
+
+    def setUp(self):
+        super().setUp()
+        self.prov = provisioned_record(self.record)
+        self.obs = provisioned_observation(self.prov)
+
+    def props(self, obs=None, record=None):
+        return {p['property']: p for p in guest.evaluate(PROFILE, record or self.prov,
+                                                         obs or self.obs)}
+
+    def failing(self, obs=None, record=None):
+        return sorted((pid, c['check']) for pid, p in self.props(obs, record).items()
+                      for c in p['checks'] if c['verdict'] != 'PASS' and pid != 'profiles P10')
+
+    def test_passing_provisioned_observation(self):
+        props = self.props()
+        self.assertEqual(self.failing(), [])
+        self.assertEqual(props[guest.PROVISIONING_PROPERTY]['verdict'], 'PASS')
+        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 9)
+        names = {c['check'] for c in props['profiles P6']['checks']}
+        self.assertTrue({'guest Moby sockets', 'agent cannot reach Moby'} <= names)
+
+    def test_ordinary_instance_has_no_provisioning_entry_and_flags_a_docker_socket(self):
+        props = self.props(record=self.record)
+        self.assertNotIn(guest.PROVISIONING_PROPERTY, props)
+        self.assertIn(('profiles P6', 'host-management paths'), self.failing(record=self.record))
+        self.assertIn(('profiles P6', 'socket inventory'), self.failing(record=self.record))
+
+    def test_probes_only_for_a_provisioned_instance(self):
+        ordinary = dict(guest.guest_probes(PORTS, [], None, PROFILE['guest_storage']))
+        prov = dict(guest.guest_probes(PORTS, [], None, PROFILE['guest_storage'], PCONF))
+        added = set(prov) - set(ordinary)
+        self.assertEqual(added, {'boot_id', 'moby_facts', 'provision_result', 'moby_sockets',
+                                 'moby_agent_connect', 'docker_as_agent', 'tcp_listeners',
+                                 'agent_docker_group', 'provision_leftovers', 'provision_units'})
+        self.assertNotIn('/srv/scratch/docker', ordinary['storage_dirs'])
+        self.assertIn('/srv/scratch/docker', prov['storage_dirs'])
+        for name in added:                      # read-only, as agent: no privilege escalation
+            self.assertNotRegex(prov[name], r'\bsudo\b|\bsu\b|systemctl (start|stop|enable)')
+
+    def mutate(self, key, out, rc=None):
+        obs = copy.deepcopy(self.obs)
+        obs['guest'][key]['out'] = out
+        if rc is not None:
+            obs['guest'][key]['rc'] = rc
+        return obs
+
+    def facts(self, **override):
+        return self.mutate('moby_facts', json.dumps(moby_facts(**override)))
+
+    def test_agent_in_docker_group(self):
+        self.assertEqual(self.failing(self.mutate('agent_docker_group', 'agent docker\ndocker:x:104:agent')),
+                         [('profiles P8', 'agent not in group docker')])
+
+    def test_agent_can_connect(self):
+        obs = self.mutate('moby_agent_connect', '/run/docker.sock CONNECTED\n'
+                                                '/run/containerd/containerd.sock EACCES')
+        self.assertEqual(self.failing(obs), [('profiles P6', 'agent cannot reach Moby')])
+        obs = self.mutate('docker_as_agent', 'Client: ... Server: Containers: 0', rc=0)
+        self.assertEqual(self.failing(obs), [('profiles P6', 'agent cannot reach Moby')])
+
+    def test_socket_open_to_others_or_undeclared(self):
+        sockets = moby_facts()['sockets'] + [{'path': '/run/docker/metrics.sock', 'state': 'socket',
+                                              'owner': 'root', 'group': 'root', 'mode': '666'}]
+        self.assertEqual(self.failing(self.facts(sockets=sockets)),
+                         [('profiles P6', 'guest Moby sockets')])
+        obs = self.mutate('moby_sockets', '/run/docker.sock|root|agent|660|socket\n'
+                                          '/run/containerd/containerd.sock|root|root|660|socket')
+        self.assertEqual(self.failing(obs), [('profiles P6', 'guest Moby sockets')])
+
+    def test_an_unlisted_host_management_socket_still_fails(self):
+        obs = copy.deepcopy(self.obs)
+        obs['guest']['mgmt_paths']['out'] = obs['guest']['mgmt_paths']['out'].replace(
+            'end', 'present /run/podman/podman.sock\nend')
+        self.assertEqual(self.failing(obs), [('profiles P6', 'host-management paths')])
+
+    def test_tcp_listener_of_dockerd(self):
+        listeners = moby_facts()['tcp_listeners'] + [
+            'LISTEN 0 4096 0.0.0.0:2375 0.0.0.0:* users:(("dockerd",pid=900,fd=9))']
+        obs = self.facts(tcp_listeners=listeners)
+        obs['guest']['tcp_listeners']['out'] += '\nLISTEN 0 4096 0.0.0.0:2375 0.0.0.0:*'
+        self.assertEqual(self.failing(obs), [('profiles P7', 'guest TCP listeners (Moby)')])
+        obs = self.mutate('tcp_listeners', '\n'.join(LISTENERS + ['LISTEN 0 5 0.0.0.0:8000 0.0.0.0:*']))
+        self.assertEqual(self.failing(obs), [('profiles P7', 'guest TCP listeners (Moby)')])
+
+    def test_image_mismatches(self):
+        for override in ({'image': {'Id': 'sha256:' + '1' * 64, 'RepoTags': [LOCAL_TAG]}},
+                         {'image': {'Id': IMAGE_ID, 'RepoTags': [
+                             LOCAL_TAG, 'ghcr.io/openhands/agent-server:i-was-a-digest']}},
+                         {'images': moby_facts()['images'] * 2}):
+            self.assertEqual(self.failing(self.facts(**override)),
+                             [(guest.PROVISIONING_PROPERTY, 'image')], override)
+
+    def test_daemon_and_version_mismatches(self):
+        info = dict(moby_facts()['info'], SecurityOptions=['name=seccomp,profile=builtin'])
+        self.assertEqual(self.failing(self.facts(info=info)),
+                         [(guest.PROVISIONING_PROPERTY, 'Moby daemon')])
+        info = dict(moby_facts()['info'], DockerRootDir='/var/lib/docker')
+        self.assertEqual(self.failing(self.facts(info=info)),
+                         [(guest.PROVISIONING_PROPERTY, 'Moby daemon')])
+        daemon = dict(PCONF['moby']['daemon_json'], hosts=['tcp://0.0.0.0:2375'])
+        self.assertEqual(self.failing(self.facts(daemon_json=daemon)),
+                         [(guest.PROVISIONING_PROPERTY, 'Moby daemon')])
+        self.assertEqual(self.failing(self.facts(version={'Server': {'Version': '27.0.0'}})),
+                         [(guest.PROVISIONING_PROPERTY, 'Moby server version')])
+
+    def test_stale_facts_failed_root_step_leftovers_and_units(self):
+        self.assertIn((guest.PROVISIONING_PROPERTY, 'facts report of this boot'),
+                      self.failing(self.facts(boot_id='boot-0')))
+        obs = self.mutate('provision_result', json.dumps({
+            'schema': guest.PROVISION_RESULT_SCHEMA, 'result': 'failed', 'failed_step': 'verify',
+            'manifest': {'sha256': MANIFEST_SHA}, 'upload_present': True, 'staging_present': True}))
+        self.assertEqual(self.failing(obs), [(guest.PROVISIONING_PROPERTY, 'root step result')])
+        obs = self.mutate('provision_leftovers', 'present /srv/scratch/agent/provision\n'
+                                                 'absent /var/lib/aieh/provision-staging')
+        self.assertEqual(self.failing(obs),
+                         [(guest.PROVISIONING_PROPERTY, 'upload and staging removed')])
+        obs = self.mutate('provision_units', 'aieh-provision.path enabled active\n'
+                                             'aieh-provision.service static inactive\n'
+                                             'aieh-docker-facts.service enabled active')
+        self.assertEqual(self.failing(obs), [(guest.PROVISIONING_PROPERTY, 'root step disabled')])
+        self.assertIn((guest.PROVISIONING_PROPERTY, 'containers'), self.failing(
+            self.facts(containers=[{'ID': 'abc'}])))
+
+    def test_moby_mounts_are_declared_optional(self):
+        storage = PROFILE['guest_storage']
+        mounts = guest.flatten_mounts(findmnt_json(RECON_MOUNTS + [
+            ('/run/docker/netns/default', 'nsfs[net:[4026531840]]', 'nsfs'),
+            ('/run/docker/netns/1a2b3c4d5e6f', 'nsfs[net:[4026532300]]', 'nsfs'),
+            ('/srv/scratch/docker/overlay2/' + 'a' * 64 + '/merged', 'overlay', 'overlay'),
+            ('/srv/scratch/docker/containers/' + 'b' * 64 + '/mounts/shm', 'shm', 'tmpfs')]))
+        serials, _ = guest.lsblk_disks(lsblk_json())
+        diff = guest.compare_mounts(storage, mounts, serials)
+        self.assertEqual((diff['unlisted'], diff['missing']), ([], []))
+        mounts = guest.flatten_mounts(findmnt_json(RECON_MOUNTS + [
+            ('/var/lib/docker/overlay2/x/merged', 'overlay', 'overlay')]))
+        self.assertEqual(len(guest.compare_mounts(storage, mounts, serials)['unlisted']), 1)
+        self.assertTrue(guest.source_matches('nsfs[net:[*]]', 'nsfs[net:[4026531840]]'))
+        self.assertFalse(guest.source_matches('nsfs[net:[*]]', 'nsfs[mnt:[4026531840]]'))
+        self.assertFalse(guest.source_matches('overlay', 'overlayX'))
+
+    def test_provisioned_records_compare_across_start_and_recreate(self):
+        a = provisioned_identity_record(self.record, 'one')
+        b = provisioned_identity_record(self.record, 'one')
+        c = provisioned_identity_record(self.record, 'two')
+        self.assertEqual(guest.compare_inspect(PROFILE, a, b, 'start')['result'], 'PASS')
+        self.assertEqual(guest.compare_inspect(PROFILE, a, c, 'recreate')['result'], 'PASS',
+                         guest.compare_inspect(PROFILE, a, c, 'recreate')['not_ok'])
+        ok, summary = guest.inspect_ok(a)
+        self.assertTrue(ok, summary)
 
 
 if __name__ == '__main__':

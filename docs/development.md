@@ -165,6 +165,8 @@ Only what is listed as verified has been exercised.
 | `guest:check-surfaces PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py check-surfaces --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | Startup inspection test for profiles P3 to P6 (F-03.3.1): exit 0 only when all four PASS. |
 | `guest:smoke PROFILE=… STATE_DIR=… NAME=<name> CANARIES=<dir> DURABLE=<dir>` | `python -I -B tools/guest.py smoke --profile <dir> --state-dir <dir> --name <name> --canaries <dir> --durable <dir> [--durable <dir> …] [--out <file>]` | no | The F-03.4 provision/inspect/teardown smoke test (profiles P10) on a fresh instance name. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:provision-fetch PROFILE=… STATE_DIR=…` | `python -I -B tools/guest.py provision-fetch --profile <dir> --state-dir <dir>` | yes | Host side of guest provisioning (F-04.1a): downloads the profile's provision-lock artifacts from their upstreams (snapshot.debian.org, GitHub, ghcr.io through the pinned crane), verifies each against the lock and stages them under `<state>\provision\<lock sha256>\`. About 1.5 GB on the first run; a verified stage is reused. Runs nothing downloaded except crane. |
+| `guest:create-provisioned PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name> --provision` | no | `create` whose seed carries the provisioning manifest of the verified `provision-fetch` stage (F-04.1b). `recreate` and `smoke` take `--provision` too. |
+| `guest:provision PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py provision --profile <dir> --state-dir <dir> --name <name>` | no | Guest side of provisioning (F-04.1b): transfers the stage over SFTP, triggers the seeded single-use root step and checks its `RESULT.json`. See [Execution guests](#execution-guests). |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -349,6 +351,29 @@ defaults them.
   download is kept as `*.rejected` and nothing is staged. No `.deb` is unpacked and no
   image is run on the host. The run is in
   [`evidence/F-04.1a-provision-pins-fetch.md`](../evidence/F-04.1a-provision-pins-fetch.md).
+- `create --provision` and `provision` (F-04.1b) are the guest side. `create --provision`
+  re-verifies the stage and writes its manifest (each `.deb`, the image archive and the
+  release binary with size and sha256; the locked image ID; the local tag
+  `aieh/agent-server:1.60.1-b43ee580`; the declared `daemon.json`) into the seed, which
+  always carries the single-use root step ([seed README](../profiles/seed/README.md));
+  the launch record keeps the manifest digest. `provision` then checks that the stage
+  still gives that manifest, that the trigger is armed and that nothing was uploaded
+  before; copies the files by SFTP into `/srv/scratch/agent/provision/` within the
+  profile's `provisioning.upload` bounds; checks each in the guest; creates `READY`; and
+  waits, in one SSH session, on an inotify event for
+  `/var/lib/aieh/provision/RESULT.json` under the `root_step.timeout_s` ceiling (waking
+  every 10 s only to notice a failed unit). The root step copies to a root-only staging
+  directory, verifies, writes `daemon.json`, installs with `apt-get install
+  --no-install-recommends ./…` (never `apt-get update`), loads the image, checks its ID,
+  keeps only the local tag, runs it once with `--entrypoint true`, enables the boot-time
+  facts report, deletes the upload and the staging directory, disables its trigger and
+  writes `RESULT.json` last. `provision` fetches and checks it into
+  `<instance>\provision\` and writes a record with the timings. It is single use:
+  recovery is `recreate --provision`, then `provision`. `inspect` of a provisioned
+  instance adds the Moby checks (P6 sockets and the `agent` refusal, P7 TCP listeners,
+  P8 group, and a `provisioning (F-04.1)` entry: version, daemon, image, containers,
+  modules, leftovers, units), reading root's boot-time report
+  `/run/aieh/docker-facts.json` as `agent`.
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);

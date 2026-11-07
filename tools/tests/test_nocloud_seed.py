@@ -34,7 +34,7 @@ NAME = 'seed-test'
 INSTANCE_ID = 'seed-test-00000000-0000-4000-8000-000000000000'
 # The sha256 of seed.iso for the fixed input above with key_line(bytes(range(32)),
 # 'aieh-test'). It changes only when a template pin or the generator's output changes.
-FIXED_INPUT_SHA256 = '91abb154f0554cbc24a7d7ed840219715ea73edaa2d4f7c84fcf3d80be3e1cf6'
+FIXED_INPUT_SHA256 = '5143f98fee9d7334c492c04e01dc7c1d2095b051cbc78a8d5f8cbfcb3632586e'
 
 
 def key_line(raw32, comment='aieh-test'):
@@ -257,7 +257,8 @@ class RoundTrip(SeedTestCase):
         def text(rel):
             return (REPO / 'profiles' / 'seed' / rel).read_text(encoding='utf-8')
         user = text('user-data.tmpl').replace('{{agent_ssh_public_key}}', KEY_A).replace(
-            '{{scratch_device}}', '/dev/disk/by-id/virtio-scratch')
+            '{{scratch_device}}', '/dev/disk/by-id/virtio-scratch').replace(
+            '{{provision_manifest}}', '')
         meta = text('meta-data.tmpl').replace('{{instance_id}}', INSTANCE_ID).replace(
             '{{instance_name}}', NAME)
         return {'user-data': user.encode(), 'meta-data': meta.encode(),
@@ -460,6 +461,72 @@ class Refusals(SeedTestCase):
         self.assertTrue(proc.stderr.startswith('REFUSED: public key'), proc.stderr)
         self.assertEqual(proc.stdout, '')
         self.assertEqual(list(inst.iterdir()), [])
+
+
+MANIFEST = (json.dumps({'schema': nocloud_seed.MANIFEST_SCHEMA, 'files': [
+    {'name': 'a.deb', 'role': 'deb', 'size': 1, 'sha256': '0' * 64}]}, indent=1) + '\n').encode()
+
+
+class ProvisionManifest(SeedTestCase):
+    """F-04.1b: the third user-data placeholder carries the provisioning manifest."""
+
+    def user_data(self, inst):
+        return read_iso((inst / 'seed.iso').read_bytes())['joliet']['files']['user-data'][1]
+
+    def test_ordinary_seed_has_an_empty_manifest(self):
+        inst, result = self.generate('o')
+        self.assertIsNone(result['provision_manifest_sha256'])
+        data = self.user_data(inst)
+        self.assertIn(b'    encoding: b64\n    content: ""\n', data)
+        self.assertNotIn(b'{{', data)
+
+    def test_manifest_is_written_base64_and_recorded(self):
+        inst = self.instance('m')
+        result = nocloud_seed.generate(PROFILE, inst, NAME, self.key_file(KEY_A), INSTANCE_ID,
+                                       MANIFEST)
+        self.assertEqual(result['provision_manifest_sha256'], hashlib.sha256(MANIFEST).hexdigest())
+        data = self.user_data(inst).decode('ascii')
+        start = data.index('path: /etc/aieh/provision.json')
+        line = [l for l in data[start:].splitlines() if l.strip().startswith('content:')][0]
+        self.assertEqual(base64.b64decode(line.split('"')[1]), MANIFEST)
+
+    def test_manifest_determinism_and_difference(self):
+        a, b, c = self.instance('a'), self.instance('b'), self.instance('c')
+        other = MANIFEST.replace(b'a.deb', b'b.deb')
+        ra = nocloud_seed.generate(PROFILE, a, NAME, self.key_file(KEY_A, 'a.pub'), INSTANCE_ID, MANIFEST)
+        rb = nocloud_seed.generate(PROFILE, b, NAME, self.key_file(KEY_A, 'b.pub'), INSTANCE_ID, MANIFEST)
+        rc = nocloud_seed.generate(PROFILE, c, NAME, self.key_file(KEY_A, 'c.pub'), INSTANCE_ID, other)
+        self.assertEqual(ra['sha256'], rb['sha256'])
+        self.assertNotEqual(ra['sha256'], rc['sha256'])
+        self.assertNotEqual(ra['sha256'], FIXED_INPUT_SHA256)
+
+    def test_bad_manifests_refused(self):
+        for label, raw, fragment in (
+                ('json', b'not json\n', 'not one ASCII JSON'),
+                ('schema', b'{"schema": "x"}\n', 'not a ai-engineering-harness'),
+                ('list', b'[]\n', 'not a ai-engineering-harness'),
+                ('cr', MANIFEST.replace(b'\n', b'\r\n'), 'has CR'),
+                ('big', b' ' * (nocloud_seed.MANIFEST_MAX + 1), 'larger than'),
+                ('empty', b'', 'empty'),
+                ('utf8', MANIFEST.replace(b'a.deb', 'ä.deb'.encode()), 'not one ASCII JSON')):
+            inst = self.instance(label)
+            self.assertRefused(fragment, PROFILE, inst, NAME, self.key_file(KEY_A, label + '.pub'),
+                               INSTANCE_ID, raw)
+            self.assertEqual(list(inst.iterdir()), [], label)
+
+    def test_cli_manifest_option(self):
+        inst = self.instance('cli')
+        manifest = self.tmp / 'manifest.json'
+        manifest.write_bytes(MANIFEST)
+        proc = subprocess.run(
+            [sys.executable, '-I', '-B', str(GENERATOR), '--profile', str(PROFILE),
+             '--instance-dir', str(inst), '--instance-name', NAME, '--public-key',
+             str(self.key_file(KEY_A)), '--instance-id', INSTANCE_ID,
+             '--provision-manifest', str(manifest)],
+            capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)['provision_manifest_sha256'],
+                         hashlib.sha256(MANIFEST).hexdigest())
 
 
 if __name__ == '__main__':

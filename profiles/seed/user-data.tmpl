@@ -1,8 +1,12 @@
 #cloud-config
 # Seed template for strong-tier execution guests (profiles P5, P8). It holds only
 # the per-instance public key and non-secret configuration. The generator
-# substitutes exactly two placeholders, the agent's public key and the profile's
-# scratch device; profiles/seed/README.md names them. This comment names neither.
+# substitutes exactly three placeholders: the agent's public key, the profile's
+# scratch device and the provisioning manifest (base64; empty for an ordinary guest).
+# profiles/seed/README.md names them. This comment names none of them.
+# The provisioning files (F-04.1, decision 0006) are inert without a manifest: both
+# units carry ConditionFileNotEmpty on it, and runcmd enables the trigger only when
+# the manifest is not empty.
 users:
   - name: agent
     gecos: AI Engineering Harness agent
@@ -30,6 +34,561 @@ write_files:
       AllowTcpForwarding no
       X11Forwarding no
       PermitTunnel no
+  - path: /etc/aieh/provision.json
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: "{{provision_manifest}}"
+  - path: /usr/local/sbin/aieh-provision
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/python3
+      # aieh-provision: the single-use root provisioning step of F-04.1 (decision 0006).
+      # Seeded by cloud-init; never downloaded. Modes:
+      #   provision  run once by aieh-provision.service when the host's READY marker appears:
+      #              copy the upload into a root-only staging directory, verify every sha256
+      #              against the seeded manifest, write daemon.json, install the packages with
+      #              apt from the local files, docker load the image, check its ID, fix its
+      #              tag, run it once, enable the facts unit, delete the staging directory and
+      #              the upload, disable the trigger, then write RESULT.json (last).
+      #   facts      run at every boot by aieh-docker-facts.service: a read-only report of the
+      #              daemon, the image store and the sockets for inspect.
+      # It reads only the seeded manifest and the files it names. It prints step names and
+      # outcomes only (journal and console); it holds and prints no secret.
+      import grp
+      import hashlib
+      import json
+      import os
+      import pwd
+      import re
+      import shutil
+      import stat
+      import subprocess
+      import sys
+      import time
+
+      MANIFEST = '/etc/aieh/provision.json'
+      UPLOAD = '/srv/scratch/agent/provision'
+      READY = 'READY'
+      STAGING = '/var/lib/aieh/provision-staging'
+      RESULT_DIR = '/var/lib/aieh/provision'
+      RESULT = RESULT_DIR + '/RESULT.json'
+      FACTS_DIR = '/run/aieh'
+      FACTS = FACTS_DIR + '/docker-facts.json'
+      DAEMON_JSON = '/etc/docker/daemon.json'
+      PATH_UNIT = 'aieh-provision.path'
+      PATH_UNIT_FILE = '/etc/systemd/system/' + PATH_UNIT
+      FACTS_UNIT = 'aieh-docker-facts.service'
+      AGENT = 'agent'
+      MANIFEST_SCHEMA = 'ai-engineering-harness/profiles/provision-manifest/v1'
+      RESULT_SCHEMA = 'ai-engineering-harness/profiles/provision-result/v1'
+      FACTS_SCHEMA = 'ai-engineering-harness/profiles/moby-facts/v1'
+      NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._+~-]{0,200}$')
+      HEX64 = re.compile(r'^[0-9a-f]{64}$')
+      DIGEST = re.compile(r'^sha256:[0-9a-f]{64}$')
+      ROLES = ('deb', 'image-archive', 'release-binary')
+      MODULES = ('overlay', 'br_netfilter', 'bridge', 'veth', 'nf_tables', 'nf_nat', 'nft_chain_nat',
+                 'iptable_nat', 'xt_MASQUERADE')
+      MOBY_SOCKET_DIRS = ('/run/docker', '/run/containerd')
+      MOBY_SOCKETS = ('/run/docker.sock',)
+      ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/root',
+             'DEBIAN_FRONTEND': 'noninteractive', 'DEBCONF_NONINTERACTIVE_SEEN': 'true'}
+      # docker's Go template for one JSON document, assembled so that no doubled brace occurs in
+      # this file (the seed generator treats doubled braces as placeholders)
+      GO_JSON = '{' + '{json .}' + '}'
+
+
+      class Failed(Exception):
+          pass
+
+
+      def now():
+          return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+      def say(text):
+          print('aieh-provision: ' + text, flush=True)
+
+
+      def tail(text, limit=2000):
+          text = (text or '').strip()
+          return text[-limit:]
+
+
+      def run(argv, timeout, cwd=None):
+          try:
+              r = subprocess.run(argv, cwd=cwd, env=ENV, stdin=subprocess.DEVNULL,
+                                 capture_output=True, timeout=timeout, check=False)
+          except subprocess.TimeoutExpired:
+              return 124, '', argv[0] + ': timed out after ' + str(timeout) + ' s'
+          except OSError as exc:
+              return 127, '', argv[0] + ': ' + str(exc)
+          return r.returncode, r.stdout.decode('utf-8', 'replace'), r.stderr.decode('utf-8', 'replace')
+
+
+      def must(step, argv, timeout, cwd=None):
+          rc, out, err = run(argv, timeout, cwd)
+          if rc != 0:
+              raise Failed(step + ': ' + ' '.join(argv[:3]) + ' exited ' + str(rc) + ': ' +
+                           tail(err or out, 600))
+          return out
+
+
+      def json_lines(text):
+          return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+      def write_json(path, data, mode):
+          tmp = path + '.partial'
+          if os.path.lexists(tmp):
+              os.unlink(tmp)
+          fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+          with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+              json.dump(data, handle, indent=2, sort_keys=True)
+              handle.write('\n')
+              handle.flush()
+              os.fsync(handle.fileno())
+          os.chmod(tmp, mode)
+          os.rename(tmp, path)
+
+
+      def sha256_path(path):
+          digest = hashlib.sha256()
+          fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+          with os.fdopen(fd, 'rb') as handle:
+              for block in iter(lambda: handle.read(1 << 20), b''):
+                  digest.update(block)
+          return digest.hexdigest()
+
+
+      def loaded_modules():
+          names = set()
+          with open('/proc/modules', encoding='ascii') as handle:
+              for line in handle:
+                  names.add(line.split(' ', 1)[0])
+          with open('/proc/filesystems', encoding='ascii') as handle:
+              overlay_fs = any(line.split()[-1] == 'overlay' for line in handle if line.strip())
+          return {'loaded': sorted(m for m in MODULES if m in names), 'overlay_filesystem': overlay_fs}
+
+
+      # ---------------------------------------------------------------- the manifest
+
+      def load_manifest():
+          st = os.lstat(MANIFEST)
+          if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
+              raise Failed('manifest: ' + MANIFEST + ' is not a root-only regular file')
+          with open(MANIFEST, encoding='utf-8') as handle:
+              manifest = json.load(handle)
+          if manifest.get('schema') != MANIFEST_SCHEMA:
+              raise Failed('manifest: schema is not ' + MANIFEST_SCHEMA)
+          files = manifest.get('files')
+          if not isinstance(files, list) or not files:
+              raise Failed('manifest: no files')
+          names = set()
+          for entry in files:
+              name, size, digest = entry.get('name'), entry.get('size'), entry.get('sha256')
+              if not isinstance(name, str) or not NAME.match(name) or name == READY or name in names:
+                  raise Failed('manifest: bad or repeated file name ' + repr(name))
+              if not isinstance(size, int) or size < 0 or not HEX64.match(str(digest)):
+                  raise Failed('manifest: ' + name + ' needs a size and a sha256')
+              if entry.get('role') not in ROLES:
+                  raise Failed('manifest: ' + name + ' has an unknown role')
+              names.add(name)
+          image = manifest.get('image') or {}
+          if not DIGEST.match(str(image.get('id'))) or image.get('archive') not in names or \
+                  not isinstance(image.get('local_tag'), str) or \
+                  not isinstance(image.get('archive_repo_tags'), list):
+              raise Failed('manifest: image needs id, archive, local_tag and archive_repo_tags')
+          docker = manifest.get('docker') or {}
+          if not isinstance(docker.get('daemon_json'), dict) or not docker.get('server_version'):
+              raise Failed('manifest: docker needs daemon_json and server_version')
+          return manifest
+
+
+      # ---------------------------------------------------------------- facts (every boot)
+
+      def socket_facts():
+          out = []
+          paths = list(MOBY_SOCKETS)
+          for top in MOBY_SOCKET_DIRS:
+              for dirpath, dirnames, filenames in os.walk(top):
+                  for name in sorted(dirnames + filenames):
+                      path = os.path.join(dirpath, name)
+                      try:
+                          if stat.S_ISSOCK(os.lstat(path).st_mode):
+                              paths.append(path)
+                      except OSError:
+                          pass
+          for path in sorted(set(paths)):
+              try:
+                  st = os.lstat(path)
+              except OSError:
+                  out.append({'path': path, 'state': 'absent'})
+                  continue
+              out.append({'path': path, 'state': 'socket' if stat.S_ISSOCK(st.st_mode) else 'other',
+                          'owner': pwd.getpwuid(st.st_uid).pw_name,
+                          'group': grp.getgrgid(st.st_gid).gr_name,
+                          'mode': format(stat.S_IMODE(st.st_mode), 'o')})
+          return out
+
+
+      def docker_json(argv, many=False):
+          rc, out, err = run(['docker'] + argv, 120)
+          if rc != 0:
+              return {'rc': rc, 'error': tail(err or out, 600)}
+          try:
+              return json_lines(out) if many else json.loads(out)
+          except ValueError:
+              return {'rc': rc, 'error': 'unparsable: ' + tail(out, 600)}
+
+
+      def facts():
+          manifest = load_manifest()
+          tag = manifest['image']['local_tag']
+          with open('/proc/sys/kernel/random/boot_id', encoding='ascii') as handle:
+              boot_id = handle.read().strip()
+          info = docker_json(['info', '--format', GO_JSON])
+          keep = ('ServerVersion', 'DockerRootDir', 'Driver', 'DefaultRuntime', 'SecurityOptions',
+                  'Runtimes', 'CgroupDriver', 'CgroupVersion', 'NCPU', 'MemTotal', 'Images',
+                  'Containers', 'LoggingDriver', 'KernelVersion', 'OperatingSystem', 'Warnings',
+                  'IPv4Forwarding', 'BridgeNfIptables', 'BridgeNfIp6tables', 'LiveRestoreEnabled')
+          if isinstance(info, dict) and 'rc' not in info:
+              info = {k: info.get(k) for k in keep}
+              if isinstance(info.get('Runtimes'), dict):
+                  info['Runtimes'] = sorted(info['Runtimes'])
+          version = docker_json(['version', '--format', GO_JSON])
+          image = docker_json(['image', 'inspect', tag])
+          if isinstance(image, list) and len(image) == 1:
+              image = {k: image[0].get(k) for k in ('Id', 'RepoTags', 'RepoDigests', 'Created')}
+          try:
+              with open(DAEMON_JSON, encoding='utf-8') as handle:
+                  daemon_json = json.load(handle)
+          except (OSError, ValueError) as exc:
+              daemon_json = {'error': str(exc)}
+          rc, listeners, err = run(['ss', '-ltnpH'], 30)
+          data = {'schema': FACTS_SCHEMA, 'boot_id': boot_id, 'collected_at': now(),
+                  'version': version, 'info': info, 'images': docker_json(
+                      ['image', 'ls', '--all', '--no-trunc', '--format', GO_JSON], many=True),
+                  'image': image, 'containers': docker_json(
+                      ['ps', '--all', '--no-trunc', '--format', GO_JSON], many=True),
+                  'daemon_json': daemon_json, 'tcp_listeners': listeners.splitlines() if rc == 0
+                  else {'rc': rc, 'error': tail(err, 600)},
+                  'sockets': socket_facts(), 'modules': loaded_modules()}
+          units = ('docker.service', 'docker.socket', 'containerd.service', FACTS_UNIT)
+          data['units'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip() for u in units}
+          os.makedirs(FACTS_DIR, mode=0o755, exist_ok=True)
+          write_json(FACTS, data, 0o644)
+          say('facts written for boot ' + boot_id)
+          return 0
+
+
+      # ---------------------------------------------------------------- provision (once)
+
+      def copy_upload(manifest, agent_uid):
+          st = os.lstat(UPLOAD)
+          if not stat.S_ISDIR(st.st_mode) or st.st_uid != agent_uid:
+              raise Failed('copy: ' + UPLOAD + ' is not a directory owned by agent (or is a link)')
+          dirfd = os.open(UPLOAD, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+          copied = []
+          try:
+              extra = sorted(set(os.listdir(dirfd)) - {f['name'] for f in manifest['files']} - {READY})
+              for entry in manifest['files']:
+                  name, size = entry['name'], entry['size']
+                  src = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
+                  try:
+                      if not stat.S_ISREG(os.fstat(src).st_mode):
+                          raise Failed('copy: ' + name + ' is not a regular file')
+                      dst = os.open(os.path.join(STAGING, name),
+                                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                      count = 0
+                      with os.fdopen(dst, 'wb') as out:
+                          while True:
+                              block = os.read(src, 1 << 20)
+                              if not block:
+                                  break
+                              count += len(block)
+                              if count > size:
+                                  raise Failed('copy: ' + name + ' is larger than the manifest says')
+                              out.write(block)
+                          out.flush()
+                          os.fsync(out.fileno())
+                  finally:
+                      os.close(src)
+                  if count != size:
+                      raise Failed('copy: ' + name + ' has ' + str(count) + ' bytes, the manifest says ' +
+                                   str(size))
+                  copied.append(name)
+          finally:
+              os.close(dirfd)
+          return {'copied': copied, 'ignored_extra_names': extra}
+
+
+      def verify_staging(manifest):
+          out = []
+          for entry in manifest['files']:
+              path = os.path.join(STAGING, entry['name'])
+              st = os.lstat(path)
+              got = sha256_path(path)
+              ok = stat.S_ISREG(st.st_mode) and st.st_size == entry['size'] and got == entry['sha256']
+              out.append({'name': entry['name'], 'role': entry['role'], 'size': st.st_size,
+                          'sha256': got, 'match': ok})
+              if not ok:
+                  raise Failed('verify: ' + entry['name'] + ' has sha256 ' + got + ', the manifest says ' +
+                               entry['sha256'])
+          return {'files': out}
+
+
+      def write_daemon_json(manifest):
+          if os.path.lexists(DAEMON_JSON):
+              raise Failed('daemon-json: ' + DAEMON_JSON + ' already exists')
+          os.makedirs(os.path.dirname(DAEMON_JSON), mode=0o755, exist_ok=True)
+          write_json(DAEMON_JSON, manifest['docker']['daemon_json'], 0o644)
+          return {'path': DAEMON_JSON, 'content': manifest['docker']['daemon_json']}
+
+
+      def apt_install(manifest):
+          debs = ['./' + f['name'] for f in manifest['files'] if f['role'] == 'deb']
+          before = loaded_modules()
+          out = must('apt-install', ['apt-get', 'install', '-y', '--no-install-recommends'] + debs,
+                     1800, cwd=STAGING)
+          names = [p['name'] for p in manifest.get('packages') or []]
+          query = must('apt-install', ['dpkg-query', '-W', '-f', '${Package} ${Version} ${Status}\\n']
+                       + names, 60)
+          installed = {}
+          for line in query.splitlines():
+              parts = line.split(' ', 2)
+              if len(parts) == 3:
+                  installed[parts[0]] = {'version': parts[1], 'status': parts[2]}
+          for p in manifest.get('packages') or []:
+              got = installed.get(p['name']) or {}
+              if got.get('version') != p['version'] or got.get('status') != 'install ok installed':
+                  raise Failed('apt-install: ' + p['name'] + ' is ' + repr(got) + ', the manifest says ' +
+                               p['version'])
+          return {'debs': debs, 'installed': installed, 'modules_before': before,
+                  'output_tail': tail(out, 1500)}
+
+
+      def docker_ready(manifest):
+          must('docker-ready', ['systemctl', 'start', 'docker.service'], 300)
+          version = json.loads(must('docker-ready', ['docker', 'version', '--format', GO_JSON], 120))
+          server = (version.get('Server') or {}).get('Version')
+          if server != manifest['docker']['server_version']:
+              raise Failed('docker-ready: server version ' + repr(server) + ', the manifest says ' +
+                           manifest['docker']['server_version'])
+          return {'server_version': server, 'client_version': (version.get('Client') or {}).get('Version'),
+                  'modules_after_start': loaded_modules()}
+
+
+      def inspect_image(ref):
+          data = json.loads(must('image', ['docker', 'image', 'inspect', ref], 120))
+          if not isinstance(data, list) or len(data) != 1:
+              raise Failed('image: docker image inspect ' + ref + ' did not return one image')
+          return {k: data[0].get(k) for k in ('Id', 'RepoTags', 'RepoDigests')}
+
+
+      def load_image(manifest):
+          archive = os.path.join(STAGING, manifest['image']['archive'])
+          out = must('docker-load', ['docker', 'load', '--input', archive], 1800)
+          return {'output': tail(out, 1000)}
+
+
+      def check_image_id(manifest):
+          image = manifest['image']
+          found = [inspect_image(tag) for tag in image['archive_repo_tags']]
+          ids = sorted({f['Id'] for f in found})
+          if ids != [image['id']]:
+              raise Failed('image-id: the loaded image ID is ' + repr(ids) + ', the manifest says ' +
+                           image['id'])
+          return {'id': ids[0], 'loaded_as': found}
+
+
+      def fix_tag(manifest):
+          image = manifest['image']
+          must('tag', ['docker', 'tag', image['id'], image['local_tag']], 120)
+          removed = []
+          for tag in image['archive_repo_tags']:
+              if tag != image['local_tag']:
+                  must('tag', ['docker', 'image', 'rm', tag], 120)
+                  removed.append(tag)
+          now_tagged = inspect_image(image['local_tag'])
+          if now_tagged['Id'] != image['id'] or now_tagged['RepoTags'] != [image['local_tag']]:
+              raise Failed('tag: ' + image['local_tag'] + ' is ' + repr(now_tagged))
+          ids = must('tag', ['docker', 'image', 'ls', '--all', '--quiet', '--no-trunc'], 120).split()
+          if sorted(set(ids)) != [image['id']]:
+              raise Failed('tag: the image store holds ' + repr(sorted(set(ids))))
+          return {'removed_tags': removed, 'image': now_tagged, 'store': sorted(set(ids))}
+
+
+      def verify_run(manifest):
+          tag = manifest['image']['local_tag']
+          argv = ['docker', 'run', '--rm', '--entrypoint', 'true', tag]
+          t0 = time.time()
+          rc, out, err = run(argv, 300)
+          left = must('run', ['docker', 'ps', '--all', '--quiet', '--no-trunc'], 60).split()
+          result = {'argv': argv, 'rc': rc, 'seconds': round(time.time() - t0, 1),
+                    'output': tail(out + err, 600), 'containers_left': left}
+          if rc != 0 or left:
+              raise Failed('run: ' + ' '.join(argv) + ' exited ' + str(rc) + ' (containers left ' +
+                           repr(left) + '): ' + tail(err or out, 400))
+          return result
+
+
+      def enable_facts():
+          must('facts', ['systemctl', 'enable', FACTS_UNIT], 60)
+          must('facts', ['systemctl', 'start', FACTS_UNIT], 300)
+          with open(FACTS, encoding='utf-8') as handle:
+              data = json.load(handle)
+          return {'unit': FACTS_UNIT, 'enabled': run(['systemctl', 'is-enabled', FACTS_UNIT], 30)[1].strip(),
+                  'boot_id': data.get('boot_id'), 'info': data.get('info'),
+                  'sockets': data.get('sockets'), 'tcp_listeners': data.get('tcp_listeners'),
+                  'modules': data.get('modules')}
+
+
+      def cleanup():
+          shutil.rmtree(STAGING)
+          st = os.lstat(UPLOAD)
+          if not stat.S_ISDIR(st.st_mode):
+              raise Failed('cleanup: ' + UPLOAD + ' is not a directory')
+          shutil.rmtree(UPLOAD)
+          left = [p for p in (STAGING, UPLOAD) if os.path.lexists(p)]
+          if left:
+              raise Failed('cleanup: still present ' + repr(left))
+          return {'removed': [STAGING, UPLOAD]}
+
+
+      def disable_trigger():
+          """Single use in every outcome: the trigger is disabled, stopped and removed."""
+          out = {}
+          out['disable'] = run(['systemctl', 'disable', '--now', PATH_UNIT], 120)[0]
+          if os.path.lexists(PATH_UNIT_FILE):
+              os.unlink(PATH_UNIT_FILE)
+          out['daemon_reload'] = run(['systemctl', 'daemon-reload'], 120)[0]
+          out['path_unit_file'] = 'present' if os.path.lexists(PATH_UNIT_FILE) else 'absent'
+          out['is_enabled'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip()
+                               for u in (PATH_UNIT, 'aieh-provision.service')}
+          return out
+
+
+      STEPS = (('copy', None), ('verify', verify_staging), ('daemon-json', write_daemon_json),
+               ('apt-install', apt_install), ('docker-ready', docker_ready),
+               ('docker-load', load_image), ('image-id', check_image_id), ('tag', fix_tag),
+               ('run', verify_run))
+
+
+      def provision():
+          t0 = time.time()
+          result = {'schema': RESULT_SCHEMA, 'started_at': now(), 'steps': [], 'result': 'failed',
+                    'failed_step': None, 'error': None}
+          step = 'start'
+          try:
+              if os.path.lexists(RESULT) or os.path.lexists(STAGING):
+                  raise Failed('start: provisioning already ran on this instance (single use)')
+              step = 'manifest'
+              manifest = load_manifest()
+              result['manifest'] = {'sha256': sha256_path(MANIFEST), 'lock_sha256':
+                                    manifest.get('lock_sha256'), 'files': len(manifest['files'])}
+              agent_uid = pwd.getpwnam(AGENT).pw_uid
+              os.makedirs(os.path.dirname(STAGING), mode=0o755, exist_ok=True)
+              os.mkdir(STAGING, 0o700)
+              for step, func in STEPS + (('facts', None), ('cleanup', None)):
+                  s = time.time()
+                  say('step ' + step)
+                  if step == 'copy':
+                      detail = copy_upload(manifest, agent_uid)
+                  elif step == 'facts':
+                      detail = enable_facts()
+                  elif step == 'cleanup':
+                      detail = cleanup()
+                  else:
+                      detail = func(manifest)
+                  result['steps'].append({'step': step, 'ok': True,
+                                          'seconds': round(time.time() - s, 1), 'detail': detail})
+              result['result'] = 'provisioned'
+          except Exception as exc:              # every failure is recorded with its step
+              result['failed_step'] = step
+              result['error'] = (type(exc).__name__ + ': ' + str(exc))[:2000]
+              say('FAILED at step ' + step)
+          finally:
+              try:
+                  result['trigger'] = disable_trigger()
+              except Exception as exc:
+                  result['trigger'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
+              result['upload_present'] = os.path.lexists(UPLOAD)
+              result['staging_present'] = os.path.lexists(STAGING)
+              result['ended_at'] = now()
+              result['seconds'] = round(time.time() - t0, 1)
+              os.makedirs(RESULT_DIR, mode=0o755, exist_ok=True)
+              write_json(RESULT, result, 0o644)
+              say('result ' + result['result'] + ' in ' + str(result['seconds']) + ' s')
+          return 0 if result['result'] == 'provisioned' else 1
+
+
+      def main(argv):
+          if os.geteuid() != 0:
+              say('must run as root (from its systemd unit)')
+              return 2
+          os.umask(0o022)
+          if argv == ['provision']:
+              return provision()
+          if argv == ['facts']:
+              return facts()
+          say('usage: aieh-provision provision|facts')
+          return 2
+
+
+      if __name__ == '__main__':
+          sys.exit(main(sys.argv[1:]))
+  - path: /etc/systemd/system/aieh-provision.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH single-use provisioning step (F-04.1, decision 0006)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      ConditionPathExists=!/var/lib/aieh/provision/RESULT.json
+      RequiresMountsFor=/srv/scratch /var/lib
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision provision
+      StandardOutput=journal+console
+      StandardError=journal+console
+      TimeoutStartSec=3600
+  - path: /etc/systemd/system/aieh-provision.path
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH provisioning trigger: the host's READY marker (single use)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      ConditionPathExists=!/var/lib/aieh/provision/RESULT.json
+
+      [Path]
+      PathExists=/srv/scratch/agent/provision/READY
+      Unit=aieh-provision.service
+
+      [Install]
+      WantedBy=paths.target
+  - path: /etc/systemd/system/aieh-docker-facts.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH read-only Moby facts for inspect (written at every boot)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision facts
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
 fs_setup:
   - label: scratch
     filesystem: ext4
@@ -40,3 +599,4 @@ mounts:
 runcmd:
   - [install, -d, -o, agent, -g, agent, -m, "0750", /srv/scratch/agent]
   - [install, -d, -o, agent, -g, agent, -m, "0750", /home/agent/exchange]
+  - [sh, -c, "if [ -s /etc/aieh/provision.json ]; then install -d -o root -g root -m 0755 /var/lib/aieh /var/lib/aieh/provision && systemctl enable --now aieh-provision.path; fi"]
