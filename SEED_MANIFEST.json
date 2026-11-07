@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "07da7a31d41f834f732c74e241f822b60c0f98d139946d45647e06ba6a08262f",
-      "size_bytes": 2119416
+      "sha256": "d52ed934dbf0b1b7182b42de5e2079abb9fdf25143e41c87c74989dd6a361c6a",
+      "size_bytes": 2119753
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "007ffe0aa162b6fd93093c976f1f8a90d34de85fcc9e04eca46d049e364e549f",
-      "size_bytes": 1103345
+      "sha256": "f0223833831507ddb9147ce743517a79623b2fbc58039a5f95e511206b90da04",
+      "size_bytes": 1103671
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "d8fa6e1be295519549630ed878ebe56fdee6dfbdcbedf8fd24e97e2b6da4c0e6",
-      "size_bytes": 168211
+      "sha256": "12c795fd46ba657772cf9b1010d2f9146fd77b1f93881520d6547b68768c9d37",
+      "size_bytes": 168252
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,7 +49,7 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "c18a0e25f7a0703cdd1c196a7b4642663698673f84777d342c7d85dc8235b61b",
+      "sha256": "557de79b18fefc621a254a50899b16d02b31eb921e64d24ebbbd2c7fa7e30036",
       "size_bytes": 42074
     },
     {
@@ -254,18 +254,18 @@
     },
     {
       "path": "task_prompts/F-06.1.md",
-      "sha256": "d889ca0dc1af6495e91dbf5fd7b05f6beba7d81614a15e48beb09059df9fab40",
-      "size_bytes": 4899
+      "sha256": "7860f459bdf17483bbf2cf3b9c506b7bb602b2b683f7d911e3d6f2509c5b6a70",
+      "size_bytes": 5073
     },
     {
       "path": "task_prompts/F-07.1.md",
-      "sha256": "e070b736c554bfd595fc632373da78937ffe9e56ea8b06e913ba5cc59549273f",
-      "size_bytes": 6066
+      "sha256": "d41fe8ad7c8a016ef28bc272a183e1b2fdfa909ccba720bc719229b455e22528",
+      "size_bytes": 6020
     },
     {
       "path": "task_prompts/F-07.2.md",
-      "sha256": "2d735386d7c9132274b53cae3c3adcc7c9f19facd9f431873246aa992b8873bf",
-      "size_bytes": 6611
+      "sha256": "a48e57ffd5c85c8f31c312f10df970756b20547f3ec3677187ff5047a754c106",
+      "size_bytes": 6519
     },
     {
       "path": "task_prompts/G-01.1.md",

@@ -118,7 +118,7 @@
         "F-02"
       ],
       "path": "task_prompts/F-07.1.md",
-      "sha256": "e070b736c554bfd595fc632373da78937ffe9e56ea8b06e913ba5cc59549273f"
+      "sha256": "d41fe8ad7c8a016ef28bc272a183e1b2fdfa909ccba720bc719229b455e22528"
     },
     {
       "id": "F-07.2",
@@ -128,7 +128,7 @@
         "F-07.1"
       ],
       "path": "task_prompts/F-07.2.md",
-      "sha256": "2d735386d7c9132274b53cae3c3adcc7c9f19facd9f431873246aa992b8873bf"
+      "sha256": "a48e57ffd5c85c8f31c312f10df970756b20547f3ec3677187ff5047a754c106"
     },
     {
       "id": "F-06.1",
@@ -140,7 +140,7 @@
         "F-07.1"
       ],
       "path": "task_prompts/F-06.1.md",
-      "sha256": "d889ca0dc1af6495e91dbf5fd7b05f6beba7d81614a15e48beb09059df9fab40"
+      "sha256": "7860f459bdf17483bbf2cf3b9c506b7bb602b2b683f7d911e3d6f2509c5b6a70"
     },
     {
       "id": "S-01.1",
