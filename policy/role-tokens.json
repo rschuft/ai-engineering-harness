@@ -180,7 +180,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its password is changed at the Owner's first sign-in. The account aieh-owner exists (F-06.1); no allowlist exists yet."
+          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07). The account aieh-owner exists (F-06.1); no allowlist exists yet."
         },
         {
           "mechanism": "Code merges into protected integration branches under the D-01.2 branch rules.",
@@ -189,7 +189,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its password is changed at the Owner's first sign-in."
+          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07)."
         }
       ],
       "issuance": [
@@ -257,7 +257,7 @@
           "evidence/bootstrap-log.md",
           "evidence/F-06.1-gitea-loopback.md"
         ],
-        "note": "The Owner directs the work and approves privileged host acts by UAC consent. The Gitea Owner account aieh-owner exists (F-06.1) and awaits the Owner's first sign-in; no protected branch lists it yet; public pushes run from the Owner's account."
+        "note": "The Owner directs the work and approves privileged host acts by UAC consent. The Gitea Owner account aieh-owner exists (F-06.1); the harness holds its credential (Owner directive of 2026-11-07: the Owner never signs in to Gitea), and how the Owner identity is used internally is to be decided; no protected branch lists it yet; public pushes run from the Owner's account."
       },
       "status": "planned",
       "sources": [
@@ -402,7 +402,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its password is changed at the Owner's first sign-in. The fixture applies block_admin_merge_override and fixture --admin-merge-probe tests it."
+          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07). The fixture applies block_admin_merge_override and fixture --admin-merge-probe tests it."
         },
         {
           "mechanism": "Issues Gitea identities, bot accounts and their tokens, protection rules and runner registration secrets; never exposed to agents or CI.",
@@ -419,7 +419,7 @@
           "credential": "cred-gitea-admin",
           "issuer": "external:gitea-installation",
           "delivered_by": null,
-          "delivery": "Created by F-06.1 with Gitea's CLI (aieh-site-admin, temporary password in Credential Manager until the first sign-in); held by the Owner during bootstrap (decision 0007, Owner confirmation 1, pending)."
+          "delivery": "Created by F-06.1 with Gitea's CLI (aieh-site-admin, temporary password in the credential provider until task gitea:finalize-credentials); held by the Owner during bootstrap (decision 0007, Owner confirmation 1, pending)."
         }
       ],
       "revocation": [
@@ -443,7 +443,7 @@
           "evidence/F-06.1-gitea-loopback.md",
           "evidence/S-01.2.2-segregated-credentials.md"
         ],
-        "note": "Gitea 28.3.0 runs on host loopback (F-06.1). aieh-site-admin exists and awaits the Owner's first sign-in; until then Gitea refuses its API calls. Gitea administration during bootstrap is performed by the Owner's host account through Gitea's CLI (identities, bots, tokens)."
+        "note": "Gitea 28.3.0 runs on host loopback (F-06.1). aieh-site-admin exists with its temporary password until task gitea:finalize-credentials replaces it (Owner directive of 2026-11-07: no Owner sign-in); until then Gitea refuses its API calls. Gitea administration during bootstrap is performed by the Owner's host account through Gitea's CLI (identities, bots, tokens)."
       },
       "status": "planned",
       "sources": [
@@ -641,7 +641,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its password is changed at the Owner's first sign-in."
+          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07)."
         }
       ],
       "issuance": [
@@ -762,7 +762,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2: Gitea 28.3.0 has no review-only scope; the token holds write:repository until the fixture shows whether read:repository suffices to review, and the account holds no repository permission until the fixture grants read. Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its password is changed at the Owner's first sign-in."
+          "notes": "Not verified at S-01.2.2: Gitea 28.3.0 has no review-only scope; the token holds write:repository until the fixture shows whether read:repository suffices to review, and the account holds no repository permission until the fixture grants read. Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07)."
         }
       ],
       "issuance": [
