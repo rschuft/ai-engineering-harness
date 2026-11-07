@@ -1,6 +1,6 @@
 # 0009 - Managed data root and configuration contract (external by default)
 
-Status: Proposed (Architect draft, 2026-11-07, for the Overseer's acceptance at F-07.1), with the Owner's refinements of the same day: three lifecycle categories including `assets/`, the effects root's placement left to the re-evaluation of decision 0004, and the confirmations recorded below.
+Status: Accepted (Overseer) - 2026-11-07, at the completion of F-07.1 (`8a81953`), implementing the Owner's directive and answers of 2026-11-07; the effects root's placement remains open pending the decision 0004 re-evaluation. Proposed (Architect draft, 2026-11-07), with the Owner's refinements of the same day: three lifecycle categories including `assets/`, the effects root's placement left to the re-evaluation of decision 0004, and the confirmations recorded below.
 
 **Authority:** the Owner directive of 2026-11-07 on external-by-default installation, configuration and filesystem ownership (relayed in the plan amendment 945b563, leaves F-07.1, F-07.2, F-06.1), and the Owner's answers of the same day to the F-07 confirmations. This decision supersedes the repository-local placement (`<repo>/.local`) of the Owner's gap decision of the same day, as that directive does.
 
