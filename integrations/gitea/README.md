@@ -105,9 +105,11 @@ password is on any command line.
 1. generate a final password with `secrets.token_urlsafe(32)` and store it in the provider entry
    `AIEH Gitea site-admin` or `AIEH Gitea owner` **before** Gitea is changed, so a failure can never
    lose it (a rerun resumes from any intermediate state);
-2. set it with Gitea's own forced change: sign in at `/user/login` with the temporary password,
-   which Gitea answers with a redirect to its change form, then submit `/user/settings/change_password`;
-   both are loopback HTTP form posts, so the passwords travel only in request bodies;
+2. set it with Gitea's own forced change: sign in at `/user/login` with the temporary password.
+   Gitea 28.3.0 answers a correct sign-in with 303 to `/`, not to the form; the next page request
+   (`GET /`) answers 303 to `/user/settings/change_password`. The tool follows that redirect, requires
+   Gitea itself to send the session to the form, and only then submits it. A wrong password answers
+   200 with the sign-in form and stops the run. The passwords travel only in loopback form-post bodies;
 3. with the new password (HTTP basic authentication), list and delete **every** access token of the
    account, then list again: a finalized human account holds no token (this revokes the
    site-administrator token that S-01.2.2's first fixture attempt could not revoke);

@@ -1038,36 +1038,74 @@ class WebSession:
         self.port, self.cookies = port, {}
         self.connection = connection or (lambda: http.client.HTTPConnection(LOOPBACK, port, timeout=30))
 
-    def post(self, path: str, fields: dict) -> tuple[int, str]:
-        """(status, Location header) of a form POST; the body is read and discarded."""
-        body = urllib.parse.urlencode(fields).encode('utf-8')
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    def request(self, method: str, path: str, fields: dict | None = None) -> tuple[int, str, bytes]:
+        """(status, Location header, body) of a GET or a form POST, keeping the session's cookies."""
+        headers, body = {}, None
+        if fields is not None:
+            body = urllib.parse.urlencode(fields).encode('utf-8')
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
         if self.cookies:
             headers['Cookie'] = '; '.join(f'{k}={v}' for k, v in self.cookies.items())
         connection = self.connection()
         try:
-            connection.request('POST', path, body=body, headers=headers)
+            connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
             for raw in response.msg.get_all('Set-Cookie') or []:
                 name, _, rest = raw.partition('=')
                 self.cookies[name.strip()] = rest.split(';', 1)[0]
-            response.read()
-            return response.status, response.getheader('Location') or ''
+            data = response.read()
+            return response.status, response.getheader('Location') or '', data
         finally:
             connection.close()
 
+    def post(self, path: str, fields: dict) -> tuple[int, str]:
+        status, location, _body = self.request('POST', path, fields)
+        return status, location
+
+    def get(self, path: str) -> tuple[int, str, bytes]:
+        return self.request('GET', path)
+
+
+CHANGE_FORM = '/user/settings/change_password'
+
+
+def _path(location: str) -> str:
+    return urllib.parse.urlsplit(location).path or '/'
+
 
 def change_password_by_web(port: int, user: str, current: str, new: str, connection: Callable = None) -> dict:
-    """Gitea's own forced password change: sign in with the current password, which Gitea answers by
-    redirecting to the change form, then submit the new one. Raises on any other answer."""
+    """Gitea's own forced password change. Gitea 28.3.0 answers a correct sign-in of an account that must
+    change its password with a redirect to where it was going (usually /), not to the change form; the
+    next page request is what Gitea redirects to the form. So: sign in, follow that redirect with the
+    session, require Gitea itself to send the session to the change form, then submit the new password.
+    A wrong password answers 200 with the sign-in form. Statuses and paths only in errors."""
     web = WebSession(port, connection)
     status, location = web.post('/user/login', {'user_name': user, 'password': current})
-    if status not in (302, 303) or 'change_password' not in location:
-        raise GiteaError('SIGN_IN_FAILED', f'{user}: sign-in answered {status}, not the forced change form', refusal=False)
-    status, location = web.post('/user/settings/change_password', {'password': new, 'retype': new})
-    if status not in (302, 303) or 'change_password' in location:
-        raise GiteaError('PASSWORD_CHANGE_FAILED', f'{user}: the change answered {status}', refusal=False)
-    return {'sign_in': 'redirected to the forced change form', 'change': status}
+    if status not in (302, 303) or _path(location).startswith('/user/login'):
+        raise GiteaError('SIGN_IN_FAILED', f'{user}: sign-in answered {status} (Location path {_path(location)!r})',
+                         refusal=False)
+    trail = [f'sign-in {status} {_path(location)}']
+    path = _path(location)
+    for _hop in range(3):
+        if path == CHANGE_FORM:
+            break
+        status, location, _body = web.get(path)
+        trail.append(f'GET {path} {status} {_path(location) if location else ""}'.rstrip())
+        if status not in (302, 303):
+            break
+        path = _path(location)
+    if path != CHANGE_FORM:
+        raise GiteaError('CHANGE_NOT_DEMANDED', f'{user}: Gitea did not send the session to the change form '
+                                                f'({"; ".join(trail)})', refusal=False)
+    status, _location, body = web.get(CHANGE_FORM)
+    trail.append(f'GET {CHANGE_FORM} {status}')
+    if status != 200 or b'name="retype"' not in body:
+        raise GiteaError('CHANGE_FORM_MISSING', f'{user}: {"; ".join(trail)}', refusal=False)
+    status, location = web.post(CHANGE_FORM, {'password': new, 'retype': new})
+    trail.append(f'change {status} {_path(location) if location else ""}'.rstrip())
+    if status not in (302, 303) or _path(location) in (CHANGE_FORM, '/user/login'):
+        raise GiteaError('PASSWORD_CHANGE_FAILED', f'{user}: {"; ".join(trail)}', refusal=False)
+    return {'trail': trail}
 
 
 def revoke_all_tokens(port: int, user: str, password: str, http: Callable = None) -> dict:

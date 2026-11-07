@@ -383,11 +383,12 @@ class FakeAccounts:
     deletion) and the web sign-in and forced-change forms, on one fake loopback server. Every request is
     logged by path only."""
 
-    def __init__(self, passwords, tokens=None, fail_change=False):
+    def __init__(self, passwords, tokens=None, fail_change=False, login_redirect='/'):
         self.accounts = {u: {'password': p, 'must_change': True, 'admin': u == G.SITE_ADMIN}
                          for u, p in passwords.items()}
         self.tokens = {u: list(t) for u, t in (tokens or {}).items()}
         self.sessions, self.log, self.fail_change, self.next_id = {}, [], fail_change, 100
+        self.login_redirect = login_redirect
 
     def who(self, headers):
         auth = (headers or {}).get('Authorization', '')
@@ -418,40 +419,52 @@ class FakeAccounts:
         return 404, {}, b'{}'
 
     def connection(self):
+        """Gitea 28.3.0's web behaviour as observed on a disposable instance (S-01.2.2): a correct sign-in
+        answers 303 to the redirect_to target, which is / (login_redirect), even when the account must
+        change its password; the next page request then answers 303 to the change form; the form is 200;
+        a wrong password answers 200 with the sign-in form."""
         fake = self
 
         class Response:
-            def __init__(self, status, location, cookie):
-                self.status, self._location = status, location
+            def __init__(self, status, location, cookie, body=b''):
+                self.status, self._location, self._body = status, location, body
                 self.msg = SimpleNamespace(get_all=lambda name: [cookie] if cookie and name == 'Set-Cookie' else None)
 
             def getheader(self, name):
                 return self._location if name == 'Location' else None
 
             def read(self):
-                return b''
+                return self._body
 
         class Connection:
             def request(self, method, path, body=None, headers=None):
                 fake.log.append((method, path))
-                form = dict(urllib.parse.parse_qsl(body.decode()))
+                form = dict(urllib.parse.parse_qsl(body.decode())) if body else {}
                 cookie = (headers or {}).get('Cookie', '')
-                session = fake.sessions.get(cookie.partition('=')[2])
-                if path == '/user/login':
+                sid = dict(part.split('=', 1) for part in cookie.split('; ') if '=' in part).get('i_like_gitea')
+                session = fake.sessions.get(sid)
+                must = session is not None and fake.accounts[session]['must_change']
+                if path == '/user/login' and method == 'POST':
                     account = fake.accounts.get(form.get('user_name'))
                     if account is None or account['password'] != form.get('password'):
-                        self.response = Response(200, '', None)
+                        self.response = Response(200, '', None, b'Username or password is incorrect.')
                     else:
                         sid = f'sid{len(fake.sessions)}'
                         fake.sessions[sid] = form['user_name']
-                        where = '/user/settings/change_password' if account['must_change'] else '/'
-                        self.response = Response(303, where, f'i_like_gitea={sid}; Path=/; HttpOnly')
-                elif path == '/user/settings/change_password' and session:
+                        self.response = Response(303, fake.login_redirect,
+                                                 f'i_like_gitea={sid}; Path=/; HttpOnly')
+                elif path == '/user/settings/change_password' and session and method == 'GET':
+                    self.response = Response(200, '', None, b'<input name="password"><input name="retype">')
+                elif path == '/user/settings/change_password' and session and method == 'POST':
                     if fake.fail_change or form['password'] != form['retype']:
                         self.response = Response(200, '', None)
                     else:
                         fake.accounts[session].update(password=form['password'], must_change=False)
                         self.response = Response(303, '/', None)
+                elif method == 'GET' and must:
+                    self.response = Response(303, '/user/settings/change_password', None)
+                elif method == 'GET' and session:
+                    self.response = Response(200, '', None, b'dashboard')
                 else:
                     self.response = Response(404, '', None)
 
@@ -600,6 +613,43 @@ class TestFinalizeCredentials(Root):
         with self.assertRaises(G.GiteaError) as caught:
             self.finalize()
         self.assertEqual(caught.exception.code, 'ENTRIES_MISSING')
+
+    def test_sign_in_redirects_to_root_then_gitea_demands_the_change(self):
+        # Observed on Gitea 28.3.0: the sign-in answers 303 to / (not to the form); GET / answers 303 to it.
+        result = G.change_password_by_web(13300, G.SITE_ADMIN, self.TEMP[G.SITE_ADMIN], 'N' * 43,
+                                          self.gitea.connection)
+        self.assertEqual(result['trail'], ['sign-in 303 /', 'GET / 303 /user/settings/change_password',
+                                           'GET /user/settings/change_password 200', 'change 303 /'])
+        self.assertEqual(self.gitea.accounts[G.SITE_ADMIN], {'password': 'N' * 43, 'must_change': False,
+                                                             'admin': True})
+        self.assertNotIn('N' * 43, json.dumps(result))
+
+    def test_a_direct_redirect_to_the_form_also_works(self):
+        gitea = FakeAccounts(self.TEMP, login_redirect='/user/settings/change_password')
+        result = G.change_password_by_web(13300, G.OWNER, self.TEMP[G.OWNER], 'M' * 43, gitea.connection)
+        self.assertEqual(result['trail'][0], 'sign-in 303 /user/settings/change_password')
+        self.assertFalse(gitea.accounts[G.OWNER]['must_change'])
+
+    def test_wrong_password_or_no_change_demand_refused_without_submitting(self):
+        with self.assertRaises(G.GiteaError) as caught:
+            G.change_password_by_web(13300, G.SITE_ADMIN, 'wrong-password', 'N' * 43, self.gitea.connection)
+        self.assertEqual(caught.exception.code, 'SIGN_IN_FAILED')
+        self.gitea.accounts[G.OWNER]['must_change'] = False
+        with self.assertRaises(G.GiteaError) as caught:
+            G.change_password_by_web(13300, G.OWNER, self.TEMP[G.OWNER], 'N' * 43, self.gitea.connection)
+        self.assertEqual(caught.exception.code, 'CHANGE_NOT_DEMANDED')
+        self.assertNotIn(('POST', '/user/settings/change_password'), self.gitea.log)
+        for secret in (self.TEMP[G.OWNER], 'N' * 43, 'wrong-password'):
+            self.assertNotIn(secret, str(caught.exception))
+
+    def test_rerun_after_a_failed_sign_in_reuses_the_stored_final_password(self):
+        # The live run of 2026-11-07: the final password was stored, then the sign-in step raised.
+        stored = 'S' * 43
+        self.provider.entries[G.FINAL_TARGETS[G.SITE_ADMIN]] = (G.SITE_ADMIN, stored)
+        report = self.finalize()
+        self.assertEqual(report['accounts'][0]['stored_before_change'], 'by an earlier run')
+        self.assertEqual(self.gitea.accounts[G.SITE_ADMIN]['password'], stored)
+        self.assertEqual(report['accounts'][0]['tokens']['remaining'], [])
 
     def test_checkout_search(self):
         (self.repo / 'tracked.txt').write_bytes(b'a ' + self.TEMP[G.SITE_ADMIN].encode() + b' b')
