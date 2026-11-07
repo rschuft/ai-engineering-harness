@@ -19,7 +19,7 @@ heading in the file, because OpenSpec finds them at any level.
    |---|---|---|
    | `record_format` | yes | `intent-record/v1` |
    | `normalized_by` | yes | `agent:<id>` or `person:<id>`: who wrote the record |
-   | `skill` | no | `<skill name>@<x.y.z>`, e.g. `intent-normalization@1.0.0` |
+   | `skill` | no | `<skill name>@<x.y.z>`, e.g. `intent-normalization@1.1.0` |
 
 2. Seven `###` sections, each exactly once: `Original Quote`, `Objective`,
    `Binding Constraints`, `Proposed Methods`, `Hypotheses`, `Acceptance Criteria`,
@@ -75,7 +75,9 @@ quote, so that neither CommonMark nor OpenSpec ends the block early.
 2. A Proposed Method without `acceptance` has `claim_type: hypothesis`, and a method
    that is a hypothesis names an existing H item in `hypothesis`. In particular a
    method attributed to `owner` stays a hypothesis until accepted.
-3. A method whose `source` cites a quote is attributed to that quote's speaker.
+3. A method whose `source` cites a quote is attributed to that quote's speaker. A
+   method that someone else proposes (for example the agent writing the record)
+   cites the item it serves, such as `O1`, not the quote.
 4. An item that is `accepted`, or of claim type `constraint`, has an `acceptance`
    reference; an item with an `acceptance` is `accepted`. The acceptance is never the
    `source` of an Original Quote: the request cannot accept itself.

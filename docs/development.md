@@ -149,6 +149,7 @@ Only what is listed as verified has been exercised.
 | `effects:restore ROOT=<dir> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/effects/effects_store.py restore --root <dir> --manifest <file> --actor <name> [--accept-rollback]` | no | The Owner's elevated act, with the executor stopped: restores a verified backup and opens a restore epoch. |
 | `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `intent:qualify -- <run\|check\|prompt\|system-prompt> [options]` | `python -I -B tools/qualify_intent_skill.py <subcommand> [options]` | `run`: the model command's own (a live model) | Runs the intent-normalization Skill's [behavioural qualification](#intent-records): one corpus item and turn through a JSON model-command template in an empty working directory, then the checker, then a ledger entry; refuses past `--max-invocations` (default 25). `check` scores a saved proposal against an item's messages. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
 | `guest:preflight PROFILE=<dir> STATE_DIR=<dir>` | `python -I -B tools/guest.py preflight --profile <dir> --state-dir <dir>` | no | Read-only capability report for a strong guest profile; each failure names its Owner act (A1, A2, A3). See [Execution guests](#execution-guests). |
 | `guest:create PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name>` | no | Creates, boots and waits for a disposable guest. Refuses an existing instance. |
@@ -361,7 +362,19 @@ verifier lives in `tools/`, outside the Skill, so that the Skill being qualified
 not carry its own judge. Its tests (`tools/tests/test_check_intent_record.py`, part of
 `task test`) pass the builder-produced fixture in `tools/tests/fixtures/intent_record/`
 and fail its mutations. That fixture shows the format can express a confusing
-request; it is not a qualification of the Skill on model runs (P-01.2).
+request; it is not a qualification of the Skill on model runs.
+
+Plan leaf P-01.2 qualified the Skill on live model runs.
+[`tools/qualify_intent_skill.py`](../tools/qualify_intent_skill.py) (`task
+intent:qualify`) gives the Skill to a model as its system prompt and one corpus
+request (and, for a later turn, the earlier proposal and the follow-up message) as its
+prompt. It runs a JSON command template in an empty working directory, checks the
+returned proposal and appends a run ledger entry, and never runs past an invocation
+cap. The corpus, the pre-written expected outcomes, the ledger, the outputs and the
+OpenSpec changes recorded from them are in `tools/tests/fixtures/intent_qualification/`
+([README](../tools/tests/fixtures/intent_qualification/README.md)). Their tests
+re-score every committed output without a model. Results and limits:
+[`evidence/P-01.2-intent-skill-qualification.md`](../evidence/P-01.2-intent-skill-qualification.md).
 
 OpenSpec 1.16.0 checks the schema (`openspec schema validate intent-driven`) and the
 readiness of a change's artifacts (`openspec status`), and `openspec validate` checks

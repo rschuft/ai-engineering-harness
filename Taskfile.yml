@@ -152,6 +152,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_intent_record.py "{{.PROPOSAL}}" {{.CLI_ARGS}}'
 
+  intent:qualify:
+    desc: "Intent-normalization qualification runner (P-01.2): python -I -B tools/qualify_intent_skill.py ARGS (pass system-prompt, prompt, run or check and their options after --)"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/qualify_intent_skill.py {{.CLI_ARGS}}'
+
   # Execution-guest lifecycle (plan leaf F-03.2.2; tools/guest.py). PROFILE and
   # STATE_DIR are always named, never defaulted (profiles/README.md sections 4 and 11).
   guest:preflight:

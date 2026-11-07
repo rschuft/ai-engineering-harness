@@ -13,6 +13,9 @@ artifacts recorded from them. Evidence and verdict:
 | `corpus/qual-NN/message-*.txt` | The message texts, byte for byte. They are the sources the checker compares quotes with. |
 | `corpus/qual-NN/expected.md` | The expected outcome, written **before** any run: the faithful objective, which methods must stay hypotheses, which ambiguities must become clarifications, what must not happen. The fidelity review compares outputs with it. |
 | `commands/claude-headless.json` | The command template of the runs: Claude Code headless, tool-less, isolated as far as its flags allow. |
+| `runs/ledger.jsonl` | One entry per model invocation, probes and superseded runs included: redacted command line, time, exit code, model, tokens, list cost, digests of the raw output and of the extracted proposal, the tool, MCP, skill and command lists the session reported at start, and the checker verdict. Raw outputs stayed in scratch; their SHA-256 is here. |
+| `runs/outputs/inv-NN-qual-MM-tT.proposal.md` | The proposal each invocation returned, unchanged. |
+| `openspec/` | The "versioned accepted OpenSpec artifacts": `config.yaml` (`schema: intent-driven`) and four changes whose `proposal.md` is a model output byte for byte. Only `qual-02-search-freshness` carries an accepted objective and criterion, and only it has a delta spec, written by the implementing agent from those accepted items. Run OpenSpec on it by copying `openspec/` into a scratch project together with `catalog/openspec/schemas/intent-driven/` under `openspec/schemas/`. |
 
 The messages are synthetic. Where a message stands for the Owner accepting
 something (`qual-02` message-2, `qual-06` message-3), it is a **fixture standing in

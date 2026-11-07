@@ -3,7 +3,7 @@ name: intent-normalization
 description: Turns a request into an intent record that keeps the requester's words verbatim and separates what they want (objective, acceptance criteria) from how they suggested doing it (proposed methods, kept as attributed hypotheses), binding constraints (only with a separately recorded acceptance) and open clarifications. Use when a new request, Owner message or change idea must become an OpenSpec proposal, or whenever a request prescribes a solution, mixes goals with methods, or is ambiguous.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   record-format: "intent-record/v1"
   openspec-schema: "intent-driven@1"
 ---
@@ -39,7 +39,7 @@ Header:
 ```
 - record_format: intent-record/v1
 - normalized_by: agent:<your id>      (or person:<id>)
-- skill: intent-normalization@1.0.0
+- skill: intent-normalization@1.1.0
 ```
 
 ## Steps
@@ -87,7 +87,10 @@ words), `source: Q1`, `authority: proposed`.
   might be a genuine requirement, raise an open clarification asking whether it is
   binding.
 - Methods you or another agent propose may be listed too, attributed to their
-  author (`agent:<id>`), on the same rules.
+  author (`agent:<id>`), on the same rules. Such a method cites what it serves in
+  `source` (the objective, for example `O1`, or the hypothesis or clarification
+  behind it), never a quote: a method whose `source` names a quote was taken from
+  that quote, so it is attributed to the quote's speaker.
 
 ### 4. Binding constraints (C1, ...): only with a separate acceptance
 
@@ -131,6 +134,8 @@ methods as hypotheses still to be evaluated in the design.
       suggested.
 - [ ] Every requester method is a hypothesis with a hypothesis item, unless it has a
       separately recorded acceptance.
+- [ ] A method cites a quote in `source` only if it was taken from that quote and is
+      attributed to its speaker; a method you propose cites the item it serves.
 - [ ] Every constraint and every accepted item has an acceptance reference that is
       not the request's own reference.
 - [ ] Every consequential ambiguity is an open clarification; no reading was guessed.

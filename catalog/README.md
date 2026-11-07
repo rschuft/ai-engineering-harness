@@ -10,9 +10,12 @@ log).
 | `openspec/schemas/intent-driven/` | OpenSpec workflow schema: proposal (with the intent record), specs, design. `apply.requires` lists all three; no `apply.tracks`, because Backlog.md tracks implementation. | schema `version: 1` | P-01.1 |
 | `skills/intent-normalization/` | Agent Skill that turns a request into the proposal's intent record (`intent-record/v1`). | `metadata.version` in `SKILL.md`; history in its `CHANGELOG.md` | P-01.1 |
 
-Nothing here is qualified on model runs yet: the Skill's behavioural qualification
-is plan leaf P-01.2. The deterministic checks are `tools/check_intent_record.py` and
-its tests (see [`docs/development.md`](../docs/development.md#intent-records)).
+The Skill was qualified on live model runs in plan leaf P-01.2 (Skill 1.1.0, one
+model, Claude Code headless, 13 synthetic requests): see
+[`evidence/P-01.2-intent-skill-qualification.md`](../evidence/P-01.2-intent-skill-qualification.md)
+and its corpus in `tools/tests/fixtures/intent_qualification/`. The deterministic
+checks are `tools/check_intent_record.py`, the runner `tools/qualify_intent_skill.py`
+and their tests (see [`docs/development.md`](../docs/development.md#intent-records)).
 
 ## Using the schema in a project
 
