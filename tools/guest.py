@@ -65,6 +65,16 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                user openhands with its two guest-generated secrets (F-04.1 slice (c)),
                deletes the upload and disables itself; provision then fetches the session
                API key alone into the instance directory. No network at any point.
+    conversation-smoke  the disposable Docker conversation (F-04.2) on a running provisioned
+               instance: the pinned fixture (and, with --openapi, its schema check), the
+               lifecycle routes in the server's own OpenAPI document, create (a non-2xx is a
+               refusal and stops the run), the conversation and its container (on-demand
+               root facts: image ID, exact mounts, user, caps, the 127.0.0.1 port and its
+               docker-proxy listener, profiles P7 as amended), an idempotent second create,
+               the events (API and disk), inspect with it running, stop of its runtime,
+               reopen (same id, state, events and mounts), with --restart a guest stop and
+               start and a second reopen, then delete. API calls run as agent on the guest
+               loopback with the session key read from its file; no LLM, no message.
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -86,6 +96,8 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py provision-fetch --profile PROFILE --state-dir STATE
     python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision
     python -I -B tools/guest.py provision --profile PROFILE --state-dir STATE --name NAME
+    python -I -B tools/guest.py conversation-smoke --profile PROFILE --state-dir STATE --name NAME
+                                          [--restart] [--openapi FILE] [--canaries DIR] [--out FILE]
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
     before it launches anything, inspect searches the guest for it; create, recreate
@@ -3036,7 +3048,7 @@ def evaluate(profile, record, obs):
               rules == declared_rules),
     ] + (netprobe_checks(record, obs.get('netprobe')) if netprobe_mode
          else [enforcement_check(profile)]) +
-        (moby_p7_checks(obs) if record.get('provisioning') else []) + agent.get('P7', []),
+        (moby_p7_checks(obs, profile) if record.get('provisioning') else []) + agent.get('P7', []),
         formal='F-03.3.2; S-02.1, S-02.2',
         note=('Validation instance: the netprobe checks are the F-03.3.2 test (guest root, '
               'routes, every denied path, both positive controls, decoys).' if netprobe_mode
@@ -5483,7 +5495,7 @@ def provisioning_probes(conf):
         ('provision_units', f'for u in {units}; do printf "%s %s %s\\n" "$u" '
                             '"$(systemctl is-enabled "$u" 2>&1 | head -n1)" '
                             '"$(systemctl is-active "$u" 2>&1 | head -n1)"; done'),
-    ] + agent_server_probes(conf)
+    ] + agent_server_probes(conf) + [('conversation_facts', conversation_facts_probe(conf))]
 
 
 # The Agent Server probe, run as agent (F-04.1 slice (c)): the API on the guest's loopback
@@ -5550,6 +5562,291 @@ def agent_server_probes(conf):
         ('agent_server_files', f"stat -c '%n|%U|%G|%a|%F' -- {quoted}"),
         ('agent_server_config', f"cat '{server['config']['path']}'"),
     ]
+
+
+# ---------------------------------------------------------------- on-demand conversation facts (F-04.2)
+
+CONVERSATION_FACTS_SCHEMA = 'ai-engineering-harness/profiles/conversation-facts/v1'
+CONVERSATION_FACTS_CEILING_S = 60      # bounds a hang of the root reporter (it takes ~1-3 s)
+
+# Run as agent: create the request file (its existence is the reporter's only input), then
+# wait on inotify in the report's directory until a report appears whose run started after
+# the request was made (CLOCK_MONOTONIC, shared by every process of the guest). Prints the
+# report, or an error object, as one JSON line.
+CONVERSATION_FACTS_PROBE = r'''import ctypes, json, os, select, sys, time
+request, report, ceiling = sys.argv[1], sys.argv[2], float(sys.argv[3])
+def current():
+    try:
+        with open(report, encoding='utf-8') as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+libc = ctypes.CDLL(None, use_errno=True)
+fd = libc.inotify_init1(os.O_CLOEXEC)
+if fd < 0 or libc.inotify_add_watch(fd, os.path.dirname(report).encode(), 0x80 | 0x100 | 0x8) < 0:
+    print(json.dumps({'error': 'inotify', 'errno': ctypes.get_errno()})); sys.exit(3)
+asked = time.monotonic()
+try:
+    os.close(os.open(request, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600))
+except OSError as exc:
+    print(json.dumps({'error': 'request', 'errno': exc.errno})); sys.exit(3)
+deadline = asked + ceiling
+while True:
+    data = current()
+    if isinstance(data, dict) and isinstance(data.get('started_monotonic'), (int, float)) and \
+            data['started_monotonic'] > asked:
+        print(json.dumps(data, sort_keys=True)); sys.exit(0)
+    left = deadline - time.monotonic()
+    if left <= 0:
+        print(json.dumps({'error': 'ceiling', 'request_present': os.path.lexists(request),
+                          'serial': (data or {}).get('serial')})); sys.exit(5)
+    ready, _, _ = select.select([fd], [], [], min(5.0, left))
+    if ready:
+        os.read(fd, 65536)
+'''
+
+
+def conversations_config(conf):
+    return ((conf or {}).get('agent_server') or {}).get('conversations') or {}
+
+
+def conversation_facts_probe(conf):
+    facts = conversations_config(conf).get('facts') or {}
+    return (f"timeout {CONVERSATION_FACTS_CEILING_S + 30} python3 - '{facts.get('request')}' "
+            f"'{facts.get('report')}' {CONVERSATION_FACTS_CEILING_S} <<'PYEOF'\n" +
+            CONVERSATION_FACTS_PROBE + 'PYEOF')
+
+
+def conversation_report(obs):
+    """The on-demand conversation facts read by this inspect, or None."""
+    data = _probe_json(obs, 'conversation_facts')
+    return data if isinstance(data, dict) and data.get('schema') == CONVERSATION_FACTS_SCHEMA \
+        else None
+
+
+def conversation_owner(profile):
+    """The owner label value the Agent Server puts on its conversation containers:
+    sha256(conversations_path NUL OH_PERSISTENCE_DIR)[:24] (1.60.1 docker_runtime/registry.py
+    DockerConversationRegistry.__init__); both are real directories, so resolved = declared."""
+    server = (profile.get('provisioning') or {}).get('agent_server') or {}
+    paths = f"{(server.get('config') or {}).get('content', {}).get('conversations_path')}\0" \
+            f"{(server.get('environment') or {}).get('OH_PERSISTENCE_DIR')}"
+    return hashlib.sha256(paths.encode()).hexdigest()[:24]
+
+
+def memory_bytes(text):
+    """Docker's reading of a memory size such as '4g' (binary units)."""
+    match = re.fullmatch(r'(\d+)([bkmg]?)', str(text).lower())
+    if not match:
+        return None
+    return int(match.group(1)) * {'': 1, 'b': 1, 'k': 1 << 10, 'm': 1 << 20, 'g': 1 << 30}[match.group(2)]
+
+
+def conversation_hex(container):
+    """The conversation id (32 hex digits) a container serves, from its event-store mount."""
+    for mount in container.get('Mounts') or []:
+        dest = str((mount or {}).get('Destination', ''))
+        if dest.startswith('/var/openhands/conversations/'):
+            tail = dest.rsplit('/', 1)[-1]
+            if re.fullmatch(r'[0-9a-f]{32}', tail):
+                return tail
+    return None
+
+
+def declared_container_mounts(profile, hex_id):
+    conv = conversations_config(profile.get('provisioning'))
+    return sorted((m['type'], m['source'].replace('{conversation_hex}', hex_id),
+                   m['destination'].replace('{conversation_hex}', hex_id), bool(m['rw']))
+                  for m in conv.get('mounts') or [])
+
+
+def effective_container_mounts(container):
+    return sorted((m.get('Type'), m.get('Source'), m.get('Destination'), bool(m.get('RW')))
+                  for m in container.get('Mounts') or [] if isinstance(m, dict))
+
+
+def forbidden_mount_sources(profile, container):
+    """Mount sources outside the declared source root, or equal to or under a forbidden
+    path (the Docker or containerd socket, Moby's data root, /etc/aieh, ...)."""
+    conv = conversations_config(profile.get('provisioning'))
+    root = str(conv.get('source_root', '')).rstrip('/') + '/'
+    bad = []
+    for _type, source, _dest, _rw in effective_container_mounts(container):
+        source = str(source)
+        under = [f for f in conv.get('forbidden_sources') or []
+                 if source == f or source.startswith(f.rstrip('/') + '/')]
+        if not source.startswith(root) or under:
+            bad.append({'source': source, 'forbidden': under})
+    return bad
+
+
+def container_problems(profile, record, report, container):
+    """One conversation container against provisioning.agent_server.conversations, decision
+    0001 s2/s3 and decision 0006 item 3. Returns (problems, deviations): a problem fails the
+    check; a deviation is recorded evidence (carried to S-01.3.x and E-01.2.2)."""
+    server = (profile.get('provisioning') or {}).get('agent_server') or {}
+    conv = server.get('conversations') or {}
+    cfg = (server.get('config') or {}).get('content') or {}
+    prov = record.get('provisioning') or {}
+    config = container.get('Config') or {}
+    host = container.get('HostConfig') or {}
+    state = container.get('State') or {}
+    user = report.get('server_user') or {}
+    hex_id = conversation_hex(container)
+    problems = []
+
+    def need(name, ok, observed):
+        if not ok:
+            problems.append({'check': name, 'observed': observed})
+    need('image (decision 0006 item 3)', container.get('Image') == prov.get('image_id'),
+         container.get('Image'))
+    need('configured image', config.get('Image') == cfg.get('conversation_image'), config.get('Image'))
+    need('owner label', (config.get('Labels') or {}).get(conv.get('owner_label')) ==
+         conversation_owner(profile), (config.get('Labels') or {}).get(conv.get('owner_label')))
+    need('conversation id', hex_id is not None, hex_id)
+    want_mounts = declared_container_mounts(profile, hex_id or '?')
+    need('mounts (exactly the declared list)', effective_container_mounts(container) == want_mounts,
+         effective_container_mounts(container))
+    forbidden = forbidden_mount_sources(profile, container)
+    need('mount sources (declared root, no forbidden path)', not forbidden, forbidden)
+    need('user', config.get('User') == f"{user.get('uid')}:{user.get('gid')}" and
+         user.get('name') == (server.get('user') or {}).get('name'), config.get('User'))
+    need('capabilities', host.get('CapDrop') == conv.get('cap_drop') and not host.get('CapAdd'),
+         {'CapDrop': host.get('CapDrop'), 'CapAdd': host.get('CapAdd')})
+    need('security options', all(o in (host.get('SecurityOpt') or []) for o in
+                                 conv.get('security_opt') or ['?']), host.get('SecurityOpt'))
+    need('no privilege or host namespace',
+         host.get('Privileged') is False and not host.get('Devices') and
+         'host' not in (host.get('PidMode'), host.get('IpcMode'), host.get('NetworkMode'),
+                        host.get('UsernsMode'), host.get('UTSMode')) and
+         host.get('Runtime') == ((profile.get('provisioning') or {}).get('moby') or {}).get(
+             'default_runtime'),
+         {k: host.get(k) for k in ('Privileged', 'Devices', 'PidMode', 'IpcMode', 'NetworkMode',
+                                   'UsernsMode', 'UTSMode', 'Runtime')})
+    published = conv.get('published') or {}
+    port_key = published.get('container_port')
+    need('port binding (127.0.0.1 only)', host.get('PortBindings') == {
+        port_key: [{'HostIp': published.get('host_ip'), 'HostPort': ''}]} and
+        not host.get('PublishAllPorts'), host.get('PortBindings'))
+    ports = ((container.get('NetworkSettings') or {}).get('Ports') or {})
+    bound = ports.get(port_key) or []
+    if state.get('Running'):
+        need('published port', len(bound) == 1 and bound[0].get('HostIp') == published.get('host_ip')
+             and str(bound[0].get('HostPort', '')).isdigit() and
+             not [k for k, v in ports.items() if k != port_key and v], ports)
+    need('caps (decision 0001 s3)', host.get('Memory') == memory_bytes(cfg.get(
+        'conversation_container_memory')) and host.get('NanoCpus') == int(round(
+            float(cfg.get('conversation_container_cpus') or 0) * 1e9)) and
+        host.get('PidsLimit') == cfg.get('conversation_container_pids_limit'),
+        {k: host.get(k) for k in ('Memory', 'NanoCpus', 'PidsLimit')})
+    deviations = []
+    extra = [h for h in host.get('ExtraHosts') or [] if 'host-gateway' in str(h)]
+    if extra:
+        deviations.append({'id': 'host-gateway', 'observed': extra})
+    if host.get('NetworkMode') != 'none':
+        deviations.append({'id': 'no-network-none', 'observed': host.get('NetworkMode'),
+                           'networks': sorted(((container.get('NetworkSettings') or {})
+                                               .get('Networks') or {}))})
+    return problems, deviations
+
+
+def _proxy_target(argv):
+    """docker-proxy's '-container-ip X -container-port Y -host-ip A -host-port B' as a dict."""
+    out = {}
+    for flag, value in zip(argv or [], (argv or [])[1:]):
+        if flag in ('-proto', '-host-ip', '-host-port', '-container-ip', '-container-port'):
+            out[flag.lstrip('-')] = value
+    return out
+
+
+def listener_allowance(profile, report):
+    """profiles P7 (amended 2026-11-07, F-04.2) on one root report: every TCP listener of Moby
+    (dockerd, containerd, docker-proxy, containerd-shim) must be a docker-proxy or dockerd
+    listener on 127.0.0.1 at a port inside ip_local_port_range, mapped to the port 8000 of
+    exactly one running conversation container that the Agent Server owns, at most one per
+    container. Returns {'allowed': [...], 'violations': [...]}."""
+    conv = conversations_config(profile.get('provisioning'))
+    published = conv.get('published') or {}
+    port_key = published.get('container_port', '8000/tcp')
+    containers = [c for c in report.get('containers') or [] if isinstance(c, dict)]
+    owner = conversation_owner(profile)
+    running = [c for c in containers if (c.get('State') or {}).get('Running') and
+               ((c.get('Config') or {}).get('Labels') or {}).get(conv.get('owner_label')) == owner]
+    try:
+        low, high = (int(x) for x in report.get('ip_local_port_range') or [])
+    except (TypeError, ValueError):
+        low, high = None, None
+    proxies = {(p.get('local'), p.get('process')): p for p in report.get('proxies') or []
+               if isinstance(p, dict)}
+    allowed, violations, used = [], [], set()
+    lines = report.get('tcp_listeners') if isinstance(report.get('tcp_listeners'), list) else []
+    for line in lines:
+        process = _listener_process(line)
+        if process not in MOBY_PROCESSES:
+            continue
+        local = line.split()[3] if len(line.split()) > 3 else ''
+        address, _, port = local.rpartition(':')
+        target = _proxy_target((proxies.get((local, process)) or {}).get('argv'))
+        matches = [c for c in running if any(
+            b.get('HostIp') == published.get('host_ip') and str(b.get('HostPort')) == port
+            for b in (((c.get('NetworkSettings') or {}).get('Ports') or {}).get(port_key) or []))]
+        if process == 'docker-proxy':
+            ips = {(n or {}).get('IPAddress') for c in matches for n in
+                   ((c.get('NetworkSettings') or {}).get('Networks') or {}).values()}
+            mapped = target.get('container-ip') in ips and \
+                f"{target.get('container-port')}/{target.get('proto', 'tcp')}" == port_key and \
+                target.get('host-ip') == published.get('host_ip') and target.get('host-port') == port
+        else:
+            mapped = True
+        reasons = []
+        if process not in ('docker-proxy', 'dockerd'):
+            reasons.append(f'{process} may not listen')
+        if address != published.get('host_ip'):
+            reasons.append('not on 127.0.0.1')
+        if not (port.isdigit() and low is not None and low <= int(port) <= high):
+            reasons.append('port outside ip_local_port_range')
+        if len(matches) != 1:
+            reasons.append(f'maps to {len(matches)} running owned containers')
+        elif not mapped:
+            reasons.append(f'docker-proxy forwards to {target}, not to the container port')
+        elif matches[0].get('Id') in used:
+            reasons.append('a second listener for one container')
+        if reasons:
+            violations.append({'line': line, 'reasons': reasons})
+        else:
+            used.add(matches[0].get('Id'))
+            allowed.append({'process': process, 'local': local,
+                            'container': str(matches[0].get('Id'))[:12],
+                            'target': f"{target.get('container-ip')}:{target.get('container-port')}"
+                            if target else None})
+    return {'allowed': allowed, 'violations': violations,
+            'running_owned': [str(c.get('Id'))[:12] for c in running]}
+
+
+def conversation_containers_view(profile, record, report):
+    """Every container in the report against the declared shape: problems, deviations, and
+    whether every container in Moby's store is an owned one."""
+    conv = conversations_config(profile.get('provisioning'))
+    containers = report.get('containers')
+    if not isinstance(containers, list):
+        return {'error': containers}, False
+    owner = conversation_owner(profile)
+    out, ok = [], True
+    for c in containers:
+        problems, deviations = container_problems(profile, record, report, c)
+        ok = ok and not problems
+        out.append({'id': c.get('Id'), 'name': c.get('Name'),
+                    'conversation': conversation_hex(c), 'running': (c.get('State') or {}).get('Running'),
+                    'image': c.get('Image'), 'user': (c.get('Config') or {}).get('User'),
+                    'mounts': [list(m) for m in effective_container_mounts(c)],
+                    'ports': ((c.get('NetworkSettings') or {}).get('Ports')),
+                    'problems': problems, 'deviations': deviations})
+    labels_ok = all(((c.get('Config') or {}).get('Labels') or {}).get(conv.get('owner_label')) == owner
+                    for c in containers)
+    only_owned = report.get('containers_all_count') == len(containers)
+    return {'count': len(containers), 'containers': out, 'owner': owner,
+            'containers_all_count': report.get('containers_all_count')}, \
+        ok and labels_ok and only_owned
 
 
 def secret_fingerprint(value):
@@ -5660,23 +5957,35 @@ def moby_p6_checks(profile, obs):
     ]
 
 
-def moby_p7_checks(obs):
-    """profiles P7 for a provisioned instance: no TCP listener of Moby (unix socket only),
-    and none appeared since the boot-time report."""
+def moby_p7_checks(obs, profile=None):
+    """profiles P7 for a provisioned instance: no TCP listener of Moby at boot (unix socket
+    only); now, only the amended allowance (F-04.2): one docker-proxy or dockerd listener on
+    127.0.0.1 at an ephemeral port per running conversation container of the Agent Server,
+    mapped to its port 8000; agent sees the same listeners as root."""
     g = obs.get('guest', {})
     facts = _probe_json(obs, 'moby_facts') or {}
     root_lines = facts.get('tcp_listeners') if isinstance(facts.get('tcp_listeners'), list) else None
     moby_owned = None if root_lines is None else [
         line for line in root_lines if any(f'(("{p}' in line or f'"{p}"' in line
                                            for p in MOBY_PROCESSES)]
+    report = conversation_report(obs)
+    now_lines = (report or {}).get('tcp_listeners')
+    now_lines = now_lines if isinstance(now_lines, list) else None
+    allowance = listener_allowance(profile or {}, report) if now_lines is not None else None
     agent_view = _listener_addresses((g.get('tcp_listeners') or {}).get('out', '').splitlines())
-    root_view = None if root_lines is None else _listener_addresses(root_lines)
+    root_view = None if now_lines is None else _listener_addresses(now_lines)
     return [check('guest TCP listeners (Moby)',
-                  'none owned by dockerd, containerd or docker-proxy; none new since boot',
-                  {'agent_view': agent_view, 'boot_root_view': root_view,
-                   'moby_owned': moby_owned},
-                  'guest: ss -ltnH (agent, now); ss -ltnpH in the facts report (root, at boot)',
-                  None if root_lines is None else not moby_owned and agent_view == root_view)]
+                  {'boot': 'none owned by dockerd, containerd or docker-proxy',
+                   'now': 'only the P7 allowance: one docker-proxy or dockerd listener on '
+                          '127.0.0.1 at an ephemeral port per running conversation container '
+                          'of the Agent Server, mapped to its port 8000',
+                   'agent_view': 'equal to the root view'},
+                  {'agent_view': agent_view, 'root_view': root_view,
+                   'boot_moby_owned': moby_owned, 'allowance': allowance},
+                  'guest: ss -ltnH (agent, now); ss -ltnpH and docker-proxy argv in the on-demand '
+                  'conversation facts (root, now); ss -ltnpH in the boot facts report (root)',
+                  None if root_lines is None or allowance is None else
+                  not moby_owned and agent_view == root_view and not allowance['violations'])]
 
 
 def moby_p8_checks(obs):
@@ -5817,18 +6126,27 @@ def agent_server_checks(profile, record, obs):
               all(isinstance(v, str) and len(v) == 64 for v in fps.values())),
     ]
 
-    root_lines = facts.get('tcp_listeners') if isinstance(facts.get('tcp_listeners'), list) else None
+    # root's listeners now (the on-demand conversation facts); a Moby listener inside the
+    # P7 allowance (F-04.2) is declared, every other one beyond the base image's is not
+    report = conversation_report(obs)
+    root_lines = (report or {}).get('tcp_listeners')
+    root_lines = root_lines if isinstance(root_lines, list) else None
+    allowed = {a['local'] for a in (listener_allowance(profile, report)['allowed']
+                                    if root_lines is not None else [])}
     by_process = {}
     for line in root_lines or []:
+        if (line.split()[3] if len(line.split()) > 3 else None) in allowed:
+            continue
         by_process.setdefault(_listener_process(line), []).extend(_listener_addresses([line]))
     agent_view = _listener_addresses((g.get('tcp_listeners') or {}).get('out', '').splitlines())
     undeclared = {p: a for p, a in by_process.items()
                   if p not in BASE_LISTENER_PROCESSES + (listener.get('process'),)}
     p7 = [check('guest TCP listeners (Agent Server)',
-                {'agent-server': [want_bind], 'others': f'only {list(BASE_LISTENER_PROCESSES)}'},
+                {'agent-server': [want_bind], 'others': f'only {list(BASE_LISTENER_PROCESSES)} '
+                 'and the P7 allowance for conversation containers'},
                 {'agent-server': sorted(set(by_process.get(listener.get('process'), []))),
                  'undeclared': undeclared, 'seen_by_agent': want_bind in agent_view},
-                'facts: ss -ltnpH (root, at boot); guest: ss -ltnH (agent)',
+                'on-demand conversation facts: ss -ltnpH (root, now); guest: ss -ltnH (agent)',
                 None if root_lines is None else
                 sorted(set(by_process.get(listener.get('process'), []))) == [want_bind] and
                 not undeclared and want_bind in agent_view)]
@@ -5970,6 +6288,39 @@ def agent_server_checks(profile, record, obs):
               bool(journal) and journal.get('rc') == 0 and
               not any((journal.get('secret_occurrences') or {}).values())),
     ]
+    conv = conf.get('conversations') or {}
+    cfacts = conv.get('facts') or {}
+    raw = _probe_json(obs, 'conversation_facts')
+    request = (report or {}).get('request') or {}
+    units = (report or {}).get('units') or {}
+    provisioning.append(check(
+        'on-demand conversation facts',
+        {'report': cfacts.get('report'), 'schema': CONVERSATION_FACTS_SCHEMA,
+         'boot': 'this boot', 'request': 'consumed (removed, never read)',
+         'units': {cfacts.get('path_unit'): 'enabled', cfacts.get('service'): 'static'}},
+        {'serial': report.get('serial'),
+         'same_boot': report.get('boot_id') == out_text('boot_id').strip(),
+         'request': request, 'units': units, 'seconds': report.get('seconds'),
+         'secret_values_redacted': report.get('secret_values_redacted'),
+         'secret_occurrences_in_report': report.get('secret_occurrences_in_report')}
+        if report else {'probe': raw if raw is not None else out_text('conversation_facts')[-500:]},
+        "guest, as agent: create the request file, wait (inotify) for the root reporter's "
+        'report of a run started after the request',
+        None if report is None else
+        report.get('boot_id') == out_text('boot_id').strip() and request.get('consumed') is True
+        and units.get(cfacts.get('path_unit')) == 'enabled'))
+    view, view_ok = conversation_containers_view(profile, record, report) if report \
+        else (None, None)
+    provisioning.append(check(
+        'conversation containers',
+        {'shape': 'provisioning.agent_server.conversations: the locked image ID, the declared '
+                  'mounts exactly, the service user, cap-drop ALL, no-new-privileges, 127.0.0.1 '
+                  'port binding only, the config caps, the owner label',
+         'store': 'every container in Moby carries the owner label',
+         'deviations': 'recorded, not failed: ' + ', '.join(
+             d.get('id', '') for d in conv.get('deviations') or [])},
+        view, 'on-demand conversation facts: docker ps --filter label and docker container '
+              'inspect (root)', view_ok))
     return {'P5': p5, 'P7': p7, 'provisioning': provisioning}
 
 
@@ -6131,7 +6482,26 @@ CHECK_CLASSES.update({
     # timestamps and process ids change with every start; the verdict (no secret value in
     # it) must stay equal
     (PROVISIONING_PROPERTY, 'Agent Server start-up log'): (VOLATILE, None),
+    # F-04.2: the on-demand report's serial and timing change with every request
+    (PROVISIONING_PROPERTY, 'on-demand conversation facts'): (VOLATILE, None),
+    # container ids, names and published ports are allocated per run: the count, the
+    # owner label and the problems and deviations found are compared
+    (PROVISIONING_PROPERTY, 'conversation containers'): (STABLE, 'containers'),
 })
+
+
+def _n_containers(value, profile):
+    if not isinstance(value, dict) or not isinstance(value.get('containers'), list):
+        return value
+    return {'count': value.get('count'), 'containers_all_count': value.get('containers_all_count'),
+            'owner': value.get('owner'),
+            'problems': sorted({p.get('check') for c in value['containers']
+                                for p in c.get('problems') or []}),
+            'deviations': sorted({d.get('id') for c in value['containers']
+                                  for d in c.get('deviations') or []})}
+
+
+NORMALIZERS['containers'] = _n_containers
 
 
 def _n_secret_scan(value, profile):
@@ -6299,6 +6669,538 @@ def provision(ctx, name):
     return out
 
 
+# ---------------------------------------------------------------- conversation lifecycle (F-04.2)
+#
+# The disposable Docker conversation of the profile's fixture, driven over the Agent
+# Server API as agent on the guest loopback (exec channel), with the root facts of its
+# container from the on-demand reporter. No LLM, no message, no repository content.
+
+CONVERSATION_SMOKE_SCHEMA = 'ai-engineering-harness/profiles/conversation-smoke-record/v1'
+
+# Run as agent: the requests (base64 JSON in argv) against the Agent Server on its loopback
+# listener, with the session key read from its agent-readable file (never on a command
+# line, never printed: any occurrence in a response is counted and redacted). Prints one
+# JSON line: the responses (status, JSON body or text) and the redaction count.
+API_PROBE = r'''import base64, errno, http.client, json, sys, time
+key_path, host, port, spec = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+requests = json.loads(base64.b64decode(spec).decode('utf-8'))
+with open(key_path, encoding='ascii') as handle:
+    key = handle.read().strip()
+out, hits = [], 0
+for req in requests:
+    headers = {'Accept': 'application/json'}
+    if req.get('auth', True):
+        headers['X-Session-API-Key'] = key
+    body = None
+    if 'json' in req:
+        body = json.dumps(req['json']).encode('utf-8')
+        headers['Content-Type'] = 'application/json'
+    entry = {'method': req['method'], 'path': req['path']}
+    t0 = time.monotonic()
+    conn = http.client.HTTPConnection(host, port, timeout=float(req.get('timeout', 300)))
+    try:
+        conn.request(req['method'], req['path'], body=body, headers=headers)
+        resp = conn.getresponse()
+        text = resp.read(32 << 20).decode('utf-8', 'replace')
+        entry['status'] = resp.status
+        hits += text.count(key)
+        text = text.replace(key, '<OH_SESSION_API_KEYS_0 redacted>')
+        try:
+            value = json.loads(text) if text else None
+        except ValueError:
+            value = text[:4000]
+        if req.get('reduce') == 'openapi-paths' and isinstance(value, dict):
+            value = {p: sorted(m.upper() for m in ops if m in ('get', 'post', 'put', 'patch', 'delete'))
+                     for p, ops in (value.get('paths') or {}).items() if '/api/conversations' in p}
+        entry['body'] = value
+    except OSError as exc:
+        code = errno.errorcode.get(exc.errno) if isinstance(getattr(exc, 'errno', None), int) else None
+        entry['error'] = code or type(exc).__name__
+    finally:
+        conn.close()
+    entry['seconds'] = round(time.monotonic() - t0, 2)
+    out.append(entry)
+print(json.dumps({'responses': out, 'session_key_occurrences': hits}, sort_keys=True))
+'''
+
+
+class GuestApi:
+    """The Agent Server API, called as agent on the guest's loopback over SSH."""
+
+    def __init__(self, ssh, profile):
+        server = provisioning_config(profile)['agent_server']
+        self.ssh = ssh
+        self.args = [server['session_key']['guest_path'], server['listener']['address'],
+                     str(server['listener']['port'])]
+
+    def __call__(self, requests, timeout=900):
+        spec = base64.b64encode(json.dumps(requests).encode('utf-8')).decode('ascii')
+        result = self.ssh.run(['python3', '-'] + self.args + [spec], input_text=API_PROBE,
+                              timeout=timeout)
+        try:
+            return json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            raise Refused('API', f'the API probe printed no result (rc {result.returncode}): '
+                          f'{result.stderr.strip()[-500:]}')
+
+
+class GuestFacts:
+    """The on-demand conversation facts: request, wait, read (as agent)."""
+
+    def __init__(self, ssh, profile):
+        self.ssh = ssh
+        self.facts = conversations_config(provisioning_config(profile)).get('facts') or {}
+
+    def __call__(self):
+        result = self.ssh.run(['python3', '-', self.facts['request'], self.facts['report'],
+                               str(CONVERSATION_FACTS_CEILING_S)],
+                              input_text=CONVERSATION_FACTS_PROBE,
+                              timeout=CONVERSATION_FACTS_CEILING_S + 60)
+        try:
+            data = json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            data = None
+        if not isinstance(data, dict) or data.get('schema') != CONVERSATION_FACTS_SCHEMA:
+            raise Refused('FACTS', f'no conversation facts report (rc {result.returncode}): '
+                          f'{(result.stdout or "")[-300:]} {result.stderr.strip()[-300:]}')
+        return data
+
+
+# The routes the lifecycle uses, as the running server's own /openapi.json names them. The
+# release's openapi.json documents the local runtime; the Docker runtime's routes (stop:
+# DELETE .../runtime, reopen: POST .../runtime/reprovision) are in the locked wheel's
+# docker_runtime/routers.py and in the running server's document, which is checked first.
+LIFECYCLE_ROUTES = (
+    ('POST', '/api/conversations'),
+    ('GET', '/api/conversations/{conversation_id}'),
+    ('GET', '/api/conversations/search'),
+    ('GET', '/api/conversations/{conversation_id}/events/search'),
+    ('GET', '/api/conversations/{conversation_id}/runtime'),
+    ('DELETE', '/api/conversations/{conversation_id}/runtime'),
+    ('POST', '/api/conversations/{conversation_id}/runtime/reprovision'),
+    ('DELETE', '/api/conversations/{conversation_id}'),
+)
+# Event kinds that only an LLM step produces (openhands-sdk 1.60.1 event classes): none may
+# appear in a conversation that has no message and no LLM.
+LLM_EVENT_KINDS = ('ActionEvent', 'MessageEvent', 'AgentErrorEvent', 'LLMCompletionLogEvent',
+                   'TokenEvent', 'StreamingDeltaEvent', 'CondensationSummaryEvent', 'ObservationEvent')
+EGRESS_LINE = re.compile(r'(?i)(https?://|name resolution|getaddrinfo|resolv|errno -?\d+|'
+                         r'network is unreachable|no route|connecterror|connection refused|'
+                         r'timed out|dns|litellm)')
+CONVERSATION_STATE_KEYS = ('id', 'execution_status', 'title', 'tags', 'created_at')
+# the runtime's ownership lease (taken while a container serves the conversation, released
+# when it stops): not conversation state
+LEASE_FILES = ('.owner_lease.lock', 'owner_lease.json')
+
+
+def _status_ok(response):
+    return isinstance(response, dict) and isinstance(response.get('status'), int) and \
+        200 <= response['status'] < 300
+
+
+def _events_of(response):
+    """(id, kind, source) of an events/search page body."""
+    body = (response or {}).get('body')
+    items = body.get('items') if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        return None
+    return [(e.get('id'), e.get('kind'), e.get('source')) for e in items if isinstance(e, dict)]
+
+
+def _state_of(response):
+    body = (response or {}).get('body')
+    if not isinstance(body, dict):
+        return None
+    out = {k: body.get(k) for k in CONVERSATION_STATE_KEYS}
+    agent = body.get('agent') if isinstance(body.get('agent'), dict) else {}
+    out['agent_kind'] = agent.get('kind')
+    return out
+
+
+def facts_summary(profile, record, report, hex_id):
+    """One on-demand report, reduced to what the lifecycle compares: the conversation
+    containers against the declared shape, the P7 allowance, the conversation's stored files
+    and events, and the egress lines of the server's and the containers' logs."""
+    view, ok = conversation_containers_view(profile, record, report)
+    storage = report.get('storage') or {}
+    conv_dir = (storage.get('conversations') or {}).get(hex_id)
+    egress = []
+    journal = report.get('server_journal') or {}
+    for line in (journal.get('head') or []) + (journal.get('noted') or []):
+        if EGRESS_LINE.search(line):
+            egress.append({'from': 'agent-server (outer)', 'line': line})
+    for cid, files in (report.get('container_files') or {}).items():
+        log = (files or {}).get('log') or {}
+        for line in (log.get('head') or []) + (log.get('noted') or []):
+            if EGRESS_LINE.search(line):
+                egress.append({'from': f'container {str(cid)[:12]}', 'line': line})
+    tree = ((conv_dir or {}).get('tree') or {}).get('entries') or []
+    return {
+        'serial': report.get('serial'), 'collected_at': report.get('collected_at'),
+        'containers': view, 'containers_ok': ok,
+        'allowance': listener_allowance(profile, report),
+        'conversation_dir': None if conv_dir is None else {
+            k: conv_dir.get(k) for k in ('state', 'owner', 'group', 'mode')},
+        'conversation_files': [{k: e.get(k) for k in ('path', 'state', 'size', 'sha256', 'mode')}
+                               for e in tree],
+        'events_on_disk': [(e.get('id'), e.get('kind'), e.get('source'))
+                           for e in (conv_dir or {}).get('events') or []],
+        'persisted_state': {e.get('path'): e.get('sha256') for e in tree
+                            if e.get('state') == 'file' and e.get('path') not in LEASE_FILES},
+        'runtime_control': [e.get('path', '').rsplit('/', 1)[-1]
+                            for e in storage.get('runtime_control') or []],
+        'runtime_data': sorted((storage.get('runtime_data') or {})),
+        'container_files': {str(k)[:12]: {'resolv_conf': (v or {}).get('resolv_conf'),
+                                          'hosts': (v or {}).get('hosts'),
+                                          'log_lines': ((v or {}).get('log') or {}).get('lines')}
+                            for k, v in (report.get('container_files') or {}).items()},
+        'secret_occurrences_in_report': report.get('secret_occurrences_in_report'),
+        'egress': egress,
+    }
+
+
+def _fixture(ctx):
+    """The pinned conversation fixture (sha256 checked) and its structural problems."""
+    server = provisioning_config(ctx.profile)['agent_server']
+    entry = server['fixture']
+    path = ctx.repo / entry['path']
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != entry['sha256']:
+        raise Refused('HASH_MISMATCH', f'{entry["path"]} differs from its pinned sha256')
+    body = json.loads(data.decode('utf-8'))
+    checker = load_profile_checker()
+    return body, checker.fixture_problems(body), checker
+
+
+def load_profile_checker():
+    spec = importlib.util.spec_from_file_location('check_profile', REPO / 'tools' / 'check_profile.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def conversation_smoke(ctx, name, canary_dir=None, restart=False, openapi=None, out_path=None,
+                       ready_timeout=READY_TIMEOUT_S, channels=None, inspect_fn=None, stop_fn=None,
+                       start_fn=None):
+    """conversation-smoke (F-04.2): the disposable Docker conversation of the profile's
+    fixture on a running provisioned instance, over the Agent Server API as agent and the
+    on-demand root facts: validate the fixture; create it (conversation_runtime docker, the
+    fixed id; a non-2xx is a refusal and stops the run); inspect the conversation and its
+    container against provisioning.agent_server.conversations; create it again (idempotent);
+    read its events (API and disk); inspect the guest with it running; stop its runtime and
+    reopen it (same id, events, state and mounts); with ``restart``, stop and start the
+    guest and reopen it again; delete it. One machine verdict, PASS or FAIL.
+    ``channels(record) -> (api, facts)`` and the *_fn hooks stand in for the guest in tests."""
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    canaries = load_canaries(canary_dir) if canary_dir else None
+    profile = ctx.profile
+    body, fixture_problems, checker = _fixture(ctx)
+    conversation_id = body['conversation_id']
+    hex_id = conversation_id.replace('-', '')
+    base = f'/api/conversations/{conversation_id}'
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    channels = channels or default_channels
+    inspect_fn = inspect_fn or (lambda: inspect(ctx, name, canaries))
+    stop_fn = stop_fn or (lambda: stop(ctx, name))
+    start_fn = start_fn or (lambda: start(ctx, name, ready_timeout))
+    api, facts = channels(record)
+    t0, started = time.time(), utc_now()
+    steps, failed, stop_conditions = [], [], []
+    state = {'created': False, 'deleted': False}
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, QmpError,
+              subprocess.SubprocessError)
+
+    def run(step, func, always=False):
+        if (failed or stop_conditions) and not always:
+            steps.append({'step': step, 'skipped': 'an earlier step failed'})
+            return None
+        s = time.time()
+        entry = {'step': step, 'started_at': utc_now()}
+        try:
+            ok, detail = func()
+        except caught as exc:
+            ok, detail = False, {'error': getattr(exc, 'code', type(exc).__name__),
+                                 'message': str(exc), 'detail': getattr(exc, 'detail', None)}
+        entry.update(seconds=round(time.time() - s, 1), ok=bool(ok), detail=detail)
+        steps.append(entry)
+        log(f'conversation-smoke: {step}: {"ok" if ok else "FAILED"} ({entry["seconds"]} s)')
+        if not ok:
+            failed.append(step)
+        return detail
+
+    def call(*requests):
+        data = api(list(requests))
+        if data.get('session_key_occurrences'):
+            raise Refused('SECRET', 'a response carried the session key '
+                          f'({data["session_key_occurrences"]} occurrence(s), redacted)')
+        return data['responses']
+
+    def look(want_count):
+        """facts now; STOP conditions (decision 0006 item 3, the mount policy) are raised."""
+        summary = facts_summary(profile, record, facts(), hex_id)
+        for c in summary['containers'].get('containers') or []:
+            names = {p.get('check') for p in c.get('problems') or []}
+            if 'image (decision 0006 item 3)' in names:
+                stop_conditions.append({'condition': 'a container .Image differs from the locked '
+                                        'image ID', 'container': c})
+            if names & {'mount sources (declared root, no forbidden path)'}:
+                stop_conditions.append({'condition': 'a mount outside the declared sources',
+                                        'container': c})
+        if summary['allowance']['violations']:
+            stop_conditions.append({'condition': 'a Moby listener outside the P7 allowance',
+                                    'violations': summary['allowance']['violations']})
+        count_ok = summary['containers'].get('count') == want_count
+        return summary, count_ok and summary['containers_ok'] and \
+            len(summary['allowance']['allowed']) == want_count and \
+            not summary['allowance']['violations']
+
+    memo = {}
+
+    def fixture_step():
+        lines = []
+        ok = not fixture_problems
+        if openapi:
+            schema_ok, lines = checker.validate_fixture_openapi(profile, ctx.repo, openapi)
+            ok = ok and schema_ok
+        return ok, {'path': provisioning_config(profile)['agent_server']['fixture']['path'],
+                    'sha256': provisioning_config(profile)['agent_server']['fixture']['sha256'],
+                    'structural_problems': fixture_problems,
+                    'openapi': lines if openapi else 'not given (structural check only)',
+                    'body': body}
+
+    def routes_step():
+        info, doc = call({'method': 'GET', 'path': '/server_info', 'auth': False},
+                         {'method': 'GET', 'path': '/openapi.json', 'auth': False,
+                          'reduce': 'openapi-paths'})
+        server = info.get('body') if isinstance(info.get('body'), dict) else {}
+        paths = doc.get('body') if isinstance(doc.get('body'), dict) else {}
+        missing = [f'{m} {p}' for m, p in LIFECYCLE_ROUTES if m not in (paths.get(p) or [])]
+        runtime_ok = (server.get('conversation_runtime') == 'docker' or
+                      'docker' in (server.get('available_conversation_runtimes') or [])) and \
+            all(c in (server.get('capabilities') or []) for c in
+                ('conversation_runtime_routes_v1', 'idempotent_conversation_create_v1'))
+        return _status_ok(info) and _status_ok(doc) and not missing and runtime_ok, {
+            'server_info': {k: server.get(k) for k in (
+                'version', 'conversation_runtime', 'available_conversation_runtimes',
+                'capabilities')},
+            'lifecycle_routes': {f'{m} {p}': m in (paths.get(p) or []) for m, p in LIFECYCLE_ROUTES},
+            'missing': missing}
+
+    def before_step():
+        summary, ok = look(0)
+        return ok and summary['conversation_dir'] is None, {'facts': summary}
+
+    def create_step():
+        response, = call({'method': 'POST', 'path': '/api/conversations', 'json': body,
+                          'timeout': 600})
+        memo['create'] = response
+        if not _status_ok(response):
+            stop_conditions.append({'condition': 'create returned non-2xx (a refusal)',
+                                    'response': response})
+            return False, {'response': response}
+        state['created'] = True
+        summary, ok = look(1)
+        memo['container'] = (summary['containers'].get('containers') or [{}])[0]
+        got_id = (response.get('body') or {}).get('id') if isinstance(response.get('body'), dict) \
+            else None
+        return ok and str(got_id).replace('-', '') == hex_id and \
+            memo['container'].get('conversation') == hex_id, {
+                'response': response, 'facts': summary}
+
+    def inspect_step():
+        conv, runtime = call({'method': 'GET', 'path': base}, {'method': 'GET', 'path': base + '/runtime'})
+        memo['state'] = _state_of(conv)
+        rt = runtime.get('body') if isinstance(runtime.get('body'), dict) else {}
+        return _status_ok(conv) and _status_ok(runtime) and \
+            str((memo['state'] or {}).get('id')).replace('-', '') == hex_id and \
+            rt.get('runtime_status') == 'available', {
+                'conversation': conv, 'runtime': runtime, 'state': memo['state'],
+                'container': memo.get('container')}
+
+    def idempotent_step():
+        response, = call({'method': 'POST', 'path': '/api/conversations', 'json': body,
+                          'timeout': 600})
+        summary, ok = look(1)
+        again = (summary['containers'].get('containers') or [{}])[0]
+        got_id = (response.get('body') or {}).get('id') if isinstance(response.get('body'), dict) \
+            else None
+        return _status_ok(response) and ok and str(got_id).replace('-', '') == hex_id and \
+            again.get('id') == (memo.get('container') or {}).get('id'), {
+                'response': {'status': response.get('status'),
+                             'id': got_id, 'seconds': response.get('seconds')},
+                'container_before': (memo.get('container') or {}).get('id'),
+                'container_after': again.get('id'), 'facts': summary}
+
+    def events_now():
+        page, = call({'method': 'GET', 'path': base + '/events/search?limit=100'})
+        return page, _events_of(page)
+
+    def events_step():
+        page, events = events_now()
+        summary, ok = look(1)
+        memo['events'] = events
+        memo['persisted'] = summary['persisted_state']
+        disk = summary['events_on_disk']
+        llm = [e for e in events or [] if e[1] in LLM_EVENT_KINDS]
+        return _status_ok(page) and ok and events is not None and \
+            sorted(map(tuple, disk)) == sorted(map(tuple, events)) and not llm and \
+            {'base_state.json', 'meta.json'} <= set(memo['persisted']), {
+                'api': events, 'disk': disk, 'llm_events': llm,
+                'persisted_state': memo['persisted'],
+                'conversation_files': summary['conversation_files'],
+                'facts': summary}
+
+    def state_kept(summary):
+        before = memo.get('persisted') or {}
+        return bool(before) and all(summary['persisted_state'].get(k) == v for k, v in before.items())
+
+    def guest_inspect_step():
+        rec = inspect_fn()
+        verdicts = rec.get('verdicts') or {}
+        want = ('profiles P3', 'profiles P4', 'profiles P6', 'profiles P7', PROVISIONING_PROPERTY)
+        picked = {(p['property'], c['check']): c for p in rec.get('properties') or []
+                  for c in p['checks']}
+        keep = [('profiles P7', 'guest TCP listeners (Moby)'),
+                ('profiles P7', 'guest TCP listeners (Agent Server)'),
+                (PROVISIONING_PROPERTY, 'conversation containers'),
+                (PROVISIONING_PROPERTY, 'on-demand conversation facts')]
+        return all(verdicts.get(p) == 'PASS' for p in want) and \
+            verdicts.get('profiles P5') in ('PASS', 'UNKNOWN'), {
+                'verdicts': verdicts, 'record': rec.get('record'),
+                'checks': {f'{k[0]} / {k[1]}': {x: (picked.get(k) or {}).get(x) for x in
+                                                ('verdict', 'observed')} for k in keep}}
+
+    def stop_runtime_step():
+        stopped, = call({'method': 'DELETE', 'path': base + '/runtime', 'timeout': 300})
+        summary, ok = look(0)
+        conv, runtime = call({'method': 'GET', 'path': base}, {'method': 'GET', 'path': base + '/runtime'})
+        page, events = events_now()
+        rt = runtime.get('body') if isinstance(runtime.get('body'), dict) else {}
+        return _status_ok(stopped) and ok and summary['conversation_dir'] is not None and \
+            _status_ok(conv) and _state_of(conv) == memo.get('state') and \
+            rt.get('runtime_status') == 'missing' and rt.get('can_resume') is True and \
+            events == memo.get('events') and state_kept(summary), {
+                'stop': stopped, 'runtime': runtime, 'state': _state_of(conv),
+                'events': events, 'persisted_state_kept': state_kept(summary), 'facts': summary}
+
+    def reopen(label):
+        reopened, = call({'method': 'POST', 'path': base + '/runtime/reprovision', 'timeout': 600})
+        summary, ok = look(1)
+        conv, runtime = call({'method': 'GET', 'path': base}, {'method': 'GET', 'path': base + '/runtime'})
+        page, events = events_now()
+        now = (summary['containers'].get('containers') or [{}])[0]
+        before = memo.get('container') or {}
+        rt = runtime.get('body') if isinstance(runtime.get('body'), dict) else {}
+        kept = events is not None and memo.get('events') is not None and \
+            all(e in events for e in memo['events'])
+        result = _status_ok(reopened) and ok and _status_ok(conv) and \
+            _state_of(conv) == memo.get('state') and rt.get('runtime_status') == 'available' and \
+            now.get('conversation') == hex_id and now.get('id') != before.get('id') and \
+            now.get('mounts') == before.get('mounts') and kept and state_kept(summary) and \
+            not [e for e in events or [] if e[1] in LLM_EVENT_KINDS]
+        memo['container'] = now
+        return result, {'reprovision': reopened, 'runtime': runtime, 'state': _state_of(conv),
+                        'container_before': before.get('id'), 'container_after': now.get('id'),
+                        'mounts_unchanged': now.get('mounts') == before.get('mounts'),
+                        'events_retained': kept, 'events': events,
+                        'persisted_state_kept': state_kept(summary),
+                        'new_events': [e for e in events or [] if e not in (memo.get('events') or [])],
+                        'facts': summary}
+
+    def restart_step():
+        nonlocal api, facts, record
+        stopped = stop_fn()
+        started_ = start_fn()
+        _, record = running_instance(ctx, name)
+        api, facts = channels(record)
+        ok_stop = stopped.get('result') == 'stopped'
+        ok_start = started_.get('result') == 'ready'
+        # the facts first: the reporter's unit is ordered after aieh-agent-server.service,
+        # which is active only once the server answers /ready (its completion signal)
+        summary, ok = look(0)
+        listed, conv, runtime = call({'method': 'GET', 'path': '/api/conversations/search?limit=100'},
+                                     {'method': 'GET', 'path': base},
+                                     {'method': 'GET', 'path': base + '/runtime'})
+        page, events = events_now()
+        items = ((listed.get('body') or {}).get('items') if isinstance(listed.get('body'), dict)
+                 else None) or []
+        ids = [str((i or {}).get('id')).replace('-', '') for i in items]
+        rt = runtime.get('body') if isinstance(runtime.get('body'), dict) else {}
+        kept = events is not None and memo.get('events') is not None and \
+            all(e in events for e in memo['events'])
+        return ok_stop and ok_start and ok and hex_id in ids and _status_ok(conv) and \
+            _state_of(conv) == memo.get('state') and rt.get('runtime_status') == 'missing' and \
+            rt.get('can_resume') is True and kept and state_kept(summary), {
+                'persisted_state_kept': state_kept(summary),
+                'guest_stop': {'result': stopped.get('result'), 'phases': stopped.get('phases')},
+                'guest_start': {'result': started_.get('result'), 'seconds': started_.get('seconds')},
+                'listed': hex_id in ids, 'runtime': runtime, 'state': _state_of(conv),
+                'events_retained': kept, 'events': events, 'facts': summary}
+
+    def delete_step():
+        deleted, = call({'method': 'DELETE', 'path': base, 'timeout': 300})
+        if _status_ok(deleted):
+            state['deleted'] = True
+        summary, ok = look(0)
+        gone, = call({'method': 'GET', 'path': base})
+        return _status_ok(deleted) and ok and summary['conversation_dir'] is None and \
+            hex_id + '.json' not in summary['runtime_control'] and \
+            hex_id not in summary['runtime_data'] and gone.get('status') == 404, {
+                'delete': deleted, 'get_after': {'status': gone.get('status')}, 'facts': summary}
+
+    run('fixture', fixture_step)
+    run('routes and server_info', routes_step)
+    run('facts before', before_step)
+    run('create', create_step)
+    run('inspect conversation', inspect_step)
+    run('create again (idempotent)', idempotent_step)
+    run('events', events_step)
+    run('inspect guest (conversation running)', guest_inspect_step)
+    run('stop runtime', stop_runtime_step)
+    run('reopen', lambda: reopen('reopen'))
+    if restart:
+        run('restart guest', restart_step)
+        run('reopen after restart', lambda: reopen('reopen after restart'))
+    run('delete', delete_step)
+    if state['created'] and not state['deleted']:
+        cleanup = {'step': 'cleanup delete'}
+        try:
+            cleanup['response'] = call({'method': 'DELETE', 'path': base, 'timeout': 300})[0]
+        except caught as exc:
+            cleanup['error'] = f'{getattr(exc, "code", type(exc).__name__)}: {exc}'
+        steps.append(cleanup)
+    egress = []
+    for s in steps:
+        for item in (((s.get('detail') or {}).get('facts') or {}).get('egress') or []):
+            if item not in egress:
+                egress.append(item)
+    out = {'schema': CONVERSATION_SMOKE_SCHEMA, 'operation': 'conversation-smoke',
+           'labels': labels(profile), 'profile': profile['name'], 'instance': name,
+           'conversation_id': conversation_id, 'restart': restart,
+           'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
+           'result': 'PASS' if not failed and not stop_conditions else 'FAIL',
+           'failed_steps': failed, 'stop_conditions': stop_conditions,
+           'egress_lines': egress, 'steps': steps}
+    out['record'] = write_record(idir, 'conversation-smoke', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -6321,14 +7223,19 @@ def main(argv=None):
     p.add_argument('--log', required=True)
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
-               'provision-fetch', 'provision'):
+               'provision-fetch', 'provision', 'conversation-smoke'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
         if op not in ('preflight', 'provision-fetch'):
             p.add_argument('--name', required=True)
-        if op in ('create', 'inspect', 'recreate'):
+        if op in ('create', 'inspect', 'recreate', 'conversation-smoke'):
             p.add_argument('--canaries', help='a canary set written by the canaries operation')
+        if op == 'conversation-smoke':
+            p.add_argument('--restart', action='store_true',
+                           help='also stop and start the guest, then reopen the conversation')
+            p.add_argument('--openapi', help="the release's downloaded openapi.json: validate the "
+                                             'fixture against it first (sha256 pinned)')
         if op in ('check-surfaces', 'smoke'):
             p.add_argument('--canaries', required=True,
                            help='a canary set written by the canaries operation')
@@ -6337,6 +7244,8 @@ def main(argv=None):
                            help='a durable root to inventory before and after each destroy and '
                                 'recreate (repeatable; stands for Owner data)')
             p.add_argument('--out', help='also write the smoke record to this new file')
+        if op == 'conversation-smoke':
+            p.add_argument('--out', help='also write the record to this new file')
         if op == 'exchange-push':
             p.add_argument('--repo', required=True, help='the repository to read the branch from')
             p.add_argument('--ref', required=True, help='one local branch')
@@ -6347,7 +7256,7 @@ def main(argv=None):
             p.add_argument('--provision', action='store_true',
                            help='F-04.1: seed the provisioning manifest of the verified host '
                                 'stage (smoke: and run provision after create and recreate)')
-        if op in ('create', 'start', 'recreate', 'netprobe', 'smoke'):
+        if op in ('create', 'start', 'recreate', 'netprobe', 'smoke', 'conversation-smoke'):
             p.add_argument('--ready-timeout', type=int, default=READY_TIMEOUT_S,
                            help='overall readiness ceiling in seconds')
         if op == 'stop':
@@ -6397,6 +7306,9 @@ def main(argv=None):
         elif op == 'smoke':
             result = smoke(ctx, args.name, args.canaries, args.durable, args.out,
                            args.ready_timeout, args.provision)
+        elif op == 'conversation-smoke':
+            result = conversation_smoke(ctx, args.name, args.canaries, args.restart, args.openapi,
+                                        args.out, args.ready_timeout)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:
@@ -6405,7 +7317,7 @@ def main(argv=None):
                           'detail': exc.detail}, indent=2, sort_keys=True, default=str))
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
-    if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke'):
+    if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \

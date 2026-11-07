@@ -292,6 +292,39 @@ conditions, recorded here and in the execution-profile contract:
   - **P3, P4 (`guest_storage`):** the service's scratch directories under
     `/srv/scratch/openhands` (role `agent-server`, `provisioned_only`, owner
     `openhands`) are declared. Every data path of the configuration is one of them.
+- **2026-11-07, F-04.2: P7 allowance for conversation containers (Overseer decision as
+  contract owner, under the same Owner authorization).** The 1.60.1 Docker runtime publishes
+  every conversation container with `-p 127.0.0.1::8000` (`docker_runtime/registry.py`), so
+  `docker-proxy` holds a TCP listener on the guest's own `127.0.0.1` while a conversation
+  runs. F-04.1c recorded that this breaks the P7 checks as written. Guest network, a
+  `guestfwd`, a host share, an LLM credential and a new host port still need separate
+  approval; `launch.argv` is unchanged and the tier stays not operational (C6). The
+  contract and the QEMU profile now say:
+  - **P7:** while conversation containers owned by the Agent Server run, each may have
+    exactly one listener on the guest's `127.0.0.1` at an ephemeral port (inside
+    `ip_local_port_range`), owned by `docker-proxy` or `dockerd` and mapped to that
+    container's port 8000. There is no other Moby listener, never a non-loopback bind,
+    and it is never forwarded to the host. The inspection now reads root's current
+    `ss -ltnp` and the `docker-proxy` argv from an on-demand report; the boot-time report
+    must still show no Moby listener.
+  - **Root-only container facts on demand** (`provisioning.agent_server.conversations.facts`):
+    `agent` creates a request file in a `root:agent 0730` directory under `/var/lib/aieh`
+    (declared in `guest_storage`, role `facts-request`); a path unit starts a root oneshot
+    that removes it unread, runs `docker ps` and `docker container inspect` only, for the
+    containers carrying the server's owner label, and writes an agent-readable report
+    (environment by name only, secret values counted and redacted). At most 20 runs in
+    60 s; beyond that the units fail closed until the next boot.
+  - **Conversation mount policy** (`provisioning.agent_server.conversations.mounts`): the
+    effective mounts of a conversation container must equal the declared list exactly:
+    three binds under `/srv/scratch/openhands` (the conversation's event store, its runtime
+    home and the server-provisioned workspace). Never the Docker or containerd socket,
+    `/srv/scratch/docker`, `/etc/aieh`, `/var/lib/aieh` or another host path. The image
+    must be the locked image ID (decision 0006 item 3).
+  - **Recorded, not failed** (decision 0001 s3, upstream behaviour): `--add-host
+    host.docker.internal:host-gateway` on every container, no `--network none`, and
+    request caps that replace the server's. They are carried to S-01.3.x and E-01.2.2.
+  - P3 and P4 are unchanged: a conversation container's binds live in its own mount
+    namespace, and the guest's mount table already declares Moby's own mounts.
 
 ## Evidence
 - **Blueprint:** #infrastructure-state, #containment-architecture, #platforms, extracted

@@ -114,7 +114,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "505d00a8454ac647fd457d97b2d54963b18c376f106103ff1b19c7ddcf2c3026"
+          "sha256": "6b3b464b41fb91b89eb5f6c7e34368ce6d5a61d182b85c9babd046c8c13af0a2"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -204,6 +204,7 @@
       {"role": "scratch", "path": "/srv/scratch/agent", "owner": "agent", "group": "agent", "mode": "750", "mount": "/srv/scratch"},
       {"role": "moby-data-root", "path": "/srv/scratch/docker", "owner": "root", "group": "root", "mode": "710", "mount": "/srv/scratch", "provisioned_only": true},
       {"role": "provisioning-state", "path": "/var/lib/aieh", "owner": "root", "group": "root", "mode": "755", "mount": "/", "provisioned_only": true},
+      {"role": "facts-request", "path": "/var/lib/aieh/facts-request", "owner": "root", "group": "agent", "mode": "730", "mount": "/", "provisioned_only": true},
       {"role": "agent-server", "path": "/srv/scratch/openhands", "owner": "openhands", "group": "openhands", "mode": "711", "mount": "/srv/scratch", "provisioned_only": true},
       {"role": "agent-server", "path": "/srv/scratch/openhands/conversations", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
       {"role": "agent-server", "path": "/srv/scratch/openhands/workspace", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
@@ -249,7 +250,7 @@
       "staging": "/var/lib/aieh/provision-staging",
       "result": "/var/lib/aieh/provision/RESULT.json",
       "timeout_s": 3600,
-      "sequence": ["copy", "verify", "daemon-json", "sysctl", "apt-install", "containerd-config", "docker-ready", "docker-load", "image-id", "tag", "run", "agent-server-install", "agent-server-secrets", "agent-server-start", "facts", "cleanup"],
+      "sequence": ["copy", "verify", "daemon-json", "sysctl", "apt-install", "containerd-config", "docker-ready", "docker-load", "image-id", "tag", "run", "agent-server-install", "agent-server-secrets", "agent-server-start", "conversation-facts", "facts", "cleanup"],
       "single_use": "the trigger is disabled, stopped and its unit file removed in every outcome; the service refuses to run once RESULT.json or the staging directory exists"
     },
     "facts": {
@@ -397,6 +398,41 @@
           "sha256": "3de49fac4670eff9c8b6635ffd8bc5b6d4219788877747135333cec9f8c5e0d0",
           "schema": "#/components/schemas/StartConversationRequest",
           "check": "tools/check_profile.py --openapi <downloaded openapi.json>: the file's sha256 must equal this pin (composition/lock/components.lock.json release_assets); the fixture is then validated against the schema with a standard-library JSON Schema subset. openapi.json is not committed (decision 0005)."
+        }
+      },
+      "conversations": {
+        "plan_leaf": "F-04.2",
+        "use": "The declared shape of every conversation container the Agent Server runs (one per Docker conversation, docker_runtime/registry.py _build_container of the locked 1.60.1 wheel), which inspect and conversation-smoke compare exactly with docker container inspect from the on-demand facts. Inspection only: the disposable conversation of the fixture, no LLM, no repository content, no untrusted workload (decision 0006, Owner authorization Part B).",
+        "owner_label": "ai.openhands.runtime-owner",
+        "owner_rule": "The label's value is sha256(conversations_path + NUL + OH_PERSISTENCE_DIR)[:24] of the resolved paths (DockerConversationRegistry.__init__); the server lists and removes stale containers by it at start-up. Every container that carries the label must be one of this server's.",
+        "image": "Config.Image is config.conversation_image (the local immutable tag) and .Image is the locked image ID (decision 0006 item 3); any other image ID is a stop condition.",
+        "user": "Config.User is the uid:gid of provisioning.agent_server.user (registry.py runs --user os.getuid():os.getgid() of the server).",
+        "mounts": [
+          {"type": "bind", "source": "/srv/scratch/openhands/conversations/{conversation_hex}", "destination": "/var/openhands/conversations/{conversation_hex}", "rw": true},
+          {"type": "bind", "source": "/srv/scratch/openhands/persistence/runtime-data/{conversation_hex}/persistence", "destination": "/var/openhands/.openhands", "rw": true},
+          {"type": "bind", "source": "/srv/scratch/openhands/persistence/runtime-data/{conversation_hex}/workspace", "destination": "/workspace", "rw": true}
+        ],
+        "mount_policy": "The effective Mounts list equals this list exactly ({conversation_hex} is the conversation id without hyphens; the image declares no volume). Every source is under the source root on the scratch disk: the conversation's own event store, its runtime home and the server-provisioned workspace (the fixture sends working_dir /workspace, so no caller-selected host path: decision 0001 s3). Never the Docker or containerd socket, Moby's data root, /etc/aieh, /var/lib/aieh or any other host path.",
+        "source_root": "/srv/scratch/openhands",
+        "forbidden_sources": ["/run/docker.sock", "/var/run/docker.sock", "/run/containerd", "/run/docker", "/srv/scratch/docker", "/etc/aieh", "/var/lib/aieh", "/etc", "/root", "/home", "/proc", "/sys", "/dev", "/run", "/var/run"],
+        "cap_drop": ["ALL"],
+        "security_opt": ["no-new-privileges"],
+        "published": {"container_port": "8000/tcp", "host_ip": "127.0.0.1"},
+        "listener_rule": "profiles P7 (amended 2026-11-07, F-04.2): while conversation containers owned by the Agent Server run, each may have exactly one listener on the guest's 127.0.0.1 at an ephemeral port (inside ip_local_port_range), owned by docker-proxy or dockerd and mapped to that container's port 8000 (registry.py publishes -p 127.0.0.1::8000). No other Moby listener, never a non-loopback bind, never forwarded to the host.",
+        "caps_rule": "HostConfig Memory, NanoCpus and PidsLimit equal the config's conversation_container_memory, _cpus and _pids_limit (decision 0001 s3): the fixture sends no container override.",
+        "deviations": [
+          {"id": "host-gateway", "observed_in": "HostConfig.ExtraHosts", "rule": "registry.py always adds --add-host host.docker.internal:host-gateway; host-gateway resolves to the guest's docker0 address, not to the Windows host", "carried_to": ["S-01.3.1", "S-01.3.2", "E-01.2.2"]},
+          {"id": "no-network-none", "observed_in": "HostConfig.NetworkMode", "rule": "registry.py passes no --network, so the container is on Moby's default bridge with NAT through the guest (no egress: the guest has no route out and SLIRP is restrict=on)", "carried_to": ["S-01.3.1", "S-01.3.2", "E-01.2.2"]},
+          {"id": "request-caps-override", "observed_in": "docker_runtime/registry.py _build_container", "rule": "a create request's container.memory and container.cpus replace the server's caps and are not capped by them; the fixture sends neither, and conversation-smoke compares the effective caps with the config", "carried_to": ["S-01.3.1", "E-01.2.2"]}
+        ],
+        "deviation_rule": "Recorded as evidence and carried to S-01.3.x and E-01.2.2; not failed here and not changed (upstream runtime behaviour).",
+        "facts": {
+          "service": "aieh-conversation-facts.service",
+          "path_unit": "aieh-conversation-facts.path",
+          "request": "/var/lib/aieh/facts-request/conversation-facts",
+          "report": "/run/aieh/conversation-facts.json",
+          "rate": {"interval_s": 60, "burst": 20},
+          "rule": "On demand, root, read-only. agent creates the request file in the root:agent 0730 directory (it can create, not list); the path unit starts the oneshot reporter, which removes the file without reading it (its existence is the only input), runs no container command but docker ps and docker container inspect, and writes an agent-readable report of the containers carrying owner_label (environment by name only, every secret value counted and redacted), root's TCP listeners with the docker-proxy argv, the stored conversations (files, sizes, sha256, event ids and kinds; runtime control files by name and size) and the server's journal. At most 20 runs in 60 s (TriggerLimitBurst and StartLimitBurst); beyond that the units fail closed until the next boot."
         }
       }
     }

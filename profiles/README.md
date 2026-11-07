@@ -217,7 +217,16 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   (`provisioning.agent_server.listener`, class management, guest-local). It is not
   forwarded to the host: there is no `hostfwd` and no new host port, and the Agent
   Server forward stays deferred (decision 0006). Every other TCP listener in a
-  provisioned guest must belong to the base image (`sshd`, `systemd-resolved`).
+  provisioned guest must belong to the base image (`sshd`, `systemd-resolved`), except
+  the bounded allowance below.
+- **Conversation container listeners (amended 2026-11-07, F-04.2).** While conversation
+  containers owned by the Agent Server run, each may have exactly one listener on the
+  guest's `127.0.0.1` at an ephemeral port (inside the guest's `ip_local_port_range`),
+  owned by `docker-proxy` or `dockerd` and mapped to that container's port 8000 (the
+  1.60.1 Docker runtime publishes `-p 127.0.0.1::8000`). "Owned" means the container
+  carries the Agent Server's owner label (`provisioning.agent_server.conversations`).
+  There is no other Moby listener and never a non-loopback bind, and the listener is
+  never forwarded to the host: no `hostfwd` and no new host port.
 - **trusted-workload:**
   - WSL `networkingMode` is VM-wide, so it is observed only (C1).
   - Egress is not enforced outside the distribution, and the network namespace is
@@ -227,9 +236,13 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     from the guest and from a container inside it;
   - a positive control to one allowlisted endpoint succeeds;
   - `ip route`, `ip addr` and `ip -6 addr` are recorded;
-  - for a provisioned guest: root's boot-time `ss -ltnp` shows exactly the declared
-    Agent Server bind for that process, and no listener of any other process beyond the
-    base image's. `agent` sees the same bind.
+  - for a provisioned guest: root's boot-time `ss -ltnp` shows no Moby listener. Root's
+    current `ss -ltnp`, from the on-demand conversation facts (amended 2026-11-07,
+    F-04.2), shows exactly the declared Agent Server bind for that process; any Moby
+    listener only inside the conversation-container allowance (its `docker-proxy` argv
+    names the address of a running owned container and port 8000, at most one per
+    container); and no listener of any other process beyond the base image's. `agent`
+    sees the same set.
 
 ### P8 Identity
 - **Per instance:** a unique instance name. machine-id and SSH host keys are

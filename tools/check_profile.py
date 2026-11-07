@@ -504,7 +504,7 @@ CONTRACT_SHARE_FSTYPES = {'9p', 'virtiofs', 'drvfs', 'fuse.sshfs', 'cifs', 'nfs'
 DIRECTORY_ROLES = ('exchange', 'scratch')
 # Directories present only on a provisioned instance (F-04.1): Moby's data root and the
 # root step's state. Each carries "provisioned_only": true.
-PROVISIONED_DIRECTORY_ROLES = ('moby-data-root', 'provisioning-state')
+PROVISIONED_DIRECTORY_ROLES = ('moby-data-root', 'provisioning-state', 'facts-request')
 # The Agent Server's scratch directories (F-04.1 slice (c)): several, each provisioned_only,
 # on the scratch disk and owned by its service user.
 AGENT_SERVER_ROLE = 'agent-server'
@@ -992,12 +992,86 @@ def check_agent_server(report, profile, root, conf):
     if openapi.get('sha256') != locked_openapi_sha256(root):
         report.fail(f'{label}.fixture.openapi.sha256: must be the locked openapi.json '
                     '(composition/lock/components.lock.json release_assets)')
+    if 'conversations' in server:
+        check_conversations(report, profile, server)
     try:
         body = json.loads((root / fixture['path']).read_text(encoding='utf-8'))
     except (OSError, ValueError, KeyError, TypeError):
         return                                   # reported by check_repo_file
     for problem in fixture_problems(body):
         report.fail(f'{label}.fixture: {problem}')
+
+
+# The 1.60.1 Docker runtime's mount targets inside a conversation container
+# (docker_runtime/registry.py _CONVERSATIONS_DIR, _PERSISTENCE_DIR, _WORKSPACE_DIR).
+CONVERSATION_MOUNT_DESTINATIONS = ['/var/openhands/.openhands',
+                                   '/var/openhands/conversations/{conversation_hex}', '/workspace']
+CONVERSATION_FORBIDDEN_SOURCES = ('/run/docker.sock', '/var/run/docker.sock', '/run/containerd',
+                                  '/srv/scratch/docker', '/etc/aieh', '/var/lib/aieh')
+CONVERSATION_DEVIATIONS = ['host-gateway', 'no-network-none', 'request-caps-override']
+
+
+def check_conversations(report, profile, server):
+    """provisioning.agent_server.conversations (F-04.2): the declared conversation container
+    (decision 0001 s2/s3, decision 0006 item 3): mounts only from agent-server directories on
+    scratch and never a socket, Moby's data root or a secret path; cap-drop ALL and
+    no-new-privileges; a 127.0.0.1-only port binding; the recorded deviations; and the
+    on-demand facts (a root:agent request directory, a /run report, a bounded rate)."""
+    conv = server.get('conversations')
+    label = 'provisioning.agent_server.conversations'
+    if not isinstance(conv, dict):
+        report.fail(f'{label}: must be an object')
+        return
+    dirs = {d.get('path') for d in (profile.get('guest_storage') or {}).get('directories') or []
+            if isinstance(d, dict) and d.get('role') == AGENT_SERVER_ROLE}
+    root = str(conv.get('source_root', ''))
+    if root not in dirs:
+        report.fail(f'{label}.source_root: must be an agent-server directory')
+    mounts = conv.get('mounts')
+    if not isinstance(mounts, list) or not mounts:
+        report.fail(f'{label}.mounts: must list the declared mounts')
+        mounts = []
+    forbidden = conv.get('forbidden_sources') or []
+    if not set(CONVERSATION_FORBIDDEN_SOURCES) <= set(forbidden):
+        report.fail(f'{label}.forbidden_sources: must include {list(CONVERSATION_FORBIDDEN_SOURCES)}')
+    for i, m in enumerate(mounts):
+        source = str((m or {}).get('source', '')) if isinstance(m, dict) else ''
+        if not isinstance(m, dict) or m.get('type') != 'bind' or m.get('rw') not in (True, False) or \
+                not source.startswith(root.rstrip('/') + '/') or '..' in source.split('/') or \
+                any(source == f or source.startswith(f.rstrip('/') + '/') for f in forbidden):
+            report.fail(f'{label}.mounts[{i}]: a bind mount whose source is under source_root and '
+                        'no forbidden path (decision 0001 s3)')
+    if sorted(str((m or {}).get('destination')) for m in mounts if isinstance(m, dict)) != \
+            sorted(CONVERSATION_MOUNT_DESTINATIONS):
+        report.fail(f'{label}.mounts: the destinations must be the 1.60.1 Docker runtime\'s '
+                    f'{CONVERSATION_MOUNT_DESTINATIONS}')
+    if conv.get('cap_drop') != ['ALL'] or 'no-new-privileges' not in (conv.get('security_opt') or []):
+        report.fail(f'{label}: cap_drop [ALL] and security_opt no-new-privileges')
+    published = conv.get('published') or {}
+    if published.get('host_ip') != LOOPBACK or published.get('container_port') != \
+            f"{(server.get('listener') or {}).get('port')}/tcp":
+        report.fail(f'{label}.published: the container port on 127.0.0.1 only (profiles P7)')
+    if not conv.get('owner_label') or not conv.get('listener_rule'):
+        report.fail(f'{label}: owner_label and listener_rule required')
+    if sorted(d.get('id') for d in conv.get('deviations') or [] if isinstance(d, dict)) != \
+            sorted(CONVERSATION_DEVIATIONS) or not all(
+                d.get('carried_to') for d in conv.get('deviations') or [] if isinstance(d, dict)):
+        report.fail(f'{label}.deviations: record {CONVERSATION_DEVIATIONS}, each carried to '
+                    'later leaves (decision 0001 s3)')
+    facts = conv.get('facts') or {}
+    request = str(facts.get('request', ''))
+    request_dirs = [d for d in (profile.get('guest_storage') or {}).get('directories') or []
+                    if isinstance(d, dict) and d.get('role') == 'facts-request']
+    if len(request_dirs) != 1 or request.rsplit('/', 1)[0] != request_dirs[0].get('path') or \
+            request_dirs[0].get('owner') != 'root' or request_dirs[0].get('group') != 'agent' or \
+            request_dirs[0].get('mode') != '730':
+        report.fail(f'{label}.facts.request: a file in the root:agent 730 facts-request directory')
+    if not str(facts.get('report', '')).startswith('/run/'):
+        report.fail(f'{label}.facts.report: the on-demand report lives on /run')
+    rate = facts.get('rate') or {}
+    if not all(isinstance(rate.get(k), int) and not isinstance(rate.get(k), bool) and rate[k] > 0
+               for k in ('interval_s', 'burst')) or rate.get('burst', 0) > 60:
+        report.fail(f'{label}.facts.rate: a positive interval and a burst of at most 60')
 
 
 def locked_openapi_sha256(root):

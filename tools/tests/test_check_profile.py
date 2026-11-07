@@ -632,6 +632,44 @@ class AgentServerBlock(unittest.TestCase):
     def test_committed_block_passes(self):
         self.assertEqual(self.errors(), [])
 
+    def test_conversation_container_declaration(self):
+        """F-04.2: provisioning.agent_server.conversations and the facts-request directory."""
+        conv = self.server['conversations']
+        mounts = conv['mounts']
+        for source in ('/run/docker.sock', '/srv/scratch/docker/volumes/x',
+                       '/etc/aieh/agent-server', '/srv/scratch/agent/x',
+                       '/srv/scratch/openhands/../docker'):
+            conv['mounts'] = mounts[:2] + [dict(mounts[2], source=source)]
+            self.assertFails('provisioning.agent_server.conversations.mounts[2]')
+        conv['mounts'] = mounts[:2] + [dict(mounts[2], destination='/host')]
+        self.assertFails('the destinations must be')
+        conv['mounts'] = mounts
+        conv['forbidden_sources'] = ['/etc']
+        self.assertFails('forbidden_sources: must include')
+        conv['forbidden_sources'] = load(QEMU, self.tmp)['provisioning']['agent_server'][
+            'conversations']['forbidden_sources']
+        conv['published'] = {'container_port': '8000/tcp', 'host_ip': '0.0.0.0'}
+        self.assertFails('published: the container port on 127.0.0.1 only')
+        conv['published'] = {'container_port': '8000/tcp', 'host_ip': '127.0.0.1'}
+        conv['cap_drop'] = []
+        self.assertFails('cap_drop [ALL]')
+        conv['cap_drop'] = ['ALL']
+        deviations = conv['deviations']
+        conv['deviations'] = deviations[:2]
+        self.assertFails('deviations: record')
+        conv['deviations'] = deviations
+        conv['facts']['rate'] = {'interval_s': 60, 'burst': 1000}
+        self.assertFails('facts.rate')
+        conv['facts']['rate'] = {'interval_s': 60, 'burst': 20}
+        conv['facts']['report'] = '/var/lib/aieh/conversation-facts.json'
+        self.assertFails('facts.report')
+        conv['facts']['report'] = '/run/aieh/conversation-facts.json'
+        self.assertEqual(self.errors(), [])
+        request_dir = next(d for d in self.qemu['guest_storage']['directories']
+                           if d['role'] == 'facts-request')
+        request_dir['mode'] = '777'
+        self.assertFails('facts.request: a file in the root:agent 730')
+
     def test_runtime_image_and_selectability(self):
         cfg = self.server['config']['content']
         cfg['conversation_runtime'] = 'local'

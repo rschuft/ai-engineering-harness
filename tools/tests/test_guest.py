@@ -21,6 +21,7 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -2847,6 +2848,97 @@ def moby_facts(boot_id='boot-1', **override):
     return facts
 
 
+CONV = AS['conversations']
+CONV_ID = '929f0d8a-f3d8-4da3-8ac3-9d0017709d71'
+CONV_HEX = CONV_ID.replace('-', '')
+OWNER = guest.conversation_owner(PROFILE)
+CONTAINER_ID = 'c' * 64
+
+
+def conversation_container(cid=CONTAINER_ID, port='32768', ip='172.17.0.2', hex_id=CONV_HEX,
+                           running=True, **override):
+    """One conversation container as the on-demand reporter writes it (shape observed in
+    F-04.2 on f042-x: docker container inspect of the Agent Server's container)."""
+    mounts = [{'Type': 'bind', 'Source': m['source'].replace('{conversation_hex}', hex_id),
+               'Destination': m['destination'].replace('{conversation_hex}', hex_id),
+               'Mode': '', 'RW': True, 'Propagation': 'rprivate'} for m in CONV['mounts']]
+    container = {
+        'Id': cid, 'Name': '/agent-server-conversation-61058093-0a9e-4f45-9966-4ddf332d8ecb',
+        'Image': IMAGE_ID, 'Driver': 'overlay2', 'Platform': 'linux',
+        'AppArmorProfile': 'docker-default',
+        'State': {'Status': 'running' if running else 'exited', 'Running': running,
+                  'Paused': False, 'Restarting': False, 'OOMKilled': False, 'Pid': 2460,
+                  'ExitCode': 0, 'StartedAt': 'x', 'FinishedAt': 'x'},
+        'Config': {'User': '999:989', 'Image': LOCAL_TAG,
+                   'Labels': {CONV['owner_label']: OWNER},
+                   'Entrypoint': ['tini', '--', '/usr/local/bin/openhands-agent-server'],
+                   'Cmd': ['--host', '0.0.0.0', '--port', '8000'],
+                   'ExposedPorts': {'8000/tcp': {}}, 'WorkingDir': '/',
+                   'EnvNames': ['HOME', 'OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0', 'PATH']},
+        'HostConfig': {'Binds': [f"{m['Source']}:{m['Destination']}" for m in mounts],
+                       'Mounts': None, 'NetworkMode': 'bridge',
+                       'PortBindings': {'8000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': ''}]},
+                       'PublishAllPorts': False, 'CapAdd': None, 'CapDrop': ['ALL'],
+                       'SecurityOpt': ['no-new-privileges'], 'Privileged': False,
+                       'ReadonlyRootfs': False, 'ExtraHosts': ['host.docker.internal:host-gateway'],
+                       'Memory': 4294967296, 'MemorySwap': 8589934592, 'NanoCpus': 2000000000,
+                       'PidsLimit': 512, 'Ulimits': [{'Name': 'core', 'Soft': 0, 'Hard': 0}],
+                       'AutoRemove': True, 'UsernsMode': '', 'PidMode': '', 'IpcMode': 'private',
+                       'UTSMode': '', 'CgroupnsMode': 'private', 'Devices': [],
+                       'Runtime': 'runc'},
+        'Mounts': mounts,
+        'NetworkSettings': {
+            'Ports': {'8000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': port}]} if running else {},
+            'Networks': {'bridge': {'NetworkID': 'n' * 64, 'IPAddress': ip if running else '',
+                                    'IPPrefixLen': 16, 'Gateway': '172.17.0.1',
+                                    'GlobalIPv6Address': '', 'IPv6Gateway': '',
+                                    'MacAddress': '02:42:ac:11:00:02', 'Aliases': None,
+                                    'DNSNames': None}}},
+    }
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(container.get(key), dict):
+            container[key] = dict(container[key], **value)
+        else:
+            container[key] = value
+    return container
+
+
+def proxy_line(port='32768', process='docker-proxy', address='127.0.0.1'):
+    return (f'LISTEN 0      4096       {address}:{port} 0.0.0.0:* '
+            f'users:(("{process}",pid=2422,fd=4))')
+
+
+def proxy_entry(port='32768', ip='172.17.0.2', container_port='8000'):
+    return {'local': f'127.0.0.1:{port}', 'process': 'docker-proxy', 'pid': 2422,
+            'argv': ['/usr/sbin/docker-proxy', '-proto', 'tcp', '-host-ip', '127.0.0.1',
+                     '-host-port', port, '-container-ip', ip, '-container-port', container_port]}
+
+
+def conversation_facts_report(containers=(), listeners=(), proxies=(), **override):
+    """The on-demand conversation facts (F-04.2); by default no conversation runs."""
+    report = {
+        'schema': guest.CONVERSATION_FACTS_SCHEMA, 'boot_id': 'boot-1', 'serial': 2,
+        'started_monotonic': 100.0, 'collected_at': 'x', 'request': {'consumed': True},
+        'owner_label': CONV['owner_label'], 'listed': [{'ID': c['Id']} for c in containers],
+        'containers': list(containers), 'containers_all_count': len(containers),
+        'container_files': {}, 'tcp_listeners': moby_facts()['tcp_listeners'] + list(listeners),
+        'proxies': list(proxies), 'ip_local_port_range': ['32768', '60999'],
+        'server_user': {'name': 'openhands', 'uid': 999, 'gid': 989},
+        'storage': {'conversations': {}, 'runtime_control': [], 'runtime_data': {}},
+        'server_journal': {'rc': 0, 'lines': 3, 'head': [], 'noted': []},
+        'units': {CONV['facts']['path_unit']: 'enabled', CONV['facts']['service']: 'static'},
+        'secret_values_redacted': 2 + 2 * len(containers),
+        'secret_occurrences_in_report': {'OH_SECRET_KEY': 0, 'OH_SESSION_API_KEYS_0': 0},
+        'seconds': 0.05}
+    report.update(override)
+    return report
+
+
+def running_report(**container_override):
+    return conversation_facts_report([conversation_container(**container_override)],
+                                     [proxy_line()], [proxy_entry()])
+
+
 def provisioned_record(base_record):
     record = copy.deepcopy(base_record)
     record['provisioning'] = {'manifest_sha256': MANIFEST_SHA, 'lock_sha256': 'e' * 64,
@@ -2868,6 +2960,7 @@ def provisioned_observation(record, token='one'):
     put('agent_server_api', json.dumps(agent_server_api(token)))
     put('agent_server_files', agent_server_files())
     put('agent_server_config', json.dumps(AS['config']['content'], indent=2))
+    put('conversation_facts', json.dumps(conversation_facts_report()))
     obs['agent_server_custody'] = {'present': True,
                                    'host_fingerprint': keys(token)[2]['OH_SESSION_API_KEYS_0']}
     obs['agent_server_secrets'] = {
@@ -2892,7 +2985,8 @@ def provisioned_observation(record, token='one'):
                            'aieh-provision.service static inactive\n'
                            'aieh-docker-facts.service enabled active')
     g['storage_dirs']['out'] += ('\n/srv/scratch/docker|root|root|710|directory|/srv/scratch\n'
-                                 '/var/lib/aieh|root|root|755|directory|/')
+                                 '/var/lib/aieh|root|root|755|directory|/\n'
+                                 '/var/lib/aieh/facts-request|root|agent|730|directory|/')
     g['storage_dirs']['out'] += ''.join(
         f"\n{d['path']}|{d['owner']}|{d['group']}|{d['mode']}|directory|/srv/scratch"
         for d in PROFILE['guest_storage']['directories'] if d['role'] == 'agent-server')
@@ -2942,7 +3036,7 @@ class ProvisionedInspect(LaunchRecord):
         props = self.props()
         self.assertEqual(self.failing(), [])
         self.assertEqual(props[guest.PROVISIONING_PROPERTY]['verdict'], 'PASS')
-        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 19)
+        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 21)
         names = {c['check'] for c in props['profiles P6']['checks']}
         self.assertTrue({'guest Moby sockets', 'agent cannot reach Moby'} <= names)
 
@@ -2959,7 +3053,8 @@ class ProvisionedInspect(LaunchRecord):
         self.assertEqual(added, {'boot_id', 'moby_facts', 'provision_result', 'moby_sockets',
                                  'moby_agent_connect', 'docker_as_agent', 'tcp_listeners',
                                  'agent_docker_group', 'provision_leftovers', 'provision_units',
-                                 'agent_server_api', 'agent_server_files', 'agent_server_config'})
+                                 'agent_server_api', 'agent_server_files', 'agent_server_config',
+                                 'conversation_facts'})
         self.assertIn('/srv/scratch/openhands/worktrees', prov['storage_dirs'])
         self.assertNotIn('/srv/scratch/openhands', ordinary['storage_dirs'])
         # the session key is read from its file inside the probe, never put on a command line
@@ -3005,16 +3100,29 @@ class ProvisionedInspect(LaunchRecord):
             'end', 'present /run/podman/podman.sock\nend')
         self.assertEqual(self.failing(obs), [('profiles P6', 'host-management paths')])
 
+    def report(self, report, agent_extra=()):
+        """This inspect's on-demand conversation facts, and agent's ss view to match."""
+        obs = self.mutate('conversation_facts', json.dumps(report))
+        obs['guest']['tcp_listeners']['out'] = '\n'.join(
+            LISTENERS + [AS_LISTENER] + [' '.join(line.split()[:5]) for line in
+                                         report['tcp_listeners'][len(moby_facts()['tcp_listeners']):]]
+            + list(agent_extra))
+        return obs
+
     def test_tcp_listener_of_dockerd(self):
-        listeners = moby_facts()['tcp_listeners'] + [
-            'LISTEN 0 4096 0.0.0.0:2375 0.0.0.0:* users:(("dockerd",pid=900,fd=9))']
-        obs = self.facts(tcp_listeners=listeners)
-        obs['guest']['tcp_listeners']['out'] += '\nLISTEN 0 4096 0.0.0.0:2375 0.0.0.0:*'
-        self.assertEqual(self.failing(obs), [('profiles P7', 'guest TCP listeners (Agent Server)'),
-                                             ('profiles P7', 'guest TCP listeners (Moby)')])
+        moby = ('profiles P7', 'guest TCP listeners (Moby)')
+        agent_server = ('profiles P7', 'guest TCP listeners (Agent Server)')
+        wide = 'LISTEN 0 4096 0.0.0.0:2375 0.0.0.0:* users:(("dockerd",pid=900,fd=9))'
+        # at boot: no Moby listener may exist
+        listeners = moby_facts()['tcp_listeners'] + [wide]
+        self.assertEqual(self.failing(self.facts(tcp_listeners=listeners)), [moby])
+        # now: a TCP socket of the daemon is outside the conversation allowance
+        obs = self.report(conversation_facts_report(listeners=[wide]))
+        self.assertEqual(self.failing(obs), [agent_server, moby])
+        # agent sees a listener that root's report does not
         obs = self.mutate('tcp_listeners', '\n'.join(LISTENERS + [AS_LISTENER,
                                                                   'LISTEN 0 5 0.0.0.0:8001 0.0.0.0:*']))
-        self.assertEqual(self.failing(obs), [('profiles P7', 'guest TCP listeners (Moby)')])
+        self.assertEqual(self.failing(obs), [moby])
 
     def test_image_mismatches(self):
         for override in ({'image': {'Id': 'sha256:' + '1' * 64, 'RepoTags': [LOCAL_TAG]}},
@@ -3143,14 +3251,149 @@ class ProvisionedInspect(LaunchRecord):
         wide = 'LISTEN 0      2048         0.0.0.0:8000      0.0.0.0:*'
         listeners = [line + ' users:(("sshd",pid=600,fd=3))' for line in LISTENERS] + \
             [wide + ' users:(("agent-server",pid=1501,fd=7))']
-        obs = self.facts(tcp_listeners=listeners)
+        obs = self.mutate('conversation_facts', json.dumps(conversation_facts_report(
+            tcp_listeners=listeners)))
         obs['guest']['tcp_listeners']['out'] = '\n'.join(LISTENERS + [wide])
         self.assertEqual(self.failing(obs), [check])
-        listeners = moby_facts()['tcp_listeners'] + [
-            'LISTEN 0 5 127.0.0.1:8001 0.0.0.0:* users:(("node",pid=1600,fd=3))']
-        obs = self.facts(tcp_listeners=listeners)
-        obs['guest']['tcp_listeners']['out'] += '\nLISTEN 0 5 127.0.0.1:8001 0.0.0.0:*'
+        obs = self.report(conversation_facts_report(listeners=[
+            'LISTEN 0 5 127.0.0.1:8001 0.0.0.0:* users:(("node",pid=1600,fd=3))']))
         self.assertEqual(self.failing(obs), [check])
+
+    # ---- F-04.2: conversation containers and the amended P7
+
+    def test_a_running_conversation_passes_with_the_p7_allowance(self):
+        obs = self.report(running_report())
+        self.assertEqual(self.failing(obs), [])
+        props = self.props(obs)
+        moby = next(c for c in props['profiles P7']['checks']
+                    if c['check'] == 'guest TCP listeners (Moby)')
+        self.assertEqual(moby['observed']['allowance']['allowed'], [{
+            'process': 'docker-proxy', 'local': '127.0.0.1:32768', 'container': 'c' * 12,
+            'target': '172.17.0.2:8000'}])
+        containers = next(c for c in props[guest.PROVISIONING_PROPERTY]['checks']
+                          if c['check'] == 'conversation containers')
+        view = containers['observed']['containers'][0]
+        self.assertEqual(view['problems'], [])
+        self.assertEqual(view['conversation'], CONV_HEX)
+        # the upstream deviations are recorded, never failed
+        self.assertEqual(sorted(d['id'] for d in view['deviations']),
+                         ['host-gateway', 'no-network-none'])
+        # dockerd itself may hold the published port (no userland proxy)
+        report = conversation_facts_report([conversation_container()],
+                                           [proxy_line(process='dockerd')], [])
+        self.assertEqual(self.failing(self.report(report)), [])
+
+    def test_listeners_outside_the_allowance(self):
+        moby = ('profiles P7', 'guest TCP listeners (Moby)')
+        agent_server = ('profiles P7', 'guest TCP listeners (Agent Server)')
+        container = conversation_container()
+        cases = {
+            'non-loopback bind': conversation_facts_report(
+                [container], [proxy_line(address='0.0.0.0')],
+                [dict(proxy_entry(), local='0.0.0.0:32768')]),
+            'port outside ip_local_port_range': conversation_facts_report(
+                [conversation_container(port='2375')], [proxy_line('2375')], [proxy_entry('2375')]),
+            'no running owned container': conversation_facts_report(
+                [], [proxy_line()], [proxy_entry()]),
+            'docker-proxy forwards elsewhere': conversation_facts_report(
+                [container], [proxy_line()], [proxy_entry(container_port='22')]),
+            'containerd listener': conversation_facts_report(
+                [container], [proxy_line(), proxy_line('40000', 'containerd')], [proxy_entry()]),
+            'second listener for one container': conversation_facts_report(
+                [conversation_container(NetworkSettings={'Ports': {'8000/tcp': [
+                    {'HostIp': '127.0.0.1', 'HostPort': '32768'},
+                    {'HostIp': '127.0.0.1', 'HostPort': '32769'}]}})],
+                [proxy_line(), proxy_line('32769')], [proxy_entry(), proxy_entry('32769')]),
+            'container of another owner': conversation_facts_report(
+                [conversation_container(Config={'Labels': {CONV['owner_label']: 'x' * 24}})],
+                [proxy_line()], [proxy_entry()]),
+        }
+        for label, report in cases.items():
+            failing = self.failing(self.report(report))
+            self.assertIn(moby, failing, label)
+            self.assertIn(agent_server, failing, label)
+
+    def test_container_shape_problems(self):
+        prov = (guest.PROVISIONING_PROPERTY, 'conversation containers')
+        socket = {'Type': 'bind', 'Source': '/run/docker.sock',
+                  'Destination': '/var/run/docker.sock', 'Mode': '', 'RW': True,
+                  'Propagation': 'rprivate'}
+        base_mounts = conversation_container()['Mounts']
+        cases = {
+            'image (decision 0006 item 3)': {'Image': 'sha256:' + '1' * 64},
+            'configured image': {'Config': {'Image': 'ghcr.io/openhands/agent-server:latest-python'}},
+            'mounts (exactly the declared list)': {'Mounts': base_mounts + [socket]},
+            'user': {'Config': {'User': '0:0'}},
+            'capabilities': {'HostConfig': {'CapAdd': ['NET_ADMIN']}},
+            'security options': {'HostConfig': {'SecurityOpt': []}},
+            'no privilege or host namespace': {'HostConfig': {'Privileged': True}},
+            'port binding (127.0.0.1 only)': {'HostConfig': {
+                'PortBindings': {'8000/tcp': [{'HostIp': '', 'HostPort': ''}]}}},
+            'caps (decision 0001 s3)': {'HostConfig': {'Memory': 64 << 30}},
+            'owner label': {'Config': {'Labels': {}}},
+        }
+        for name, override in cases.items():
+            report = conversation_facts_report([conversation_container(**override)],
+                                               [proxy_line()], [proxy_entry()])
+            obs = self.report(report)
+            self.assertIn(prov, self.failing(obs), name)
+            view = next(c for c in self.props(obs)[guest.PROVISIONING_PROPERTY]['checks']
+                        if c['check'] == 'conversation containers')['observed']
+            self.assertIn(name, {p['check'] for p in view['containers'][0]['problems']}, name)
+        # a forbidden source anywhere: Moby's data root, a secret path, the socket
+        for source in ('/srv/scratch/docker/volumes/x/_data', '/etc/aieh/agent-server',
+                       '/run/docker.sock', '/srv/scratch/agent'):
+            mounts = base_mounts[:2] + [dict(base_mounts[2], Source=source)]
+            container = conversation_container(Mounts=mounts)
+            self.assertTrue(guest.forbidden_mount_sources(PROFILE, container), source)
+        # a container in Moby's store without the owner label
+        report = running_report()
+        report['containers_all_count'] = 2
+        self.assertIn(prov, self.failing(self.report(report)))
+
+    def test_missing_report_is_unknown(self):
+        obs = self.mutate('conversation_facts', json.dumps({'error': 'ceiling'}), rc=5)
+        props = self.props(obs)
+        verdicts = {(p, c['check']): c['verdict'] for p, prop_ in props.items()
+                    for c in prop_['checks']}
+        for key in (('profiles P7', 'guest TCP listeners (Moby)'),
+                    ('profiles P7', 'guest TCP listeners (Agent Server)'),
+                    (guest.PROVISIONING_PROPERTY, 'on-demand conversation facts'),
+                    (guest.PROVISIONING_PROPERTY, 'conversation containers')):
+            self.assertEqual(verdicts[key], 'UNKNOWN', key)
+        report = conversation_facts_report(boot_id='boot-0')
+        self.assertIn((guest.PROVISIONING_PROPERTY, 'on-demand conversation facts'),
+                      self.failing(self.report(report)))
+        report = conversation_facts_report(request={'consumed': False})
+        self.assertIn((guest.PROVISIONING_PROPERTY, 'on-demand conversation facts'),
+                      self.failing(self.report(report)))
+
+    def test_conversation_records_compare_without_ids_and_ports(self):
+        a = provisioned_identity_record(self.record, 'one')
+        b = provisioned_identity_record(self.record, 'one')
+        out = guest.compare_inspect(PROFILE, a, b, 'start')
+        self.assertEqual(out['result'], 'PASS', out['not_ok'])
+        value = {'count': 1, 'containers_all_count': 1, 'owner': OWNER, 'containers': [
+            {'id': 'a' * 12, 'ports': {'8000/tcp': [{'HostPort': '32768'}]},
+             'problems': [], 'deviations': [{'id': 'host-gateway'}]}]}
+        other = copy.deepcopy(value)
+        other['containers'][0].update(id='b' * 12, ports={'8000/tcp': [{'HostPort': '40000'}]})
+        self.assertEqual(guest.NORMALIZERS['containers'](value, PROFILE),
+                         guest.NORMALIZERS['containers'](other, PROFILE))
+        other['containers'][0]['problems'] = [{'check': 'user'}]
+        self.assertNotEqual(guest.NORMALIZERS['containers'](value, PROFILE),
+                            guest.NORMALIZERS['containers'](other, PROFILE))
+
+    def test_the_facts_probe_takes_no_argument_but_the_paths(self):
+        probe = dict(guest.provisioning_probes(PCONF))['conversation_facts']
+        facts = CONV['facts']
+        self.assertIn(f"python3 - '{facts['request']}' '{facts['report']}' "
+                      f"{guest.CONVERSATION_FACTS_CEILING_S}", probe)
+        script = guest.CONVERSATION_FACTS_PROBE
+        self.assertIn('os.O_CREAT', script)
+        self.assertNotIn('write(', script)            # the request is created empty
+        self.assertNotRegex(probe, r'\bsudo\b|systemctl (start|stop|enable)|docker ')
+        self.assertEqual(guest.conversation_owner(PROFILE), 'bdb2d2b4c2261e63b98cffe7')
 
     def test_runtime_selection_is_the_decision_0001_premise(self):
         check = (guest.PROVISIONING_PROPERTY, 'runtime selection (decision 0001 s2)')
@@ -3267,6 +3510,325 @@ class ProvisionedInspect(LaunchRecord):
                                         'owner': 'root', 'group': 'root', 'mode': '600'}])
         self.assertIn('profiles P6 / guest Moby sockets',
                       guest.compare_inspect(PROFILE, a, b, 'start')['not_ok'])
+
+
+class FakeAgentServer:
+    """The Agent Server's Docker runtime and the on-demand root reporter, faked for
+    conversation_smoke: conversations, containers (as the reporter shows them), listeners
+    and stored state, behaving as observed in F-04.2 (create 201 then 200, DELETE .../runtime
+    204 removes the container, reprovision starts a new one with the same mounts, a guest
+    restart leaves no container). ``faults`` inject the failures the tests look for."""
+
+    def __init__(self, body, **faults):
+        self.body, self.faults = body, faults
+        self.conversation, self.container, self.serial, self.n = None, None, 0, 0
+        self.state_sha = 'a' * 64
+        self.calls = []
+
+    def start_container(self):
+        self.n += 1
+        override = dict(self.faults.get('container') or {})
+        if self.n > 1 and self.faults.get('reopen_container'):
+            override.update(self.faults['reopen_container'])
+        port = str(32767 + self.n)
+        self.container = conversation_container(cid=f'{self.n:064x}', port=port, **override)
+
+    def info(self):
+        return {'id': CONV_ID, 'execution_status': 'idle', 'title': None,
+                'tags': self.body.get('tags'), 'created_at': 't0', 'agent': {'kind': 'Agent'}}
+
+    def respond(self, req):
+        method, path = req['method'], req['path'].split('?')[0]
+        base = f'/api/conversations/{CONV_ID}'
+        if path == '/server_info':
+            return 200, {'version': '1.60.1', 'conversation_runtime': 'docker',
+                         'available_conversation_runtimes': [], 'capabilities': CAPABILITIES}
+        if path == '/openapi.json':
+            routes = {}
+            for m, p_ in guest.LIFECYCLE_ROUTES:
+                if (m, p_) != self.faults.get('missing_route'):
+                    routes.setdefault(p_, []).append(m)
+            return 200, routes
+        if method == 'POST' and path == '/api/conversations':
+            if self.faults.get('refuse'):
+                return 422, {'detail': 'This server only runs docker conversations'}
+            if self.conversation is None:
+                self.conversation = self.info()
+                self.start_container()
+                return 201, self.info()
+            if self.faults.get('second_container'):
+                self.start_container()
+            return 200, self.info()
+        if self.conversation is None:
+            return 404, {'detail': 'Not Found'}
+        if method == 'GET' and path == base:
+            return 200, self.info()
+        if path == base + '/runtime':
+            if method == 'DELETE':
+                self.container = None
+                if self.faults.get('state_lost'):
+                    self.state_sha = 'b' * 64
+                return 204, None
+            return 200, {'runtime_status': 'available' if self.container else 'missing',
+                         'can_resume': True, 'runtime_error': None}
+        if path == base + '/runtime/reprovision':
+            self.start_container()
+            return 200, {'runtime_status': 'available', 'can_resume': True, 'runtime_error': None}
+        if path == base + '/events/search':
+            return 200, {'items': [], 'next_page_id': None}
+        if path == '/api/conversations/search':
+            return 200, {'items': [self.info()], 'next_page_id': None}
+        if method == 'DELETE' and path == base:
+            self.conversation, self.container = None, None
+            return 200, None
+        return 404, {'detail': 'Not Found'}
+
+    def api(self, requests):
+        out = []
+        for req in requests:
+            self.calls.append((req['method'], req['path']))
+            status, body = self.respond(req)
+            out.append({'method': req['method'], 'path': req['path'], 'status': status,
+                        'body': body, 'seconds': 0.0})
+        return {'responses': out, 'session_key_occurrences': self.faults.get('key_leak', 0)}
+
+    def facts(self):
+        self.serial += 1
+        running = [self.container] if self.container else []
+        storage = {'conversations': {}, 'runtime_control': [], 'runtime_data': {}}
+        if self.conversation is not None:
+            storage['conversations'][CONV_HEX] = {
+                'state': 'directory', 'owner': 'openhands', 'group': 'openhands', 'mode': '700',
+                'events': [],
+                'tree': {'entries': [
+                    {'path': name, 'state': 'file', 'size': 10, 'sha256': sha, 'mode': '600'}
+                    for name, sha in (('base_state.json', self.state_sha), ('meta.json', 'c' * 64),
+                                      ('.owner_lease.lock', 'd' * 64))], 'truncated': 0}}
+            storage['runtime_control'] = [{'path': f'/x/runtime-control/{CONV_HEX}.json'}]
+            storage['runtime_data'] = {CONV_HEX: {'state': 'directory'}}
+        listeners = [proxy_line(c['NetworkSettings']['Ports']['8000/tcp'][0]['HostPort'])
+                     for c in running]
+        proxies = [proxy_entry(c['NetworkSettings']['Ports']['8000/tcp'][0]['HostPort'])
+                   for c in running]
+        return conversation_facts_report(running, listeners, proxies, serial=self.serial,
+                                         storage=storage)
+
+
+class ConversationLifecycle(TempState):
+    """conversation_smoke (F-04.2) against FakeAgentServer: the step sequence, the checks
+    and the stop conditions; no guest."""
+
+    def setUp(self):
+        super().setUp()
+        self.body = json.loads((REPO / AS['fixture']['path']).read_text(encoding='utf-8'))
+        self.idir = self.state / 'instances' / 'conv'
+        self.idir.mkdir(parents=True)
+        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG},
+                       'ports': {'ssh': 40001}}
+        patcher = mock.patch.object(guest, 'running_instance',
+                                    lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.events = []
+
+    def run_smoke(self, server, restart=False, inspect_verdict='PASS'):
+        def fake_inspect():
+            self.events.append('inspect')
+            verdicts = {p: inspect_verdict for p in ('profiles P3', 'profiles P4', 'profiles P5',
+                                                     'profiles P6', 'profiles P7',
+                                                     guest.PROVISIONING_PROPERTY)}
+            return {'verdicts': verdicts, 'properties': [], 'record': 'inspect-x.json'}
+
+        def fake_stop():
+            self.events.append('stop')
+            return {'result': 'stopped', 'phases': [{'exited_after': 'system_powerdown'}]}
+
+        def fake_start():
+            self.events.append('start')
+            server.container = None            # the guest's shutdown removed it (--rm)
+            return {'result': 'ready', 'seconds': 20.0}
+        return guest.conversation_smoke(
+            self.ctx(), 'conv', restart=restart, channels=lambda rec: (server.api, server.facts),
+            inspect_fn=fake_inspect, stop_fn=fake_stop, start_fn=fake_start)
+
+    def steps(self, out):
+        return {s['step']: s.get('ok', s.get('skipped')) for s in out['steps']}
+
+    def test_lifecycle_passes(self):
+        server = FakeAgentServer(self.body)
+        out = self.run_smoke(server, restart=True)
+        self.assertEqual(out['result'], 'PASS', [(s['step'], s.get('detail')) for s in out['steps']
+                                                 if not s.get('ok')])
+        self.assertEqual(list(self.steps(out)), [
+            'fixture', 'routes and server_info', 'facts before', 'create', 'inspect conversation',
+            'create again (idempotent)', 'events', 'inspect guest (conversation running)',
+            'stop runtime', 'reopen', 'restart guest', 'reopen after restart', 'delete'])
+        self.assertEqual(self.events, ['inspect', 'stop', 'start'])
+        by = {s['step']: s['detail'] for s in out['steps']}
+        create = by['create']['facts']['containers']['containers'][0]
+        reopened = by['reopen']
+        self.assertNotEqual(reopened['container_before'], reopened['container_after'])
+        self.assertTrue(reopened['mounts_unchanged'] and reopened['persisted_state_kept'])
+        self.assertEqual(sorted(d['id'] for d in create['deviations']),
+                         ['host-gateway', 'no-network-none'])
+        self.assertEqual(by['create again (idempotent)']['container_before'],
+                         by['create again (idempotent)']['container_after'])
+        # the request bodies carry the fixture only: no key, no LLM block
+        self.assertIn(('POST', '/api/conversations'), server.calls)
+        self.assertIn(('DELETE', f'/api/conversations/{CONV_ID}/runtime'), server.calls)
+        record = json.loads(Path(out['record']).read_text(encoding='utf-8'))
+        self.assertEqual(record['operation'], 'conversation-smoke')
+        self.assertEqual(server.conversation, None)
+
+    def test_a_refused_create_stops_the_run(self):
+        server = FakeAgentServer(self.body, refuse=True)
+        out = self.run_smoke(server)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['stop_conditions'][0]['condition'], 'create returned non-2xx (a refusal)')
+        self.assertEqual(out['stop_conditions'][0]['response']['status'], 422)
+        steps = self.steps(out)
+        self.assertEqual(steps['inspect conversation'], 'an earlier step failed')
+        self.assertNotIn('cleanup delete', steps)          # nothing was created
+        self.assertEqual(self.events, [])
+
+    def test_image_mismatch_is_a_stop_condition_and_cleans_up(self):
+        server = FakeAgentServer(self.body, container={'Image': 'sha256:' + '1' * 64})
+        out = self.run_smoke(server)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertIn('a container .Image differs from the locked image ID',
+                      [c['condition'] for c in out['stop_conditions']])
+        self.assertEqual(out['failed_steps'], ['create'])
+        self.assertIn('cleanup delete', [s['step'] for s in out['steps']])
+        self.assertIsNone(server.conversation)
+
+    def test_forbidden_mount_is_a_stop_condition(self):
+        mounts = conversation_container()['Mounts']
+        mounts = mounts[:2] + [dict(mounts[2], Source='/run/docker.sock')]
+        out = self.run_smoke(FakeAgentServer(self.body, container={'Mounts': mounts}))
+        self.assertIn('a mount outside the declared sources',
+                      [c['condition'] for c in out['stop_conditions']])
+
+    def test_failures_after_create(self):
+        mounts = conversation_container()['Mounts']
+        moved = mounts[:2] + [dict(mounts[2], Source='/srv/scratch/openhands/workspace')]
+        for faults, step in (({'second_container': True}, 'create again (idempotent)'),
+                             ({'state_lost': True}, 'stop runtime'),
+                             ({'reopen_container': {'Mounts': moved}}, 'reopen'),
+                             ({'missing_route': ('DELETE', '/api/conversations/{conversation_id}/runtime')},
+                              'routes and server_info'),
+                             ({'key_leak': 1}, 'routes and server_info')):
+            self.events.clear()
+            out = self.run_smoke(FakeAgentServer(self.body, **faults))
+            self.assertEqual(out['result'], 'FAIL', faults)
+            self.assertEqual(out['failed_steps'], [step], faults)
+        out = self.run_smoke(FakeAgentServer(self.body), inspect_verdict='FAIL')
+        self.assertEqual(out['failed_steps'], ['inspect guest (conversation running)'])
+
+    def test_refusals_before_any_request(self):
+        self.record = {'ports': {'ssh': 40001}}
+        with self.assertRaises(guest.Refused):
+            guest.conversation_smoke(self.ctx(), 'conv', channels=lambda rec: (None, None))
+        self.record = {'provisioning': {'image_id': IMAGE_ID}, 'ports': {'ssh': 40001}}
+        with self.assertRaises(guest.Refused):
+            guest.conversation_smoke(self.ctx(), 'conv', out_path=str(REPO / 'x.json'),
+                                     channels=lambda rec: (None, None))
+
+    def test_cli(self):
+        with mock.patch.object(guest, 'conversation_smoke',
+                               return_value={'operation': 'conversation-smoke', 'result': 'PASS'}) as fn:
+            rc = guest.main(['conversation-smoke', '--profile', str(PROFILE_DIR), '--state-dir',
+                             str(self.state), '--name', 'conv', '--restart', '--openapi', 'o.json'])
+        self.assertEqual(rc, 0)
+        args = fn.call_args[0]
+        self.assertEqual(args[1:6], ('conv', None, True, 'o.json', None))
+
+
+class ApiProbe(unittest.TestCase):
+    """The guest-side API probe (API_PROBE) against a local HTTP server: the key comes
+    from its file, is sent as X-Session-API-Key, is redacted from responses and counted."""
+
+    KEY = 'k' * 43
+
+    def setUp(self):
+        import http.server
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-api-probe-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.key_file = self.tmp / 'session.key'
+        self.key_file.write_text(self.KEY + '\n', encoding='ascii')
+        self.seen = []
+        test = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def reply(self, status, body):
+                data = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                test.seen.append(('GET', self.path, self.headers.get('X-Session-API-Key')))
+                if self.path == '/openapi.json':
+                    self.reply(200, {'paths': {'/api/conversations': {'post': {}, 'get': {}},
+                                               '/health': {'get': {}}}})
+                elif self.path == '/leak':
+                    self.reply(200, {'echo': test.KEY})
+                else:
+                    self.reply(200 if self.headers.get('X-Session-API-Key') == test.KEY else 401,
+                               {'ok': True})
+
+            def do_POST(self):
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length))
+                test.seen.append(('POST', self.path, self.headers.get('X-Session-API-Key'), body))
+                self.reply(201, {'id': body.get('conversation_id')})
+
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def probe(self, requests):
+        spec = base64.b64encode(json.dumps(requests).encode()).decode()
+        proc = subprocess.run([sys.executable, '-I', '-', str(self.key_file), '127.0.0.1',
+                               str(self.server.server_address[1]), spec],
+                              input=guest.API_PROBE.encode(), capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn(self.KEY.encode(), proc.stdout)
+        return json.loads(proc.stdout.decode().strip().splitlines()[-1])
+
+    def test_requests_key_and_redaction(self):
+        out = self.probe([
+            {'method': 'POST', 'path': '/api/conversations', 'json': {'conversation_id': 'x'}},
+            {'method': 'GET', 'path': '/api/conversations/count'},
+            {'method': 'GET', 'path': '/api/conversations/count', 'auth': False},
+            {'method': 'GET', 'path': '/openapi.json', 'auth': False, 'reduce': 'openapi-paths'},
+            {'method': 'GET', 'path': '/leak'}])
+        statuses = [r['status'] for r in out['responses']]
+        self.assertEqual(statuses, [201, 200, 401, 200, 200])
+        self.assertEqual(out['responses'][0]['body'], {'id': 'x'})
+        self.assertEqual(out['responses'][3]['body'], {'/api/conversations': ['GET', 'POST']})
+        self.assertEqual(out['responses'][4]['body'], {'echo': '<OH_SESSION_API_KEYS_0 redacted>'})
+        self.assertEqual(out['session_key_occurrences'], 1)
+        self.assertEqual([s[2] for s in self.seen], [self.KEY, self.KEY, None, None, self.KEY])
+        self.assertEqual(self.seen[0][3], {'conversation_id': 'x'})
+
+    def test_connection_refused_is_recorded(self):
+        port = self.server.server_address[1]
+        self.server.shutdown()
+        self.server.server_close()
+        spec = base64.b64encode(json.dumps([{'method': 'GET', 'path': '/x'}]).encode()).decode()
+        proc = subprocess.run([sys.executable, '-I', '-', str(self.key_file), '127.0.0.1',
+                               str(port), spec], input=guest.API_PROBE.encode(),
+                              capture_output=True, timeout=60)
+        out = json.loads(proc.stdout.decode().strip().splitlines()[-1])
+        self.assertIn('error', out['responses'][0])
+        self.assertNotIn('status', out['responses'][0])
 
 
 class AgentServerSecretScan(unittest.TestCase):

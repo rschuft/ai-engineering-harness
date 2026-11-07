@@ -58,6 +58,12 @@ write_files:
       #              RESULT.json (last).
       #   facts      run at every boot by aieh-docker-facts.service: a read-only report of the
       #              daemon, the image store, the sockets and the Agent Server for inspect.
+      #   conversation-facts
+      #              run by aieh-conversation-facts.service when agent creates the request file
+      #              (F-04.2; rate-bounded by its units): a read-only report of the containers
+      #              carrying the Agent Server's owner label (docker ps and docker container
+      #              inspect only), the TCP listeners and the stored conversations. It takes no
+      #              input from the request but its existence.
       # It reads only the seeded manifest and the files it names. It prints step names and
       # outcomes only (journal and console). The two secrets it generates are written only to
       # their root-only environment file (and the session key to its agent-readable file);
@@ -131,6 +137,28 @@ write_files:
       # read by root, the secret values are redacted and counted before anything is written
       LOG_NOTE = re.compile(r'(?i)(error|warn|fail|refused|unreachable|resolv|timed? ?out|connect|'
                             r'https?://|network|dns|docker|telemetry|listen|start)')
+      # On-demand conversation facts (F-04.2): the Agent Server's conversation containers and
+      # their stored state, written by root when agent creates the request file. Its existence
+      # is the only input: it is removed, never read. Equal to provisioning.agent_server
+      # .conversations.facts of the profile.
+      REQUEST_DIR = '/var/lib/aieh/facts-request'
+      REQUEST = REQUEST_DIR + '/conversation-facts'
+      CONV_FACTS = FACTS_DIR + '/conversation-facts.json'
+      CONV_FACTS_SCHEMA = 'ai-engineering-harness/profiles/conversation-facts/v1'
+      CONV_FACTS_UNIT = 'aieh-conversation-facts.service'
+      CONV_PATH_UNIT = 'aieh-conversation-facts.path'
+      # docker_runtime/registry.py (1.60.1): the label every conversation container carries
+      OWNER_LABEL = 'ai.openhands.runtime-owner'
+      AS_PERSISTENCE = '/srv/scratch/openhands/persistence'
+      # environment variables of a conversation container whose values are secrets (its own
+      # OH_SECRET_KEY and session key); reported by name only, redacted wherever they occur
+      CONTAINER_SECRET_VARS = ('OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0')
+      SECRET_NAME = re.compile(r'(?i)(key|secret|token|password|credential)')
+      CONTAINER_ID = re.compile(r'^[0-9a-f]{64}$')
+      PROXY_PROCESSES = ('docker-proxy', 'dockerd')
+      INVENTORY_MAX = 400
+      HASH_MAX = 16 << 20
+      LOG_TAIL = 1 << 20
 
 
       class Failed(Exception):
@@ -532,6 +560,255 @@ write_files:
           return 0
 
 
+      # ---------------------------------------------------------------- conversation facts (on request)
+
+      def container_view(c):
+          """The fields of docker container inspect that F-04.2 compares: image, user, mounts,
+          host configuration, published port, network, labels. Environment by name only."""
+          config, host = c.get('Config') or {}, c.get('HostConfig') or {}
+          net, state = c.get('NetworkSettings') or {}, c.get('State') or {}
+          names = sorted(str(e).partition('=')[0] for e in config.get('Env') or [])
+          keep_host = ('Binds', 'Mounts', 'NetworkMode', 'PortBindings', 'PublishAllPorts', 'CapAdd',
+                       'CapDrop', 'SecurityOpt', 'Privileged', 'ReadonlyRootfs', 'ExtraHosts', 'Memory',
+                       'MemorySwap', 'NanoCpus', 'CpuShares', 'CpuQuota', 'PidsLimit', 'Ulimits',
+                       'AutoRemove', 'UsernsMode', 'PidMode', 'IpcMode', 'UTSMode', 'CgroupnsMode',
+                       'Devices', 'DeviceCgroupRules', 'Runtime', 'RestartPolicy', 'LogConfig', 'Init',
+                       'Sysctls', 'GroupAdd', 'Dns', 'DnsOptions', 'DnsSearch', 'VolumesFrom', 'Links',
+                       'Tmpfs', 'ShmSize', 'CgroupParent', 'OomKillDisable', 'VolumeDriver')
+          networks = {}
+          for name, n in (net.get('Networks') or {}).items():
+              networks[name] = {k: (n or {}).get(k) for k in (
+                  'NetworkID', 'IPAddress', 'IPPrefixLen', 'Gateway', 'GlobalIPv6Address',
+                  'IPv6Gateway', 'MacAddress', 'Aliases', 'DNSNames')}
+          return {'Id': c.get('Id'), 'Name': c.get('Name'), 'Created': c.get('Created'),
+                  'Image': c.get('Image'), 'Driver': c.get('Driver'), 'Platform': c.get('Platform'),
+                  'AppArmorProfile': c.get('AppArmorProfile'),
+                  'State': {k: state.get(k) for k in ('Status', 'Running', 'Paused', 'Restarting',
+                                                      'OOMKilled', 'Pid', 'ExitCode', 'StartedAt',
+                                                      'FinishedAt')},
+                  'Config': {'User': config.get('User'), 'Image': config.get('Image'),
+                             'Labels': config.get('Labels'), 'Entrypoint': config.get('Entrypoint'),
+                             'Cmd': config.get('Cmd'), 'ExposedPorts': config.get('ExposedPorts'),
+                             'WorkingDir': config.get('WorkingDir'), 'EnvNames': names},
+                  'HostConfig': {k: host.get(k) for k in keep_host},
+                  'Mounts': c.get('Mounts'),
+                  'NetworkSettings': {'Ports': net.get('Ports'), 'Networks': networks},
+                  }
+
+
+      def container_secret_values(c):
+          """{label: value} of a conversation container's secret environment values, for
+          redaction only (never written)."""
+          out = {}
+          for entry in (c.get('Config') or {}).get('Env') or []:
+              name, sep, value = str(entry).partition('=')
+              # a short value is no credential, and replacing it would corrupt the report
+              if sep and len(value) >= 16 and (name in CONTAINER_SECRET_VARS or
+                                               SECRET_NAME.search(name)):
+                  out['container ' + str(c.get('Id', ''))[:12] + ' ' + name] = value
+          return out
+
+
+      def container_files(cid):
+          """The resolv.conf and hosts that Moby wrote for the container (its name resolution),
+          and the noted lines of its json-file log (egress attempts, failures)."""
+          if not CONTAINER_ID.match(str(cid)):
+              return {'error': 'not a container id'}
+          base = '/srv/scratch/docker/containers/' + cid
+          out = {'resolv_conf': read_text(base + '/resolv.conf'), 'hosts': read_text(base + '/hosts')}
+          path = base + '/' + cid + '-json.log'
+          try:
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+              with os.fdopen(fd, 'rb') as handle:
+                  size = os.fstat(handle.fileno()).st_size
+                  handle.seek(max(0, size - LOG_TAIL))
+                  data = handle.read()
+          except OSError as exc:
+              out['log'] = {'error': str(exc)}
+              return out
+          lines = []
+          for raw in data.decode('utf-8', 'replace').splitlines():
+              try:
+                  lines.append(str(json.loads(raw).get('log', '')).rstrip('\n'))
+              except (ValueError, AttributeError):
+                  lines.append(raw)
+          noted = [line[:400] for line in lines if LOG_NOTE.search(line)]
+          out['log'] = {'bytes': size, 'lines': len(lines), 'head': [line[:400] for line in lines[:20]],
+                        'noted': noted[-80:]}
+          return out
+
+
+      def tree_inventory(root, digest):
+          """Regular files and directories under root (no link followed), at most INVENTORY_MAX:
+          relative path, kind, size, mode, owner; sha256 of files up to HASH_MAX when digest."""
+          out, truncated = [], 0
+          for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+              dirnames.sort()
+              for name in sorted(dirnames) + sorted(filenames):
+                  path = os.path.join(dirpath, name)
+                  if len(out) >= INVENTORY_MAX:
+                      truncated += 1
+                      continue
+                  entry = stat_entry(path)
+                  entry['path'] = os.path.relpath(path, root)
+                  if entry['state'] == 'file':
+                      entry['size'] = os.lstat(path).st_size
+                      if digest and entry['size'] <= HASH_MAX:
+                          entry['sha256'] = sha256_path(path)
+                  out.append(entry)
+          return {'entries': out, 'truncated': truncated}
+
+
+      def event_summaries(directory):
+          """id, kind, source and timestamp of each persisted event file (no other content)."""
+          out = []
+          try:
+              names = sorted(os.listdir(directory))
+          except OSError:
+              return out
+          for name in names:
+              path = os.path.join(directory, name)
+              if not name.endswith('.json') or not stat.S_ISREG(os.lstat(path).st_mode) or \
+                      os.lstat(path).st_size > HASH_MAX:
+                  continue
+              try:
+                  fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                  with os.fdopen(fd, encoding='utf-8') as handle:
+                      event = json.load(handle)
+              except (OSError, ValueError) as exc:
+                  out.append({'file': name, 'error': type(exc).__name__})
+                  continue
+              event = event if isinstance(event, dict) else {}
+              out.append({'file': name, 'id': event.get('id'), 'kind': event.get('kind'),
+                          'source': event.get('source'), 'timestamp': event.get('timestamp')})
+          return out
+
+
+      def conversation_storage(conversations_path):
+          """Every conversation directory (files, sizes, sha256, event summaries), the runtime
+          control files by name and size (their content is encrypted key material) and every
+          runtime data directory by name and size."""
+          out = {'conversations': dict(), 'runtime_control': [], 'runtime_data': dict()}
+          try:
+              names = sorted(os.listdir(conversations_path))
+          except OSError as exc:
+              names, out['conversations_error'] = [], str(exc)
+          for name in names:
+              path = os.path.join(conversations_path, name)
+              out['conversations'][name] = dict(stat_entry(path), tree=tree_inventory(path, True),
+                                                events=event_summaries(os.path.join(path, 'events')))
+          control = os.path.join(AS_PERSISTENCE, 'runtime-control')
+          try:
+              for name in sorted(os.listdir(control)):
+                  entry = stat_entry(os.path.join(control, name))
+                  entry['size'] = os.lstat(os.path.join(control, name)).st_size
+                  out['runtime_control'].append(entry)
+          except OSError as exc:
+              out['runtime_control_error'] = str(exc)
+          data = os.path.join(AS_PERSISTENCE, 'runtime-data')
+          try:
+              for name in sorted(os.listdir(data)):
+                  path = os.path.join(data, name)
+                  out['runtime_data'][name] = dict(stat_entry(path), tree=tree_inventory(path, False))
+          except OSError as exc:
+              out['runtime_data_error'] = str(exc)
+          return out
+
+
+      def listener_facts():
+          """root's ss -ltnpH, and for each listener of docker-proxy or dockerd its pid and argv
+          (docker-proxy names the container address and port it forwards to)."""
+          rc, out, err = run(['ss', '-ltnpH'], 30)
+          if rc != 0:
+              return {'error': 'ss exited ' + str(rc) + ': ' + tail(err, 300)}, []
+          lines, proxies = out.splitlines(), []
+          for line in lines:
+              match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', line)
+              if not match or match.group(1) not in PROXY_PROCESSES:
+                  continue
+              try:
+                  with open('/proc/' + match.group(2) + '/cmdline', 'rb') as handle:
+                      argv = [a.decode('utf-8', 'replace') for a in handle.read().split(b'\0') if a]
+              except OSError as exc:
+                  argv = ['unreadable: ' + str(exc)]
+              proxies.append({'local': line.split()[3] if len(line.split()) > 3 else None,
+                              'process': match.group(1), 'pid': int(match.group(2)), 'argv': argv})
+          return lines, proxies
+
+
+      def conversation_facts():
+          """On request (aieh-conversation-facts.path): a read-only report of the containers
+          that carry the Agent Server's owner label, the TCP listeners and the stored
+          conversations. The request file is removed, never read. Container commands: docker
+          ps and docker container inspect only. Every secret value is counted and redacted."""
+          started = time.monotonic()
+          request = {'consumed': False}
+          try:
+              os.unlink(REQUEST)
+              request['consumed'] = True
+          except FileNotFoundError:
+              pass
+          except OSError as exc:
+              request['error'] = type(exc).__name__
+          with open('/proc/sys/kernel/random/boot_id', encoding='ascii') as handle:
+              boot_id = handle.read().strip()
+          try:
+              with open(CONV_FACTS, encoding='utf-8') as handle:
+                  serial = int(json.load(handle).get('serial', 0)) + 1
+          except (OSError, ValueError, TypeError, AttributeError):
+              serial = 1
+          manifest = load_manifest()
+          config = manifest['agent_server']['config']
+          values = dict(secret_values())
+          listed = docker_json(['ps', '--all', '--no-trunc', '--filter', 'label=' + OWNER_LABEL,
+                                '--format', GO_JSON], many=True)
+          rc, out, err = run(['docker', 'ps', '--all', '--quiet', '--no-trunc'], 60)
+          all_ids = out.split() if rc == 0 else None
+          ids = [c.get('ID') for c in listed] if isinstance(listed, list) else []
+          containers, files = [], {}
+          if ids:
+              inspected = docker_json(['container', 'inspect'] + ids)
+              if isinstance(inspected, list):
+                  for c in inspected:
+                      values.update(container_secret_values(c))
+                      containers.append(container_view(c))
+                      files[c.get('Id')] = container_files(c.get('Id'))
+              else:
+                  containers = inspected
+          lines, proxies = listener_facts()
+          try:
+              user = pwd.getpwnam(AS_USER)
+              server_user = {'name': user.pw_name, 'uid': user.pw_uid, 'gid': user.pw_gid}
+          except KeyError:
+              server_user = {'name': AS_USER, 'state': 'absent'}
+          data = {'schema': CONV_FACTS_SCHEMA, 'boot_id': boot_id, 'serial': serial,
+                  'started_monotonic': started, 'collected_at': now(), 'request': request,
+                  'owner_label': OWNER_LABEL, 'listed': listed, 'containers': containers,
+                  'containers_all_count': None if all_ids is None else len(all_ids),
+                  'container_files': files, 'tcp_listeners': lines, 'proxies': proxies,
+                  'ip_local_port_range': read_text('/proc/sys/net/ipv4/ip_local_port_range').split(),
+                  'server_user': server_user,
+                  'storage': conversation_storage(config['conversations_path']),
+                  'server_journal': unit_journal(values),
+                  'units': {u: run(['systemctl', 'is-enabled', u], 30)[1].strip()
+                            for u in (CONV_PATH_UNIT, CONV_FACTS_UNIT)},
+                  }
+          # the report is agent-readable: no secret value reaches it (counted, redacted)
+          text, counts = redact(json.dumps(data, sort_keys=True), values)
+          data = json.loads(text)
+          totals = {}
+          for label, count in counts.items():
+              name = label.rsplit(' ', 1)[-1]
+              totals[name] = totals.get(name, 0) + count
+          data['secret_values_redacted'] = len(values)
+          data['secret_occurrences_in_report'] = totals
+          data['seconds'] = round(time.monotonic() - started, 2)
+          os.makedirs(FACTS_DIR, mode=0o755, exist_ok=True)
+          write_json(CONV_FACTS, data, 0o644)
+          say('conversation facts ' + str(serial) + ': ' + str(len(ids)) + ' container(s)')
+          return 0
+
+
       # ---------------------------------------------------------------- provision (once)
 
       def copy_upload(manifest, agent_uid):
@@ -859,6 +1136,30 @@ write_files:
           return {'unit': unit, 'listeners': lines, 'agent_server_listeners': mine}
 
 
+      def enable_conversation_facts(manifest):
+          """The on-demand conversation facts (F-04.2): the request directory (root:agent 0730:
+          agent may create the request file, list nothing), the path unit that starts the
+          reporter when the file exists, and one first report (no container yet)."""
+          step = 'conversation-facts'
+          if os.path.lexists(REQUEST_DIR):
+              raise Failed(step + ': ' + REQUEST_DIR + ' already exists (single use)')
+          agent_gid = pwd.getpwnam(AGENT).pw_gid
+          os.mkdir(REQUEST_DIR, 0o730)
+          os.chown(REQUEST_DIR, 0, agent_gid, follow_symlinks=False)
+          os.chmod(REQUEST_DIR, 0o730)
+          must(step, ['systemctl', 'enable', '--now', CONV_PATH_UNIT], 120)
+          must(step, ['systemctl', 'start', CONV_FACTS_UNIT], 300)
+          with open(CONV_FACTS, encoding='utf-8') as handle:
+              data = json.load(handle)
+          if data.get('schema') != CONV_FACTS_SCHEMA or data.get('containers') != []:
+              raise Failed(step + ': the first report is ' + repr({k: data.get(k) for k in (
+                  'schema', 'containers', 'listed')})[:600])
+          return {'request_dir': stat_entry(REQUEST_DIR), 'units': data.get('units'),
+                  'serial': data.get('serial'), 'containers': data.get('containers'),
+                  'containers_all_count': data.get('containers_all_count'),
+                  'seconds': data.get('seconds')}
+
+
       def enable_facts():
           must('facts', ['systemctl', 'enable', FACTS_UNIT], 60)
           must('facts', ['systemctl', 'start', FACTS_UNIT], 300)
@@ -904,7 +1205,8 @@ write_files:
                ('docker-load', load_image), ('image-id', check_image_id), ('tag', fix_tag),
                ('run', verify_run), ('agent-server-install', install_agent_server),
                ('agent-server-secrets', agent_server_secrets),
-               ('agent-server-start', start_agent_server))
+               ('agent-server-start', start_agent_server),
+               ('conversation-facts', enable_conversation_facts))
 
 
       def provision():
@@ -964,7 +1266,9 @@ write_files:
               return provision()
           if argv == ['facts']:
               return facts()
-          say('usage: aieh-provision provision|facts')
+          if argv == ['conversation-facts']:
+              return conversation_facts()
+          say('usage: aieh-provision provision|facts|conversation-facts')
           return 2
 
 
@@ -1020,6 +1324,49 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
+  - path: /etc/systemd/system/aieh-conversation-facts.path
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH on-demand conversation facts: agent's request file (no parameters; F-04.2)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+
+      [Path]
+      PathExists=/var/lib/aieh/facts-request/conversation-facts
+      Unit=aieh-conversation-facts.service
+      TriggerLimitIntervalSec=60
+      TriggerLimitBurst=20
+
+      [Install]
+      WantedBy=paths.target
+  - path: /etc/systemd/system/aieh-conversation-facts.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH read-only facts of the Agent Server's conversation containers (on request; F-04.2)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      Requires=docker.service
+      After=docker.service aieh-agent-server.service
+      StartLimitIntervalSec=60
+      StartLimitBurst=20
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision conversation-facts
+      TimeoutStartSec=120
+      StandardOutput=journal
+      StandardError=journal
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      RuntimeDirectory=aieh
+      RuntimeDirectoryMode=0755
+      RuntimeDirectoryPreserve=yes
+      ReadWritePaths=-/var/lib/aieh/facts-request
+      ProtectHome=read-only
+      PrivateTmp=yes
+      IPAddressDeny=any
   - path: /usr/local/sbin/aieh-agent-server-ready
     owner: root:root
     permissions: '0755'

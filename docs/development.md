@@ -167,6 +167,7 @@ Only what is listed as verified has been exercised.
 | `guest:provision-fetch PROFILE=… STATE_DIR=…` | `python -I -B tools/guest.py provision-fetch --profile <dir> --state-dir <dir>` | yes | Host side of guest provisioning (F-04.1a): downloads the profile's provision-lock artifacts from their upstreams (snapshot.debian.org, GitHub, ghcr.io through the pinned crane), verifies each against the lock and stages them under `<state>\provision\<lock sha256>\`. About 1.5 GB on the first run; a verified stage is reused. Runs nothing downloaded except crane. |
 | `guest:create-provisioned PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name> --provision` | no | `create` whose seed carries the provisioning manifest of the verified `provision-fetch` stage (F-04.1b). `recreate` and `smoke` take `--provision` too. |
 | `guest:provision PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py provision --profile <dir> --state-dir <dir> --name <name>` | no | Guest side of provisioning (F-04.1b): transfers the stage over SFTP, triggers the seeded single-use root step and checks its `RESULT.json`. See [Execution guests](#execution-guests). |
+| `guest:conversation-smoke PROFILE=… STATE_DIR=… NAME=<name> [-- --restart --openapi <file> --canaries <dir> --out <file>]` | `python -I -B tools/guest.py conversation-smoke --profile <dir> --state-dir <dir> --name <name> [--restart] [--openapi <file>] [--canaries <dir>] [--out <file>]` | no | The contained conversation lifecycle (F-04.2) on a running provisioned guest: create the disposable Docker conversation of the pinned fixture, inspect it and its container, create it again (idempotent), read its events, stop its runtime, reopen it, optionally restart the guest and reopen again, delete it. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -389,6 +390,21 @@ defaults them.
   `python -I -B tools/check_profile.py --openapi <openapi.json>` also validates the
   disposable conversation fixture against the release's `openapi.json` (downloaded,
   pinned by sha256, never committed).
+- `conversation-smoke` (F-04.2) runs the disposable conversation of that fixture on a
+  running provisioned guest. Every API call runs as `agent` on the guest loopback, with
+  the session key read inside the guest from its file. Root-only facts of the
+  conversation container come from the on-demand reporter: `agent` creates
+  `/var/lib/aieh/facts-request/conversation-facts` (no content is read; at most 20
+  requests a minute), `aieh-conversation-facts.service` removes it and writes
+  `/run/aieh/conversation-facts.json` from `docker ps` and `docker container inspect` of
+  the containers carrying the Agent Server's owner label (environment by name only,
+  secret values redacted), root's TCP listeners and the stored conversations. The run
+  checks the image ID, the exact mount list, the user, caps and the 127.0.0.1 port
+  against `provisioning.agent_server.conversations`, and the amended profiles P7: one
+  `docker-proxy` listener on `127.0.0.1` per running conversation container. `inspect`
+  uses the same report for its P7 listener checks and its `conversation containers`
+  entry. The upstream deviations it records (`host-gateway`, no `--network none`,
+  request caps override) are evidence for S-01.3.x and E-01.2.2, not failures.
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);
@@ -396,6 +412,8 @@ the exchange and surface-test cycles (F-03.3.1) are in
 [`evidence/F-03.3.1-guest-surfaces.md`](../evidence/F-03.3.1-guest-surfaces.md); the
 network validation (F-03.3.2) is in
 [`evidence/F-03.3.2-guest-network.md`](../evidence/F-03.3.2-guest-network.md); the
+conversation lifecycle (F-04.2) is in
+[`evidence/F-04.2-conversation-lifecycle.md`](../evidence/F-04.2-conversation-lifecycle.md); the
 teardown test and the provider-profile qualification (F-03.4) are in
 [`evidence/F-03.4-teardown-qualification.md`](../evidence/F-03.4-teardown-qualification.md)
 and [`QUALIFICATION.md`](../profiles/strong-windows-qemu-whpx/QUALIFICATION.md).

@@ -285,6 +285,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py provision --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
 
+  guest:conversation-smoke:
+    desc: "Contained conversation lifecycle (F-04.2) on a running provisioned guest: the pinned fixture, create (docker runtime, fixed id; non-2xx is a refusal), inspect the conversation and its container from the on-demand root facts (image ID, exact mounts, user, caps, 127.0.0.1 port, P7 allowance), idempotent create, events, inspect, stop the runtime, reopen, delete; exit 0 only on PASS (python -I -B tools/guest.py conversation-smoke --profile PROFILE --state-dir STATE_DIR --name NAME [-- --restart --openapi FILE --canaries DIR --out FILE])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py conversation-smoke --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
+
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
     cmds:

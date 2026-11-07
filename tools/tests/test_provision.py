@@ -97,7 +97,9 @@ class SeededRootStep(unittest.TestCase):
             '/etc/systemd/system/aieh-provision.service', '/etc/systemd/system/aieh-provision.path',
             '/etc/systemd/system/aieh-docker-facts.service',
             '/usr/local/sbin/aieh-agent-server-ready',
-            '/etc/systemd/system/aieh-agent-server.service'})
+            '/etc/systemd/system/aieh-agent-server.service',
+            '/etc/systemd/system/aieh-conversation-facts.path',
+            '/etc/systemd/system/aieh-conversation-facts.service'})
         self.assertIn('  - path: /etc/aieh/provision.json\n    owner: root:root\n'
                       "    permissions: '0600'\n    encoding: b64\n"
                       '    content: "{{provision_manifest}}"\n', TEMPLATE)
@@ -236,6 +238,133 @@ class AgentServerSeed(unittest.TestCase):
         self.assertNotIn('values', returned[0])           # fingerprints only
         self.assertIn('token_urlsafe(32)', SCRIPT)
         self.assertIn("write_secret_file(AS_SECRETS", SCRIPT)
+
+
+def script_function(name):
+    return next(n for n in ast.parse(SCRIPT).body if isinstance(n, ast.FunctionDef)
+                and n.name == name)
+
+
+def script_functions(*names):
+    """The named functions of the seeded script, executed (only those, as text) in a
+    namespace with the modules they use; the script itself is Linux- and root-only."""
+    namespace = {'json': json, 're': re, 'os': os, 'hashlib': hashlib}
+    for node in ast.parse(SCRIPT).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
+                isinstance(node.targets[0], ast.Name):
+            try:
+                exec(compile(ast.Module([node], []), 'seed', 'exec'), namespace)
+            except Exception:
+                pass
+    for name in names:
+        exec(compile(ast.Module([script_function(name)], []), 'seed', 'exec'), namespace)
+    return namespace
+
+
+class ConversationFactsSeed(unittest.TestCase):
+    """F-04.2: the on-demand conversation facts reporter and its units against
+    provisioning.agent_server.conversations.facts, with the Overseer's limits: an agent
+    trigger with no parameters (its existence is the only input), no container command but
+    docker ps and docker container inspect, a bounded rate, and no secret value written."""
+    CONV = PCONF['agent_server']['conversations']
+    FACTS = CONV['facts']
+
+    def test_constants_equal_the_profile(self):
+        c = script_constants()
+        self.assertEqual(c['REQUEST_DIR'] + '/conversation-facts', self.FACTS['request'])
+        self.assertEqual(c['FACTS_DIR'] + '/conversation-facts.json', self.FACTS['report'])
+        self.assertIn("REQUEST = REQUEST_DIR + '/conversation-facts'", SCRIPT)
+        self.assertIn("CONV_FACTS = FACTS_DIR + '/conversation-facts.json'", SCRIPT)
+        self.assertEqual(c['CONV_FACTS_UNIT'], self.FACTS['service'])
+        self.assertEqual(c['CONV_PATH_UNIT'], self.FACTS['path_unit'])
+        self.assertEqual(c['CONV_FACTS_SCHEMA'], guest.CONVERSATION_FACTS_SCHEMA)
+        self.assertEqual(c['OWNER_LABEL'], self.CONV['owner_label'])
+        self.assertEqual(c['AS_PERSISTENCE'],
+                         PCONF['agent_server']['environment']['OH_PERSISTENCE_DIR'])
+        request_dir = [d for d in PROFILE['guest_storage']['directories']
+                       if d['role'] == 'facts-request']
+        self.assertEqual([d['path'] for d in request_dir], [c['REQUEST_DIR']])
+        self.assertEqual((request_dir[0]['owner'], request_dir[0]['group'], request_dir[0]['mode']),
+                         ('root', 'agent', '730'))
+
+    def test_units(self):
+        path = unit(self.FACTS['path_unit'])
+        service = unit(self.FACTS['service'])
+        rate = self.FACTS['rate']
+        self.assertIn(f"PathExists={self.FACTS['request']}", path)
+        self.assertIn(f"Unit={self.FACTS['service']}", path)
+        self.assertIn(f"TriggerLimitIntervalSec={rate['interval_s']}", path)
+        self.assertIn(f"TriggerLimitBurst={rate['burst']}", path)
+        self.assertIn(f"StartLimitIntervalSec={rate['interval_s']}", service)
+        self.assertIn(f"StartLimitBurst={rate['burst']}", service)
+        self.assertIn('ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision '
+                      'conversation-facts', service)
+        self.assertIn('Type=oneshot', service)
+        for option in ('NoNewPrivileges=yes', 'ProtectSystem=strict', 'PrivateTmp=yes',
+                       'IPAddressDeny=any', 'RuntimeDirectory=aieh',
+                       'ReadWritePaths=-/var/lib/aieh/facts-request'):
+            self.assertIn(option, service)
+        for lines in (path, service):
+            self.assertIn('ConditionFileNotEmpty=/etc/aieh/provision.json', lines)
+        # the unit passes nothing from the request: ExecStart has no specifier or variable
+        exec_start = next(l for l in service if l.startswith('ExecStart='))
+        self.assertNotRegex(exec_start, r'[%$]')
+        self.assertNotIn('[Install]', FILES[f"/etc/systemd/system/{self.FACTS['service']}"])
+
+    def test_the_request_is_only_removed(self):
+        fn = script_function('conversation_facts')
+        uses = [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == 'REQUEST']
+        self.assertEqual(len(uses), 1)
+        call = next(n for n in ast.walk(fn) if isinstance(n, ast.Call) and
+                    any(isinstance(a, ast.Name) and a.id == 'REQUEST' for a in n.args))
+        self.assertEqual(ast.unparse(call.func), 'os.unlink')
+        for name in ('REQUEST', 'REQUEST_DIR'):
+            for other in ('container_view', 'container_files', 'tree_inventory',
+                          'event_summaries', 'conversation_storage', 'listener_facts'):
+                self.assertNotIn(name, ast.unparse(script_function(other)), (name, other))
+
+    def test_container_commands_are_ps_and_inspect_only(self):
+        source = '\n'.join(ast.unparse(script_function(n)) for n in (
+            'conversation_facts', 'container_view', 'container_files', 'listener_facts',
+            'conversation_storage', 'tree_inventory', 'event_summaries'))
+        docker = re.findall(r"docker_json\(\[('[^']+')(?:, ('[^']+'))?", source)
+        self.assertEqual(sorted({d[0] for d in docker}), ["'container'", "'ps'"])
+        self.assertIn("['container', 'inspect']", source)
+        self.assertIn("run(['docker', 'ps', '--all', '--quiet', '--no-trunc']", source)
+        for word in ('exec', "'rm'", "'stop'", "'kill'", "'run'", "'logs'", "'cp'", 'subprocess'):
+            self.assertNotIn(f"'docker', {word}", source)
+            self.assertNotIn(f"docker_json([{word}", source)
+
+    def test_container_environment_is_reported_by_name_and_redacted(self):
+        ns = script_functions('container_view', 'container_secret_values', 'redact')
+        secret, session = 'S' * 43, 'T' * 43
+        inspected = {'Id': 'f' * 64, 'Image': 'sha256:' + 'e' * 64,
+                     'Config': {'User': '999:989', 'Env': [
+                         f'OH_SECRET_KEY={secret}', f'OH_SESSION_API_KEYS_0={session}',
+                         'OH_ENABLE_BROWSER=0', 'PATH=/usr/bin', 'LMNR_PROJECT_API_KEY=short']},
+                     'HostConfig': {'CapDrop': ['ALL']}, 'Mounts': [], 'NetworkSettings': {},
+                     'State': {'Running': True}}
+        view = ns['container_view'](inspected)
+        text = json.dumps(view)
+        self.assertNotIn(secret, text)
+        self.assertNotIn(session, text)
+        self.assertEqual(view['Config']['EnvNames'], ['LMNR_PROJECT_API_KEY', 'OH_ENABLE_BROWSER',
+                                                      'OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0',
+                                                      'PATH'])
+        values = ns['container_secret_values'](inspected)
+        self.assertEqual(sorted(values.values()), sorted([secret, session]))   # short ones skipped
+        log = json.dumps({'log': [f'server started with key {session}']})
+        redacted, counts = ns['redact'](log, values)
+        self.assertNotIn(session, redacted)
+        self.assertEqual(sum(counts.values()), 1)
+        json.loads(redacted)
+
+    def test_step_creates_the_request_directory_and_enables_the_path_unit(self):
+        source = ast.unparse(script_function('enable_conversation_facts'))
+        self.assertIn('os.mkdir(REQUEST_DIR, 472)', source)            # 0o730
+        self.assertIn('os.chown(REQUEST_DIR, 0, agent_gid', source)
+        self.assertIn("['systemctl', 'enable', '--now', CONV_PATH_UNIT]", source)
+        self.assertIn("data.get('containers') != []", source)
 
 
 class ManifestFixture(unittest.TestCase):
