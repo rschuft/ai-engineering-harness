@@ -42,6 +42,16 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                directory's image and provider, the other instances/ entries and the
                named --durable roots) compared across every destroy and recreate.
                One machine verdict, PASS or FAIL, with profiles P10.
+    provision-fetch  host side of guest provisioning (F-04.1a; decision 0006, Proposed):
+               every artifact of the profile's provision lock (provider.provision_lock,
+               itself pinned by sha256) is downloaded from its upstream over https and
+               checked against the lock; the agent-server image is read and pulled by the
+               lock's pinned, verified crane (empty DOCKER_CONFIG, scrubbed environment),
+               its manifests are checked against the locked digests and the archive's
+               config and layer members against the lock. Staged atomically under
+               STATE/provision/<lock sha256>/ with a staged.json manifest; a staged
+               directory is re-verified and reused. No guest is involved and nothing
+               downloaded is unpacked or run on the host except crane.
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -60,6 +70,7 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py smoke     --profile PROFILE --state-dir STATE --name NAME
                                           --canaries DIR --durable DIR [--durable DIR ...]
                                           [--out FILE]
+    python -I -B tools/guest.py provision-fetch --profile PROFILE --state-dir STATE
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
     before it launches anything, inspect searches the guest for it)
@@ -92,6 +103,9 @@ import sys
 import tarfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -4672,6 +4686,488 @@ def enforcement_check(profile):
                  {'qualified': True, 'failed': False}.get(status))
 
 
+# ---------------------------------------------------------------- provision fetch (F-04.1a)
+#
+# Host side of the provisioning channel (decision 0006, Proposed; decision 0005): every
+# artifact in the profile's provision lock is downloaded from its original upstream,
+# checked against the lock, and staged under {state_dir}/provision/<lock sha256>/. The
+# image is fetched by the pinned, verified crane; nothing else downloaded is unpacked or
+# run on the host. The guest side (transfer and install) is a later slice.
+
+PROVISION_LOCK_SCHEMA = 'ai-engineering-harness/profiles/provision-lock/v1'
+PROVISION_STAGED_SCHEMA = 'ai-engineering-harness/profiles/provision-staged/v1'
+PROVISION_UA = 'aieh-provision-fetch/1 (+F-04.1)'
+PROVISION_HEX64 = re.compile(r'^[0-9a-f]{64}$')
+PROVISION_DIGEST = re.compile(r'^sha256:[0-9a-f]{64}$')
+PROVISION_PART = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._+~-]*$')   # one path component
+PROVISION_REPOSITORY = re.compile(r'^[a-z0-9.-]+(/[a-z0-9._-]+)+$')
+PROVISION_STAGED_FILE = 'staged.json'
+FETCH_TIMEOUT_S = 120      # socket ceiling per connect or read (bounds a hang)
+CRANE_TIMEOUT_S = 3600     # ceiling for one crane call (bounds a hang; the pull is ~1.3 GB)
+
+
+class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow redirects (snapshot.debian.org and GitHub use them) to https URLs only."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith('https://'):
+            raise urllib.error.HTTPError(req.full_url, code, f'redirect refused: {newurl}',
+                                         headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def provision_opener():
+    return urllib.request.build_opener(_HttpsOnlyRedirect())
+
+
+def provision_lock(ctx):
+    """The profile's provision lock, after its bytes match the profile's sha256 pin."""
+    entry = (ctx.profile.get('provider') or {}).get('provision_lock')
+    if not isinstance(entry, dict) or not entry.get('path') or \
+            not PROVISION_HEX64.match(str(entry.get('sha256', ''))):
+        raise Refused('REFUSED', 'profile provider.provision_lock needs a path and a sha256')
+    path = (Path(ctx.repo) / entry['path']).resolve()
+    if not inside(path, Path(ctx.repo) / 'profiles'):
+        raise Refused('REFUSED', f'provision lock {entry["path"]} is not under profiles/')
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise Refused('REFUSED', f'provision lock {entry["path"]}: cannot read ({exc})') from exc
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != entry['sha256']:
+        raise Refused('LOCK_MISMATCH', f'provision lock {entry["path"]} has sha256 {digest}; '
+                      f'the profile pins {entry["sha256"]}')
+    lock = json.loads(data.decode('utf-8'))
+    if lock.get('schema') != PROVISION_LOCK_SCHEMA or lock.get('profile') != ctx.profile.get('name'):
+        raise Refused('REFUSED', f'provision lock {entry["path"]}: not a {PROVISION_LOCK_SCHEMA} '
+                      f'lock for {ctx.profile.get("name")}')
+    return lock, entry['path'], digest
+
+
+def _provision_rel(*parts):
+    for part in parts:
+        if not isinstance(part, str) or not PROVISION_PART.match(part) or part in ('.', '..'):
+            raise Refused('REFUSED', f'provision lock: unsafe path component {part!r}')
+    return '/'.join(parts)
+
+
+def _provision_pin(what, url, size, sha256):
+    if not isinstance(url, str) or not url.startswith('https://'):
+        raise Refused('REFUSED', f'provision lock: {what} URL {url!r} is not https')
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise Refused('REFUSED', f'provision lock: {what} size {size!r} is not a byte count')
+    if not isinstance(sha256, str) or not PROVISION_HEX64.match(sha256):
+        raise Refused('REFUSED', f'provision lock: {what} sha256 is not 64 lowercase hex digits')
+
+
+def provision_items(lock):
+    """Every plain download of the lock: (staged path, url, size, sha256, role)."""
+    items = []
+    debian = lock.get('debian') or {}
+    for suite in debian.get('suites') or []:
+        for entry in suite.get('files') or []:
+            rel = _provision_rel('index', suite.get('archive'), *str(entry.get('path')).split('/'))
+            items.append((rel, entry.get('url'), entry.get('size'), entry.get('sha256'), 'debian-index'))
+    for package in debian.get('packages') or []:
+        name = package.get('filename')
+        if not isinstance(name, str) or not name.endswith('.deb'):
+            raise Refused('REFUSED', f'provision lock: package filename {name!r} is not a .deb')
+        items.append((_provision_rel('debs', name), package.get('url'), package.get('size'),
+                      package.get('sha256'), 'deb'))
+    binary = lock.get('release_binary') or {}
+    items.append((_provision_rel('agent-server', binary.get('name')), binary.get('url'),
+                  binary.get('size'), binary.get('sha256'), 'release-binary'))
+    for rel, url, size, sha256, _ in items:
+        _provision_pin(rel, url, size, sha256)
+    if len({i[0] for i in items}) != len(items):
+        raise Refused('REFUSED', 'provision lock: two artifacts share a staged path')
+    return items
+
+
+def provision_image(lock):
+    image = lock.get('image') or {}
+    for key in ('index_digest', 'manifest_digest', 'config_digest'):
+        if not PROVISION_DIGEST.match(str(image.get(key, ''))):
+            raise Refused('REFUSED', f'provision lock: image.{key} is not a sha256 digest')
+    if not PROVISION_REPOSITORY.match(str(image.get('repository', ''))):
+        raise Refused('REFUSED', f'provision lock: image.repository {image.get("repository")!r}')
+    if image.get('platform') != 'linux/amd64':
+        raise Refused('REFUSED', 'provision lock: image.platform must be linux/amd64')
+    layers = image.get('layers')
+    if not isinstance(layers, list) or not layers or not all(
+            isinstance(l, dict) and PROVISION_DIGEST.match(str(l.get('digest', ''))) and
+            isinstance(l.get('size'), int) for l in layers):
+        raise Refused('REFUSED', 'provision lock: image.layers must list digests and sizes')
+    if image.get('image_id', image['config_digest']) != image['config_digest']:
+        raise Refused('REFUSED', 'provision lock: image.image_id differs from config_digest')
+    return image
+
+
+def _check_existing(path, size, sha256):
+    got_size = path.stat().st_size
+    got = sha256_file(path)
+    if got_size != size or got != sha256:
+        raise Refused('HASH_MISMATCH', f'{path} is {got_size} bytes with sha256 {got}; the lock '
+                      f'says {size} bytes, {sha256} (left in place for inspection)',
+                      {'path': str(path), 'observed': got, 'expected': sha256})
+
+
+def fetch_file(opener, url, dest, size, sha256):
+    """Download url to dest through dest.part, refusing more than size bytes or a digest
+    other than sha256. A mismatching download is kept as dest.rejected for inspection."""
+    part = dest.with_name(dest.name + '.part')
+    if os.path.lexists(part):
+        part.unlink()                      # this tool's own interrupted download
+    digest, count, t0 = hashlib.sha256(), 0, time.time()
+    request = urllib.request.Request(url, headers={'User-Agent': PROVISION_UA})
+    try:
+        with opener.open(request, timeout=FETCH_TIMEOUT_S) as resp:
+            final = resp.geturl()
+            if not str(final).startswith('https://'):
+                raise Refused('FETCH', f'{url}: ended at a non-https URL {final}')
+            with open(part, 'xb') as out:
+                for block in iter(lambda: resp.read(1 << 20), b''):
+                    count += len(block)
+                    if count > size:
+                        raise Refused('HASH_MISMATCH', f'{url}: more than the locked {size} bytes')
+                    digest.update(block)
+                    out.write(block)
+    except Refused:
+        if os.path.lexists(part):
+            part.unlink()
+        raise
+    except (OSError, ValueError) as exc:   # urllib.error.URLError and HTTPError are OSErrors
+        if os.path.lexists(part):
+            part.unlink()
+        raise Refused('FETCH', f'{url}: {exc}') from exc
+    got = digest.hexdigest()
+    if count != size or got != sha256:
+        rejected = dest.with_name(dest.name + '.rejected')
+        os.replace(part, rejected)
+        raise Refused('HASH_MISMATCH', f'{url}: {count} bytes with sha256 {got}; the lock says '
+                      f'{size} bytes, {sha256} (kept as {rejected})',
+                      {'url': url, 'observed': got, 'expected': sha256, 'kept': str(rejected)})
+    os.rename(part, dest)
+    # only the host: a redirect target can be a pre-signed URL (GitHub release assets)
+    return {'bytes': count, 'seconds': round(time.time() - t0, 1),
+            'final_host': urllib.parse.urlsplit(str(final)).netloc}
+
+
+def ensure_crane(state_dir, pin, opener):
+    """The pinned crane under {state_dir}/tools/crane/<version>/, verified before any use."""
+    for key in ('version', 'asset'):
+        if not PROVISION_PART.match(str(pin.get(key, ''))):
+            raise Refused('REFUSED', f'provision lock: tools.crane.{key} {pin.get(key)!r}')
+    member = pin.get('member') or {}
+    if member.get('name') != 'crane.exe':
+        raise Refused('REFUSED', 'provision lock: tools.crane.member.name must be crane.exe')
+    _provision_pin('tools.crane', pin.get('url'), pin.get('size'), pin.get('sha256'))
+    if not isinstance(member.get('size'), int) or \
+            not PROVISION_HEX64.match(str(member.get('sha256', ''))):
+        raise Refused('REFUSED', 'provision lock: tools.crane.member needs a size and a sha256')
+    tool_dir = Path(state_dir) / 'tools' / 'crane' / pin['version']
+    exe = tool_dir / 'crane.exe'
+    if os.path.lexists(exe):
+        _check_existing(exe, member['size'], member['sha256'])
+        return exe, {'state': 'reused', 'path': str(exe), 'sha256': member['sha256']}
+    tool_dir.mkdir(parents=True, exist_ok=True)
+    archive = tool_dir / pin['asset']
+    fetched = None
+    if os.path.lexists(archive):
+        _check_existing(archive, pin['size'], pin['sha256'])
+    else:
+        fetched = fetch_file(opener, pin['url'], archive, pin['size'], pin['sha256'])
+    try:
+        with tarfile.open(archive, 'r:gz') as tf:
+            found = [m for m in tf.getmembers() if m.name == 'crane.exe']
+            if len(found) != 1 or not found[0].isfile() or found[0].size != member['size']:
+                raise Refused('HASH_MISMATCH', f'{archive}: no single regular crane.exe of '
+                              f'{member["size"]} bytes')
+            data = tf.extractfile(found[0]).read()
+    except (OSError, tarfile.TarError) as exc:
+        raise Refused('HASH_MISMATCH', f'{archive}: unreadable ({exc})') from exc
+    got = hashlib.sha256(data).hexdigest()
+    if got != member['sha256']:
+        raise Refused('HASH_MISMATCH', f'{archive}: crane.exe has sha256 {got}; the lock says '
+                      f'{member["sha256"]}')
+    part = exe.with_name('crane.exe.part')
+    if os.path.lexists(part):
+        part.unlink()
+    with open(part, 'xb') as out:
+        out.write(data)
+    os.rename(part, exe)
+    archive.unlink()
+    return exe, {'state': 'installed', 'path': str(exe), 'sha256': got, 'archive_fetch': fetched}
+
+
+def crane_env(home, temp, environ=None):
+    """A scrubbed environment: no proxy or registry settings of the caller, and an empty
+    DOCKER_CONFIG and home, so crane reads no stored credentials and pulls anonymously."""
+    environ = os.environ if environ is None else environ
+    env = {key: environ[key] for key in ('SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE') if key in environ}
+    env.update({'DOCKER_CONFIG': str(home), 'USERPROFILE': str(home), 'HOME': str(home),
+                'TEMP': str(temp), 'TMP': str(temp)})
+    return env
+
+
+def run_crane(exe, args, env, timeout=CRANE_TIMEOUT_S):
+    result = subprocess.run([str(exe)] + list(args), capture_output=True, env=env,
+                            stdin=subprocess.DEVNULL, timeout=timeout, check=False)
+    return result.returncode, result.stdout, result.stderr.decode('utf-8', errors='replace')
+
+
+def image_manifests(crane, exe, env, image):
+    """The index and platform manifest bytes, each checked against its locked digest, and
+    the platform manifest's config and layers against the lock."""
+    def get(digest):
+        rc, out, err = crane(exe, ['manifest', f'{image["repository"]}@{digest}'], env)
+        if rc != 0:
+            raise Refused('CRANE', f'crane manifest {digest} exited {rc}: {err.strip()[-500:]}')
+        got = 'sha256:' + hashlib.sha256(out).hexdigest()
+        if got != digest:
+            raise Refused('DIGEST_MISMATCH', f'crane manifest {digest} returned bytes with {got}')
+        return out
+    index_bytes = get(image['index_digest'])
+    index = json.loads(index_bytes)
+    os_name, arch = image['platform'].split('/')
+    matches = [m.get('digest') for m in index.get('manifests') or []
+               if (m.get('platform') or {}).get('os') == os_name and
+               (m.get('platform') or {}).get('architecture') == arch and
+               not (m.get('platform') or {}).get('variant')]
+    if matches != [image['manifest_digest']]:
+        raise Refused('DIGEST_MISMATCH', f'index {image["index_digest"]} lists {matches} for '
+                      f'{image["platform"]}; the lock says {image["manifest_digest"]}')
+    manifest_bytes = get(image['manifest_digest'])
+    manifest = json.loads(manifest_bytes)
+    config = manifest.get('config') or {}
+    if config.get('digest') != image['config_digest'] or \
+            ('config_size' in image and config.get('size') != image['config_size']):
+        raise Refused('DIGEST_MISMATCH', f'manifest {image["manifest_digest"]} names config '
+                      f'{config.get("digest")}; the lock says {image["config_digest"]}')
+    got_layers = [(l.get('digest'), l.get('size')) for l in manifest.get('layers') or []]
+    if got_layers != [(l['digest'], l['size']) for l in image['layers']]:
+        raise Refused('DIGEST_MISMATCH', f'manifest {image["manifest_digest"]} layers differ '
+                      'from the lock')
+    return index_bytes, manifest_bytes
+
+
+def _member_sha256(tf, member):
+    digest = hashlib.sha256()
+    handle = tf.extractfile(member)
+    for block in iter(lambda: handle.read(1 << 20), b''):
+        digest.update(block)
+    return 'sha256:' + digest.hexdigest()
+
+
+def verify_image_tar(path, image):
+    """A docker-archive written by crane pull: manifest.json, the config and the layers,
+    all regular files and nothing else; the config member hashes to the locked config
+    digest (the image ID) and each layer member, in order, to its locked digest and size."""
+    try:
+        with tarfile.open(path, 'r:') as tf:
+            members = tf.getmembers()
+            names = [m.name for m in members]
+            by_name = {m.name: m for m in members}
+            if len(names) != len(by_name):
+                raise Refused('IMAGE_MISMATCH', f'{path}: duplicate member names')
+            irregular = [m.name for m in members if not m.isfile()]
+            if irregular:
+                raise Refused('IMAGE_MISMATCH', f'{path}: non-regular members {irregular[:5]}')
+            if 'manifest.json' not in by_name:
+                raise Refused('IMAGE_MISMATCH', f'{path}: no manifest.json')
+            entries = json.loads(tf.extractfile(by_name['manifest.json']).read())
+            if not isinstance(entries, list) or len(entries) != 1 or \
+                    not isinstance(entries[0], dict):
+                raise Refused('IMAGE_MISMATCH', f'{path}: manifest.json is not one image')
+            config_name, layer_names = entries[0].get('Config'), entries[0].get('Layers')
+            if not isinstance(config_name, str) or not isinstance(layer_names, list):
+                raise Refused('IMAGE_MISMATCH', f'{path}: manifest.json lacks Config or Layers')
+            expected = {'manifest.json', config_name, *layer_names}
+            if set(names) != expected:
+                raise Refused('IMAGE_MISMATCH', f'{path}: members {sorted(set(names) ^ expected)[:5]} '
+                              'are unexpected or missing')
+            config = _member_sha256(tf, by_name[config_name])
+            if config != image['config_digest']:
+                raise Refused('IMAGE_MISMATCH', f'{path}: config member has {config}; the lock '
+                              f'says {image["config_digest"]} (the image ID)')
+            hashed = {name: _member_sha256(tf, by_name[name]) for name in set(layer_names)}
+            got = [(hashed[name], by_name[name].size) for name in layer_names]
+            if got != [(l['digest'], l['size']) for l in image['layers']]:
+                raise Refused('IMAGE_MISMATCH', f'{path}: layer members differ from the lock')
+    except (OSError, ValueError, tarfile.TarError) as exc:
+        raise Refused('IMAGE_MISMATCH', f'{path}: unreadable ({exc})') from exc
+    return {'members': len(names), 'config_digest': config, 'layers': len(layer_names),
+            'distinct_layers': len(set(layer_names)), 'repo_tags': entries[0].get('RepoTags'),
+            'bytes': Path(path).stat().st_size}
+
+
+def _plain_dir(path):
+    if os.path.islink(path) or os.path.isjunction(path) or \
+            (os.path.lexists(path) and not os.path.isdir(path)):
+        raise Refused('REFUSED', f'{path} is not a plain directory')
+
+
+def staged_inventory(root):
+    """Every regular file under root, relative and '/'-separated; any other entry refuses."""
+    files = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames:
+            if os.path.islink(os.path.join(dirpath, name)) or \
+                    os.path.isjunction(os.path.join(dirpath, name)):
+                raise Refused('REFUSED', f'{os.path.join(dirpath, name)} is a link')
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                raise Refused('REFUSED', f'{path} is not a regular file')
+            files.append(posix(os.path.relpath(path, root)))
+    return sorted(files)
+
+
+IMAGE_FILES = ('image/index.json', 'image/manifest.json', 'image/agent-server.tar')
+
+
+def verify_staged(staged_dir, lock_sha, items, image):
+    """Re-check a staged directory: its manifest names this lock, it holds exactly the
+    lock's artifacts, every file matches, and the image archive matches the lock."""
+    t0 = time.time()
+    try:
+        staged = json.loads((Path(staged_dir) / PROVISION_STAGED_FILE).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise Refused('STAGED_MISMATCH', f'{staged_dir}: no readable {PROVISION_STAGED_FILE}') from exc
+    if staged.get('schema') != PROVISION_STAGED_SCHEMA or \
+            (staged.get('lock') or {}).get('sha256') != lock_sha:
+        raise Refused('STAGED_MISMATCH', f'{staged_dir}: the staged manifest is not for lock {lock_sha}')
+    files = {f.get('path'): f for f in staged.get('files') or []}
+    want = {rel for rel, *_ in items} | set(IMAGE_FILES)
+    on_disk = set(staged_inventory(staged_dir)) - {PROVISION_STAGED_FILE}
+    if set(files) != want or on_disk != want:
+        raise Refused('STAGED_MISMATCH', f'{staged_dir}: holds {sorted(on_disk ^ want)[:5]} '
+                      'beyond or short of the lock')
+    for rel, _url, size, sha256, _role in items:
+        if (files[rel].get('size'), files[rel].get('sha256')) != (size, sha256):
+            raise Refused('STAGED_MISMATCH', f'{rel}: the staged manifest differs from the lock')
+    for rel, entry in sorted(files.items()):
+        try:
+            _check_existing(Path(staged_dir) / rel, entry.get('size'), entry.get('sha256'))
+        except Refused as exc:
+            raise Refused('STAGED_MISMATCH', str(exc), exc.detail) from exc
+    for rel, digest in (('image/index.json', image['index_digest']),
+                        ('image/manifest.json', image['manifest_digest'])):
+        if 'sha256:' + files[rel]['sha256'] != digest:
+            raise Refused('STAGED_MISMATCH', f'{rel} is not {digest}')
+    tar = verify_image_tar(Path(staged_dir) / 'image' / 'agent-server.tar', image)
+    return {'files': len(files), 'bytes': sum(f['size'] for f in files.values()),
+            'image': tar, 'seconds': round(time.time() - t0, 1)}
+
+
+def provision_fetch(ctx, opener=None, crane=None):
+    """provision-fetch: download, verify and stage every artifact of the provision lock.
+
+    Idempotent: a staged directory for this lock is re-verified and reused. Atomic: work
+    happens in {lock sha256}.partial (resumable; complete files are re-checked, never
+    re-downloaded) and is renamed to {lock sha256} only after everything verified."""
+    t0 = time.time()
+    lock, lock_rel, lock_sha = provision_lock(ctx)
+    items = provision_items(lock)
+    image = provision_image(lock)
+    pin = (lock.get('tools') or {}).get('crane') or {}
+    root = Path(ctx.state_dir) / 'provision'
+    final, work = root / lock_sha, root / f'{lock_sha}.partial'
+    for path in (root, final, work):
+        _plain_dir(path)
+    result = {'operation': 'provision-fetch', 'labels': labels(ctx.profile),
+              'lock': {'path': lock_rel, 'sha256': lock_sha}, 'staged_dir': str(final)}
+    if os.path.lexists(final):
+        result['verify'] = verify_staged(final, lock_sha, items, image)
+        result['result'] = 'reused'
+        result['seconds'] = round(time.time() - t0, 1)
+        return result
+    opener = opener or provision_opener()
+    crane = crane or run_crane
+    work.mkdir(parents=True, exist_ok=True)
+    files, downloads = [], []
+    for rel, url, size, sha256, role in items:
+        dest = work / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if os.path.lexists(dest):
+            _check_existing(dest, size, sha256)
+            downloads.append({'path': rel, 'state': 'reused', 'bytes': size})
+        else:
+            log(f'provision-fetch: {url}')
+            downloads.append(dict(fetch_file(opener, url, dest, size, sha256), path=rel,
+                                  state='fetched'))
+        files.append({'path': rel, 'role': role, 'size': size, 'sha256': sha256})
+    exe, crane_state = ensure_crane(ctx.state_dir, pin, opener)
+    home, temp = work / 'crane-home', work / 'crane-tmp'
+    for path in (home, temp):
+        if os.path.lexists(path):
+            remove_tree(path)
+        path.mkdir()
+    env = crane_env(home, temp)
+    (work / 'image').mkdir(exist_ok=True)
+    index_bytes, manifest_bytes = image_manifests(crane, exe, env, image)
+    for rel, data in (('image/index.json', index_bytes), ('image/manifest.json', manifest_bytes)):
+        (work / rel).write_bytes(data)
+        files.append({'path': rel, 'role': 'image-' + rel.split('/')[1].split('.')[0],
+                      'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+    tar = work / 'image' / 'agent-server.tar'
+    pull = {'state': 'reused'}
+    if not os.path.lexists(tar):
+        part = tar.with_name('agent-server.tar.part')
+        if os.path.lexists(part):
+            part.unlink()
+        ref = f'{image["repository"]}@{image["index_digest"]}'
+        log(f'provision-fetch: crane pull --platform {image["platform"]} {ref}')
+        t1 = time.time()
+        rc, _out, err = crane(exe, ['pull', '--platform', image['platform'], ref, str(part)], env)
+        pull = {'state': 'pulled', 'rc': rc, 'seconds': round(time.time() - t1, 1)}
+        if rc != 0:
+            if os.path.lexists(part):
+                part.unlink()
+            raise Refused('CRANE', f'crane pull exited {rc}: {err.strip()[-500:]}', pull)
+        try:
+            pull['verify'] = verify_image_tar(part, image)
+        except Refused:
+            os.replace(part, tar.with_name('agent-server.tar.rejected'))
+            raise
+        os.rename(part, tar)
+    else:
+        pull['verify'] = verify_image_tar(tar, image)
+    files.append({'path': 'image/agent-server.tar', 'role': 'image-archive',
+                  'size': tar.stat().st_size, 'sha256': sha256_file(tar)})
+    leftovers = staged_inventory(home)
+    if leftovers:
+        raise Refused('CRANE_STATE', f'crane wrote into its empty home: {leftovers}')
+    remove_tree(home)
+    remove_tree(temp)
+    staged = {'schema': PROVISION_STAGED_SCHEMA, 'profile': ctx.profile.get('name'),
+              'lock': {'path': lock_rel, 'sha256': lock_sha},
+              'image': {'ref': f'{image["repository"]}@{image["index_digest"]}',
+                        'manifest_digest': image['manifest_digest'],
+                        'config_digest': image['config_digest']},
+              'crane': {'version': pin['version'], 'sha256': pin['member']['sha256']},
+              'files': sorted(files, key=lambda f: f['path'])}
+    with open(work / PROVISION_STAGED_FILE, 'w', encoding='utf-8', newline='\n') as handle:
+        json.dump(staged, handle, indent=2, sort_keys=True)
+        handle.write('\n')
+    stray = sorted(set(staged_inventory(work)) - {f['path'] for f in files} -
+                   {PROVISION_STAGED_FILE})
+    if stray:
+        raise Refused('STAGED_MISMATCH', f'{work}: unexpected files {stray[:5]}')
+    if os.path.lexists(final):
+        raise Refused('REFUSED', f'{final} appeared while staging; not replaced')
+    os.rename(work, final)
+    result.update({'result': 'staged', 'downloads': downloads, 'crane': crane_state,
+                   'image': {'ref': staged['image']['ref'], 'pull': pull},
+                   'files': len(files), 'bytes': sum(f['size'] for f in files),
+                   'seconds': round(time.time() - t0, 1)})
+    records = root / 'records'
+    records.mkdir(exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    write_json_exclusive(records / f'provision-fetch-{stamp}.json', result)
+    return result
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -4693,11 +5189,12 @@ def main(argv=None):
     p = sub.add_parser('netprobe-listen', help=argparse.SUPPRESS)
     p.add_argument('--log', required=True)
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
-               'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke'):
+               'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
+               'provision-fetch'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
-        if op != 'preflight':
+        if op not in ('preflight', 'provision-fetch'):
             p.add_argument('--name', required=True)
         if op in ('create', 'inspect', 'recreate'):
             p.add_argument('--canaries', help='a canary set written by the canaries operation')
@@ -4739,6 +5236,8 @@ def main(argv=None):
             return exec_command(ctx, args.name, command)
         if op == 'preflight':
             result = preflight(ctx)
+        elif op == 'provision-fetch':
+            result = provision_fetch(ctx)
         elif op == 'create':
             result = create(ctx, args.name, args.ready_timeout, canaries)
         elif op == 'start':

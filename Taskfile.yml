@@ -264,6 +264,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py smoke --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}" --durable "{{.DURABLE}}" {{.CLI_ARGS}}'
 
+  guest:provision-fetch:
+    desc: "Host side of guest provisioning (F-04.1a): download every artifact of the profile's provision lock from its upstream, pull the image with the pinned crane, verify all against the lock and stage under STATE_DIR/provision/<lock sha256>/; reuses a verified stage (python -I -B tools/guest.py provision-fetch --profile PROFILE --state-dir STATE_DIR)"
+    requires:
+      vars: [PROFILE, STATE_DIR]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py provision-fetch --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}"'
+
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
     cmds:

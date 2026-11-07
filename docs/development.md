@@ -161,6 +161,7 @@ Only what is listed as verified has been exercised.
 | `guest:create-canaries PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | `create` with the canary set planted in its own environment first (the P5 test). |
 | `guest:check-surfaces PROFILE=… STATE_DIR=… NAME=… CANARIES=<dir>` | `python -I -B tools/guest.py check-surfaces --profile <dir> --state-dir <dir> --name <name> --canaries <dir>` | no | Startup inspection test for profiles P3 to P6 (F-03.3.1): exit 0 only when all four PASS. |
 | `guest:smoke PROFILE=… STATE_DIR=… NAME=<name> CANARIES=<dir> DURABLE=<dir>` | `python -I -B tools/guest.py smoke --profile <dir> --state-dir <dir> --name <name> --canaries <dir> --durable <dir> [--durable <dir> …] [--out <file>]` | no | The F-03.4 provision/inspect/teardown smoke test (profiles P10) on a fresh instance name. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:provision-fetch PROFILE=… STATE_DIR=…` | `python -I -B tools/guest.py provision-fetch --profile <dir> --state-dir <dir>` | yes | Host side of guest provisioning (F-04.1a): downloads the profile's provision-lock artifacts from their upstreams (snapshot.debian.org, GitHub, ghcr.io through the pinned crane), verifies each against the lock and stages them under `<state>\provision\<lock sha256>\`. About 1.5 GB on the first run; a verified stage is reused. Runs nothing downloaded except crane. |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -328,6 +329,23 @@ defaults them.
   validation record declares, and `start` refuses a validation instance. `inspect` of
   a validation instance adds the netprobe checks to P7; for an ordinary instance, P7
   cites the enforcement point's qualification. Destroy the instance after the cycle.
+- `provision-fetch` (F-04.1a) is the host side of guest provisioning
+  ([decision 0006](../decisions/0006-guest-provisioning-channel-and-image-conformance.md),
+  Proposed). It reads the profile's
+  [`provision.lock.json`](../profiles/strong-windows-qemu-whpx/provision.lock.json)
+  after its bytes match the profile's pin (`provider.provision_lock`), downloads the
+  Debian indexes and packages from snapshot.debian.org and the Agent Server release
+  binary from GitHub (https only, size and sha256 checked while streaming), and installs
+  the pinned crane into `<state>\tools\crane\<version>\` after checking the archive and
+  `crane.exe` against the lock. Crane runs with a scrubbed environment and an empty
+  `DOCKER_CONFIG`; `crane manifest` bytes must hash to the locked index and platform
+  digests, and the archive from `crane pull` must hold exactly the locked config (the
+  image ID) and layers. Work happens in `<state>\provision\<lock sha256>.partial\`
+  (resumable) and is renamed to `<lock sha256>\` with a `staged.json` manifest only
+  when everything verified; a later run re-verifies and reuses it. A mismatching
+  download is kept as `*.rejected` and nothing is staged. No `.deb` is unpacked and no
+  image is run on the host. The run is in
+  [`evidence/F-04.1a-provision-pins-fetch.md`](../evidence/F-04.1a-provision-pins-fetch.md).
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);
@@ -409,7 +427,7 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, publication gate, P-01.1 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share | F-05.1, F-05.2 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
