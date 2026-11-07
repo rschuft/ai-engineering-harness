@@ -1,6 +1,6 @@
 # 0008 - Outcome identity: assignment, form and record
 
-Status: Proposed (Architect, gate B consultation for P-03.1) - 2026-11-07. Refines blueprint
+Status: Accepted (Overseer) - 2026-11-07, at the completion of P-03.1 (`922cfbc`). Both points listed below as not yet verified were shown live with OpenSpec 1.16.0 (`validate --strict` with `x-outcomes`; `.openspec.yaml` byte-identical across `archive`). Proposed by the Architect (gate B consultation for P-03.1) - 2026-11-07. Refines blueprint
 #authority (outcomeId rule, link table) and #integration-contracts ("OpenSpec goal and x-fields";
 "We own stable IDs") within intent-record/v1 (P-01) and the P-02.1 design pointer. Creates no
 OpenSpec schema change, no intent-record format change, no registry and no writer.
