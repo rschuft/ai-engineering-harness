@@ -112,6 +112,45 @@ class Negative(unittest.TestCase):
         path.write_bytes(path.read_bytes().replace(b'11.1.3-1', b'11.1.2-1', 1))
         self.assertFails(self.qemu, 'provider.artifact_lock')
 
+    def test_tampered_provision_lock(self):
+        path = self.tmp / 'profiles' / QEMU / 'provision.lock.json'
+        path.write_bytes(path.read_bytes().replace(b'"tini"', b'"tinj"', 1))
+        self.assertFails(self.qemu, 'provider.provision_lock: profiles/')
+
+    def repinned_provision_lock(self, mutate):
+        """Mutate the provision lock, then re-pin it, so only its shape check can fail."""
+        path = self.tmp / 'profiles' / QEMU / 'provision.lock.json'
+        lock = json.loads(path.read_text(encoding='utf-8'))
+        mutate(lock)
+        data = (json.dumps(lock, indent=2) + '\n').encode('utf-8')
+        path.write_bytes(data)
+        self.qemu['provider']['provision_lock']['sha256'] = check_profile.sha256_file(path)
+        return self.qemu
+
+    def test_provision_lock_http_url(self):
+        def mutate(lock):
+            lock['debian']['packages'][0]['url'] = lock['debian']['packages'][0]['url'] \
+                .replace('https://', 'http://')
+        self.assertFails(self.repinned_provision_lock(mutate),
+                         'provider.provision_lock: debian.packages.runc: url must start with')
+
+    def test_provision_lock_package_at_another_timestamp(self):
+        def mutate(lock):
+            lock['debian']['packages'][0]['url'] = lock['debian']['packages'][0]['url'] \
+                .replace('20261106T143859Z', '20261001T000000Z')
+        self.assertFails(self.repinned_provision_lock(mutate), 'debian.packages.runc: url')
+
+    def test_provision_lock_image_id_differs_from_config(self):
+        def mutate(lock):
+            lock['image']['image_id'] = 'sha256:' + '0' * 64
+        self.assertFails(self.repinned_provision_lock(mutate),
+                         'image.image_id: must equal config_digest')
+
+    def test_provision_lock_unpinned_crane(self):
+        def mutate(lock):
+            del lock['tools']['crane']['member']['sha256']
+        self.assertFails(self.repinned_provision_lock(mutate), 'tools.crane.member')
+
     def test_provider_binary_pin_disagrees(self):
         self.qemu['boot_inputs']['provider_binary']['sha256'] = '0' * 64
         self.assertFails(self.qemu, 'differs from the provider binary pin')

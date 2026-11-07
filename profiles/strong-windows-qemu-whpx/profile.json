@@ -37,6 +37,10 @@
       "path": "profiles/strong-windows-qemu-whpx/qemu-msys2-ucrt64.lock.json",
       "sha256": "69e083362da92d413c56e687ac36300a8a51a913e7cae3c2126bcfb6e45df879"
     },
+    "provision_lock": {
+      "path": "profiles/strong-windows-qemu-whpx/provision.lock.json",
+      "sha256": "f02e430a3f3de69976e5eb632d757126c9d1a879ab68cf2c3681f9977a8168e0"
+    },
     "binaries": {
       "qemu-system-x86_64": {
         "path": "{qemu_prefix}/ucrt64/bin/qemu-system-x86_64.exe",

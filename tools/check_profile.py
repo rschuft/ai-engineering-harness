@@ -5,6 +5,9 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
 
 - every boot input (profiles P9) is pinned by digest, and every committed file a
   profile pins still has that digest;
+- a provision lock (``provider.provision_lock``, F-04.1a) still has its pinned digest
+  and pins every artifact by an https URL, a size and a sha256, the Debian ones at one
+  snapshot timestamp and the image as index, platform manifest and config digest;
 - the tier, provider and nesting labels are present and valid (profiles P11);
 - no host share is declared or configured (profiles P3, P4);
 - the guest's approved volume and mount table (``guest_storage``) and the exchange
@@ -41,6 +44,10 @@ REPO = Path(__file__).resolve().parents[1]
 SCHEMA = 'ai-engineering-harness/profiles/profile/v1'
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
 HEX128 = re.compile(r'^[0-9a-f]{128}$')
+DIGEST = re.compile(r'^sha256:[0-9a-f]{64}$')
+PROVISION_LOCK_SCHEMA = 'ai-engineering-harness/profiles/provision-lock/v1'
+SNAPSHOT_ARCHIVE = 'https://snapshot.debian.org/archive/'
+SNAPSHOT_TIMESTAMP = re.compile(r'^\d{8}T\d{6}Z$')
 LOOPBACK = '127.0.0.1'
 REQUIRED_INPUTS = ('image', 'firmware', 'kernel', 'seed', 'provider_binary', 'profile_revision')
 # QEMU options a profile may use. Anything else (-virtfs, -fsdev, -drive, -usb, -audio,
@@ -235,8 +242,99 @@ def check_provider(report, profile, root):
                   version_ok=True)
     if provider.get('artifact_lock') is not None:
         check_repo_file(report, root, 'provider.artifact_lock', provider['artifact_lock'])
+    if provider.get('provision_lock') is not None:
+        check_provision_lock(report, profile, root, provider['provision_lock'])
     for name, entry in (profile.get('provider_files') or {}).items():
         check_repo_file(report, root, f'provider_files.{name}', entry)
+
+
+def provision_lock_problems(lock, profile_name):
+    """Static shape of a provision lock (F-04.1a): every artifact pinned by an https URL,
+    a size and a sha256; one snapshot timestamp for the Debian indexes and packages; the
+    image chained index -> platform manifest -> config digest (the image ID) with its
+    layers; the crane tool pinned with its archive and its crane.exe member."""
+    problems = []
+
+    def pinned(label, entry, url_prefix='https://'):
+        if not isinstance(entry, dict):
+            problems.append(f'{label}: missing')
+            return
+        url = entry.get('url')
+        if not isinstance(url, str) or not url.startswith(url_prefix):
+            problems.append(f'{label}: url must start with {url_prefix}')
+        size = entry.get('size')
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            problems.append(f'{label}: size is not a byte count')
+        if not HEX64.match(str(entry.get('sha256', ''))):
+            problems.append(f'{label}: sha256 is not 64 lowercase hex digits')
+
+    if lock.get('schema') != PROVISION_LOCK_SCHEMA:
+        problems.append(f'schema: expected {PROVISION_LOCK_SCHEMA}')
+    if lock.get('profile') != profile_name:
+        problems.append(f'profile: {lock.get("profile")!r} is not {profile_name!r}')
+    debian = lock.get('debian') or {}
+    stamp = str((debian.get('snapshot') or {}).get('timestamp', ''))
+    if not SNAPSHOT_TIMESTAMP.match(stamp):
+        problems.append('debian.snapshot.timestamp: not a snapshot.debian.org timestamp')
+    suites = debian.get('suites') or []
+    if not suites:
+        problems.append('debian.suites: none')
+    for suite in suites:
+        base = f'{SNAPSHOT_ARCHIVE}{suite.get("archive")}/{stamp}/'
+        if suite.get('base_url') != base:
+            problems.append(f'debian.suites.{suite.get("suite")}: base_url is not {base}')
+        for entry in suite.get('files') or []:
+            pinned(f'debian.suites.{suite.get("suite")}.{entry.get("path")}', entry, base)
+            if isinstance(entry.get('url'), str) and entry['url'] != base + str(entry.get('path')):
+                problems.append(f'debian.suites.{suite.get("suite")}.{entry.get("path")}: url '
+                                'is not base_url + path')
+    packages = debian.get('packages') or []
+    if not packages:
+        problems.append('debian.packages: none')
+    for package in packages:
+        pinned(f'debian.packages.{package.get("name")}', package,
+               f'{SNAPSHOT_ARCHIVE}debian/{stamp}/pool/')
+        if not str(package.get('filename', '')).endswith('.deb') or not package.get('version'):
+            problems.append(f'debian.packages.{package.get("name")}: needs a .deb filename and '
+                            'a version')
+    image = lock.get('image') or {}
+    for key in ('index_digest', 'manifest_digest', 'config_digest'):
+        if not DIGEST.match(str(image.get(key, ''))):
+            problems.append(f'image.{key}: not a sha256 digest')
+    if image.get('ref') != f'{image.get("repository")}@{image.get("index_digest")}':
+        problems.append('image.ref: must be repository@index_digest')
+    if image.get('image_id') != image.get('config_digest'):
+        problems.append('image.image_id: must equal config_digest')
+    layers = image.get('layers')
+    if not isinstance(layers, list) or not layers or not all(
+            isinstance(l, dict) and DIGEST.match(str(l.get('digest', ''))) and
+            isinstance(l.get('size'), int) for l in layers):
+        problems.append('image.layers: must list sha256 digests and sizes')
+    pinned('release_binary', lock.get('release_binary'))
+    crane = (lock.get('tools') or {}).get('crane')
+    pinned('tools.crane', crane)
+    if isinstance(crane, dict):
+        member = crane.get('member') or {}
+        if member.get('name') != 'crane.exe' or not HEX64.match(str(member.get('sha256', ''))):
+            problems.append('tools.crane.member: needs crane.exe with a sha256')
+        if not (crane.get('checksums_source') or {}).get('url'):
+            problems.append('tools.crane.checksums_source: missing')
+    return problems
+
+
+def check_provision_lock(report, profile, root, entry):
+    """The provision lock is pinned by sha256 like any committed file, then shape-checked."""
+    before = len(report.errors)
+    check_repo_file(report, root, 'provider.provision_lock', entry)
+    if len(report.errors) != before:
+        return
+    try:
+        lock = json.loads((root / entry['path']).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        report.fail(f'provider.provision_lock: cannot read ({exc})')
+        return
+    for problem in provision_lock_problems(lock, profile.get('name')):
+        report.fail(f'provider.provision_lock: {problem}')
 
 
 def check_ceilings(report, profile):

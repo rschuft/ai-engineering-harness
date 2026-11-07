@@ -1,0 +1,371 @@
+{
+  "schema": "ai-engineering-harness/profiles/provision-lock/v1",
+  "profile": "strong-windows-qemu-whpx",
+  "plan_leaf": "F-04.1",
+  "decision": "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+  "captured_utc": "2026-11-07",
+  "distribution": "Decision 0005: every artifact is downloaded from its original upstream onto the user's machine and checked against this lock; nothing is redistributed.",
+  "consumer": "tools/guest.py provision-fetch stages these artifacts under {state_dir}/provision/<sha256 of this file>/. Nothing here is unpacked or executed on the host except the pinned crane.",
+  "debian": {
+    "snapshot": {
+      "service": "https://snapshot.debian.org/",
+      "timestamp": "20261106T143859Z",
+      "rule": "One timestamp for every suite: snapshot.debian.org serves, per archive, the latest snapshot at or before it (it redirects to /file/<hash>/...)."
+    },
+    "suites": [
+      {
+        "archive": "debian",
+        "suite": "trixie",
+        "component": "main",
+        "architecture": "amd64",
+        "base_url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/",
+        "release": {
+          "origin": "Debian",
+          "suite": "stable",
+          "version": "13.7",
+          "codename": "trixie",
+          "date": "Sat, 12 Sep 2026 07:55:41 UTC"
+        },
+        "signed_by_reported": [
+          "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+          "41587F7DB8C774BCCF131416762F67A0B2C39DE4",
+          "B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8"
+        ],
+        "files": [
+          {
+            "path": "dists/trixie/InRelease",
+            "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/dists/trixie/InRelease",
+            "size": 140421,
+            "sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"
+          },
+          {
+            "path": "dists/trixie/main/binary-amd64/Packages.xz",
+            "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/dists/trixie/main/binary-amd64/Packages.xz",
+            "size": 9678380,
+            "sha256": "7778d3e3f303b7ddb8ce0fe7c8d57473a076c6bf2e8f241f75421d2396352498"
+          }
+        ]
+      },
+      {
+        "archive": "debian-security",
+        "suite": "trixie-security",
+        "component": "main",
+        "architecture": "amd64",
+        "base_url": "https://snapshot.debian.org/archive/debian-security/20261106T143859Z/",
+        "release": {
+          "origin": "Debian",
+          "suite": "stable-security",
+          "version": "13",
+          "codename": "trixie-security",
+          "date": "Thu, 05 Nov 2026 18:22:29 UTC",
+          "valid_until": "Thu, 12 Nov 2026 18:22:29 UTC"
+        },
+        "signed_by_reported": [
+          "05AB90340C0C5E797F44A8C8254CF3B5AEC0A8F0",
+          "5E04A1E3223A19A20706E20F9904613D4CCE68C6"
+        ],
+        "files": [
+          {
+            "path": "dists/trixie-security/InRelease",
+            "url": "https://snapshot.debian.org/archive/debian-security/20261106T143859Z/dists/trixie-security/InRelease",
+            "size": 43409,
+            "sha256": "d0dbede32d80c3e9462e037ede87b138bdd5e44be10145acf46c9f643388836d"
+          },
+          {
+            "path": "dists/trixie-security/main/binary-amd64/Packages.xz",
+            "url": "https://snapshot.debian.org/archive/debian-security/20261106T143859Z/dists/trixie-security/main/binary-amd64/Packages.xz",
+            "size": 298120,
+            "sha256": "5f9fc5aa45642005a7d58bf8782e6fe1a483b9082f4e1918dfb186fa490d2a20"
+          }
+        ]
+      }
+    ],
+    "resolution": {
+      "requested": [
+        "docker.io",
+        "docker-cli"
+      ],
+      "install_recommends": false,
+      "command": "apt-get -qq --print-uris install --no-install-recommends docker.io docker-cli",
+      "where": "a disposable ordinary guest of this profile (base image build 20261103-2651, Debian 13.7), as agent (uid 1000), no network",
+      "apt": "apt 3.0.3; signature verifier sqv 1.3.0-3+b2; keyring debian-archive-keyring 2025.1",
+      "sources": [
+        "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp check-valid-until=no by-hash=no] file:<pushed copy>/debian trixie main",
+        "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp check-valid-until=no by-hash=no] file:<pushed copy>/debian-security trixie-security main"
+      ],
+      "apt_options": [
+        "Dir::State=<scratch>/state",
+        "Dir::State::status=/var/lib/dpkg/status",
+        "Dir::Cache=<scratch>/cache",
+        "Dir::Etc::SourceList=<scratch>/etc/sources.list",
+        "Dir::Etc::SourceParts=<scratch>/etc/sources.list.d (empty)",
+        "Dir::Etc::PreferencesParts=<scratch>/etc/preferences.d (empty)",
+        "Debug::NoLocking=1",
+        "Acquire::Languages=none"
+      ],
+      "base": "The closure is relative to the guest image's installed set (/var/lib/dpkg/status); a different base image needs a new resolution.",
+      "sha256_source": "apt-cache show --no-all-versions over the signature-verified lists; apt 3.0.3 --print-uris prints MD5Sum only (it agreed with the same records). Cross-checked on the host against the pinned Packages.xz.",
+      "security_suite": "Included because the image's own sources pair trixie with trixie-security and a security fix would supersede a closure member. At this timestamp the main-only resolution gave the identical set and versions.",
+      "evidence": "evidence/F-04.1a-provision-pins-fetch.md"
+    },
+    "packages": [
+      {
+        "name": "runc",
+        "version": "1.1.15+ds1-2+b4",
+        "architecture": "amd64",
+        "source": "runc (1.1.15+ds1-2)",
+        "filename": "runc_1.1.15+ds1-2+b4_amd64.deb",
+        "pool_path": "pool/main/r/runc/runc_1.1.15+ds1-2+b4_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/r/runc/runc_1.1.15%2Bds1-2%2Bb4_amd64.deb",
+        "size": 3229748,
+        "sha256": "fad4f807a369677f0954bd4c61e56ddb2dd8b3f4aec30c3834c3165fc6d3c19f",
+        "apt_origin": "Debian:13.7/stable",
+        "present_in": [
+          "debian"
+        ]
+      },
+      {
+        "name": "containerd",
+        "version": "1.7.24~ds1-6+deb13u1",
+        "architecture": "amd64",
+        "source": "containerd",
+        "filename": "containerd_1.7.24~ds1-6+deb13u1_amd64.deb",
+        "pool_path": "pool/main/c/containerd/containerd_1.7.24~ds1-6+deb13u1_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/c/containerd/containerd_1.7.24~ds1-6%2Bdeb13u1_amd64.deb",
+        "size": 32784720,
+        "sha256": "ed708deb96fe476a3bce4efa5c0538dfbcf717ab9a7c7944ba7260342c25899c",
+        "apt_origin": "Debian:13.7/stable, Debian-Security:13/stable-security",
+        "present_in": [
+          "debian",
+          "debian-security"
+        ]
+      },
+      {
+        "name": "tini",
+        "version": "0.19.0-3+b8",
+        "architecture": "amd64",
+        "source": "tini (0.19.0-3)",
+        "filename": "tini_0.19.0-3+b8_amd64.deb",
+        "pool_path": "pool/main/t/tini/tini_0.19.0-3+b8_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/t/tini/tini_0.19.0-3%2Bb8_amd64.deb",
+        "size": 280384,
+        "sha256": "a443b12107331f67836a64cb6efe1dd92d2765e15568eb4567dccb409a8cd2a0",
+        "apt_origin": "Debian:13.7/stable",
+        "present_in": [
+          "debian"
+        ]
+      },
+      {
+        "name": "docker.io",
+        "version": "26.1.5+dfsg1-9+deb13u1",
+        "architecture": "amd64",
+        "source": "docker.io",
+        "filename": "docker.io_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "pool_path": "pool/main/d/docker.io/docker.io_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/d/docker.io/docker.io_26.1.5%2Bdfsg1-9%2Bdeb13u1_amd64.deb",
+        "size": 23037844,
+        "sha256": "142fe32f839a20720b2e6074b8d28d883b01bc45345f7315586b0c2d348dae87",
+        "apt_origin": "Debian:13.7/stable, Debian-Security:13/stable-security",
+        "present_in": [
+          "debian",
+          "debian-security"
+        ]
+      },
+      {
+        "name": "docker-cli",
+        "version": "26.1.5+dfsg1-9+deb13u1",
+        "architecture": "amd64",
+        "source": "docker.io",
+        "filename": "docker-cli_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "pool_path": "pool/main/d/docker.io/docker-cli_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/d/docker.io/docker-cli_26.1.5%2Bdfsg1-9%2Bdeb13u1_amd64.deb",
+        "size": 7337444,
+        "sha256": "e78ac35b7a21652546ca1a739f63e4f31fe52e4385a9baf7020be400c594f23d",
+        "apt_origin": "Debian:13.7/stable, Debian-Security:13/stable-security",
+        "present_in": [
+          "debian",
+          "debian-security"
+        ]
+      }
+    ]
+  },
+  "image": {
+    "repository": "ghcr.io/openhands/agent-server",
+    "ref": "ghcr.io/openhands/agent-server@sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55",
+    "index_digest": "sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55",
+    "index_media_type": "application/vnd.oci.image.index.v1+json",
+    "index_size": 1609,
+    "platform": "linux/amd64",
+    "manifest_digest": "sha256:8496d13f117827165af5a9c5c2b8ec5a1e52074aaff49a196ce9b000262d6b0c",
+    "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
+    "manifest_size": 4505,
+    "config_digest": "sha256:e8959dfc8e184f629b63dcd709f39b1cb0c804c8d19f34ba7a9e2cc8854042cb",
+    "config_size": 28492,
+    "image_id": "sha256:e8959dfc8e184f629b63dcd709f39b1cb0c804c8d19f34ba7a9e2cc8854042cb",
+    "config_facts": {
+      "architecture": "amd64",
+      "os": "linux",
+      "created": "2026-11-05T16:57:02.245510293Z",
+      "user": "openhands",
+      "entrypoint": [
+        "tini",
+        "--",
+        "/usr/local/bin/openhands-agent-server"
+      ]
+    },
+    "layers": [
+      {
+        "digest": "sha256:37fb86c2a767b88d500c6872195f88078f64765fe0d2f9cc375cc2efbd4c0a41",
+        "size": 29856132,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:a0a8874366534e91e15e0ac5789750a8c85529b96d6425088c93266f1f666f8b",
+        "size": 10936105,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:d93139a22bf2cb3e0d6a9f276a83594f3a277f736ed3ac880be10c8ef0ddef19",
+        "size": 46102704,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:78b050a8a312669866a21b3b9c8159732593e0808961bcfd3a2e76204e37a571",
+        "size": 3216946,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:8886806a5115095213a93ba58a7f8eb410369b8d7db0edee82664f9e89150294",
+        "size": 14184376,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:b149ba178408d3c5068c54320649b8813656f24f9795f941ecb3f9e45bec2ee7",
+        "size": 1699711,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:8d16ebebf98afde93a4d079d95d32935d0d39e935732446b3e84985e408d87b7",
+        "size": 5479001,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:168e9bdce93f30eb99682ecb3349cfef77e3436508706ddb1c1264a71e7d4aeb",
+        "size": 36033029,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:b503db956d4e3c1b9b862d64bc522bdc877a4c2b55d66b835fc5b65209f9c828",
+        "size": 358855585,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:0a2800f88ecdc7a538f59c49f9708c6dc3c5ceba77d4d81084c64e763e58ed95",
+        "size": 296,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "size": 32,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:a9aaa110c60434c4ccc2ba82acb1ac05c8bba0c860ba3d291c1808f99f706f0f",
+        "size": 218,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:132a729272a9690cebb082b548759b82a250bff071599fa4cc394de94ccac2ef",
+        "size": 100208265,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:d4cf262b0c5225cae368beb555e43d833f162b0cf1d9fbef7442afa621dacf2d",
+        "size": 18689674,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "size": 32,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:82ebc12e354a267e46e03e47444013ea271f3704856ed0e70e4255c18f3aa492",
+        "size": 78613441,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:115754c76e110d0f5018c7108a62b6b9def5e41be0248307ee6f521c35f61b97",
+        "size": 756,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:2b02273dfa3190b13c02e7ce39e556575925c5d994f17d14fc86be1dee0154b3",
+        "size": 146525303,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:e2e93ec45c6846bf6a428d2b98e817768fe1a838eeb3af61718fe5a46efb4472",
+        "size": 15185247,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:7a674448c494d9bf4d537d75df84fd279dbad11e6ad4aa8bfb43b2b5fd765de9",
+        "size": 269815468,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:d44d0b0c8cdb7eae87787adb081aa6541b59be75552c556ba3bcb3919f312e79",
+        "size": 136611892,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "size": 32,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      }
+    ],
+    "layers_count": 22,
+    "layers_distinct": 20,
+    "layers_total_bytes": 1272014245,
+    "archive": {
+      "file": "agent-server.tar",
+      "format": "docker-archive (crane pull, default --format tarball)",
+      "command": "crane pull --platform linux/amd64 ghcr.io/openhands/agent-server@sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55 agent-server.tar",
+      "verification": "manifest.json names the config and the layers; the config member hashes to config_digest and each layer member, in order, to its layer digest and size"
+    }
+  },
+  "release_binary": {
+    "component": "openhands-agent-server",
+    "name": "agent-server-1.60.1-linux-x86_64",
+    "url": "https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/agent-server-1.60.1-linux-x86_64",
+    "size": 137978504,
+    "sha256": "b2fbcf8cf1495bdbef97f26583917bc188b765c71c181effc3e47c14da08ce72",
+    "checksum_file": "https://github.com/OpenHands/software-agent-sdk/releases/download/v1.60.1/SHA256SUMS",
+    "source": "composition/lock/components.lock.json release_assets (checksum-file-line); GitHub asset digest matched"
+  },
+  "tools": {
+    "crane": {
+      "project": "https://github.com/google/go-containerregistry",
+      "license": "Apache-2.0",
+      "version": "v0.22.1",
+      "published_at": "2026-09-04T00:17:00Z",
+      "asset": "go-containerregistry_Windows_x86_64.tar.gz",
+      "url": "https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Windows_x86_64.tar.gz",
+      "size": 16978582,
+      "sha256": "0e073ea8192c3b8442ec8aaf44d53c1050a09084669fae3a6ceb0f2026cf8b21",
+      "checksums_source": {
+        "url": "https://github.com/google/go-containerregistry/releases/download/v0.22.1/checksums.txt",
+        "sha256": "889e6996ef939c12d613f4cae657cc2ecce822e69ea74a58a453a95d723a857d",
+        "note": "the archive line matched; the GitHub asset digest matched. The SLSA provenance (multiple.intoto.jsonl) is not verified."
+      },
+      "member": {
+        "name": "crane.exe",
+        "size": 12295168,
+        "sha256": "e22e47202cece45d09fe92919bdb683f56f548d360cb96f6a852defd965c935d"
+      },
+      "install_dir": "{state_dir}/tools/crane/v0.22.1",
+      "use": "host only, without installation: crane manifest and crane pull of the image above, with a scrubbed environment and an empty DOCKER_CONFIG (anonymous pull)"
+    }
+  }
+}

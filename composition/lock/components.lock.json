@@ -40,6 +40,10 @@
       "linux/amd64": "sha256:8496d13f117827165af5a9c5c2b8ec5a1e52074aaff49a196ce9b000262d6b0c",
       "linux/arm64": "sha256:89f694c3a3ec77efeaae7ab4c72352e7a5f2fd606544e6a7123d87be1d467665"
     },
+    "config_digests": {
+      "linux/amd64": "sha256:e8959dfc8e184f629b63dcd709f39b1cb0c804c8d19f34ba7a9e2cc8854042cb"
+    },
+    "config_digests_note": "The config digest (the image ID after docker load) named by the linux/amd64 manifest under the locked index, read with the pinned crane (crane manifest, crane config) in F-04.1a; the layers are in profiles/strong-windows-qemu-whpx/provision.lock.json. The index digest stays the locked reference (decision 0001 s4); decision 0006 (Proposed) enforces it in the guest by this image ID.",
     "tag_at_lock_time": "1.60.1-python",
     "conformance": "Only this digest reference conforms. The Agent Server default conversation image ghcr.io/openhands/agent-server:latest-python (config.py DEFAULT_CONVERSATION_IMAGE) is a floating tag and is NON-CONFORMING; so is ghcr.io/openhands/agent-server:e99e5c7-python (a different index, sha256:8857fbd2...) and every latest-* or other floating tag.",
     "enforcement": "Not configured here. F-04.1 sets conversation_image to this ref in server configuration; F-04.2 and E-01.5 observe it (decision 0001 s4).",
