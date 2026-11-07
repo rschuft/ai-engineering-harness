@@ -5717,6 +5717,8 @@ def tar_secret_scan(tar_bytes, session_key, secret_fp):
 BASE_LISTENER_PROCESSES = ('sshd', 'systemd-resolve')
 AGENT_SERVER_ENGINE_WARNINGS = ('Failed to list stale conversation containers',
                                 'Docker CLI not found')
+AGENT_SERVER_UNIT_SETS = ('IPAddressAllow', 'IPAddressDeny', 'RestrictAddressFamilies',
+                          'ReadWritePaths', 'CapabilityBoundingSet', 'AmbientCapabilities')
 
 
 def _listener_process(line):
@@ -5871,6 +5873,11 @@ def agent_server_checks(profile, record, obs):
                                           'AmbientCapabilities', 'IPAddressDeny', 'IPAddressAllow',
                                           'RestrictAddressFamilies', 'SystemCallArchitectures',
                                           'UMask', 'ReadWritePaths')}
+    # systemctl show prints these sets in no fixed order (observed in F-04.1c across
+    # recreate: '127.0.0.0/8 ::1/128' then '::1/128 127.0.0.0/8')
+    for key in AGENT_SERVER_UNIT_SETS:
+        if isinstance(unit_view.get(key), str):
+            unit_view[key] = ' '.join(sorted(unit_view[key].split()))
     proc_view = sorted({json.dumps({k: p.get(k) for k in ('name', 'user', 'group', 'groups', 'exe',
                                                            'error')}, sort_keys=True)
                         for p in procs})

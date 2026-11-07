@@ -3196,6 +3196,28 @@ class ProvisionedInspect(LaunchRecord):
         obs = self.api(count_without_key={'status': 200, 'body': 0})
         self.assertEqual(self.failing(obs), [(prov, 'session API key enforced')])
 
+    def test_unit_address_sets_in_any_order_compare_equal(self):
+        """Observed in F-04.1c: systemctl show printed IPAddressAllow and IPAddressDeny in
+        a different order after recreate; the sets are equal."""
+        a = provisioned_identity_record(self.record, 'one')
+        c = provisioned_identity_record(self.record, 'two')
+        obs = c['observations']
+        facts = json.loads(obs['guest']['moby_facts']['out'])
+        unit = facts['agent_server']['unit']
+        unit['IPAddressAllow'] = ' '.join(reversed(unit['IPAddressAllow'].split()))
+        unit['IPAddressDeny'] = ' '.join(reversed(unit['IPAddressDeny'].split()))
+        obs['guest']['moby_facts']['out'] = json.dumps(facts)
+        c['properties'] = guest.evaluate(PROFILE, provisioned_record(self.record) | {
+            'instance': dict(self.record['instance'], instance_id=c['instance_id'])}, obs)
+        out = guest.compare_inspect(PROFILE, a, c, 'recreate')
+        self.assertNotIn('provisioning (F-04.1) / Agent Server service', out['not_ok'])
+        unit['IPAddressAllow'] = 'any'
+        obs['guest']['moby_facts']['out'] = json.dumps(facts)
+        c['properties'] = guest.evaluate(PROFILE, provisioned_record(self.record) | {
+            'instance': dict(self.record['instance'], instance_id=c['instance_id'])}, obs)
+        self.assertIn('provisioning (F-04.1) / Agent Server service',
+                      guest.compare_inspect(PROFILE, a, c, 'recreate')['not_ok'])
+
     def test_agent_server_fingerprints_are_per_instance(self):
         a = provisioned_identity_record(self.record, 'one')
         b = provisioned_identity_record(self.record, 'one')
