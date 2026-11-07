@@ -163,6 +163,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/planning/planning_adapter.py resolve --project "{{.PROJECT}}" {{.CLI_ARGS}}'
 
+  planning:readiness:
+    desc: "Report Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; exit 1 on a missing dependency, a failing pointer or unknown readiness (python -I -B integrations/planning/planning_readiness.py --project PROJECT --backlog BACKLOG [-- --task ID --no-pointers])"
+    requires:
+      vars: [PROJECT, BACKLOG]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/planning/planning_readiness.py --project "{{.PROJECT}}" --backlog "{{.BACKLOG}}" {{.CLI_ARGS}}'
+
   profile:check:
     desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins
     cmds:

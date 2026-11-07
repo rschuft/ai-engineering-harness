@@ -12,6 +12,10 @@ adapter asked for. ``FAKE_BACKLOG_MODE`` selects a misbehaviour:
 - ``bad-envelope``: list answers with another schemaVersion;
 - ``lost-create``: create reports success but keeps nothing.
 
+``FAKE_BACKLOG_SNAPSHOT=<dir>`` instead replays Backlog.md's own recorded output:
+``task list --json`` prints ``<dir>/task-list.json`` and ``task view <ID> --json``
+prints ``<dir>/task-view-<ID>.json``, byte for byte; every other command fails.
+
 This is test scaffolding, not a Backlog.md implementation.
 """
 import json
@@ -37,9 +41,28 @@ def summary(task):
             'references': task['references'], 'createdAt': '2026-11-07T00:00:00Z', 'updatedAt': None}
 
 
+def replay(directory, argv):
+    if argv == ['task', 'list', '--json']:
+        name = 'task-list.json'
+    elif argv[:2] == ['task', 'view'] and len(argv) == 4 and argv[3] == '--json':
+        name = f'task-view-{argv[2].upper()}.json'
+    else:
+        print(f'fake: replay does not answer {argv}', file=sys.stderr)
+        return 1
+    path = directory / name
+    if not path.is_file():
+        print(f'Task {argv[2] if len(argv) > 2 else ""} not found.', file=sys.stderr)
+        return 1
+    sys.stdout.buffer.write(path.read_bytes())
+    return 0
+
+
 def main(argv):
     with LOG.open('a', encoding='utf-8') as log:
         log.write(json.dumps(argv) + '\n')
+    snapshot = os.environ.get('FAKE_BACKLOG_SNAPSHOT')
+    if snapshot:
+        return replay(Path(snapshot), argv)
     mode = os.environ.get('FAKE_BACKLOG_MODE', '')
     state = load()
     if argv[:2] == ['task', 'list'] and '--json' in argv:

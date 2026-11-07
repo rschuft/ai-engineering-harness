@@ -126,5 +126,37 @@ class LiveTwoTask(unittest.TestCase):
                 self.assertIn(f'FAIL TASK-1 {text}: {code}', result.stderr)
 
 
+
+@unittest.skipUnless(BACKLOG and OPENSPEC, SKIP)
+class LiveReadiness(unittest.TestCase):
+    """P-02.2: Backlog.md's readiness, regenerated in the three recorded stages."""
+
+    def setUp(self):
+        import readiness_fixture as rf
+        self.rf = rf
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-readiness-live-'))
+        self.addCleanup(fx.rmtree, self.tmp)
+        self.backlog_argv = adapter.tool_argv(BACKLOG)
+        self.repo, self.stages = rf.live_stages(self.backlog_argv, adapter.tool_argv(OPENSPEC), self.tmp)
+
+    def test_regenerated_stages_equal_the_recorded_fixtures(self):
+        for stage in self.rf.STAGES:
+            recorded = self.rf.recorded(stage)
+            self.assertEqual(sorted(self.stages[stage]), sorted(recorded), stage)
+            for name in sorted(recorded):
+                self.assertEqual(self.stages[stage][name], recorded[name], f'{stage}/{name}')
+
+    def test_command_line_fails_visibly_on_the_missing_dependency(self):
+        env = mock.patch.dict(os.environ, fx.isolated_env(self.tmp / 'home'))
+        env.start()
+        self.addCleanup(env.stop)
+        result = subprocess.run(
+            [sys.executable, '-I', '-B', str(fx.PLANNING / 'planning_readiness.py'), '--project', str(self.repo),
+             '--backlog', BACKLOG], capture_output=True, text=True, encoding='utf-8', timeout=fx.WAIT_CEILING_S)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stderr.strip(), 'FAIL TASK-3: MISSING_DEPENDENCIES TASK-2')
+        self.assertEqual(json.loads(result.stdout)['eligible'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

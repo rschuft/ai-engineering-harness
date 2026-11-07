@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "kind": "task-view",
+  "task": {
+    "id": "TASK-2",
+    "title": "Refresh affected search cache entries when a product is added",
+    "status": "To Do",
+    "archived": false,
+    "type": null,
+    "priority": null,
+    "project": null,
+    "assignees": [],
+    "reporter": null,
+    "labels": [],
+    "milestone": null,
+    "parentTaskId": null,
+    "acceptanceCriteriaCompleted": 0,
+    "acceptanceCriteriaCount": 0,
+    "references": [
+      "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+    ],
+    "modifiedFiles": [],
+    "ordinal": 2000,
+    "createdAt": "<timestamp>",
+    "updatedAt": null,
+    "dueDate": null,
+    "isReady": true,
+    "path": "backlog/tasks/task-2 - Refresh-affected-search-cache-entries-when-a-product-is-added.md",
+    "description": "Design D2: meet the requirement that new products are findable within 5 minutes, using method M2 if D1 shows the cache is the main cause.",
+    "dependencies": [
+      "TASK-1"
+    ],
+    "dependencyGraph": {
+      "root": "TASK-2",
+      "nodes": [
+        {
+          "id": "TASK-2",
+          "title": "Refresh affected search cache entries when a product is added",
+          "status": "To Do",
+          "state": "resolved",
+          "completed": false,
+          "dependencyDepth": 0,
+          "dependentDepth": 0
+        },
+        {
+          "id": "TASK-1",
+          "title": "Measure where new products are delayed before search",
+          "status": "Done",
+          "state": "resolved",
+          "completed": true,
+          "dependencyDepth": 1,
+          "dependentDepth": null
+        }
+      ],
+      "edges": [
+        {
+          "from": "TASK-2",
+          "to": "TASK-1"
+        }
+      ]
+    },
+    "readiness": {
+      "isReady": true,
+      "isBlocked": false,
+      "blockingDependencies": [],
+      "missingDependencies": []
+    },
+    "documentation": [],
+    "subtasks": [],
+    "acceptanceCriteria": [],
+    "definitionOfDone": [],
+    "implementationPlan": null,
+    "implementationNotes": null,
+    "comments": [],
+    "finalSummary": null
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "format": "planning-readiness/v1",
+  "eligible": [],
+  "tasks": [
+    {
+      "id": "TASK-1",
+      "eligible": false,
+      "reasons": [
+        "NOT_READY"
+      ],
+      "blocking_dependencies": [],
+      "missing_dependencies": [],
+      "graph_unresolved": [],
+      "backlog_readiness": {
+        "isReady": false,
+        "isBlocked": false,
+        "blockingDependencies": [],
+        "missingDependencies": []
+      },
+      "pointers": [
+        {
+          "pointer": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+          "resolved": true
+        },
+        {
+          "pointer": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+          "resolved": true
+        }
+      ]
+    },
+    {
+      "id": "TASK-3",
+      "eligible": false,
+      "reasons": [
+        "MISSING_DEPENDENCIES"
+      ],
+      "blocking_dependencies": [],
+      "missing_dependencies": [
+        "TASK-2"
+      ],
+      "graph_unresolved": [
+        {
+          "id": "TASK-2",
+          "state": "missing"
+        }
+      ],
+      "backlog_readiness": {
+        "isReady": false,
+        "isBlocked": true,
+        "blockingDependencies": [],
+        "missingDependencies": [
+          "TASK-2"
+        ]
+      },
+      "pointers": [
+        {
+          "pointer": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+          "resolved": true
+        }
+      ]
+    }
+  ]
+}

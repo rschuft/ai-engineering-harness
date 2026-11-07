@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "kind": "task-view",
+  "task": {
+    "id": "TASK-1",
+    "title": "Measure where new products are delayed before search",
+    "status": "Done",
+    "archived": false,
+    "type": null,
+    "priority": null,
+    "project": null,
+    "assignees": [],
+    "reporter": null,
+    "labels": [],
+    "milestone": null,
+    "parentTaskId": null,
+    "acceptanceCriteriaCompleted": 0,
+    "acceptanceCriteriaCount": 0,
+    "references": [
+      "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+    ],
+    "modifiedFiles": [],
+    "ordinal": 1000,
+    "createdAt": "<timestamp>",
+    "updatedAt": "<timestamp>",
+    "dueDate": null,
+    "isReady": false,
+    "path": "backlog/tasks/task-1 - Measure-where-new-products-are-delayed-before-search.md",
+    "description": "Design D1: record when an added product reaches the catalogue store, the search index and the search responses, with the cache bypassed and in use (the test of hypothesis H2).",
+    "dependencies": [],
+    "dependencyGraph": {
+      "root": "TASK-1",
+      "nodes": [
+        {
+          "id": "TASK-1",
+          "title": "Measure where new products are delayed before search",
+          "status": "Done",
+          "state": "resolved",
+          "completed": true,
+          "dependencyDepth": 0,
+          "dependentDepth": 0
+        },
+        {
+          "id": "TASK-2",
+          "title": "Refresh affected search cache entries when a product is added",
+          "status": "To Do",
+          "state": "resolved",
+          "completed": false,
+          "dependencyDepth": null,
+          "dependentDepth": 1
+        }
+      ],
+      "edges": [
+        {
+          "from": "TASK-2",
+          "to": "TASK-1"
+        }
+      ]
+    },
+    "readiness": {
+      "isReady": false,
+      "isBlocked": false,
+      "blockingDependencies": [],
+      "missingDependencies": []
+    },
+    "documentation": [],
+    "subtasks": [],
+    "acceptanceCriteria": [],
+    "definitionOfDone": [],
+    "implementationPlan": null,
+    "implementationNotes": null,
+    "comments": [],
+    "finalSummary": null
+  }
+}

@@ -7,8 +7,9 @@ dependencies and status, and "updates use its commands"
 ([`#architecture`](../../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture)).
 This adapter is the small resolver between them. It turns a task plan for one
 OpenSpec change into Backlog.md tasks through Backlog.md's command line, and gives
-each task source pointers that resolve the exact design revision. It is Python
-standard library only, plus git.
+each task source pointers that resolve the exact design revision (P-02.1). Its
+readiness read (P-02.2) reports Backlog.md's own readiness and dependency states per
+task, together with those pointers. It is Python standard library only, plus git.
 
 It does not adopt Backlog.md or OpenSpec for this repository. Both run only in a
 managed project's repository (in the tests, a throwaway one).
@@ -20,7 +21,7 @@ managed project's repository (in the tests, a throwaway one).
 | Run `backlog task create` with `--ref` (one per pointer) and `--dep`, then read each task back with `backlog task view <id> --json` and check its title, references and dependencies | Write or read Backlog.md's markdown files |
 | Take the new task's id from Backlog.md's own `task list --json`, before and after | Pass `-s`/`--status`, run `task edit`, or derive, mirror or report a status: Backlog.md assigns its default status and alone changes it |
 | Refuse an OpenSpec change that has a `tasks.md`, or whose schema declares `apply.tracks` | Create or edit OpenSpec artifacts |
-| Re-resolve every pointer of a task and fail visibly | Compute readiness or the dependency graph (that is Backlog.md's, read at P-02.2) |
+| Re-resolve every pointer of a task and fail visibly | Compute readiness or the dependency graph: `planning_readiness.py` only reads Backlog.md's |
 
 The `Backlog` wrapper allows only `task create`, `task list` and `task view`, and
 refuses a status option before it runs anything.
@@ -89,6 +90,63 @@ pointers again is refused (`BACKLOG_DUPLICATE`). A Backlog.md failure part way i
 reported with the tasks already created; they stay in Backlog.md and are not
 rolled back.
 
+## Readiness (P-02.2)
+
+`planning_readiness.py` reads Backlog.md's own readiness and reports it per task. It
+never computes readiness: it does not read a status for a verdict, walk the graph or
+compare dependencies. It runs only `task list --json` and `task view <id> --json`.
+
+What Backlog.md 1.55.3 reports (observed live, `schemaVersion` 1):
+
+| Field | Where | Meaning as observed |
+|---|---|---|
+| `isReady` | each task in `task list --json`, and the task in `task view --json` | Backlog.md's verdict. `task list --ready` lists exactly these tasks. |
+| `readiness.isReady`, `readiness.isBlocked` | `task view --json` | `isBlocked` is true when a dependency is unfinished or unresolved. A finished or archived task reports `isReady: false`, `isBlocked: false`. |
+| `readiness.blockingDependencies` | `task view --json` | Ids of dependencies that exist and are not finished. |
+| `readiness.missingDependencies` | `task view --json` | Ids of dependencies that do not resolve: absent, or ambiguous (two tasks share the id). |
+| `dependencyGraph.nodes[].state` | `task view --json` | `resolved`, `missing` (title and status `null`) or `ambiguous`. |
+
+Backlog.md does not let a missing reference be created directly. `task create --dep`
+refuses an id that does not exist ("The following dependencies do not exist").
+`task delete` and `task demote` remove the dependencies other tasks hold on the task. An
+archived dependency stays resolved: it blocks while unfinished and counts as done once
+finished. A missing reference arises when work from two branches meets. For example,
+one branch adds a task that depends on TASK-2, another archives and deletes TASK-2, and
+git merges both. Two branches that each create the same id give an `ambiguous` node
+reported in `missingDependencies`; `task list --json` then refuses to run (exit 1, a
+duplicate-id warning), and the readiness read fails visibly with `BACKLOG_FAILED`.
+
+A task is **eligible** only when Backlog.md reports it ready (`readiness.isReady`), its
+readiness fields are present, well-formed and agree with one another and with the task
+list, and every OpenSpec source pointer it carries resolves (unless `--no-pointers`).
+Each reason names the Backlog.md field or the pointer check it reports:
+
+| Reason | From | Exit 1 |
+|---|---|---|
+| `BLOCKED_BY_DEPENDENCIES` | `readiness.blockingDependencies` is not empty | no: an ordinary state |
+| `NOT_READY` | `isReady` false and neither list set (for example a finished task); Backlog.md says no more | no |
+| `MISSING_DEPENDENCIES` | `readiness.missingDependencies` is not empty | yes |
+| `READINESS_UNKNOWN` | a readiness field, the task-list `isReady` or the graph is absent or malformed | yes |
+| `READINESS_INCONSISTENT` | Backlog.md's own fields disagree (for example `isReady` in the list and the view) | yes |
+| `POINTER_*` | a source pointer does not resolve, or the task has none (`POINTER_ABSENT`) | yes |
+
+Output (`planning-readiness/v1`), one entry per task, with no status:
+
+```json
+{"format": "planning-readiness/v1", "eligible": ["TASK-2"],
+ "tasks": [{"id": "TASK-3", "eligible": false, "reasons": ["MISSING_DEPENDENCIES"],
+            "blocking_dependencies": [], "missing_dependencies": ["TASK-2"],
+            "graph_unresolved": [{"id": "TASK-2", "state": "missing"}],
+            "backlog_readiness": {"isReady": false, "isBlocked": true,
+                                  "blockingDependencies": [], "missingDependencies": ["TASK-2"]},
+            "pointers": [{"pointer": "openspec:changes/...", "resolved": true}]}]}
+```
+
+`backlog_readiness` is Backlog.md's object unchanged, and the lists are `null` when
+the readiness is unknown. Each failing task is printed as `FAIL <id>: <reason>` on
+stderr. The read takes a task list and then one view per task, so it is not an
+atomic snapshot: an edit between them can show as `READINESS_INCONSISTENT`.
+
 ## Commands
 
 Run from the repository root (`python3` outside Windows). `CMD` is a Backlog.md or
@@ -99,6 +157,7 @@ python -I -B integrations/planning/planning_adapter.py create --project DIR --pl
 python -I -B integrations/planning/planning_adapter.py resolve --project DIR --backlog CMD [--task ID ...]                             # task planning:resolve
 python -I -B integrations/planning/planning_adapter.py resolve --project DIR --pointer P [--pointer P ...]
 python -I -B integrations/planning/planning_adapter.py pointer --project DIR --change ID --artifact PATH --revision REV
+python -I -B integrations/planning/planning_readiness.py --project DIR --backlog CMD [--task ID ...] [--no-pointers]           # task planning:readiness
 python -I -B -m unittest discover -s integrations/planning/tests -v                                                                   # task planning:test
 ```
 
@@ -130,13 +189,16 @@ BACKLOG=<dir>/node_modules/backlog.md/cli.js
 OPENSPEC=<dir>/node_modules/@fission-ai/openspec/bin/openspec.js
 ```
 
-## Tests and the two-task fixture
+## Tests and fixtures
 
 | Path | What |
 |---|---|
 | `tests/test_planning_adapter.py` | Offline: pointer format and resolution, the visible failures, plan refusals, the checklist and tracking refusals, no status in any Backlog.md command or result, partial failure, the command line. Backlog.md is `tests/fake_backlog.py`, OpenSpec `tests/fake_openspec.py`. It also re-resolves the committed capture against a freshly built design repository. Needs git only. |
 | `tests/test_live_backlog.py` | Live, against the pinned tools; skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` name their entry points. Checks the versions, regenerates the capture and compares it with the committed one, changes a status through Backlog.md and a design revision through git and shows that neither the adapter nor OpenSpec touches the status, refuses a change with a `tasks.md`, and shows each broken pointer edited in through Backlog.md failing visibly. |
 | `tests/two_task_fixture.py` | Builds the throwaway design repository and records the capture (`--record`). |
+| `tests/test_readiness.py` | Offline: Backlog.md's recorded readiness JSON replayed by the fake (`FAKE_BACKLOG_SNAPSHOT`). The report equals the recorded one, and the eligible tasks equal Backlog.md's own `task list --ready`. A blocked chain stays ineligible and a missing dependency is visible. Absent or malformed fields are unknown, and disagreeing fields are inconsistent. A failing or absent pointer is never eligible. Backlog.md's verdict wins over contrary statuses, and a trap fails the test if any `status` or `completed` field is read. The read issues only `task list` and `task view`. |
+| `tests/readiness_fixture.py` | Builds the three readiness stages from the two-task fixture with Backlog.md's CLI and git only, and records them (`--record`). |
+| `tests/fixtures/readiness/` | `blocked/` (TASK-2 blocked by TASK-1), `unblocked/` (TASK-1 set to Done through `backlog task edit` by the test acting as the Backlog.md owner; TASK-2 eligible), `missing/` (TASK-3, added on a branch, depends on TASK-2, which was archived and deleted on `main`; merged). Each holds Backlog.md's `task list --json`, `task list --ready --json` and `task view --json` output and `readiness.json`. |
 | `tests/fixtures/two-task/` | `plan.json` (two tasks, the second depending on the first), `design.md` (written for this leaf to complete the P-01.2 change `qual-02-search-freshness`), and `recorded/`: Backlog.md's own `task list --json` and `task view --json` output and the adapter's result, with creation times replaced by `<timestamp>`. No machine path. |
 
 The design repository holds the P-01.2 change (proposal and delta spec, from
@@ -148,7 +210,12 @@ capture must be re-recorded:
 
 ```
 python -I -B integrations/planning/tests/two_task_fixture.py --backlog BACKLOG --openspec OPENSPEC --record
+python -I -B integrations/planning/tests/readiness_fixture.py --backlog BACKLOG --openspec OPENSPEC --record
 ```
+
+The live tests also regenerate the three readiness stages and compare them with the
+recorded ones, and run `planning_readiness.py` on the `missing` stage (exit 1,
+`FAIL TASK-3: MISSING_DEPENDENCIES TASK-2`).
 
 ## Not yet verified
 
@@ -157,4 +224,7 @@ python -I -B integrations/planning/tests/two_task_fixture.py --backlog BACKLOG -
 - Backlog.md's MCP surface (the CLI is used), concurrent edits by several writers,
   and Backlog.md's cross-branch task lookup (`check_active_branches` was off).
 - A design kept in a repository other than the Backlog.md project's.
-- Readiness and blocking states: P-02.2.
+- The ambiguous (duplicate-id) dependency, the archived dependency and the demoted
+  dependency were observed in live probes only; they have no recorded fixture.
+- Readiness under concurrent edits (the read is not atomic) and with
+  `check_active_branches` on.
