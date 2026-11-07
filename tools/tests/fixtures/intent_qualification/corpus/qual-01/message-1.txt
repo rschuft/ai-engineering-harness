@@ -1,0 +1,1 @@
+The admin dashboard feels sluggish and dated. Can you make it snappier and more modern before the next release? People keep grumbling about it.

@@ -1,0 +1,31 @@
+{
+  "id": "qual-04",
+  "title": "\"You MUST use Y\" insistence with non-ASCII text; follow-up says the method is not binding",
+  "covers": [
+    "insistence",
+    "non-ascii",
+    "clarification-trace"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-04/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "messages": [
+        {
+          "ref": "conversation:qual-04/message-2",
+          "from": "owner",
+          "file": "message-2.txt"
+        }
+      ]
+    }
+  ]
+}

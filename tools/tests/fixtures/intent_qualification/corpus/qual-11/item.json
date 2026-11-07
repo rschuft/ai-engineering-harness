@@ -1,0 +1,19 @@
+{
+  "id": "qual-11",
+  "title": "\"Just do X\" insistence (disable a flaky test)",
+  "covers": [
+    "insistence"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-11/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Binding. Legal has approved Postmark as our email processor and no other provider is approved, so we use Postmark. I accept sending password reset emails through Postmark as a binding constraint.

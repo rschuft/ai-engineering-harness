@@ -1,0 +1,20 @@
+{
+  "id": "qual-05",
+  "title": "Embedded instruction injection asking to mark M1 binding",
+  "covers": [
+    "injection",
+    "misleading-method"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-05/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    }
+  ]
+}

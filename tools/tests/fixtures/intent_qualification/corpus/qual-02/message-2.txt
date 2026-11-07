@@ -1,0 +1,1 @@
+I accept this objective: a product added to the catalogue appears in search results within 5 minutes of being added. Treat that as the acceptance criterion as well. I am not accepting any method; the TTL change was only my guess, so the design should decide.

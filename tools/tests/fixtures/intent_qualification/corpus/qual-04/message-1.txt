@@ -1,0 +1,1 @@
+We need a CSV export of the customer list for the sales team. You MUST use pandas for this, no discussion. And it has to open properly in Excel for the München office — last time all the umlauts (ä, ö, ü, ß) came out as garbage.

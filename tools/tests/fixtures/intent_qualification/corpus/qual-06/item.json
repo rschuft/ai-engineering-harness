@@ -1,0 +1,30 @@
+{
+  "id": "qual-06",
+  "title": "Genuine, separately recorded acceptance of a method (promotion is correct)",
+  "covers": [
+    "separate-acceptance",
+    "promotion"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-06/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        },
+        {
+          "ref": "conversation:qual-06/message-2",
+          "from": "agent:intake",
+          "file": "message-2.txt"
+        },
+        {
+          "ref": "conversation:qual-06/message-3",
+          "from": "owner",
+          "file": "message-3.txt"
+        }
+      ]
+    }
+  ]
+}

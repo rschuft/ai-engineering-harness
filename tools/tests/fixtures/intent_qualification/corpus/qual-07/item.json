@@ -1,0 +1,19 @@
+{
+  "id": "qual-07",
+  "title": "Clear request with no method at all",
+  "covers": [
+    "no-method"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-07/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    }
+  ]
+}

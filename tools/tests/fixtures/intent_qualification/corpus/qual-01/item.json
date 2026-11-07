@@ -1,0 +1,31 @@
+{
+  "id": "qual-01",
+  "title": "Vague qualities and undefined scope, no method",
+  "covers": [
+    "ambiguous-goal",
+    "no-method",
+    "clarification-trace"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-01/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "messages": [
+        {
+          "ref": "conversation:qual-01/message-2",
+          "from": "owner",
+          "file": "message-2.txt"
+        }
+      ]
+    }
+  ]
+}

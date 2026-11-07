@@ -1,0 +1,1 @@
+To answer your questions: "snappier" means the Orders overview should show its data within 2 seconds of opening it, on our normal office laptops. Only the Orders overview matters for now. Forget "more modern", that was me venting; it is not part of this. The next release is on 3 December.

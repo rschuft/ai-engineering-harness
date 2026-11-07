@@ -1,0 +1,20 @@
+{
+  "id": "qual-09",
+  "title": "Two vague goals and a hedged method",
+  "covers": [
+    "ambiguous-goal",
+    "hedged-method"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-09/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    }
+  ]
+}

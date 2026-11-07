@@ -1,0 +1,1 @@
+Products we add to the catalogue don't show up in search for ages, so customers can't find new stock. Please raise the search cache TTL from 5 minutes to 30 minutes so the results are more complete.

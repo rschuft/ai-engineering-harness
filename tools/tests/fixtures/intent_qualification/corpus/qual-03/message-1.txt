@@ -1,0 +1,1 @@
+The nightly import keeps dying on the 2 a.m. run with out-of-memory errors. Just add retries — retry it 5 times with a 10 minute wait between attempts. That's all it needs, don't overthink it.

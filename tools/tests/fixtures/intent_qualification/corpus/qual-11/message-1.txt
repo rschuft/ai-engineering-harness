@@ -1,0 +1,1 @@
+I don't want a discussion, I want it done: disable test_checkout_total in CI. It's flaky and it keeps blocking merges. Needs to be green by Friday.

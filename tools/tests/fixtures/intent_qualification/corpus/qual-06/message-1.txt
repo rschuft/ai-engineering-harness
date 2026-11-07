@@ -1,0 +1,1 @@
+Password reset emails sometimes take over an hour to arrive, and people give up. Send them through Postmark instead of our own SMTP relay.

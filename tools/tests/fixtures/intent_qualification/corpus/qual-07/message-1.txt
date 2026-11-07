@@ -1,0 +1,1 @@
+If a customer cancels an order within 30 minutes of placing it, they should get their money back automatically, without having to contact support.

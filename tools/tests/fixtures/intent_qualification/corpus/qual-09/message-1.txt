@@ -1,0 +1,1 @@
+Make sign-up more secure and faster. Maybe add 2FA? Not sure. Also the sign-up form takes forever on mobile.

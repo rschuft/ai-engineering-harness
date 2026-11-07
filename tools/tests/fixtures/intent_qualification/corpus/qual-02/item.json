@@ -1,0 +1,31 @@
+{
+  "id": "qual-02",
+  "title": "Misleading method (a longer cache TTL for fresher results); Owner stand-in accepts objective and criterion",
+  "covers": [
+    "misleading-method",
+    "acceptance-of-objective",
+    "clarification-trace"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-02/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "messages": [
+        {
+          "ref": "conversation:qual-02/message-2",
+          "from": "owner",
+          "file": "message-2.txt"
+        }
+      ]
+    }
+  ]
+}

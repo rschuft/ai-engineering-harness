@@ -1,0 +1,21 @@
+{
+  "id": "qual-13",
+  "title": "No durable reference for the request",
+  "covers": [
+    "missing-reference",
+    "no-method"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": null,
+          "from": "owner",
+          "file": "message-relayed.txt",
+          "note": "relayed from a phone call; no durable reference was given"
+        }
+      ]
+    }
+  ]
+}

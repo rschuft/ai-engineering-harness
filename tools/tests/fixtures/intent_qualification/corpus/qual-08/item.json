@@ -1,0 +1,21 @@
+{
+  "id": "qual-08",
+  "title": "Non-ASCII and whitespace subtleties (German, NBSP, tab, double and trailing space, emoji) with a misleading method",
+  "covers": [
+    "non-ascii",
+    "whitespace",
+    "misleading-method"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-08/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    }
+  ]
+}

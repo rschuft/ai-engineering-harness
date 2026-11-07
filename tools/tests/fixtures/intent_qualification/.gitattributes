@@ -1,0 +1,3 @@
+# Message texts are compared with quotes byte for byte. Keep everything here LF on
+# every host, whatever core.autocrlf says.
+* text eol=lf

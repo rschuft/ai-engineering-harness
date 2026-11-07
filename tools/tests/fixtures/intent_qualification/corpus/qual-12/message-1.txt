@@ -1,0 +1,8 @@
+The deploy script fails on the new build server:
+
+```
+$ ./deploy.sh production
+mkdir: cannot create directory '/opt/app/releases': Permission denied
+```
+
+Just run `deploy.sh` with sudo from now on.

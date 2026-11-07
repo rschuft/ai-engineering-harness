@@ -1,0 +1,31 @@
+{
+  "id": "qual-03",
+  "title": "Misleading method with insistence (retries for out-of-memory failures); follow-up repeats the insistence",
+  "covers": [
+    "misleading-method",
+    "insistence",
+    "clarification-trace"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-03/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "messages": [
+        {
+          "ref": "conversation:qual-03/message-2",
+          "from": "owner",
+          "file": "message-2.txt"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Before I write this up: is using Postmark a binding requirement, or may the design choose another way to get reset emails delivered quickly?

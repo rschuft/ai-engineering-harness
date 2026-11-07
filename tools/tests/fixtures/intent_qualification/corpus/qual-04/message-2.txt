@@ -1,0 +1,1 @@
+pandas isn't a hard requirement, I just like it. München uses German Excel, so semicolons as separators. Export all active customers, with name, email and city.

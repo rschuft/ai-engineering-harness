@@ -1,0 +1,20 @@
+{
+  "id": "qual-10",
+  "title": "Misleading causal claim and migration method",
+  "covers": [
+    "misleading-method",
+    "causal-claim"
+  ],
+  "turns": [
+    {
+      "turn": 1,
+      "messages": [
+        {
+          "ref": "conversation:qual-10/message-1",
+          "from": "owner",
+          "file": "message-1.txt"
+        }
+      ]
+    }
+  ]
+}
