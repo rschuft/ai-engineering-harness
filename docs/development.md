@@ -843,6 +843,13 @@ prints findings without values. It exits 1 when it finds anything.
   without output is caught. A file that Gitleaks would skip by a default path
   allowlist (lock files, `node_modules/`) is rescanned under a neutral name.
   Inline `gitleaks:allow` comments and `.gitleaksignore` files are ignored.
+- **Large content.** Gitleaks reads a file in pieces and scans each piece
+  separately, so a match across a piece boundary would be missed. Content over
+  96 KiB is therefore scanned as overlapping windows, each of which, with its
+  marker, fits in one scanner read. Consecutive windows overlap by at least
+  32 KiB, so any match up to that length lies whole in one window. Every
+  window's marker is required, so a window the scanner does not inspect still
+  fails closed. Findings are reported at the file's real line, once.
 - Output names the category, rule, file, line and commit only. Values are never
   printed (`--redact`, and the gate prints no match text).
 
@@ -852,6 +859,8 @@ prints findings without values. It exits 1 when it finds anything.
   low-entropy passwords.
 - Secrets split across lines, files or commits, or encoded in ways the scanner
   does not decode.
+- In content over 96 KiB, a single match longer than 32 KiB, which may cross a
+  window boundary.
 - Private information that is not a recognisable path or credential: names,
   hostnames, internal URLs, customer data, screenshots.
 - Content of allowlisted binaries.
