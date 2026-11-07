@@ -851,6 +851,94 @@ class AdmissionBlock(unittest.TestCase):
         self.assertFails('admission.dispatcher')
 
 
+class JobsBlock(unittest.TestCase):
+    """S-01.3.2: provisioning.agent_server.jobs, the job environment's declared hardening and
+    the CI constraints carried as planned; each mutation must FAIL naming the rule."""
+    setUp = AgentServerBlock.setUp
+    errors = AgentServerBlock.errors
+    assertFails = AgentServerBlock.assertFails
+
+    def test_committed_jobs_block_passes(self):
+        self.assertEqual(self.errors(), [])
+
+    def test_host_config_values(self):
+        host = self.server['jobs']['host_config']
+        for key, value in (('Privileged', True), ('CapDrop', []), ('CapAdd', ['NET_ADMIN']),
+                           ('SecurityOpt', ['no-new-privileges', 'seccomp=unconfined']),
+                           ('SecurityOpt', []), ('AppArmorProfile', 'unconfined'),
+                           ('PidMode', 'host'), ('IpcMode', 'host'), ('UsernsMode', 'host'),
+                           ('Devices', ['/dev/kvm']), ('GroupAdd', ['docker']),
+                           ('Mounts', [{'Source': '/run/docker.sock'}])):
+            saved = host[key]
+            host[key] = value
+            self.assertFails(f'jobs.host_config.{key}')
+            host[key] = saved
+        host['SecurityOpt'] = ['no-new-privileges', 'apparmor=unconfined']
+        self.assertFails('no confinement option may be overridden')
+        host['SecurityOpt'] = ['no-new-privileges']
+        self.assertEqual(self.errors(), [])
+
+    def test_process_names_sockets_and_ports(self):
+        jobs = self.server['jobs']
+        cases = [
+            ('process', dict(jobs['process'], capabilities='00000000a80425fb'), 'jobs.process'),
+            ('process', dict(jobs['process'], no_new_privs='0'), 'jobs.process'),
+            ('environment', dict(jobs['environment'], credential_name_pattern='TOKEN'),
+             'jobs.environment'),
+            ('environment', dict(jobs['environment'], secret_names=['OH_SECRET_KEY', 'GITEA_TOKEN']),
+             'jobs.environment'),
+            ('engine_sockets', ['/run/docker.sock'], 'jobs.engine_sockets'),
+            ('engine_sockets', jobs['engine_sockets'] + ['/home/x/docker.sock'], 'jobs.engine_sockets'),
+            ('engine_tcp_ports', [2375], 'jobs.engine_tcp_ports'),
+            ('host_alias', dict(jobs['host_alias'], host_ports=[13300]), 'jobs.host_alias'),
+            ('credential_files', '^\\.netrc$', 'jobs.credential_files'),
+            ('credential_files', '([', 'jobs.credential_files'),
+            ('deviations', {'host-gateway': 'x'}, 'jobs.deviations'),
+            ('sources', dict(jobs['sources'], moby=''), 'jobs.sources'),
+            ('token_rule', '', 'jobs.token_rule'),
+        ]
+        for key, value, fragment in cases:
+            saved = jobs[key]
+            jobs[key] = value
+            self.assertFails(fragment)
+            jobs[key] = saved
+        self.assertEqual(self.errors(), [])
+
+    def test_moby_defaults_server_environment_and_browser(self):
+        moby = self.qemu['provisioning']['moby']
+        saved = list(moby['required_security_options'])
+        moby['required_security_options'] = ['name=no-new-privileges']
+        self.assertFails('Moby must default no-new-privileges and require')
+        moby['required_security_options'] = saved
+        self.server['environment']['DOCKER_HOST'] = 'tcp://127.0.0.1:2375'
+        self.assertFails('may not set an engine variable')
+        del self.server['environment']['DOCKER_HOST']
+        self.server['config']['content']['enable_browser'] = True
+        self.assertFails('enable_browser must be false')
+        del self.server['config']['content']['enable_browser']
+        self.assertFails('enable_browser must be false')
+        self.server['config']['content']['enable_browser'] = False
+        self.assertEqual(self.errors(), [])
+
+    def test_ci_constraints_stay_planned_and_carried(self):
+        ci = self.server['jobs']['ci']
+        ci['status'] = 'observed'
+        self.assertFails('jobs.ci')
+        ci['status'] = 'planned'
+        constraints = ci['constraints']
+        ci['constraints'] = constraints[:3]
+        self.assertFails('jobs.ci')
+        ci['constraints'] = constraints
+        ci['carried_to'] = ['Q-02.2.1']
+        self.assertFails('jobs.ci')
+
+    def test_jobs_block_is_optional_but_typed(self):
+        del self.server['jobs']
+        self.assertEqual(self.errors(), [])
+        self.server['jobs'] = []
+        self.assertFails('provisioning.agent_server.jobs: must be an object')
+
+
 class OpenApiSubset(unittest.TestCase):
     """The standard-library JSON Schema subset that validates the fixture (synthetic
     documents; the locked openapi.json itself is downloaded, never committed)."""

@@ -996,6 +996,8 @@ def check_agent_server(report, profile, root, conf):
         check_conversations(report, profile, server)
     if 'admission' in server:
         check_admission(report, profile, root, conf, server)
+    if 'jobs' in server:
+        check_jobs(report, conf, server)
     try:
         body = json.loads((root / fixture['path']).read_text(encoding='utf-8'))
     except (OSError, ValueError, KeyError, TypeError):
@@ -1211,6 +1213,105 @@ def check_admission(report, profile, root, conf, server):
             not dispatcher.get('owner_ui'):
         report.fail(f'{label}.dispatcher: name the principal, the bootstrap performer and the '
                     'Owner UI path (planned or unknown)')
+
+
+# The job environment (S-01.3.2): what every conversation container must show, and the CI
+# constraints carried to the runner containment leaves.
+JOB_HOST_CONFIG = {'Privileged': False, 'CapDrop': ['ALL'], 'CapAdd': [],
+                   'SecurityOpt': ['no-new-privileges'], 'AppArmorProfile': 'docker-default',
+                   'IpcMode': 'private', 'CgroupnsMode': 'private', 'PidMode': '', 'UTSMode': '',
+                   'UsernsMode': '', 'Devices': [], 'DeviceCgroupRules': [], 'GroupAdd': [],
+                   'Sysctls': {}, 'VolumesFrom': [], 'Links': [], 'Mounts': []}
+JOB_ENGINE_SOCKETS = ('/run/docker.sock', '/var/run/docker.sock', '/run/containerd/containerd.sock')
+JOB_ENGINE_PORTS = (2375, 2376)
+JOB_REQUIRED_SECURITY_OPTIONS = ('name=no-new-privileges', 'name=apparmor',
+                                 'name=seccomp,profile=builtin')
+JOB_CI_CONSTRAINTS = ['no-engine-endpoint', 'no-privileged-credential', 'not-privileged',
+                      'no-host-path']
+JOB_CI_CARRIED_TO = ('Q-02.2.1', 'Q-02.2.2', 'Q-02.3.2')
+JOB_ENGINE_ENV = re.compile(r'(?i)^(DOCKER|CONTAINERD|CONTAINER_HOST|PODMAN|BUILDKIT)')
+
+
+def check_jobs(report, conf, server):
+    """provisioning.agent_server.jobs (S-01.3.2): the job environment's declared hardening
+    (exact HostConfig values with no unconfined or disabled option, the process rule, the
+    engine sockets and ports, the credential names), the Moby defaults it relies on, no
+    engine variable for the server's docker CLI, the browser off, and the CI constraints
+    carried as planned to the runner containment leaves."""
+    label = 'provisioning.agent_server.jobs'
+    jobs = server.get('jobs')
+    if not isinstance(jobs, dict):
+        report.fail(f'{label}: must be an object')
+        return
+    host = jobs.get('host_config') if isinstance(jobs.get('host_config'), dict) else {}
+    for key, want in JOB_HOST_CONFIG.items():
+        if host.get(key) != want:
+            report.fail(f'{label}.host_config.{key}: must be {json.dumps(want)}')
+    loose = [o for o in host.get('SecurityOpt') or [] if re.search(
+        r'(?i)unconfined|disable|privileged|seccomp|apparmor|label|systempaths', str(o))]
+    if loose:
+        report.fail(f'{label}.host_config.SecurityOpt: no confinement option may be overridden '
+                    f'({loose})')
+    env = jobs.get('environment') if isinstance(jobs.get('environment'), dict) else {}
+    try:
+        pattern = re.compile(str(env.get('credential_name_pattern', '')), re.I)
+    except re.error:
+        pattern = None
+    if env.get('secret_names') != ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0'] or pattern is None or \
+            not all(pattern.search(n) for n in ('DOCKER_HOST', 'CONTAINERD_ADDRESS', 'GITEA_TOKEN',
+                                                'OH_SECRET_KEY', 'PASSWORD')):
+        report.fail(f'{label}.environment: secret_names are the conversation keys only, and the '
+                    'credential name pattern matches engine and credential names')
+    proc = jobs.get('process') if isinstance(jobs.get('process'), dict) else {}
+    if proc.get('capabilities') != '0' * 16 or proc.get('no_new_privs') != '1' or \
+            proc.get('seccomp') != '2' or not str(proc.get('apparmor', '')).startswith(
+                'docker-default'):
+        report.fail(f'{label}.process: no capability, no_new_privs 1, seccomp 2 and AppArmor '
+                    'docker-default inside the container')
+    sockets = jobs.get('engine_sockets') if isinstance(jobs.get('engine_sockets'), list) else []
+    if not set(JOB_ENGINE_SOCKETS) <= set(sockets) or \
+            not all(str(s).startswith(('/run/', '/var/run/')) for s in sockets):
+        report.fail(f'{label}.engine_sockets: /run paths including {list(JOB_ENGINE_SOCKETS)}')
+    if not set(JOB_ENGINE_PORTS) <= set(jobs.get('engine_tcp_ports') or []):
+        report.fail(f'{label}.engine_tcp_ports: must include {list(JOB_ENGINE_PORTS)}')
+    alias = jobs.get('host_alias') if isinstance(jobs.get('host_alias'), dict) else {}
+    if '10.0.2.2' not in (alias.get('addresses') or []) or \
+            not {'{ssh_port}', '{qmp_port}'} <= set(alias.get('host_ports') or []):
+        report.fail(f'{label}.host_alias: 10.0.2.2 with the instance\'s SSH forward and QMP ports')
+    try:
+        files = re.compile(str(jobs.get('credential_files', '')))
+    except re.error:
+        files = None
+    if files is None or not all(files.search(n) for n in ('.git-credentials', 'session.key',
+                                                          'secrets.env', 'id_ed25519')):
+        report.fail(f'{label}.credential_files: a pattern naming the credential files')
+    for key in ('socket_rule', 'tcp_rule', 'routes_rule', 'token_rule', 'fail_closed', 'probe'):
+        if not jobs.get(key):
+            report.fail(f'{label}.{key}: required')
+    sources = jobs.get('sources') if isinstance(jobs.get('sources'), dict) else {}
+    if not all(sources.get(k) for k in ('server', 'server_config', 'moby')):
+        report.fail(f'{label}.sources: name what the server sets, its configuration and the '
+                    'Moby defaults')
+    if sorted((jobs.get('deviations') or {})) != ['host-gateway', 'no-network-none']:
+        report.fail(f'{label}.deviations: host-gateway and no-network-none, each carried')
+    moby = conf.get('moby') or {}
+    if (moby.get('daemon_json') or {}).get('no-new-privileges') is not True or \
+            not set(JOB_REQUIRED_SECURITY_OPTIONS) <= set(moby.get('required_security_options') or []):
+        report.fail(f'{label}: Moby must default no-new-privileges and require '
+                    f'{list(JOB_REQUIRED_SECURITY_OPTIONS)}')
+    if any(JOB_ENGINE_ENV.search(k) for k in server.get('environment') or {}):
+        report.fail(f'{label}: the server environment may not set an engine variable (the '
+                    "server's docker CLI inherits it)")
+    if ((server.get('config') or {}).get('content') or {}).get('enable_browser') is not False:
+        report.fail(f'{label}: provisioning.agent_server.config enable_browser must be false')
+    ci = jobs.get('ci') if isinstance(jobs.get('ci'), dict) else {}
+    if ci.get('status') != 'planned' or \
+            [c.get('id') for c in ci.get('constraints') or [] if isinstance(c, dict)] != \
+            JOB_CI_CONSTRAINTS or not all(c.get('rule') for c in ci.get('constraints') or []
+                                          if isinstance(c, dict)) or \
+            not set(JOB_CI_CARRIED_TO) <= set(ci.get('carried_to') or []):
+        report.fail(f'{label}.ci: status planned, the constraints {JOB_CI_CONSTRAINTS} and '
+                    f'carried to {list(JOB_CI_CARRIED_TO)}')
 
 
 CREDENTIAL_KEYS = re.compile(r'(?i)(api_?key|secret|password|token|credential|auth)')

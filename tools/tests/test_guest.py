@@ -26,6 +26,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+import zlib
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
@@ -4182,6 +4183,325 @@ class AdmissionInspect(LaunchRecord):
                        {'keycheck': dict(good['keycheck'], exec_start_pre=False)}):
             self.assertEqual(self.verdict(**change), 'FAIL', change)
         self.assertEqual(guest.admission_check(PROFILE, {'guest': {}})[0]['verdict'], 'FAIL')
+
+
+JOBS = AS['jobs']
+
+
+def _script_of(command):
+    """(script, arg) of a container_python command, or (None, None)."""
+    if not command.startswith('echo ') or '/tmp/aieh-job.py ' not in command:
+        return None, None
+    script = base64.b64decode(command.split()[1]).decode('utf-8')
+    arg = command.split('/tmp/aieh-job.py ', 2)[-1].split(';', 1)[0].strip()
+    return script, arg
+
+
+class FakeJobGuest(FakeAdmissionGuest):
+    """FakeAdmissionGuest with the job-side scripts of job_access_probe, answering with the
+    outcomes observed in the S-01.3.2 exploration guest (s0132-x). ``faults`` inject what
+    the tests look for."""
+
+    def run(self, argv, input_text=None, timeout=None, user='agent'):
+        if argv[:2] == ['python3', '-'] and input_text and 'json.load(open(sys.argv[1]))' in input_text:
+            facts = moby_facts()
+            facts['agent_server'] = dict(facts['agent_server'],
+                                         secrets={'fingerprints': OUTER_FP})
+            if self.faults.get('daemon_nnp_off'):
+                facts['daemon_json'] = dict(facts['daemon_json'], **{'no-new-privileges': False})
+            self.calls.append('boot')
+            return subprocess.CompletedProcess(argv, 0, json.dumps(facts) + '\n', '')
+        return super().run(argv, input_text, timeout, user)
+
+    def facts(self):
+        report = super().facts()
+        if self.faults.get('privileged'):
+            for c in report['containers']:
+                c['HostConfig'] = dict(c['HostConfig'], Privileged=True)
+        if self.faults.get('unconfined'):
+            for c in report['containers']:
+                c['HostConfig'] = dict(c['HostConfig'],
+                                       SecurityOpt=['no-new-privileges', 'seccomp=unconfined'])
+        return report
+
+    def env_output(self, spec):
+        status = {'Uid': '999 999 999 999', 'Gid': '989 989 989 989', 'Groups': '989',
+                  'CapInh': '0' * 16, 'CapPrm': '0' * 16, 'CapEff': '0' * 16,
+                  'CapBnd': '0' * 16, 'CapAmb': '0' * 16, 'NoNewPrivs': '1', 'Seccomp': '2'}
+        if self.faults.get('capability'):
+            status['CapEff'] = '00000000a80425fb'
+        envs = {'1': {'comm': 'tini', 'names': ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0']},
+                '45': {'comm': 'python3', 'names': []}}
+        if self.faults.get('engine_env'):
+            envs['45']['names'] = ['DOCKER_HOST']
+        connect = {p: {'outcome': 'ENOENT'} for p in spec['sockets']}
+        if self.faults.get('socket_open'):
+            connect['/run/docker.sock'] = {'outcome': 'connected', 'docker_api': True,
+                                           'answer': 'HTTP/1.0 200 OK Api-Version: 1.45'}
+        sudo = {'rc': 0 if self.faults.get('root') else 1,
+                'out': '' if self.faults.get('root') else 'sudo: The "no new privileges" flag is set'}
+        return {'id': 'uid=999 gid=989 groups=989', 'self': status, 'pid1': dict(status),
+                'apparmor': 'docker-default (enforce)', 'process_environments': envs,
+                'terminal_names': [], 'socket_files': [], 'unix_bound': [],
+                'setuid_root': ['/usr/bin/su', '/usr/bin/sudo'], 'connect': connect,
+                'sudo': sudo, 'su': {'rc': 1, 'out': 'su: Authentication failure'}}
+
+    def sweep_output(self, spec):
+        hosts = {}
+        for host in spec['hosts']:
+            n = 2 * len(spec['routes'])
+            outcomes, answered = {'refused': n}, []
+            if self.faults.get('listener_answers') and host == 'host.docker.internal':
+                outcomes = {'refused': n - 1, 'answered HTTP 401': 1}
+                answered = [['GET', '/api/conversations/count', 'no_key', 'answered HTTP 401']]
+            hosts[host] = {'attempts': n, 'outcomes': outcomes, 'answered': answered,
+                           'seconds': 0.5}
+        return {'inner_key_present': True, 'hosts': hosts}
+
+    def scan_output(self, spec):
+        self.scan_specs = getattr(self, 'scan_specs', []) + [spec]
+        hits = []
+        if self.faults.get('outer_in_job'):
+            hits = [['/proc/7/environ', 'aieh:' + OUTER_FP['OH_SESSION_API_KEYS_0']]]
+        if self.faults.get('gitea_in_job'):
+            hits = [['/workspace/.env', 'gitea:' + spec['gitea'][0]]]
+        return {'files': 39302, 'unreadable': 12, 'over_bound': 40, 'process_files': 14,
+                'distinct_43': 8665, 'distinct_40hex': 2356, 'hits': hits,
+                'control_found': [] if self.faults.get('scanner_blind') else ['/proc/1/environ'],
+                'control_keys': 1,
+                'credential_files': ['/workspace/.git-credentials']
+                if self.faults.get('cred_file') else [], 'seconds': 30.0}
+
+    def container_output(self, cid, command):
+        script, arg = _script_of(command)
+        if script == guest.JOB_ENV_PROBE:
+            spec = json.loads(base64.b64decode(arg).decode('utf-8'))
+            return 'noise\n' + guest.JOB_MARKER + json.dumps(self.env_output(spec)) + '\n'
+        if script == guest.JOB_ROUTE_SWEEP:
+            spec = json.loads(zlib.decompress(base64.b64decode(arg)).decode('utf-8'))
+            self.sweep_spec = spec
+            return guest.JOB_MARKER + json.dumps(self.sweep_output(spec)) + '\n'
+        if script == guest.JOB_TOKEN_SCAN:
+            spec = json.loads(base64.b64decode(arg).decode('utf-8'))
+            return guest.JOB_MARKER + json.dumps(self.scan_output(spec)) + '\n'
+        if 'TARGETS="' in command:
+            ip, _ = self.conversations[cid]
+            targets = command.split('TARGETS="', 1)[1].split('"', 1)[0].split()
+            self.tcp_targets = targets
+            lines = ['ID 999:989', f'ADDR {ip}', 'HOSTS_HDI 172.17.0.1']
+            for t in targets:
+                host, port = t.rsplit(':', 1)
+                if host == '127.0.0.1' and port == '8000':
+                    lines.append(f'PROBE {host} {port} rc=0 HTTP/1.1 200 OK')
+                elif host.startswith('172.17.0.') and host != '172.17.0.1':
+                    lines.append(f'PROBE {host} {port} rc=124 TIMEOUT')
+                elif self.faults.get('engine_tcp') and port == '2375' and host == '172.17.0.1':
+                    lines.append(f'PROBE {host} {port} rc=0 HTTP/1.1 404 Not Found')
+                elif self.faults.get('host_service') and host == '10.0.2.2' and port == '13300':
+                    lines.append(f'PROBE {host} {port} rc=0 HTTP/1.1 200 OK')
+                else:
+                    lines.append(f'PROBE {host} {port} rc=1 bash: connect: Connection refused '
+                                 f'bash: line 1: /dev/tcp/{host}/{port}: Connection refused')
+            return '\n'.join(lines) + '\n'
+        return super().container_output(cid, command)
+
+
+class JobAccessProbe(TempState):
+    """job_access_probe (S-01.3.2) against FakeJobGuest: the steps, the checks and the stop
+    conditions; no guest."""
+
+    def setUp(self):
+        super().setUp()
+        self.idir = self.state / 'instances' / 'job'
+        self.idir.mkdir(parents=True)
+        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG},
+                       'ports': {'ssh': 40001, 'qmp': 40002}}
+        patcher = mock.patch.object(guest, 'running_instance',
+                                    lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_probe(self, fingerprints=('builder=sha256:2edcc7070632f15d',), **faults):
+        fake = FakeJobGuest(**faults)
+        out = guest.job_access_probe(self.ctx(), 'job', token_fingerprints=list(fingerprints),
+                                     channels=lambda rec: (fake.api, fake.facts),
+                                     ssh_fn=lambda rec: fake)
+        return out, fake
+
+    def steps(self, out):
+        return {s['step']: s.get('ok', s.get('skipped')) for s in out['steps']}
+
+    def test_probe_passes(self):
+        out, fake = self.run_probe()
+        self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
+        self.assertEqual(len(out['steps']), 10)
+        self.assertEqual(fake.conversations, {})                # both deleted
+        self.assertEqual(out['ci']['status'], 'not applicable yet: no CI runner exists')
+        self.assertEqual(out['ci']['carried_to'], JOBS['ci']['carried_to'])
+        inspected = out['steps'][2]['detail']
+        self.assertEqual(len(inspected['effective']), 2)
+        self.assertIn('HostConfig.NetworkMode', inspected['sources'])
+        # every route, both variants, at host.docker.internal and both guest addresses
+        self.assertEqual(sorted(fake.sweep_spec['hosts']),
+                         sorted(['host.docker.internal', '10.0.2.15', '172.17.0.1']))
+        self.assertEqual(len(fake.sweep_spec['routes']), len(ROUTES['routes']))
+        # the TCP targets cover the engine ports, the host alias ports and the control
+        for target in ('172.17.0.1:2375', '10.0.2.15:2376', 'host.docker.internal:8000',
+                       '127.0.0.1:2375', '10.0.2.2:13300', '10.0.2.2:40001', '10.0.2.2:40002',
+                       '10.0.2.3:2375', '127.0.0.1:8000'):
+            self.assertIn(target, fake.tcp_targets)
+        # the scan looks for the outer fingerprints and the given Gitea fingerprint only
+        self.assertEqual(fake.scan_specs[0]['aieh'], sorted(OUTER_FP.values()))
+        self.assertEqual(fake.scan_specs[0]['gitea'], ['sha256:2edcc7070632f15d'])
+        self.assertTrue(Path(out['record']).is_file())
+
+    def test_container_scripts_carry_no_secret_or_key_on_the_command_line(self):
+        fake = FakeJobGuest()
+        commands = []
+        api = fake.api
+
+        def spy(requests):
+            for r in requests:
+                if r['path'].endswith('/bash/execute_bash_command'):
+                    commands.append(r['json']['command'])
+            return api(requests)
+        guest.job_access_probe(self.ctx(), 'job', channels=lambda rec: (spy, fake.facts),
+                               ssh_fn=lambda rec: fake)
+        self.assertTrue(commands)
+        for c in commands:
+            self.assertNotIn('X-Session-API-Key', c)
+            self.assertNotIn('session.key', c)
+        # the inner key is read inside the container, from its own process environment
+        self.assertIn("open('/proc/1/environ', 'rb')", guest.JOB_ROUTE_SWEEP)
+
+    def test_engine_socket_reachable_is_a_stop_condition(self):
+        out, fake = self.run_probe(socket_open=True)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['stop_conditions'][0]['condition'],
+                         'an engine socket answered from a job')
+        self.assertTrue(self.steps(out)['delete the conversations (positive control)'])
+        self.assertEqual(fake.conversations, {})
+
+    def test_engine_api_or_host_service_reachable_is_a_stop_condition(self):
+        for fault, kind in (('engine_tcp', 'engine'), ('host_service', 'host')):
+            out, fake = self.run_probe(**{fault: True})
+            self.assertEqual(out['result'], 'FAIL')
+            self.assertEqual(out['stop_conditions'][0]['condition'],
+                             f'a {kind} endpoint answered from a job')
+            self.assertEqual(fake.conversations, {})
+
+    def test_management_listener_answering_is_a_stop_condition(self):
+        out, _ = self.run_probe(listener_answers=True)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['stop_conditions'][0]['condition'],
+                         'the management listener answered from a job')
+
+    def test_loosened_container_fails_the_inspection(self):
+        for fault in ('privileged', 'unconfined'):
+            out, _ = self.run_probe(**{fault: True})
+            self.assertEqual(out['failed_steps'],
+                             ['job environment as inspected (docker inspect, root facts)'], fault)
+
+    def test_process_view_fails(self):
+        for fault in ('capability', 'engine_env'):
+            out, _ = self.run_probe(**{fault: True})
+            self.assertEqual(out['failed_steps'],
+                             ['job environment from inside (identity, capabilities, variables, '
+                              'root)'], fault)
+
+    def test_obtainable_root_repeats_the_socket_attempts_as_root(self):
+        out, _ = self.run_probe(root=True)
+        env = out['steps'][3]['detail']
+        self.assertTrue(all(e['root_obtainable'] for e in env.values()))
+        sockets = out['steps'][4]['detail']
+        self.assertTrue(all('root' in per for per in sockets.values()))
+
+    def test_credentials_in_a_job_fail(self):
+        for fault in ('outer_in_job', 'gitea_in_job', 'cred_file', 'scanner_blind'):
+            out, _ = self.run_probe(**{fault: True})
+            self.assertEqual(out['failed_steps'],
+                             ['credentials by name and fingerprint inside each job'], fault)
+        out, _ = self.run_probe(outer_in_job=True)
+        hit = out['steps'][7]['detail']['containers'][CONV_ID]['hits'][0]
+        self.assertEqual(hit, ['/proc/7/environ', 'aieh:OH_SESSION_API_KEYS_0'])
+
+    def test_missing_daemon_default_fails(self):
+        out, _ = self.run_probe(daemon_nnp_off=True)
+        self.assertEqual(out['failed_steps'], ['hardening controls present (boot facts)'])
+
+    def test_refusals(self):
+        with self.assertRaises(guest.Refused):
+            self.run_probe(fingerprints=('builder=2edcc7070632f15d',))
+        with self.assertRaises(guest.Refused):
+            self.run_probe(fingerprints=('bad label!=sha256:2edcc7070632f15d',))
+        self.record = {'ports': {'ssh': 40001}}
+        with self.assertRaises(guest.Refused):
+            guest.job_access_probe(self.ctx(), 'job')
+
+    def test_socket_verdict(self):
+        data = {'connect': {p.replace('{uid}', '999'): {'outcome': 'ENOENT'}
+                            for p in JOBS['engine_sockets']}}
+        data['connect']['/tmp/tmux-999/default'] = {'outcome': 'connected', 'answer': 'x',
+                                                    'docker_api': False}
+        ok, rows, stop = guest.job_socket_verdict(PROFILE, data, 999)
+        self.assertFalse(ok)                      # a found socket must refuse or be absent
+        self.assertEqual(stop, [])                # but it is no engine
+        data['connect']['/tmp/tmux-999/default'] = {'outcome': 'ECONNREFUSED'}
+        self.assertTrue(guest.job_socket_verdict(PROFILE, data, 999)[0])
+        del data['connect']['/run/docker.sock']
+        self.assertFalse(guest.job_socket_verdict(PROFILE, data, 999)[0])
+
+    def test_container_python_command(self):
+        command = guest.container_python(guest.JOB_TOKEN_SCAN, 'QUJD')
+        script, arg = _script_of(command)
+        self.assertEqual(script, guest.JOB_TOKEN_SCAN)
+        self.assertEqual(arg, 'QUJD')
+        self.assertTrue(command.endswith('exit $rc'))
+
+
+class JobContainerShape(unittest.TestCase):
+    """job_problems (S-01.3.2) inside container_problems: the declared HostConfig values,
+    the AppArmor profile and the variable names."""
+
+    def problems(self, **override):
+        return guest.job_problems(PROFILE, conversation_container(**override))
+
+    def test_observed_container_passes(self):
+        self.assertEqual(self.problems(), [])
+
+    def test_each_loosening_fails(self):
+        for host in ({'Privileged': True}, {'CapAdd': ['SYS_ADMIN']}, {'CapDrop': []},
+                     {'SecurityOpt': ['no-new-privileges', 'apparmor=unconfined']},
+                     {'SecurityOpt': []}, {'PidMode': 'host'}, {'IpcMode': 'host'},
+                     {'UsernsMode': 'host'}, {'CgroupnsMode': 'host'},
+                     {'Devices': [{'PathOnHost': '/dev/kvm'}]}, {'GroupAdd': ['docker']},
+                     {'Sysctls': {'net.ipv4.ip_forward': '1'}},
+                     {'Mounts': [{'Type': 'bind', 'Source': '/run/docker.sock'}]}):
+            self.assertTrue(self.problems(HostConfig=host), host)
+        self.assertTrue(self.problems(AppArmorProfile='unconfined'))
+        self.assertTrue(self.problems(AppArmorProfile=''))
+
+    def test_variable_names(self):
+        names = ['HOME', 'OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0', 'PATH']
+        for extra in ('DOCKER_HOST', 'GITEA_TOKEN', 'OWNER_PASSWORD', 'CONTAINERD_ADDRESS'):
+            got = self.problems(Config={'EnvNames': names + [extra]})
+            self.assertEqual(got[0]['observed'], [extra])
+        self.assertTrue(self.problems(Config={'EnvNames': []}))
+
+    def test_no_jobs_block_no_problems(self):
+        profile = copy.deepcopy(PROFILE)
+        del profile['provisioning']['agent_server']['jobs']
+        self.assertEqual(guest.job_problems(profile, conversation_container(
+            HostConfig={'Privileged': True})), [])
+        problems, _ = guest.container_problems(profile, {'provisioning': {
+            'image_id': IMAGE_ID}}, conversation_facts_report(), conversation_container())
+        self.assertEqual([p for p in problems if 'S-01.3.2' in p['check']], [])
+
+    def test_container_problems_include_the_job_rules(self):
+        problems, _ = guest.container_problems(
+            PROFILE, {'provisioning': {'image_id': IMAGE_ID}}, conversation_facts_report(),
+            conversation_container(HostConfig={'Privileged': True}))
+        self.assertIn('job environment Privileged (S-01.3.2)', [p['check'] for p in problems])
 
 
 if __name__ == '__main__':

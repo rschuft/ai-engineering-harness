@@ -481,6 +481,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py admission-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
 
+  guest:job-access-probe:
+    desc: "Job daemon and management access (S-01.3.2) on a running provisioned guest: two disposable conversations; each container's docker inspect against the declared job environment; from inside each job its identity, capabilities, no_new_privs, seccomp, AppArmor, credential-like variable names, sockets and root; every engine socket; the engine API, the management listener, the published ports and the SLIRP host aliases over TCP; every privileged route at every address; the outer key and Gitea tokens by fingerprint; exit 0 only on PASS (python -I -B tools/guest.py job-access-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --token-fingerprint LABEL=sha256:HEX16 --out FILE])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py job-access-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
+
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
     cmds:

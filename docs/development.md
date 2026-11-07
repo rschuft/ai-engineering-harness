@@ -204,6 +204,7 @@ Only what is listed as verified has been exercised.
 | `guest:provision PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py provision --profile <dir> --state-dir <dir> --name <name>` | no | Guest side of provisioning (F-04.1b): transfers the stage over SFTP, triggers the seeded single-use root step and checks its `RESULT.json`. See [Execution guests](#execution-guests). |
 | `guest:conversation-smoke PROFILE=… STATE_DIR=… NAME=<name> [-- --restart --openapi <file> --canaries <dir> --out <file>]` | `python -I -B tools/guest.py conversation-smoke --profile <dir> --state-dir <dir> --name <name> [--restart] [--openapi <file>] [--canaries <dir>] [--out <file>]` | no | The contained conversation lifecycle (F-04.2) on a running provisioned guest: create the disposable Docker conversation of the pinned fixture, inspect it and its container, create it again (idempotent), read its events, stop its runtime, reopen it, optionally restart the guest and reopen again, delete it. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:admission-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --out <file>]` | `python -I -B tools/guest.py admission-probe --profile <dir> --state-dir <dir> --name <name> [--out <file>]` | no | The management API admission (S-01.3.1) on a running provisioned guest: the pinned route inventory against the running server, every route without the key and with a wrong one, the agent network's reach from inside two disposable conversation containers, the key check and the logged refusals. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:job-access-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --token-fingerprint LABEL=sha256:<hex16> --out <file>]` | `python -I -B tools/guest.py job-access-probe --profile <dir> --state-dir <dir> --name <name> [--token-fingerprint LABEL=sha256:<hex16>] [--out <file>]` | no | The job environment (S-01.3.2) on a running provisioned guest: from inside two disposable conversation containers, their effective hardening, every engine socket, the engine API and the host aliases over TCP, every privileged Agent Server route at every address, and the management, Owner, admin and bot credentials by name and fingerprint. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -538,6 +539,26 @@ defaults them.
   `icc` is off on Moby's default bridge, and the Agent Server's `ExecStartPre` refuses
   to start without a valid session key. `inspect` checks all three from the boot-time
   facts.
+- `job-access-probe` (S-01.3.2) proves the job environment declared in
+  `provisioning.agent_server.jobs`: each conversation container, where builder and
+  reviewer runs execute. It creates two disposable conversations; compares each
+  container's `docker container inspect` (from the on-demand facts) with the declared
+  values (not privileged, `CapDrop` ALL, no added capability, device or host namespace,
+  `SecurityOpt` exactly `no-new-privileges`, AppArmor `docker-default`, no engine or
+  credential variable name); and, from inside each container as its default user, reads
+  its identity, capabilities, `NoNewPrivs`, seccomp and AppArmor state, the
+  credential-like variable names of every readable process, every socket and whether
+  `sudo` or `su` gives root. It then tries every declared engine socket and every socket
+  it found; the engine ports, the management listener and the published ports at
+  `host.docker.internal` and every guest address, and the instance's SSH, QMP and the host
+  Gitea port at SLIRP's `10.0.2.2`; every route of the admission inventory at every
+  address, without a key and with the conversation's own key; and searches the
+  container's readable files and process environments for the outer session key and any
+  Gitea token by fingerprint (`--token-fingerprint LABEL=sha256:<16 hex>`, repeatable),
+  never by value. An engine socket or API, a management route or a host service that
+  answers is a stop condition. `inspect`'s `conversation containers` entry applies the
+  same declared values to every container. The CI side of the job constraints is
+  recorded as planned (no CI runner exists yet).
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);

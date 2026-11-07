@@ -134,6 +134,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -5740,6 +5741,7 @@ def container_problems(profile, record, report, container):
             float(cfg.get('conversation_container_cpus') or 0) * 1e9)) and
         host.get('PidsLimit') == cfg.get('conversation_container_pids_limit'),
         {k: host.get(k) for k in ('Memory', 'NanoCpus', 'PidsLimit')})
+    problems.extend(job_problems(profile, container))
     deviations = []
     extra = [h for h in host.get('ExtraHosts') or [] if 'host-gateway' in str(h)]
     if extra:
@@ -5749,6 +5751,41 @@ def container_problems(profile, record, report, container):
                            'networks': sorted(((container.get('NetworkSettings') or {})
                                                .get('Networks') or {}))})
     return problems, deviations
+
+
+def jobs_config(profile):
+    return (((profile.get('provisioning') or {}).get('agent_server') or {}).get('jobs')) or {}
+
+
+def _empty(value):
+    return value in (None, [], {}, '')
+
+
+def job_problems(profile, container):
+    """One conversation container against provisioning.agent_server.jobs (S-01.3.2): the
+    declared HostConfig values and AppArmor profile (null matches an empty value), and no
+    engine or credential variable in Config.Env but the conversation's own keys (names
+    only). An empty list when the profile declares no job environment."""
+    jobs = jobs_config(profile)
+    if not jobs:
+        return []
+    host = container.get('HostConfig') or {}
+    problems = []
+    for key, want in (jobs.get('host_config') or {}).items():
+        if key == 'rule':
+            continue
+        have = container.get(key) if key == 'AppArmorProfile' else host.get(key)
+        if not (have == want or (_empty(want) and _empty(have))):
+            problems.append({'check': f'job environment {key} (S-01.3.2)', 'observed': have})
+    env = jobs.get('environment') or {}
+    pattern = re.compile(env.get('credential_name_pattern') or '$^', re.I)
+    names = (container.get('Config') or {}).get('EnvNames') or []
+    bad = sorted(n for n in names if pattern.search(str(n)) and
+                 n not in (env.get('secret_names') or []))
+    if bad or not isinstance(names, list) or not names:
+        problems.append({'check': 'job environment variables (S-01.3.2): no engine or '
+                                  'credential name but the conversation keys', 'observed': bad})
+    return problems
 
 
 def _proxy_target(argv):
@@ -7818,6 +7855,739 @@ def admission_probe(ctx, name, out_path=None, channels=None, ssh_fn=None):
     return out
 
 
+# ---------------------------------------------------------------- job daemon and management access (S-01.3.2)
+
+JOB_PROBE_SCHEMA = 'ai-engineering-harness/profiles/job-access-probe-record/v1'
+# The second disposable conversation of this probe (the fixture with this id).
+JOB_PEER_CONVERSATION_ID = 'a0132b00-0000-4000-8000-000000000b02'
+JOB_MARKER = 'AIEH-JOB-JSON '
+JOB_CONNECT_S = 4               # one TCP or unix connect inside a container
+JOB_SWEEP_DEADLINE_S = 240      # bounds the route sweep at one address if it stops refusing
+JOB_SCAN_MAX_BYTES = 8 << 20    # files larger than this are counted, not read
+GITEA_FINGERPRINT = re.compile(r'^sha256:[0-9a-f]{16}$')
+# Where each inspected property of a job container comes from: the locked server's
+# docker run (registry.py _build_container) or Moby's own default (the server passes
+# nothing for it; daemon.json where noted).
+JOB_PROPERTY_SOURCES = {
+    'Config.User': 'server: --user <server uid>:<gid>',
+    'HostConfig.CapDrop': 'server: --cap-drop ALL',
+    'HostConfig.SecurityOpt': 'server: --security-opt no-new-privileges (daemon.json '
+                              'no-new-privileges too)',
+    'HostConfig.Ulimits': 'server: --ulimit core=0',
+    'HostConfig.ExtraHosts': 'server: --add-host host.docker.internal:host-gateway',
+    'HostConfig.PortBindings': 'server: -p 127.0.0.1::8000',
+    'HostConfig.Binds': 'server: exactly three -v binds',
+    'HostConfig.Memory/NanoCpus/PidsLimit': 'server: --memory, --cpus, --pids-limit (config)',
+    'HostConfig.AutoRemove': 'server: --rm',
+    'Config.EnvNames': 'server: -e for the forwarded names; the image for the rest',
+    'HostConfig.Privileged': 'Moby default (no --privileged)',
+    'HostConfig.CapAdd': 'Moby default (no --cap-add)',
+    'AppArmorProfile': 'Moby default (docker-default, AppArmor enabled)',
+    'seccomp': 'Moby default (the builtin profile; no seccomp option passed)',
+    'HostConfig.IpcMode': 'Moby default (private)',
+    'HostConfig.CgroupnsMode': 'Moby default (private on cgroup v2)',
+    'HostConfig.PidMode/UTSMode/UsernsMode': 'Moby default (the container\'s own namespaces; '
+                                             'no user-namespace remap)',
+    'HostConfig.NetworkMode': 'Moby default (bridge: the server passes no --network)',
+    'HostConfig.Devices/DeviceCgroupRules/GroupAdd/Sysctls': 'Moby default (none)',
+    'HostConfig.ReadonlyRootfs': 'Moby default (false: the server passes no --read-only)',
+    'HostConfig.Runtime': 'daemon.json default-runtime runc',
+    'HostConfig.LogConfig': 'daemon.json log-driver json-file',
+}
+
+# Run inside a conversation container as its default user (python3, spec as base64 JSON):
+# identity, capabilities, no_new_privs, seccomp, AppArmor; credential-like variable names of
+# every readable process environment (names only); every socket file and every bound unix
+# name; a connect to each declared engine socket and each socket found (a connected one is
+# asked GET /_ping); whether sudo or su gives root.
+JOB_ENV_PROBE = r'''import base64, errno, json, os, re, shutil, socket, stat, subprocess, sys
+spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+pattern = re.compile(spec['pattern'], re.I)
+keep = ('Uid', 'Gid', 'Groups', 'CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb', 'NoNewPrivs',
+        'Seccomp')
+def status(pid):
+    try:
+        lines = open('/proc/%s/status' % pid).read().splitlines()
+    except OSError as exc:
+        return {'error': type(exc).__name__}
+    return {k: ' '.join(v.split()) for k, _, v in (l.partition(':') for l in lines) if k in keep}
+def run(argv):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        return {'rc': r.returncode, 'out': ' '.join((r.stdout + r.stderr).split())[:240]}
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {'rc': None, 'out': type(exc).__name__}
+out = {'id': run(['id'])['out'], 'self': status('self'), 'pid1': status('1')}
+try:
+    out['apparmor'] = open('/proc/self/attr/current').read().strip()
+except OSError as exc:
+    out['apparmor'] = type(exc).__name__
+envs = {}
+for d in sorted(os.listdir('/proc')):
+    if not d.isdigit():
+        continue
+    try:
+        data = open('/proc/%s/environ' % d, 'rb').read()
+        comm = open('/proc/%s/comm' % d).read().strip()
+    except OSError as exc:
+        envs[d] = {'unreadable': type(exc).__name__}
+        continue
+    names = sorted({e.split(b'=', 1)[0].decode('latin-1') for e in data.split(bytes([0])) if e})
+    envs[d] = {'comm': comm, 'names': [n for n in names if pattern.search(n)]}
+out['process_environments'] = envs
+out['terminal_names'] = sorted(n for n in os.environ if pattern.search(n))
+files, setuid = [], []
+for root, dirs, names in os.walk('/', onerror=lambda e: None):
+    if root in ('/proc', '/sys'):
+        dirs[:] = []
+        continue
+    for name in names + dirs:
+        p = os.path.join(root, name)
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if stat.S_ISSOCK(st.st_mode):
+            files.append(p)
+        elif stat.S_ISREG(st.st_mode) and st.st_mode & 0o6000 and st.st_uid == 0:
+            setuid.append(p)
+out['socket_files'] = sorted(files)
+out['setuid_root'] = sorted(setuid)
+bound = []
+for line in open('/proc/net/unix').read().splitlines()[1:]:
+    parts = line.split()
+    if len(parts) >= 8:
+        bound.append(parts[7])
+out['unix_bound'] = sorted(set(bound))
+def connect(path):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(spec['timeout'])
+    try:
+        s.connect(('\0' + path[1:]) if path.startswith('@') else path)
+    except socket.timeout:
+        return {'outcome': 'timeout'}
+    except OSError as exc:
+        return {'outcome': errno.errorcode.get(exc.errno, str(exc.errno)) if exc.errno else type(exc).__name__}
+    try:
+        s.sendall(b'GET /_ping HTTP/1.0\r\nHost: docker\r\n\r\n')
+        answer = s.recv(512).decode('latin-1')
+    except OSError as exc:
+        answer = type(exc).__name__
+    finally:
+        s.close()
+    return {'outcome': 'connected', 'answer': ' '.join(answer.split())[:160],
+            'docker_api': 'api-version' in answer.lower() or 'docker' in answer.lower()}
+targets = list(spec['sockets']) + [p for p in out['socket_files'] + out['unix_bound']
+                                  if p not in spec['sockets']]
+out['connect'] = {p: connect(p) for p in targets}
+out['sudo'] = run(['sudo', '-n', 'true']) if shutil.which('sudo') else None
+out['su'] = run(['su', '-c', 'true', 'root']) if shutil.which('su') else None
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+
+# Run inside a conversation container: every route of the inventory at each outer address,
+# without a key and with the conversation's own inner key (read from /proc/1/environ inside
+# the container, never sent from outside). Outcomes are counted; any HTTP or WebSocket
+# answer is listed. spec: zlib-compressed base64 JSON {hosts, port, routes, timeout, deadline}.
+JOB_ROUTE_SWEEP = r'''import base64, http.client, json, os, socket, sys, time, zlib
+spec = json.loads(zlib.decompress(base64.b64decode(sys.argv[1])).decode('utf-8'))
+key = ''
+for e in open('/proc/1/environ', 'rb').read().split(bytes([0])):
+    if e.startswith(b'OH_SESSION_API_KEYS_0='):
+        key = e.split(b'=', 1)[1].decode('ascii')
+def classify(exc):
+    name = type(exc).__name__
+    return {'ConnectionRefusedError': 'refused', 'ConnectionResetError': 'reset',
+            'TimeoutError': 'timeout', 'timeout': 'timeout'}.get(name, name)
+def attempt(host, method, path, headers):
+    if method == 'WEBSOCKET':
+        try:
+            s = socket.create_connection((host, spec['port']), timeout=spec['timeout'])
+        except OSError as exc:
+            return classify(exc)
+        try:
+            req = 'GET %s HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' % path
+            req += 'Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n' % base64.b64encode(os.urandom(16)).decode()
+            for k, v in headers.items():
+                req += '%s: %s\r\n' % (k, v)
+            s.sendall((req + '\r\n').encode())
+            line = s.recv(256).split(b'\r\n')[0].decode('latin-1')
+            return 'answered ' + line[:40]
+        except OSError as exc:
+            return 'after-connect ' + classify(exc)
+        finally:
+            s.close()
+    conn = http.client.HTTPConnection(host, spec['port'], timeout=spec['timeout'])
+    try:
+        conn.request(method, path, headers=headers)
+        return 'answered HTTP %s' % conn.getresponse().status
+    except OSError as exc:
+        return classify(exc)
+    except http.client.HTTPException as exc:
+        return 'after-connect ' + type(exc).__name__
+    finally:
+        conn.close()
+out = {'inner_key_present': bool(key), 'hosts': {}}
+for host in spec['hosts']:
+    counts, answered, t0, n = {}, [], time.monotonic(), 0
+    for method, path in spec['routes']:
+        for variant, headers in (('no_key', {}), ('inner_key', {'X-Session-API-Key': key})):
+            if time.monotonic() - t0 > spec['deadline']:
+                outcome = 'not-attempted (deadline)'
+            else:
+                outcome = attempt(host, method, path, headers)
+            n += 1
+            counts[outcome] = counts.get(outcome, 0) + 1
+            if outcome.startswith(('answered', 'after-connect')):
+                answered.append([method, path, variant, outcome])
+    out['hosts'][host] = {'attempts': n, 'outcomes': counts, 'answered': answered[:40],
+                          'seconds': round(time.monotonic() - t0, 1)}
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+
+# Run inside a conversation container: credentials by name and by fingerprint, never by
+# value. Every readable process environment and command line and every readable regular
+# file up to the size bound: each 43-character token is fingerprinted (aieh v1) and each
+# 40-hex token hashed (Gitea's sha256 prefix); file names are matched against the credential
+# file pattern. Control: the conversation's own session key is found in /proc/1/environ.
+JOB_TOKEN_SCAN = r'''import base64, hashlib, json, os, re, stat, sys, time
+spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+aieh, gitea = set(spec['aieh']), set(spec['gitea'])
+names = re.compile(spec['files'])
+T43 = re.compile(rb'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])')
+H40 = re.compile(rb'(?<![0-9a-fA-F])[0-9a-f]{40}(?![0-9a-fA-F])')
+NUL = bytes([0])
+t0 = time.monotonic()
+def fp(v):
+    return hashlib.sha256(b'aieh-secret-fingerprint/v1\n' + v).hexdigest()
+control = set()
+for e in open('/proc/1/environ', 'rb').read().split(NUL):
+    if e.startswith(b'OH_SESSION_API_KEYS_0='):
+        control.add(fp(e.split(b'=', 1)[1]))
+seen43, seen40, hits, control_hits = set(), set(), [], []
+stats = {'files': 0, 'unreadable': 0, 'over_bound': 0, 'process_files': 0}
+def scan(path, data):
+    for m in T43.finditer(data):
+        v = m.group(0)
+        if v in seen43:
+            continue
+        seen43.add(v)
+        f = fp(v)
+        if f in aieh:
+            hits.append([path, 'aieh:' + f])
+        if f in control:
+            control_hits.append(path)
+    for m in H40.finditer(data):
+        v = m.group(0)
+        if v in seen40:
+            continue
+        seen40.add(v)
+        f = 'sha256:' + hashlib.sha256(v).hexdigest()[:16]
+        if f in gitea:
+            hits.append([path, 'gitea:' + f])
+for d in sorted(os.listdir('/proc')):
+    if d.isdigit():
+        for part in ('environ', 'cmdline'):
+            try:
+                data = open('/proc/%s/%s' % (d, part), 'rb').read()
+            except OSError:
+                stats['unreadable'] += 1
+                continue
+            stats['process_files'] += 1
+            scan('/proc/%s/%s' % (d, part), data.replace(NUL, b'\n'))
+named = []
+for root, dirs, files in os.walk('/', onerror=lambda e: None):
+    if root in ('/proc', '/sys', '/dev'):
+        dirs[:] = []
+        continue
+    for n in files:
+        p = os.path.join(root, n)
+        try:
+            st = os.lstat(p)
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            if names.search(n) or p.endswith('/.docker/config.json'):
+                named.append(p)
+            if st.st_size > spec['max_bytes']:
+                stats['over_bound'] += 1
+                continue
+            with open(p, 'rb') as fh:
+                data = fh.read()
+        except OSError:
+            stats['unreadable'] += 1
+            continue
+        stats['files'] += 1
+        scan(p, data)
+out = dict(stats, distinct_43=len(seen43), distinct_40hex=len(seen40), hits=hits,
+           control_found=sorted(set(control_hits)), control_keys=len(control),
+           credential_files=sorted(named), seconds=round(time.monotonic() - t0, 1))
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+
+
+def _job_json(stdout):
+    """The last AIEH-JOB-JSON line of a container script's output."""
+    lines = [line for line in (stdout or '').splitlines() if line.startswith(JOB_MARKER)]
+    if not lines:
+        raise Refused('CONTAINER', f'the container script printed no result: {(stdout or "")[-300:]}')
+    return json.loads(lines[-1][len(JOB_MARKER):])
+
+
+def container_python(script, arg):
+    """A bash command that runs ``script`` with python3 in the container, the script and its
+    one argument as base64 (no quoting, no secret on the command line)."""
+    return (f"echo {base64.b64encode(script.encode('utf-8')).decode('ascii')} | base64 -d > "
+            f"/tmp/aieh-job.py && python3 /tmp/aieh-job.py {arg}; rc=$?; rm -f /tmp/aieh-job.py; "
+            "exit $rc")
+
+
+def parse_token_fingerprints(values):
+    """``--token-fingerprint LABEL=sha256:<16 hex>`` values (Gitea's token fingerprint form,
+    S-01.2.2) as {label: fingerprint}."""
+    out = {}
+    for value in values or []:
+        label, sep, fp = str(value).partition('=')
+        if not sep or not re.match(r'^[A-Za-z0-9_.:-]{1,64}$', label) or \
+                not GITEA_FINGERPRINT.match(fp):
+            raise Refused('REFUSED', f'--token-fingerprint {value!r}: LABEL=sha256:<16 hex digits>')
+        out[label] = fp
+    return out
+
+
+def job_env_verdict(profile, server_user, data):
+    """The in-container view of one job against provisioning.agent_server.jobs.process and
+    .environment: (ok, problems, root_obtainable)."""
+    jobs = jobs_config(profile)
+    proc, env = jobs.get('process') or {}, jobs.get('environment') or {}
+    secret_names = set(env.get('secret_names') or [])
+    problems = []
+    me = data.get('self') or {}
+    uid, gid = str(server_user.get('uid')), str(server_user.get('gid'))
+    if (me.get('Uid') or '').split() != [uid] * 4 or (me.get('Gid') or '').split() != [gid] * 4 or \
+            (me.get('Groups') or '').split() != [gid]:
+        problems.append({'check': 'identity: the server user, no supplementary group',
+                         'observed': {k: me.get(k) for k in ('Uid', 'Gid', 'Groups')}})
+    for who in ('self', 'pid1'):
+        st = data.get(who) or {}
+        caps = {k: st.get(k) for k in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')}
+        if any(v != proc.get('capabilities') for v in caps.values()) or \
+                st.get('NoNewPrivs') != proc.get('no_new_privs') or \
+                st.get('Seccomp') != proc.get('seccomp'):
+            problems.append({'check': f'{who}: no capability, no_new_privs, seccomp filter',
+                             'observed': st})
+    if data.get('apparmor') != proc.get('apparmor'):
+        problems.append({'check': 'AppArmor profile', 'observed': data.get('apparmor')})
+    if data.get('terminal_names'):
+        problems.append({'check': 'terminal environment: no credential or engine name',
+                         'observed': data.get('terminal_names')})
+    extra = {pid: e.get('names') for pid, e in (data.get('process_environments') or {}).items()
+             if set(e.get('names') or []) - secret_names}
+    if extra:
+        problems.append({'check': 'process environments: only the conversation keys',
+                         'observed': extra})
+    root = any(isinstance(r, dict) and r.get('rc') == 0 for r in (data.get('sudo'), data.get('su')))
+    return not problems, problems, root
+
+
+def job_socket_verdict(profile, data, uid):
+    """The engine socket attempts of one job: (ok, rows, stop). Every declared path must be
+    absent; a socket found in the container may refuse or be absent too; a connection that
+    answers the Docker API is a stop condition."""
+    declared = [str(p).replace('{uid}', str(uid)) for p in jobs_config(profile).get('engine_sockets') or []]
+    rows, ok, stop = [], True, []
+    for path, got in sorted((data.get('connect') or {}).items()):
+        outcome = (got or {}).get('outcome')
+        want = ['ENOENT'] if path in declared else ['ENOENT', 'ECONNREFUSED', 'EACCES']
+        good = outcome in want
+        ok = ok and good
+        rows.append({'path': path, 'declared': path in declared, 'expected': want,
+                     'observed': outcome, 'answer': (got or {}).get('answer'), 'ok': good})
+        if outcome == 'connected' and ((got or {}).get('docker_api') or path in declared):
+            stop.append({'condition': 'an engine socket answered from a job', 'socket': rows[-1]})
+    missing = [p for p in declared if p not in (data.get('connect') or {})]
+    if missing:
+        ok = False
+        rows.append({'missing_attempts': missing})
+    return ok, rows, stop
+
+
+def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels=None,
+                     ssh_fn=None):
+    """job-access-probe (S-01.3.2) on a running provisioned instance: from inside two
+    disposable conversation containers (the job environment; the agent's own terminal,
+    through the outer server's proxied bash route), the job's effective environment (docker
+    inspect from the root facts, and its own view: identity, capabilities, no_new_privs,
+    seccomp, AppArmor, credential-like variable names, sockets, root), every engine socket,
+    the engine API over TCP and the host aliases at every address, every privileged route of
+    the outer server at every address, and the management, Owner, admin and bot credentials
+    by name and fingerprint; the trusted side with the key, the inner server and the
+    hardening controls as positive controls. One machine verdict, PASS or FAIL; an engine
+    socket or API, a management route or a host service reachable from a job is a stop
+    condition. ``channels(record) -> (api, facts)`` and ``ssh_fn(record)`` stand in for the
+    guest in tests."""
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    jobs = jobs_config(ctx.profile)
+    adm = admission_config(ctx.profile)
+    if not jobs or not adm:
+        raise Refused('REFUSED', 'the profile declares no provisioning.agent_server.jobs and '
+                      'admission')
+    gitea = parse_token_fingerprints(token_fingerprints)
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    profile = ctx.profile
+    server = provisioning_config(profile)['agent_server']
+    listener = server['listener']
+    routes, inventory_problems = load_routes(ctx)
+    body_a, fixture_problems, _ = _fixture(ctx)
+    body_b = dict(body_a, conversation_id=JOB_PEER_CONVERSATION_ID,
+                  tags={'aieh': 's-01.3.2-disposable-peer'})
+    conversations = [body_a['conversation_id'], JOB_PEER_CONVERSATION_ID]
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    channels = channels or default_channels
+    ssh = (ssh_fn or (lambda rec: Ssh(profile, idir, rec['ports']['ssh'])))(record)
+    api, facts = channels(record)
+    t0, started = time.time(), utc_now()
+    steps, failed, stop_conditions = [], [], []
+    state = {'created': []}
+    memo = {}
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError,
+              subprocess.SubprocessError)
+
+    def run(step, func, always=False):
+        if (failed or stop_conditions) and not always:
+            steps.append({'step': step, 'skipped': 'an earlier step failed'})
+            return None
+        s = time.time()
+        entry = {'step': step, 'started_at': utc_now()}
+        try:
+            ok, detail = func()
+        except caught as exc:
+            ok, detail = False, {'error': getattr(exc, 'code', type(exc).__name__),
+                                 'message': str(exc), 'detail': getattr(exc, 'detail', None)}
+        entry.update(seconds=round(time.time() - s, 1), ok=bool(ok), detail=detail)
+        steps.append(entry)
+        log(f'job-access-probe: {step}: {"ok" if ok else "FAILED"} ({entry["seconds"]} s)')
+        if not ok:
+            failed.append(step)
+        return detail
+
+    def call(*requests):
+        data = api(list(requests))
+        if data.get('session_key_occurrences'):
+            raise Refused('SECRET', 'a response carried the session key '
+                          f'({data["session_key_occurrences"]} occurrence(s), redacted)')
+        return data['responses']
+
+    def in_container(conversation, command, timeout=300):
+        response, = call({'method': 'POST',
+                          'path': f'/api/conversations/{conversation}/bash/execute_bash_command',
+                          'json': {'command': command, 'cwd': '/workspace', 'timeout': timeout},
+                          'timeout': timeout + 60})
+        body = response.get('body') if isinstance(response.get('body'), dict) else {}
+        if not _status_ok(response) or body.get('exit_code') is None:
+            raise Refused('CONTAINER', f'the command did not run in {conversation}: '
+                          f'{json.dumps(response)[:400]}')
+        return body.get('stdout') or ''
+
+    def boot_facts():
+        result = ssh.run(['python3', '-', provisioning_config(profile)['facts']['path']],
+                         input_text='import json,sys\nprint(json.dumps(json.load(open(sys.argv[1]))))\n',
+                         timeout=120)
+        try:
+            return json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            raise Refused('PROBE', f'no boot facts (rc {result.returncode})')
+
+    def addresses():
+        result = ssh.run(['ip', '-o', '-4', 'address', 'show'], timeout=60)
+        addrs = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if 'inet' in parts:
+                addr = parts[parts.index('inet') + 1].split('/')[0]
+                if not addr.startswith('127.'):
+                    addrs.append(addr)
+        return sorted(addrs)
+
+    def trusted_step():
+        count, info = call({'method': 'GET', 'path': '/api/conversations/count'},
+                           {'method': 'GET', 'path': '/server_info', 'auth': False})
+        return _status_ok(count) and _status_ok(info) and count.get('body') == 0, {
+            'count': {'status': count.get('status'), 'body': count.get('body')},
+            'server_info': {'status': info.get('status')}}
+
+    def create_step():
+        out = {}
+        for body in (body_a, body_b):
+            response, = call({'method': 'POST', 'path': '/api/conversations', 'json': body,
+                              'timeout': 600})
+            out[body['conversation_id']] = {'status': response.get('status'),
+                                            'seconds': response.get('seconds')}
+            if not _status_ok(response):
+                stop_conditions.append({'condition': 'create returned non-2xx (a refusal)',
+                                        'response': response})
+                return False, out
+            state['created'].append(body['conversation_id'])
+        return not fixture_problems and not inventory_problems, {
+            'create': out, 'fixture_problems': fixture_problems,
+            'inventory_problems': inventory_problems}
+
+    def inspected_step():
+        report = facts()
+        memo['server_user'] = report.get('server_user') or {}
+        view, ok = conversation_containers_view(profile, record, report)
+        allowance = listener_allowance(profile, report)
+        memo['published'] = sorted({str(a.get('local', '')).rpartition(':')[2]
+                                    for a in allowance.get('allowed') or [] if a.get('local')})
+        keys = [k for k in (jobs.get('host_config') or {}) if k not in ('rule', 'AppArmorProfile')]
+        effective = []
+        for c in report.get('containers') or []:
+            host = c.get('HostConfig') or {}
+            effective.append({
+                'id': str(c.get('Id'))[:12], 'conversation': conversation_hex(c),
+                'AppArmorProfile': c.get('AppArmorProfile'),
+                'Config.User': (c.get('Config') or {}).get('User'),
+                'Config.EnvNames': (c.get('Config') or {}).get('EnvNames'),
+                'HostConfig': {k: host.get(k) for k in keys + [
+                    'ExtraHosts', 'NetworkMode', 'ReadonlyRootfs', 'Ulimits', 'Runtime',
+                    'PortBindings', 'Binds', 'Memory', 'NanoCpus', 'PidsLimit', 'AutoRemove']},
+                'Mounts': [list(m) for m in effective_container_mounts(c)]})
+        return ok and view.get('count') == 2 and not allowance['violations'], {
+            'containers': view, 'allowance': allowance, 'effective': effective,
+            'sources': JOB_PROPERTY_SOURCES}
+
+    def env_step():
+        user = memo.get('server_user') or {}
+        spec = {'pattern': (jobs.get('environment') or {}).get('credential_name_pattern'),
+                'sockets': [str(p).replace('{uid}', str(user.get('uid')))
+                            for p in jobs.get('engine_sockets') or []],
+                'timeout': JOB_CONNECT_S}
+        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        results, ok_all = {}, True
+        for cid in conversations:
+            data = _job_json(in_container(cid, container_python(JOB_ENV_PROBE, arg), 300))
+            ok, problems, root = job_env_verdict(profile, user, data)
+            entry = {'default_user': data, 'problems': problems, 'root_obtainable': root}
+            if root:
+                # repeat the socket attempts as root (sudo -n), as the dispatch requires
+                command = container_python(JOB_ENV_PROBE, arg).replace(
+                    'python3 /tmp/aieh-job.py', 'sudo -n python3 /tmp/aieh-job.py')
+                entry['root'] = _job_json(in_container(cid, command, 300))
+            results[cid] = entry
+            ok_all = ok_all and ok
+        memo['env'] = results
+        return ok_all, {cid: {k: v for k, v in e.items() if k != 'default_user'} |
+                        {'identity': e['default_user'].get('id'),
+                         'status': e['default_user'].get('self'),
+                         'pid1_status': e['default_user'].get('pid1'),
+                         'apparmor': e['default_user'].get('apparmor'),
+                         'process_environments': e['default_user'].get('process_environments'),
+                         'terminal_names': e['default_user'].get('terminal_names'),
+                         'setuid_root': e['default_user'].get('setuid_root'),
+                         'sudo': e['default_user'].get('sudo'), 'su': e['default_user'].get('su')}
+                        for cid, e in results.items()}
+
+    def socket_step():
+        uid = (memo.get('server_user') or {}).get('uid')
+        out, ok_all = {}, True
+        for cid, entry in (memo.get('env') or {}).items():
+            per = {}
+            for who in ('default_user', 'root'):
+                if who not in entry:
+                    continue
+                ok, rows, stop = job_socket_verdict(profile, entry[who], uid)
+                stop_conditions.extend(dict(s, conversation=cid, user=who) for s in stop)
+                ok_all = ok_all and ok
+                per[who] = {'socket_files': entry[who].get('socket_files'),
+                            'unix_bound': entry[who].get('unix_bound'), 'attempts': rows}
+            out[cid] = per
+        return ok_all and len(out) == 2, out
+
+    def tcp_step():
+        guest_addrs = addresses()
+        memo['guest_addresses'] = guest_addrs
+        ports = record.get('ports') or {}
+        alias = jobs.get('host_alias') or {}
+        host_ports = []
+        for p in alias.get('host_ports') or []:
+            p = {'{ssh_port}': ports.get('ssh'), '{qmp_port}': ports.get('qmp')}.get(p, p)
+            if isinstance(p, int):
+                host_ports.append(p)
+        engine = [int(p) for p in jobs.get('engine_tcp_ports') or []]
+        published = [int(p) for p in memo.get('published') or []]
+        ips = {cid: (in_container(cid, 'hostname -I', 30).split() or [None])[0]
+               for cid in conversations}
+        results, ok_all = {}, True
+        for cid in conversations:
+            peer = ips[conversations[1 - conversations.index(cid)]]
+            targets = []                                  # (host, port, what, allowed, stop kind)
+            for host in ['host.docker.internal'] + guest_addrs:
+                for port in engine:
+                    targets.append((host, port, 'engine API (guest)', {'refused'}, 'engine'))
+                targets.append((host, listener['port'], 'management listener', {'refused'},
+                                'listener'))
+                for port in published:
+                    targets.append((host, port, 'published conversation port', {'refused'}, None))
+            for port in engine:
+                targets.append(('127.0.0.1', port, 'engine API (own loopback)', {'refused'},
+                                'engine'))
+            for host in alias.get('addresses') or []:
+                for port in engine:
+                    targets.append((host, port, 'engine API (SLIRP alias)', {'refused'}, 'engine'))
+                if host == '10.0.2.2':
+                    for port in host_ports:
+                        targets.append((host, port, 'host loopback service (SLIRP alias)',
+                                        {'refused'}, 'host'))
+            for port in engine:
+                targets.append((peer, port, 'engine API (peer container)',
+                                {'timeout', 'unreachable'}, 'engine'))
+            targets.append(('127.0.0.1', 8000, 'own inner server (control)', {'connected'}, None))
+            spec = ' '.join(f'{h}:{p}' for h, p, _, _, _ in targets)
+            text = in_container(cid, f'TARGETS="{spec}"\n' + CONTAINER_NET_PROBE, 600)
+            parsed = parse_net_probe(text)
+            rows = []
+            for host, port, what, allowed, kind in targets:
+                got = parsed.get(f'{host}:{port}') or {'outcome': 'missing'}
+                good = got['outcome'] in allowed
+                if what.endswith('(control)'):
+                    good = good and str(got.get('answer', '')).startswith('HTTP/1.1 200')
+                ok_all = ok_all and good
+                rows.append({'target': f'{host}:{port}', 'what': what, 'expected': sorted(allowed),
+                             'observed': got['outcome'], 'answer': got.get('answer'), 'ok': good})
+                if kind and got['outcome'] == 'connected':
+                    stop_conditions.append({'condition': f'a {kind} endpoint answered from a job',
+                                            'conversation': cid, 'target': rows[-1]})
+            results[cid] = {'container_address': ips[cid],
+                            'host.docker.internal': (_probe_lines(text, 'HOSTS_HDI') or [''])[0],
+                            'identity': (_probe_lines(text, 'ID') or [''])[0], 'targets': rows}
+        return ok_all, {'guest_addresses': guest_addrs, 'published_ports': published,
+                        'host_ports': host_ports, 'containers': results}
+
+    def routes_step():
+        hosts = ['host.docker.internal'] + (memo.get('guest_addresses') or addresses())
+        attempts = [[r['method'], concrete_path(r['path'])] for r in routes['routes']]
+        spec = {'hosts': hosts, 'port': listener['port'], 'routes': attempts,
+                'timeout': JOB_CONNECT_S, 'deadline': JOB_SWEEP_DEADLINE_S}
+        arg = base64.b64encode(zlib.compress(json.dumps(spec).encode('utf-8'), 9)).decode('ascii')
+        out, ok_all = {}, True
+        for cid in conversations:
+            data = _job_json(in_container(cid, container_python(JOB_ROUTE_SWEEP, arg), 1800))
+            for host, h in (data.get('hosts') or {}).items():
+                if h.get('answered'):
+                    stop_conditions.append({'condition': 'the management listener answered '
+                                            'from a job', 'conversation': cid, 'host': host,
+                                            'answered': h['answered'][:5]})
+            good = data.get('inner_key_present') is True and \
+                sorted(data.get('hosts') or {}) == sorted(hosts) and \
+                all(set(h.get('outcomes') or {}) == {'refused'} and
+                    h.get('attempts') == 2 * len(attempts) for h in (data.get('hosts') or {}).values())
+            ok_all = ok_all and good
+            out[cid] = dict(data, ok=good)
+        return ok_all, {'routes': len(attempts), 'variants': ['no_key', 'inner_key'],
+                        'port': listener['port'], 'containers': out}
+
+    def token_step():
+        boot = boot_facts()
+        memo['boot'] = boot
+        outer = ((boot.get('agent_server') or {}).get('secrets') or {}).get('fingerprints') or {}
+        spec = {'aieh': sorted(outer.values()), 'gitea': sorted(gitea.values()),
+                'files': jobs.get('credential_files'), 'max_bytes': JOB_SCAN_MAX_BYTES}
+        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        label_of = {v: f'aieh:{k}' for k, v in outer.items()}
+        label_of.update({v: f'gitea:{k}' for k, v in gitea.items()})
+        out, ok_all = {}, len(outer) == 2
+        for cid in conversations:
+            data = _job_json(in_container(cid, container_python(JOB_TOKEN_SCAN, arg), 1800))
+            hits = [[p, label_of.get(f.split(':', 1)[1], f)] for p, f in data.get('hits') or []]
+            good = not data.get('hits') and not data.get('credential_files') and \
+                bool(data.get('control_found')) and data.get('files', 0) > 0
+            ok_all = ok_all and good
+            out[cid] = dict(data, hits=hits, ok=good)
+        return ok_all, {'searched': {'outer (aieh v1)': sorted(outer),
+                                     'gitea (sha256 prefix)': sorted(gitea)},
+                        'size_bound_bytes': JOB_SCAN_MAX_BYTES, 'containers': out}
+
+    def controls_step():
+        boot = memo.get('boot') or boot_facts()
+        moby = provisioning_config(profile).get('moby') or {}
+        daemon = boot.get('daemon_json') if isinstance(boot.get('daemon_json'), dict) else {}
+        info = boot.get('info') if isinstance(boot.get('info'), dict) else {}
+        security = info.get('SecurityOptions') if isinstance(info.get('SecurityOptions'), list) else []
+        adm_facts = boot.get('admission') if isinstance(boot.get('admission'), dict) else {}
+        unit = adm_facts.get('guard_unit') if isinstance(adm_facts.get('guard_unit'), dict) else {}
+        keycheck = adm_facts.get('keycheck') if isinstance(adm_facts.get('keycheck'), dict) else {}
+        observed = {'daemon.json no-new-privileges': daemon.get('no-new-privileges'),
+                    'daemon.json icc': daemon.get('icc'),
+                    'daemon.json hosts': daemon.get('hosts'),
+                    'SecurityOptions': security,
+                    'guard unit': unit.get('ActiveState'),
+                    'docker.service requires the guard': adm_facts.get('docker_requires_guard'),
+                    'key check ExecStartPre': keycheck.get('exec_start_pre')}
+        ok = daemon.get('no-new-privileges') is True and daemon.get('icc') is False and \
+            'hosts' not in daemon and \
+            set(moby.get('required_security_options') or []) <= set(security) and \
+            unit.get('ActiveState') == 'active' and adm_facts.get('docker_requires_guard') is True \
+            and keycheck.get('exec_start_pre') is True
+        return ok, {'declared': {'daemon.json no-new-privileges': True, 'daemon.json icc': False,
+                                 'daemon.json hosts': None,
+                                 'SecurityOptions': f"including {moby.get('required_security_options')}",
+                                 'guard unit': 'active',
+                                 'docker.service requires the guard': True,
+                                 'key check ExecStartPre': True},
+                    'observed': observed}
+
+    def delete_step():
+        out = {}
+        for cid in list(state['created']):
+            response, = call({'method': 'DELETE', 'path': f'/api/conversations/{cid}',
+                              'timeout': 300})
+            out[cid] = response.get('status')
+            if _status_ok(response):
+                state['created'].remove(cid)
+        report = facts()
+        view, ok = conversation_containers_view(profile, record, report)
+        count, = call({'method': 'GET', 'path': '/api/conversations/count'})
+        return not state['created'] and ok and view.get('count') == 0 and count.get('body') == 0, {
+            'delete': out, 'containers_after': view.get('count'), 'count_after': count.get('body')}
+
+    run('trusted side with the key (positive control)', trusted_step)
+    run('create two disposable conversations (positive control)', create_step)
+    run('job environment as inspected (docker inspect, root facts)', inspected_step)
+    run('job environment from inside (identity, capabilities, variables, root)', env_step)
+    run('engine sockets from inside each job', socket_step)
+    run('engine API over TCP, guest and host aliases, from inside each job', tcp_step)
+    run('privileged Agent Server routes from inside each job, every address', routes_step)
+    run('credentials by name and fingerprint inside each job', token_step)
+    run('hardening controls present (boot facts)', controls_step)
+    run('delete the conversations (positive control)', delete_step,
+        always=bool(state['created']))
+    out = {'schema': JOB_PROBE_SCHEMA, 'operation': 'job-access-probe',
+           'labels': labels(profile), 'profile': profile['name'], 'instance': name,
+           'conversations': conversations, 'started_at': started, 'ended_at': utc_now(),
+           'seconds': round(time.time() - t0, 1),
+           'ci': {'status': 'not applicable yet: no CI runner exists',
+                  'constraints': (jobs.get('ci') or {}).get('constraints'),
+                  'carried_to': (jobs.get('ci') or {}).get('carried_to')},
+           'result': 'PASS' if not failed and not stop_conditions else 'FAIL',
+           'failed_steps': failed, 'stop_conditions': stop_conditions, 'steps': steps}
+    out['record'] = write_record(idir, 'job-access-probe', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -7840,7 +8610,8 @@ def main(argv=None):
     p.add_argument('--log', required=True)
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
-               'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe'):
+               'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
+               'job-access-probe'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -7861,8 +8632,12 @@ def main(argv=None):
                            help='a durable root to inventory before and after each destroy and '
                                 'recreate (repeatable; stands for Owner data)')
             p.add_argument('--out', help='also write the smoke record to this new file')
-        if op in ('conversation-smoke', 'admission-probe'):
+        if op in ('conversation-smoke', 'admission-probe', 'job-access-probe'):
             p.add_argument('--out', help='also write the record to this new file')
+        if op == 'job-access-probe':
+            p.add_argument('--token-fingerprint', action='append', default=[],
+                           help='LABEL=sha256:<16 hex digits>: a Gitea token fingerprint '
+                                '(S-01.2.2 form) to search for inside the jobs (repeatable)')
         if op == 'exchange-push':
             p.add_argument('--repo', required=True, help='the repository to read the branch from')
             p.add_argument('--ref', required=True, help='one local branch')
@@ -7928,6 +8703,8 @@ def main(argv=None):
                                         args.out, args.ready_timeout)
         elif op == 'admission-probe':
             result = admission_probe(ctx, args.name, args.out)
+        elif op == 'job-access-probe':
+            result = job_access_probe(ctx, args.name, args.out, args.token_fingerprint)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:
@@ -7937,7 +8714,7 @@ def main(argv=None):
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke',
-                                   'admission-probe'):
+                                   'admission-probe', 'job-access-probe'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \
