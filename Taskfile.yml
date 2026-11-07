@@ -145,6 +145,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_profile.py {{.CLI_ARGS}}'
 
+  security:check:
+    desc: "Check the security inventory (S-01.1): python -I -B tools/check_security_inventory.py; pass -- --list to print each privileged operation's principal"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_security_inventory.py {{.CLI_ARGS}}'
+
   intent:check:
     desc: "Check a proposal's intent record (P-01.1): python -I -B tools/check_intent_record.py PROPOSAL --source REF=FILE (pass each quote's source after --)"
     requires:

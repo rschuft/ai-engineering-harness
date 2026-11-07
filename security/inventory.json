@@ -1,0 +1,1787 @@
+{
+  "schema": "ai-engineering-harness/security/inventory/v1",
+  "plan_leaf": "S-01.1",
+  "title": "Principals, trust domains, protected assets and credential requirements",
+  "as_of": "2026-11-07",
+  "baseline_commit": "b358a68",
+  "readme": "security/README.md",
+  "checker": "tools/check_security_inventory.py",
+  "statuses": {
+    "planned": "Defined by accepted authority (blueprint, plan, decision or contract) but not built or not enforced yet. Needs sources.",
+    "observed": "Exists today and is shown by committed evidence. Needs evidence links.",
+    "unknown": "Not established from the accepted records or the committed evidence. Needs a finding.",
+    "conflict": "Two accepted records disagree. Needs a finding."
+  },
+  "authority_classes": {
+    "owner": "The Owner's own authority: approval, protected merge, policy and governance change, publication, privileged host change.",
+    "admin": "System administration of a component: Gitea site administration, guest root equivalence (Moby group), Windows Administrators.",
+    "executor": "The privileged effect executor's authority over allowlisted external effects and the effect receipts.",
+    "management": "Management of execution: the Agent Server management API, the guest operator login, CI runner registration.",
+    "scoped": "A least-privilege role credential limited to one role's own resources (a bot's repository writes, one conversation's inner server).",
+    "guest-local": "A secret that exists only inside one execution guest for its own services.",
+    "provider": "Access to an external model or service provider account."
+  },
+  "privileged_authority_classes": ["owner", "admin", "executor", "management"],
+  "privileged_authority_basis": [
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+    "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.1"
+  ],
+  "trust_domains": [
+    {
+      "id": "td-owner",
+      "name": "Owner",
+      "trust": "trusted",
+      "description": "The Owner's identity and decisions, protected policy and the Owner's host account. Same-account shell access can defeat an otherwise sound approval design.",
+      "status": "observed",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
+      ],
+      "evidence": ["evidence/bootstrap-log.md", "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "td-management",
+      "name": "Trusted management",
+      "trust": "trusted",
+      "description": "The minimal dispatch broker or restricted launcher, the Integration Service, the authorization verifier and the inference broker, on the trusted control side and never mounted into agent execution.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification"
+      ],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "td-privileged-effect",
+      "name": "Privileged effect",
+      "trust": "trusted",
+      "description": "The restricted operation executor and its effect receipts, behind a separate OS credential boundary.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ]
+    },
+    {
+      "id": "td-git-hosting",
+      "name": "Git hosting",
+      "trust": "trusted-computing-base",
+      "description": "The Gitea server, its host and its site administration. Gitea's protections do not survive compromise of its administrator or host.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "composition/candidates.json"
+      ]
+    },
+    {
+      "id": "td-guest-control",
+      "name": "Execution guest control",
+      "trust": "contained",
+      "description": "The managed Linux execution VM's own system: guest root, the outer Agent Server's service user and the guest's own Moby. The VM is a host-protection boundary; this domain holds the guest's Docker authority and must stay unreachable from untrusted engineering.",
+      "status": "observed",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "decisions/0006-guest-provisioning-channel-and-image-conformance.md"
+      ],
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "td-untrusted-engineering",
+      "name": "Untrusted engineering",
+      "trust": "untrusted",
+      "description": "Planner and builder agents, the ACP provider process and build or test workloads, each in a per-conversation container inside the guest. Assumed hostile.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.1"
+      ]
+    },
+    {
+      "id": "td-review",
+      "name": "Review",
+      "trust": "untrusted",
+      "description": "Independent reviewer attempts: a separate session, runner or model and context from the builder; may review, never merge.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence"
+      ]
+    },
+    {
+      "id": "td-untrusted-ci",
+      "name": "Untrusted CI",
+      "trust": "untrusted",
+      "description": "CI jobs that execute pull-request code: no Owner, release or signing secret, no host Docker socket.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security"
+      ]
+    },
+    {
+      "id": "td-ci-runner-host",
+      "name": "CI runner host",
+      "trust": "contained",
+      "description": "A dedicated runner host, not the trusted management host, whose runner service registers with Gitea and launches disposable job environments.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-ci-runner-unpinned"]
+    }
+  ],
+  "principals": [
+    {
+      "id": "owner",
+      "name": "The Owner",
+      "kind": "owner",
+      "domain": "td-owner",
+      "agent_controlled": false,
+      "owner_authority": true,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "A separate Gitea Owner account, the only identity on the authorization branch's merge allowlist; privileged host acts by the Owner's interactive UAC approval of a specifically authorized operation.",
+        "observed": "The Owner directs the work through the Overseer; Owner decisions and authorizations are recorded in decisions/ and evidence/bootstrap-log.md; host acts A1 and A3 were approved by interactive UAC consent. No authenticated Owner authorization record exists yet."
+      },
+      "status": "observed",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ],
+      "evidence": ["evidence/bootstrap-log.md"],
+      "findings": ["fd-owner-authorization-record"]
+    },
+    {
+      "id": "owner-os-account",
+      "name": "The Owner's Windows account",
+      "kind": "owner-host-account",
+      "domain": "td-owner",
+      "agent_controlled": false,
+      "owner_authority": true,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The Owner's own interactive account. It holds no executor or service identity, and no executor credential is stored in its Credential Manager.",
+        "observed": "Medium-integrity token, Administrators deny-only, no SeTakeOwnership/SeBackup/SeRestore, UAC on with secure-desktop consent. It runs QEMU as an ordinary user process (no service, no elevation) and owns the guest-state root, whose ACL holds only this account, SYSTEM and Administrators."
+      },
+      "status": "observed",
+      "sources": ["profiles/README.md", "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"],
+      "evidence": [
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "evidence/bootstrap-log.md"
+      ]
+    },
+    {
+      "id": "bootstrap-host-agents",
+      "name": "Host-side bootstrap agent sessions",
+      "kind": "agent",
+      "domain": "td-owner",
+      "agent_controlled": true,
+      "owner_authority": false,
+      "independently_isolated": false,
+      "shares_os_identity_with": "owner-os-account",
+      "identity": {
+        "planned": "No independent identity is planned for them. Engineering work moves into the guest (td-untrusted-engineering) and privileged work to separate identities (the management service and the executor at G-04.2.1).",
+        "observed": "Claude Code sessions (Overseer, Architect, Builder) running as the Owner's Windows account. They are not independently isolated security principals; their elevation is gated only by the Owner's interactive UAC consent, which is not an OS security boundary, and they hold no standing elevation."
+      },
+      "status": "observed",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"],
+      "evidence": ["evidence/bootstrap-log.md", "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "management-dispatcher",
+      "name": "Trusted dispatcher and restricted launcher",
+      "kind": "trusted-service",
+      "domain": "td-management",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The trusted dispatcher identity and network admitted to the Agent Server's create and admin routes (S-01.3.1). It alone holds the Agent Server session key and, through the Agent Server, Docker authority; it checks accepted Work, policy revision, mounts, network and resource budget before it starts a conversation.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"
+      ],
+      "notes": "Today its role is performed by the Owner's account through tools/guest.py over the management SSH channel (F-04.2)."
+    },
+    {
+      "id": "integration-service",
+      "name": "Integration Service",
+      "kind": "trusted-service",
+      "domain": "td-management",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "One lightweight local process for ordinary adapters, with its own identity; custody of integration.sqlite moves to it. It cannot write effect receipts.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ]
+    },
+    {
+      "id": "authorization-verifier",
+      "name": "Authorization verifier",
+      "kind": "trusted-service",
+      "domain": "td-management",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "A small read-only verifier: a webhook only wakes it; it reads the protected ref, the PR, merged_by, the exact blob and the policy, and never executes.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+    },
+    {
+      "id": "inference-broker",
+      "name": "Inference broker",
+      "kind": "trusted-service",
+      "domain": "td-management",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The host-side broker behind the guest's `inference` endpoint class: the only path to provider credentials, which never enter the guest.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": ["profiles/README.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "findings": ["fd-acp-provider-auth"]
+    },
+    {
+      "id": "privileged-executor",
+      "name": "Privileged effect executor",
+      "kind": "executor",
+      "domain": "td-privileged-effect",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "A genuinely separate Windows identity created by Owner act A4 at G-04.2.1, preferably a service identity such as a virtual service account; Modify on the effects root only; it applies only typed, allowlisted effects.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": [
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "notes": "Nothing live exists: no effects root, executor principal, service or scheduled task (decision 0004, Current facts)."
+    },
+    {
+      "id": "release-job-environment",
+      "name": "Release-signing or deployment job environment",
+      "kind": "trusted-service",
+      "domain": null,
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "Named only as a separately credentialed environment that runs narrowly authorized release or deployment jobs after verifying the protected revision.",
+        "observed": null
+      },
+      "status": "unknown",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-release-job-principal"]
+    },
+    {
+      "id": "gitea-site-admin",
+      "name": "Gitea site administrator",
+      "kind": "git-admin",
+      "domain": "td-git-hosting",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The Gitea instance's site administrator. Can change protection rules and impersonate users, so it is in the trusted computing base and is never exposed to agents or CI.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "findings": ["fd-gitea-version-docs"]
+    },
+    {
+      "id": "engineering-agent",
+      "name": "Engineering agent (planner and builder)",
+      "kind": "agent",
+      "domain": "td-untrusted-engineering",
+      "agent_controlled": true,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "A per-conversation container started by the guest's Agent Server Docker runtime: approved read-only definitions, a working copy only, a minimal tool set; a dedicated Gitea 28 token-only bot account with non-admin repository write and PR scope. No Owner, merge, admin, executor, Docker or guest-management credential.",
+        "observed": "Only the container identity is observed, for the no-LLM fixture conversation: uid:gid of the Agent Server's service user (999:989), cap-drop ALL, no-new-privileges, exactly three binds under the server's scratch, port 8000 published on the guest's loopback only, and its own per-conversation OH_SECRET_KEY and session key in its environment. No agent workload, LLM or repository content has run."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-container-shares-service-uid", "fd-acp-provider-auth"]
+    },
+    {
+      "id": "reviewer-agent",
+      "name": "Reviewer agent",
+      "kind": "agent",
+      "domain": "td-review",
+      "agent_controlled": true,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "A separate session, runner or model and context from the builder; its own Gitea bot identity that can submit reviews but cannot merge, administer or reach the executor.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
+      ]
+    },
+    {
+      "id": "ci-job",
+      "name": "CI job executing pull-request code",
+      "kind": "ci-job",
+      "domain": "td-untrusted-ci",
+      "agent_controlled": true,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "A disposable container or VM on the dedicated runner host, with a restricted Gitea job token; no host-mode execution, broad container socket, user home or Owner credential.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-ci-runner-unpinned"]
+    },
+    {
+      "id": "ci-runner-service",
+      "name": "CI runner service",
+      "kind": "trusted-service",
+      "domain": "td-ci-runner-host",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The runner daemon on the dedicated runner host. Its registration secret stays unreachable from the job filesystem.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "findings": ["fd-ci-runner-unpinned"]
+    },
+    {
+      "id": "guest-root",
+      "name": "Guest root",
+      "kind": "guest-system",
+      "domain": "td-guest-control",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "Root inside the execution guest, reached only through cloud-init at create and declared systemd units.",
+        "observed": "Root SSH login is refused (PermitRootLogin no). Root acts only in the single-use provision step (triggered once by a host marker, consuming only seed-pinned sha256 values) and in two read-only facts reporters (at boot, and on demand at most 20 runs in 60 s)."
+      },
+      "status": "observed",
+      "sources": ["profiles/README.md", "decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
+      "evidence": [
+        "evidence/F-03.2.2b-guest-lifecycle.md",
+        "evidence/F-04.1b-provision-moby.md",
+        "evidence/F-04.2-conversation-lifecycle.md"
+      ]
+    },
+    {
+      "id": "guest-service-openhands",
+      "name": "Guest service user `openhands` (outer Agent Server)",
+      "kind": "guest-system",
+      "domain": "td-guest-control",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The guest's own service principal for the Agent Server: a system user with no login, in group docker, reaching only the guest's own daemon socket.",
+        "observed": "System user openhands (uid 999), shell nologin, password locked, groups openhands and docker; runs aieh-agent-server.service with NoNewPrivileges, an empty capability set, ProtectSystem=strict and IPAddressDeny=any except localhost; its process environment is readable only by itself and root."
+      },
+      "status": "observed",
+      "sources": ["decisions/0003-execution-guest-providers-and-isolation-contract.md", "profiles/README.md"],
+      "evidence": ["evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "guest-login-agent",
+      "name": "Guest login user `agent` (operator login)",
+      "kind": "operator-login",
+      "domain": "td-guest-control",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The guest's non-root login for operators and provisioning: exec is never offered to agents, who reach the guest only through the Agent Server path.",
+        "observed": "User agent (uid 1000), no sudo, not in group docker (connect to both daemon sockets: EACCES). SSH login only with the per-instance key over the host-loopback forward. Host tooling uses it for exec, exchange, the provisioning upload, the facts requests and the API probes, and it can read the Agent Server session key (root:agent 0440)."
+      },
+      "status": "observed",
+      "sources": ["profiles/README.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "evidence": [
+        "evidence/F-03.2.2b-guest-lifecycle.md",
+        "evidence/F-04.1c-agent-server.md",
+        "evidence/F-04.2-conversation-lifecycle.md"
+      ],
+      "findings": ["fd-guest-login-name-and-key"]
+    }
+  ],
+  "credentials": [
+    {
+      "id": "cred-uac-consent",
+      "name": "The Owner's interactive UAC consent",
+      "authority": "owner",
+      "issuer": "owner",
+      "holder": "owner",
+      "manager": "owner",
+      "readable_by": [],
+      "storage": "Not stored: an interactive secure-desktop approval of one specifically authorized elevated operation that an agent may initiate.",
+      "scope": "One elevated host operation (A1, A3, A4 and effects-store restore).",
+      "lifetime": "One operation.",
+      "rotation_revocation_owner": "owner",
+      "status": "observed",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"],
+      "evidence": ["evidence/bootstrap-log.md"],
+      "findings": ["fd-bootstrap-shared-identity"],
+      "notes": "Consent, not a boundary: UAC is not an OS security boundary between processes of the Owner's account (decision 0004, clarification 5)."
+    },
+    {
+      "id": "cred-owner-github",
+      "name": "The Owner's push credential for the public GitHub repository",
+      "authority": "owner",
+      "issuer": "external:github",
+      "holder": "owner-os-account",
+      "manager": "owner-os-account",
+      "readable_by": [],
+      "storage": "The Owner's host credential store or key (not inspected).",
+      "scope": "Push to the public repository; publication.",
+      "lifetime": "Unknown.",
+      "rotation_revocation_owner": "owner",
+      "status": "unknown",
+      "findings": ["fd-owner-credential-custody", "fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "cred-owner-provider-login",
+      "name": "The Owner's coding-assistant login used by the host-side agent sessions",
+      "authority": "provider",
+      "issuer": "external:model-provider",
+      "holder": "owner-os-account",
+      "manager": "owner-os-account",
+      "readable_by": [],
+      "storage": "The coding assistant's own login storage in the Owner's account (not inspected).",
+      "scope": "Model access under the Owner's provider account; it grants no approval, merge, policy or privileged host authority in this system.",
+      "lifetime": "Unknown.",
+      "rotation_revocation_owner": "owner",
+      "status": "unknown",
+      "evidence": ["evidence/bootstrap-log.md"],
+      "findings": ["fd-owner-credential-custody", "fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "cred-guest-ssh-key",
+      "name": "Per-instance SSH key for the guest operator login",
+      "authority": "management",
+      "issuer": "owner-os-account",
+      "holder": "owner-os-account",
+      "manager": "owner-os-account",
+      "readable_by": [],
+      "storage": "The per-instance directory under the guest-state root (ACL: the Owner's account, SYSTEM, Administrators); never ~/.ssh. Generated at create with the system ssh-keygen.",
+      "scope": "SSH and SFTP as guest user agent over the host-loopback forward: exec, exchange, provisioning upload and session-key export.",
+      "lifetime": "The instance: destroy removes it; recreate issues a new one.",
+      "rotation_revocation_owner": "owner-os-account",
+      "status": "observed",
+      "sources": ["profiles/README.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "evidence": ["evidence/F-03.2.2b-guest-lifecycle.md", "evidence/F-03.3.1-guest-surfaces.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "cred-guest-host-keys",
+      "name": "Guest SSH host keys",
+      "authority": "guest-local",
+      "issuer": "guest-root",
+      "holder": "guest-root",
+      "manager": "guest-root",
+      "readable_by": [],
+      "storage": "Inside the guest; the fingerprints reach the host from cloud-init's serial-log block into the instance's known_hosts.",
+      "scope": "Host authentication of the guest's sshd.",
+      "lifetime": "Regenerated at every create.",
+      "rotation_revocation_owner": "guest-root",
+      "status": "observed",
+      "evidence": ["evidence/F-03.2.2b-guest-lifecycle.md"]
+    },
+    {
+      "id": "cred-agent-server-session-key",
+      "name": "Agent Server session API key (OH_SESSION_API_KEYS_0)",
+      "authority": "management",
+      "issuer": "guest-root",
+      "holder": "guest-service-openhands",
+      "manager": "guest-root",
+      "readable_by": ["guest-login-agent", "owner-os-account"],
+      "storage": "Generated in the guest by the root step into a root-only environment file read by systemd; an agent-readable copy (root:agent 0440 in a root:agent 0750 directory); exported by SFTP as agent into the per-instance directory on the host. Records carry fingerprints only.",
+      "scope": "Every /api/* route of the outer Agent Server: one key, no per-route scope.",
+      "lifetime": "From provisioning until destroy; unchanged by a guest restart; new on recreate.",
+      "rotation_revocation_owner": "owner-os-account",
+      "status": "observed",
+      "sources": ["profiles/README.md", "decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-guest-login-name-and-key", "fd-session-key-not-fine-grained", "fd-bootstrap-shared-identity"],
+      "notes": "Planned holder: management-dispatcher alone (S-01.3.1). Rotation today is recreate and provision only."
+    },
+    {
+      "id": "cred-oh-secret-key",
+      "name": "Agent Server OH_SECRET_KEY",
+      "authority": "guest-local",
+      "issuer": "guest-root",
+      "holder": "guest-service-openhands",
+      "manager": "guest-root",
+      "readable_by": [],
+      "storage": "Root-only environment file in the guest (root:root 0600); never leaves the guest; searched for on the host by fingerprint only.",
+      "scope": "Encryption of the server's stored secrets and runtime-control key material.",
+      "lifetime": "From provisioning until destroy.",
+      "rotation_revocation_owner": "guest-root",
+      "status": "observed",
+      "sources": ["profiles/README.md"],
+      "evidence": ["evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "cred-conversation-keys",
+      "name": "Per-conversation OH_SECRET_KEY and session key",
+      "authority": "scoped",
+      "issuer": "guest-service-openhands",
+      "holder": "engineering-agent",
+      "manager": "guest-service-openhands",
+      "readable_by": ["guest-service-openhands", "guest-root"],
+      "storage": "Passed by the Docker runtime as environment values into the conversation container; visible to anyone with Docker access (openhands and root); facts reports carry names only.",
+      "scope": "That conversation's own inner Agent Server.",
+      "lifetime": "The conversation container.",
+      "rotation_revocation_owner": "guest-service-openhands",
+      "status": "observed",
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/F-04.1c-agent-server.md"],
+      "findings": ["fd-container-shares-service-uid"]
+    },
+    {
+      "id": "cred-moby-docker-group",
+      "name": "Membership of the guest's docker group",
+      "authority": "admin",
+      "issuer": "guest-root",
+      "holder": "guest-service-openhands",
+      "manager": "guest-root",
+      "readable_by": [],
+      "storage": "Group membership: /run/docker.sock is root:docker 0660; containerd's socket is root:root 0660; no Moby TCP listener.",
+      "scope": "The guest's Docker Engine API, which is root-equivalent inside the guest.",
+      "lifetime": "The provisioned guest.",
+      "rotation_revocation_owner": "guest-root",
+      "status": "observed",
+      "sources": ["profiles/README.md", "decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "cred-gitea-owner-account",
+      "name": "The Owner's Gitea account",
+      "authority": "owner",
+      "issuer": "gitea-site-admin",
+      "holder": "owner",
+      "manager": "owner",
+      "readable_by": [],
+      "storage": "The Owner's own login; never an Owner PAT or session inside agent workspaces or CI runners.",
+      "scope": "Merge allowlist of the protected authorization branch; review of exact operation manifests.",
+      "lifetime": "Not defined yet.",
+      "rotation_revocation_owner": "owner",
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+    },
+    {
+      "id": "cred-gitea-admin",
+      "name": "Gitea site-administrator credential",
+      "authority": "admin",
+      "issuer": "external:gitea-installation",
+      "holder": "gitea-site-admin",
+      "manager": "gitea-site-admin",
+      "readable_by": [],
+      "storage": "Not defined yet; never exposed to agents or CI.",
+      "scope": "Site administration, protection rules, impersonation.",
+      "lifetime": "Not defined yet.",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "findings": ["fd-rotation-undecided"]
+    },
+    {
+      "id": "cred-gitea-bot-builder",
+      "name": "Engineering agent's Gitea bot token",
+      "authority": "scoped",
+      "issuer": "gitea-site-admin",
+      "holder": "engineering-agent",
+      "manager": "management-dispatcher",
+      "readable_by": [],
+      "storage": "Agent-visible environment only, provisioned per attempt by the credential broker.",
+      "scope": "Non-admin repository write and PR on the proposal branch; no merge, admin, protection, credential or executor privilege.",
+      "lifetime": "Not defined yet (S-01.2.1).",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
+      ],
+      "findings": ["fd-rotation-undecided", "fd-gitea-version-docs"]
+    },
+    {
+      "id": "cred-gitea-bot-reviewer",
+      "name": "Reviewer agent's Gitea bot token",
+      "authority": "scoped",
+      "issuer": "gitea-site-admin",
+      "holder": "reviewer-agent",
+      "manager": "management-dispatcher",
+      "readable_by": [],
+      "storage": "The reviewer session's environment only.",
+      "scope": "Read the PR and submit a review; no merge, push to protected refs, admin or executor privilege.",
+      "lifetime": "Not defined yet (S-01.2.1).",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
+      ],
+      "findings": ["fd-rotation-undecided", "fd-gitea-version-docs"]
+    },
+    {
+      "id": "cred-ci-job-token",
+      "name": "CI job token (GITEA_TOKEN)",
+      "authority": "scoped",
+      "issuer": "external:gitea-actions",
+      "holder": "ci-job",
+      "manager": "ci-runner-service",
+      "readable_by": [],
+      "storage": "The job environment, with restricted repository and workflow token maxima.",
+      "scope": "The consuming repository's job context; no protected merge, deploy or executor access.",
+      "lifetime": "One job.",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-ci-runner-unpinned", "fd-rotation-undecided"]
+    },
+    {
+      "id": "cred-runner-registration",
+      "name": "CI runner registration secret",
+      "authority": "management",
+      "issuer": "gitea-site-admin",
+      "holder": "ci-runner-service",
+      "manager": "ci-runner-service",
+      "readable_by": [],
+      "storage": "The runner host, unreachable from the job filesystem.",
+      "scope": "Register the runner and receive jobs.",
+      "lifetime": "Not defined yet.",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "findings": ["fd-ci-runner-unpinned", "fd-rotation-undecided"]
+    },
+    {
+      "id": "cred-verifier-read",
+      "name": "Authorization verifier's read-only Gitea credential",
+      "authority": "scoped",
+      "issuer": "gitea-site-admin",
+      "holder": "authorization-verifier",
+      "manager": "authorization-verifier",
+      "readable_by": [],
+      "storage": "The verifier's own identity; unreachable from code runners.",
+      "scope": "Read the protected authorization ref, PRs, merged_by and blobs.",
+      "lifetime": "Not defined yet.",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "findings": ["fd-rotation-undecided"]
+    },
+    {
+      "id": "cred-executor-identity",
+      "name": "Executor service identity",
+      "authority": "executor",
+      "issuer": "owner",
+      "holder": "privileged-executor",
+      "manager": "privileged-executor",
+      "readable_by": [],
+      "storage": "A Windows service identity (a virtual service account preferred) with no stored password; never in the Owner's Credential Manager, never runas /savecred, never given to an agent.",
+      "scope": "Modify on the effects root; allowlisted effect kinds only.",
+      "lifetime": "Until the Owner revokes it.",
+      "rotation_revocation_owner": "owner",
+      "status": "planned",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"]
+    },
+    {
+      "id": "cred-executor-target-secrets",
+      "name": "Executor target credentials",
+      "authority": "executor",
+      "issuer": "owner",
+      "holder": "privileged-executor",
+      "manager": "privileged-executor",
+      "readable_by": [],
+      "storage": "Separately credentialed, encrypted; unreachable from agents, CI and the Integration Service.",
+      "scope": "The targets of allowlisted operation kinds; not defined until G-04.2.x.",
+      "lifetime": "Not defined yet.",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
+      ],
+      "findings": ["fd-rotation-undecided"]
+    },
+    {
+      "id": "cred-llm-provider-key",
+      "name": "Brokered model-provider credential",
+      "authority": "provider",
+      "issuer": "external:model-provider",
+      "holder": "inference-broker",
+      "manager": "inference-broker",
+      "readable_by": [],
+      "storage": "Host side, behind the brokered `inference` endpoint; never in the guest, the seed, a container or an agent-readable file.",
+      "scope": "Model inference for engineering conversations.",
+      "lifetime": "Not defined yet.",
+      "rotation_revocation_owner": null,
+      "status": "planned",
+      "sources": [
+        "profiles/README.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
+      ],
+      "findings": ["fd-rotation-undecided", "fd-acp-provider-auth"]
+    },
+    {
+      "id": "cred-owner-ui-access",
+      "name": "Owner UI access to the Agent Server and Integration Service",
+      "authority": "management",
+      "issuer": "external:undefined",
+      "holder": "owner",
+      "manager": "owner",
+      "readable_by": [],
+      "storage": "Not defined.",
+      "scope": "Agent Canvas reaches only the backend needed for an Owner-authorized engineering session.",
+      "lifetime": "Not defined.",
+      "rotation_revocation_owner": null,
+      "status": "unknown",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"],
+      "findings": ["fd-owner-ui-access"]
+    }
+  ],
+  "assets": [
+    {
+      "id": "host-owner-windows",
+      "name": "The Owner's Windows host",
+      "kind": "host",
+      "custodian": "owner-os-account",
+      "location": "The trusted Owner host: Windows 11 Home, WHPX enabled (A1), the pinned QEMU (A2).",
+      "status": "observed",
+      "evidence": ["evidence/bootstrap-log.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "host-credential-stores",
+      "name": "The Owner's host credential stores",
+      "kind": "credential-store",
+      "custodian": "owner-os-account",
+      "location": "The Owner's credential stores (protected for this leaf; not listed or read).",
+      "credentials": ["cred-owner-github", "cred-owner-provider-login"],
+      "status": "unknown",
+      "findings": ["fd-owner-credential-custody", "fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "host-guest-state-root",
+      "name": "Guest-state root",
+      "kind": "directory",
+      "custodian": "owner-os-account",
+      "location": "The directory the Owner designated by act A3, outside the checkout and the Owner profile; ACL: the Owner's account, SYSTEM, Administrators. It holds the images, the pinned provider, the provision stage and the instances.",
+      "credentials": ["cred-guest-ssh-key", "cred-agent-server-session-key"],
+      "status": "observed",
+      "evidence": ["evidence/bootstrap-log.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "host-instance-directory",
+      "name": "Per-instance directory",
+      "kind": "directory",
+      "custodian": "owner-os-account",
+      "location": "One directory per guest under the guest-state root: disks, seed, launch record, serial log, the SSH key and known_hosts, the exported session key, exchange staging. destroy removes it.",
+      "credentials": ["cred-guest-ssh-key", "cred-agent-server-session-key"],
+      "status": "observed",
+      "evidence": ["evidence/F-03.2.2b-guest-lifecycle.md", "evidence/F-04.1c-agent-server.md", "evidence/F-03.4-teardown-qualification.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "host-qemu-process",
+      "name": "QEMU process",
+      "kind": "process",
+      "custodian": "owner-os-account",
+      "location": "An ordinary user process of the Owner's account: no service, no elevation. The strong tier buys a kernel boundary, not a principal boundary.",
+      "status": "observed",
+      "evidence": ["profiles/strong-windows-qemu-whpx/profile.json", "evidence/F-03.2.2b-guest-lifecycle.md"]
+    },
+    {
+      "id": "listener-host-ssh-forward",
+      "name": "Host loopback SSH forward",
+      "kind": "listener",
+      "custodian": "owner-os-account",
+      "location": "Host 127.0.0.1:{ssh_port} to guest :22 (hostfwd); classes management and exchange. Reachable by any local process; authentication by the per-instance key.",
+      "credentials": ["cred-guest-ssh-key"],
+      "status": "observed",
+      "evidence": ["evidence/F-03.3.2-guest-network.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "findings": ["fd-host-loopback-exposure"]
+    },
+    {
+      "id": "listener-host-qmp",
+      "name": "QMP monitor",
+      "kind": "listener",
+      "custodian": "owner-os-account",
+      "location": "Host 127.0.0.1:{qmp_port}, loopback TCP chardev, unauthenticated; host-only (refused from the guest). Full VM control.",
+      "status": "observed",
+      "evidence": ["evidence/F-03.2.2a-seed-and-monitor.md", "evidence/F-03.3.2-guest-network.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "findings": ["fd-host-loopback-exposure"]
+    },
+    {
+      "id": "guest-execution-vm",
+      "name": "Strong execution guest",
+      "kind": "guest",
+      "custodian": "owner-os-account",
+      "location": "Debian 13 under QEMU/WHPX (profile strong-windows-qemu-whpx): SLIRP restrict=on, ipv6=off, no host share, no guestfwd. The strong tier is not operational until S-02.x passes (C6).",
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.1-guest-surfaces.md",
+        "evidence/F-03.3.2-guest-network.md",
+        "evidence/F-03.4-teardown-qualification.md",
+        "profiles/strong-windows-qemu-whpx/QUALIFICATION.md"
+      ]
+    },
+    {
+      "id": "guest-exchange",
+      "name": "Repository exchange",
+      "kind": "directory",
+      "custodian": "guest-login-agent",
+      "location": "The guest's exchange directory and its host staging: git bundles only, bounded in size; pull never writes into the Owner's repositories.",
+      "status": "observed",
+      "evidence": ["evidence/F-03.3.1-guest-surfaces.md"]
+    },
+    {
+      "id": "guest-sshd",
+      "name": "Guest sshd",
+      "kind": "listener",
+      "custodian": "guest-root",
+      "location": "Base-image sshd on 0.0.0.0:22 and [::]:22 in the guest; root login refused.",
+      "credentials": ["cred-guest-ssh-key", "cred-guest-host-keys"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-03.2.2b-guest-lifecycle.md"],
+      "findings": ["fd-container-network-deviations"]
+    },
+    {
+      "id": "guest-agent-server-listener",
+      "name": "Outer Agent Server listener",
+      "kind": "listener",
+      "custodian": "guest-service-openhands",
+      "location": "The guest's 127.0.0.1:8000 only (explicit --host 127.0.0.1); class management, guest-local; not forwarded to the host (the Agent Server host forward is deferred).",
+      "credentials": ["cred-agent-server-session-key"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "guest-conversation-listeners",
+      "name": "Conversation container listeners",
+      "kind": "listener",
+      "custodian": "guest-service-openhands",
+      "location": "One docker-proxy listener per running owned container on the guest's 127.0.0.1 at an ephemeral port, mapped to the container's port 8000; never forwarded to the host.",
+      "credentials": ["cred-conversation-keys"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"]
+    },
+    {
+      "id": "guest-moby-socket",
+      "name": "Guest Docker daemon socket",
+      "kind": "socket",
+      "custodian": "guest-root",
+      "location": "/run/docker.sock, root:docker 0660; agent gets EACCES; never mounted into a conversation container.",
+      "credentials": ["cred-moby-docker-group"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.2-conversation-lifecycle.md"]
+    },
+    {
+      "id": "guest-containerd-socket",
+      "name": "Guest containerd socket",
+      "kind": "socket",
+      "custodian": "guest-root",
+      "location": "/run/containerd/containerd.sock, root:root 0660; the CRI plugin is off, so no streaming listener.",
+      "status": "observed",
+      "evidence": ["evidence/F-04.1b-provision-moby.md"]
+    },
+    {
+      "id": "guest-secrets-env-file",
+      "name": "Agent Server secrets environment file",
+      "kind": "secret-file",
+      "custodian": "guest-root",
+      "location": "/etc/aieh/agent-server/secrets.env, root:root 0600; agent gets EACCES.",
+      "credentials": ["cred-oh-secret-key", "cred-agent-server-session-key"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "guest-session-key-file",
+      "name": "Agent-readable session key file",
+      "kind": "secret-file",
+      "custodian": "guest-root",
+      "location": "/var/lib/aieh/agent-server/session.key, root:agent 0440, in a root:agent 0750 directory.",
+      "credentials": ["cred-agent-server-session-key"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md"],
+      "findings": ["fd-guest-login-name-and-key"]
+    },
+    {
+      "id": "guest-provision-root-step",
+      "name": "Single-use root provisioning step",
+      "kind": "privileged-unit",
+      "custodian": "guest-root",
+      "location": "aieh-provision.path and .service, seeded by cloud-init: triggered once by a host marker; copies, verifies against seed-pinned sha256 values, installs with native tools, deletes the upload and disables itself.",
+      "status": "observed",
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "guest-facts-reporters",
+      "name": "Root read-only facts reporters",
+      "kind": "privileged-unit",
+      "custodian": "guest-root",
+      "location": "aieh-docker-facts (every boot) and aieh-conversation-facts (on demand: agent creates a request file in a root:agent 0730 directory; the reporter removes it unread, runs docker ps and container inspect only, redacts secret values; at most 20 runs in 60 s, then fails closed until the next boot).",
+      "status": "observed",
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "conversation-container",
+      "name": "Conversation container",
+      "kind": "container",
+      "custodian": "guest-service-openhands",
+      "location": "One per Docker conversation: the locked image ID, three binds under the server's scratch, cap-drop ALL, no-new-privileges, the server's uid:gid, Moby's default bridge with host.docker.internal mapped to the guest's docker0. Its inner server also starts VSCode on port 8001 inside its network namespace.",
+      "credentials": ["cred-conversation-keys"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-container-network-deviations", "fd-container-shares-service-uid"]
+    },
+    {
+      "id": "api-agent-server-management",
+      "name": "Outer Agent Server management API",
+      "kind": "api",
+      "custodian": "guest-service-openhands",
+      "location": "/api/* on the guest's 127.0.0.1:8000; X-Session-API-Key required (401 without it or with a wrong key). Recorded routes: POST /api/conversations; GET /api/conversations/{id}, /search, /count; GET, DELETE /api/conversations/{id}/runtime; POST /api/conversations/{id}/runtime/reprovision; DELETE /api/conversations/{id}; events search; POST /api/conversations/{id}/pause (present, not used).",
+      "credentials": ["cred-agent-server-session-key"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-session-key-not-fine-grained", "fd-agent-server-route-inventory"]
+    },
+    {
+      "id": "api-agent-server-public",
+      "name": "Outer Agent Server unauthenticated routes",
+      "kind": "api",
+      "custodian": "guest-service-openhands",
+      "location": "/server_info, /alive and /openapi.json answered without the key on the guest loopback; read only.",
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"]
+    },
+    {
+      "id": "api-agent-server-unenumerated",
+      "name": "Further Agent Server capabilities",
+      "kind": "api",
+      "custodian": "guest-service-openhands",
+      "location": "Capability families advertised by /server_info at 1.60.1 whose routes are not recorded: credential_binding_v1 (with readiness probe and activation guard), profile_secret_scope_v1, canvas_app_backend_secret_grants_v1, canvas_app_backend_enable_lifecycle_v1, agent_launch_pipeline_v1, agent_profile_draft_materialize_v1, profile_persona_v1, profile_public_skills_v1, skill_catalog_v1, tool_catalog_v1; and the usable tool start_child_conversation.",
+      "status": "unknown",
+      "evidence": ["evidence/F-04.1c-agent-server.md"],
+      "findings": ["fd-agent-server-route-inventory", "fd-child-conversation-tool"]
+    },
+    {
+      "id": "api-moby",
+      "name": "Guest Docker Engine API",
+      "kind": "api",
+      "custodian": "guest-root",
+      "location": "Over /run/docker.sock only; reached by the server's docker CLI as openhands.",
+      "credentials": ["cred-moby-docker-group"],
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "store-agent-server-scratch",
+      "name": "Agent Server data on guest scratch",
+      "kind": "store",
+      "custodian": "guest-service-openhands",
+      "location": "/srv/scratch/openhands: conversations, persistence (runtime-control with encrypted key material, runtime-data with workspaces), home and tmp; owner openhands, 0711/0700.",
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"]
+    },
+    {
+      "id": "store-moby-data-root",
+      "name": "Moby data root",
+      "kind": "store",
+      "custodian": "guest-root",
+      "location": "/srv/scratch/docker, root-only; never a conversation mount source.",
+      "status": "observed",
+      "evidence": ["evidence/F-04.1b-provision-moby.md"]
+    },
+    {
+      "id": "store-effects",
+      "name": "Privileged effect store (effects.sqlite)",
+      "kind": "store",
+      "custodian": "privileged-executor",
+      "location": "An explicit, Owner-designated root on a local fixed volume outside the repository, every profile, the guest-state root and the integration tree. Interim custody: owner Administrators, DACL SYSTEM and Administrators only; the executor added as one Modify entry at A4.",
+      "status": "planned",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"],
+      "evidence": ["evidence/F-05.2-effects-store-backup-restore.md"],
+      "notes": "Proven on fixtures only; nothing live exists."
+    },
+    {
+      "id": "store-integration",
+      "name": "Integration store (integration.sqlite)",
+      "kind": "store",
+      "custodian": "owner-os-account",
+      "location": "Default per-user location under the local application-data folder; Owner-session custody during bootstrap; custody moves to the Integration Service identity later.",
+      "status": "planned",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md", "integrations/store/README.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "repo-owner-local",
+      "name": "The Owner's local repositories",
+      "kind": "repository",
+      "custodian": "owner-os-account",
+      "location": "This checkout and the Owner's other durable repositories on the host; never mounted into a guest, never written by exchange pull, never deleted automatically.",
+      "status": "observed",
+      "evidence": ["evidence/F-03.3.1-guest-surfaces.md", "evidence/F-03.4-teardown-qualification.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "repo-github-public",
+      "name": "Public GitHub repository",
+      "kind": "repository",
+      "custodian": "owner",
+      "location": "The public origin of this repository; protected by the publication-safety gate before commit and push.",
+      "credentials": ["cred-owner-github"],
+      "status": "observed",
+      "evidence": ["evidence/bootstrap-log.md"],
+      "findings": ["fd-owner-credential-custody"]
+    },
+    {
+      "id": "gitea-server",
+      "name": "Gitea server",
+      "kind": "service",
+      "custodian": "gitea-site-admin",
+      "location": "Gitea 28.3.0 as pinned in composition/; not installed.",
+      "credentials": ["cred-gitea-admin", "cred-gitea-owner-account", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer", "cred-verifier-read"],
+      "status": "planned",
+      "sources": ["composition/candidates.json", "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "findings": ["fd-gitea-version-docs"]
+    },
+    {
+      "id": "repo-gitea-authorization",
+      "name": "Gitea authorization repository",
+      "kind": "repository",
+      "custodian": "owner",
+      "location": "A dedicated repository with one protected authorization branch; operations/<operation-id>.json manifests; Owner-only merges; no direct or force pushes; merge commits only.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+    },
+    {
+      "id": "repo-gitea-policy",
+      "name": "Gitea protected policy and workflow-source repositories",
+      "kind": "repository",
+      "custodian": "owner",
+      "location": "Protected governance repositories: policy profiles, the agent and skill catalog, central scoped workflows.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ]
+    },
+    {
+      "id": "ci-runner-host",
+      "name": "Dedicated CI runner host",
+      "kind": "host",
+      "custodian": "ci-runner-service",
+      "location": "Not the trusted management host; untrusted jobs in disposable containers or VMs; no host-mode execution or broad container socket.",
+      "credentials": ["cred-runner-registration", "cred-ci-job-token"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-ci-runner-unpinned"]
+    },
+    {
+      "id": "endpoint-inference",
+      "name": "Inference endpoint class",
+      "kind": "listener",
+      "custodian": "inference-broker",
+      "location": "A guestfwd to a host-side broker on 127.0.0.1; deferred: the broker does not exist and enabling a guestfwd needs separate Owner authorization.",
+      "credentials": ["cred-llm-provider-key"],
+      "status": "planned",
+      "sources": ["profiles/strong-windows-qemu-whpx/profile.json", "profiles/README.md"],
+      "findings": ["fd-acp-provider-auth"]
+    },
+    {
+      "id": "endpoint-provision",
+      "name": "Provision endpoint class",
+      "kind": "listener",
+      "custodian": "owner-os-account",
+      "location": "A phase-limited guestfwd to an allowlisting proxy; deferred and unused (provisioning uses the SFTP channel instead).",
+      "status": "planned",
+      "sources": ["profiles/strong-windows-qemu-whpx/profile.json", "decisions/0006-guest-provisioning-channel-and-image-conformance.md"]
+    }
+  ],
+  "operations": [
+    {
+      "id": "op-as-conversation-create",
+      "name": "Create a conversation",
+      "mechanism": "POST /api/conversations on the outer Agent Server",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-management", "conversation-container"],
+      "observed_performer": "owner-os-account",
+      "performed_via": "tools/guest.py conversation-smoke: an API probe run as guest user agent reads the session key from its file (F-04.2).",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"
+      ],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-guest-login-name-and-key", "fd-session-key-not-fine-grained"]
+    },
+    {
+      "id": "op-as-runtime-stop",
+      "name": "Stop a conversation's container",
+      "mechanism": "DELETE /api/conversations/{id}/runtime",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-management", "conversation-container"],
+      "observed_performer": "owner-os-account",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-session-key-not-fine-grained"]
+    },
+    {
+      "id": "op-as-runtime-reprovision",
+      "name": "Reopen a conversation's container",
+      "mechanism": "POST /api/conversations/{id}/runtime/reprovision",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-management", "conversation-container"],
+      "observed_performer": "owner-os-account",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-session-key-not-fine-grained"]
+    },
+    {
+      "id": "op-as-conversation-delete",
+      "name": "Delete a conversation and its data",
+      "mechanism": "DELETE /api/conversations/{id}",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-management", "store-agent-server-scratch"],
+      "observed_performer": "owner-os-account",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-session-key-not-fine-grained"]
+    },
+    {
+      "id": "op-as-conversation-pause",
+      "name": "Pause a conversation's run",
+      "mechanism": "POST /api/conversations/{id}/pause (present in both documents; not used)",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-management"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-session-key-not-fine-grained"]
+    },
+    {
+      "id": "op-as-management-read",
+      "name": "Read conversations, runtimes and events",
+      "mechanism": "GET /api/conversations/{id}, /search, /count, /{id}/runtime and events search",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-management", "store-agent-server-scratch"],
+      "observed_performer": "owner-os-account",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/F-04.1c-agent-server.md"],
+      "findings": ["fd-session-key-not-fine-grained"]
+    },
+    {
+      "id": "op-as-unenumerated-routes",
+      "name": "Other Agent Server management capabilities",
+      "mechanism": "Routes behind the advertised credential-binding, secret-grant, agent-launch, profile and skill capability families (not enumerated)",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-agent-server-session-key"],
+      "assets": ["api-agent-server-unenumerated"],
+      "status": "unknown",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"],
+      "findings": ["fd-agent-server-route-inventory"]
+    },
+    {
+      "id": "op-child-conversation",
+      "name": "Conversation creation requested from inside a conversation",
+      "mechanism": "The usable tool start_child_conversation (path to a server not established)",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["api-agent-server-unenumerated", "conversation-container"],
+      "status": "unknown",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.1"],
+      "evidence": ["evidence/F-04.1c-agent-server.md"],
+      "findings": ["fd-child-conversation-tool"]
+    },
+    {
+      "id": "op-moby-container-control",
+      "name": "Run, inspect and remove containers",
+      "mechanism": "The guest Docker Engine API through /run/docker.sock",
+      "principal": "guest-service-openhands",
+      "owner_only": false,
+      "credentials": ["cred-moby-docker-group"],
+      "assets": ["api-moby", "guest-moby-socket", "conversation-container"],
+      "observed_performer": "guest-service-openhands",
+      "status": "observed",
+      "sources": ["decisions/0003-execution-guest-providers-and-isolation-contract.md"],
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"]
+    },
+    {
+      "id": "op-moby-daemon-admin",
+      "name": "Administer the guest's Moby daemon",
+      "mechanism": "daemon.json, containerd config, sysctl, image load and tag, by the root step",
+      "principal": "guest-root",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["guest-moby-socket", "guest-containerd-socket", "store-moby-data-root"],
+      "observed_performer": "guest-root",
+      "status": "observed",
+      "sources": ["decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
+      "evidence": ["evidence/F-04.1b-provision-moby.md"]
+    },
+    {
+      "id": "op-guest-provision",
+      "name": "Provision the guest (single-use root step)",
+      "mechanism": "aieh-provision, triggered once by a host marker after the SFTP upload",
+      "principal": "guest-root",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["guest-provision-root-step", "guest-secrets-env-file", "guest-session-key-file"],
+      "observed_performer": "guest-root",
+      "performed_via": "The host uploads the pinned artifacts as guest user agent and writes the READY marker; root consumes only files whose sha256 equals the seed-pinned manifest.",
+      "status": "observed",
+      "sources": ["decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.1c-agent-server.md"]
+    },
+    {
+      "id": "op-guest-facts",
+      "name": "Report root-only guest and container facts",
+      "mechanism": "aieh-docker-facts at boot; aieh-conversation-facts on an agent-created request file",
+      "principal": "guest-root",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["guest-facts-reporters", "api-moby"],
+      "observed_performer": "guest-root",
+      "status": "observed",
+      "sources": ["decisions/0003-execution-guest-providers-and-isolation-contract.md"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"]
+    },
+    {
+      "id": "op-guest-lifecycle",
+      "name": "Guest lifecycle",
+      "mechanism": "tools/guest.py preflight, create, start, stop, destroy, recreate, inspect; qemu-img; QMP",
+      "principal": "owner-os-account",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["host-qemu-process", "listener-host-qmp", "host-guest-state-root", "host-instance-directory", "guest-execution-vm"],
+      "observed_performer": "owner-os-account",
+      "status": "observed",
+      "sources": ["profiles/README.md", "decisions/0003-execution-guest-providers-and-isolation-contract.md"],
+      "evidence": ["evidence/F-03.2.2b-guest-lifecycle.md", "evidence/F-03.4-teardown-qualification.md"],
+      "findings": ["fd-host-loopback-exposure", "fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-guest-exec",
+      "name": "Run a command in the guest",
+      "mechanism": "tools/guest.py exec: SSH as agent over the loopback forward (operators and provisioning only)",
+      "principal": "owner-os-account",
+      "owner_only": false,
+      "credentials": ["cred-guest-ssh-key"],
+      "assets": ["listener-host-ssh-forward", "guest-sshd"],
+      "observed_performer": "owner-os-account",
+      "status": "observed",
+      "sources": ["profiles/README.md"],
+      "evidence": ["evidence/F-03.2.2b-guest-lifecycle.md"],
+      "findings": ["fd-bootstrap-shared-identity", "fd-guest-login-name-and-key"]
+    },
+    {
+      "id": "op-exchange",
+      "name": "Exchange push and pull",
+      "mechanism": "Git bundles by SFTP over the management forward",
+      "principal": "owner-os-account",
+      "owner_only": false,
+      "credentials": ["cred-guest-ssh-key"],
+      "assets": ["guest-exchange", "listener-host-ssh-forward", "repo-owner-local"],
+      "observed_performer": "owner-os-account",
+      "status": "observed",
+      "sources": ["profiles/README.md"],
+      "evidence": ["evidence/F-03.3.1-guest-surfaces.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-session-key-export",
+      "name": "Export the Agent Server session key to the host",
+      "mechanism": "tools/guest.py provision: SFTP as agent into the per-instance directory",
+      "principal": "owner-os-account",
+      "owner_only": false,
+      "credentials": ["cred-guest-ssh-key", "cred-agent-server-session-key"],
+      "assets": ["guest-session-key-file", "host-instance-directory"],
+      "observed_performer": "owner-os-account",
+      "status": "observed",
+      "sources": ["profiles/README.md", "decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
+      "evidence": ["evidence/F-04.1c-agent-server.md"],
+      "findings": ["fd-bootstrap-shared-identity", "fd-guest-login-name-and-key"]
+    },
+    {
+      "id": "op-provision-fetch",
+      "name": "Fetch pinned provisioning artifacts on the host",
+      "mechanism": "tools/guest.py provision-fetch, including one pinned, checksum-verified crane run from the state directory",
+      "principal": "owner-os-account",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["host-guest-state-root"],
+      "observed_performer": "owner-os-account",
+      "status": "observed",
+      "sources": ["decisions/0006-guest-provisioning-channel-and-image-conformance.md", "decisions/0005-distribution-model-upstream-download-no-redistribution.md"],
+      "evidence": ["evidence/F-04.1a-provision-pins-fetch.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-guest-boundary-change",
+      "name": "Widen the guest boundary",
+      "mechanism": "Any guest network, guestfwd, host share, LLM credential, new host port or launch.argv change",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": [],
+      "assets": ["guest-execution-vm", "endpoint-inference", "endpoint-provision"],
+      "observed_performer": "owner",
+      "performed_via": "Each such change needs a separate, recorded Owner approval; none has been granted.",
+      "status": "observed",
+      "sources": ["decisions/0003-execution-guest-providers-and-isolation-contract.md", "decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
+      "evidence": ["evidence/bootstrap-log.md", "evidence/F-04.2-conversation-lifecycle.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-host-privileged-change",
+      "name": "Privileged host change",
+      "mechanism": "Elevated host acts (A1 Windows feature, A3 guest-state root, A4 effects root and executor identity)",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": ["cred-uac-consent"],
+      "assets": ["host-owner-windows", "host-guest-state-root", "store-effects"],
+      "observed_performer": "owner-os-account",
+      "performed_via": "Initiated by a host-side agent session, elevated only by the Owner's interactive UAC consent; never automatic, never bypassing UAC.",
+      "status": "observed",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md", "decisions/0003-execution-guest-providers-and-isolation-contract.md"],
+      "evidence": ["evidence/bootstrap-log.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-git-push-public",
+      "name": "Push to the public repository",
+      "mechanism": "git push to the public GitHub origin, after the publication-safety gate",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": ["cred-owner-github"],
+      "assets": ["repo-github-public"],
+      "observed_performer": "owner-os-account",
+      "performed_via": "On the Owner's explicit authorization, by processes of the Owner's account.",
+      "status": "observed",
+      "sources": ["AGENTS.md"],
+      "evidence": ["evidence/bootstrap-log.md"],
+      "findings": ["fd-bootstrap-shared-identity", "fd-owner-credential-custody"]
+    },
+    {
+      "id": "op-policy-change",
+      "name": "Change governance",
+      "mechanism": "The blueprint, accepted decisions, the plan, integrity-tracked files, the publication-safety gate and repository policy",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": [],
+      "assets": ["repo-owner-local", "repo-gitea-policy"],
+      "observed_performer": "owner-os-account",
+      "performed_via": "Owner decisions recorded by the Overseer in decisions/ and evidence/bootstrap-log.md; planned: a protected Gitea policy merge.",
+      "status": "observed",
+      "sources": [
+        "AGENTS.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture"
+      ],
+      "evidence": ["evidence/bootstrap-log.md"],
+      "findings": ["fd-owner-authorization-record", "fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-protected-merge",
+      "name": "Authorize an operation by protected merge",
+      "mechanism": "Owner-only merge of an exact operation manifest into the protected authorization branch",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": ["cred-gitea-owner-account"],
+      "assets": ["repo-gitea-authorization", "gitea-server"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+    },
+    {
+      "id": "op-gitea-administration",
+      "name": "Administer Gitea",
+      "mechanism": "Branch protection, merge allowlists, bot accounts, token maxima, audit settings, impersonation",
+      "principal": "gitea-site-admin",
+      "owner_only": false,
+      "credentials": ["cred-gitea-admin"],
+      "assets": ["gitea-server", "repo-gitea-authorization", "repo-gitea-policy"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "findings": ["fd-gitea-version-docs"]
+    },
+    {
+      "id": "op-open-proposal-pr",
+      "name": "Push a proposal branch and open a PR",
+      "mechanism": "Gitea API or git push with the builder's bot token",
+      "principal": "engineering-agent",
+      "owner_only": false,
+      "credentials": ["cred-gitea-bot-builder"],
+      "assets": ["gitea-server"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+    },
+    {
+      "id": "op-submit-review",
+      "name": "Submit an independent review",
+      "mechanism": "Gitea review with the reviewer's bot token",
+      "principal": "reviewer-agent",
+      "owner_only": false,
+      "credentials": ["cred-gitea-bot-reviewer"],
+      "assets": ["gitea-server"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence"]
+    },
+    {
+      "id": "op-ci-untrusted-job",
+      "name": "Execute a pull-request CI job",
+      "mechanism": "A Gitea Actions job on the dedicated runner host",
+      "principal": "ci-job",
+      "owner_only": false,
+      "credentials": ["cred-ci-job-token"],
+      "assets": ["ci-runner-host"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-ci-runner-unpinned"]
+    },
+    {
+      "id": "op-ci-runner-registration",
+      "name": "Register a runner and receive jobs",
+      "mechanism": "The runner service with its registration secret",
+      "principal": "ci-runner-service",
+      "owner_only": false,
+      "credentials": ["cred-runner-registration"],
+      "assets": ["ci-runner-host", "gitea-server"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-ci-runner-unpinned"]
+    },
+    {
+      "id": "op-release-signing-deploy",
+      "name": "Sign a release or run a deployment job",
+      "mechanism": "A narrowly authorized job after verification of the protected revision",
+      "principal": "release-job-environment",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["repo-gitea-authorization"],
+      "status": "unknown",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "findings": ["fd-release-job-principal"]
+    },
+    {
+      "id": "op-authorization-verify",
+      "name": "Verify an Owner authorization",
+      "mechanism": "Read-only lookup of the protected ref, PR, merged_by, blob and policy",
+      "principal": "authorization-verifier",
+      "owner_only": false,
+      "credentials": ["cred-verifier-read"],
+      "assets": ["repo-gitea-authorization", "gitea-server"],
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+    },
+    {
+      "id": "op-effect-apply",
+      "name": "Apply an authorized external effect",
+      "mechanism": "The restricted executor: typed, allowlisted operation kinds; target and precondition recheck; one-time effect key",
+      "principal": "privileged-executor",
+      "owner_only": false,
+      "credentials": ["cred-executor-identity", "cred-executor-target-secrets"],
+      "assets": ["store-effects"],
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ]
+    },
+    {
+      "id": "op-effect-receipt-write",
+      "name": "Write effect receipts",
+      "mechanism": "effects.sqlite under OS-enforced custody",
+      "principal": "privileged-executor",
+      "owner_only": false,
+      "credentials": ["cred-executor-identity"],
+      "assets": ["store-effects"],
+      "status": "planned",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"],
+      "evidence": ["evidence/F-05.2-effects-store-backup-restore.md"]
+    },
+    {
+      "id": "op-effect-store-custody",
+      "name": "Create the effect store's custody, or restore the store",
+      "mechanism": "A4 (effects root, executor principal) and each restore, as elevated Owner acts with the executor stopped",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": ["cred-uac-consent"],
+      "assets": ["store-effects"],
+      "status": "planned",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"]
+    },
+    {
+      "id": "op-integration-store-write",
+      "name": "Write the integration store",
+      "mechanism": "integration.sqlite: coordination receipts and rebuildable projections",
+      "principal": "integration-service",
+      "owner_only": false,
+      "credentials": [],
+      "assets": ["store-integration"],
+      "status": "planned",
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md", "integrations/store/README.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-inference-call",
+      "name": "Call a model provider",
+      "mechanism": "The brokered inference endpoint; the provider credential stays with the broker",
+      "principal": "inference-broker",
+      "owner_only": false,
+      "credentials": ["cred-llm-provider-key"],
+      "assets": ["endpoint-inference"],
+      "status": "planned",
+      "sources": ["profiles/README.md"],
+      "findings": ["fd-acp-provider-auth"]
+    }
+  ],
+  "findings": [
+    {
+      "id": "fd-bootstrap-shared-identity",
+      "kind": "limit",
+      "title": "Host-side bootstrap agents share the Owner's Windows account",
+      "detail": "The host-side agent sessions run as the Owner's account and are not independently isolated security principals. Every credential and store in that account's custody (the public-repository push credential, the provider login, the guest SSH keys, the exported session keys, QMP, the guest-state root, the integration store) is reachable by them. Their elevation is gated by the Owner's interactive UAC consent, which is not an OS security boundary. This is the accepted bootstrap limit; the guest boundary is the boundary against untrusted agents, and the genuine OS boundary for privileged effects is the executor's separate identity (G-04.2.1). No credential is designated to an agent principal here; the reachability is disclosed, not prevented.",
+      "refs": [
+        "bootstrap-host-agents", "owner-os-account", "cred-owner-github", "cred-owner-provider-login",
+        "cred-guest-ssh-key", "cred-agent-server-session-key", "cred-uac-consent", "store-integration"
+      ],
+      "citations": [
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "evidence/bootstrap-log.md"
+      ],
+      "carried_to": ["S-01.2.1", "S-01.2.2", "G-04.2.1"]
+    },
+    {
+      "id": "fd-owner-authorization-record",
+      "kind": "limit",
+      "title": "Owner authorization has no authenticated record yet",
+      "detail": "During bootstrap the Owner's decisions and authorizations reach the repository as records the Overseer writes (decisions/, evidence/bootstrap-log.md), committed from the Owner's account. The planned record is an Owner-only protected Gitea merge, verified by a read-only verifier (SEC-02). Gitea is not installed.",
+      "refs": ["owner", "op-policy-change", "op-protected-merge"],
+      "citations": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority",
+        "evidence/bootstrap-log.md"
+      ],
+      "carried_to": ["G-04.x"]
+    },
+    {
+      "id": "fd-guest-login-name-and-key",
+      "kind": "unknown",
+      "title": "The guest login named `agent` is an operator login that holds the management key",
+      "detail": "The contract makes the guest user `agent` the operators' and provisioning login (exec is never offered to agents) and lets it read the Agent Server session key (P5 as amended at F-04.1). The same user is the unprivileged vantage of the P6 negative checks, and its name collides with the engineering-agent role. If any untrusted workload were ever given this login, it would hold the full management API key and could create conversations, against S-01's proof. Whether the management key stays readable by the login user once a dispatcher exists is not decided by any accepted record: it belongs to S-01.3.1.",
+      "refs": ["guest-login-agent", "cred-agent-server-session-key", "guest-session-key-file", "op-as-conversation-create"],
+      "citations": [
+        "profiles/README.md",
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "evidence/F-04.1c-agent-server.md",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"
+      ],
+      "carried_to": ["S-01.3.1", "S-01.3.2"]
+    },
+    {
+      "id": "fd-session-key-not-fine-grained",
+      "kind": "open-risk",
+      "title": "One session key grants the whole management API",
+      "detail": "The outer Agent Server accepts one X-Session-API-Key for every /api/* route; there is no per-route or per-role scope, and the only rotation is recreate and provision. The blueprint warns not to assume a session API key is a fine-grained permission token and to keep the broad management API behind the trusted execution network.",
+      "refs": ["cred-agent-server-session-key", "api-agent-server-management"],
+      "citations": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "evidence/F-04.1c-agent-server.md"
+      ],
+      "carried_to": ["S-01.2.1", "S-01.3.1"]
+    },
+    {
+      "id": "fd-agent-server-route-inventory",
+      "kind": "unknown",
+      "title": "The Agent Server's privileged routes are only partly enumerated",
+      "detail": "Committed evidence records the Docker-runtime lifecycle routes (from the locked wheel's docker_runtime/routers.py and the running server's /openapi.json) and the unauthenticated /server_info, /alive and /openapi.json. /server_info also advertises capability families (credential binding, secret scopes and grants, agent launch pipeline, profiles, skills and tools) whose routes are not recorded. The release openapi.json documents the local runtime only and is not committed (decision 0005). No routes are invented here; S-01.3.1 must enumerate them from the locked artefacts.",
+      "refs": ["api-agent-server-unenumerated", "op-as-unenumerated-routes", "api-agent-server-management"],
+      "citations": [
+        "evidence/F-04.1c-agent-server.md",
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "decisions/0005-distribution-model-upstream-download-no-redistribution.md"
+      ],
+      "carried_to": ["S-01.3.1"]
+    },
+    {
+      "id": "fd-child-conversation-tool",
+      "kind": "unknown",
+      "title": "An agent tool can start child conversations",
+      "detail": "The server's usable_tools include start_child_conversation. Whether an agent inside a conversation can thereby cause conversation creation, and on which server and with which credential, is not established by the committed evidence. S-01's proof requires that an agent cannot invoke privileged conversation creation.",
+      "refs": ["op-child-conversation", "api-agent-server-unenumerated", "engineering-agent"],
+      "citations": [
+        "evidence/F-04.1c-agent-server.md",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.1"
+      ],
+      "carried_to": ["S-01.3.1", "S-01.3.2", "E-01.2.2"]
+    },
+    {
+      "id": "fd-container-network-deviations",
+      "kind": "open-risk",
+      "title": "Conversation containers keep upstream network defaults",
+      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Inference, not observed: from a container, the guest's sshd (bound to all addresses) is reachable at the docker0 address, and other conversation containers' inner servers (port 8000, and VSCode on 8001) are reachable across the default bridge. Not tested; carried.",
+      "refs": ["conversation-container", "guest-sshd", "guest-conversation-listeners"],
+      "citations": [
+        "decisions/0001-agent-server-dispatch-precondition-and-version-line.md",
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/F-04.1b-provision-moby.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "carried_to": ["S-01.3.1", "S-01.3.2", "E-01.2.2", "S-02.1"]
+    },
+    {
+      "id": "fd-container-shares-service-uid",
+      "kind": "open-risk",
+      "title": "Conversation containers run as the Agent Server's service uid",
+      "detail": "The Docker runtime starts each container with --user of the server's uid:gid (openhands, 999:989), the principal that is in group docker. The separation of the untrusted workload from the server rests on the container's namespaces, cap-drop ALL, no-new-privileges and the absent socket mount, with no user-namespace remap. Each conversation's keys are environment values visible to openhands and root through docker inspect.",
+      "refs": ["conversation-container", "guest-service-openhands", "engineering-agent", "cred-conversation-keys"],
+      "citations": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"],
+      "carried_to": ["S-01.3.2", "S-02.1"]
+    },
+    {
+      "id": "fd-host-loopback-exposure",
+      "kind": "open-risk",
+      "title": "Host loopback control surfaces are open to every local process",
+      "detail": "QMP is an unauthenticated loopback TCP socket with full VM control, and the SSH forward is a loopback port protected by the per-instance key. Both are reachable by any local process of any user on the host: disclosed, not prevented (the standard library has no AF_UNIX on Windows).",
+      "refs": ["listener-host-qmp", "listener-host-ssh-forward", "op-guest-lifecycle"],
+      "citations": ["profiles/strong-windows-qemu-whpx/profile.json", "evidence/F-03.3.2-guest-network.md"],
+      "carried_to": ["S-01.4"]
+    },
+    {
+      "id": "fd-release-job-principal",
+      "kind": "unknown",
+      "title": "No accepted record names the release-signing and deployment principal",
+      "detail": "The blueprint reserves persistent release credentials for 'separate, narrowly authorized jobs' in 'a separately credentialed environment', and also lists the runner and the privileged executor among the build and deploy tools. No accepted record says whether release signing and deployment run as the privileged executor, as a dedicated trusted runner, or as something else. The inventory names the role only as an unknown placeholder principal and does not decide it.",
+      "refs": ["release-job-environment", "op-release-signing-deploy", "privileged-executor"],
+      "citations": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "carried_to": ["S-01.2.1", "G-04.2.1"]
+    },
+    {
+      "id": "fd-ci-runner-unpinned",
+      "kind": "unknown",
+      "title": "No CI runner is selected or pinned",
+      "detail": "composition/ pins Gitea but no runner. The runner's identity, its dedicated host, its isolation of jobs and the job-token maxima are planned only.",
+      "refs": ["ci-job", "ci-runner-service", "ci-runner-host", "cred-ci-job-token", "cred-runner-registration"],
+      "citations": ["composition/candidates.json", "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "carried_to": ["S-01.2.1", "S-01.4"]
+    },
+    {
+      "id": "fd-gitea-version-docs",
+      "kind": "unknown",
+      "title": "Gitea bot and token behaviour is unverified at the pinned version",
+      "detail": "The blueprint's SEC-02 qualification cites Gitea 28 token-only bot accounts and audit logging and names 28.2.0 as its baseline; composition/ pins 28.3.0, whose OpenAPI document was not retrieved. Bot-account and token-scope behaviour at 28.3.0 cannot be confirmed offline.",
+      "refs": ["gitea-server", "gitea-site-admin", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer"],
+      "citations": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "composition/candidates.json",
+        "composition/compatibility-matrix.md"
+      ],
+      "carried_to": ["S-01.2.1", "S-01.2.2"]
+    },
+    {
+      "id": "fd-owner-ui-access",
+      "kind": "unknown",
+      "title": "The Owner UI's access to the Agent Server is not defined",
+      "detail": "Agent Canvas is to reach only the backend needed for an Owner-authorized engineering session, but no accepted record says which credential it uses or whether it would hold the management key. The Agent Server host forward is deferred (decision 0006).",
+      "refs": ["cred-owner-ui-access", "api-agent-server-management"],
+      "citations": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "decisions/0006-guest-provisioning-channel-and-image-conformance.md"
+      ],
+      "carried_to": ["S-01.3.1"]
+    },
+    {
+      "id": "fd-owner-credential-custody",
+      "kind": "unknown",
+      "title": "Custody of the Owner's own credentials was not inspected",
+      "detail": "Credential stores are protected for this leaf, so the storage, scope and lifetime of the Owner's push credential and provider login are not established. Their existence is evident from the recorded pushes and headless runs.",
+      "refs": ["cred-owner-github", "cred-owner-provider-login", "host-credential-stores"],
+      "citations": ["evidence/bootstrap-log.md"],
+      "carried_to": ["S-01.2.2"]
+    },
+    {
+      "id": "fd-rotation-undecided",
+      "kind": "unknown",
+      "title": "Issuance and revocation owners of the planned role credentials are not defined",
+      "detail": "For the Gitea administrator, the bot tokens, the CI tokens, the verifier, the executor's target credentials and the provider key, no accepted record yet names who rotates or revokes them. S-01.2.1 defines issuance and revocation.",
+      "refs": [
+        "cred-gitea-admin", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer", "cred-ci-job-token",
+        "cred-runner-registration", "cred-verifier-read", "cred-executor-target-secrets", "cred-llm-provider-key"
+      ],
+      "citations": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"],
+      "carried_to": ["S-01.2.1"]
+    },
+    {
+      "id": "fd-acp-provider-auth",
+      "kind": "unknown",
+      "title": "How an engineering agent's coding provider authenticates is not defined",
+      "detail": "The ACP provider's default session mode is bypassPermissions, so it cannot be the isolation boundary. Provider credentials may only sit behind the brokered inference endpoint, which is deferred; how the provider inside a conversation container authenticates without holding an Owner or long-lived credential is not yet specified.",
+      "refs": ["engineering-agent", "inference-broker", "cred-llm-provider-key", "endpoint-inference"],
+      "citations": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "profiles/README.md"
+      ],
+      "carried_to": ["S-01.2.1", "S-02.x"]
+    }
+  ]
+}

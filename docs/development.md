@@ -151,6 +151,7 @@ Only what is listed as verified has been exercised.
 | `effects:backup ROOT=<dir> ACTOR=<name>` | `python -I -B integrations/effects/effects_store.py backup --root <dir> --actor <name>` | no | Backs the effects store up into `<root>/backups/` and prints the manifest. |
 | `effects:restore ROOT=<dir> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/effects/effects_store.py restore --root <dir> --manifest <file> --actor <name> [--accept-rollback]` | no | The Owner's elevated act, with the executor stopped: restores a verified backup and opens a restore epoch. |
 | `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
+| `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:qualify -- <run\|check\|prompt\|system-prompt> [options]` | `python -I -B tools/qualify_intent_skill.py <subcommand> [options]` | `run`: the model command's own (a live model) | Runs the intent-normalization Skill's [behavioural qualification](#intent-records): one corpus item and turn through a JSON model-command template in an empty working directory, then the checker, then a ledger entry; refuses past `--max-invocations` (default 25). `check` scores a saved proposal against an item's messages. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict] [--openapi <file>]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. `--openapi` validates the Agent Server conversation fixture against the locked `openapi.json` (F-04.1). |
@@ -459,6 +460,30 @@ OpenSpec 1.16.0 checks the schema (`openspec schema validate intent-driven`) and
 readiness of a change's artifacts (`openspec status`), and `openspec validate` checks
 delta specs. It does not check the content of a proposal; that is this checker's job.
 
+## Security inventory
+
+Plan leaf S-01.1 records the harness's trust domains, principals, protected assets,
+credential requirements and privileged operations in
+[`security/inventory.json`](../security/inventory.json), with the human-readable
+record in [`security/README.md`](../security/README.md). Every entry is `planned`
+(defined by accepted authority, with source links), `observed` (shown by committed
+evidence, with evidence links), `unknown` or `conflict` (with a finding). It is an
+inventory, not a control: it changes no identity, key or permission, and S-01.2 and
+S-01.3.x implement against it.
+
+[`tools/check_security_inventory.py`](../tools/check_security_inventory.py) (`task
+security:check`) enforces the leaf's acceptance with the standard library only:
+every privileged operation names exactly one existing principal; no agent principal
+holds, manages or may read a credential of Owner, admin, executor or management
+authority, and no Owner-only operation uses one an agent can hold or read; an agent
+that shares the Owner's OS identity (the host-side bootstrap agents) is never described
+as an isolated principal, and every privileged credential it can reach is disclosed by a
+finding. It also resolves every reference, link, blueprint anchor and plan id, rejects
+machine paths, and requires the README to name every operation and finding. Its tests
+(`tools/tests/test_check_security_inventory.py`, part of `task test`) pass the
+committed inventory and fail its mutations. When an entry changes, update the JSON,
+keep the README's tables and summary consistent with it, and run the checker.
+
 ## Task
 
 The Taskfile targets Task **3.54.0** (release `v3.54.0`, published 2026-10-01,
@@ -488,22 +513,26 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list, the profile declarations, and per-OS packaging when added | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
+| `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share | F-05.1, F-05.2 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |
 
 Planned homes are documented here and created by the leaf that first fills them.
-That leaf may refine the name with a recorded reason. Upstream sources stay
-external (pinned in `composition/`) unless adaptation is necessary.
+That leaf may refine the name with a recorded reason. S-01.1 recorded its inventory of
+principals, assets and credential requirements in `security/` rather than `policy/`,
+because it describes the current and planned security state rather than enforceable
+policy; role permissions and controls (S-01.2.1, G-01.1) keep `policy/`. Upstream
+sources stay external (pinned in `composition/`) unless adaptation is necessary.
 
 | Concern | Planned home | Filled first by |
 |---|---|---|
 | Configuration (Agent Server and service configuration) | `config/` | F-04.1 |
 | Integrations (Integration Service adapters and schemas) | `integrations/` (created by F-05.1: `integrations/store/`) | F-05.1, then P-02.1 and E-01.x |
-| Policy (principals, permissions, controls) | `policy/` | S-01.1, S-01.2.1, G-01.1 |
+| Policy (permissions, controls) | `policy/` | S-01.2.1, G-01.1 |
 | Agent and Skill catalog | `catalog/` (created by P-01.1: the `intent-driven` OpenSpec schema and the `intent-normalization` Skill) | P-01.1, then A-01.1 and E-03.1 |
 | Contract tests | `tests/` | F-03.3.1, S-02.1, E-01.3.2 |
 
