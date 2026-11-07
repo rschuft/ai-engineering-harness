@@ -175,9 +175,10 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
 
 - Anything but Windows 11 on x86_64.
 - Gitea's egress proxy beyond the 407 answer, and the effective `EGRESS_MODE` policy.
-- `finalize-credentials` against the real instance: implemented and tested with a fake Gitea only.
-  Its first live run was refused by the session's permission system, so both accounts still carry
-  their temporary passwords.
-- The repository-level role-token behaviour of S-01.2.2: branch protection, merge allowlists,
-  PRs and reviews (the fixture awaits `finalize-credentials`).
-- The `--restricted` flag's effect, and the site administrator's path to revoke another account's token.
+- Gitea's audit logging (off by default).
+- A credential provider other than Windows Credential Manager.
+
+Live-verified on 2026-11-07: `finalize-credentials` on the real instance, with its token remediation and
+no-exposure scan ([F-06.1 section 8](../../evidence/F-06.1-gitea-loopback.md)); the fixture, the
+administrator's blocked merge override and the full live authorization suite
+([S-01.2.2](../../evidence/S-01.2.2-segregated-credentials.md)).

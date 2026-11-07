@@ -178,18 +178,19 @@
           "verified": false,
           "verify_at": "S-01.2.2",
           "evidence": [
-            "evidence/S-01.2.2-segregated-credentials.md"
+            "evidence/S-01.2.2-segregated-credentials.md",
+            "evidence/F-06.1-gitea-loopback.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07). The account aieh-owner exists (F-06.1); no allowlist exists yet."
+          "notes": "Partly shown at S-01.2.2: aieh-owner is the only merge-allowlist identity of every protected-branch rule of the fixture, and it holds no access token (finalize-credentials). The authorization branch does not exist yet (fd-owner-authorization-record). Under the Owner directive of 2026-11-07 the Owner never signs in: the credential is harness-held and how the Owner identity is used internally is to be decided, so \"interactive sign-in only\" is superseded pending that decision."
         },
         {
           "mechanism": "Code merges into protected integration branches under the D-01.2 branch rules.",
           "verified": false,
-          "verify_at": "S-01.2.2",
+          "verify_at": "D-01.2",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07)."
+          "notes": "Not exercised at S-01.2.2: no Owner merge was performed (the Owner credential is not used by tests); the D-01.2 branch rules are not applied yet."
         }
       ],
       "issuance": [
@@ -257,7 +258,7 @@
           "evidence/bootstrap-log.md",
           "evidence/F-06.1-gitea-loopback.md"
         ],
-        "note": "The Owner directs the work and approves privileged host acts by UAC consent. The Gitea Owner account aieh-owner exists (F-06.1); the harness holds its credential (Owner directive of 2026-11-07: the Owner never signs in to Gitea), and how the Owner identity is used internally is to be decided; no protected branch lists it yet; public pushes run from the Owner's account."
+        "note": "The Owner directs the work and approves privileged host acts by UAC consent. The Gitea Owner account aieh-owner exists (F-06.1); its credential is harness-held (Owner directive of 2026-11-07: the Owner never signs in to Gitea), and how the Owner identity is used internally is to be decided; it is the only merge-allowlist identity of the S-01.2.2 fixture; public pushes run from the Owner's account."
       },
       "status": "planned",
       "sources": [
@@ -397,12 +398,12 @@
       "realization": [
         {
           "mechanism": "The Gitea site-administrator account; branch protection with the admin force-merge override disabled, so the administrator obeys the branch rules.",
-          "verified": false,
+          "verified": true,
           "verify_at": "S-01.2.2",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07). The fixture applies block_admin_merge_override and fixture --admin-merge-probe tests it."
+          "notes": "Verified at S-01.2.2: the fixture's default-branch rule carries block_admin_merge_override; the site administrator's merge and force-merge of a proposal PR both answered 405 \"User not allowed to merge PR\", and the default branch did not change."
         },
         {
           "mechanism": "Issues Gitea identities, bot accounts and their tokens, protection rules and runner registration secrets; never exposed to agents or CI.",
@@ -411,7 +412,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Observed at S-01.2.2: the bot accounts and their tokens were issued with Gitea's CLI (admin user create, admin user generate-access-token) by the Owner's host account, which acts on Gitea's database directly, not through the site-administrator account; no agent or CI has run. Protection rules and runner secrets: not issued yet."
+          "notes": "Partly shown at S-01.2.2: the protection rules, organization, repository and collaborators were issued by the site administrator through the API (basic authentication, password in memory, no token); the bot accounts and tokens through Gitea's CLI by the Owner's host account; the administrator can list and revoke another account's token (200, 204, then 401). No runner registration secret exists (fd-ci-runner-unpinned). The credential is read only by credential finalization and the fixture administration."
         }
       ],
       "issuance": [
@@ -419,7 +420,7 @@
           "credential": "cred-gitea-admin",
           "issuer": "external:gitea-installation",
           "delivered_by": null,
-          "delivery": "Created by F-06.1 with Gitea's CLI (aieh-site-admin, temporary password in the credential provider until task gitea:finalize-credentials); held by the Owner during bootstrap (decision 0007, Owner confirmation 1, pending)."
+          "delivery": "Created by F-06.1 with Gitea's CLI; its final password is generated and set by task gitea:finalize-credentials and held by the harness in the credential provider (Owner directive of 2026-11-07); read only by credential finalization and the fixture administration."
         }
       ],
       "revocation": [
@@ -443,7 +444,7 @@
           "evidence/F-06.1-gitea-loopback.md",
           "evidence/S-01.2.2-segregated-credentials.md"
         ],
-        "note": "Gitea 28.3.0 runs on host loopback (F-06.1). aieh-site-admin exists with its temporary password until task gitea:finalize-credentials replaces it (Owner directive of 2026-11-07: no Owner sign-in); until then Gitea refuses its API calls. Gitea administration during bootstrap is performed by the Owner's host account through Gitea's CLI (identities, bots, tokens)."
+        "note": "Gitea 28.3.0 runs on host loopback (F-06.1). aieh-site-admin holds a harness-held password set by task gitea:finalize-credentials (Owner directive of 2026-11-07: no Owner sign-in), which also revoked its leftover tokens. Gitea administration during bootstrap is performed by the Owner's host account: identities, bots and tokens through Gitea's CLI, the fixture as the site administrator through the API."
       },
       "status": "planned",
       "sources": [
@@ -501,7 +502,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Verified at S-01.2.2: aieh-bot-planner, a non-administrator Gitea Bot account without a password; token scope write:repository only, as Gitea reports it; every instance-wide Owner, administrator, user and token operation probed was refused."
+          "notes": "Verified at S-01.2.2: aieh-bot-planner, a restricted, non-administrator Gitea Bot account without a password; token scope write:repository only; every Owner, administrator, user and token operation probed was refused, and it pushed work/authz-planner and opened a PR."
         },
         {
           "mechanism": "Planning-artefact-only writes, pending the layout: a repository-level permission if planning artefacts get their own repository, or a required scoped-workflow check on PR paths if they are co-located.",
@@ -510,7 +511,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Gitea token scopes are categorical, not path-scoped (blueprint reading). Gitea 28.3.0 confirms it at S-01.2.2: token scopes are categorical; no path-level scope exists. Unknown pending the planning-artefact layout."
+          "notes": "Unknown at S-01.2.2: Gitea 28.3.0 token scopes are categorical and no path-level scope exists; pending the planning-artefact layout (decision 0007, point 2)."
         }
       ],
       "issuance": [
@@ -539,7 +540,7 @@
             "owner-direction"
           ],
           "revoker": "gitea-site-admin",
-          "method": "The site administrator revokes the bot's tokens or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime. Observed at S-01.2.2: DELETE /api/v1/token revokes the authenticating token and its next call fails with 401; the site administrator's path is not yet tested.",
+          "method": "The site administrator revokes the bot's tokens (observed at S-01.2.2: it lists and deletes another account's token, which then answers 401) or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime; DELETE /api/v1/token also revokes the authenticating token (observed).",
           "rotation_owner": "management-dispatcher",
           "findings": [
             "fd-gitea-version-docs"
@@ -627,21 +628,21 @@
       "realization": [
         {
           "mechanism": "A dedicated, non-administrator Gitea bot account and token with repository write and PR scope.",
-          "verified": false,
+          "verified": true,
           "verify_at": "S-01.2.2",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Partly shown at S-01.2.2: aieh-bot-builder is a non-administrator Bot account and its token scope is write:repository only; the push and PR were not run (fixture blocked)."
+          "notes": "Verified at S-01.2.2: aieh-bot-builder, a restricted, non-administrator Bot account; token scope write:repository; write collaborator of the fixture; it pushed work/authz-builder and opened a PR."
         },
         {
           "mechanism": "Branch protection denies the bot direct push, force push, API merge and protection changes; it can still open a proposal PR.",
-          "verified": false,
+          "verified": true,
           "verify_at": "S-01.2.2",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07)."
+          "notes": "Verified at S-01.2.2: direct push, force-push and push-deletion of main and a push to a non-work/* branch were declined by the pre-receive hook; merge, force-merge and squash answered 405; protection, settings, collaborator, hook, deploy-token, transfer and deletion calls answered 403; it still opened a proposal PR."
         }
       ],
       "issuance": [
@@ -670,7 +671,7 @@
             "owner-direction"
           ],
           "revoker": "gitea-site-admin",
-          "method": "The site administrator revokes the bot's tokens or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime. Observed at S-01.2.2: DELETE /api/v1/token revokes the authenticating token and its next call fails with 401; the site administrator's path is not yet tested.",
+          "method": "The site administrator revokes the bot's tokens (observed at S-01.2.2: it lists and deletes another account's token, which then answers 401) or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime; DELETE /api/v1/token also revokes the authenticating token (observed).",
           "rotation_owner": "management-dispatcher",
           "findings": [
             "fd-gitea-version-docs"
@@ -762,7 +763,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2: Gitea 28.3.0 has no review-only scope; the token holds write:repository until the fixture shows whether read:repository suffices to review, and the account holds no repository permission until the fixture grants read. Not verified at S-01.2.2 (stopped): the fixture repository and its branch protection could not be created, because Gitea 28.3.0 refuses every API call of the site administrator until its temporary password is replaced (task gitea:finalize-credentials; Owner directive of 2026-11-07)."
+          "notes": "Failed in part at S-01.2.2. Shown: read permission on the fixture, on no merge allowlist; it submitted an approving review; its pushes were declined, its merges answered 405, its settings calls 403. Not realizable: Gitea 28.3.0 has no review-only scope (a review with read:repository answered 403, required=[write:repository]), and a read-permission collaborator can open a pull request from an existing branch (201; fd-gitea-reader-opens-pr). Neither reaches an Owner operation."
         }
       ],
       "issuance": [
@@ -785,7 +786,7 @@
             "owner-direction"
           ],
           "revoker": "gitea-site-admin",
-          "method": "The site administrator revokes the bot's tokens or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime. Observed at S-01.2.2: DELETE /api/v1/token revokes the authenticating token and its next call fails with 401; the site administrator's path is not yet tested.",
+          "method": "The site administrator revokes the bot's tokens (observed at S-01.2.2: it lists and deletes another account's token, which then answers 401) or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime; DELETE /api/v1/token also revokes the authenticating token (observed).",
           "rotation_owner": "management-dispatcher",
           "findings": [
             "fd-gitea-version-docs"
@@ -1137,7 +1138,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Verified at S-01.2.2: aieh-bot-verifier, a non-administrator Bot account; token scope read:repository only, as Gitea reports it; every write probed was refused by scope. Its reads of the protected ref, PR and blob await the fixture."
+          "notes": "Verified at S-01.2.2: aieh-bot-verifier, a restricted, non-administrator Bot account; token scope read:repository only; it read the protected default branch, a PR with merged_by and a blob; every write probed (push, PR, review, merge, settings) was refused by scope."
         }
       ],
       "issuance": [
@@ -1614,5 +1615,5 @@
     "security/inventory.json",
     "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.2"
   ],
-  "notes": "S-01.2.2 (stopped, incomplete) verified the planner and verifier bot accounts and tokens and recorded every other realization as unknown, not applicable or blocked, with reasons, in evidence/S-01.2.2-segregated-credentials.md. Nothing failed. The rows blocked on the fixture keep verify_at S-01.2.2."
+  "notes": "S-01.2.2 verified the planner, builder and verifier account-and-token rows, the builder's branch protection and the site administrator's blocked merge override; the reviewer row failed in part (no review-only scope; a reader can open a PR); every other row is unknown, not applicable or carried, with its reason, in evidence/S-01.2.2-segregated-credentials.md."
 }

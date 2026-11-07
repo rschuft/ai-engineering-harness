@@ -241,7 +241,7 @@
       "independently_isolated": true,
       "identity": {
         "planned": "A small read-only verifier: a webhook only wakes it; it reads the protected ref, the PR, merged_by, the exact blob and the policy, and never executes.",
-        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-verifier, a non-administrator Gitea Bot account without a password, with a token of scope read:repository only in the Owner account's Credential Manager. No verifier is built and none has used it."
+        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-verifier, a restricted, non-administrator Gitea Bot account without a password, read collaborator of the fixture, with a token of scope read:repository only in the Owner account's Credential Manager. It read the protected branch, a PR with merged_by and a blob; every write was refused by scope. No verifier is built."
       },
       "status": "planned",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
@@ -308,12 +308,12 @@
       "independently_isolated": true,
       "identity": {
         "planned": "The Gitea instance's site administrator. Can change protection rules and impersonate users, so it is in the trusted computing base and is never exposed to agents or CI.",
-        "observed": "aieh-site-admin, created by F-06.1 with Gitea's CLI as the instance's administrator account. It still carries its temporary password, and until task gitea:finalize-credentials replaces it (Owner directive of 2026-11-07: no Owner sign-in) Gitea 28.3.0 refuses every API call it makes (S-01.2.2). During bootstrap Gitea administration is performed by the Owner's host account (observed performer owner-os-account) through Gitea's CLI, which creates accounts and mints tokens for any account without a password."
+        "observed": "aieh-site-admin, created by F-06.1 with Gitea's CLI as the instance's administrator account. Its password is harness-held: task gitea:finalize-credentials (Owner directive of 2026-11-07, no Owner sign-in) set it through Gitea's forced change and revoked the account's three leftover tokens (S-01.2.2). Gitea administration during bootstrap is performed by the Owner's host account (observed performer owner-os-account): identities, bots and tokens through Gitea's CLI, which needs no password; the S-01.2.2 fixture through the API as the site administrator, by basic authentication with the password in memory. Its merge and force-merge of a proposal PR were refused (405) by branch protection with the merge override blocked."
       },
       "status": "observed",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
       "evidence": ["evidence/F-06.1-gitea-loopback.md", "evidence/S-01.2.2-segregated-credentials.md"],
-      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
+      "findings": ["fd-gitea-version-docs", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "engineering-agent",
@@ -345,7 +345,7 @@
       "independently_isolated": true,
       "identity": {
         "planned": "A separate session, runner or model and context from the builder; its own Gitea bot identity that can submit reviews but cannot merge, administer or reach the executor.",
-        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-reviewer, a non-administrator Gitea Bot account without a password, with a token of scope write:repository in the Owner account's Credential Manager (Gitea 28.3.0 has no review-only scope; the account holds no repository permission yet). No reviewer session has run."
+        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-reviewer, a restricted, non-administrator Gitea Bot account without a password, read collaborator of the fixture, with a token of scope write:repository in the Owner account's Credential Manager (Gitea 28.3.0 needs write:repository to submit a review). It reviewed; its pushes, merges and settings changes were refused; it can open a PR (fd-gitea-reader-opens-pr). No reviewer session has run."
       },
       "status": "planned",
       "sources": [
@@ -353,7 +353,8 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
       ],
-      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"]
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
+      "findings": ["fd-gitea-reader-opens-pr"]
     },
     {
       "id": "ci-job",
@@ -604,9 +605,9 @@
       "holder": "owner",
       "manager": "owner",
       "readable_by": [],
-      "storage": "The non-administrator Gitea account aieh-owner, created by gitea admin user create with --must-change-password; its temporary password is in the credential provider entry \"AIEH Gitea owner (temporary)\". Owner directive of 2026-11-07: the Owner never signs in to Gitea or opens Credential Manager; the harness holds this credential. task gitea:finalize-credentials replaces it with a generated final password in the entry \"AIEH Gitea owner\" (Windows: Credential Manager), revokes every token of the account and deletes the temporary entry; not yet run (the first live run was refused by the session's permission system). The final credential is not read by agents, bots or tests; how the Owner identity is used internally is to be decided. Never an Owner PAT or session inside agent workspaces or CI runners.",
+      "storage": "The non-administrator Gitea account aieh-owner. Owner directive of 2026-11-07: the Owner never signs in to Gitea or opens Credential Manager. Its final password was generated and set by task gitea:finalize-credentials on 2026-11-07 through Gitea's own forced change and is held in the credential provider entry \"AIEH Gitea owner\"; the temporary entry is deleted and the account holds no token. It is not read by agents, bots or tests; how the Owner identity is used internally is to be decided. Never an Owner PAT or session inside agent workspaces or CI runners.",
       "scope": "Merge allowlist of the protected authorization branch; review of exact operation manifests.",
-      "lifetime": "Temporary password: until task gitea:finalize-credentials. Final password: harness-held; rotation not defined yet.",
+      "lifetime": "Harness-held; rotated by rerunning credential finalization under the Owner's approval of 2026-11-07; no fixed lifetime yet.",
       "rotation_revocation_owner": "owner",
       "status": "observed",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
@@ -621,9 +622,9 @@
       "holder": "gitea-site-admin",
       "manager": "gitea-site-admin",
       "readable_by": [],
-      "storage": "The Gitea site-administrator account aieh-site-admin, created by gitea admin user create with --must-change-password; its temporary password, generated by Gitea, is in the credential provider entry \"AIEH Gitea site-admin (temporary)\". Owner directive of 2026-11-07: the Owner never signs in to Gitea or opens Credential Manager; the harness holds this credential. task gitea:finalize-credentials replaces it with a generated final password in the entry \"AIEH Gitea site-admin\" (Windows: Credential Manager), revokes every token of the account (the unrevoked S-01.2.2 fixture token included) and deletes the temporary entry; not yet run (the first live run was refused by the session's permission system). Read only by credential finalization and the fixture administration; never exposed to agents, bots, tests or CI.",
+      "storage": "The Gitea site-administrator account aieh-site-admin. Owner directive of 2026-11-07: the Owner never signs in to Gitea or opens Credential Manager. Its final password was generated and set by task gitea:finalize-credentials on 2026-11-07 through Gitea's own forced change and is held in the credential provider entry \"AIEH Gitea site-admin\" (Windows: Credential Manager); the temporary entry is deleted, the temporary password no longer authenticates, and no password was found in the managed root, the checkout or the output. The same run revoked the account's three leftover tokens: S-01.2.2's unrevoked fixture token and two remediation probes (remediated exposure; a fixture-named probe answered 401 afterwards). Read only by credential finalization and the fixture administration; never exposed to agents, bots, tests or CI.",
       "scope": "Site administration, protection rules, impersonation.",
-      "lifetime": "Temporary password: until task gitea:finalize-credentials. Final password: harness-held; rotation not defined yet.",
+      "lifetime": "Harness-held; rotated by rerunning credential finalization under the Owner's approval of 2026-11-07; no fixed lifetime yet.",
       "rotation_revocation_owner": "owner",
       "status": "observed",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
@@ -648,7 +649,7 @@
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
       ],
       "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
-      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
+      "findings": ["fd-gitea-version-docs", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "cred-gitea-bot-planner",
@@ -669,7 +670,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
       ],
       "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
-      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
+      "findings": ["fd-gitea-version-docs", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "cred-gitea-bot-reviewer",
@@ -689,7 +690,7 @@
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
       ],
       "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
-      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
+      "findings": ["fd-gitea-version-docs", "fd-gitea-reader-opens-pr", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "cred-ci-job-token",
@@ -1489,11 +1490,11 @@
       "credentials": ["cred-gitea-admin"],
       "assets": ["gitea-server", "repo-gitea-authorization", "repo-gitea-policy"],
       "observed_performer": "owner-os-account",
-      "performed_via": "Gitea's CLI under the Owner's account: the two identities (F-06.1), the four bot accounts and their tokens (S-01.2.2). The API path through the site administrator awaits task gitea:finalize-credentials; no branch protection exists yet.",
+      "performed_via": "The Owner's host account: through Gitea's CLI the two identities (F-06.1), the four bot accounts and their tokens (S-01.2.2); through the API as the site administrator, by basic authentication with its harness-held password in memory, the credential finalization and the S-01.2.2 fixture (organization, repository, collaborators, branch protection).",
       "status": "observed",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
       "evidence": ["evidence/F-06.1-gitea-loopback.md", "evidence/S-01.2.2-segregated-credentials.md"],
-      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
+      "findings": ["fd-gitea-version-docs", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "op-open-proposal-pr",
@@ -1765,19 +1766,19 @@
       "carried_to": ["S-01.2.1", "S-01.4"]
     },
     {
-      "id": "fd-gitea-fixture-blocked",
-      "kind": "unknown",
-      "title": "Repository-level denials of the bot tokens are unverified: the site administrator's credential is not yet finalized",
-      "detail": "S-01.2.2 could not create its fixture repository and branch protection: Gitea 28.3.0 refuses every API call of aieh-site-admin (HTTP 403, must change password) until its temporary password is replaced, and the CLI cannot create organizations, collaborators or protection rules. Protected merge, protected-ref push and deletion, protection and settings changes, PRs and reviews are therefore untested. A site-administrator token minted for the fixture (aieh-s0122-fixture-..., scopes write:organization and write:repository) could most probably not be revoked for the same reason; its value was never stored or shown. Under the Owner directive of 2026-11-07 the Owner never signs in: task gitea:finalize-credentials revokes every token of the account with its new credentials; it is implemented but its first live run was refused by the session's permission system. Then the fixture and the live suite are run.",
-      "refs": ["gitea-site-admin", "cred-gitea-admin", "cred-gitea-bot-planner", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer", "cred-verifier-read", "op-protected-merge", "op-gitea-administration"],
-      "citations": ["evidence/S-01.2.2-segregated-credentials.md", "evidence/F-06.1-gitea-loopback.md"],
-      "carried_to": ["S-01.2.2"]
+      "id": "fd-gitea-reader-opens-pr",
+      "kind": "limit",
+      "title": "A read-permission collaborator can open a pull request in Gitea 28.3.0",
+      "detail": "Observed at S-01.2.2: the reviewer bot, a read collaborator of the fixture with a write:repository token (Gitea needs that scope to submit a review), opened a pull request from an existing branch (201); it could not open an issue (write:issue), push, merge or change settings. Gitea has no review-only permission, so the reviewer's 'read and review only' realization holds except for opening PRs. Opening a PR is not an Owner operation: merges stay with the merge allowlist.",
+      "refs": ["reviewer-agent", "cred-gitea-bot-reviewer"],
+      "citations": ["evidence/S-01.2.2-segregated-credentials.md"],
+      "carried_to": ["D-01.2"]
     },
     {
       "id": "fd-gitea-version-docs",
       "kind": "unknown",
       "title": "Gitea bot and token behaviour is unverified at the pinned version",
-      "detail": "The blueprint's SEC-02 qualification cites Gitea 28 token-only bot accounts and audit logging and names 28.2.0 as its baseline; composition/ pins 28.3.0, whose OpenAPI document was not retrieved. Bot-account and token-scope behaviour at 28.3.0 cannot be confirmed offline. S-01.2.2 observed on the running 28.3.0 instance: the Bot account type (created without a password), categorical token scopes (read: and write: of activitypub, issue, misc, notification, organization, package, repository, user and admin, plus all), no token lifetime, self-revocation through DELETE /api/v1/token, sudo refused to non-administrators and the reverse-proxy user header ignored. Still unverified: branch protection and merge allowlists, the scope a review needs, the site administrator's path to revoke another account's token, the restricted flag's effect and audit logging.",
+      "detail": "The blueprint's SEC-02 qualification cites Gitea 28 token-only bot accounts and audit logging and names 28.2.0 as its baseline; composition/ pins 28.3.0. Observed on the running 28.3.0 instance at S-01.2.2: the Bot account type (no password), the restricted flag (a public repository is invisible to a restricted account), categorical token scopes (read: and write: of activitypub, issue, misc, notification, organization, package, repository, user and admin, plus all), no token lifetime, self-revocation through DELETE /api/v1/token, the site administrator listing and revoking another account's token, sudo refused to non-administrators, the reverse-proxy user header ignored, reviews needing write:repository, and branch protection (push and merge allowlists, force-push and deletion denied, the administrator's merge override blocked). Still unverified: audit logging (off by default).",
       "refs": ["gitea-server", "gitea-site-admin", "cred-gitea-bot-planner", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer", "cred-verifier-read"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",

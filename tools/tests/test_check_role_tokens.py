@@ -105,14 +105,17 @@ class CommittedMatrix(unittest.TestCase):
         rows = [(r['id'], m) for r in POLICY['roles'] for m in r['realization']]
         self.assertTrue(rows)
         self.assertEqual(sorted(rid for rid, m in rows if m['verified'] is True),
-                         ['authorization-verifier', 'planner'])
+                         ['authorization-verifier', 'builder', 'builder', 'gitea-site-admin', 'planner'])
         for rid, m in rows:
             if m['verified'] is True:
                 self.assertIn('evidence/S-01.2.2-segregated-credentials.md', m['evidence'])
             else:
                 self.assertIs(m['verified'], False, m['mechanism'])
                 self.assertTrue(m.get('notes'), m['mechanism'])
-            self.assertEqual(m['verify_at'], 'G-04.2.1' if rid == 'privileged-executor' else 'S-01.2.2')
+            carried = {'privileged-executor': 'G-04.2.1'}
+            if rid == 'owner' and m['mechanism'].startswith('Code merges'):
+                carried['owner'] = 'D-01.2'
+            self.assertEqual(m['verify_at'], carried.get(rid, 'S-01.2.2'), m['mechanism'])
 
     def test_every_role_binds_to_one_inventory_principal(self):
         principals = {p['id'] for p in INVENTORY['principals']}
