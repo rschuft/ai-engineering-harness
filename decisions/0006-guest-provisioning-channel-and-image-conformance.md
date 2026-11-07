@@ -230,7 +230,59 @@ Detail and raw outputs: [`evidence/F-04.1b-provision-moby.md`](../evidence/F-04.
 - **Not yet:** the Agent Server service, its configuration and secrets (slice (c)).
   `conversation_image` is the local tag; item 3 holds as observed.
 
+## Current facts (2026-11-07, F-04.1 slice (c))
+Detail and raw outputs: [`evidence/F-04.1c-agent-server.md`](../evidence/F-04.1c-agent-server.md).
+- **Service.** The same single-use root step now:
+  - installs the release binary `agent-server-1.60.1-linux-x86_64` at
+    `/opt/aieh/agent-server/agent-server` (`root:root` `0755`, sha256 `b2fbcf8c…ce72` =
+    the lock) as `aieh-agent-server.service`;
+  - runs it under the system user `openhands`: shell `/usr/sbin/nologin`, password locked,
+    groups `openhands` and `docker`; `agent` stays outside `docker`;
+  - binds it with `--host 127.0.0.1 --port 8000`;
+  - hardens the unit with `NoNewPrivileges`, an empty capability set,
+    `ProtectSystem=strict` (writable only `/srv/scratch/openhands`), `ProtectHome`,
+    `PrivateTmp`, `PrivateDevices`, `ProtectProc=invisible`, `RestrictNamespaces`,
+    `@system-service` and `IPAddressDeny=any` with `IPAddressAllow=localhost`;
+  - configures it through `OPENHANDS_AGENT_SERVER_CONFIG_PATH`: `conversation_runtime`
+    docker, not selectable, `conversation_image` `aieh/agent-server:1.60.1-b43ee580`,
+    caps 4g / 2.0 CPUs / 512 pids with `max_concurrent_runs` 3, every data path under
+    `/srv/scratch/openhands`, no webhook, telemetry exporter none, no VSCode, no tool
+    preload;
+  - generates `OH_SECRET_KEY` and the session API key in the guest into a `root:root`
+    `0600` environment file.
+
+  `provision` fetches the session key alone into the instance directory. The server
+  was ready about 5 s after the step began. The root step took 87.5 s in all.
+- **Observed** (`/server_info`, as `agent` on the guest loopback): `version` 1.60.1
+  (with SDK, tools and workspace 1.60.1), `conversation_runtime` docker,
+  `available_conversation_runtimes` [], and `capabilities` including
+  `conversation_runtime_routes_v1` and `idempotent_conversation_create_v1`. Decision 0001
+  s2's conditions hold. The session key is enforced: 200 with it, 401 without it or with
+  a wrong one. The engine endpoint is `unix:///var/run/docker.sock`: there is no
+  `DOCKER_*` variable, and `openhands` reaches Moby 26.1.5+dfsg1. At start-up the
+  server ran `docker ps -aq --filter …` and logged no warning. The configured image
+  resolves offline to the locked image ID.
+- **Egress at start-up.** LiteLLM tried to fetch its model cost map from
+  raw.githubusercontent.com. Name resolution failed (the guest's resolver has no
+  upstream), LiteLLM fell back to its bundled copy, and the server came up without
+  network. No other outbound attempt was logged.
+- **Secrets.** `agent` gets `EACCES` on the environment file and on the service's
+  process environments. Neither value appears:
+  - in the instance directory on the host (14 files; `OH_SECRET_KEY` searched by
+    fingerprint);
+  - in the 612-member collection read as `agent`;
+  - in RESULT.json, the config, the manifest, cloud-init's logs, the start-up log or
+    the facts report.
+- **Item 3** holds with the Agent Server configured: `conversation_image` is the local
+  tag whose image ID is the locked config digest. No conversation was created (F-04.2).
+- P1 to P9, P11, P12 and the provisioning entry PASS, also after a restart and after
+  recreate in `smoke --provision` (evidence section 7: run 4 PASS after a fix forward of
+  the comparison of the unit's address sets). Not operational (C6).
+
 ## Evidence
+- [`evidence/F-04.1c-agent-server.md`](../evidence/F-04.1c-agent-server.md): the
+  slice (c) runs, the `/server_info` JSON, the configuration, the secret custody, the
+  declared-versus-observed table for the F-04.1 proof and the smoke test.
 - [`evidence/F-04.1b-provision-moby.md`](../evidence/F-04.1b-provision-moby.md): the
   slice (b) runs, timings, RESULT.json, inspect verdicts and the smoke test.
 - [`evidence/F-04.1a-provision-pins-fetch.md`](../evidence/F-04.1a-provision-pins-fetch.md):
