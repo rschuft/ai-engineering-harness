@@ -49,28 +49,21 @@ flowchart TB
 
 ### Component status
 
-OpenHands Software Agent SDK and Agent Server, Agent Canvas, assistant-ui, OpenSpec, Backlog.md and Gitea are **selected and locked**. Their exact upstream versions are recorded in the [compatibility matrix](composition/compatibility-matrix.md) and pinned by hash, integrity and digest in the [component lock](composition/lock/README.md).
+**Target architecture.** The components above are the target: the OpenHands Software Agent SDK and Agent Server, Agent Canvas, assistant-ui, OpenSpec, Backlog.md and Gitea are **selected and locked**. Their exact upstream versions are recorded in the [compatibility matrix](composition/compatibility-matrix.md) and pinned by hash, integrity and digest in the [component lock](composition/lock/README.md). Selecting and locking a component means its artifacts are pinned and verified; it does not mean the component is integrated or running in the harness.
 
-**None of these components is integrated or operational yet.** The harness does not yet run OpenHands sessions or provide the Owner application. It can provision disposable execution guests with its Windows reference profile, but their strong isolation tier is not yet operational (see [Current status](#current-status)).
+**Verified today.** The verified work is foundation work, such as the pinned composition and the resolver that checks it, repository tooling and integrity checks, managed execution guests for a reference execution profile, local operational stores tested on fixtures, and the first product artifacts in [`catalog/`](catalog/). This README does not list each verified item. The records under [Current status](#current-status) give each verdict with its scope and limits. Treat a component or capability as integrated or operational only when one of those records says so.
 
 ## Current status
 
-The repository holds a working implementation foundation, not the completed application. Established so far:
+The project is in its bootstrap phase. It is building the foundation the harness will run on and verifying each part with recorded evidence. No part of it is ready for production use, and the strong isolation tier for agent execution is not yet declared operational.
 
-- **Bootstrap.** The initial seed was imported and verified.
-- **F-01: upstream composition.** Components were selected and locked, with a resolver that verifies every pinned artifact.
-- **F-02: repository foundation.** Repository structure, developer commands, integrity verification and contributor documentation.
-- **M-1.** The blueprint was reconciled with [decision 0001](decisions/0001-agent-server-dispatch-precondition-and-version-line.md).
-- **F-03: managed execution environment.** Passed for the Windows reference profile, QEMU with WHPX, on the reference host. Guest lifecycle, filesystem and credential surfaces, network policy and teardown are evidenced in the profile's [qualification record](profiles/strong-windows-qemu-whpx/QUALIFICATION.md). The strong isolation tier is **not yet operational**: the S-02 security tests are pending. The Linux (Incus) and macOS (Lima) profiles are not qualified.
-- **F-05: local operational persistence.** Passes on fixtures.
-  - **F-05.1: integration receipt store.** The Integration Service's local SQLite store for attempt receipts and rebuildable projections ([`integrations/store/`](integrations/store/)).
-  - **F-05.2: privileged-effect store.** A separate store for the executor's effect receipts, with custody verification, and backup and restore for both stores ([`integrations/effects/`](integrations/effects/)), under Accepted [decision 0004](decisions/0004-privileged-effect-store-custody-and-restore-semantics.md). No live store exists yet. The limits, including a fixture oracle in place of real target probes, are in the [F-05.2 evidence](evidence/F-05.2-effects-store-backup-restore.md).
-- **P-01.1: intent schema and normalization Skill.** An OpenSpec workflow schema whose proposal carries an intent record, and an Agent Skill that turns a request into that record ([`catalog/`](catalog/)).
-- **Publication licensing audit.** No violation was found in what the repository publishes ([audit](composition/inventory/PUBLICATION-AUDIT.md)).
+This README does not track progress. The authoritative records are:
 
-Next: **P-01.2**, the Skill's live qualification on model runs.
+- **Verdict history:** the [bootstrap log](evidence/bootstrap-log.md) records each verdict during bootstrap, with its revision and evidence. Once Backlog.md is adopted as the Work system, Backlog.md replaces it as the record of progress.
+- **Decisions:** accepted and proposed decision records are in [`decisions/`](decisions/).
+- **Evidence and qualification:** the detailed evidence behind each verdict, including its limits, is in [`evidence/`](evidence/) and in the `QUALIFICATION.md` of each qualified execution profile under [`profiles/`](profiles/).
 
-The [evidence log](evidence/bootstrap-log.md) records each verdict with its revision and evidence; it is where progress is recorded. Decision records (accepted and proposed) are in [`decisions/`](decisions/). The [plan](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json) defines the work; its own status fields are its original baseline, not progress.
+The [plan](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json) defines the work; its own status fields are its original baseline, not progress.
 
 ## Getting started
 

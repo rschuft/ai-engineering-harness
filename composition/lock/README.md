@@ -102,6 +102,8 @@ This is the 1.60.1-python multi-arch index. These references are **non-conformin
 - `…:e99e5c7-python`, a different index
 - Any `latest-*` or other tag reference
 
+`conversation_image.config_digests` records the config digest that the linux/amd64 manifest under the locked index names. That digest is the image ID after `docker load`, so a guest without registry access can check conformance by image ID ([decision 0006](../../decisions/0006-guest-provisioning-channel-and-image-conformance.md)). The index digest stays the locked reference.
+
 This lock does not configure any server. F-04.1 sets `conversation_image` to the locked reference, and F-04.2 and E-01.5 observe it (decision 0001 §4).
 
 ## Provenance notes
