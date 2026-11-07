@@ -262,20 +262,20 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py verify'
 
   gitea:identities:
-    desc: "Create the site administrator and the non-administrator Owner account with Gitea's CLI, each with a random temporary password that must change at first sign-in, written only into Windows Credential Manager (python -I -B integrations/gitea/gitea_host.py identities)"
+    desc: "Create the site administrator and the non-administrator Owner account with Gitea's CLI, each with a random temporary password, written only into the credential provider (Windows Credential Manager) until gitea:finalize-credentials replaces it (python -I -B integrations/gitea/gitea_host.py identities)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py identities'
 
-  gitea:finish-first-login:
-    desc: "After the Owner has signed in and changed both passwords: check no must-change flag remains, that each temporary password no longer signs in and is in no file of the managed root or the checkout, then delete the two temporary Credential Manager entries (python -I -B integrations/gitea/gitea_host.py finish-first-login)"
+  gitea:finalize-credentials:
+    desc: "Owner directive of 2026-11-07, no Owner sign-in: replace both temporary passwords with harness-held final ones (generated, stored in the credential provider first, set through Gitea's forced change), revoke every token of both accounts, verify, delete the temporary entries, and check no password is in the managed root, the checkout or the output (python -I -B integrations/gitea/gitea_host.py finalize-credentials)"
     cmds:
-      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py finish-first-login'
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py finalize-credentials'
 
   # Segregated role credentials (plan leaf S-01.2.2; decision 0007): restricted Bot accounts, their
   # narrowest tokens in Credential Manager ("AIEH Gitea bot <role>"), the authorization fixture and the
   # live denial tests (integrations/gitea/README.md).
   gitea:roles:
-    desc: "Role bots and the authorization fixture (python -I -B integrations/gitea/gitea_roles.py <command>): pass -- provision | fixture [--admin-merge-probe] | rotate ROLE | status; fixture needs the site administrator's first sign-in"
+    desc: "Role bots and the authorization fixture (python -I -B integrations/gitea/gitea_roles.py <command>): pass -- provision | fixture [--admin-merge-probe] | rotate ROLE | status; fixture needs gitea:finalize-credentials first"
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_roles.py {{.CLI_ARGS}}'
 

@@ -18,16 +18,21 @@ it, and every Gitea process is started while that handle is held. Nothing unveri
 
 Identities (Owner decision of 2026-11-07, decision 0007 confirmation 1): `identities` creates the
 site administrator and the separate non-administrator Owner account with Gitea's own CLI
-(`admin user create --random-password --must-change-password`). Each temporary password is read
-from the CLI's captured output in memory and written, with CredWriteW, into one generic Windows
-Credential Manager entry; it is never printed, logged, put on a command line or written to a file.
-`finish-first-login`, run after the Owner has signed in and changed both passwords, checks that,
-proves each temporary password no longer authenticates and appears nowhere in the managed root or
-the checkout, and deletes the two entries.
+(`admin user create --random-password --must-change-password`); each temporary password goes from the
+CLI's captured output into one credential-provider entry. `finalize-credentials` (Owner directive of
+2026-11-07: the Owner never signs in to Gitea) then replaces each with a harness-held final password:
+generated with `secrets`, stored in its provider entry first, set through Gitea's own forced change
+(sign-in with the temporary password, then the change form, over loopback HTTP request bodies), after
+which every access token of the account is revoked with the new credentials, the result is verified,
+the temporary entry is deleted, and no password may appear in the managed root, the checkout or the
+output. No password is ever printed, logged, put on a command line or in an environment.
+
+Credentials are reached through CredentialProvider (get, set, delete, exists); its Windows
+implementation is Credential Manager (CredWriteW, CredReadW, CredDeleteW).
 
   python -I -B integrations/gitea/gitea_host.py install [--from-file EXE] [--port N]
   python -I -B integrations/gitea/gitea_host.py up | down | status | verify
-  python -I -B integrations/gitea/gitea_host.py identities | finish-first-login
+  python -I -B integrations/gitea/gitea_host.py identities | finalize-credentials
 
 Exit 0 done, 1 failed, 2 refused (a stable code). Windows only.
 """
@@ -67,6 +72,10 @@ DEFAULT_PORT = 13300
 SITE_ADMIN, OWNER = 'aieh-site-admin', 'aieh-owner'
 EMAIL_DOMAIN = 'localhost.invalid'
 CRED_TARGETS = {SITE_ADMIN: 'AIEH Gitea site-admin (temporary)', OWNER: 'AIEH Gitea owner (temporary)'}
+# The harness-held final credentials (Owner directive of 2026-11-07): read only by finalize-credentials and
+# the fixture administration; never by agents, bots or tests.
+FINAL_TARGETS = {SITE_ADMIN: 'AIEH Gitea site-admin', OWNER: 'AIEH Gitea owner'}
+FINAL_PASSWORD_BYTES = 32  # secrets.token_urlsafe(32): 43 characters, 256 bits
 # The role bots of S-01.2.2 (gitea_roles.py): restricted, non-administrator Gitea Bot accounts.
 BOT_ACCOUNTS = {'planner': 'aieh-bot-planner', 'builder': 'aieh-bot-builder', 'reviewer': 'aieh-bot-reviewer',
                 'verifier': 'aieh-bot-verifier'}
@@ -829,9 +838,52 @@ class CredentialStore:
         raise GiteaError('CREDENTIAL_DELETE_FAILED', f'CredDeleteW({target!r}) failed ({code})', refusal=False)
 
 
-def password_bytes(blob: bytes) -> bytes:
-    """A credential blob is the password as UTF-16LE (as the Credential Manager UI shows it)."""
-    return blob.decode('utf-16-le').encode('utf-8')
+class CredentialProvider:
+    """Where the harness keeps service credentials, by entry name: get, set, delete, exists. A secret is a
+    str held in memory; an implementation never prints or logs it. WindowsCredentialProvider is the only
+    implementation today; a cross-platform one replaces it through credential_provider() without its
+    callers changing."""
+
+    def get(self, name: str) -> tuple[str, str] | None:
+        """(user name, secret), or None when the entry does not exist."""
+        raise NotImplementedError
+
+    def set(self, name: str, user: str, secret: str, comment: str = '') -> None:
+        """Create or replace the entry."""
+        raise NotImplementedError
+
+    def delete(self, name: str) -> bool:
+        """True when an entry was deleted, False when there was none."""
+        raise NotImplementedError
+
+    def exists(self, name: str) -> bool:
+        return self.get(name) is not None
+
+
+class WindowsCredentialProvider(CredentialProvider):
+    """Windows Credential Manager generic credentials (CredentialStore); the secret is stored as UTF-16LE, as
+    the Credential Manager UI shows it."""
+
+    def __init__(self, store=None):
+        self.store = store or CredentialStore()
+
+    def get(self, name):
+        entry = self.store.read(name)
+        return None if entry is None else (entry[0], entry[1].decode('utf-16-le'))
+
+    def set(self, name, user, secret, comment=''):
+        self.store.write(name, user, secret.encode('utf-16-le'), comment)
+
+    def delete(self, name):
+        return self.store.delete(name)
+
+
+def credential_provider() -> CredentialProvider:
+    """The platform's credential provider."""
+    if os.name == 'nt':
+        return WindowsCredentialProvider()
+    raise GiteaError('NO_CREDENTIAL_PROVIDER', 'only the Windows Credential Manager provider is implemented; the '
+                     'cross-platform provider is pending')
 
 
 # ---------------------------------------------------------------- identities
@@ -858,17 +910,18 @@ def gitea_users(binary: Path, lay: Layout, run: Callable = subprocess.run) -> di
     return users
 
 
-def create_identities(res, lay: Layout, pinned: dict, store=None, run: Callable = subprocess.run) -> dict:
+def create_identities(res, lay: Layout, pinned: dict, provider: CredentialProvider | None = None,
+                      run: Callable = subprocess.run) -> dict:
     """The site administrator and the separate non-administrator Owner account, each with a random
-    temporary password that Gitea generates, must change at first sign-in, and that goes from the
-    CLI's captured output straight into one Credential Manager entry."""
-    store = store or CredentialStore()
+    temporary password that Gitea generates and that goes from the CLI's captured output straight into one
+    provider entry; finalize-credentials then replaces it."""
+    provider = provider or credential_provider()
     host = read_host_record(lay)
     if not healthy(host['port']):
         raise GiteaError('NOT_RUNNING', 'run up first: the accounts are created against the migrated database')
-    for target in CRED_TARGETS.values():
-        if store.read(target) is not None:
-            raise GiteaError('CREDENTIAL_EXISTS', f'the Credential Manager entry {target!r} already exists')
+    for target in (*CRED_TARGETS.values(), *FINAL_TARGETS.values()):
+        if provider.exists(target):
+            raise GiteaError('CREDENTIAL_EXISTS', f'the credential entry {target!r} already exists')
     with verified_binary(lay, pinned['sha256']) as binary:
         existing = gitea_users(binary, lay, run)
         if clash := sorted(set(CRED_TARGETS) & set(existing)):
@@ -885,30 +938,17 @@ def create_identities(res, lay: Layout, pinned: dict, store=None, run: Callable 
                 raise GiteaError('ACCOUNT_CREATE_FAILED', f'gitea admin user create {user} exited {result.returncode} '
                                                           f'({len(found)} generated passwords seen; output withheld)',
                                  refusal=False)
-            secret = found[0].decode('utf-8').encode('utf-16-le')
+            secret = found[0].decode('utf-8')
             del found, result
-            store.write(CRED_TARGETS[user], user, secret,
-                        f'Temporary first-login password for {user} on the AIEH Gitea at '
-                        f'http://{LOOPBACK}:{host["port"]}/ (plan leaf F-06.1); deleted after the first sign-in.')
+            provider.set(CRED_TARGETS[user], user, secret,
+                         f'Temporary password of {user} on the AIEH Gitea at http://{LOOPBACK}:{host["port"]}/; '
+                         'replaced and deleted by task gitea:finalize-credentials.')
             del secret
             created.append(user)
         after = gitea_users(binary, lay, run)
     return {'created': created, 'admin': {u: after.get(u, {}).get('admin') for u in created},
             'credential_targets': [CRED_TARGETS[u] for u in created],
-            'password_handling': 'gitea --random-password output captured in memory; CredWriteW; never shown'}
-
-
-def must_change_password(lay: Layout) -> dict:
-    """{name: bool} for the two accounts, read from Gitea's database read-only (the CLI does not show it)."""
-    import sqlite3
-    uri = 'file:' + urllib.parse.quote(str(lay.db).replace('\\', '/')) + '?mode=ro'
-    connection = sqlite3.connect(uri, uri=True)
-    try:
-        rows = connection.execute('SELECT lower_name, must_change_password FROM user WHERE lower_name IN (?, ?)',
-                                  (SITE_ADMIN, OWNER)).fetchall()
-    finally:
-        connection.close()
-    return {name: bool(flag) for name, flag in rows}
+            'password_handling': 'gitea --random-password output captured in memory; credential provider; never shown'}
 
 
 def contains_secret(root: Path, needles: list[bytes], skip: Iterable[Path] = ()) -> list[str]:
@@ -959,47 +999,177 @@ def files_containing(files: Iterable[Path], needles: list[bytes]) -> list[str]:
     return hits
 
 
-def password_authenticates(port: int, user: str, password: bytes) -> bool:
-    token = base64.b64encode(user.encode('utf-8') + b':' + password).decode('ascii')
-    code = http_get(port, '/api/v1/user', headers={'Authorization': 'Basic ' + token})[0]
-    return code == 200
+# ---------------------------------------------------------------- credential finalization
 
 
-def finish_first_login(res, lay: Layout, pinned: dict, store=None) -> dict:
-    """After the Owner's first sign-in: both accounts changed their passwords, the temporary passwords no
-    longer authenticate and appear nowhere in the managed root or the checkout; then the two entries go."""
-    store = store or CredentialStore()
-    host = read_host_record(lay)
-    flags = must_change_password(lay)
-    if set(flags) != set(CRED_TARGETS):
-        raise GiteaError('ACCOUNTS_MISSING', f'found {sorted(flags)}; run identities first')
-    if pending := sorted(u for u, flag in flags.items() if flag):
-        raise GiteaError('FIRST_LOGIN_PENDING', f'must_change_password is still set for {pending}')
-    temporary = {}
-    for user, target in CRED_TARGETS.items():
-        entry = store.read(target)
-        if entry is not None:
-            temporary[user] = password_bytes(entry[1])
-    report = {'must_change_password': flags, 'entries_found': sorted(CRED_TARGETS[u] for u in temporary)}
-    if temporary:
-        if not healthy(host['port']):
-            raise GiteaError('NOT_RUNNING', 'run up: the temporary passwords are checked against the running Gitea')
-        still = sorted(u for u, pw in temporary.items() if password_authenticates(host['port'], u, pw))
-        report['temporary_password_still_authenticates'] = still
-        if still:
-            raise GiteaError('TEMPORARY_PASSWORD_ACTIVE', f'the temporary password still signs in {still}')
-        needles = list(temporary.values())
+def basic_header(user: str, password: str) -> dict:
+    return {'Authorization': 'Basic ' + base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')}
+
+
+def basic_call(port: int, user: str, password: str, method: str, path: str, http: Callable = None):
+    """(status, parsed JSON or None) of an API call with HTTP basic authentication."""
+    status, _headers, body = (http or http_get)(port, '/api/v1' + path, method=method,
+                                                headers={**basic_header(user, password), 'Accept': 'application/json'})
+    try:
+        return status, json.loads(body) if body else None
+    except ValueError:
+        return status, None
+
+
+MUST_CHANGE = 'change your password'
+
+
+def password_state(port: int, user: str, password: str, http: Callable = None) -> str:
+    """'valid' (200), 'must-change' (correct, but Gitea refuses the account until it changes it), or
+    'rejected' (anything else)."""
+    status, body = basic_call(port, user, password, 'GET', '/user', http)
+    if status == 200 and isinstance(body, dict) and body.get('login') == user:
+        return 'valid'
+    if status == 403 and isinstance(body, dict) and MUST_CHANGE in str(body.get('message', '')):
+        return 'must-change'
+    return 'rejected'
+
+
+class WebSession:
+    """A cookie-keeping HTTP client for Gitea's own web forms on loopback. Form values travel in request
+    bodies only; nothing here prints or logs them."""
+
+    def __init__(self, port: int, connection: Callable = None):
+        self.port, self.cookies = port, {}
+        self.connection = connection or (lambda: http.client.HTTPConnection(LOOPBACK, port, timeout=30))
+
+    def post(self, path: str, fields: dict) -> tuple[int, str]:
+        """(status, Location header) of a form POST; the body is read and discarded."""
+        body = urllib.parse.urlencode(fields).encode('utf-8')
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        if self.cookies:
+            headers['Cookie'] = '; '.join(f'{k}={v}' for k, v in self.cookies.items())
+        connection = self.connection()
+        try:
+            connection.request('POST', path, body=body, headers=headers)
+            response = connection.getresponse()
+            for raw in response.msg.get_all('Set-Cookie') or []:
+                name, _, rest = raw.partition('=')
+                self.cookies[name.strip()] = rest.split(';', 1)[0]
+            response.read()
+            return response.status, response.getheader('Location') or ''
+        finally:
+            connection.close()
+
+
+def change_password_by_web(port: int, user: str, current: str, new: str, connection: Callable = None) -> dict:
+    """Gitea's own forced password change: sign in with the current password, which Gitea answers by
+    redirecting to the change form, then submit the new one. Raises on any other answer."""
+    web = WebSession(port, connection)
+    status, location = web.post('/user/login', {'user_name': user, 'password': current})
+    if status not in (302, 303) or 'change_password' not in location:
+        raise GiteaError('SIGN_IN_FAILED', f'{user}: sign-in answered {status}, not the forced change form', refusal=False)
+    status, location = web.post('/user/settings/change_password', {'password': new, 'retype': new})
+    if status not in (302, 303) or 'change_password' in location:
+        raise GiteaError('PASSWORD_CHANGE_FAILED', f'{user}: the change answered {status}', refusal=False)
+    return {'sign_in': 'redirected to the forced change form', 'change': status}
+
+
+def revoke_all_tokens(port: int, user: str, password: str, http: Callable = None) -> dict:
+    """Delete every access token of the account with its own credentials, then list again: a finalized
+    human account holds no token. Token names only; never a value or its last characters."""
+    status, tokens = basic_call(port, user, password, 'GET', f'/users/{user}/tokens', http)
+    if status != 200 or not isinstance(tokens, list):
+        raise GiteaError('TOKEN_LIST_FAILED', f'{user}: listing its tokens answered {status}', refusal=False)
+    deleted = []
+    for token in tokens:
+        code, _body = basic_call(port, user, password, 'DELETE', f'/users/{user}/tokens/{token["id"]}', http)
+        if code != 204:
+            raise GiteaError('TOKEN_DELETE_FAILED', f'{user}: deleting token {token.get("name")!r} answered {code}',
+                             refusal=False)
+        deleted.append(token.get('name'))
+    status, after = basic_call(port, user, password, 'GET', f'/users/{user}/tokens', http)
+    return {'found': [t.get('name') for t in tokens], 'deleted': deleted,
+            'remaining': [t.get('name') for t in after] if status == 200 and isinstance(after, list) else f'HTTP {status}'}
+
+
+def finalize_account(port: int, user: str, provider: CredentialProvider, http: Callable = None,
+                     connection: Callable = None, secrets_seen: list | None = None) -> dict:
+    """One account: a new random password, stored in its provider entry BEFORE Gitea is changed (so a crash
+    never loses it), set through Gitea's forced change, then every token of the account revoked with the new
+    credentials, then verified, then the temporary entry deleted. Reruns resume from any intermediate state."""
+    final_name, temp_name = FINAL_TARGETS[user], CRED_TARGETS[user]
+    final_entry, temp_entry = provider.get(final_name), provider.get(temp_name)
+    report = {'user': user, 'entry': final_name}
+    if temp_entry is None:
+        if final_entry is None:
+            raise GiteaError('ENTRIES_MISSING', f'neither {temp_name!r} nor {final_name!r} exists; run identities')
+        final = final_entry[1]
+        if password_state(port, user, final, http) != 'valid':
+            raise GiteaError('FINAL_PASSWORD_REJECTED', f'{user}: the stored final password does not authenticate',
+                             refusal=False)
+        report.update(state='already final', tokens=revoke_all_tokens(port, user, final, http))
+    else:
+        temp = temp_entry[1]
+        if final_entry is None:
+            final = secrets.token_urlsafe(FINAL_PASSWORD_BYTES)
+            provider.set(final_name, user, final, f'Password of {user} on the AIEH Gitea (harness-held; set by task '
+                                                  'gitea:finalize-credentials). Not for agents, bots or tests.')
+            report['stored_before_change'] = True
+        else:
+            final = final_entry[1]
+            report['stored_before_change'] = 'by an earlier run'
+        if secrets_seen is not None:
+            secrets_seen += [temp, final]
+        if password_state(port, user, final, http) == 'valid':
+            report['change'] = 'already applied by an earlier run'
+        else:
+            if password_state(port, user, temp, http) == 'rejected':
+                raise GiteaError('TEMPORARY_PASSWORD_REJECTED', f'{user}: the temporary password does not authenticate',
+                                 refusal=False)
+            report['change'] = change_password_by_web(port, user, temp, final, connection)
+        # First call with the new credentials: every token of the account goes (S-01.2.2's dangling one included).
+        report['tokens'] = revoke_all_tokens(port, user, final, http)
+        report['temporary_password'] = password_state(port, user, temp, http)
+        if report['temporary_password'] != 'rejected':
+            raise GiteaError('TEMPORARY_PASSWORD_ACTIVE', f'{user}: the temporary password still authenticates',
+                             refusal=False)
+        report['temporary_entry_deleted'] = provider.delete(temp_name)
+    status, body = basic_call(port, user, final, 'GET', '/user', http)
+    report['final_password'] = 'valid' if status == 200 and body.get('login') == user else f'HTTP {status}'
+    report['is_admin'] = bool(body.get('is_admin')) if status == 200 else None
+    if report['final_password'] != 'valid':
+        raise GiteaError('FINAL_PASSWORD_REJECTED', f'{user}: the final password answered {status}', refusal=False)
+    if report['is_admin'] is not (user == SITE_ADMIN):
+        raise GiteaError('ACCOUNT_ROLE_MISMATCH', f'{user}: is_admin is {report["is_admin"]}', refusal=False)
+    if secrets_seen is not None and temp_entry is None:
+        secrets_seen.append(final)
+    del final
+    return report
+
+
+def finalize_credentials(res, lay: Layout, pinned: dict, provider: CredentialProvider | None = None,
+                         http: Callable = None, connection: Callable = None, repo: Path | None = None) -> dict:
+    """Owner directive of 2026-11-07: the harness finishes the two human accounts' credential lifecycle itself.
+    The site administrator first, then the Owner account; then no temporary or final password may appear in
+    the managed root (its logs included), the checkout or this report."""
+    provider = provider or credential_provider()
+    port = read_host_record(lay)['port']
+    if not healthy(port):
+        raise GiteaError('NOT_RUNNING', 'run up: the credentials are finalized against the running Gitea')
+    seen: list[str] = []
+    try:
+        report = {'accounts': [finalize_account(port, user, provider, http, connection, seen)
+                               for user in (SITE_ADMIN, OWNER)]}
+        report['entries'] = {name: provider.exists(name) for name in (*FINAL_TARGETS.values(), *CRED_TARGETS.values())}
+        needles = [s.encode('utf-8') for s in seen]
         report['found_in_managed_root'] = contains_secret(lay.root, needles)
-        report['found_in_checkout'] = files_containing(checkout_files(lay.repo), needles)
-        temporary.clear()
-        del needles
-        if report['found_in_managed_root'] or report['found_in_checkout']:
-            names = report['found_in_managed_root'] + report['found_in_checkout']
-            raise GiteaError('TEMPORARY_PASSWORD_FOUND', f'a temporary password is stored in {names} (names only); '
-                                                         'the Credential Manager entries were kept', refusal=False)
-    report['deleted'] = [t for t in CRED_TARGETS.values() if store.delete(t)]
-    report['entries_remaining'] = [t for t in CRED_TARGETS.values() if store.read(t) is not None]
-    report['final_passwords'] = 'only as Gitea password hashes in its database'
+        report['found_in_checkout'] = files_containing(checkout_files(repo or lay.repo), needles)
+        text = json.dumps(report)
+        report['found_in_report'] = any(s in text for s in seen)
+    finally:
+        seen.clear()
+    if report['found_in_managed_root'] or report['found_in_checkout'] or report['found_in_report']:
+        raise GiteaError('PASSWORD_FOUND', json.dumps({k: report[k] for k in ('found_in_managed_root',
+                                                                               'found_in_checkout')}), refusal=False)
+    report['password_handling'] = ('generated with secrets, stored by the credential provider before use, sent only in '
+                                   'loopback HTTP request bodies and basic-auth headers; never on a command line, in '
+                                   'an environment, in a log or in output')
     return report
 
 
@@ -1124,9 +1294,10 @@ def main(argv=None) -> int:
                        ('status', 'report the processes, listeners, token and job; changes nothing'),
                        ('verify', 'run the F-06.1 proof set against the running instance'),
                        ('identities', 'create the site administrator and the Owner account (temporary passwords '
-                                      'into Credential Manager)'),
-                       ('finish-first-login', 'after the Owner changed both passwords: verify, then delete the '
-                                              'temporary entries'),
+                                      'into the credential provider)'),
+                       ('finalize-credentials', 'replace both temporary passwords with harness-held final ones '
+                                                "through Gitea's forced change, revoke the accounts' tokens, verify, "
+                                                'delete the temporary entries'),
                        ('supervise', 'internal: the managed environment process started by up')):
         sub.add_parser(name, help=text)
     args = parser.parse_args(argv)
@@ -1145,7 +1316,7 @@ def main(argv=None) -> int:
             report = install(res, lay, pinned, args.port, args.from_file)
         else:
             report = {'up': up, 'down': down, 'status': status, 'verify': verify,
-                      'identities': create_identities, 'finish-first-login': finish_first_login}[args.command](
+                      'identities': create_identities, 'finalize-credentials': finalize_credentials}[args.command](
                 res, lay, pinned)
     except paths.PathsError as exc:
         sys.stderr.write(f'gitea-host: {exc}\n')

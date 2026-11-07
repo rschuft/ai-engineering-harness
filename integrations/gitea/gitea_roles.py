@@ -9,18 +9,15 @@ interactively). Each role's token is minted with `admin user generate-access-tok
 using the narrowest scopes Gitea 28.3.0 can express for the role; the CLI's standard output is captured
 in memory and written by CredWriteW (gitea_host.CredentialStore) into one generic Windows Credential
 Manager entry, `AIEH Gitea bot <role>`. A token is never printed, logged, written to a file or put on a
-command line; reports carry a fingerprint (a sha256 prefix) only.
+command line; reports carry a fingerprint (a sha256 prefix) only. Entries are reached through
+gitea_host's CredentialProvider (Windows: Credential Manager).
 
 The fixture is Gitea administration (op-gitea-administration): a disposable organization with one
 private repository, its collaborators and branch protection. Gitea's CLI cannot create organizations,
-collaborators or protection rules, so `fixture` mints a short-lived site-administrator token with the
-CLI (narrowest scopes for those routes), holds it in memory, applies the fixture through the API, and
-revokes the token with Gitea's own `DELETE /api/v1/token` before it returns, in every outcome; it then
-checks that the token no longer authenticates. The site administrator's password is never used.
-Gitea 28.3.0 refuses every API call of an account that must still change its password, the token's
-own DELETE /api/v1/token included, so `fixture` works only after the Owner's first sign-in and
-`task gitea:finish-first-login`; before that it stops at its first call (ADMIN_FIRST_LOGIN_PENDING)
-and reports whether the token it minted could be revoked.
+collaborators or protection rules, so `fixture` acts through the API as the site administrator, by HTTP
+basic authentication with the harness-held password that `task gitea:finalize-credentials` stored
+(Owner directive of 2026-11-07), read from the credential provider into memory. No token is minted for
+administration, and the report shows that the administrator holds none afterwards.
 
   python -I -B integrations/gitea/gitea_roles.py provision      # the bot accounts and missing tokens
   python -I -B integrations/gitea/gitea_roles.py fixture        # organization, repository, protection
@@ -40,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Callable
 
@@ -74,8 +72,6 @@ ROLES = {
 }
 FIXTURE_ORG, FIXTURE_REPO, DEFAULT_BRANCH = 'aieh-authz-fixture', 'authz', 'main'
 PROPOSAL_PATTERN = 'work/*'
-# Organization and repository creation, collaborators and branch protection; nothing under /admin.
-ADMIN_SCOPES = ('write:organization', 'write:repository')
 TOKEN_SHAPE = re.compile(rb'[0-9a-f]{40}')
 
 
@@ -166,15 +162,18 @@ class Cli:
 
 
 class Api:
-    """JSON over HTTP to 127.0.0.1:<port>/api/v1 with an optional token (Authorization: token ...)."""
+    """JSON over HTTP to 127.0.0.1:<port>/api/v1, authenticated by a token (Authorization: token ...) or by
+    HTTP basic authentication (basic=(user, password), the site administrator's fixture administration)."""
 
-    def __init__(self, port: int, token: str | None = None, http: Callable = None):
-        self.port, self.token, self.http = port, token, http or host.http_get
+    def __init__(self, port: int, token: str | None = None, http: Callable = None, basic: tuple | None = None):
+        self.port, self.token, self.http, self.basic = port, token, http or host.http_get, basic
 
     def call(self, method: str, path: str, body=None, headers=None) -> tuple[int, object]:
         sent = {'Accept': 'application/json', **(headers or {})}
         if self.token is not None:
             sent['Authorization'] = 'token ' + self.token
+        elif self.basic is not None:
+            sent.update(host.basic_header(*self.basic))
         data = None
         if body is not None:
             data = json.dumps(body).encode('utf-8')
@@ -205,31 +204,35 @@ def revoke_current(port: int, token: str, http: Callable = None) -> dict:
 # ---------------------------------------------------------------- commands
 
 
-def context(store=None, run: Callable = subprocess.run):
+def context(provider=None, run: Callable = subprocess.run):
     res = host.paths.resolve()
     lay, pinned = host.layout(res), host.pin()
     port = host.read_host_record(lay)['port']
     if not host.healthy(port):
         raise GiteaError('NOT_RUNNING', 'Gitea does not answer; run task gitea:up')
-    return lay, pinned, port, store or host.CredentialStore(), Cli(lay, pinned, run)
+    return lay, pinned, port, provider or host.credential_provider(), Cli(lay, pinned, run)
 
 
-def read_token(store, role: str) -> str | None:
-    entry = store.read(target(role))
+def read_token(provider, role: str) -> str | None:
+    """A role bot's token from its provider entry. Only role entries are read here: the site
+    administrator's and the Owner account's entries are not reachable through this function."""
+    if role not in ROLES:
+        raise GiteaError('ROLE_UNKNOWN', f'{role!r} is not one of {sorted(ROLES)}')
+    entry = provider.get(target(role))
     if entry is None:
         return None
-    user, blob = entry
+    user, token = entry
     if user != ROLES[role]['user']:
         raise GiteaError('ENTRY_MISMATCH', f'{target(role)!r} names {user!r}, not {ROLES[role]["user"]!r}')
-    return host.password_bytes(blob).decode('ascii')
+    return token
 
 
-def store_token(store, role: str, token: str, port: int) -> None:
+def store_token(provider, role: str, token: str, port: int) -> None:
     spec = ROLES[role]
-    store.write(target(role), spec['user'], token.encode('utf-16-le'),
-                f'Gitea access token of {spec["user"]} ({role}; scopes {",".join(spec["scopes"])}) on the AIEH '
-                f'Gitea at http://{host.LOOPBACK}:{port}/ (plan leaf S-01.2.2). Bootstrap custody: the Owner '
-                'account; the management dispatcher is its planned custodian.')
+    provider.set(target(role), spec['user'], token,
+                 f'Gitea access token of {spec["user"]} ({role}; scopes {",".join(spec["scopes"])}) on the AIEH '
+                 f'Gitea at http://{host.LOOPBACK}:{port}/ (plan leaf S-01.2.2). Bootstrap custody: the Owner '
+                 'account; the management dispatcher is its planned custodian.')
 
 
 def token_check(port: int, token: str, http: Callable = None) -> dict:
@@ -241,11 +244,11 @@ def token_check(port: int, token: str, http: Callable = None) -> dict:
     return report
 
 
-def provision(store=None, run: Callable = subprocess.run, roles=None, http: Callable = None,
+def provision(provider=None, run: Callable = subprocess.run, roles=None, http: Callable = None,
               ctx=None) -> dict:
     """Create each missing bot account, then mint and store a token for each role whose entry is
     absent. An existing entry is kept (rotate replaces one)."""
-    lay, pinned, port, store, cli = ctx or context(store, run)
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
     roles = list(roles or ROLES)
     users = cli.users()
     for role in roles:
@@ -262,11 +265,11 @@ def provision(store=None, run: Callable = subprocess.run, roles=None, http: Call
     for role in roles:
         spec = ROLES[role]
         report['accounts'][spec['user']] = after.get(spec['user'])
-        token = read_token(store, role)
+        token = read_token(provider, role)
         minted = token is None
         if minted:
             token = cli.mint(spec['user'], f'aieh-{role}-{now_stamp()}', spec['scopes'])
-            store_token(store, role, token, port)
+            store_token(provider, role, token, port)
         report['tokens'][role] = {'user': spec['user'], 'entry': target(role), 'minted': minted,
                                   'requested_scopes': list(spec['scopes']), 'fingerprint': fingerprint(token),
                                   'check': token_check(port, token, http)}
@@ -284,14 +287,20 @@ def apply_fixture(api: Api) -> list[dict]:
         require(status, expected, f'{method} {path}', payload)
         return status, payload
 
-    if api.call('GET', f'/orgs/{FIXTURE_ORG}')[0] == 404:
+    status, payload = api.call('GET', f'/orgs/{FIXTURE_ORG}')
+    if status == 404:
         call('POST', '/orgs', {'username': FIXTURE_ORG, 'visibility': 'private',
                                'repo_admin_change_team_access': False,
                                'description': 'Disposable authorization fixture (plan leaf S-01.2.2)'})
+    else:
+        require(status, 200, f'GET /orgs/{FIXTURE_ORG}', payload)
     repo = f'/repos/{FIXTURE_ORG}/{FIXTURE_REPO}'
-    if api.call('GET', repo)[0] == 404:
+    status, payload = api.call('GET', repo)
+    if status == 404:
         call('POST', f'/orgs/{FIXTURE_ORG}/repos', {'name': FIXTURE_REPO, 'private': True, 'auto_init': True,
                                                     'default_branch': DEFAULT_BRANCH, 'readme': 'Default'})
+    else:
+        require(status, 200, f'GET {repo}', payload)
     for user, permission in collaborators().items():
         call('PUT', f'{repo}/collaborators/{user}', {'permission': permission})
     status, existing = call('GET', f'{repo}/branch_protections')
@@ -300,7 +309,7 @@ def apply_fixture(api: Api) -> list[dict]:
         name = rule['rule_name']
         if name in names:
             body = {k: v for k, v in rule.items() if k != 'rule_name'}
-            call('PATCH', f'{repo}/branch_protections/{name}', body)
+            call('PATCH', f'{repo}/branch_protections/{urllib.parse.quote(name, safe="")}', body)
         else:
             call('POST', f'{repo}/branch_protections', rule)
     return actions
@@ -327,58 +336,52 @@ def read_fixture(api: Api) -> dict:
             'branch_protections': [{k: r.get(k) for k in keep} for r in rules or []]}
 
 
-def fixture(store=None, run: Callable = subprocess.run, http: Callable = None, ctx=None,
+def admin_api(provider, port: int, http: Callable = None) -> Api:
+    """The site administrator, by HTTP basic authentication with its harness-held password read from the
+    credential provider into memory (Owner directive of 2026-11-07). No token is minted for administration."""
+    entry = provider.get(host.FINAL_TARGETS[host.SITE_ADMIN])
+    if entry is None or entry[0] != host.SITE_ADMIN:
+        raise GiteaError('ADMIN_NOT_FINALIZED', f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} is missing; run task '
+                         'gitea:finalize-credentials')
+    api = Api(port, http=http, basic=(host.SITE_ADMIN, entry[1]))
+    del entry
+    status, body = api.call('GET', '/user')
+    if status != 200 or not (isinstance(body, dict) and body.get('is_admin')):
+        raise GiteaError('ADMIN_UNUSABLE', f'the site administrator gets HTTP {status}', refusal=False)
+    return api
+
+
+def fixture(provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None,
             probe: Callable | None = None) -> dict:
-    """Mint a short-lived site-administrator token, apply and read back the fixture, optionally run
-    probe(api) with it (the admin merge-override check), then revoke the token in every outcome."""
-    lay, pinned, port, store, cli = ctx or context(store, run)
+    """Apply and read back the fixture as the site administrator (basic authentication, password in memory
+    only), optionally run probe(api) with it (the admin merge-override check), and show that the
+    administrator still holds no access token."""
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
     users = cli.users()
     missing = sorted({spec['user'] for spec in ROLES.values()} - set(users))
     if missing:
         raise GiteaError('BOTS_MISSING', f'run provision first: {missing}')
     if host.OWNER not in users:
         raise GiteaError('OWNER_MISSING', f'{host.OWNER} does not exist; run task gitea:identities')
-    name = f'aieh-s0122-fixture-{now_stamp()}'
-    token = cli.mint(host.SITE_ADMIN, name, ADMIN_SCOPES)
-    report = {'admin_token': {'user': host.SITE_ADMIN, 'name': name, 'scopes': list(ADMIN_SCOPES),
-                              'fingerprint': fingerprint(token), 'minted_by': 'gitea admin user generate-access-token'}}
-    failure = None
-    try:
-        api = Api(port, token, http)
-        status_code, body = api.call('GET', '/token')
-        report['admin_token']['check'] = {'status': status_code}
-        if status_code != 200:
-            message = redact(str(body.get('message') if isinstance(body, dict) else body))[:200]
-            code = 'ADMIN_FIRST_LOGIN_PENDING' if 'change your password' in message else 'ADMIN_TOKEN_UNUSABLE'
-            raise GiteaError(code, f'the site administrator token gets HTTP {status_code} ({message})', refusal=False)
-        report['actions'] = apply_fixture(api)
-        report['fixture'] = read_fixture(api)
-        if probe is not None:
-            report['probe'] = probe(api)
-    except Exception as exc:  # every outcome reports the revocation below
-        failure = exc
-    finally:
-        revocation = revoke_current(port, token, http)
-        del token
-    report['admin_token']['revocation'] = revocation
-    if failure is not None or not revocation['revoked']:
-        code, detail = (failure.code, failure.detail) if isinstance(failure, GiteaError) else (
-            'ADMIN_TOKEN_NOT_REVOKED' if failure is None else 'FIXTURE_FAILED',
-            '' if failure is None else f'{type(failure).__name__}: {redact(str(failure))[:300]}')
-        tail = '' if revocation['revoked'] else (
-            f'; NOT REVOKED: delete the token {name!r} in the site administrator\'s Settings > Applications')
-        raise GiteaError(code, f'{detail}; admin token {name!r} revocation {json.dumps(revocation)}{tail}',
-                         refusal=False)
+    api = admin_api(provider, port, http)
+    report = {'admin_auth': {'user': host.SITE_ADMIN, 'method': 'HTTP basic authentication, password read from '
+                             f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} into memory; no token minted'}}
+    report['actions'] = apply_fixture(api)
+    report['fixture'] = read_fixture(api)
+    if probe is not None:
+        report['probe'] = probe(api)
+    status, tokens = api.call('GET', f'/users/{host.SITE_ADMIN}/tokens')
+    report['admin_tokens_after'] = [t.get('name') for t in tokens] if status == 200 else f'HTTP {status}'
     return report
 
 
-def rotate(role: str, store=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
+def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
     """The revocation contract once: revoke the role's token through DELETE /api/v1/token, prove its
     next call fails closed, mint a new one and replace the entry, prove the new one works."""
     if role not in ROLES:
         raise GiteaError('ROLE_UNKNOWN', f'{role!r} is not one of {sorted(ROLES)}')
-    lay, pinned, port, store, cli = ctx or context(store, run)
-    old = read_token(store, role)
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
+    old = read_token(provider, role)
     if old is None:
         raise GiteaError('ENTRY_MISSING', f'{target(role)!r} does not exist; run provision')
     report = {'role': role, 'user': ROLES[role]['user'], 'entry': target(role), 'old_fingerprint': fingerprint(old),
@@ -389,19 +392,18 @@ def rotate(role: str, store=None, run: Callable = subprocess.run, http: Callable
     if not report['revocation']['revoked']:
         raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
     new = cli.mint(ROLES[role]['user'], f'aieh-{role}-{now_stamp()}', ROLES[role]['scopes'])
-    store.delete(target(role))
-    store_token(store, role, new, port)
+    store_token(provider, role, new, port)
     report.update(new_fingerprint=fingerprint(new), new_check=token_check(port, new, http))
     del new
     return report
 
 
-def status(store=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
-    lay, pinned, port, store, cli = ctx or context(store, run)
+def status(provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
     users = cli.users()
     report = {}
     for role, spec in ROLES.items():
-        token = read_token(store, role)
+        token = read_token(provider, role)
         report[role] = {'user': spec['user'], 'account': users.get(spec['user']), 'entry': target(role),
                         'entry_present': token is not None}
         if token is not None:
@@ -410,14 +412,15 @@ def status(store=None, run: Callable = subprocess.run, http: Callable = None, ct
     return report
 
 
-def admin_merge_probe(store, port: int, http: Callable = None) -> Callable:
-    """The probe fixture() runs with the admin token: a proposal PR from the builder bot, then the site
+def admin_merge_probe(provider, port: int, http: Callable = None) -> Callable:
+    """The probe fixture() runs as the site administrator: a proposal PR from the builder bot, then the site
     administrator's merge and force-merge, both of which branch protection must refuse."""
     def probe(api: Api) -> dict:
-        builder = Api(port, read_token(store, 'builder'), http)
+        builder = Api(port, read_token(provider, 'builder'), http)
         repo = f'/repos/{FIXTURE_ORG}/{FIXTURE_REPO}'
-        branch = f'work/admin-probe-{now_stamp().lower()}'
-        status, body = builder.call('POST', f'{repo}/contents/probe-{branch.rsplit("-", 1)[1]}.txt', {
+        stamp = now_stamp().lower()
+        branch = f'work/admin-probe-{stamp}'
+        status, body = builder.call('POST', f'{repo}/contents/admin-probe-{stamp}.txt', {
             'content': 'YWRtaW4gbWVyZ2UtcHJvYmUK', 'message': 'admin merge-override probe',
             'branch': DEFAULT_BRANCH, 'new_branch': branch})
         result = {'builder_creates_proposal_branch': status}
@@ -427,10 +430,10 @@ def admin_merge_probe(store, port: int, http: Callable = None) -> Callable:
         require(status, 201, 'builder opens the probe PR', pull)
         number = pull['number']
         before = api.call('GET', f'{repo}/branches/{DEFAULT_BRANCH}')[1]['commit']['id']
-        result.update(pull=number,
-                      admin_merge=api.call('POST', f'{repo}/pulls/{number}/merge', {'Do': 'merge'})[0],
-                      admin_force_merge=api.call('POST', f'{repo}/pulls/{number}/merge',
-                                                 {'Do': 'merge', 'force_merge': True})[0])
+        merge = api.call('POST', f'{repo}/pulls/{number}/merge', {'Do': 'merge'})
+        force = api.call('POST', f'{repo}/pulls/{number}/merge', {'Do': 'merge', 'force_merge': True})
+        result.update(pull=number, admin_merge=[merge[0], redact(str((merge[1] or {}).get('message', '')))[:160]],
+                      admin_force_merge=[force[0], redact(str((force[1] or {}).get('message', '')))[:160]])
         after = api.call('GET', f'{repo}/branches/{DEFAULT_BRANCH}')[1]['commit']['id']
         result['default_branch_unchanged'] = before == after
         result['pull_merged'] = api.call('GET', f'{repo}/pulls/{number}')[1].get('merged')
@@ -444,7 +447,7 @@ def main(argv=None) -> int:
                                      'the authorization fixture (S-01.2.2). Exit 0 done, 1 failed, 2 refused.')
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('provision', help='create the bot accounts and mint the tokens that are missing')
-    fix = sub.add_parser('fixture', help='apply the fixture with a short-lived, revoked site-admin token')
+    fix = sub.add_parser('fixture', help='apply the fixture as the site administrator (credentials in memory)')
     fix.add_argument('--admin-merge-probe', action='store_true',
                      help='also check that the site administrator cannot merge or force-merge a proposal PR')
     rot = sub.add_parser('rotate', help='revoke a role token, prove it fails closed, re-issue it')
@@ -455,7 +458,7 @@ def main(argv=None) -> int:
     if hasattr(out, 'reconfigure'):
         out.reconfigure(encoding='utf-8')
     if os.name != 'nt':
-        sys.stderr.write('gitea-roles: REFUSED: Windows Credential Manager custody is implemented for Windows only\n')
+        sys.stderr.write('gitea-roles: REFUSED: only the Windows credential provider is implemented\n')
         return 2
     try:
         if args.command == 'provision':

@@ -1,18 +1,20 @@
 """Tests of the role-bot provisioning, fixture and rotation (plan leaf S-01.2.2), offline.
 
-A fake Gitea CLI and a fake Gitea API stand in for the instance and an in-memory store for Windows
-Credential Manager, so nothing here touches the real Credential Manager, the managed root or the
+A fake Gitea CLI and a fake Gitea API stand in for the instance and an in-memory credential provider
+for Windows Credential Manager, so nothing here touches the real Credential Manager, the managed root or the
 network. The live checks are in test_authorization_live.py. The last class checks the guest profile's
 declaration: no host share, and no path of the managed root or of a credential store, reaches a guest.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
 import re
 import sys
 import unittest
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -69,29 +71,42 @@ class FakeCli:
     mint = R.Cli.mint
 
 
-class FakeGitea:
-    """A minimal Gitea API: token authentication, DELETE /token, organizations, repositories,
-    collaborators and branch protection. must_change lists accounts whose calls Gitea refuses."""
+ADMIN_PASSWORD = 'admin-final-password-for-the-fake'
 
-    def __init__(self, must_change=(), fail_path=None):
+
+class FakeGitea:
+    """A minimal Gitea API: token authentication, DELETE /token, the site administrator by basic
+    authentication, organizations, repositories, collaborators and branch protection."""
+
+    def __init__(self, fail_path=None, admin_password=ADMIN_PASSWORD):
         self.tokens, self.orgs, self.repos, self.collab, self.rules = {}, set(), set(), {}, {}
-        self.must_change, self.fail_path, self.requests = set(must_change), fail_path, []
+        self.fail_path, self.requests, self.admin_password = fail_path, [], admin_password
 
     def __call__(self, port, path, method='GET', body=None, headers=None, timeout=5.0):
         assert port == PORT
         headers = headers or {}
-        self.requests.append((method, path, headers.get('Authorization', '')[:6]))
-        token = headers.get('Authorization', '').removeprefix('token ')
-        entry = self.tokens.get(token)
-        if entry is None:
-            return self.reply(401, {'message': 'token is required'})
-        if entry['user'] in self.must_change:
-            return self.reply(403, {'message': 'You must change your password. Change it at: ...'})
+        auth = headers.get('Authorization', '')
+        self.requests.append((method, path, auth[:6]))
+        if auth.startswith('Basic '):
+            user, _, password = base64.b64decode(auth[6:]).decode().partition(':')
+            if (user, password) != (G.SITE_ADMIN, self.admin_password):
+                return self.reply(401, {'message': 'unauthorized'})
+            entry, token = {'user': G.SITE_ADMIN}, None
+        else:
+            token = auth.removeprefix('token ')
+            entry = self.tokens.get(token)
+            if entry is None:
+                return self.reply(401, {'message': 'token is required'})
         if self.fail_path and path.endswith(self.fail_path):
             return self.reply(500, {'message': 'boom'})
         data = json.loads(body) if body else None
         route = path.removeprefix('/api/v1')
-        if route == '/token':
+        if route == '/user' and token is None:
+            return self.reply(200, {'login': G.SITE_ADMIN, 'is_admin': True})
+        if route == f'/users/{G.SITE_ADMIN}/tokens' and token is None:
+            return self.reply(200, [{'id': 1, 'name': t['name']} for t in self.tokens.values()
+                                    if t['user'] == G.SITE_ADMIN])
+        if route == '/token' and token is not None:
             if method == 'DELETE':
                 del self.tokens[token]
                 return self.reply(204, None)
@@ -122,7 +137,7 @@ class FakeGitea:
                 return self.reply(201, data)
             return self.reply(200, list(self.rules.values()))
         if route.startswith(f'{repo}/branch_protections/') and method == 'PATCH':
-            name = route.split('/branch_protections/', 1)[1]
+            name = urllib.parse.unquote(route.split('/branch_protections/', 1)[1])
             self.rules[name].update(data)
             return self.reply(200, self.rules[name])
         return self.reply(404, {'message': 'not found'})
@@ -132,38 +147,43 @@ class FakeGitea:
         return status, {}, b'' if payload is None else json.dumps(payload).encode()
 
 
-class MemoryStore:
+class MemoryProvider(G.CredentialProvider):
     def __init__(self, entries=None):
-        self.entries = dict(entries or {})
+        self.entries, self.reads = dict(entries or {}), []
 
-    def write(self, target, user, secret, comment):
-        assert target not in self.entries, 'a write must not silently replace an entry'
-        assert target.startswith(R.TARGET_PREFIX), target
-        self.entries[target] = (user, bytes(secret))
+    def get(self, name):
+        self.reads.append(name)
+        return self.entries.get(name)
 
-    def read(self, target):
-        return self.entries.get(target)
+    def set(self, name, user, secret, comment=''):
+        assert isinstance(secret, str)
+        self.entries[name] = (user, secret)
 
-    def delete(self, target):
-        return self.entries.pop(target, None) is not None
+    def delete(self, name):
+        return self.entries.pop(name, None) is not None
 
 
-def ctx(cli, store):
-    return None, None, PORT, store, cli
+def ctx(cli, provider):
+    return None, None, PORT, provider, cli
 
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.gitea, self.cli, self.store = FakeGitea(), FakeCli(), MemoryStore()
+        self.gitea, self.cli = FakeGitea(), FakeCli()
+        self.store = MemoryProvider({G.FINAL_TARGETS[G.SITE_ADMIN]: (G.SITE_ADMIN, ADMIN_PASSWORD)})
         self.cli.gitea = self.gitea
 
     def provision(self, **kwargs):
         return R.provision(http=self.gitea, ctx=ctx(self.cli, self.store), **kwargs)
 
+    def bot_entries(self):
+        return {k: v for k, v in self.store.entries.items() if k.startswith(R.TARGET_PREFIX)}
+
     def assert_no_token(self, text):
         for token in self.cli.minted:
             self.assertNotIn(token, text)
         self.assertIsNone(re.search(r'[0-9a-f]{40}', text))
+        self.assertNotIn(ADMIN_PASSWORD, text)
 
 
 class TestProvision(Base):
@@ -181,16 +201,16 @@ class TestProvision(Base):
             argv = next(c for c in mints if c[c.index('--username') + 1] == spec['user'])
             self.assertIn('--raw', argv)
             self.assertEqual(argv[argv.index('--scopes') + 1], ','.join(spec['scopes']))
-            user, blob = self.store.read(R.target(role))
+            user, token = self.store.get(R.target(role))
             self.assertEqual(user, spec['user'])
-            token = G.password_bytes(blob).decode()
-            self.assertEqual(blob, token.encode('utf-16-le'))
+            self.assertIn(token, self.cli.minted)
             self.assertEqual(report['tokens'][role]['fingerprint'], R.fingerprint(token))
             self.assertEqual(report['tokens'][role]['check']['scopes'], sorted(spec['scopes']))
         self.assert_no_token(json.dumps(report))
         for token in self.cli.minted:
             for argv in self.cli.calls:
                 self.assertNotIn(token, ' '.join(argv))
+        self.assertFalse(any(name in self.store.reads for name in G.FINAL_TARGETS.values()))
 
     def test_existing_entries_are_kept(self):
         self.provision()
@@ -206,7 +226,7 @@ class TestProvision(Base):
             with self.subTest(state=state), self.assertRaises(G.GiteaError) as caught:
                 self.provision()
             self.assertEqual(caught.exception.code, 'ACCOUNT_NOT_A_BOT')
-            self.assertEqual(self.store.entries, {})
+            self.assertEqual(self.bot_entries(), {})
 
     def test_mint_failure_withholds_the_output(self):
         self.cli.fail_mint = True
@@ -214,71 +234,72 @@ class TestProvision(Base):
             self.provision()
         self.assertEqual(caught.exception.code, 'TOKEN_MINT_FAILED')
         self.assertIsNone(re.search(r'[0-9a-f]{40}', str(caught.exception)))
-        self.assertEqual(self.store.entries, {})
+        self.assertEqual(self.bot_entries(), {})
 
 
 class TestFixture(Base):
     def setUp(self):
         super().setUp()
         self.provision()
+        self.minted_before = len(self.cli.minted)
 
     def run_fixture(self, **kwargs):
         return R.fixture(http=self.gitea, ctx=ctx(self.cli, self.store), **kwargs)
 
-    def test_applied_with_a_short_lived_admin_token_that_is_revoked(self):
+    def test_applied_as_the_administrator_with_basic_auth_and_no_token(self):
         report = self.run_fixture()
-        admin = report['admin_token']
-        self.assertEqual((admin['user'], admin['scopes']), (G.SITE_ADMIN, list(R.ADMIN_SCOPES)))
-        self.assertFalse(any(s.startswith(('write:admin', 'read:admin')) or s == 'all' for s in R.ADMIN_SCOPES))
-        self.assertEqual(admin['revocation'], {'delete_status': 204, 'next_call_status': 401, 'revoked': True})
-        self.assertEqual(sum(1 for t in self.gitea.tokens.values() if t['user'] == G.SITE_ADMIN), 0)
+        self.assertEqual(len(self.cli.minted), self.minted_before)  # no administration token
+        self.assertEqual(report['admin_tokens_after'], [])
         self.assertEqual(self.gitea.collab, R.collaborators())
         self.assertEqual(set(self.gitea.rules), {r['rule_name'] for r in R.protection_rules()})
         self.assertEqual(report['fixture']['collaborator_permissions'], R.collaborators())
         self.assert_no_token(json.dumps(report))
         self.assertFalse(any('/admin/' in path for _m, path, _a in self.gitea.requests))
+        admin_calls = {a for _m, _p, a in self.gitea.requests if _p.startswith('/api/v1/orgs') or 'branch_' in _p}
+        self.assertEqual(admin_calls, {'Basic '})
 
     def test_rerun_updates_instead_of_duplicating(self):
         self.run_fixture()
         report = self.run_fixture()
         self.assertTrue(any(a['method'] == 'PATCH' for a in report['actions']))
+        self.assertTrue(any(a['path'].endswith('/branch_protections/work%2F%2A') for a in report['actions']))
         self.assertFalse(any(a['path'] == '/orgs' for a in report['actions']))
 
-    def test_first_login_pending_stops_and_reports_the_unrevoked_token(self):
-        self.gitea.must_change.add(G.SITE_ADMIN)
+    def test_unfinalized_or_rejected_administrator_refused(self):
+        del self.store.entries[G.FINAL_TARGETS[G.SITE_ADMIN]]
         with self.assertRaises(G.GiteaError) as caught:
             self.run_fixture()
-        self.assertEqual(caught.exception.code, 'ADMIN_FIRST_LOGIN_PENDING')
-        self.assertIn('NOT REVOKED', str(caught.exception))
-        self.assertIn('aieh-s0122-fixture-', str(caught.exception))
+        self.assertEqual(caught.exception.code, 'ADMIN_NOT_FINALIZED')
+        self.store.entries[G.FINAL_TARGETS[G.SITE_ADMIN]] = (G.SITE_ADMIN, 'wrong')
+        with self.assertRaises(G.GiteaError) as caught:
+            self.run_fixture()
+        self.assertEqual(caught.exception.code, 'ADMIN_UNUSABLE')
+        self.assertNotIn('wrong', str(caught.exception))
         self.assertEqual([p for _m, p, _a in self.gitea.requests if 'collaborators' in p], [])
-        self.assert_no_token(str(caught.exception))
 
-    def test_a_failure_midway_still_revokes_and_reports(self):
+    def test_a_failure_midway_reports_without_secrets(self):
         self.gitea.fail_path = f'/collaborators/{G.OWNER}'
         with self.assertRaises(G.GiteaError) as caught:
             self.run_fixture()
         self.assertEqual(caught.exception.code, 'API_UNEXPECTED')
-        self.assertIn('"revoked": true', str(caught.exception))
-        self.assertEqual(sum(1 for t in self.gitea.tokens.values() if t['user'] == G.SITE_ADMIN), 0)
+        self.assert_no_token(str(caught.exception))
 
     def test_missing_bots_or_owner_refused(self):
         del self.cli.users_[R.ROLES['reviewer']['user']]
         with self.assertRaises(G.GiteaError) as caught:
             self.run_fixture()
         self.assertEqual(caught.exception.code, 'BOTS_MISSING')
-        self.assertEqual(len([t for t in self.cli.minted]), len(R.ROLES))  # no admin token minted
 
 
 class TestRotate(Base):
     def test_revoke_fail_closed_reissue(self):
         self.provision()
-        old = G.password_bytes(self.store.read(R.target('builder'))[1]).decode()
+        old = self.store.get(R.target('builder'))[1]
         report = R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store))
         self.assertEqual(report['revocation'], {'delete_status': 204, 'next_call_status': 401, 'revoked': True})
         self.assertEqual(report['old_on_repository_read'], 401)
         self.assertNotIn(old, self.gitea.tokens)
-        new = G.password_bytes(self.store.read(R.target('builder'))[1]).decode()
+        new = self.store.get(R.target('builder'))[1]
         self.assertNotEqual(new, old)
         self.assertEqual(report['new_fingerprint'], R.fingerprint(new))
         self.assertEqual(report['new_check']['status'], 200)
@@ -293,10 +314,17 @@ class TestRotate(Base):
         self.assertEqual(caught.exception.code, 'ENTRY_MISSING')
 
     def test_entry_naming_another_account_refused(self):
-        self.store.entries[R.target('builder')] = ('aieh-owner', b'x\x00' * 40)
+        self.store.entries[R.target('builder')] = ('aieh-owner', 'x' * 40)
         with self.assertRaises(G.GiteaError) as caught:
             R.read_token(self.store, 'builder')
         self.assertEqual(caught.exception.code, 'ENTRY_MISMATCH')
+
+    def test_the_human_entries_are_not_reachable_as_a_role(self):
+        for name in ('site-admin', 'owner', G.SITE_ADMIN, G.OWNER):
+            with self.assertRaises(G.GiteaError) as caught:
+                R.read_token(self.store, name)
+            self.assertEqual(caught.exception.code, 'ROLE_UNKNOWN')
+        self.assertFalse(any(R.target(role) in G.FINAL_TARGETS.values() for role in R.ROLES))
 
 
 class TestPolicy(unittest.TestCase):

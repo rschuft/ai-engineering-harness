@@ -1,13 +1,14 @@
 """Tests of the host-loopback Gitea lifecycle (plan leaf F-06.1).
 
 Every test works in a temporary managed root named through an injected AIEH_DATA_ROOT, never the real
-one. None touches the real Windows Credential Manager: the identity and first-login tests use an
-in-memory store and a fake Gitea CLI. The Windows tests exercise the real Job Object, socket-table and
+one. None touches the real Windows Credential Manager: the identity and credential-finalization tests
+use an in-memory credential provider, a fake Gitea CLI and a fake Gitea (web forms and basic-auth API). The Windows tests exercise the real Job Object, socket-table and
 token code against child Python processes. The live test runs the pinned Gitea end to end on a free
 port in a temporary root, only when AIEH_GITEA_BINARY names a copy of the pinned binary.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import io
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -315,8 +317,8 @@ class TestIdentities(Root):
         self.addCleanup(patcher.stop)
 
     def test_two_accounts_and_two_entries_without_exposure(self):
-        run, store = FakeRun(), MemoryStore()
-        report = G.create_identities(self.res, self.lay, FAKE_PIN, store=store, run=run)
+        run, store = FakeRun(), MemoryProvider()
+        report = G.create_identities(self.res, self.lay, FAKE_PIN, provider=store, run=run)
         self.assertEqual(report['created'], [G.SITE_ADMIN, G.OWNER])
         self.assertEqual(report['admin'], {G.SITE_ADMIN: True, G.OWNER: False})
         creates = [c for c in run.calls if 'create' in c]
@@ -329,10 +331,8 @@ class TestIdentities(Root):
         self.assertIn('--admin', creates[0])
         self.assertNotIn('--admin', creates[1])
         for user, target in G.CRED_TARGETS.items():
-            name, blob = store.read(target)
-            self.assertEqual(name, user)
-            self.assertEqual(G.password_bytes(blob), run.generated[user].encode())
-            self.assertEqual(blob, run.generated[user].encode('utf-16-le'))
+            name, secret = store.get(target)
+            self.assertEqual((name, secret), (user, run.generated[user]))
         text = json.dumps(report)
         for password in run.generated.values():
             self.assertNotIn(password, text)
@@ -342,31 +342,35 @@ class TestIdentities(Root):
     def test_refusals(self):
         with self.assertRaises(G.GiteaError) as caught:
             G.create_identities(self.res, self.lay, FAKE_PIN, run=FakeRun(),
-                                store=MemoryStore({G.CRED_TARGETS[G.OWNER]: ('x', b'y')}))
+                                provider=MemoryProvider({G.CRED_TARGETS[G.OWNER]: ('x', 'y')}))
         self.assertEqual(caught.exception.code, 'CREDENTIAL_EXISTS')
         with self.assertRaises(G.GiteaError) as caught:
-            G.create_identities(self.res, self.lay, FAKE_PIN, store=MemoryStore(), run=FakeRun({G.OWNER: False}))
+            G.create_identities(self.res, self.lay, FAKE_PIN, run=FakeRun(),
+                                provider=MemoryProvider({G.FINAL_TARGETS[G.SITE_ADMIN]: ('x', 'y')}))
+        self.assertEqual(caught.exception.code, 'CREDENTIAL_EXISTS')
+        with self.assertRaises(G.GiteaError) as caught:
+            G.create_identities(self.res, self.lay, FAKE_PIN, provider=MemoryProvider(), run=FakeRun({G.OWNER: False}))
         self.assertEqual(caught.exception.code, 'ACCOUNT_EXISTS')
         with mock.patch.object(G, 'healthy', return_value=False), self.assertRaises(G.GiteaError) as caught:
-            G.create_identities(self.res, self.lay, FAKE_PIN, store=MemoryStore(), run=FakeRun())
+            G.create_identities(self.res, self.lay, FAKE_PIN, provider=MemoryProvider(), run=FakeRun())
         self.assertEqual(caught.exception.code, 'NOT_RUNNING')
 
     def test_cli_failure_withholds_output(self):
-        run, store = FakeRun(password_line=True), MemoryStore()
+        run, store = FakeRun(password_line=True), MemoryProvider()
         original = run.__call__
 
         def failing(argv, **kwargs):
             result = original(argv, **kwargs)
             return SimpleNamespace(returncode=1, stdout=result.stdout, stderr=b'') if 'create' in argv else result
         with self.assertRaises(G.GiteaError) as caught:
-            G.create_identities(self.res, self.lay, FAKE_PIN, store=store, run=failing)
+            G.create_identities(self.res, self.lay, FAKE_PIN, provider=store, run=failing)
         self.assertEqual(caught.exception.code, 'ACCOUNT_CREATE_FAILED')
         self.assertNotIn(run.generated[G.SITE_ADMIN], str(caught.exception))
         self.assertEqual(store.entries, {})
 
     def test_missing_password_line_fails_closed(self):
         with self.assertRaises(G.GiteaError) as caught:
-            G.create_identities(self.res, self.lay, FAKE_PIN, store=MemoryStore(), run=FakeRun(password_line=False))
+            G.create_identities(self.res, self.lay, FAKE_PIN, provider=MemoryProvider(), run=FakeRun(password_line=False))
         self.assertEqual(caught.exception.code, 'ACCOUNT_CREATE_FAILED')
 
     def test_user_list_parsing(self):
@@ -374,67 +378,234 @@ class TestIdentities(Root):
         self.assertEqual(users, {G.SITE_ADMIN: {'admin': True}, G.OWNER: {'admin': False}})
 
 
-class TestFinishFirstLogin(Root):
-    PASSWORDS = {G.SITE_ADMIN: b'Temp-site-admin-Pw-9876543210', G.OWNER: b'Temp-owner-Pw-9876543210'}
+class FakeAccounts:
+    """Gitea's accounts as finalize-credentials meets them: basic-auth API (/api/v1/user, token listing and
+    deletion) and the web sign-in and forced-change forms, on one fake loopback server. Every request is
+    logged by path only."""
+
+    def __init__(self, passwords, tokens=None, fail_change=False):
+        self.accounts = {u: {'password': p, 'must_change': True, 'admin': u == G.SITE_ADMIN}
+                         for u, p in passwords.items()}
+        self.tokens = {u: list(t) for u, t in (tokens or {}).items()}
+        self.sessions, self.log, self.fail_change, self.next_id = {}, [], fail_change, 100
+
+    def who(self, headers):
+        auth = (headers or {}).get('Authorization', '')
+        if not auth.startswith('Basic '):
+            return None, 'none'
+        user, _, password = base64.b64decode(auth[6:]).decode().partition(':')
+        account = self.accounts.get(user)
+        if account is None or account['password'] != password:
+            return None, 'wrong'
+        return user, 'must-change' if account['must_change'] else 'ok'
+
+    def __call__(self, port, path, method='GET', body=None, headers=None, timeout=5.0):
+        self.log.append((method, path))
+        user, state = self.who(headers)
+        if state in ('none', 'wrong'):
+            return 401, {}, b'{"message":"unauthorized"}'
+        if state == 'must-change':
+            return 403, {}, b'{"message":"You must change your password. Change it at: x"}'
+        route = path.removeprefix('/api/v1')
+        if route == '/user':
+            return 200, {}, json.dumps({'login': user, 'is_admin': self.accounts[user]['admin']}).encode()
+        if route == f'/users/{user}/tokens' and method == 'GET':
+            return 200, {}, json.dumps([{'id': i, 'name': n} for i, n in self.tokens.get(user, [])]).encode()
+        if route.startswith(f'/users/{user}/tokens/') and method == 'DELETE':
+            ident = int(route.rsplit('/', 1)[1])
+            self.tokens[user] = [(i, n) for i, n in self.tokens.get(user, []) if i != ident]
+            return 204, {}, b''
+        return 404, {}, b'{}'
+
+    def connection(self):
+        fake = self
+
+        class Response:
+            def __init__(self, status, location, cookie):
+                self.status, self._location = status, location
+                self.msg = SimpleNamespace(get_all=lambda name: [cookie] if cookie and name == 'Set-Cookie' else None)
+
+            def getheader(self, name):
+                return self._location if name == 'Location' else None
+
+            def read(self):
+                return b''
+
+        class Connection:
+            def request(self, method, path, body=None, headers=None):
+                fake.log.append((method, path))
+                form = dict(urllib.parse.parse_qsl(body.decode()))
+                cookie = (headers or {}).get('Cookie', '')
+                session = fake.sessions.get(cookie.partition('=')[2])
+                if path == '/user/login':
+                    account = fake.accounts.get(form.get('user_name'))
+                    if account is None or account['password'] != form.get('password'):
+                        self.response = Response(200, '', None)
+                    else:
+                        sid = f'sid{len(fake.sessions)}'
+                        fake.sessions[sid] = form['user_name']
+                        where = '/user/settings/change_password' if account['must_change'] else '/'
+                        self.response = Response(303, where, f'i_like_gitea={sid}; Path=/; HttpOnly')
+                elif path == '/user/settings/change_password' and session:
+                    if fake.fail_change or form['password'] != form['retype']:
+                        self.response = Response(200, '', None)
+                    else:
+                        fake.accounts[session].update(password=form['password'], must_change=False)
+                        self.response = Response(303, '/', None)
+                else:
+                    self.response = Response(404, '', None)
+
+            def getresponse(self):
+                return self.response
+
+            def close(self):
+                pass
+        return Connection()
+
+
+class MemoryProvider(G.CredentialProvider):
+    def __init__(self, entries=None, events=None):
+        self.entries, self.events = dict(entries or {}), events if events is not None else []
+
+    def get(self, name):
+        return self.entries.get(name)
+
+    def set(self, name, user, secret, comment=''):
+        self.events.append(('set', name))
+        self.entries[name] = (user, secret)
+
+    def delete(self, name):
+        self.events.append(('delete', name))
+        return self.entries.pop(name, None) is not None
+
+
+class TestCredentialProvider(unittest.TestCase):
+    def test_windows_provider_wraps_the_store_as_utf16(self):
+        store = MemoryStore()
+        provider = G.WindowsCredentialProvider(store)
+        self.assertFalse(provider.exists('AIEH x'))
+        provider.set('AIEH x', 'u', 'pässword', 'c')
+        self.assertEqual(store.entries['AIEH x'], ('u', 'pässword'.encode('utf-16-le')))
+        self.assertEqual(provider.get('AIEH x'), ('u', 'pässword'))
+        self.assertTrue(provider.exists('AIEH x'))
+        self.assertTrue(provider.delete('AIEH x'))
+        self.assertFalse(provider.delete('AIEH x'))
+
+    def test_interface(self):
+        for name in ('get', 'set', 'delete', 'exists'):
+            self.assertTrue(callable(getattr(G.CredentialProvider, name)))
+        with self.assertRaises(NotImplementedError):
+            G.CredentialProvider().get('x')
+
+
+class TestFinalizeCredentials(Root):
+    TEMP = {G.SITE_ADMIN: 'Temp-site-admin-Pw-9876543210', G.OWNER: 'Temp-owner-Pw-9876543210'}
 
     def setUp(self):
         super().setUp()
         self.acquire_fake()
         G.configure(self.res, self.lay, FAKE_PIN, 13300, run=FakeRun())
-        self.store = MemoryStore({G.CRED_TARGETS[u]: (u, p.decode().encode('utf-16-le'))
-                                  for u, p in self.PASSWORDS.items()})
-        for name, value in (('healthy', True), ('password_authenticates', False),
-                            ('checkout_files', [])):
+        self.events = []
+        self.provider = MemoryProvider({G.CRED_TARGETS[u]: (u, p) for u, p in self.TEMP.items()}, self.events)
+        self.gitea = FakeAccounts(self.TEMP, tokens={G.SITE_ADMIN: [(7, 'aieh-s0122-fixture-20261107T175000Z')]})
+        self.repo = self.tmp / 'repo'
+        self.repo.mkdir()
+        for name, value in (('healthy', True), ('checkout_files', [])):
             patcher = mock.patch.object(G, name, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def finish(self, flags):
-        with mock.patch.object(G, 'must_change_password', return_value=flags):
-            return G.finish_first_login(self.res, self.lay, FAKE_PIN, store=self.store)
+    def finalize(self, gitea=None):
+        gitea = gitea or self.gitea
+        return G.finalize_credentials(self.res, self.lay, FAKE_PIN, provider=self.provider, http=gitea,
+                                      connection=gitea.connection, repo=self.repo)
 
-    def test_pending_first_login_refused_and_entries_kept(self):
+    def finals(self):
+        return {u: self.provider.get(G.FINAL_TARGETS[u]) for u in self.TEMP}
+
+    def test_both_accounts_finalized_without_exposure(self):
+        report = self.finalize()
+        for user, (name, final) in self.finals().items():
+            self.assertEqual(name, user)
+            self.assertGreaterEqual(len(final), 43)
+            self.assertEqual(self.gitea.accounts[user], {'password': final, 'must_change': False,
+                                                         'admin': user == G.SITE_ADMIN})
+            self.assertIsNone(self.provider.get(G.CRED_TARGETS[user]))
+        self.assertNotEqual(*[f for _u, f in self.finals().values()])
+        admin, owner = report['accounts']
+        self.assertEqual(admin['tokens'], {'found': ['aieh-s0122-fixture-20261107T175000Z'],
+                                           'deleted': ['aieh-s0122-fixture-20261107T175000Z'], 'remaining': []})
+        self.assertEqual(owner['tokens'], {'found': [], 'deleted': [], 'remaining': []})
+        self.assertEqual((admin['is_admin'], owner['is_admin']), (True, False))
+        self.assertEqual({a['temporary_password'] for a in report['accounts']}, {'rejected'})
+        self.assertEqual((report['found_in_managed_root'], report['found_in_checkout'], report['found_in_report']),
+                         ([], [], False))
+        text = json.dumps(report)
+        for secret in [*self.TEMP.values(), *(f for _u, f in self.finals().values())]:
+            self.assertNotIn(secret, text)
+
+    def test_final_password_stored_before_the_change_and_tokens_revoked_first(self):
+        self.finalize()
+        for user in self.TEMP:
+            stored = self.events.index(('set', G.FINAL_TARGETS[user]))
+            deleted = self.events.index(('delete', G.CRED_TARGETS[user]))
+            self.assertLess(stored, deleted)
+        change = self.gitea.log.index(('POST', '/user/settings/change_password'))
+        after = [entry for entry in self.gitea.log[change + 1:] if entry[1].startswith('/api/v1')]
+        self.assertEqual(after[0], ('GET', f'/api/v1/users/{G.SITE_ADMIN}/tokens'))
+        self.assertEqual(after[1], ('DELETE', f'/api/v1/users/{G.SITE_ADMIN}/tokens/7'))
+
+    def test_a_failed_change_keeps_both_entries_and_a_rerun_completes(self):
+        failing = FakeAccounts(self.TEMP, fail_change=True)
         with self.assertRaises(G.GiteaError) as caught:
-            self.finish({G.SITE_ADMIN: False, G.OWNER: True})
-        self.assertEqual(caught.exception.code, 'FIRST_LOGIN_PENDING')
-        self.assertEqual(len(self.store.entries), 2)
+            self.finalize(failing)
+        self.assertEqual(caught.exception.code, 'PASSWORD_CHANGE_FAILED')
+        stored = self.provider.get(G.FINAL_TARGETS[G.SITE_ADMIN])
+        self.assertIsNotNone(stored)
+        self.assertIsNotNone(self.provider.get(G.CRED_TARGETS[G.SITE_ADMIN]))
+        failing.fail_change = False
+        report = self.finalize(failing)
+        self.assertEqual(self.provider.get(G.FINAL_TARGETS[G.SITE_ADMIN]), stored)
+        self.assertEqual(failing.accounts[G.SITE_ADMIN]['password'], stored[1])
+        self.assertEqual(report['accounts'][0]['stored_before_change'], 'by an earlier run')
+
+    def test_a_rerun_after_the_change_resumes_and_an_already_final_account_is_verified(self):
+        self.finalize()
+        report = self.finalize()
+        self.assertEqual([a['state'] for a in report['accounts']], ['already final'] * 2)
+        self.provider.entries[G.CRED_TARGETS[G.OWNER]] = (G.OWNER, self.TEMP[G.OWNER])
+        report = self.finalize()
+        self.assertEqual(report['accounts'][1]['change'], 'already applied by an earlier run')
+        self.assertIsNone(self.provider.get(G.CRED_TARGETS[G.OWNER]))
+
+    def test_rejected_temporary_password_changes_nothing(self):
+        self.provider.entries[G.CRED_TARGETS[G.SITE_ADMIN]] = (G.SITE_ADMIN, 'not-the-password')
         with self.assertRaises(G.GiteaError) as caught:
-            self.finish({G.SITE_ADMIN: False})
-        self.assertEqual(caught.exception.code, 'ACCOUNTS_MISSING')
+            self.finalize()
+        self.assertEqual(caught.exception.code, 'TEMPORARY_PASSWORD_REJECTED')
+        self.assertTrue(self.gitea.accounts[G.SITE_ADMIN]['must_change'])
+        self.assertNotIn('not-the-password', str(caught.exception))
 
-    def test_active_temporary_password_refused(self):
-        with mock.patch.object(G, 'password_authenticates', return_value=True), self.assertRaises(G.GiteaError) as c:
-            self.finish({G.SITE_ADMIN: False, G.OWNER: False})
-        self.assertEqual(c.exception.code, 'TEMPORARY_PASSWORD_ACTIVE')
-        self.assertEqual(len(self.store.entries), 2)
+    def test_password_found_in_the_managed_root_is_reported_by_name_only(self):
+        leak = self.lay.logs / 'leak.log'
+        leak.write_bytes(b'x' * (1 << 20) + self.TEMP[G.OWNER].encode('utf-16-le') + b'y')
+        with self.assertRaises(G.GiteaError) as caught:
+            self.finalize()
+        self.assertEqual(caught.exception.code, 'PASSWORD_FOUND')
+        self.assertIn('leak.log', str(caught.exception))
+        self.assertNotIn(self.TEMP[G.OWNER], str(caught.exception))
 
-    def test_password_found_in_a_file_refused_by_name_only(self):
-        for form in (self.PASSWORDS[G.OWNER], self.PASSWORDS[G.OWNER].decode().encode('utf-16-le')):
-            leak = self.lay.logs / 'leak.log'
-            leak.write_bytes(b'x' * (1 << 20) + form + b'y')  # across the 1 MiB read boundary
-            with self.assertRaises(G.GiteaError) as caught:
-                self.finish({G.SITE_ADMIN: False, G.OWNER: False})
-            self.assertEqual(caught.exception.code, 'TEMPORARY_PASSWORD_FOUND')
-            self.assertIn('leak.log', str(caught.exception))
-            self.assertNotIn(self.PASSWORDS[G.OWNER].decode(), str(caught.exception))
-            self.assertEqual(len(self.store.entries), 2)
-            leak.unlink()
-
-    def test_success_deletes_both_entries(self):
-        report = self.finish({G.SITE_ADMIN: False, G.OWNER: False})
-        self.assertEqual(report['found_in_managed_root'], [])
-        self.assertEqual(sorted(report['deleted']), sorted(G.CRED_TARGETS.values()))
-        self.assertEqual((report['entries_remaining'], self.store.entries), ([], {}))
-        for password in self.PASSWORDS.values():
-            self.assertNotIn(password.decode(), json.dumps(report))
+    def test_missing_entries_refused(self):
+        self.provider.entries.clear()
+        with self.assertRaises(G.GiteaError) as caught:
+            self.finalize()
+        self.assertEqual(caught.exception.code, 'ENTRIES_MISSING')
 
     def test_checkout_search(self):
-        repo = self.tmp / 'repo'
-        repo.mkdir()
-        (repo / 'tracked.txt').write_bytes(b'a ' + self.PASSWORDS[G.SITE_ADMIN] + b' b')
-        self.assertEqual(G.files_containing([repo / 'tracked.txt'], [self.PASSWORDS[G.SITE_ADMIN]]),
-                         [str(repo / 'tracked.txt')])
-        self.assertEqual(G.files_containing([repo / 'tracked.txt'], [self.PASSWORDS[G.OWNER]]), [])
+        (self.repo / 'tracked.txt').write_bytes(b'a ' + self.TEMP[G.SITE_ADMIN].encode() + b' b')
+        self.assertEqual(G.files_containing([self.repo / 'tracked.txt'], [self.TEMP[G.SITE_ADMIN].encode()]),
+                         [str(self.repo / 'tracked.txt')])
+        self.assertEqual(G.files_containing([self.repo / 'tracked.txt'], [self.TEMP[G.OWNER].encode()]), [])
 
 
 class TestCheckoutFiles(unittest.TestCase):

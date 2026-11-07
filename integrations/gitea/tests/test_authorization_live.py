@@ -71,7 +71,7 @@ def _probe_live():
         return None, f'Gitea is not installed here ({exc})'
     if not G.healthy(port):
         return None, 'Gitea is not running (task gitea:up)'
-    store = G.CredentialStore()
+    store = G.credential_provider()
     tokens = {role: R.read_token(store, role) for role in R.ROLES}
     if missing := sorted(role for role, token in tokens.items() if token is None):
         return None, f'no Credential Manager entry for {missing} (gitea_roles.py provision)'
@@ -257,7 +257,7 @@ class Fixture(Live):
         status = R.Api(cls.ctx.port, cls.ctx.tokens['verifier']).call('GET', REPO)[0]
         if status != 200:
             raise unittest.SkipTest(f'the fixture repository answers {status} to the verifier: it is created by '
-                                    'gitea_roles.py fixture, which needs the site administrator\'s first sign-in')
+                                    'gitea_roles.py fixture, after task gitea:finalize-credentials')
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-authz-'))
         cls.url = f'http://{G.LOOPBACK}:{cls.ctx.port}/{R.FIXTURE_ORG}/{R.FIXTURE_REPO}.git'
         cls.clones, cls.pulls, cls.pushes = {}, {}, {}

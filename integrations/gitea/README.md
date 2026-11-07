@@ -15,7 +15,7 @@ nothing is written into the checkout. Windows only.
 
 | Path | What |
 |---|---|
-| `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `status`, `verify`, `identities`, `finish-first-login` (and the internal `supervise`) |
+| `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `status`, `verify`, `identities`, `finalize-credentials` (and the internal `supervise`); the credential provider |
 | `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `rotate ROLE`, `status` |
 | `tests/test_gitea_roles.py` | Bots, tokens, custody, fixture, revocation and rotation with a fake CLI and a fake API; the guest profile declares no path to a token store |
 | `tests/test_authorization_live.py` | Opt-in (`AIEH_GITEA_AUTHZ=1`, `task gitea:authz`) allowed and forbidden calls of each bot token against the running Gitea |
@@ -30,7 +30,7 @@ From the repository root (`task gitea:<name>`):
 python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]   # network once: GitHub
 python -I -B integrations/gitea/gitea_host.py up | down | status | verify
 python -I -B integrations/gitea/gitea_host.py identities
-python -I -B integrations/gitea/gitea_host.py finish-first-login
+python -I -B integrations/gitea/gitea_host.py finalize-credentials
 python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | rotate ROLE | status
 python -I -B -m unittest discover -s integrations/gitea/tests -v                    # task gitea:test
 AIEH_GITEA_AUTHZ=1 python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v   # task gitea:authz
@@ -87,21 +87,51 @@ stop through its own `gitea manager shutdown`, waits on both process handles, an
 supervisor only when Gitea does not stop within 60 s. Process identity is the pid plus its creation
 time, recorded in the run record.
 
-## Identities and first login
+## Identities and credential finalization
+
+The Owner never signs in to Gitea, changes its passwords or opens Credential Manager: the harness
+completes the credential lifecycle itself (Owner directive of 2026-11-07, which supersedes the manual
+first sign-in of F-06.1).
 
 `identities` (Gitea running) creates `aieh-site-admin` (administrator) and `aieh-owner`
 (non-administrator) with `gitea admin user create --random-password --must-change-password=true`,
 e-mail `@localhost.invalid`. Gitea generates each temporary password (crypto/rand, 24 characters).
-The CLI's output is captured into memory, never shown; the password goes by `CredWriteW` into one
-generic Windows Credential Manager entry (`AIEH Gitea site-admin (temporary)`,
-`AIEH Gitea owner (temporary)`, persisted to the local machine). No password is on any command line.
+The CLI's output is captured into memory, never shown; the password goes through the credential
+provider into one entry (`AIEH Gitea site-admin (temporary)`, `AIEH Gitea owner (temporary)`). No
+password is on any command line.
 
-The Owner then signs in at `http://127.0.0.1:13300/` with each temporary password, read from
-Control Panel, Credential Manager, Windows Credentials, and Gitea forces a new password.
-`finish-first-login` then checks that neither account still must change its password, that each
-temporary password no longer signs in (HTTP basic authentication against `/api/v1/user`) and occurs
-in no file of the managed root or of the checkout (UTF-8 and UTF-16), and only then deletes the two
-entries. The final passwords exist only as Gitea's password hashes.
+`finalize-credentials` then does, for the site administrator and then the Owner account:
+
+1. generate a final password with `secrets.token_urlsafe(32)` and store it in the provider entry
+   `AIEH Gitea site-admin` or `AIEH Gitea owner` **before** Gitea is changed, so a failure can never
+   lose it (a rerun resumes from any intermediate state);
+2. set it with Gitea's own forced change: sign in at `/user/login` with the temporary password,
+   which Gitea answers with a redirect to its change form, then submit `/user/settings/change_password`;
+   both are loopback HTTP form posts, so the passwords travel only in request bodies;
+3. with the new password (HTTP basic authentication), list and delete **every** access token of the
+   account, then list again: a finalized human account holds no token (this revokes the
+   site-administrator token that S-01.2.2's first fixture attempt could not revoke);
+4. verify: the final password authenticates and Gitea no longer demands a change; the temporary
+   password is rejected; the account's administrator flag is as expected;
+5. delete the temporary entry;
+6. search every file of the managed root (logs included) and of the checkout (tracked and untracked,
+   not ignored; UTF-8 and UTF-16) and its own report for every temporary and final password, and fail,
+   naming files only, on any hit.
+
+**Why this mechanism.** `gitea admin user change-password --password` would put a password on a
+command line, so it is not used. The web flow is Gitea's own supported forced change. It needs no
+token and no administrator. A password is never on a command line, in an environment, in a log or
+in output.
+
+The final credentials are harness-held, for administration only: `finalize-credentials` and the
+fixture administration (`gitea_roles.py fixture`) read the site administrator's entry, and nothing
+reads the Owner account's yet. How the Owner identity is used internally is still to be decided. No
+bot, test or ordinary Builder or Reviewer context reads either entry.
+
+**The credential provider.** Callers reach credentials through `CredentialProvider` (`get`, `set`,
+`delete`, `exists`). `WindowsCredentialProvider` implements it with Credential Manager (`CredWriteW`,
+`CredReadW`, `CredDeleteW`; secrets as UTF-16LE). A cross-platform implementation can replace it
+through `credential_provider()` without its callers changing.
 
 ## Role credentials (S-01.2.2)
 
@@ -117,14 +147,14 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   Gitea 28.3.0 can express: `write:repository` for the planner, builder and reviewer, and
   `read:repository` for the verifier. Gitea's scopes are categorical; the per-repository and
   per-branch limits come from collaborator permission and branch protection. The CLI's output is
-  captured in memory and must be exactly one token, which `CredWriteW` writes into a generic Credential
-  Manager entry, `AIEH Gitea bot <role>`. Reports carry a fingerprint (`sha256:` and 16 hex digits)
+  captured in memory and must be exactly one token, which the credential provider writes into the
+  entry `AIEH Gitea bot <role>`. Reports carry a fingerprint (`sha256:` and 16 hex digits)
   only. An existing entry is kept.
 - **Rotation.** `rotate ROLE` revokes the token through Gitea's `DELETE /api/v1/token`, proves that
   its next call gets 401, mints a new one and replaces the entry. Gitea 28.3.0 has no token
   lifetime, so per-attempt rotation is the dispatcher's job (S-01.3.1).
-- **Fixture.** `fixture` mints a token for `aieh-site-admin` with the CLI (scopes
-  `write:organization,write:repository`), holds it in memory, and checks it first. It then creates the
+- **Fixture.** `fixture` acts as `aieh-site-admin` by HTTP basic authentication with its
+  harness-held password, read from the credential provider into memory; it mints no token. It creates the
   private organization `aieh-authz-fixture` and repository `authz`, the collaborators (planner and
   builder write, reviewer and verifier read, `aieh-owner` write) and three protection rules:
   - `main`: no push or force-push; only `aieh-owner` merges; one approval from the reviewer bot;
@@ -132,10 +162,9 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   - `work/*`: the planner and builder bots push;
   - `**`: nobody pushes.
 
-  It revokes the token in every outcome and reports whether that worked.
-  `--admin-merge-probe` also has the site administrator try to merge a proposal PR, which must be
-  refused. Gitea refuses every API call of an account that must still change its password, so
-  `fixture` works only after the Owner's first sign-in and `finish-first-login`.
+  It reports that the administrator holds no token afterwards. `--admin-merge-probe` also has the
+  site administrator try to merge a proposal PR, which must be refused. Gitea refuses every API call
+  of an account that must still change its password, so `fixture` runs after `finalize-credentials`.
 - **Live tests.** `task gitea:authz` reads the four tokens into memory and probes what each may and
   may not do; the fixture-dependent classes skip while the fixture is absent, and the executor test
   is not applicable (G-04.2.1).
@@ -144,6 +173,9 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
 
 - Anything but Windows 11 on x86_64.
 - Gitea's egress proxy beyond the 407 answer, and the effective `EGRESS_MODE` policy.
+- `finalize-credentials` against the real instance: implemented and tested with a fake Gitea only.
+  Its first live run was refused by the session's permission system, so both accounts still carry
+  their temporary passwords.
 - The repository-level role-token behaviour of S-01.2.2: branch protection, merge allowlists,
-  PRs and reviews (the fixture awaits the site administrator's first sign-in).
+  PRs and reviews (the fixture awaits `finalize-credentials`).
 - The `--restricted` flag's effect, and the site administrator's path to revoke another account's token.
