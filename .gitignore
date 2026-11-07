@@ -11,6 +11,9 @@
 .claude/agent-memory-local/
 .codex/auth.json
 
+# Local, optional configuration (example_config.yml is the tracked template)
+config.yml
+
 # Generated state and Python caches
 .venv/
 venv/

@@ -67,13 +67,14 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test) and the lineage tests (lineage:test)
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test) and the managed data root tests (paths:test)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
       - task: effects:test
       - task: planning:test
       - task: lineage:test
+      - task: paths:test
 
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
@@ -198,6 +199,33 @@ tasks:
     desc: "Rebuild the lineage projection example offline and print each projection's verdict; pass -- --record to rewrite integrations/lineage/examples/ (python -I -B integrations/lineage/tests/lineage_example.py)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/lineage/tests/lineage_example.py {{.CLI_ARGS}}'
+
+  # Managed data root (plan leaf F-07.1, decision 0009): the shared path resolver, its
+  # configuration and the Python tools venv (integrations/paths/README.md).
+  paths:test:
+    desc: "Run the managed data root resolver tests (python -I -B -m unittest discover -s integrations/paths/tests -v); the config.yml tests skip when PyYAML is not importable"
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/paths/tests -v'
+
+  paths:show:
+    desc: "Print the managed data root and its categories; creates nothing (python -I -B integrations/paths/aieh_paths.py show); pass -- --format sh or -- --format ps1 for shell assignments"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/paths/aieh_paths.py show {{.CLI_ARGS}}'
+
+  paths:init:
+    desc: Create the managed data root, its persistent/, ephemeral/ and assets/ directories and its marker (python -I -B integrations/paths/aieh_paths.py init)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/paths/aieh_paths.py init'
+
+  paths:doctor:
+    desc: Report the managed data root, what exists, its marker and the legacy locations; moves and changes nothing (python -I -B integrations/paths/aieh_paths.py doctor)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/paths/aieh_paths.py doctor'
+
+  tools:install:
+    desc: "Network (PyPI): install the hash-locked Python tools venv (PyYAML, for config.yml) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/paths/tools_install.py'
 
   # Owner host (plan leaf U-01.1): the React shell in apps/owner-host. These targets need
   # the component tier (Node.js >= 24, npm >= 11), so they are not part of setup or test.

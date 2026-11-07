@@ -29,9 +29,9 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests and the lineage tests. It is offline and takes seconds. Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests and the managed data root tests. It is offline and takes seconds. Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the eight commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the nine commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -42,6 +42,7 @@ python -I -B -m unittest discover -s integrations/store/tests -v
 python -I -B -m unittest discover -s integrations/effects/tests -v
 python -I -B -m unittest discover -s integrations/planning/tests -v
 python -I -B -m unittest discover -s integrations/lineage/tests -v
+python -I -B -m unittest discover -s integrations/paths/tests -v
 ```
 
 Use `python3` instead of `python` outside Windows.
@@ -69,6 +70,11 @@ Windows reference guest profile has its own provider prerequisites in
 This guide does not record whether any of them is verified. That is recorded in
 the evidence: the [bootstrap log](../evidence/bootstrap-log.md),
 [`evidence/`](../evidence/) and each profile's `QUALIFICATION.md`.
+
+The basic tier stays standard-library only and offline. The one exception is the optional
+`config.yml` ([Managed data root](#managed-data-root)): reading it needs PyYAML, which
+`task tools:install` installs from PyPI, hash-locked and wheels only, into a venv under the
+managed data root. Without `config.yml` nothing beyond the basic tier is needed.
 
 Check a tier with `task prereqs`, `task prereqs:components` or
 `task prereqs:inventory`, or run `python -I -B tools/check_prereqs.py --tier <basic|components|inventory>`.
@@ -135,14 +141,14 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the eight commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the nine commands in [Quick start](#quick-start) | no | Supported setup command. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test` and `lineage:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests and lineage tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test` and `paths:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests and managed data root tests (stdlib `unittest`). |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -162,6 +168,11 @@ Only what is listed as verified has been exercised.
 | `lineage:resolve -- REF ... [--current] [--project <repo>] [--backlog <cmd>] [--repo NAME=<dir>] [--effects-root <dir>]` | `python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [options]` | no | Resolves references read-only and prints one JSON resolution each. Exit 0 when all resolved, 1 on any other outcome or a malformed reference, 2 could not run. |
 | `lineage:trace -- OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | `python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | no | Projects the lineage of one outcome id read-only (statement, objective, design, task, attempt), with the real authorities only, and prints the `lineage-projection/v1` JSON. Exit 0 complete, 1 the projection carries uncertainty, 2 could not run. |
 | `lineage:example [-- --record]` | `python -I -B integrations/lineage/tests/lineage_example.py [--record]` | no | Rebuilds the lineage projection example offline (sample authorities and real registry) and prints each verdict; `--record` rewrites `integrations/lineage/examples/`. |
+| `paths:test` | `python -I -B -m unittest discover -s integrations/paths/tests -v` | no | [Managed data root](#managed-data-root) tests: every refusal code, the platform defaults by injection, both adapters, the legacy table, `example_config.yml`, asset records. The `config.yml` tests skip, counted, when PyYAML is not importable. |
+| `paths:show [-- --format sh\|ps1]` | `python -I -B integrations/paths/aieh_paths.py show [--format json\|sh\|ps1]` | no | Prints the managed data root and its categories (`aieh-paths/v1` JSON, or shell assignments). Creates nothing. Exit 2 on a refusal, with its code and remedy. |
+| `paths:init` | `python -I -B integrations/paths/aieh_paths.py init` | no | Creates the managed data root, its `persistent/`, `ephemeral/` and `assets/` directories and its `aieh-root.json` marker. Idempotent. |
+| `paths:doctor` | `python -I -B integrations/paths/aieh_paths.py doctor` | no | Reports the root, what exists, the marker and the legacy locations with their migration recipes. Moves and changes nothing. |
+| `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`), wheels only, under the managed data root; prints its interpreter. Not part of `setup`. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -205,6 +216,35 @@ compliance is not verified**; see
 items.
 
 **Formatting and linting.** No formatter or linter is configured yet.
+
+## Managed data root
+
+[`integrations/paths/`](../integrations/paths/README.md) holds the shared path resolver of
+plan leaf F-07.1 ([decision 0009](../decisions/0009-managed-data-root-and-configuration-contract.md),
+Proposed). The harness keeps its installations, state, caches and downloads outside the
+checkout, under one managed data root:
+
+- Windows: `%LOCALAPPDATA%\AIEH`
+- Linux: `$XDG_DATA_HOME/aieh`, or `~/.local/share/aieh`
+- macOS: `~/Library/Application Support/aieh` (**not yet verified**)
+
+`AIEH_DATA_ROOT` overrides it: absolute, or relative to the repository root, never to the
+working directory. A root inside or containing the checkout is refused. The root holds
+`persistent/` (never deleted implicitly), `ephemeral/` (controlled cleanup only) and `assets/`
+(downloaded, verified artifacts, each with an `aieh-asset.json` record of its version,
+provenance, integrity and reacquisition). `task paths:show` prints every category and creates
+nothing; `task paths:init` creates the root; `task paths:doctor` reports what exists and the
+legacy locations, and moves nothing.
+
+`example_config.yml` is the tracked template; copy it to the gitignored `config.yml` to
+override a category's directory (relative to the effective root, or absolute). Its absence is
+the supported default, it never holds secrets, and `.env` is never read. Reading it needs
+PyYAML (`task tools:install`).
+
+F-07.1 defines the contract only. The integration store, the publication gate's Gitleaks cache
+and the guest tooling keep their current locations until F-07.2 adopts it, and nothing is moved
+or deleted. Details, the error codes and the OS-managed locations that stay outside the root
+are in the component's [README](../integrations/paths/README.md).
 
 ## Integration store
 
@@ -693,11 +733,11 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
-| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2 |
+| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
-| repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |
+| repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `example_config.yml` (the configuration template; `config.yml` is gitignored) | seed, F-02, contributor onboarding, F-07.1 |
 
 Planned homes are documented here and created by the leaf that first fills them.
 That leaf may refine the name with a recorded reason. S-01.1 recorded its inventory of

@@ -1,0 +1,52 @@
+# example_config.yml: the template for the AI Engineering Harness configuration (decision 0009).
+#
+# Copy it to config.yml at the repository root to change a setting. config.yml is optional and
+# gitignored; without it every default shown here applies. Reading config.yml needs PyYAML: run
+# `task tools:install` once (see "Managed data root" in docs/development.md).
+#
+# Never put a credential or any other secret in this file or in config.yml. The loader refuses
+# every secret-shaped key; secrets belong in the credential custody of decision 0007.
+#
+# The managed data root is not set here. It is the OS default (AIEH under %LOCALAPPDATA% on
+# Windows, $XDG_DATA_HOME/aieh or ~/.local/share/aieh on Linux) or the AIEH_DATA_ROOT environment
+# variable: absolute, or relative to the repository root, never to the working directory. A root
+# inside or containing the checkout is refused. `task paths:show` prints the resolved paths.
+
+# The schema version. This resolver reads version 1.
+version: 1
+
+# Per-category directory overrides. A relative path is relative to the managed data root; an
+# absolute path is used as given. Each commented line shows the default: uncomment it and change
+# the value to override it. The root has three lifecycle directories: persistent/ (never deleted
+# implicitly), ephemeral/ (controlled cleanup only) and assets/ (downloaded, verified artifacts
+# that can be reacquired).
+paths:
+  # Durable component state such as databases, one directory per component.
+  #state: persistent/state
+  # Gitea's state, kept apart from its binary (plan leaf F-06.1).
+  #gitea: persistent/gitea
+  # Installed or unpacked tools, one directory per tool and version.
+  #installs: persistent/installs
+  # Component logs.
+  #logs: persistent/logs
+  # Durable workspaces (reserved).
+  #workspaces: persistent/workspaces
+  # Downloaded, verified assets: <kind>/<name>/<version>/ with an aieh-asset.json record.
+  #assets: assets
+  # Caches, such as pip's.
+  #cache: ephemeral/cache
+  # Scratch work directories.
+  #scratch: ephemeral/scratch
+  # Temporary files.
+  #tmp: ephemeral/tmp
+
+  # Registered external locations have no default. Each is an absolute path the Owner names; the
+  # resolver reports it and never creates or checks it, and its own component checks it.
+  # The privileged effects store root (decision 0004, act A4). Its placement awaits the
+  # re-evaluation of decision 0004:
+  # effects_root: /absolute/path/named/by/the/Owner
+  # The execution-guest state root (decision 0003, act A3), not relocated:
+  # guest_state: /absolute/path/named/by/the/Owner
+
+# Per-component settings, each validated by its own component. None is defined yet.
+components:
