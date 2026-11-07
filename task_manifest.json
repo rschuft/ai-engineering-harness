@@ -7,7 +7,7 @@
       "phase": 0,
       "deps": [],
       "path": "task_prompts/F-01.1.md",
-      "sha256": "d6a6b6f970cdb98c4397e60840b285ef24909594fb50992d95385ae3bb083443"
+      "sha256": "86d9fca0731cf14ad31f4dacd87520ac6293885b83f1b045aef5dff2bdd56bb5"
     },
     {
       "id": "F-01.2",
@@ -17,7 +17,7 @@
         "F-01.1"
       ],
       "path": "task_prompts/F-01.2.md",
-      "sha256": "fac5a6f83ceee775b18a368536065000eef08cd615345f0e6bc92f8a360b92e9"
+      "sha256": "a31531d2e5b945f44972a9dabc989b2cf5911378bde4f2d10b659b9ac62a7648"
     },
     {
       "id": "F-02",
@@ -27,7 +27,7 @@
         "F-01.2"
       ],
       "path": "task_prompts/F-02.md",
-      "sha256": "f88ed2ca9d0c6bfd23aa42238dc6397452ebd018f311165f703275f21b265866"
+      "sha256": "8ed462a8bccc4f6a01084bb0b7502e600db028796b16e7f2bcbca683224c0f2f"
     },
     {
       "id": "F-03.1",
@@ -38,7 +38,7 @@
         "F-02"
       ],
       "path": "task_prompts/F-03.1.md",
-      "sha256": "976b156a3e5fc86826a028c0c4c179d84b6b3d820ac88478c3a499ef1c323e3b"
+      "sha256": "3dc140f654c7ee485f371a01abe0db690c0497f148d753da4a6167d0f848cdfc"
     },
     {
       "id": "F-03.2.1",
@@ -48,7 +48,7 @@
         "F-03.1"
       ],
       "path": "task_prompts/F-03.2.1.md",
-      "sha256": "4df2ac4dbf6f6c395a1897cf325ad81bd97ebf777216238e6daa6dc704b4c75a"
+      "sha256": "60f720fd33910b8d91631cb6f7d77a9eb80cb657f9d653f2390b3285fe812d1d"
     },
     {
       "id": "F-03.2.2",
@@ -58,7 +58,7 @@
         "F-03.2.1"
       ],
       "path": "task_prompts/F-03.2.2.md",
-      "sha256": "13e709caeec3aa084c5a5dc7886426de0076152c2b179613b221f9b764cb797d"
+      "sha256": "58d76dcf18f27e4b16995e43305b11f18bf8f24c7beceeadf227ce055f08198b"
     },
     {
       "id": "F-03.3.1",
@@ -68,7 +68,7 @@
         "F-03.2.2"
       ],
       "path": "task_prompts/F-03.3.1.md",
-      "sha256": "02deb175aa38dd6f57be3e8101a638f6a2e3723306eaf192f9abd6cd8ffe0639"
+      "sha256": "d21d7f6037588c59329c8fd1647b806a694d847574ca2d08bca9e89939d0f88e"
     },
     {
       "id": "F-03.3.2",
@@ -78,7 +78,7 @@
         "F-03.3.1"
       ],
       "path": "task_prompts/F-03.3.2.md",
-      "sha256": "995f9da1eaaf509bb852e0163c2922316d313d29bbe14869939a8e3affe64c50"
+      "sha256": "cc7d86da74013216c7f9f626ffe6fccaab2fd606da2e1542cd85d0996e94f7b0"
     },
     {
       "id": "F-03.4",
@@ -88,7 +88,7 @@
         "F-03.3.2"
       ],
       "path": "task_prompts/F-03.4.md",
-      "sha256": "600d8941dfd60512bc7d5f0f7b6d15165a056933a12b9eb92b949c5a48e5d16c"
+      "sha256": "362eff7d7523e0767409e15dbb1100af403c654dd84f838cc680fead2812bd9f"
     },
     {
       "id": "F-04.1",
@@ -98,7 +98,7 @@
         "F-03.4"
       ],
       "path": "task_prompts/F-04.1.md",
-      "sha256": "827eb097557f4fe4d31df9b2aa73aa183e69857fbc528c9bec49772abf7d6b67"
+      "sha256": "63ba3dd541a546add5dfdc493342b20fa85e64773fcf668d49acf4c498f175c8"
     },
     {
       "id": "F-04.2",
@@ -108,7 +108,7 @@
         "F-04.1"
       ],
       "path": "task_prompts/F-04.2.md",
-      "sha256": "6f67bbce2a20c4e83a1892bd1f8b53b3b2e9b99528a8f36c720a2ad8a6cb1e6d"
+      "sha256": "b02c3623c2eb6b345986949be583f8bcc3c2034f7f353606f70ddea9cd2939ae"
     },
     {
       "id": "S-01.1",
@@ -119,7 +119,7 @@
         "F-04.2"
       ],
       "path": "task_prompts/S-01.1.md",
-      "sha256": "6ceb978d9308842fbf107547247d0bd3a0ae0b5db7d8103f3c88ee74039c166a"
+      "sha256": "47a2fabb39ebd233860624fb5f85b00053f5fa43d9eae9d4ee07861434ed0cf0"
     },
     {
       "id": "S-01.2.1",
@@ -129,7 +129,7 @@
         "S-01.1"
       ],
       "path": "task_prompts/S-01.2.1.md",
-      "sha256": "1c2ee03a829ea11740102408794a8705f561b4b8d3ed89b927bb08e9a6d739f6"
+      "sha256": "f39e6964137cc48ba0fb212193030a00d4c7e7de84d65ce4390448fb8d6be969"
     },
     {
       "id": "S-01.2.2",
@@ -139,7 +139,7 @@
         "S-01.2.1"
       ],
       "path": "task_prompts/S-01.2.2.md",
-      "sha256": "d248baabd572da909b73870e648b8eb11653d070bacc2df214066fc9a6132be7"
+      "sha256": "047600e655cd8ffb752b7dbefdc0ebe00466ed51cbc1972587c43fced7daa2d6"
     },
     {
       "id": "S-01.3.1",
@@ -149,7 +149,7 @@
         "S-01.2.2"
       ],
       "path": "task_prompts/S-01.3.1.md",
-      "sha256": "5bee18a45cfb36b62f8100302800c26ab4df6f2f5719d282538b87d8a00a2c97"
+      "sha256": "8b3f56b4a021e4fb63c7e19fd68f9b7740c2a3ac49d24c45049a9cbe39337ec6"
     },
     {
       "id": "S-01.3.2",
@@ -159,7 +159,7 @@
         "S-01.3.1"
       ],
       "path": "task_prompts/S-01.3.2.md",
-      "sha256": "15361e40afc5bb925d18944a3aac1651fbdccf1f6e03da0cc918ad46f6d5f11c"
+      "sha256": "77c494f4f8e32730e4795b84b49952bb952056775cb9cc7e466fa6b2aca4e809"
     },
     {
       "id": "S-01.4",
@@ -169,7 +169,7 @@
         "S-01.3.2"
       ],
       "path": "task_prompts/S-01.4.md",
-      "sha256": "90d6fc5fb65e6469bf2ff2e507e11ac04ae3a36b5ff48977bfd61aea3e50a91a"
+      "sha256": "3ce82f4e48b47f88344a5bcb4d8b0aaac753027fab5a0ef617c2f0b3d371b2ba"
     },
     {
       "id": "F-05.1",
@@ -179,7 +179,7 @@
         "F-02"
       ],
       "path": "task_prompts/F-05.1.md",
-      "sha256": "129c1da8dbb775f75300154d2152baf238716ad2e084730effacbb7f13e138bf"
+      "sha256": "f4444c9388a610f3f5664f0bd3e510d1c2671c1576af06b39303b164dd009a6a"
     },
     {
       "id": "F-05.2",
@@ -189,7 +189,7 @@
         "F-05.1"
       ],
       "path": "task_prompts/F-05.2.md",
-      "sha256": "3a660584e89409395977691a0356e2c62db41bd71cd57101f7cecd97c5d8adf0"
+      "sha256": "f06c7189f352a545a47ffecdc111104a8358ac355543c6012bd08dab838d101e"
     },
     {
       "id": "S-02.1",
@@ -200,7 +200,7 @@
         "F-05.2"
       ],
       "path": "task_prompts/S-02.1.md",
-      "sha256": "2ac508745ad9cd65cdc91327191aee7774fda5550329ac857c4372c16d3e8101"
+      "sha256": "a27e2515c9cf02c3f55264a0cb2009c145e4b4ff1d23195d351f549eb180d969"
     },
     {
       "id": "S-02.2",
@@ -210,7 +210,7 @@
         "S-02.1"
       ],
       "path": "task_prompts/S-02.2.md",
-      "sha256": "0046de716efae2e8eb7a953ee14340b0dc1aed6a3301c475b9e8bce461a3f713"
+      "sha256": "12b6fa8b11ebbc23b5ca9fffa93d740a87b9a48a2f7ca13206120530927fd063"
     },
     {
       "id": "U-01.1",
@@ -220,7 +220,7 @@
         "F-02"
       ],
       "path": "task_prompts/U-01.1.md",
-      "sha256": "fc168934af1ee2ba9b11de876581a67e9cdbfb8b0a4ffa727cdc6f8f2696831a"
+      "sha256": "6ab0ea5165e0a37080e5f3377e3362425a454e745f1dcc5e319bc19a8e443119"
     },
     {
       "id": "U-01.2",
@@ -230,7 +230,7 @@
         "U-01.1"
       ],
       "path": "task_prompts/U-01.2.md",
-      "sha256": "34c77a61cf75f87db4562ccd67a92dfec03341aa4b69ef625fe89134a1c433ca"
+      "sha256": "359fa95fb6f8558ac19c6d93393040e890434d76898ae97276813e90aed8b5f2"
     },
     {
       "id": "U-02.1",
@@ -241,7 +241,7 @@
         "F-05.2"
       ],
       "path": "task_prompts/U-02.1.md",
-      "sha256": "232559acffd33a20b065cd4c8edbf7bb8b9882d5539134b6e16141f20b03d7d0"
+      "sha256": "dfada1009008a51da29de7f5c571ce72e9f241331b3b6f52c10fb1aaccdeb44d"
     },
     {
       "id": "U-02.2",
@@ -251,7 +251,7 @@
         "U-02.1"
       ],
       "path": "task_prompts/U-02.2.md",
-      "sha256": "bf2a3d1c97b1aa99d9ed40e3796cf4ed644174e3b1e61675e24de08e07fb3628"
+      "sha256": "fb8fdb8d15188325df7314bfbf7fdda38d8372e4ecd035c6af5b0e0ce01b3be8"
     },
     {
       "id": "U-03.1",
@@ -263,7 +263,7 @@
         "S-01.4"
       ],
       "path": "task_prompts/U-03.1.md",
-      "sha256": "ac49f660b742466f3a956c5ad719a841ec7783fb46b13aa38c45c967ed97f09f"
+      "sha256": "f09346fe083b85809d029066817b98b294e0c650fc1297c4078a3d54ca4ead45"
     },
     {
       "id": "U-03.2",
@@ -273,7 +273,7 @@
         "U-03.1"
       ],
       "path": "task_prompts/U-03.2.md",
-      "sha256": "bdb08ee16a2802091dff083f0d4b30906fefb0753459114120dbd35bc675e540"
+      "sha256": "a18f49a29653d55be1a23f53d0e318776a405535e6846affa068a98e89f013eb"
     },
     {
       "id": "P-01.1",
@@ -283,7 +283,7 @@
         "F-02"
       ],
       "path": "task_prompts/P-01.1.md",
-      "sha256": "3b16616273641a3f6d46bfbd7cf7e3e33fa0fe1b51759424af369b0cdfa1b69f"
+      "sha256": "5e871a9e56d047901079cd459be80dfd01e83a6473f00515865d036422528bd2"
     },
     {
       "id": "P-01.2",
@@ -293,7 +293,7 @@
         "P-01.1"
       ],
       "path": "task_prompts/P-01.2.md",
-      "sha256": "6f807894e13fe8c00f580a2b00da2e9efc5bb657fd4a9a7221d6ed176c26253d"
+      "sha256": "53e39d128538a1757b5df9aa906fa54e29e30d68bf2a1b339c63f8c20cd4ad43"
     },
     {
       "id": "P-02.1",
@@ -304,7 +304,7 @@
         "P-01.2"
       ],
       "path": "task_prompts/P-02.1.md",
-      "sha256": "5cf4c79f5430daf84ca38cd23ac20fb2aa146394a32e283eedafcec4aa84c366"
+      "sha256": "d40a6a15724576895ccec40164e58f50b5a9a13692de488dfd17e2038f0cc0cc"
     },
     {
       "id": "P-02.2",
@@ -314,7 +314,7 @@
         "P-02.1"
       ],
       "path": "task_prompts/P-02.2.md",
-      "sha256": "37789491d565c5a5fb78979210807b386c984345e526ec8ac35903d2512ba457"
+      "sha256": "d297ccaa34eebeb5cb062b2dd70443013963ab0b6bd34e542f0d999b7917ac63"
     },
     {
       "id": "P-03.1",
@@ -326,7 +326,7 @@
         "F-05.2"
       ],
       "path": "task_prompts/P-03.1.md",
-      "sha256": "c14b0c57a53afe481fa11d5217360243c80a6a1f3eac5b30605771191bac770f"
+      "sha256": "747ba17e015996cf48888ada50a87dd75fa1e5cdb3195e2c28de5d434dba1669"
     },
     {
       "id": "P-03.2",
@@ -336,7 +336,7 @@
         "P-03.1"
       ],
       "path": "task_prompts/P-03.2.md",
-      "sha256": "3609d0d8fef0792cd321640ac7187f09ab9e8357026e14f350cccde0aa461603"
+      "sha256": "9a2296540816eeb9f5c388236e71f600730bbafca3bace95371784a3e7cdba49"
     },
     {
       "id": "E-01.1.1",
@@ -349,7 +349,7 @@
         "P-02.2"
       ],
       "path": "task_prompts/E-01.1.1.md",
-      "sha256": "9feb10af2698441a9b04d46ee046a8852830bd2d6ce8ea7e1ce5488599896d3b"
+      "sha256": "e0fbf9cac0ad8a04ae752fbb8291b95de894064bc485da67e5d7297081f85853"
     },
     {
       "id": "E-01.1.2",
@@ -359,7 +359,7 @@
         "E-01.1.1"
       ],
       "path": "task_prompts/E-01.1.2.md",
-      "sha256": "488ef522d2a26440b0c3d23721f3b61c260ed53c310287eb53b4af45d6d38d18"
+      "sha256": "6ca6a2f3cc91fdd46e984467b3c9ec585765194bfff63efffadf33eaab39ec2f"
     },
     {
       "id": "E-01.2.1",
@@ -369,7 +369,7 @@
         "E-01.1.2"
       ],
       "path": "task_prompts/E-01.2.1.md",
-      "sha256": "44c6ac231964da99b9e7b8009b2cf59d687b9c774f6a098a5485181d5b21900d"
+      "sha256": "bd17e6075495d25bef1b8efc07026cbd259460561e034e7b3f89f1419b2cd9f1"
     },
     {
       "id": "E-01.2.2",
@@ -379,7 +379,7 @@
         "E-01.2.1"
       ],
       "path": "task_prompts/E-01.2.2.md",
-      "sha256": "a8243de2a339921e6093f2d396da524c59bd85cc95226985726b81037a4627ca"
+      "sha256": "81b9b0c99f46ee82b63926e240b1785ab61bc1a74f98ed4e3c2db67d7b42113f"
     },
     {
       "id": "E-01.3.1",
@@ -389,7 +389,7 @@
         "E-01.2.2"
       ],
       "path": "task_prompts/E-01.3.1.md",
-      "sha256": "52a7f88bb185e82f0263a9bb44fbaf9854d3c94b3bc62613a6e14b91e4ee0cea"
+      "sha256": "7263b416f851c86385d0625d0a1d803ad6ad539a3b8337a04e5321c757c430d3"
     },
     {
       "id": "E-01.3.2",
@@ -399,7 +399,7 @@
         "E-01.3.1"
       ],
       "path": "task_prompts/E-01.3.2.md",
-      "sha256": "58aff397d145b9a832a7426d76ceac01c5d833ac1549d64e7a347b5b9a25bf42"
+      "sha256": "ae2a4afa6dfa9246490b37e225fba512a52044962aff6ec06ee96476ae7d0d3c"
     },
     {
       "id": "E-01.4.1",
@@ -409,7 +409,7 @@
         "E-01.3.2"
       ],
       "path": "task_prompts/E-01.4.1.md",
-      "sha256": "97319ffe36ec8f965dee3713466455b48a3202b91bc6805a1685ae0318dcfd5f"
+      "sha256": "68708b5f235d1055e26d61dc25a86bbbdc65d350684668665f282160c6e9f481"
     },
     {
       "id": "E-01.4.2",
@@ -419,7 +419,7 @@
         "E-01.4.1"
       ],
       "path": "task_prompts/E-01.4.2.md",
-      "sha256": "0b37d9a029892a8c6b33e472885a649959a1ad99d6c77987c279af1ef891cf20"
+      "sha256": "2f0aa7b2f035bafb9bc8e58bedd8a8cb12f7649631a271aa6799913da946b1ae"
     },
     {
       "id": "E-01.5",
@@ -429,7 +429,7 @@
         "E-01.4.2"
       ],
       "path": "task_prompts/E-01.5.md",
-      "sha256": "344b514b132596597a04cfce63a637b76c23713d2dd4f7adc9e4619fd4774b90"
+      "sha256": "492531c36c05746528aa6277f85d8f01cb71ef6660dfd80106f4b8fd0d08abfe"
     },
     {
       "id": "E-02.1",
@@ -440,7 +440,7 @@
         "P-03.2"
       ],
       "path": "task_prompts/E-02.1.md",
-      "sha256": "952a559fe0e8d45297722dd4714812c1c7fe37347168bfd00e6c282a3d391eab"
+      "sha256": "e0e35834840accf7c038f8404b7863680ed0459bead53d3c50132d0e77c172cc"
     },
     {
       "id": "E-02.2",
@@ -450,7 +450,7 @@
         "E-02.1"
       ],
       "path": "task_prompts/E-02.2.md",
-      "sha256": "29319a4abb86f7d6125b2b78ca7d84d1b4cb82fb19036f5e60e1fc035626761c"
+      "sha256": "aaa94e10ef3c7487b40b267ef1775dcb86d3b217dea5a2c3e570625c1b9fe97e"
     },
     {
       "id": "U-04.1",
@@ -462,7 +462,7 @@
         "E-01.5"
       ],
       "path": "task_prompts/U-04.1.md",
-      "sha256": "2c2668569e47521582d1f1955a20cf0c4d94faa73bcefe1195937bf46b444b61"
+      "sha256": "9e43abebe271f8ade6f1112bd74cc081746a2ad7548a14ba229dc8087a23297f"
     },
     {
       "id": "U-04.2",
@@ -472,7 +472,7 @@
         "U-04.1"
       ],
       "path": "task_prompts/U-04.2.md",
-      "sha256": "022cb0c13f87b9e43fa4b4b29041c2a475a5b4cda130a7839efb80beedcf1c71"
+      "sha256": "ea2f70be001b7a31db93c9a32db220840bb6aa7d7e009bc9d76855fa8ab21086"
     },
     {
       "id": "A-01.1",
@@ -483,7 +483,7 @@
         "S-01.4"
       ],
       "path": "task_prompts/A-01.1.md",
-      "sha256": "d0de9c8e1d2ccf97e81cb419efdb4320476ef2c1ffbec85d5113853af175d068"
+      "sha256": "7a6599bc0eb30d8884a38258d3ca19a70f6794af53c6693d4a4fd8af4e467a3c"
     },
     {
       "id": "A-01.2",
@@ -493,7 +493,7 @@
         "A-01.1"
       ],
       "path": "task_prompts/A-01.2.md",
-      "sha256": "24e0d90935c0904074bd4110b37ad3c5f80040cca572fa5c90a24431a6cbcc2a"
+      "sha256": "abe6d1be496fe2bc375c217de58b3dadaca0f8117a58f78c20e311c3da14a973"
     },
     {
       "id": "E-03.1",
@@ -504,7 +504,7 @@
         "E-02.2"
       ],
       "path": "task_prompts/E-03.1.md",
-      "sha256": "fa5ccd46bbda6da40cc61a3ed5452a14baec0d7d5eba9f552b9ea7c6259177ff"
+      "sha256": "b8eb2f7a9ecdcc903a8717985d40757827a0e3d4c29f176be33ed2e2d9230045"
     },
     {
       "id": "E-03.2.1",
@@ -514,7 +514,7 @@
         "E-03.1"
       ],
       "path": "task_prompts/E-03.2.1.md",
-      "sha256": "5883c0a878c5a2cd2b4a0276ab905275218770baa52edd531329b8a4ac6b7bd5"
+      "sha256": "272a65026d4aaa1eb6537f1e956f786a6f783edcf66b91a02cd2526639701d47"
     },
     {
       "id": "E-03.2.2",
@@ -524,7 +524,7 @@
         "E-03.2.1"
       ],
       "path": "task_prompts/E-03.2.2.md",
-      "sha256": "5ccce5108563bbe37ccd0222d8ceed32ee716541641a3dbfdf73cc4a398b79b5"
+      "sha256": "722fca59e8d052853237dd961f4ad65cedbdc54f0e03fa7468632807f98e1767"
     },
     {
       "id": "E-03.3.1",
@@ -534,7 +534,7 @@
         "E-03.2.2"
       ],
       "path": "task_prompts/E-03.3.1.md",
-      "sha256": "20f584a8e9be1cc09155a0838d0b0dc7d562a33fcf139f2f51a4be6f118b14ed"
+      "sha256": "babfe3447d7ef8bb473cc59eacee377b3bb9e172e926be3b60947e9b0282dd84"
     },
     {
       "id": "E-03.3.2",
@@ -544,7 +544,7 @@
         "E-03.3.1"
       ],
       "path": "task_prompts/E-03.3.2.md",
-      "sha256": "7794217ea55bd9ba76f473358e687aeb89a2ecab74fd70d60e4eed6cacb70470"
+      "sha256": "90953891be2091ca2abe74ac180cd1e4d38b853baa4232f7399201fa96c62522"
     },
     {
       "id": "E-03.4",
@@ -554,7 +554,7 @@
         "E-03.3.2"
       ],
       "path": "task_prompts/E-03.4.md",
-      "sha256": "96feb62ac981e0ff6f15142417de07613468c0d6f608a1c56321b02cdefd1ff8"
+      "sha256": "ae9ea2f469ac51889185facb2a4b534cbd56aed8352e5c0271f05d08f3524123"
     },
     {
       "id": "Q-01.1",
@@ -564,7 +564,7 @@
         "E-02.2"
       ],
       "path": "task_prompts/Q-01.1.md",
-      "sha256": "b7a00b640718f918135dbe2d35c7cfa542fcf83f50e108ebed1dfcec0045ebe4"
+      "sha256": "413cd6a047479c0c7c9b2d756e727d3cc2de099095c7dcb6748fbaea77ee9aca"
     },
     {
       "id": "Q-01.2",
@@ -574,7 +574,7 @@
         "Q-01.1"
       ],
       "path": "task_prompts/Q-01.2.md",
-      "sha256": "d95ae84e03eae398096e0c2ebd470caa293e141093c0310308191a6ca57bbcc8"
+      "sha256": "53182258a21b694d11bbd0314b73f0a7a1de745c8c8dcee0657bd666cd309af1"
     },
     {
       "id": "Q-02.1",
@@ -585,7 +585,7 @@
         "F-03.4"
       ],
       "path": "task_prompts/Q-02.1.md",
-      "sha256": "53f4f377b3572516d19ad840461a1bbedf5bb5d6e98ce8da324a94a6c252848a"
+      "sha256": "972e9db56862a8cc803dc914581133de264cb8013abdc1e6ef200039001f7855"
     },
     {
       "id": "Q-02.2.1",
@@ -595,7 +595,7 @@
         "Q-02.1"
       ],
       "path": "task_prompts/Q-02.2.1.md",
-      "sha256": "69c7c066c404e47703b88d2d94c7db80117ac84cba122b891d56a716aa68e568"
+      "sha256": "06e05e6a2f245c0d811c3e907cf56376827d9fe4949edacf0b8bd62068571cbd"
     },
     {
       "id": "Q-02.2.2",
@@ -605,7 +605,7 @@
         "Q-02.2.1"
       ],
       "path": "task_prompts/Q-02.2.2.md",
-      "sha256": "3a7d15e9184c030702c3f82d50fd97267e346dedf41361eabb06e4f260461d01"
+      "sha256": "b69374dd153d778e1d670dcc4d8aa5ca0b6cb204b4d53407c49abcb43a9ad78b"
     },
     {
       "id": "Q-02.3.1",
@@ -615,7 +615,7 @@
         "Q-02.2.2"
       ],
       "path": "task_prompts/Q-02.3.1.md",
-      "sha256": "15509fe3ab5c40f34ddbae267fe23285e4c1878d0d06ddf773565b009399760e"
+      "sha256": "50455e3729be93cad8c13686c4ece252eb62c22e47cdca24dd3dee5896c6f49d"
     },
     {
       "id": "Q-02.3.2",
@@ -625,7 +625,7 @@
         "Q-02.3.1"
       ],
       "path": "task_prompts/Q-02.3.2.md",
-      "sha256": "43c9a359a4941b34e383db87f57e2263d6f5b99437fad1dc38679b25614f3c65"
+      "sha256": "9dcf3d8f898e59a2c5e5b615567a09d1e1a58d7442809931d7a0b5ae41aad97e"
     },
     {
       "id": "Q-02.4",
@@ -635,7 +635,7 @@
         "Q-02.3.2"
       ],
       "path": "task_prompts/Q-02.4.md",
-      "sha256": "fc051ff86eb09bf731d39d52eb3b795272b6d30a79c1b16b57cae43a3a12a89c"
+      "sha256": "85a28e3f3cf56e12930bc85b581c84bd681c69f7808c58f29d10cbc9f429faad"
     },
     {
       "id": "Q-03.1",
@@ -646,7 +646,7 @@
         "Q-01.2"
       ],
       "path": "task_prompts/Q-03.1.md",
-      "sha256": "bde3a9037bce983b7718bc42be15ab02a3479afe6b0332866835cd3b4fec28c9"
+      "sha256": "1b45bd1b78562eb777bd1074e1a5df6d1a0dbc549827a3bb5ef57b9c7f66dfbc"
     },
     {
       "id": "Q-03.2",
@@ -656,7 +656,7 @@
         "Q-03.1"
       ],
       "path": "task_prompts/Q-03.2.md",
-      "sha256": "ad033048e5d78b89f03af20b0d6c3474cadeb364f42d81821bfa0656cd85ac1f"
+      "sha256": "b58812bf7cf60aa82bc95e4bcd0cd2d154f81a309a34b318f561d39a81d732f7"
     },
     {
       "id": "E-04.1",
@@ -668,7 +668,7 @@
         "P-03.2"
       ],
       "path": "task_prompts/E-04.1.md",
-      "sha256": "73bed52730d48ca0406fc42affff45a94272c336acc1fd26bfb6e7b758ece3c7"
+      "sha256": "dd838b18b50ddaa4d89df82266f255b82bfd23692fe1db0407d47b48e29f4321"
     },
     {
       "id": "E-04.2.1",
@@ -678,7 +678,7 @@
         "E-04.1"
       ],
       "path": "task_prompts/E-04.2.1.md",
-      "sha256": "7df809d792b9743e4d70ab7cdb09b8b88623ef216e5399a8b55a25447b81a4ce"
+      "sha256": "ac2172bfb03013020c341cd2a0737fb15c65c4b4ac5bd8df8fdf9eb3e33b83f3"
     },
     {
       "id": "E-04.2.2",
@@ -688,7 +688,7 @@
         "E-04.2.1"
       ],
       "path": "task_prompts/E-04.2.2.md",
-      "sha256": "aa6849f153144f6262113b75788ce86729aa7bb139131f8a45404a8d273bc4bf"
+      "sha256": "382b8651b1acd18b727f125679b9c3d3790979cedc0fd76a615add4cdc10587b"
     },
     {
       "id": "E-04.3.1",
@@ -698,7 +698,7 @@
         "E-04.2.2"
       ],
       "path": "task_prompts/E-04.3.1.md",
-      "sha256": "08ff7a154e5389a2eea37c9edd76cd969f2ead1a51e3e07520d656827996abe3"
+      "sha256": "eaaeacb448a81e69848ba7515f98737ac17724ba6b05f0e255243ad5619ad398"
     },
     {
       "id": "E-04.3.2",
@@ -708,7 +708,7 @@
         "E-04.3.1"
       ],
       "path": "task_prompts/E-04.3.2.md",
-      "sha256": "db7f5016506e5d7c3a38082523064d266af1c8cd7251b4dea2531b3e120d72d8"
+      "sha256": "5e5f6086c6d0042590650c8303c05c0322fc6cfb8517bc9fdf23468ce86d623f"
     },
     {
       "id": "E-04.4",
@@ -718,7 +718,7 @@
         "E-04.3.2"
       ],
       "path": "task_prompts/E-04.4.md",
-      "sha256": "6816ebf5c1d2b7a827f350ddc8af4ccfe089771be776d321357da28deb49cf0b"
+      "sha256": "86044f98e0accf4e25e20670ff6eb693480480174b06678c55fbe61abb40a628"
     },
     {
       "id": "D-01.1",
@@ -730,7 +730,7 @@
         "S-01.4"
       ],
       "path": "task_prompts/D-01.1.md",
-      "sha256": "bcc542b81fd61c2e3891f5bb93aa8da6d311a81d9c55444b2c23fb0b9b33fab5"
+      "sha256": "f3141f8c21d0e36b0218f677f047f59c6c17a5be631d22208a5695cda4cd1bac"
     },
     {
       "id": "D-01.2",
@@ -740,7 +740,7 @@
         "D-01.1"
       ],
       "path": "task_prompts/D-01.2.md",
-      "sha256": "02dacc5629cb260281d317f026f43e9782a394e2aabe0495e5cdb3affd2b179d"
+      "sha256": "e1e68d8fc49ae14db4593cc630e779af07877e6b6643dc7cc075090c651fb144"
     },
     {
       "id": "G-01.1",
@@ -751,7 +751,7 @@
         "P-03.2"
       ],
       "path": "task_prompts/G-01.1.md",
-      "sha256": "8bfe651b4debd503fd6c80f0e5dd27f828223991cb51af8e767c4ed9f7199884"
+      "sha256": "8cb24320e626d480c5d41a62bd58f96e78cdd66130ac776bc703613074598049"
     },
     {
       "id": "G-01.2",
@@ -761,7 +761,7 @@
         "G-01.1"
       ],
       "path": "task_prompts/G-01.2.md",
-      "sha256": "71451b524c0c45d0ad6230807d9eb94df4626952f4e5e5ba8a683446e77f2093"
+      "sha256": "ad19d2745ac9b3f2f6661125099d7cb0469b0738cd96bad456a92c0583d51430"
     },
     {
       "id": "G-02.1",
@@ -772,7 +772,7 @@
         "Q-03.2"
       ],
       "path": "task_prompts/G-02.1.md",
-      "sha256": "3216003222471642dab195f1b9f4711de39aa3fc69b9979099fcd8ca70782e25"
+      "sha256": "8708971e0ca2105cd3d750c57ead602b287d5223d236b527fd6582bb98e13160"
     },
     {
       "id": "G-02.2",
@@ -782,7 +782,7 @@
         "G-02.1"
       ],
       "path": "task_prompts/G-02.2.md",
-      "sha256": "e83395bc22cd4edc774ff227bb335bf2a919a4f85252487716d8b28c63ac75a6"
+      "sha256": "cb06e1c3ecbf150b5ac8dc0a27bc88aa00f18da0cbd2eee320b77e586fb0a819"
     },
     {
       "id": "G-03.1",
@@ -793,7 +793,7 @@
         "G-01.2"
       ],
       "path": "task_prompts/G-03.1.md",
-      "sha256": "6e57732d662f2a31bcb4cf7fa07c6b0812ee9784f960b58fdeede019e70d5f0b"
+      "sha256": "73f71cad0e20ed36e59348b0c5e5f4c377c4fa7dd0aeec98113e4101226c9b43"
     },
     {
       "id": "G-03.2",
@@ -803,7 +803,7 @@
         "G-03.1"
       ],
       "path": "task_prompts/G-03.2.md",
-      "sha256": "6631eb3553620ee21602e97e81b3ed5b52dea8d2917ea100a760e4d06f52cc42"
+      "sha256": "18d8928bdce4fada0e4c03342a39f39357e3948b9a982a8aad325edc9cb8adff"
     },
     {
       "id": "G-04.1.1",
@@ -815,7 +815,7 @@
         "S-01.4"
       ],
       "path": "task_prompts/G-04.1.1.md",
-      "sha256": "c74fdd7248faceac56ad549ab7d2c4365251d88e794eb2fdb63b20b175077d22"
+      "sha256": "2d6d1c85eb36d72573eb67a2ec4dfd23389d4d09272edc4c04b654befbef6783"
     },
     {
       "id": "G-04.1.2",
@@ -825,7 +825,7 @@
         "G-04.1.1"
       ],
       "path": "task_prompts/G-04.1.2.md",
-      "sha256": "95c5dfebebbf795681c543628fc5795c674cc64eb5ffa861e7f94f90aaa65b28"
+      "sha256": "8f8631b0ab6c259163244ccd4a52596119baeb229c8ddfd1c35f7f7677146430"
     },
     {
       "id": "G-04.2.1",
@@ -835,7 +835,7 @@
         "G-04.1.2"
       ],
       "path": "task_prompts/G-04.2.1.md",
-      "sha256": "383b43f7308f39e9b7ba96758485d306703a838c5ab33d8963e852974fd32879"
+      "sha256": "727a1a0d7a6f27f8f81e1f3caf6a30dcab698ef28647a139c8f8b3760e973abb"
     },
     {
       "id": "G-04.2.2",
@@ -845,7 +845,7 @@
         "G-04.2.1"
       ],
       "path": "task_prompts/G-04.2.2.md",
-      "sha256": "cc8db804eacbfbe3f7409efc9f1065c39fcf5708be25c7ef6ff455582a007315"
+      "sha256": "82f3f706712e094dca61770ede67e51d8e510327e8cc64be5abecceffca66f5a"
     },
     {
       "id": "G-04.3.1",
@@ -855,7 +855,7 @@
         "G-04.2.2"
       ],
       "path": "task_prompts/G-04.3.1.md",
-      "sha256": "f31f01f0abcf6096816e929e7446154446b21c6aff27861ef4174a5fc0c35a9d"
+      "sha256": "05b9273597e7476e39f3855205b3b982ad1f870c879c5b6978cc67b45435cc2f"
     },
     {
       "id": "G-04.3.2",
@@ -865,7 +865,7 @@
         "G-04.3.1"
       ],
       "path": "task_prompts/G-04.3.2.md",
-      "sha256": "1e2a447018e9706425fcca5838dbce6cd404aaeb2334c1aad2bdf35185458d85"
+      "sha256": "c4fe00352d7a7a09984d59fd312b7b9077e05c1cd07e473cd68067c9fba1d1a2"
     },
     {
       "id": "G-04.4.1",
@@ -875,7 +875,7 @@
         "G-04.3.2"
       ],
       "path": "task_prompts/G-04.4.1.md",
-      "sha256": "32f47d318877a3e45531ff2b1ab80440a5b60524f50fac4aefcb360ba77a585a"
+      "sha256": "118e59265cabbd4ffa861191a619642373a2791eab4a94775dcc5b89852a9d48"
     },
     {
       "id": "G-04.4.2",
@@ -885,7 +885,7 @@
         "G-04.4.1"
       ],
       "path": "task_prompts/G-04.4.2.md",
-      "sha256": "495bc7367c682a7fa66f8257f3d5d1ddc4e470e41551372585e6b7c90555e69b"
+      "sha256": "71ce07c20fa2dbf2d38f737979f088c99499d972c25a91f78463b3414aab9e47"
     },
     {
       "id": "G-04.5",
@@ -895,7 +895,7 @@
         "G-04.4.2"
       ],
       "path": "task_prompts/G-04.5.md",
-      "sha256": "773bad11eecc8b98833253c5bf5a82054f732d4b524a6fe4be06b8932aa1a2ae"
+      "sha256": "a592d60dc268557619b0e216741c6ec6bf25c773ef661b55a6d1da7427e90f59"
     },
     {
       "id": "G-05.1",
@@ -906,7 +906,7 @@
         "E-04.4"
       ],
       "path": "task_prompts/G-05.1.md",
-      "sha256": "9d0ba0de95435934ab3428a31ca7e482980199df90bb8b4e63f20deb6318da32"
+      "sha256": "0c95addb61f45d6a2a33c563917014f87d920a412e51795ad8e5cd599430f6ac"
     },
     {
       "id": "G-05.2",
@@ -916,7 +916,7 @@
         "G-05.1"
       ],
       "path": "task_prompts/G-05.2.md",
-      "sha256": "32a8531204b6a7033809023cc0fa3e0931bb305988cb02c456de587bdc576c10"
+      "sha256": "f078dc7943254b384de67a44c81551c3d67b81244e75ebbb4040e5b745c2f0ac"
     },
     {
       "id": "G-06.1",
@@ -928,7 +928,7 @@
         "S-02.2"
       ],
       "path": "task_prompts/G-06.1.md",
-      "sha256": "bcfe32d2cc90c99cca3845a1ad9f17058ec8f11e73bd567fc6812abd585259f5"
+      "sha256": "0214263a9206a9df868e546d683c9708a7049a3a95ae7f498d9dc86f71f66ac9"
     },
     {
       "id": "G-06.2.1",
@@ -938,7 +938,7 @@
         "G-06.1"
       ],
       "path": "task_prompts/G-06.2.1.md",
-      "sha256": "1fc2fdfac3c9301c86abef3273f211ca961c7ae1158b145b6a3eb9ba241c4708"
+      "sha256": "d7654b8a6116d4f7c6a79cc60e0a9cd554f90662f205cf789591bbb9b01e49d3"
     },
     {
       "id": "G-06.2.2",
@@ -948,7 +948,7 @@
         "G-06.2.1"
       ],
       "path": "task_prompts/G-06.2.2.md",
-      "sha256": "00a5ac558e8e45cf617819c5b18d9b4cb0c1e786ade43dd506cab0188d9c0cf7"
+      "sha256": "b45e566b0bc525764ee06591326f24a541c6ade1407a4984b14c235485b6db06"
     },
     {
       "id": "G-06.3.1",
@@ -958,7 +958,7 @@
         "G-06.2.2"
       ],
       "path": "task_prompts/G-06.3.1.md",
-      "sha256": "fac6099ee2c99a807976477f9db1f69ddacecbb31aca26d867bc1ab13f596128"
+      "sha256": "3c564af61e99f6892256187341f574d0105e0ad3156824948b0b872349e27f6e"
     },
     {
       "id": "G-06.3.2",
@@ -968,7 +968,7 @@
         "G-06.3.1"
       ],
       "path": "task_prompts/G-06.3.2.md",
-      "sha256": "440e1a4300f5be35cb2bee72ef7c58485166c1e394c940eb0f7fe2a2d0f6cceb"
+      "sha256": "f7da3c0a0f55785449c23431e15cda1687ac2d7c3fa521c84246512745a586f5"
     },
     {
       "id": "G-06.4",
@@ -978,7 +978,7 @@
         "G-06.3.2"
       ],
       "path": "task_prompts/G-06.4.md",
-      "sha256": "1b387abc89e027ebb6fe2702a425158f840fb877c4e24ede2d0c31238ce70830"
+      "sha256": "c10c2cd14f46b1341e6915fd09972195ea2d56bfcbb7abfb11346c20bb3deabd"
     },
     {
       "id": "K-01.1",
@@ -990,7 +990,7 @@
         "F-05.2"
       ],
       "path": "task_prompts/K-01.1.md",
-      "sha256": "a87f9bfe2785db744cceeed4b2f18ba20df2259878950ed4f84373a3af2e3365"
+      "sha256": "7f3fef765b6b2fd0c43ff5c8c9deb73d1c3aa2b7073459f82fb0e4f0a27bb84b"
     },
     {
       "id": "K-01.2",
@@ -1000,7 +1000,7 @@
         "K-01.1"
       ],
       "path": "task_prompts/K-01.2.md",
-      "sha256": "6d4de236f18b4ba292b16a5ad27ebfd80dfd61ec8959e257329042caab841268"
+      "sha256": "b36310dc000beb2a7936663daa29228c0c2ef9e132a4ba227b904bff9eb2c1bc"
     },
     {
       "id": "K-02.1",
@@ -1010,7 +1010,7 @@
         "K-01.2"
       ],
       "path": "task_prompts/K-02.1.md",
-      "sha256": "4184ea1bbc122669c6d919f4b62b0fd78503c7b26c141c8c1146f3d42e4d51d1"
+      "sha256": "95501bc26402f96c2960ad8e0fa90e07b1e8b8551f5295eed1677da33998e51d"
     },
     {
       "id": "K-02.2",
@@ -1020,7 +1020,7 @@
         "K-02.1"
       ],
       "path": "task_prompts/K-02.2.md",
-      "sha256": "12bf14da31b7ba096b19ce12fe0ecba91ff05b035467520a1b2a2694d3ca458f"
+      "sha256": "526c5cee4d59e5229dc7c784803c0d7ca31711ddcf56d5c555ac360ca0a2e66c"
     },
     {
       "id": "K-03.1",
@@ -1031,7 +1031,7 @@
         "G-01.2"
       ],
       "path": "task_prompts/K-03.1.md",
-      "sha256": "db200c6809862e8d6f16e4b17a4bd3e640666fc22a72e440ae2e1a8629d04f22"
+      "sha256": "37102b106f9cb95eebcdecfc8c0ea4700574bf24e119e599fe24ae42c3f29d3a"
     },
     {
       "id": "K-03.2.1",
@@ -1041,7 +1041,7 @@
         "K-03.1"
       ],
       "path": "task_prompts/K-03.2.1.md",
-      "sha256": "df51c86b56c15e4c1a3bef7999e559003c8325e1ad279d64e187d3fe06a70d15"
+      "sha256": "d3dfda72cd0c27b802406cf30cef8676d2fc04b92a29a86eb85c6aad0168f187"
     },
     {
       "id": "K-03.2.2",
@@ -1051,7 +1051,7 @@
         "K-03.2.1"
       ],
       "path": "task_prompts/K-03.2.2.md",
-      "sha256": "a486e70284d7b7bba8ad4c6e0db704610e372ed1bfe070237f539936802d0daf"
+      "sha256": "2d6be775d8a367e04848252bbca66427492096a462ebd202685ae40aa8252a9f"
     },
     {
       "id": "K-03.3.1",
@@ -1061,7 +1061,7 @@
         "K-03.2.2"
       ],
       "path": "task_prompts/K-03.3.1.md",
-      "sha256": "fb2885cdf4396d18e7e546ae728dec6b925cbd2ba82633fe3678d8ec9c141833"
+      "sha256": "b9b50bb2262e1da8267e9bc7359b3be0215ed1aa3691f9d707f8f358e11de036"
     },
     {
       "id": "K-03.3.2",
@@ -1071,7 +1071,7 @@
         "K-03.3.1"
       ],
       "path": "task_prompts/K-03.3.2.md",
-      "sha256": "7e3899e8dbc401cf7d90d393955bf6969f3514002aa8daf5d769f2da614b8c5e"
+      "sha256": "99ad80c8c2148b7993b53e2adb90c5cfd9333d0ff9cef419f2185a8f1b266745"
     },
     {
       "id": "K-03.4",
@@ -1081,7 +1081,7 @@
         "K-03.3.2"
       ],
       "path": "task_prompts/K-03.4.md",
-      "sha256": "116bb44792dfc158d0c0a14a423b17cfbc0080bc3eb8982e7dabaae9204f2481"
+      "sha256": "a3b77d26ec1232b5f2abef26f3e0c54845288ec8504dfec398c75d6393bc9ce1"
     },
     {
       "id": "O-01.1",
@@ -1093,7 +1093,7 @@
         "G-01.2"
       ],
       "path": "task_prompts/O-01.1.md",
-      "sha256": "72e5a2d9302903e85a18f36d067a44930a3b5fc830507341165d5c0f38d4a9b4"
+      "sha256": "ed47b44d43d27926ba24e2eb2663aabb706d0ee0def72881ed0527fb80fd0bf8"
     },
     {
       "id": "O-01.2",
@@ -1103,7 +1103,7 @@
         "O-01.1"
       ],
       "path": "task_prompts/O-01.2.md",
-      "sha256": "a067c9416d4a180c3c0915778d339aa25a96bdd682445f0c6e2ca3a2297dadf2"
+      "sha256": "72da4511f4e17f928ebab0b0eb10c83916eb3ba71db73b71f37a151b8934387c"
     },
     {
       "id": "U-05.1",
@@ -1115,7 +1115,7 @@
         "O-01.2"
       ],
       "path": "task_prompts/U-05.1.md",
-      "sha256": "7381a0e8f66a7cb04b8b4a17476c0645df0110522de898313d7a7dde5c5c41b1"
+      "sha256": "0d6dea4ed542c1e525a82bc79046518960beaa173280f6355f84e29100c8874f"
     },
     {
       "id": "U-05.2",
@@ -1125,7 +1125,7 @@
         "U-05.1"
       ],
       "path": "task_prompts/U-05.2.md",
-      "sha256": "79855db566d237b10fa06c7f60b9bfb3c40275af4b8062ebd90089610c1f2d1e"
+      "sha256": "af893702bec41da0647e52a8c01bb83a54e2f66ac38c865f89f09fecda9af60f"
     },
     {
       "id": "R-01.1",
@@ -1137,7 +1137,7 @@
         "G-05.2"
       ],
       "path": "task_prompts/R-01.1.md",
-      "sha256": "13ba460f7128c04ac1e7141b8611ce2732cca3792579a67fe0b71bc9d5a337e1"
+      "sha256": "5c8a70f4d1b82b85f783ff45fb4d93f11cfba7cbf6e4b977489f2f255a021bf7"
     },
     {
       "id": "R-01.2",
@@ -1147,7 +1147,7 @@
         "R-01.1"
       ],
       "path": "task_prompts/R-01.2.md",
-      "sha256": "30427d242af637388a95b1726a79443015d46d234eb7b4fd33ad656d6825a601"
+      "sha256": "233121aed5af65beed75b405c0e03c395a69399a500850aa8d0fe07db9fb202d"
     },
     {
       "id": "R-02.1.1",
@@ -1159,7 +1159,7 @@
         "G-04.5"
       ],
       "path": "task_prompts/R-02.1.1.md",
-      "sha256": "d3e079c239b352fc7e38af1eb14d25ceb7c834c857d2627bb656c5bc2db7202b"
+      "sha256": "6940fb658d922399ad85d7d83c464c28632c0e3b7bfb3ede2b358d4dfc56bbc5"
     },
     {
       "id": "R-02.1.2",
@@ -1169,7 +1169,7 @@
         "R-02.1.1"
       ],
       "path": "task_prompts/R-02.1.2.md",
-      "sha256": "75cec236130372c15f38813cbdb69ec1d1c7f9a02b43e65c31bd341425e79694"
+      "sha256": "05291f7599006631a4ceb9c2fdaaeb6d9e4692235b6a03368eea0000932c0b9d"
     },
     {
       "id": "R-02.2.1",
@@ -1179,7 +1179,7 @@
         "R-02.1.2"
       ],
       "path": "task_prompts/R-02.2.1.md",
-      "sha256": "e3ee3d7385a20de7a3956e5ffb9d6875d96de9e65e3eabeedd4a22e443b19522"
+      "sha256": "aa4449a974ec65d5adb04c9c42c40247399b4406fce13b44c46e71d07e444a9a"
     },
     {
       "id": "R-02.2.2",
@@ -1189,7 +1189,7 @@
         "R-02.2.1"
       ],
       "path": "task_prompts/R-02.2.2.md",
-      "sha256": "b0e119d411709926488fbe376e935cbf52214dd4f1859e278a9bc77e212595e4"
+      "sha256": "edbdb500a3b5a30504ddde7d702ba950cc5d3bcd31da240fa9323440562c8858"
     },
     {
       "id": "R-02.3.1",
@@ -1199,7 +1199,7 @@
         "R-02.2.2"
       ],
       "path": "task_prompts/R-02.3.1.md",
-      "sha256": "27931be4a2e80b8ab4a1862386ab64ba200ceb9a697e9e4fb55e1741ce7eb4b7"
+      "sha256": "b7a0a798414c168182911fc11e4827ee8b3e81e23fdd25b6f29b2b9e87bcb269"
     },
     {
       "id": "R-02.3.2",
@@ -1209,7 +1209,7 @@
         "R-02.3.1"
       ],
       "path": "task_prompts/R-02.3.2.md",
-      "sha256": "b6c1d78178c1269c17a23d413e40ff6a74e676bb98f9197d90e25df6237547ca"
+      "sha256": "8992c52dde00e48cb692dbafaa01819758ce64ef3941a5f6c674a737eb45aba1"
     },
     {
       "id": "R-02.4.1",
@@ -1219,7 +1219,7 @@
         "R-02.3.2"
       ],
       "path": "task_prompts/R-02.4.1.md",
-      "sha256": "59c299e4222f041a6d7dd04f0cbdd2664e13ca2dc5f4cb2787292f74c5d5affb"
+      "sha256": "131b981a668bf2b5a8f16f73f1ebfc8e5f387a35b126b71a351a905cd429401e"
     },
     {
       "id": "R-02.4.2",
@@ -1229,7 +1229,7 @@
         "R-02.4.1"
       ],
       "path": "task_prompts/R-02.4.2.md",
-      "sha256": "7f520c687d4e766cce0a97f8c64ec1c074b8e618fcd04880f53e33145b6aa529"
+      "sha256": "e01dad7eb49b9b27e97760be4d395467278619cfd5036586db5dcd5b261ac8a3"
     },
     {
       "id": "R-03.1.1",
@@ -1240,7 +1240,7 @@
         "R-02.4.2"
       ],
       "path": "task_prompts/R-03.1.1.md",
-      "sha256": "003f33ff6edcd699b16b3f7cef828bbd0d71a007a6a1538d50e969534c93b991"
+      "sha256": "a1a9bdcadb9089945cf4e4a8db501a09c946462fe83aba5525778ffd0edd4768"
     },
     {
       "id": "R-03.1.2",
@@ -1250,7 +1250,7 @@
         "R-03.1.1"
       ],
       "path": "task_prompts/R-03.1.2.md",
-      "sha256": "83ae29bfec341f7ad31759c2919472b30e374d3468e8ef098b634fe28a7ab12e"
+      "sha256": "236c2261aac25ac4a0d5903ad736f1ddb0c729dfa80e41c37283928186f32d04"
     },
     {
       "id": "R-03.2.1",
@@ -1261,7 +1261,7 @@
         "R-02.4.2"
       ],
       "path": "task_prompts/R-03.2.1.md",
-      "sha256": "fac434919f07c18abbb88232b638e92cdf9a8cac3aa8c4d50fcb04459102e6ea"
+      "sha256": "1e72119d52a3a37cf4a2cb4f9fe918e99239e596ce57600a4f210f9543f49ab1"
     },
     {
       "id": "R-03.2.2",
@@ -1271,7 +1271,7 @@
         "R-03.2.1"
       ],
       "path": "task_prompts/R-03.2.2.md",
-      "sha256": "a793cfaf7b2569bfeb9f32af245eb4ee4f440aec329323b005e7b3d963edc3fb"
+      "sha256": "44af2142de500be9e7c62580648f2c33a014b90ff069e3b84104df69eb03fb40"
     },
     {
       "id": "R-03.3.1",
@@ -1282,7 +1282,7 @@
         "R-02.4.2"
       ],
       "path": "task_prompts/R-03.3.1.md",
-      "sha256": "544067f575fda54c462d48a151255fd2fa2f44af4560c4b058f97640ac07b6b1"
+      "sha256": "4194d7ed24eb702604652536afd0be9bd73f1e61ee4ef98d0dab98cc92bf151a"
     },
     {
       "id": "R-03.3.2",
@@ -1292,7 +1292,7 @@
         "R-03.3.1"
       ],
       "path": "task_prompts/R-03.3.2.md",
-      "sha256": "ee73550d3817010c759171843428dbc63f3542f42dd4567c199f4bf662997a9b"
+      "sha256": "819a8c0041d7518508493e1609fc941f681c8b65c4f0ad75c9b1a53b294e7c87"
     },
     {
       "id": "R-03.4.1",
@@ -1304,7 +1304,7 @@
         "R-03.3.2"
       ],
       "path": "task_prompts/R-03.4.1.md",
-      "sha256": "d17a4d8f6eb3b909723213d82d963110c6ddf516c23070a24d7536772f07a793"
+      "sha256": "8d594271f72761a2a13aba72b323b96cd93e9b0e6561fe284ddc0b5f7f76b726"
     },
     {
       "id": "R-03.4.2",
@@ -1314,7 +1314,7 @@
         "R-03.4.1"
       ],
       "path": "task_prompts/R-03.4.2.md",
-      "sha256": "0d743ca9b70844d97e3b5e843eb55858e218808eae79682fb5aab72008aa8cea"
+      "sha256": "a87648d8f2776f1ef99c8bcbcc391c0441009b9f166b3849ec9e0831fdb068d2"
     },
     {
       "id": "R-04.1",
@@ -1325,7 +1325,7 @@
         "G-02.2"
       ],
       "path": "task_prompts/R-04.1.md",
-      "sha256": "005abaa793ee307dfe7b7051565a72af0421bcb42c5e80e0f75f5e25d1190981"
+      "sha256": "6151d73dd3c42174498730686642ef9452cf2518abf9ba54b1f8807aa10e7904"
     },
     {
       "id": "R-04.2",
@@ -1335,7 +1335,7 @@
         "R-04.1"
       ],
       "path": "task_prompts/R-04.2.md",
-      "sha256": "a9d768d44df10511d682535a700e4b41ea693dff7a28e2a0abc43abdfab62775"
+      "sha256": "6c2c45cd990dbd77b0c5c6cb2c354d16d0027115294e0aafd3aa51c09442b893"
     },
     {
       "id": "R-05.1.1",
@@ -1348,7 +1348,7 @@
         "U-05.2"
       ],
       "path": "task_prompts/R-05.1.1.md",
-      "sha256": "465ae8878b475e7d2a76181eb58c2d95b05107425df8c7abc4c50c07e5d851dd"
+      "sha256": "29aee7e60d6af943e610b4fcbde745fe56e15f090ae33cb6e82063509ba7e748"
     },
     {
       "id": "R-05.1.2",
@@ -1358,7 +1358,7 @@
         "R-05.1.1"
       ],
       "path": "task_prompts/R-05.1.2.md",
-      "sha256": "c8efdfe4bf4131d687a390473d253c4011464fd28b5ede872d36b3b4cfa98bc8"
+      "sha256": "961ada9ea759793cd803d3094d7e14e26c1ef238ec02b0ada28692679439320a"
     },
     {
       "id": "R-05.2.1",
@@ -1368,7 +1368,7 @@
         "R-05.1.2"
       ],
       "path": "task_prompts/R-05.2.1.md",
-      "sha256": "79854d8bb9c6afaaa8dee69474f1898ced919a07f2330d37f7787d08b5967545"
+      "sha256": "43bce62c16ae2324b1e5950aed7389a581d25ae9f53b643b91a382e34377611a"
     },
     {
       "id": "R-05.2.2",
@@ -1378,7 +1378,7 @@
         "R-05.2.1"
       ],
       "path": "task_prompts/R-05.2.2.md",
-      "sha256": "b5927a9842eaf0f51c95a3e0c41e0502565b3660d3937ed212da5bb0cedb3c82"
+      "sha256": "63878e3e56be026f580fa7c053e6d1dcf9563e8ed21658fa38b190d1b8a4590d"
     },
     {
       "id": "R-05.3",
@@ -1388,7 +1388,7 @@
         "R-05.2.2"
       ],
       "path": "task_prompts/R-05.3.md",
-      "sha256": "216897c63e0851cb27b94535711298e1ec9636a28c6016e88125afdd29707520"
+      "sha256": "a11fceb0e700b265398f0a460333ae238a5a886e430dae04d549c840efdfb9b5"
     },
     {
       "id": "R-05.4.1",
@@ -1398,7 +1398,7 @@
         "R-05.3"
       ],
       "path": "task_prompts/R-05.4.1.md",
-      "sha256": "2eacb5b4c23ed49342a2347e4f9c1316f52e44ea3de2325f321b7a900a0d3a8e"
+      "sha256": "ec481b551d16c467698a433d5c15467fb4feb96d38112db643f1ee567b4e8859"
     },
     {
       "id": "R-05.4.2",
@@ -1408,7 +1408,7 @@
         "R-05.4.1"
       ],
       "path": "task_prompts/R-05.4.2.md",
-      "sha256": "954a86bc110de206efc20a4e2adaa6f152273085e6cd20f7bbd46e8403cb741f"
+      "sha256": "4b50e9b6af1093a5e482d773d02bd514e365c644eca23ea3f18fe65bacc546f7"
     }
   ]
 }
