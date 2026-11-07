@@ -292,22 +292,26 @@ class MessageRef(Reference):
 
 @dataclass(frozen=True)
 class ObjectiveRef(Reference):
-    """An accepted objective by its outcome id (blueprint notation ``outcome:O-101``)."""
+    """An accepted objective by its outcome id (decision 0008): a random UUID in canonical
+    lower-case text, minted when the Objective item's acceptance is recorded and declared
+    under ``x-outcomes`` in the declaring change's ``.openspec.yaml``; optionally read at
+    one commit of the project repository."""
     KIND: ClassVar[str] = 'objective'
     SCHEME: ClassVar[str] = 'outcome'
     PINNING: ClassVar[str] = 'optional'
-    PATTERN: ClassVar[re.Pattern] = re.compile(rf'^outcome:(?P<outcome>{SEGMENT})(?:@(?P<revision>{COMMIT}))?$')
+    PATTERN: ClassVar[re.Pattern] = re.compile(rf'^outcome:(?P<outcome>{UUID})(?:@(?P<revision>{COMMIT}))?$')
     outcome: str
     revision: str | None = None
 
     def __post_init__(self):
-        _native(self.KIND, 'outcome', self.outcome)
+        _require(_is('uuid', self.outcome), self.KIND,
+                 f'the outcome id must be a lower-case UUID (decision 0008): {self.outcome!r}')
         _require(self.revision is None or _is('commit', self.revision), self.KIND,
                  'revision must be a full commit id')
 
     @property
     def text(self):
-        return f'outcome:{encode_segment(self.outcome)}' + (f'@{self.revision}' if self.revision else '')
+        return f'outcome:{self.outcome}' + (f'@{self.revision}' if self.revision else '')
 
     @property
     def pinned(self):
@@ -318,7 +322,7 @@ class ObjectiveRef(Reference):
 
     @classmethod
     def _from_match(cls, m):
-        return cls(decode_segment(m['outcome']), m['revision'])
+        return cls(m['outcome'], m['revision'])
 
 
 @dataclass(frozen=True)
@@ -689,7 +693,9 @@ class Resolution:
     revision). ``observed_revision`` and ``observed_digest`` are what the authority
     showed, when it has such anchors. ``code`` is a stable reason code; it is empty
     exactly when the outcome is ``resolved``. ``supplied_by`` names the plan leaves that
-    will supply a missing authority.
+    will supply a missing authority. ``facts`` holds the fields of the authority's own
+    record that a traversal follows (for an objective: its declaring change, item,
+    acceptance, source and accepted criteria), as JSON-compatible values.
     """
     reference: str
     kind: str
@@ -701,8 +707,11 @@ class Resolution:
     observed_digest: str | None = None
     query: str = 'reference'
     supplied_by: tuple = field(default_factory=tuple)
+    facts: dict | None = None
 
     def __post_init__(self):
+        if self.facts is not None and not isinstance(self.facts, dict):
+            raise ValueError('facts must be a JSON object')
         if self.outcome not in OUTCOMES:
             raise ValueError(f'not a resolution outcome: {self.outcome!r}')
         if (self.outcome == RESOLVED) != (self.code is None):

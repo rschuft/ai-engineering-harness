@@ -542,10 +542,11 @@ and adapter exist:
 | `work` | Backlog.md | `task view --json`, `task list --json` (P-02) | implemented; offline, and live with `AIEH_BACKLOG` |
 | `commit` | Git | `git rev-parse`, `cat-file` in a registered clone | implemented; offline tests |
 | `effect-receipt` | effects store | F-05.2 read methods | implemented on fixtures only |
+| `objective` | OpenSpec | the outcome id declared under `x-outcomes` in the declaring change's `.openspec.yaml`, cross-checked against its intent record ([decision 0008](../decisions/0008-outcome-identity-assignment-form-and-record.md), Proposed) | implemented; offline, and live with `AIEH_OPENSPEC` (`validate --strict`, `archive`) |
 | `conversation`, `message` | Owner conversation store | none | authority unavailable (U-02.1); **not yet verified** |
 | `attempt` | OpenHands Agent Server | none | authority unavailable (E-01.3.1, E-01.4.1); **not yet verified** |
 | `review`, `ci`, `authorization` | Gitea | none | authority unavailable (E-03.3.x, Q-03.x, G-03.1/G-04.3.1); **not yet verified** |
-| `objective`, `release`, `catalog` | OpenSpec, Git/Gitea, Gitea catalog | none | identity not settled (`unsupported-kind`) |
+| `release`, `catalog` | Git/Gitea, Gitea catalog | none | identity not settled (`unsupported-kind`) |
 
 A `message` reference may carry a span anchor (byte offset, length and the sha256 of those
 bytes) so that a quote can be re-extracted from the durable source and verified byte for

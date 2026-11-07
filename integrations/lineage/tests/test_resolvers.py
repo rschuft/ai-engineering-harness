@@ -52,6 +52,7 @@ CHANGE = fx.CHANGE
 CLI = [sys.executable, '-I', '-B', str(LINEAGE_DIR / 'lineage_resolve.py')]
 WAIT_CEILING_S = 120
 ABSENT = '0123456789abcdef0123456789abcdef01234567'
+OUTCOME = '5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a'
 
 
 def git(repo, *args):
@@ -148,6 +149,238 @@ class DesignResolution(TempDirCase):
         gone = resolver.current(ref)
         self.assertEqual((gone.outcome, gone.code), (L.MISSING, 'POINTER_ARTIFACT_MISSING'))
         self.assertEqual(resolver.resolve(ref).outcome, L.RESOLVED)  # the pinned revision is still there
+
+
+# ---------------------------------------------------------------------------
+# objective (decision 0008)
+
+CHANGE_DIR = f'openspec/changes/{CHANGE}'
+ARCHIVED_DIR = f'openspec/changes/archive/2026-11-07-{CHANGE}'
+ACCEPTANCE = 'conversation:qual-02/message-2'
+
+
+def declaration(outcome=OUTCOME, item='O1', acceptance=ACCEPTANCE):
+    return f'x-outcomes:\n  {outcome}:\n    item: {item}\n    acceptance: {acceptance}\n'.encode('utf-8')
+
+
+def declare(repo, change_dir=CHANGE_DIR, data=None):
+    """Append an x-outcomes declaration to a change's .openspec.yaml in a throwaway
+    repository (never the P-01.2 fixture itself, whose bytes the P-02.1 capture pins)."""
+    meta = repo / change_dir / '.openspec.yaml'
+    meta.write_bytes(meta.read_bytes() + (declaration() if data is None else data))
+
+
+def edit(repo, path, old, new):
+    target = repo / path
+    text = target.read_bytes()
+    assert text.count(old) >= 1, (path, old)
+    target.write_bytes(text.replace(old, new, 1))
+
+
+class ObjectiveResolution(TempDirCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.repo = cls.tmp / 'project'
+        cls.undeclared = fx.build_repo(cls.repo)
+        declare(cls.repo)
+        cls.declared = fx.commit_all(cls.repo, 'accept O1 of qual-02: declare its outcome id')
+        cls.proposal_digest = hashlib.sha256((cls.repo / CHANGE_DIR / 'proposal.md').read_bytes()).hexdigest()
+        cls.resolver = R.ObjectiveResolver(cls.repo)
+
+    def scenario(self, name, change):
+        """A fresh repository: the qual-02 change, CHANGE(repo) applied, committed."""
+        repo = self.tmp / name
+        fx.build_repo(repo)
+        change(repo)
+        return repo, fx.commit_all(repo, name)
+
+    def ask(self, text, repo=None, current=False):
+        resolver = R.ObjectiveResolver(repo) if repo else self.resolver
+        return (resolver.current if current else resolver.resolve)(L.parse(text))
+
+    def test_resolved_pinned_unpinned_and_current(self):
+        before = tree_state(self.repo)
+        for text, query in ((f'outcome:{OUTCOME}@{self.declared}', 'reference'), (f'outcome:{OUTCOME}', 'reference'),
+                            (f'outcome:{OUTCOME}@{self.undeclared}', 'current')):
+            with self.subTest(text=text, query=query):
+                result = self.ask(text, current=query == 'current')
+                self.assertEqual((result.outcome, result.authority, result.query), (L.RESOLVED, 'OpenSpec', query))
+                self.assertEqual((result.observed_revision, result.observed_digest),
+                                 (self.declared, self.proposal_digest))
+                self.assertEqual(result.facts, {
+                    'change': CHANGE_DIR, 'item': 'O1', 'acceptance': ACCEPTANCE,
+                    'statement': 'A product added to the catalogue appears in search results within 5 minutes of '
+                                 'being added, so customers can find new stock.',
+                    'source': ['Q1', ACCEPTANCE], 'acceptance_criteria': ['AC1']})
+        self.assertEqual(tree_state(self.repo), before)
+
+    def test_missing(self):
+        other = '0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70'
+        result = self.ask(f'outcome:{other}')
+        self.assertEqual((result.outcome, result.code), (L.MISSING, 'OUTCOME_MISSING'))
+        result = self.ask(f'outcome:{OUTCOME}@{self.undeclared}')  # before the acceptance was recorded
+        self.assertEqual((result.outcome, result.code), (L.MISSING, 'OUTCOME_MISSING'))
+
+    def test_revision_missing(self):
+        result = self.ask(f'outcome:{OUTCOME}@{ABSENT}')
+        self.assertEqual((result.outcome, result.code), (L.REVISION_MISMATCH, 'OUTCOME_REVISION_MISSING'))
+
+    def test_two_declaring_changes_are_ambiguous(self):
+        def copy_change(repo):
+            declare(repo)
+            shutil.copytree(repo / CHANGE_DIR, repo / 'openspec' / 'changes' / 'qual-02-copy')
+        repo, _ = self.scenario('amb', copy_change)
+        result = self.ask(f'outcome:{OUTCOME}', repo)
+        self.assertEqual((result.outcome, result.code), (L.AMBIGUOUS, 'OUTCOME_AMBIGUOUS'))
+        self.assertIn('qual-02-copy', result.detail)
+
+    def test_not_accepted(self):
+        cases = {
+            'proposed item': lambda repo: (declare(repo), edit(
+                repo, f'{CHANGE_DIR}/proposal.md',
+                b'- authority: accepted\n- acceptance: conversation:qual-02/message-2\n',
+                b'- authority: proposed\n')),
+            'proposed item keeping its acceptance': lambda repo: (declare(repo), edit(
+                repo, f'{CHANGE_DIR}/proposal.md', b'- authority: accepted\n- acceptance: conversation:qual-02/message-2\n',
+                b'- authority: proposed\n- acceptance: conversation:qual-02/message-2\n')),
+            'other acceptance': lambda repo: declare(repo, data=declaration(acceptance='conversation:qual-02/message-9')),
+            'absent item': lambda repo: declare(repo, data=declaration(item='O7')),
+        }
+        for number, (name, change) in enumerate(cases.items()):
+            with self.subTest(case=name):
+                repo, commit = self.scenario(f'n{number}', change)
+                result = self.ask(f'outcome:{OUTCOME}', repo)
+                self.assertEqual((result.outcome, result.code, result.observed_revision),
+                                 (L.MISSING, 'OUTCOME_NOT_ACCEPTED', commit))
+
+    def test_metadata_invalid(self):
+        cases = {
+            'flow mapping': lambda repo: declare(repo, data=b'x-outcomes: {}\n'),
+            'no proposal': lambda repo: (declare(repo), (repo / CHANGE_DIR / 'proposal.md').unlink()),
+            'unreadable intent record': lambda repo: (declare(repo), edit(
+                repo, f'{CHANGE_DIR}/proposal.md', b'## Intent Record', b'## Intent Notes')),
+            'another change is malformed': lambda repo: (declare(repo), shutil.copytree(
+                repo / CHANGE_DIR, repo / 'openspec' / 'changes' / 'other'), declare(
+                repo, 'openspec/changes/other', b'x-outcomes:\n  not-a-uuid:\n    item: O1\n')),
+        }
+        for number, (name, change) in enumerate(cases.items()):
+            with self.subTest(case=name):
+                repo, _ = self.scenario(f'i{number}', change)
+                result = self.ask(f'outcome:{OUTCOME}', repo)
+                self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'OUTCOME_METADATA_INVALID'))
+
+    def test_the_declaration_reader_is_strict(self):
+        good = declaration()
+        self.assertEqual(R.read_x_outcomes(b'schema: intent-driven\n' + good + b'other: 1\n'),
+                         {OUTCOME: {'item': 'O1', 'acceptance': ACCEPTANCE}})
+        self.assertEqual(R.read_x_outcomes(b'schema: intent-driven\n'), {})
+        self.assertEqual(R.read_x_outcomes(good + b'other:\n  nested: 1\n'),  # a later top-level key ends it
+                         {OUTCOME: {'item': 'O1', 'acceptance': ACCEPTANCE}})
+        self.assertEqual(R.read_x_outcomes(b'x-outcomes:\n  # a comment\n\n' + good[len(b'x-outcomes:\n'):]),
+                         {OUTCOME: {'item': 'O1', 'acceptance': ACCEPTANCE}})
+        bad = {
+            'flow': b'x-outcomes: {}\n',
+            'empty': b'x-outcomes:\nschema: x\n',
+            'twice': good + good,
+            'mentioned elsewhere': b'# x-outcomes\n' + good,
+            'duplicate id': good + good[len(b'x-outcomes:\n'):],
+            'upper-case id': good.replace(OUTCOME.encode(), OUTCOME.upper().encode()),
+            'unknown key': good + b'    note: x\n',
+            'repeated key': good + b'    item: O2\n',
+            'missing key': f'x-outcomes:\n  {OUTCOME}:\n    item: O1\n'.encode(),
+            'not an objective item': declaration(item='AC1'),
+            'not a reference': declaration(acceptance='yes'),
+            'missing source': declaration(acceptance='missing:owner-statement'),
+            'quoted': declaration(acceptance='"conversation:qual-02/message-2"'),
+            'trailing comment': good.replace(b'item: O1', b'item: O1 # the objective'),
+            'tab indentation': good.replace(b'    item', b'\titem'),
+            'tab-indented line after a complete entry': good + b'\t    note: x\n',
+            'fields less indented than ids': (b'x-outcomes:\n    ' + OUTCOME.encode() + b':\n  item: O1\n'
+                                              b'  acceptance: ' + ACCEPTANCE.encode() + b'\n'),
+            'tab inside': good.replace(b'item: O1', b'item:\tO1'),
+            'third level': good + b'      deeper: x\n',
+            'field before entry': b'x-outcomes:\n    item: O1\n  ' + OUTCOME.encode() + b':\n',
+            'uneven fields': good.replace(b'    acceptance', b'     acceptance'),
+            'not utf-8': good + b'\xff\n',
+        }
+        for name, data in bad.items():
+            with self.subTest(case=name), self.assertRaises(R.OutcomeMetadataInvalid):
+                R.read_x_outcomes(data)
+
+    def test_archive_move_keeps_resolving(self):
+        def archive(repo):
+            declare(repo)
+        repo, declared = self.scenario('arc', archive)
+        (repo / 'openspec' / 'changes' / 'archive').mkdir()
+        fx.git(repo, 'mv', CHANGE_DIR, ARCHIVED_DIR)
+        archived = fx.commit_all(repo, 'archive qual-02')
+        current = self.ask(f'outcome:{OUTCOME}', repo, current=True)
+        self.assertEqual((current.outcome, current.observed_revision, current.facts['change']),
+                         (L.RESOLVED, archived, ARCHIVED_DIR))
+        pinned = self.ask(f'outcome:{OUTCOME}@{declared}', repo)
+        self.assertEqual((pinned.outcome, pinned.facts['change']), (L.RESOLVED, CHANGE_DIR))
+        self.assertEqual(current.observed_digest, pinned.observed_digest)  # the move changed no bytes
+
+    def test_amendment_keeps_the_id_and_changes_the_digest(self):
+        repo, declared = self.scenario('amd', declare)
+        edit(repo, f'{CHANGE_DIR}/proposal.md',
+             b'within 5 minutes of being added, so customers can find new stock.\n- claim_type: requirement',
+             b'within 2 minutes of being added, so customers can find new stock.\n- claim_type: requirement')
+        edit(repo, f'{CHANGE_DIR}/proposal.md', b'- authority: accepted\n- acceptance: conversation:qual-02/message-2\n',
+             b'- authority: accepted\n- acceptance: conversation:qual-02/message-4\n')
+        edit(repo, f'{CHANGE_DIR}/.openspec.yaml', b'acceptance: conversation:qual-02/message-2',
+             b'acceptance: conversation:qual-02/message-4')
+        amended = fx.commit_all(repo, 'amend O1 with a new acceptance')
+        pinned = self.ask(f'outcome:{OUTCOME}@{declared}', repo)
+        current = self.ask(f'outcome:{OUTCOME}', repo, current=True)
+        self.assertEqual((pinned.outcome, current.outcome), (L.RESOLVED, L.RESOLVED))
+        self.assertEqual((pinned.observed_revision, current.observed_revision), (declared, amended))
+        self.assertNotEqual(pinned.observed_digest, current.observed_digest)
+        self.assertEqual((pinned.facts['acceptance'], current.facts['acceptance']),
+                         (ACCEPTANCE, 'conversation:qual-02/message-4'))
+        self.assertIn('within 2 minutes', current.facts['statement'])
+
+    def test_acceptance_criteria_are_the_accepted_ones_citing_the_item(self):
+        ac2 = (b'- source: O1, CL3\n- authority: proposed\n')
+        cases = {b'- source: CL3\n- authority: accepted\n': ['AC1'],      # accepted, not citing O1
+                 b'- source: O1, CL3\n- authority: accepted\n': ['AC1', 'AC2']}
+        for number, (replacement, expected) in enumerate(cases.items()):
+            with self.subTest(expected=expected):
+                repo, _ = self.scenario(f'c{number}', lambda r: (declare(r), edit(
+                    r, f'{CHANGE_DIR}/proposal.md', ac2, replacement)))
+                self.assertEqual(self.ask(f'outcome:{OUTCOME}', repo).facts['acceptance_criteria'], expected)
+
+    def test_the_archive_folder_itself_is_not_a_change(self):
+        def stray(repo):
+            declare(repo)
+            (repo / 'openspec' / 'changes' / 'archive').mkdir()
+            (repo / 'openspec' / 'changes' / 'archive' / '.openspec.yaml').write_bytes(declaration())
+        repo, _ = self.scenario('str', stray)
+        result = self.ask(f'outcome:{OUTCOME}', repo)
+        self.assertEqual((result.outcome, result.facts['change']), (L.RESOLVED, CHANGE_DIR))
+
+    def test_reads_git_objects_never_the_working_tree(self):
+        repo, commit = self.scenario('wt', declare)
+        (repo / CHANGE_DIR / '.openspec.yaml').write_bytes(b'schema: intent-driven\n')  # uncommitted
+        result = self.ask(f'outcome:{OUTCOME}', repo)
+        self.assertEqual((result.outcome, result.observed_revision), (L.RESOLVED, commit))
+
+    def test_authority_unavailable(self):
+        empty = self.tmp / 'not-a-repo-objective'
+        empty.mkdir(exist_ok=True)
+        resolver = R.ObjectiveResolver(empty)
+        for method in (resolver.resolve, resolver.current):
+            result = method(L.parse(f'outcome:{OUTCOME}'))
+            self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'PROJECT_UNAVAILABLE'))
+        with mock.patch.object(planning.Git, 'blob', side_effect=planning.PlanningError('GIT_FAILED', 'boom')):
+            result = self.ask(f'outcome:{OUTCOME}')
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'GIT_FAILED'))
+        unborn = self.tmp / 'unborn'
+        unborn.mkdir(exist_ok=True)
+        fx.git(unborn, 'init', '--quiet', '-b', 'main')
+        result = self.ask(f'outcome:{OUTCOME}', unborn)
+        self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'GIT_FAILED'))
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +733,7 @@ class RegistryAndCommandLine(TempDirCase):
 
     def test_build_registry_configures_the_resolvers(self):
         registry = R.build_registry(project=self.repo, backlog=FAKE_BACKLOG, repositories={'p': self.repo})
-        self.assertEqual(sorted(registry.resolvers), ['commit', 'design', 'work'])
+        self.assertEqual(sorted(registry.resolvers), ['commit', 'design', 'objective', 'work'])
         self.assertEqual(registry.resolve(self.pointer).outcome, L.RESOLVED)
         self.assertEqual(registry.resolve(f'git:p@{self.commit}').outcome, L.RESOLVED)
         self.assertEqual(registry.resolve('backlog:TASK-1').outcome, L.MISSING)  # the fake has no tasks here
@@ -531,11 +764,11 @@ class RegistryAndCommandLine(TempDirCase):
         self.assertEqual([json.loads(line)['outcome'] for line in ok.stdout.splitlines()], [L.RESOLVED] * 2)
         current = self.cli('resolve', '--current', self.pointer, '--project', str(self.repo))
         self.assertEqual(json.loads(current.stdout)['query'], 'current')
-        failing = self.cli('resolve', f'git:p@{ABSENT}', 'outcome:O-1', '--repo', f'p={self.repo}')
+        failing = self.cli('resolve', f'git:p@{ABSENT}', f'outcome:{OUTCOME}', '--repo', f'p={self.repo}')
         self.assertEqual(failing.returncode, 1)
         self.assertEqual([json.loads(line)['outcome'] for line in failing.stdout.splitlines()],
-                         [L.MISSING, L.UNSUPPORTED_KIND])
-        self.assertIn('FAIL outcome:O-1: unsupported-kind KIND_NOT_SETTLED', failing.stderr)
+                         [L.MISSING, L.AUTHORITY_UNAVAILABLE])
+        self.assertIn(f'FAIL outcome:{OUTCOME}: authority-unavailable RESOLVER_NOT_CONFIGURED', failing.stderr)
         self.assertEqual(self.cli('resolve', 'backlog:TASK-1', '--backlog', 'x').returncode, 2)
         self.assertEqual(self.cli('resolve', 'backlog:TASK-1', '--repo', 'nameonly').returncode, 2)
         self.assertEqual(self.cli('resolve', 'effect:fx1-' + 'a' * 64, '--effects-principal', 'S-1').returncode, 2)

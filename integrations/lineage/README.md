@@ -19,7 +19,7 @@ status.
 |---|---|
 | `lineage_schema.json` | The machine-readable schema (`lineage-reference-schema/v1`): one entry per kind, with its authority, stable identity, revision anchor, pinning, validation rule, status, the leaves that supply it, citations and open points |
 | `lineage.py` | The typed references, their canonical text (parser and formatter), the span anchor, `Resolution`, the `Resolver` protocol, the `Registry` and the schema check. It runs no tool and opens no store. |
-| `lineage_resolve.py` | The four read-only resolvers and the command line (`schema`, `parse`, `resolve`) |
+| `lineage_resolve.py` | The five read-only resolvers (design, objective, work, commit, effect-receipt) and the command line (`schema`, `parse`, `resolve`) |
 | `tests/test_references.py` | Round trip of every kind, malformed references, the schema check (and the defects it catches), the span anchor, `Resolution` and `Registry` contracts |
 | `tests/test_resolvers.py` | Every outcome of each resolver, against throwaway git repositories, the P-02 fake Backlog.md and its recorded fixtures, and F-05.2 effects-store fixtures; read-only checks; the command line |
 | `tests/test_live_lineage.py` | Live, against the pinned Backlog.md 1.55.3 and OpenSpec 1.16.0; skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` are set |
@@ -30,7 +30,7 @@ status.
 |---|---|---|---|---|---|---|
 | `conversation` | `conversation:<thread>[@<message>]` | Owner conversation store (assistant-ui local persistence) | native thread id | the thread through one message | optional | authority unavailable: U-02.1, U-02.2 |
 | `message` | `conversation:<thread>/<message>[#sha256:<hex> \| #span:<start>+<length>:sha256:<hex>]` | Owner conversation store | native thread and message ids | content digest, or a span anchor | optional | authority unavailable: U-02.1, U-02.2 |
-| `objective` | `outcome:<outcome-id>[@<commit>]` | OpenSpec | the outcomeId assigned on acceptance | OpenSpec commit | (not settled) | **unknown**: the outcomeId is not settled |
+| `objective` | `outcome:<uuid>[@<commit>]` | OpenSpec (the declaring change's intent record and `.openspec.yaml`) | the outcome id: a lower-case UUID minted when an Objective item's acceptance is recorded, declared under `x-outcomes` (decision 0008) | project repository commit; observed digest: the declaring `proposal.md` | optional | implemented |
 | `design` | `openspec:changes/<change>/<artifact>@<commit>#sha256=<hex>` | OpenSpec (git) | change id and artifact path (P-02.1) | commit and blob sha256 | required | implemented |
 | `work` | `backlog:<TASK-ID>[@<commit>]` | Backlog.md | Backlog.md task id | commit of the repository holding Backlog.md's files | optional | implemented |
 | `attempt` | `openhands:conversation/<uuid>[@<event>]` | OpenHands Agent Server | native conversation id (the reserved UUID, decision 0001) | native event id | optional | authority unavailable: E-01.3.1, E-01.4.1 |
@@ -56,6 +56,9 @@ receipts, traces) carry references but are never an authority; the schema lists 
   so a text and its value correspond one to one.
 - A **commit** is a full commit id: 40 lower-case hex digits, or 64 in a SHA-256
   repository. Never a branch, a tag or an abbreviation.
+- An **outcome id** is a random UUID in canonical lower-case text (8-4-4-4-12 hex), as
+  [decision 0008](../../decisions/0008-outcome-identity-assignment-form-and-record.md)
+  assigns it; the blueprint's illustrative `outcome:O-101` is refused.
 - A **sha256** is 64 lower-case hex digits. A **repository** is a name of
   `[A-Za-z0-9_][A-Za-z0-9._-]*` parts separated by `/`; Gitea kinds take exactly
   `owner/name`.
@@ -114,6 +117,7 @@ outcomes or authority differ from the schema, and an answer outside the resolver
 | Kind | How | Outcomes and codes |
 |---|---|---|
 | `design` | `planning_adapter.resolve_pointer` (P-02.1) on git objects only; `current` builds the pointer at `HEAD` | `missing` POINTER_ARTIFACT_MISSING; `revision-mismatch` POINTER_REVISION_MISSING; `digest-mismatch` POINTER_DIGEST_MISMATCH (with the observed digest); `authority-unavailable` PROJECT_UNAVAILABLE, GIT_FAILED |
+| `objective` | git objects only, at the pinned commit or at `HEAD` (decision 0008, point 6): every `openspec/changes/<change>/.openspec.yaml` and `openspec/changes/archive/<dated-change>/.openspec.yaml` is read with a strict reader of the `x-outcomes` block (`read_x_outcomes`); exactly one change must declare the id; its proposal is parsed with the intent-record/v1 parser (`tools/check_intent_record.py`) and the declared item must be an Objective item with `authority: accepted` and the declared acceptance. A resolved answer carries `facts`: the change, item, statement, acceptance, source and the accepted Acceptance Criteria citing the item; `observed_digest` is the sha256 of `proposal.md`. It never runs openspec or reads the working tree. | `missing` OUTCOME_MISSING, OUTCOME_NOT_ACCEPTED; `revision-mismatch` OUTCOME_REVISION_MISSING; `ambiguous` OUTCOME_AMBIGUOUS; `authority-unavailable` PROJECT_UNAVAILABLE, GIT_FAILED, OUTCOME_METADATA_INVALID |
 | `work` | Backlog.md's `task view <id> --json` and `task list --json` through the P-02 wrapper, limited to those two commands. A pinned reference is read by Backlog.md from a `git archive` export of that commit in a temporary directory; the pinned Backlog.md answered there and wrote nothing (observed live). | `missing` WORK_MISSING; `revision-mismatch` WORK_REVISION_MISSING; `ambiguous` WORK_AMBIGUOUS; `authority-unavailable` PROJECT_UNAVAILABLE, BACKLOG_UNAVAILABLE, BACKLOG_VIEW_FAILED, BACKLOG_LIST_FAILED |
 | `commit` | `git rev-parse --verify <commit>^{commit}` and `git cat-file -t` in the clone registered for the repository name | `missing` COMMIT_MISSING, COMMIT_NOT_A_COMMIT, COMMIT_ID_MISMATCH; `authority-unavailable` REPOSITORY_NOT_REGISTERED, REPOSITORY_UNAVAILABLE, GIT_FAILED |
 | `effect-receipt` | the effects store opened by the caller's `open_store` (its location and custody checks apply), then only `verify_chain`, `get`, `events`, `open_epochs`, `high_water_mark` | `missing` EFFECT_RECEIPT_MISSING (never evidence that the effect did not happen, decision 0004 point 7); `revision-mismatch` EFFECT_EVENT_MISSING; `digest-mismatch` EFFECT_EVENT_DIGEST_MISMATCH; `authority-unavailable` EFFECTS_STORE_UNAVAILABLE, EFFECTS_CHAIN_INVALID |
@@ -139,6 +143,26 @@ for `commit`; `--effects-root` enables `effect-receipt` with the effects store's
 location policy and custody template, exactly as the effects command line uses them.
 Exit status: 0 PASS (all parsed, or all resolved), 1 FAIL, 2 could not run.
 
+## Observed live (OpenSpec 1.16.0, Windows 11)
+
+- `openspec validate <change> --strict` exits 0 with an `x-outcomes` declaration in the
+  change's `.openspec.yaml`.
+- `openspec archive <change> --yes` moves the change to
+  `openspec/changes/archive/<YYYY-MM-DD>-<change>/` with `.openspec.yaml` byte for byte
+  unchanged (it also writes the change's specs into `openspec/specs/`), and the outcome
+  then resolves at the archived path, current and pinned.
+
+## Notes for P-03.2
+
+- After `openspec archive`, a design pointer still resolves at its pinned commit, but its
+  `current()` answers `missing` (`POINTER_ARTIFACT_MISSING`): the artifact's path moved
+  to `openspec/changes/archive/<date>-<change>/`. The traversal has to account for this;
+  it is not changed here.
+- An objective's `facts.source` is the trace to the source statement and `facts.acceptance`
+  the acceptance reference; whether the Owner accepted is established by resolving that
+  reference through its own kind (decision 0008, point 6). Acceptance references of scheme
+  `decision:` have no lineage kind yet.
+
 ## Not yet verified
 
 - Every kind whose status is authority unavailable or unknown: no resolver exists, and
@@ -153,3 +177,5 @@ Exit status: 0 PASS (all parsed, or all resolved), 1 FAIL, 2 could not run.
   lookup (`check_active_branches`) on an exported commit, and repositories large enough
   for the per-resolution `git archive` to matter.
 - The `ambiguous` work outcome against the live Backlog.md (it refuses to list instead).
+- The outcome id's acceptance recorder: no plan leaf owns it yet (decision 0008,
+  Consequences), so declarations exist only in the tests' throwaway repositories.

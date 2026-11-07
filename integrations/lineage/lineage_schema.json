@@ -104,37 +104,46 @@
     {
       "kind": "objective",
       "scheme": "outcome",
-      "canonical_form": "outcome:<outcome-id>[@<commit>]",
+      "canonical_form": "outcome:<outcome-uuid>[@<commit>]",
       "authority": {
         "name": "OpenSpec",
-        "system_of_record": "OpenSpec Git-backed artifacts",
+        "system_of_record": "OpenSpec Git-backed artifacts: the declaring change's intent record and .openspec.yaml in the project repository",
         "blueprint": "#authority, 'Accepted objective and proposed design | OpenSpec Git-backed artifacts | Source references, objective ID, design revision'; 'An outcomeId is assigned when an objective is accepted, and may be referenced by multiple changes or tasks'"
       },
       "identity": {
-        "settled": false,
-        "native_id": null,
-        "fields": ["outcome"],
-        "unsettled": "the outcomeId: who assigns it on acceptance, its form, its uniqueness scope, and where in the OpenSpec artifacts it is recorded"
+        "settled": true,
+        "native_id": "the outcome id, minted when an Objective item's acceptance is recorded; a random UUID in canonical lower-case text, declared in the declaring change's .openspec.yaml under x-outcomes as {item: O<n>, acceptance: <reference>} (decision 0008)",
+        "fields": ["outcome"]
       },
       "revision": {
-        "anchor": "@<commit>: the commit of the OpenSpec repository at which the objective is read (the form parses; the kind is not resolvable while its identity is open)",
-        "pinning": null
+        "anchor": "@<commit>: the project repository commit at which the declaring change is read; observed_digest is the sha256 of the declaring change's proposal.md blob at that commit",
+        "pinning": "optional"
       },
-      "validation_rule": "Trace to source statement, acceptance conditions and current revision. (#authority, link 'Accepted objective')",
-      "status": "unknown",
-      "resolver": null,
-      "supplied_by": [],
-      "verified": "not yet verified",
-      "examples": ["outcome:O-101", "outcome:O-101@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7"],
+      "validation_rule": "From git objects only, at the pinned commit or at HEAD for current: enumerate openspec/changes/<change>/.openspec.yaml and openspec/changes/archive/<dated-change>/.openspec.yaml; exactly one declares the id, else missing or ambiguous; the declared item exists in that change's proposal Objective section with authority: accepted and the same acceptance, else the outcome does not resolve; a resolved answer reports the declaring change, the item, its acceptance, its source and the accepted Acceptance Criteria that cite it (decision 0008, point 6). Trace to source statement, acceptance conditions and current revision. (#authority, link 'Accepted objective')",
+      "status": "implemented",
+      "resolver": "lineage_resolve.ObjectiveResolver (the P-02.1 git reader and the intent-record/v1 parser)",
+      "outcomes": ["resolved", "missing", "revision-mismatch", "ambiguous", "authority-unavailable"],
+      "outcome_codes": {
+        "missing": "OUTCOME_MISSING; OUTCOME_NOT_ACCEPTED (declared item absent, not an Objective item, not accepted, or its acceptance differs)",
+        "revision-mismatch": "OUTCOME_REVISION_MISSING",
+        "ambiguous": "OUTCOME_AMBIGUOUS",
+        "authority-unavailable": "PROJECT_UNAVAILABLE, GIT_FAILED, OUTCOME_METADATA_INVALID (x-outcomes or the intent record unreadable)"
+      },
+      "supplied_by": ["P-01.2", "P-03.1"],
+      "verified": "offline: throwaway git repositories (integrations/lineage/tests); live: openspec validate --strict and openspec archive with OpenSpec 1.16.0 when AIEH_OPENSPEC is set",
+      "examples": ["outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a", "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7"],
       "citations": [
-        "blueprint #authority (outcomeId rule; link notation outcome:O-101 is illustrative)",
-        "catalog/skills/intent-normalization/references/intent-record.md (intent-record/v1: objective items O1, O2 ... are local to one proposal, accepted through an acceptance reference; no outcome id field)",
-        "evidence/P-01.2-intent-skill-qualification.md (the accepted objective recorded as O1 with acceptance conversation:qual-02/message-2)",
-        "catalog/openspec/schemas/intent-driven/schema.yaml (no outcome id)"
+        "blueprint #authority (outcomeId rule; the link notation outcome:O-101 is illustrative)",
+        "blueprint #integration-contracts ('OpenSpec goal and x-fields'; 'We own stable IDs')",
+        "decisions/0008-outcome-identity-assignment-form-and-record.md",
+        "OpenSpec docs/cli.md at v1.16.0 (x- keys are the user's own; archive moves a change to openspec/changes/archive/YYYY-MM-DD-<name>/)",
+        "catalog/skills/intent-normalization/references/intent-record.md (intent-record/v1: Objective items, authority, acceptance)",
+        "evidence/P-01.2-intent-skill-qualification.md (the accepted objective recorded as O1 with acceptance conversation:qual-02/message-2)"
       ],
       "open": [
-        "No accepted decision or implemented leaf assigns an outcomeId: intent-record/v1 identifies an objective only as a proposal-local item id (O1) with an acceptance reference, which is not stable across changes, while the blueprint requires an id that several changes and tasks can reference.",
-        "Deciding who assigns the outcomeId, its form and the OpenSpec record that carries it is needed before P-03.2 can traverse from an objective."
+        "The acceptance recorder (sets the item's authority and acceptance, mints the id, writes the declaration, commits) has no owning plan leaf; until it exists, Owner acceptances are recorded by hand in this form (decision 0008, Consequences).",
+        "Supersession links between outcomes are not defined (K-03.3.2).",
+        "Acceptance references of scheme decision: have no lineage kind; one is added when a traversal needs it."
       ]
     },
     {

@@ -1,13 +1,18 @@
-"""Live tests of the work and design resolvers against the pinned Backlog.md 1.55.3 and
-OpenSpec 1.16.0 (stdlib unittest, plan leaf P-03.1).
+"""Live tests of the work, design and objective resolvers against the pinned Backlog.md
+1.55.3 and OpenSpec 1.16.0 (stdlib unittest, plan leaf P-03.1).
 
-Skipped unless AIEH_BACKLOG and AIEH_OPENSPEC name the tools' entry points, installed
-outside the checkout as integrations/planning/README.md describes. The project is the
-P-02.1 two-task fixture, built in a throwaway directory; the tools' per-user state is
-kept inside it. Backlog.md is run only with task list and task view.
+LiveWork is skipped unless AIEH_BACKLOG and AIEH_OPENSPEC name the tools' entry points,
+LiveObjective unless AIEH_OPENSPEC does; install them outside the checkout as
+integrations/planning/README.md describes. The project is the P-02.1 two-task fixture,
+built in a throwaway directory; the tools' per-user state is kept inside it. Backlog.md
+is run only with task list and task view. LiveObjective adds the decision 0008
+declaration to the throwaway copy only, then runs openspec validate --strict and
+openspec archive --yes there.
 """
 import importlib.util
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -96,6 +101,65 @@ class LiveWork(unittest.TestCase):
                 current = self.resolve(text, current=True)
                 self.assertEqual((current.outcome, current.observed_revision), (L.RESOLVED, self.tasks_commit))
                 self.assertEqual(current.observed_digest, result.observed_digest)  # the design did not change
+
+
+OUTCOME = '5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a'
+DECLARATION = (f'x-outcomes:\n  {OUTCOME}:\n    item: O1\n'
+               f'    acceptance: conversation:qual-02/message-2\n').encode('utf-8')
+
+
+@unittest.skipUnless(OPENSPEC, 'set AIEH_OPENSPEC to run the live OpenSpec tests')
+class LiveObjective(unittest.TestCase):
+    """Decision 0008's two unverified points: x-outcomes under openspec validate --strict,
+    and the .openspec.yaml bytes across openspec archive."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.openspec = fx.adapter.tool_argv(OPENSPEC)
+        cls.work = Path(tempfile.mkdtemp(prefix='aieh-lineage-os-'))
+        (cls.work / 'home').mkdir()
+        cls.env = fx.isolated_env(cls.work / 'home')
+        cls.repo = cls.work / 'p'
+        with mock.patch.dict(os.environ, cls.env):
+            if fx.tool_version(cls.openspec, cls.work) != fx.OPENSPEC_VERSION:
+                raise unittest.SkipTest('not the pinned OpenSpec')
+            fx.build_repo(cls.repo)
+            meta = cls.repo / 'openspec' / 'changes' / fx.CHANGE / '.openspec.yaml'
+            meta.write_bytes(meta.read_bytes() + DECLARATION)
+            cls.meta_bytes = meta.read_bytes()
+            cls.declared = fx.commit_all(cls.repo, 'declare the outcome of O1')
+
+    @classmethod
+    def tearDownClass(cls):
+        fx.rmtree(cls.work)
+
+    def openspec_run(self, *args):
+        with mock.patch.dict(os.environ, self.env):
+            return subprocess.run([*self.openspec, *args], cwd=self.repo, capture_output=True, text=True,
+                                  encoding='utf-8', stdin=subprocess.DEVNULL, timeout=fx.WAIT_CEILING_S)
+
+    def test_validate_strict_then_archive_keeps_the_declaration(self):
+        valid = self.openspec_run('validate', fx.CHANGE, '--strict')
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        report = json.loads(self.openspec_run('validate', fx.CHANGE, '--strict', '--json').stdout)
+        self.assertEqual(report['summary']['totals'], {'items': 1, 'passed': 1, 'failed': 0})
+
+        archived = self.openspec_run('archive', fx.CHANGE, '--yes')
+        self.assertEqual(archived.returncode, 0, archived.stdout + archived.stderr)
+        self.assertFalse((self.repo / 'openspec' / 'changes' / fx.CHANGE).exists())
+        moved = sorted((self.repo / 'openspec' / 'changes' / 'archive').glob(f'*-{fx.CHANGE}/.openspec.yaml'))
+        self.assertEqual(len(moved), 1)
+        self.assertRegex(moved[0].parent.name, rf'^\d{{4}}-\d{{2}}-\d{{2}}-{fx.CHANGE}$')
+        self.assertEqual(moved[0].read_bytes(), self.meta_bytes)
+        with mock.patch.dict(os.environ, self.env):
+            archived_commit = fx.commit_all(self.repo, 'openspec archive')
+        resolver = R.ObjectiveResolver(self.repo)
+        current = resolver.current(L.parse(f'outcome:{OUTCOME}'))
+        self.assertEqual((current.outcome, current.observed_revision), (L.RESOLVED, archived_commit))
+        self.assertEqual(current.facts['change'], f'openspec/changes/archive/{moved[0].parent.name}')
+        pinned = resolver.resolve(L.parse(f'outcome:{OUTCOME}@{self.declared}'))
+        self.assertEqual((pinned.outcome, pinned.facts['change']), (L.RESOLVED, f'openspec/changes/{fx.CHANGE}'))
+        self.assertEqual(current.observed_digest, pinned.observed_digest)
 
 
 if __name__ == '__main__':

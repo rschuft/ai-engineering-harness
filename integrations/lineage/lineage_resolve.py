@@ -4,6 +4,9 @@ Resolvers exist only where a local authority and adapter already exist:
 
 - ``design``: the P-02.1 OpenSpec source pointer, re-resolved from git objects by
   ``planning_adapter.resolve_pointer``;
+- ``objective``: the outcome id declared under ``x-outcomes`` in a change's
+  ``.openspec.yaml`` and cross-checked against that change's intent record, from git
+  objects only (decision 0008);
 - ``work``: Backlog.md's own ``task view --json`` and ``task list --json`` through the
   P-02 wrapper, restricted to those two commands; a pinned reference is read by
   Backlog.md from an export of that commit;
@@ -25,8 +28,10 @@ reference, a schema problem, or any outcome other than resolved), 2 could not ru
 Standard library only, plus git and the tools named.
 """
 import argparse
+import hashlib
 import io
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -117,6 +122,190 @@ class DesignResolver:
                             query='current')
         return L.answer(reference, L.RESOLVED, self.authority, detail=f'{self.current_revision} is {commit}',
                         observed_revision=pointer.revision, observed_digest=pointer.digest, query='current')
+
+
+# ---------------------------------------------------------------------------
+# objective (decision 0008)
+
+def _intent_module():
+    """The intent-record/v1 parser of P-01.1 (tools/check_intent_record.py)."""
+    return _load('aieh_check_intent_record', REPO / 'tools' / 'check_intent_record.py')
+
+
+X_OUTCOMES = 'x-outcomes'
+OUTCOME_FIELDS = ('item', 'acceptance')
+_ACTIVE_META = re.compile(r'^openspec/changes/(?P<change>[^/]+)/\.openspec\.yaml$')
+_ARCHIVED_META = re.compile(r'^openspec/changes/archive/(?P<change>[^/]+)/\.openspec\.yaml$')
+_OBJECTIVE_ITEM = re.compile(r'^O[1-9][0-9]*$')
+_ENTRY_KEY = re.compile(rf'^(?P<id>{L.UUID}):$')
+_FIELD = re.compile(r'^(?P<key>[a-z]+): (?P<value>\S+)$')
+
+
+class OutcomeMetadataInvalid(ValueError):
+    pass
+
+
+def read_x_outcomes(data):
+    """The ``x-outcomes`` declarations of one ``.openspec.yaml``: {id: {item, acceptance}}.
+
+    A strict reader of exactly one shape: a top-level ``x-outcomes:`` block mapping whose
+    keys are lower-case UUIDs, each mapping exactly ``item: O<n>`` and ``acceptance:
+    <reference>`` as plain scalars. Blank and whole-line comment lines are allowed. Any
+    other shape (a flow mapping, a duplicate id or key, an unknown key, a tab, a trailing
+    comment, quoting, a third level) is refused. A file without the key declares nothing.
+    """
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        raise OutcomeMetadataInvalid('not UTF-8') from None
+    lines = [line.rstrip('\r') for line in text.split('\n')]
+    mentions = [i for i, line in enumerate(lines) if X_OUTCOMES in line]
+    if not mentions:
+        return {}
+    heads = [i for i in mentions if lines[i].rstrip(' ') == f'{X_OUTCOMES}:']
+    if len(heads) != 1 or len(mentions) != 1:
+        raise OutcomeMetadataInvalid(f'{X_OUTCOMES} must appear once, as a top-level "{X_OUTCOMES}:" block')
+    intent = _intent_module()
+    out, entry, entry_indent, field_indent = {}, None, None, None
+    for number, line in enumerate(lines[heads[0] + 1:], heads[0] + 2):
+        stripped = line.strip(' ')
+        if stripped == '' or stripped.startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip(' '))
+        if line[indent:indent + 1] == '\t':
+            raise OutcomeMetadataInvalid(f'line {number}: tab indentation')
+        if indent == 0:
+            break  # the next top-level key ends the block
+        # A tab, a trailing comment, quoting or any other value with white space fails the
+        # patterns below.
+        if entry_indent is None:
+            entry_indent = indent
+        if indent == entry_indent:
+            match = _ENTRY_KEY.match(stripped)
+            if not match:
+                raise OutcomeMetadataInvalid(f'line {number}: expected "<lower-case uuid>:"')
+            if match['id'] in out:
+                raise OutcomeMetadataInvalid(f'line {number}: {match["id"]} is declared twice')
+            entry = out[match['id']] = {}
+            continue
+        if entry is None or indent < entry_indent:
+            raise OutcomeMetadataInvalid(f'line {number}: unexpected indentation')
+        if field_indent is None:
+            field_indent = indent
+        if indent != field_indent:
+            raise OutcomeMetadataInvalid(f'line {number}: unexpected indentation')
+        match = _FIELD.match(stripped)
+        if not match:  # an unknown key fails the exactly-item-and-acceptance check below
+            raise OutcomeMetadataInvalid(f'line {number}: expected item: O<n> or acceptance: <reference>')
+        if match['key'] in entry:
+            raise OutcomeMetadataInvalid(f'line {number}: {match["key"]} is repeated')
+        entry[match['key']] = match['value']
+    if not out:
+        raise OutcomeMetadataInvalid(f'{X_OUTCOMES} declares nothing')
+    for outcome, entry in out.items():
+        if set(entry) != set(OUTCOME_FIELDS):
+            raise OutcomeMetadataInvalid(f'{outcome} must declare exactly item and acceptance')
+        if not _OBJECTIVE_ITEM.match(entry['item']):
+            raise OutcomeMetadataInvalid(f'{outcome}: item must be an Objective item id (O<n>)')
+        if not intent.REFERENCE.match(entry['acceptance']) or entry['acceptance'].startswith('missing:'):
+            raise OutcomeMetadataInvalid(f'{outcome}: acceptance must be an intent-record reference')
+    return out
+
+
+class ObjectiveResolver:
+    """Accepted objectives by outcome id, read from the project's OpenSpec tree in git
+    objects only (decision 0008, point 6). It never runs openspec or reads the working tree."""
+    kind = 'objective'
+    authority = 'OpenSpec'
+    outcomes = frozenset({L.RESOLVED, L.MISSING, L.REVISION_MISMATCH, L.AMBIGUOUS, L.AUTHORITY_UNAVAILABLE})
+
+    def __init__(self, project, current_revision='HEAD'):
+        self.project = Path(project)
+        self.current_revision = current_revision
+
+    def resolve(self, reference):
+        return self._ask(reference, 'reference')
+
+    def current(self, reference):
+        return self._ask(reference, 'current')
+
+    def _ask(self, reference, query):
+        def say(outcome, code=None, detail='', **extra):
+            return L.answer(reference, outcome, self.authority, code, detail, query=query, **extra)
+
+        git, why = _git(self.project)
+        if git is None:
+            return say(L.AUTHORITY_UNAVAILABLE, 'PROJECT_UNAVAILABLE', why)
+        try:
+            if query == 'reference' and reference.revision is not None:
+                commit = git.commit(reference.revision)
+                if commit != reference.revision:
+                    return say(L.REVISION_MISMATCH, 'OUTCOME_REVISION_MISSING',
+                               f'the project repository has no commit {reference.revision}')
+            else:
+                commit = git.commit(self.current_revision)
+                if commit is None:
+                    return say(L.AUTHORITY_UNAVAILABLE, 'GIT_FAILED',
+                               f'the project has no commit {self.current_revision!r}')
+            return self._read(git, commit, reference, say)
+        except OutcomeMetadataInvalid as exc:
+            return say(L.AUTHORITY_UNAVAILABLE, 'OUTCOME_METADATA_INVALID', str(exc))
+        except planning.PlanningError as exc:
+            return say(L.AUTHORITY_UNAVAILABLE, 'GIT_FAILED', exc.message)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return say(L.AUTHORITY_UNAVAILABLE, 'GIT_FAILED', str(exc))
+
+    def _read(self, git, commit, reference, say):
+        metas = [path for path in git.files(commit, 'openspec/changes')
+                 if (_ACTIVE_META.match(path) and _ACTIVE_META.match(path)['change'] != 'archive')
+                 or _ARCHIVED_META.match(path)]
+        declared = []
+        for path in sorted(metas):
+            try:
+                outcomes = read_x_outcomes(git.blob(commit, path))
+            except OutcomeMetadataInvalid as exc:
+                raise OutcomeMetadataInvalid(f'{path} at {commit}: {exc}') from None
+            if reference.outcome in outcomes:
+                declared.append((path, outcomes[reference.outcome]))
+        if not declared:
+            return say(L.MISSING, 'OUTCOME_MISSING', f'no change declares {reference.outcome} at {commit}')
+        if len(declared) > 1:
+            return say(L.AMBIGUOUS, 'OUTCOME_AMBIGUOUS',
+                       f'{len(declared)} changes declare {reference.outcome} at {commit}: '
+                       + ', '.join(path for path, _ in declared))
+        path, declaration = declared[0]
+        change = path.rsplit('/', 1)[0]
+        proposal = f'{change}/proposal.md'
+        if git.object_type(commit, proposal) != 'blob':
+            raise OutcomeMetadataInvalid(f'{proposal} does not exist at {commit}')
+        data = git.blob(commit, proposal)
+        intent = _intent_module()
+        try:
+            record, problems = intent._Parser(data).parse()
+        except UnicodeDecodeError:
+            raise OutcomeMetadataInvalid(f'{proposal} at {commit} is not UTF-8') from None
+        if problems:
+            raise OutcomeMetadataInvalid(f'{proposal} at {commit} is not a readable intent record: '
+                                         + '; '.join(str(p) for p in problems[:3]))
+        item = record.items.get(declaration['item'])
+        why = None
+        if item is None or item.section != 'Objective':
+            why = f'{proposal} has no Objective item {declaration["item"]}'
+        elif item.fields.get('authority') != 'accepted':
+            why = f'{declaration["item"]} is {item.fields.get("authority")!r}, not accepted'
+        elif item.fields.get('acceptance') != declaration['acceptance']:
+            why = (f'{declaration["item"]} has acceptance {item.fields.get("acceptance")!r}; the declaration '
+                   f'says {declaration["acceptance"]!r}')
+        if why:
+            return say(L.MISSING, 'OUTCOME_NOT_ACCEPTED', why, observed_revision=commit)
+        criteria = [ac.id for ac in record.sections.get('Acceptance Criteria', [])
+                    if ac.fields.get('authority') == 'accepted'
+                    and item.id in intent._split_list(ac.fields.get('source', ''))]
+        facts = {'change': change, 'item': item.id, 'statement': item.fields.get('statement'),
+                 'acceptance': item.fields['acceptance'], 'source': intent._split_list(item.fields.get('source', '')),
+                 'acceptance_criteria': criteria}
+        return say(L.RESOLVED, detail=f'{item.id} of {change}', observed_revision=commit,
+                   observed_digest=hashlib.sha256(data).hexdigest(), facts=facts)
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +546,7 @@ def build_registry(*, project=None, backlog=None, repositories=None, open_effect
     resolvers = []
     if project is not None:
         resolvers.append(DesignResolver(project))
+        resolvers.append(ObjectiveResolver(project))
         if backlog is not None:
             resolvers.append(WorkResolver(project, backlog))
     if repositories:

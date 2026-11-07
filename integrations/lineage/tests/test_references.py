@@ -38,6 +38,7 @@ D = hashlib.sha256(b'digest').hexdigest()
 D2 = hashlib.sha256(b'other').hexdigest()
 KEY = 'fx1-' + hashlib.sha256(b'key').hexdigest()
 UUID = '929f0d8a-f3d8-4da3-8ac3-9d0017709d71'
+OUTCOME = '5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a'
 
 # One or more typed values per kind, including native ids that need percent-encoding.
 VALUES = [
@@ -47,8 +48,8 @@ VALUES = [
     L.MessageRef('qual-02', 'message-1', D),
     L.MessageRef('qual-08', 'message-1', D, 0, 1),
     L.MessageRef('t%', 'm#@/?=,', D, 12, 57),
-    L.ObjectiveRef('O-101'),
-    L.ObjectiveRef('O 101', C64),
+    L.ObjectiveRef(OUTCOME),
+    L.ObjectiveRef(OUTCOME, C64),
     L.DesignRef('qual-02-search-freshness', 'design.md', C40, D),
     L.DesignRef('a-b', 'specs/x/spec.md', C64, D),
     L.WorkRef('TASK-2'),
@@ -82,6 +83,8 @@ MALFORMED = [
     'conversation:t@',
     # objective
     'outcome:', 'outcome:O-1@main', 'outcome:O-1@' + C40[:7],
+    'outcome:O-101', 'outcome:' + OUTCOME.upper(), 'outcome:' + OUTCOME + '@' + C40[:12],
+    'outcome:' + OUTCOME[:-1], 'outcome:' + OUTCOME + '@main', 'outcome:{' + OUTCOME + '}',
     # design (P-02.1 form)
     'openspec:changes/editor-shutdown@' + C40,     # the blueprint's change-level notation
     'openspec:changes/x/design.md@' + C40,         # no digest
@@ -191,7 +194,8 @@ class Malformed(unittest.TestCase):
             lambda: L.ReviewRef('o/r', 7, 31, 'x'), lambda: L.CIRef('r', 1, C40),
             lambda: L.AuthorizationRef('r', 'main', C40, D), lambda: L.AuthorizationRef('o/r', 'main', 'x', D),
             lambda: L.EffectReceiptRef(KEY, 3, 'x'),
-            lambda: L.ObjectiveRef('O', 'main'),
+            lambda: L.ObjectiveRef('O', 'main'), lambda: L.ObjectiveRef('O-101'),
+            lambda: L.ObjectiveRef(OUTCOME.upper()), lambda: L.ObjectiveRef(OUTCOME, 'main'),
             lambda: L.DesignRef('X', 'design.md', C40, D), lambda: L.DesignRef('x', '../d.md', C40, D),
             lambda: L.DesignRef('x', 'd.md', C40[:7], D), lambda: L.DesignRef('x', 'd.md', C40, 'x'),
             lambda: L.WorkRef('task-2'), lambda: L.WorkRef('TASK-2', 'HEAD'),
@@ -257,7 +261,7 @@ class Schema(unittest.TestCase):
 
     def test_the_overseer_kinds_and_statuses(self):
         expected = {
-            'conversation': 'authority-unavailable', 'message': 'authority-unavailable', 'objective': 'unknown',
+            'conversation': 'authority-unavailable', 'message': 'authority-unavailable', 'objective': 'implemented',
             'design': 'implemented', 'work': 'implemented', 'attempt': 'authority-unavailable',
             'commit': 'implemented', 'review': 'authority-unavailable', 'ci': 'authority-unavailable',
             'authorization': 'authority-unavailable', 'effect-receipt': 'implemented', 'release': 'unknown',
@@ -310,10 +314,10 @@ class Schema(unittest.TestCase):
             'anchor': (lambda s, k: k['work']['revision'].update(anchor=None), 'revision.anchor is required'),
             'validation rule': (lambda s, k: k['design'].pop('validation_rule'), 'validation_rule is required'),
             'citations': (lambda s, k: k['design'].update(citations=[]), 'citations are required'),
-            'unknown but settled': (lambda s, k: k['objective']['identity'].update(settled=True),
+            'unknown but settled': (lambda s, k: k['release']['identity'].update(settled=True),
                                     'status unknown exactly when'),
             'settled but unknown': (lambda s, k: k['commit'].update(status='unknown'), 'status unknown exactly when'),
-            'unknown without open': (lambda s, k: k['objective'].update(open=[]), 'lists what is open'),
+            'unknown without open': (lambda s, k: k['release'].update(open=[]), 'lists what is open'),
             'unavailable without leaf': (lambda s, k: k['attempt'].update(supplied_by=[]),
                                          'names the leaves that supply it'),
             'unverified claim': (lambda s, k: k['attempt'].update(verified='verified'), 'verified must be'),
@@ -415,6 +419,11 @@ class ResolutionContract(unittest.TestCase):
             L.Resolution('r', 'work', L.MISSING, 'a', 'CODE', query='latest')
         with self.assertRaises(ValueError):
             L.Resolution('r', 'work', L.MISSING, 'a', 'CODE', supplied_by=['U-02.1'])
+        for facts in ([1], 'x'):
+            with self.subTest(facts=facts), self.assertRaises(ValueError):
+                L.Resolution('r', 'objective', L.RESOLVED, 'a', facts=facts)
+        self.assertEqual(L.Resolution('r', 'objective', L.RESOLVED, 'a', facts={'item': 'O1'}).to_json()['facts'],
+                         {'item': 'O1'})
         result = L.Resolution('r', 'work', L.MISSING, 'a', 'CODE', supplied_by=('U-02.1',))
         self.assertEqual(json.loads(json.dumps(result.to_json()))['supplied_by'], ['U-02.1'])
 
@@ -448,9 +457,17 @@ class RegistryContract(unittest.TestCase):
                     self.assertIn(L.NOT_YET_VERIFIED, result.detail)
 
     def test_unsettled_and_unknown_kinds_are_unsupported(self):
-        registry = L.Registry()
-        result = registry.resolve('outcome:O-101')
+        schema = L.load_schema()
+        objective = L.schema_kinds(schema)['objective']  # as it stood before decision 0008
+        objective.update(status='unknown', resolver=None, verified=L.NOT_YET_VERIFIED,
+                         open=['the outcomeId is not settled'])
+        objective['identity']['settled'] = False
+        result = L.Registry(schema=schema).resolve(f'outcome:{OUTCOME}')
         self.assertEqual((result.outcome, result.code), (L.UNSUPPORTED_KIND, 'KIND_NOT_SETTLED'))
+        self.assertIn('the outcomeId is not settled', result.detail)
+        registry = L.Registry()
+        with self.assertRaises(L.MalformedReference):
+            registry.resolve('outcome:O-101')  # the illustrative notation no longer parses (decision 0008)
         result = registry.resolve('catalog:engineer@x')
         self.assertEqual((result.outcome, result.code, result.kind),
                          (L.UNSUPPORTED_KIND, 'REFERENCE_UNSUPPORTED_SCHEME', 'unknown'))
@@ -469,7 +486,7 @@ class RegistryContract(unittest.TestCase):
 
     def test_implemented_kinds_without_configuration(self):
         registry = L.Registry()
-        for text in ('backlog:TASK-1', f'git:r@{C40}', 'effect:' + KEY,
+        for text in ('backlog:TASK-1', f'git:r@{C40}', 'effect:' + KEY, f'outcome:{OUTCOME}',
                      f'openspec:changes/x/design.md@{C40}#sha256={D}'):
             with self.subTest(text=text):
                 result = registry.resolve(text)
@@ -482,7 +499,7 @@ class RegistryContract(unittest.TestCase):
         self.assertEqual(registry.resolve(f'git:r@{C40}').outcome, L.RESOLVED)
         self.assertEqual(registry.current(f'git:r@{C40}').query, 'current')
         with self.assertRaises(ValueError):
-            L.Registry([_Stub('objective', 'OpenSpec', outcomes, good)])        # not implemented
+            L.Registry([_Stub('attempt', 'OpenHands Agent Server', outcomes, good)])  # not implemented
         with self.assertRaises(ValueError):
             L.Registry([_Stub('commit', 'Git', {'resolved'}, good)])            # outcomes differ
         with self.assertRaises(ValueError):
