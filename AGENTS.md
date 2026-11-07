@@ -97,6 +97,7 @@ unless adaptation is necessary.
   python -I tools/verify_seed.py --baseline seed
   python -I -B -m unittest discover -s tools/tests -v
   python -I -B -m unittest discover -s integrations/store/tests -v
+  python -I -B -m unittest discover -s integrations/effects/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the

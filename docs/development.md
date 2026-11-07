@@ -28,10 +28,10 @@ task setup
 ```
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
-verifies the seed in both modes and runs the tool tests and the integration store
-tests. It is offline and takes seconds. Before your first commit, also run
+verifies the seed in both modes and runs the tool tests, the integration store
+tests and the effects store tests. It is offline and takes seconds. Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the five commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the six commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -39,6 +39,7 @@ python -I tools/verify_seed.py
 python -I tools/verify_seed.py --baseline seed
 python -I -B -m unittest discover -s tools/tests -v
 python -I -B -m unittest discover -s integrations/store/tests -v
+python -I -B -m unittest discover -s integrations/effects/tests -v
 ```
 
 Use `python3` instead of `python` outside Windows.
@@ -129,17 +130,24 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the five commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the six commands in [Quick start](#quick-start) | no | Supported setup command. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test` | no | Tool tests and integration store tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, then `effects:test` | no | Tool tests, integration store tests and effects store tests (stdlib `unittest`). |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
+| `store:backup DB=<path> ACTOR=<name>` | `python -I -B integrations/store/integration_store.py backup --db <path> --actor <name>` | no | Backs the integration store up with the SQLite backup API into `<db dir>/backups/`, checks the copy and prints its manifest. |
+| `store:restore DB=<path> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/store/integration_store.py restore --db <path> --manifest <file> --actor <name> [--accept-rollback]` | no | Restores a verified backup and opens a restore epoch. Refuses a rollback unless accepted; keeps the superseded store in `backups/superseded/`. |
+| `effects:test` | `python -I -B -m unittest discover -s integrations/effects/tests -v` | no | [Effects store](#effects-store) tests: crash, backup and restore, custody and location refusals on fixtures; a few seconds. |
+| `effects:init ROOT=<dir> [-- --principal SID]` | `python -I -B integrations/effects/effects_store.py init --root <dir> [--principal SID]` | no | Creates or migrates `effects.sqlite` inside an existing, Owner-created root after the location and custody checks. Never creates the root. |
+| `effects:backup ROOT=<dir> ACTOR=<name>` | `python -I -B integrations/effects/effects_store.py backup --root <dir> --actor <name>` | no | Backs the effects store up into `<root>/backups/` and prints the manifest. |
+| `effects:restore ROOT=<dir> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/effects/effects_store.py restore --root <dir> --manifest <file> --actor <name> [--accept-rollback]` | no | The Owner's elevated act, with the executor stopped: restores a verified backup and opens a restore epoch. |
+| `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
 | `guest:preflight PROFILE=<dir> STATE_DIR=<dir>` | `python -I -B tools/guest.py preflight --profile <dir> --state-dir <dir>` | no | Read-only capability report for a strong guest profile; each failure names its Owner act (A1, A2, A3). See [Execution guests](#execution-guests). |
@@ -195,7 +203,35 @@ Always pass an explicit database path. The default trusted-host location, which
 Neither setup nor the tests create it: a consumer initialises it when it first
 needs it. Keep the file on local disk, outside the repository (the store refuses
 a path inside the checkout), out of agent workspaces and out of guest storage.
-Backup and restore come with F-05.2.
+
+Backup and restore (F-05.2, [decision 0004](../decisions/0004-privileged-effect-store-custody-and-restore-semantics.md))
+use the SQLite online backup API, never a copy of the live files. `store:backup`
+writes the copy and a sha256 manifest to `<db dir>/backups/`. `store:restore`
+verifies the backup, needs exclusive use of the store, refuses a rollback unless
+explicitly accepted, keeps the superseded store in `backups/superseded/`, drops
+the projections and opens a restore epoch. New attempts are refused until
+reconciliation closes the epoch. Details are in the store's
+[README](../integrations/store/README.md#backup-and-restore).
+
+## Effects store
+
+[`integrations/effects/`](../integrations/effects/README.md) holds the privileged
+executor's effect store (`effects.sqlite`, plan leaf F-05.2, decision 0004):
+one-time effect receipts, an append-only, hash-chained journal, reconciliation
+records and restore epochs. It is separate from the integration store in every
+respect: database, directory, migrations, `application_id`, backup line and owner.
+It is a library and a command line only.
+
+There is **no default path**. `ROOT` must be an existing directory on a local
+fixed volume, outside the repository, every user profile (including
+`%LOCALAPPDATA%`), every guest-state root and the integration store's tree. On
+every open the store reads back the root's owner and DACL and refuses anything
+but the custody template: inheritance removed, and access for SYSTEM,
+Administrators and the configured principal only. The Owner creates that root
+from an elevated window (act A4 at G-04.2.1). Until then the store is proven
+only on test fixtures, and **no live effects store exists**. The tests use a
+library-only fixture policy that allows `%TEMP%`; the command line cannot select
+it.
 
 ## Execution guests
 
@@ -362,7 +398,7 @@ Directories exist only when they hold real content.
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
 | `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, publication gate, P-01.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
-| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/` | F-05.1 |
+| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share | F-05.1, F-05.2 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |

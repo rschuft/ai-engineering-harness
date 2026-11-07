@@ -67,10 +67,11 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test)
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), then the effects store tests (effects:test)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
+      - task: effects:test
 
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
@@ -88,6 +89,56 @@ tasks:
     desc: Print the default trusted-host store location without creating anything (python -I -B integrations/store/integration_store.py default-path)
     cmds:
       - '{{.PYTHON}} -I -B integrations/store/integration_store.py default-path'
+
+  store:backup:
+    desc: Back up the integration store with the SQLite backup API into <db dir>/backups/ and print the manifest (python -I -B integrations/store/integration_store.py backup --db DB --actor ACTOR)
+    requires:
+      vars: [DB, ACTOR]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/store/integration_store.py backup --db "{{.DB}}" --actor "{{.ACTOR}}"'
+
+  store:restore:
+    desc: "Restore a verified integration-store backup; opens a restore epoch (python -I -B integrations/store/integration_store.py restore --db DB --manifest MANIFEST --actor ACTOR); pass -- --accept-rollback only to accept a rollback"
+    requires:
+      vars: [DB, MANIFEST, ACTOR]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/store/integration_store.py restore --db "{{.DB}}" --manifest "{{.MANIFEST}}" --actor "{{.ACTOR}}" {{.CLI_ARGS}}'
+
+  # Privileged effect store (plan leaf F-05.2, decision 0004). ROOT is always named and
+  # must already exist (Owner act A4); there is no default path. Pass -- --principal SID
+  # once the executor principal is part of the custody template.
+  effects:test:
+    desc: Run the effects store tests (python -I -B -m unittest discover -s integrations/effects/tests -v)
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/effects/tests -v'
+
+  effects:init:
+    desc: Create or migrate effects.sqlite inside an existing, Owner-created root; verifies location and custody (python -I -B integrations/effects/effects_store.py init --root ROOT)
+    requires:
+      vars: [ROOT]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/effects/effects_store.py init --root "{{.ROOT}}" {{.CLI_ARGS}}'
+
+  effects:backup:
+    desc: Back up the effects store into ROOT/backups/ and print the manifest (python -I -B integrations/effects/effects_store.py backup --root ROOT --actor ACTOR)
+    requires:
+      vars: [ROOT, ACTOR]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/effects/effects_store.py backup --root "{{.ROOT}}" --actor "{{.ACTOR}}" {{.CLI_ARGS}}'
+
+  effects:restore:
+    desc: "Owner act, elevated, executor stopped: restore a verified effects backup; opens a restore epoch (python -I -B integrations/effects/effects_store.py restore --root ROOT --manifest MANIFEST --actor ACTOR); pass -- --accept-rollback only to accept a rollback"
+    requires:
+      vars: [ROOT, MANIFEST, ACTOR]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/effects/effects_store.py restore --root "{{.ROOT}}" --manifest "{{.MANIFEST}}" --actor "{{.ACTOR}}" {{.CLI_ARGS}}'
+
+  effects:verify-chain:
+    desc: Verify the effects journal hash chain and every receipt; print the chain head (python -I -B integrations/effects/effects_store.py verify-chain --root ROOT)
+    requires:
+      vars: [ROOT]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/effects/effects_store.py verify-chain --root "{{.ROOT}}" {{.CLI_ARGS}}'
 
   profile:check:
     desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins
