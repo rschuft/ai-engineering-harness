@@ -29,9 +29,9 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests, the integration store
-tests, the effects store tests and the planning adapter tests. It is offline and takes seconds. Before your first commit, also run
+tests, the effects store tests, the planning adapter tests and the lineage tests. It is offline and takes seconds. Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the seven commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the eight commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -41,6 +41,7 @@ python -I -B -m unittest discover -s tools/tests -v
 python -I -B -m unittest discover -s integrations/store/tests -v
 python -I -B -m unittest discover -s integrations/effects/tests -v
 python -I -B -m unittest discover -s integrations/planning/tests -v
+python -I -B -m unittest discover -s integrations/lineage/tests -v
 ```
 
 Use `python3` instead of `python` outside Windows.
@@ -134,14 +135,14 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the seven commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the eight commands in [Quick start](#quick-start) | no | Supported setup command. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test` and `planning:test` | no | Tool tests, integration store tests, effects store tests and planning adapter tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test` and `lineage:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests and lineage tests (stdlib `unittest`). |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -156,6 +157,9 @@ Only what is listed as verified has been exercised.
 | `planning:create PROJECT=<repo> PLAN=<file> REVISION=<rev> BACKLOG=<cmd> [-- --openspec <cmd>]` | `python -I -B integrations/planning/planning_adapter.py create --project <repo> --plan <file> --revision <rev> --backlog <cmd> [--openspec <cmd>]` | no | Creates a plan's Backlog.md tasks and their dependencies through `backlog task create`; each task carries OpenSpec source pointers at the exact design revision. Refuses a change with a `tasks.md` or a tracked schema, and any status. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `planning:readiness PROJECT=<repo> BACKLOG=<cmd> [-- --task ID --no-pointers]` | `python -I -B integrations/planning/planning_readiness.py --project <repo> --backlog <cmd> [--task ID ...] [--no-pointers]` | no | Reports Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; blocking and missing dependency ids from Backlog.md's `readiness`. Exit 1 on a missing dependency, a failing pointer or unknown readiness; blocked tasks alone exit 0. |
 | `planning:resolve PROJECT=<repo> -- --backlog <cmd> [--task ID]` (or `-- --pointer <p>`) | `python -I -B integrations/planning/planning_adapter.py resolve --project <repo> (--backlog <cmd> [--task ID ...] \| --pointer <p> ...)` | no | Re-resolves source pointers; exit 1 on a missing revision, a missing artifact, a digest mismatch or a task without a pointer. |
+| `lineage:test` | `python -I -B -m unittest discover -s integrations/lineage/tests -v` | no | [Lineage references](#lineage-references) tests: parsing and formatting of every kind, the schema, the span anchor, and every outcome of each implemented resolver against throwaway git repositories, the fake Backlog.md and its recorded fixtures, and effects-store fixtures. The live tests run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name the pinned tools. |
+| `lineage:schema` | `python -I -B integrations/lineage/lineage_resolve.py schema` | no | Checks `integrations/lineage/lineage_schema.json` against the typed references and lists each kind's authority and status. Exit 0 PASS, 1 FAIL. |
+| `lineage:resolve -- REF ... [--current] [--project <repo>] [--backlog <cmd>] [--repo NAME=<dir>] [--effects-root <dir>]` | `python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [options]` | no | Resolves references read-only and prints one JSON resolution each. Exit 0 when all resolved, 1 on any other outcome or a malformed reference, 2 could not run. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -515,6 +519,41 @@ both. The recorded fixtures in `integrations/planning/tests/fixtures/readiness/`
 and regenerated by the live tests. The ambiguous (duplicate-id) case was observed live
 but has no fixture, and readiness under concurrent edits is **not yet verified**.
 
+## Lineage references
+
+Plan leaf P-03.1 adds [`integrations/lineage/`](../integrations/lineage/README.md): the
+typed source references that blueprint section
+[`#authority`](../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority)
+asks the integration to carry between products, and a read-only resolver interface.
+`lineage_schema.json` (`lineage-reference-schema/v1`) gives every reference kind its
+authority, its stable identity (always the product's native ID), its revision anchor
+(and whether pinning is required) and its validation rule. `lineage.py` parses and formats
+each kind's canonical text, and the two round-trip. The `design` kind is the P-02.1
+pointer, parsed and formatted by `planning_adapter.Pointer` unchanged.
+
+A resolution is `resolved` or names why not: `missing`, `revision-mismatch`,
+`digest-mismatch`, `authority-unavailable`, `unsupported-kind` or `ambiguous`. It has no
+truth value, so it is never a silent success. Resolvers exist only where a local authority
+and adapter exist:
+
+| Kind | Authority | Resolver | Status |
+|---|---|---|---|
+| `design` | OpenSpec (git) | P-02.1 pointer resolution | implemented; offline tests |
+| `work` | Backlog.md | `task view --json`, `task list --json` (P-02) | implemented; offline, and live with `AIEH_BACKLOG` |
+| `commit` | Git | `git rev-parse`, `cat-file` in a registered clone | implemented; offline tests |
+| `effect-receipt` | effects store | F-05.2 read methods | implemented on fixtures only |
+| `conversation`, `message` | Owner conversation store | none | authority unavailable (U-02.1); **not yet verified** |
+| `attempt` | OpenHands Agent Server | none | authority unavailable (E-01.3.1, E-01.4.1); **not yet verified** |
+| `review`, `ci`, `authorization` | Gitea | none | authority unavailable (E-03.3.x, Q-03.x, G-03.1/G-04.3.1); **not yet verified** |
+| `objective`, `release`, `catalog` | OpenSpec, Git/Gitea, Gitea catalog | none | identity not settled (`unsupported-kind`) |
+
+A `message` reference may carry a span anchor (byte offset, length and the sha256 of those
+bytes) so that a quote can be re-extracted from the durable source and verified byte for
+byte. No message store exists yet, so only the anchor and its check are implemented. Live
+resolution of effect receipts, which needs the store's custody identity (G-04.2.x), every
+host but Windows 11 x86_64, and every kind marked unavailable or unsettled are **not yet
+verified**.
+
 ## Security inventory
 
 Plan leaf S-01.1 records the harness's trust domains, principals, protected assets,
@@ -598,7 +637,7 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
-| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2 |
+| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |

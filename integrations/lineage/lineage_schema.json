@@ -1,0 +1,452 @@
+{
+  "format": "lineage-reference-schema/v1",
+  "schema_version": 1,
+  "plan_leaf": "P-03.1",
+  "governing": [
+    "blueprint #authority: information ownership table, identifier link table, minimal relationship contract and outcomeId rule",
+    "blueprint #integration-contracts, #quality-pipeline, #control-evidence, #agent-skills, #infrastructure-state (cross-references)",
+    "decisions/0001-agent-server-dispatch-precondition-and-version-line.md (native conversation identity, reserved conversation_id)",
+    "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md (effects store, hash-chained journal, restore epochs)"
+  ],
+  "principles": [
+    "Each source record keeps its native ID; a reference never mints a new ID where a native one exists (blueprint #authority).",
+    "Other systems carry references and projections, not competing lifecycle states: a resolution reports what the authority shows and never a status of its own.",
+    "Historical links include the source revision so the Owner can reconstruct what was known when a decision was made: every kind states how a reference pins an immutable revision.",
+    "If a source relationship was never recorded, report missing provenance; never invent it. A resolution is never a silent success."
+  ],
+  "grammar": {
+    "reference": "<scheme>:<body>, where <scheme> is lower case and selects the kind (canonical_form of each kind gives the body)",
+    "segment": "a native ID that the authority assigns and this schema does not constrain: its UTF-8 bytes, with every byte outside A-Z a-z 0-9 - . _ ~ percent-encoded as %XX with upper-case hex digits; any other spelling is refused, so text and value correspond one to one",
+    "commit": "a full git commit id: 40 lower-case hex digits, or 64 in a SHA-256 repository; never a branch, tag or abbreviation",
+    "sha256": "64 lower-case hex digits",
+    "repository": "a repository name as its hosting authority names it: parts of [A-Za-z0-9_][A-Za-z0-9._-]* separated by /; Gitea kinds take exactly owner/name",
+    "canonical": "every accepted text is canonical: format(parse(text)) == text and parse(format(reference)) == reference",
+    "intent_record": "every kind's canonical form except design satisfies intent-record/v1's reference value grammar ^[a-z][a-z0-9+.-]*:[^\\s=,]+$ (catalog/skills/intent-normalization/references/intent-record.md), so it can be cited as an intent record's source, acceptance or resolution; the design pointer keeps the P-02.1 form, whose '=' that grammar refuses"
+  },
+  "outcomes": {
+    "resolved": "the authority answered, the identity exists and every anchor the reference pins matches; observed_revision and observed_digest report what it showed",
+    "missing": "the authority answered and does not hold the identity (at the pinned revision, when pinned): missing provenance, reported, never invented",
+    "revision-mismatch": "the authority does not hold the revision the reference pins (for example a commit lost to a history rewrite, or a journal event absent after a restore)",
+    "digest-mismatch": "the pinned revision exists but its content does not have the pinned digest",
+    "authority-unavailable": "the authority could not be asked: it does not exist yet, is not configured, refused access, failed or did not verify its own integrity; nothing is known about the reference",
+    "unsupported-kind": "the kind's identity is not settled, or no kind uses the scheme: the reference cannot be resolved by anything",
+    "ambiguous": "the identity matches more than one record in the authority"
+  },
+  "kinds": [
+    {
+      "kind": "conversation",
+      "scheme": "conversation",
+      "canonical_form": "conversation:<thread>[@<message>]",
+      "authority": {
+        "name": "Owner conversation store",
+        "system_of_record": "Owner conversation store: local conversation persistence behind assistant-ui",
+        "blueprint": "#authority, 'Original general conversation | Local conversation persistence behind assistant-ui | Stable thread and message reference'; #integration-contracts, 'General chat needs a small local durable thread store because ExternalStoreRuntime does not supply its own history database'"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the thread id the Owner conversation store assigns (a segment)",
+        "fields": ["thread"]
+      },
+      "revision": {
+        "anchor": "@<message>: the thread as it stood through that message (the branch of the thread that ends at it)",
+        "pinning": "optional"
+      },
+      "validation_rule": "Resolve a durable message or explicitly report missing source. (#authority, link 'Original statement')",
+      "status": "authority-unavailable",
+      "resolver": null,
+      "supplied_by": ["U-02.1", "U-02.2"],
+      "verified": "not yet verified",
+      "examples": ["conversation:thread-42", "conversation:qual-06@message-3"],
+      "citations": ["blueprint #authority", "blueprint #integration-contracts", "plan U-02.1"],
+      "open": ["Whether a message id names immutable content, and how an edit branches a thread, are U-02.1's edit semantics; the message kind's content digest is what pins bytes."]
+    },
+    {
+      "kind": "message",
+      "scheme": "conversation",
+      "canonical_form": "conversation:<thread>/<message>[#sha256:<content sha256> | #span:<start>+<length>:sha256:<span sha256>]",
+      "authority": {
+        "name": "Owner conversation store",
+        "system_of_record": "Owner conversation store: local conversation persistence behind assistant-ui",
+        "blueprint": "#authority, 'Original general conversation | Local conversation persistence behind assistant-ui | Stable thread and message reference'; link 'Original statement', notation conversation:thread-42/message-8"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the thread id and the message id the Owner conversation store assigns (two segments)",
+        "fields": ["thread", "message"]
+      },
+      "revision": {
+        "anchor": "#sha256:<hex>: the sha256 of the message content; or the span anchor #span:<start>+<length>:sha256:<hex>",
+        "pinning": "optional",
+        "content": "the message content is its text as UTF-8 bytes exactly as the durable store returns it: no Unicode normalisation, no newline conversion, no trimming",
+        "span_anchor": {
+          "start": "byte offset into the content, an integer >= 0 in canonical decimal",
+          "length": "byte length, an integer >= 1 in canonical decimal",
+          "sha256": "the sha256 of exactly content[start : start + length]; required whenever a span is given",
+          "boundaries": "start and start + length fall on UTF-8 character boundaries and within the content",
+          "re_extraction": "the quote is content[start : start + length] read from the durable source; it is verified when its sha256 equals the anchor's, byte for byte (Overseer ruling D2, evidence/P-01.2-intent-skill-qualification.md: a U+00A0 did not survive the model channel, so quotes are filled mechanically from the durable source and the model references spans)"
+        }
+      },
+      "validation_rule": "Resolve a durable message or explicitly report missing source (#authority). With a digest: the content's sha256 equals it. With a span: the span lies within the content on character boundaries and its bytes' sha256 equals the anchor's; otherwise digest-mismatch. Implemented as lineage.check_message_content, ready for the U-02.1 store.",
+      "status": "authority-unavailable",
+      "resolver": null,
+      "supplied_by": ["U-02.1", "U-02.2"],
+      "verified": "not yet verified",
+      "examples": [
+        "conversation:thread-42/message-8",
+        "conversation:qual-02/message-1",
+        "conversation:qual-02/message-2#sha256:5f0c7b9a1e3d2c4b6a8f0e1d3c5b7a9f2e4d6c8b0a1f3e5d7c9b2a4f6e8d0c1b",
+        "conversation:qual-08/message-1#span:12+57:sha256:0d4f2c6e8a1b3d5f7092c4e6a8b0d2f4618a3c5e7b9d1f3a5c7e9b2d4f6a8c0e",
+        "conversation:thread%20with%20space/m%C3%A9ssage"
+      ],
+      "citations": ["blueprint #authority", "evidence/P-01.2-intent-skill-qualification.md (D2)", "plan U-02.1", "plan P-03.2"],
+      "open": ["Which parts of a multi-part assistant-ui message form its content bytes, and how they are joined, is U-02.1's to define; the P-01.2 corpus message text stands in until then."]
+    },
+    {
+      "kind": "objective",
+      "scheme": "outcome",
+      "canonical_form": "outcome:<outcome-id>[@<commit>]",
+      "authority": {
+        "name": "OpenSpec",
+        "system_of_record": "OpenSpec Git-backed artifacts",
+        "blueprint": "#authority, 'Accepted objective and proposed design | OpenSpec Git-backed artifacts | Source references, objective ID, design revision'; 'An outcomeId is assigned when an objective is accepted, and may be referenced by multiple changes or tasks'"
+      },
+      "identity": {
+        "settled": false,
+        "native_id": null,
+        "fields": ["outcome"],
+        "unsettled": "the outcomeId: who assigns it on acceptance, its form, its uniqueness scope, and where in the OpenSpec artifacts it is recorded"
+      },
+      "revision": {
+        "anchor": "@<commit>: the commit of the OpenSpec repository at which the objective is read (the form parses; the kind is not resolvable while its identity is open)",
+        "pinning": null
+      },
+      "validation_rule": "Trace to source statement, acceptance conditions and current revision. (#authority, link 'Accepted objective')",
+      "status": "unknown",
+      "resolver": null,
+      "supplied_by": [],
+      "verified": "not yet verified",
+      "examples": ["outcome:O-101", "outcome:O-101@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7"],
+      "citations": [
+        "blueprint #authority (outcomeId rule; link notation outcome:O-101 is illustrative)",
+        "catalog/skills/intent-normalization/references/intent-record.md (intent-record/v1: objective items O1, O2 ... are local to one proposal, accepted through an acceptance reference; no outcome id field)",
+        "evidence/P-01.2-intent-skill-qualification.md (the accepted objective recorded as O1 with acceptance conversation:qual-02/message-2)",
+        "catalog/openspec/schemas/intent-driven/schema.yaml (no outcome id)"
+      ],
+      "open": [
+        "No accepted decision or implemented leaf assigns an outcomeId: intent-record/v1 identifies an objective only as a proposal-local item id (O1) with an acceptance reference, which is not stable across changes, while the blueprint requires an id that several changes and tasks can reference.",
+        "Deciding who assigns the outcomeId, its form and the OpenSpec record that carries it is needed before P-03.2 can traverse from an objective."
+      ]
+    },
+    {
+      "kind": "design",
+      "scheme": "openspec",
+      "canonical_form": "openspec:changes/<change-id>/<artifact-path>@<commit>#sha256=<blob sha256>",
+      "authority": {
+        "name": "OpenSpec",
+        "system_of_record": "OpenSpec Git-backed artifacts (the project repository's git objects)",
+        "blueprint": "#authority, 'Accepted objective and proposed design | OpenSpec Git-backed artifacts | Source references, objective ID, design revision'; link 'Design', notation openspec:changes/editor-shutdown@sha"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the OpenSpec change id and the artifact path inside openspec/changes/<change-id>/ (the P-02.1 source pointer, integrations/planning/README.md)",
+        "fields": ["change", "artifact"]
+      },
+      "revision": {
+        "anchor": "@<commit>#sha256=<digest>: the full commit id of the design revision and the sha256 of the artifact's blob bytes in that commit",
+        "pinning": "required"
+      },
+      "validation_rule": "Resolve the Git artifact and revision, not just a title. (#authority, link 'Design') Resolved from git objects alone, never the working tree, by planning_adapter.resolve_pointer.",
+      "status": "implemented",
+      "resolver": "lineage_resolve.DesignResolver (planning_adapter.resolve_pointer, P-02.1)",
+      "outcomes": ["resolved", "missing", "revision-mismatch", "digest-mismatch", "authority-unavailable"],
+      "outcome_codes": {
+        "missing": "POINTER_ARTIFACT_MISSING",
+        "revision-mismatch": "POINTER_REVISION_MISSING",
+        "digest-mismatch": "POINTER_DIGEST_MISMATCH",
+        "authority-unavailable": "PROJECT_UNAVAILABLE, GIT_FAILED"
+      },
+      "supplied_by": ["P-02.1"],
+      "verified": "offline: throwaway git repositories (integrations/lineage/tests)",
+      "examples": [
+        "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      ],
+      "citations": ["blueprint #authority", "integrations/planning/README.md (Source pointer)", "plan P-02.1"],
+      "open": ["The blueprint's change-level notation openspec:changes/<name>@<sha> is not a form here: P-02.1 pins one artifact and its digest."]
+    },
+    {
+      "kind": "work",
+      "scheme": "backlog",
+      "canonical_form": "backlog:<TASK-ID>[@<commit>]",
+      "authority": {
+        "name": "Backlog.md",
+        "system_of_record": "Backlog.md",
+        "blueprint": "#authority, 'Tasks and dependencies | Backlog.md | Task ID, goal/design references, execution references'; link 'Work', notation backlog:T-204"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the Backlog.md task id as Backlog.md prints it (for example TASK-2; upper case)",
+        "fields": ["task"]
+      },
+      "revision": {
+        "anchor": "@<commit>: a full commit id of the repository that holds Backlog.md's files; the task is read by Backlog.md itself (task view --json) from an export of that commit, never by reading its markdown",
+        "pinning": "optional"
+      },
+      "validation_rule": "Query supported Backlog API; don't assume Work is done because an agent finished. (#authority, link 'Work') Only task view --json and task list --json are run; no status is read for a verdict or reported.",
+      "status": "implemented",
+      "resolver": "lineage_resolve.WorkResolver (the P-02 Backlog.md wrapper, read commands only)",
+      "outcomes": ["resolved", "missing", "revision-mismatch", "ambiguous", "authority-unavailable"],
+      "outcome_codes": {
+        "missing": "WORK_MISSING",
+        "revision-mismatch": "WORK_REVISION_MISSING",
+        "ambiguous": "WORK_AMBIGUOUS",
+        "authority-unavailable": "PROJECT_UNAVAILABLE, BACKLOG_VIEW_FAILED, BACKLOG_LIST_FAILED, BACKLOG_UNAVAILABLE"
+      },
+      "supplied_by": ["P-02.1", "P-02.2"],
+      "verified": "offline with the fake Backlog.md and the recorded P-02 fixtures; live against Backlog.md 1.55.3 when AIEH_BACKLOG and AIEH_OPENSPEC are set",
+      "examples": ["backlog:TASK-2", "backlog:TASK-2@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7", "backlog:TASK-1.2"],
+      "citations": ["blueprint #authority", "blueprint #integration-contracts (backlog task view <id> --json)", "integrations/planning/README.md", "plan P-02.2"],
+      "open": [
+        "The Backlog.md task has no content digest anchor: its JSON output is the tool's, not an immutable record, so a digest-mismatch cannot arise for this kind.",
+        "Backlog.md 1.55.3 refuses task list --json when two tasks share an id (P-02.2); the resolver then answers authority-unavailable with Backlog.md's message, not ambiguous."
+      ]
+    },
+    {
+      "kind": "attempt",
+      "scheme": "openhands",
+      "canonical_form": "openhands:conversation/<conversation-uuid>[@<event>]",
+      "authority": {
+        "name": "OpenHands Agent Server",
+        "system_of_record": "OpenHands Agent Server",
+        "blueprint": "#authority, 'Engineering conversation and agent events | OpenHands Agent Server | Native conversation/event/run identity; streamed read projections'; link 'Execution', notation openhands:conversation/run/event, 'Use native IDs, preserve chronological evidence and correlation to Work'"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the Agent Server's native conversation id, a UUID: the integration reserves it before dispatch and sends it on the create (decision 0001, point 2; integrations/store: uuid5 of the operation key). The integration's own operation key is not this identity (#integration-contracts: 'The coordinator must not confuse its own operationKey with the identities assigned by OpenHands or Gitea').",
+        "fields": ["conversation"]
+      },
+      "revision": {
+        "anchor": "@<event>: a native event id of that conversation (a segment)",
+        "pinning": "optional"
+      },
+      "validation_rule": "Use native IDs, preserve chronological evidence and correlation to Work. (#authority, link 'Execution')",
+      "status": "authority-unavailable",
+      "resolver": null,
+      "supplied_by": ["E-01.3.1", "E-01.4.1"],
+      "verified": "not yet verified",
+      "examples": ["openhands:conversation/929f0d8a-f3d8-4da3-8ac3-9d0017709d71", "openhands:conversation/929f0d8a-f3d8-4da3-8ac3-9d0017709d71@evt-17"],
+      "citations": ["blueprint #authority", "blueprint #integration-contracts", "decisions/0001", "integrations/store/README.md (Attempt receipts)", "evidence/F-04.2-conversation-lifecycle.md (conversation id observed as a UUID; no events)"],
+      "open": [
+        "The native event id's form was not observed: F-04.2's conversation had no events. Its segment is opaque until E-01.3.1 types the client.",
+        "The blueprint's 'run' part of openhands:conversation/run/event names no native identity established at Agent Server 1.60.1, so it is not part of the form."
+      ]
+    },
+    {
+      "kind": "commit",
+      "scheme": "git",
+      "canonical_form": "git:<repository>@<commit>",
+      "authority": {
+        "name": "Git",
+        "system_of_record": "Git (the repository's object database; Gitea once adopted)",
+        "blueprint": "#authority, 'Commits, reviews and release artifacts | Git / Gitea | Repository, revision SHA and review reference'; link 'Revision and review', notation git:repo@commit"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the repository name and the full commit id; the commit id is content-addressed",
+        "fields": ["repository", "commit"]
+      },
+      "revision": {
+        "anchor": "@<commit>: the full commit id itself, which is immutable",
+        "pinning": "required"
+      },
+      "validation_rule": "Verify repository, exact commit and reviewer; no path/title-only proof. (#authority, link 'Revision and review') The resolver maps the repository name to a registered local clone (configuration, never part of the reference) and requires that exact commit object there.",
+      "status": "implemented",
+      "resolver": "lineage_resolve.CommitResolver (git rev-parse and cat-file, read-only)",
+      "outcomes": ["resolved", "missing", "authority-unavailable"],
+      "outcome_codes": {
+        "missing": "COMMIT_MISSING, COMMIT_NOT_A_COMMIT, COMMIT_ID_MISMATCH",
+        "authority-unavailable": "REPOSITORY_NOT_REGISTERED, REPOSITORY_UNAVAILABLE, GIT_FAILED"
+      },
+      "supplied_by": ["F-02"],
+      "verified": "offline: throwaway git repositories (integrations/lineage/tests)",
+      "examples": ["git:ai-engineering-harness@6e79b3e42d06146624cde5ffc52ae29a892c5205", "git:rschuft/ai-engineering-harness@6e79b3e42d06146624cde5ffc52ae29a892c5205"],
+      "citations": ["blueprint #authority", "blueprint #quality-pipeline ('gitCommit': 'repository@<full-commit-sha>')"],
+      "open": [
+        "Until Gitea is adopted, a repository name is the name configured for a local clone; whether a resolved commit is reachable from a branch is not part of this kind.",
+        "Blueprint #integration-contracts asks for Python adapters that need no Git executable (Dulwich); this resolver, like P-02.1, runs git."
+      ]
+    },
+    {
+      "kind": "review",
+      "scheme": "gitea",
+      "canonical_form": "gitea:<owner>/<name>/pulls/<index>/reviews/<review-id>@<commit>",
+      "authority": {
+        "name": "Gitea",
+        "system_of_record": "Gitea",
+        "blueprint": "#authority, 'Commits, reviews and release artifacts | Git / Gitea | Repository, revision SHA and review reference'; link 'Revision and review', notation gitea:repo/pr/review"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "Gitea's repository owner/name, pull request index and review id",
+        "fields": ["repository", "pull", "review"]
+      },
+      "revision": {
+        "anchor": "@<commit>: the exact commit the review was made against",
+        "pinning": "required"
+      },
+      "validation_rule": "Verify repository, exact commit and reviewer; no path/title-only proof. (#authority, link 'Revision and review'; #control-evidence REVIEW-01: invalidate review on material revision change)",
+      "status": "authority-unavailable",
+      "resolver": null,
+      "supplied_by": ["E-03.3.1", "E-03.3.2", "D-01.1"],
+      "verified": "not yet verified",
+      "examples": ["gitea:example/project/pulls/7/reviews/31@6e79b3e42d06146624cde5ffc52ae29a892c5205"],
+      "citations": ["blueprint #authority", "blueprint #control-evidence", "plan E-03.3.1"],
+      "open": ["Gitea is not adopted; the review fields read for the reviewer and the commit are qualified against the pinned Gitea API by E-03.3.1."]
+    },
+    {
+      "kind": "ci",
+      "scheme": "gitea",
+      "canonical_form": "gitea:<owner>/<name>/actions/runs/<run>@<commit>",
+      "authority": {
+        "name": "Gitea Actions",
+        "system_of_record": "Gitea Actions",
+        "blueprint": "#quality-pipeline, 'Run ID + commit SHA + policy/workflow revision + reports'; 'Preserve the native Gitea run ID, Git SHA, test artifact, policy revision ... independently'; #authority, 'Git / Gitea ... check results'"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "Gitea's repository owner/name and the native Actions run id",
+        "fields": ["repository", "run"]
+      },
+      "revision": {
+        "anchor": "@<commit>: the exact commit the run tested",
+        "pinning": "required"
+      },
+      "validation_rule": "A verdict must point to the tested revision and specific evidence; the absence of a result is unknown, not green. (#quality-pipeline)",
+      "status": "authority-unavailable",
+      "resolver": null,
+      "supplied_by": ["Q-03.1", "Q-03.2"],
+      "verified": "not yet verified",
+      "examples": ["gitea:example/project/actions/runs/1234@6e79b3e42d06146624cde5ffc52ae29a892c5205"],
+      "citations": ["blueprint #quality-pipeline", "blueprint #control-evidence", "plan Q-03.1"],
+      "open": ["Whether the native run id is Gitea's global run id or the per-repository run number, and how a job within a run is named, is pin-specific and qualified by Q-03.1."]
+    },
+    {
+      "kind": "authorization",
+      "scheme": "gitea",
+      "canonical_form": "gitea:<owner>/<name>/branches/<branch>@<commit>#sha256:<manifest sha256>",
+      "authority": {
+        "name": "Gitea",
+        "system_of_record": "Gitea: the Owner-only merge onto a protected authorization branch (the authenticated Gitea decision record)",
+        "blueprint": "#authority, 'Consequential Owner authorization | Authenticated Gitea decision record | Reviewer, scope, operation digest and applicable revision'; #integration-contracts, 'the protected branch revision is the authorization source'"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the repository owner/name, the protected branch (a segment) and the merge commit on it",
+        "fields": ["repository", "branch", "commit"]
+      },
+      "revision": {
+        "anchor": "@<commit>#sha256:<digest>: the merge revision and the sha256 of the authorized manifest's blob (decision 0004's Authority: protected_ref, authorization_revision, manifest_blob_digest)",
+        "pinning": "required"
+      },
+      "validation_rule": "Recheck latest Gitea review and exact revision immediately before the effect; stale or missing authorization is never inferred from a webhook. (#integration-contracts; #control-evidence AUTH-01)",
+      "status": "authority-unavailable",
+      "resolver": null,
+      "supplied_by": ["G-03.1", "G-04.3.1"],
+      "verified": "not yet verified",
+      "examples": ["gitea:example/operations/branches/authorized@6e79b3e42d06146624cde5ffc52ae29a892c5205#sha256:9b1f0c3e5a7d9f1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b"],
+      "citations": ["blueprint #authority", "blueprint #integration-contracts", "blueprint #control-evidence", "decisions/0004 (Authority fields)", "plan G-03.1", "plan G-04.3.1"],
+      "open": ["The manifest's path and layout in the protected repository are G-03.1's; the digest pins the manifest's bytes without them."]
+    },
+    {
+      "kind": "effect-receipt",
+      "scheme": "effect",
+      "canonical_form": "effect:<effect-key>[@<seq>#sha256:<event hash>]",
+      "authority": {
+        "name": "effects store",
+        "system_of_record": "the privileged effects store (effects.sqlite), kept by the protected executor",
+        "blueprint": "#infrastructure-state, 'Protected executor keeps its own effect receipts'; decision 0004 points 1, 5-7; #integration-contracts, 'Authorization revision, effect key, observed result'"
+      },
+      "identity": {
+        "settled": true,
+        "native_id": "the one-time effect key: fx1- and the sha256 of the canonical key inputs (integrations/effects/README.md)",
+        "fields": ["effect_key"]
+      },
+      "revision": {
+        "anchor": "@<seq>#sha256:<hash>: one journal event of this receipt (its sequence number) and that event's hash-chain value, sha256(prev_hash || LF || content); the receipt as of that event",
+        "pinning": "optional"
+      },
+      "validation_rule": "The journal must verify (verify_chain) before any answer. A restore loses knowledge, never effects: the absence of a receipt after a restore is not evidence that an effect did not happen (decision 0004, point 7), so missing says only that the store holds no receipt.",
+      "status": "implemented",
+      "resolver": "lineage_resolve.EffectReceiptResolver (EffectsStore.get, events, verify_chain; read methods only)",
+      "outcomes": ["resolved", "missing", "revision-mismatch", "digest-mismatch", "authority-unavailable"],
+      "outcome_codes": {
+        "missing": "EFFECT_RECEIPT_MISSING",
+        "revision-mismatch": "EFFECT_EVENT_MISSING",
+        "digest-mismatch": "EFFECT_EVENT_DIGEST_MISMATCH",
+        "authority-unavailable": "EFFECTS_STORE_UNAVAILABLE, EFFECTS_CHAIN_INVALID"
+      },
+      "supplied_by": ["F-05.2"],
+      "verified": "offline on F-05.2 fixture stores only; no live effects store exists (decision 0004, point 4)",
+      "examples": [
+        "effect:fx1-3c1a5e7b9d1f3a5c7e9b2d4f6a8c0e1d3f5a7c9e1b3d5f7a9c2e4f6a8b0d1f3e",
+        "effect:fx1-3c1a5e7b9d1f3a5c7e9b2d4f6a8c0e1d3f5a7c9e1b3d5f7a9c2e4f6a8b0d1f3e@4#sha256:7e9b1d3f5a7c9e2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b"
+      ],
+      "citations": ["decisions/0004", "integrations/effects/README.md (Receipts, Journal)", "evidence/F-05.2-effects-store-backup-restore.md", "plan G-04.2.2"],
+      "open": [
+        "On the live store, OS custody denies ordinary integration processes (decision 0004, point 1): a resolver not run under the store's custody identity answers authority-unavailable. Live resolution belongs with G-04.2.1 and G-04.2.2.",
+        "open_effects_store, the store's only open path, applies pending migrations in a write transaction; at the current schema it changes no content (tested), but the store has no strictly read-only open."
+      ]
+    },
+    {
+      "kind": "release",
+      "scheme": null,
+      "canonical_form": null,
+      "authority": {
+        "name": "Git / Gitea",
+        "system_of_record": "Git / Gitea",
+        "blueprint": "#authority, 'Commits, reviews and release artifacts | Git / Gitea | Repository, revision SHA and review reference'; #quality-pipeline, 'releaseDigest': 'sha256:<digest>'"
+      },
+      "identity": {
+        "settled": false,
+        "native_id": null,
+        "unsettled": "where a release artifact is held and named (a Gitea release and tag, a package registry or an OCI registry); only its sha256 artifact digest is named"
+      },
+      "revision": {"anchor": null, "pinning": null},
+      "validation_rule": "Verify the promoted digest is exactly the qualified artifact. (#quality-pipeline, release qualification)",
+      "status": "unknown",
+      "resolver": null,
+      "supplied_by": [],
+      "verified": "not yet verified",
+      "citations": ["blueprint #authority", "blueprint #quality-pipeline", "plan R-01.1", "plan R-02.2.1", "plan R-05.4.2"],
+      "open": ["The release artifact's native identity is settled by the distribution leaves (R-01.1, R-02.2.1, R-05.4.2), not by #authority."]
+    },
+    {
+      "kind": "catalog",
+      "scheme": null,
+      "canonical_form": null,
+      "authority": {
+        "name": "Gitea catalog repository",
+        "system_of_record": "the protected Gitea catalog repository of agent definitions and Agent Skills",
+        "blueprint": "#authority, 'Each attempt records the selected agent definition revision, transitive skill revisions ... Agent and skill governance establishes the catalog authority'; #agent-skills, 'Produce an immutable approved definition/skill digest'; #quality-pipeline, 'agentDefinition': 'catalog:engineer@<digest>'"
+      },
+      "identity": {
+        "settled": false,
+        "native_id": null,
+        "unsettled": "the approved definition or Skill digest: which bytes it covers (the definition file, its bundle, transitive Skills) is A-01.1's"
+      },
+      "revision": {"anchor": null, "pinning": null},
+      "validation_rule": "Resolve imported artifacts to immutable digests; active attempts retain their original revisions. (#agent-skills)",
+      "status": "unknown",
+      "resolver": null,
+      "supplied_by": [],
+      "verified": "not yet verified",
+      "citations": ["blueprint #authority", "blueprint #agent-skills", "blueprint #quality-pipeline", "plan A-01.1"],
+      "open": ["The catalog's digest definition is A-01.1's (catalog admission); until then a catalog reference has no settled identity."]
+    }
+  ],
+  "non_authoritative": [
+    {"record": "derived conversation episodes and search index", "blueprint": "#authority: 'Trusted local SQLite projections (rebuildable, non-authoritative)'; they carry immutable source-message spans and revisions"},
+    {"record": "derived cross-document concepts", "blueprint": "#authority: 'Optional Knowledge providers ... Claims linked to original sources, with confidence and authority separated'"},
+    {"record": "integration store attempt receipts and projections (integration.sqlite)", "blueprint": "integrations/store/README.md: 'It is not a record of authority'; #integration-contracts: the operation key is the coordinator's own"},
+    {"record": "OpenTelemetry traces", "blueprint": "#quality-pipeline: 'traces are operational diagnostics, not immutable evidence or guaranteed complete history'"}
+  ]
+}

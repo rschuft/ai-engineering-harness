@@ -67,12 +67,13 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test) and the planning adapter tests (planning:test)
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test) and the lineage tests (lineage:test)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
       - task: effects:test
       - task: planning:test
+      - task: lineage:test
 
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
@@ -169,6 +170,23 @@ tasks:
       vars: [PROJECT, BACKLOG]
     cmds:
       - '{{.PYTHON}} -I -B integrations/planning/planning_readiness.py --project "{{.PROJECT}}" --backlog "{{.BACKLOG}}" {{.CLI_ARGS}}'
+
+  # Lineage references (plan leaf P-03.1): typed source references, their schema and the
+  # read-only resolvers (integrations/lineage/README.md).
+  lineage:test:
+    desc: "Run the lineage reference and resolver tests (python -I -B -m unittest discover -s integrations/lineage/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/lineage/tests -v'
+
+  lineage:schema:
+    desc: Check the lineage reference schema against the typed references and list each kind's status (python -I -B integrations/lineage/lineage_resolve.py schema)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/lineage/lineage_resolve.py schema'
+
+  lineage:resolve:
+    desc: "Resolve lineage references read-only; exit 1 on any outcome other than resolved (python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [--current] [--project DIR] [--backlog CMD] [--repo NAME=DIR] [--effects-root DIR])"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/lineage/lineage_resolve.py resolve {{.CLI_ARGS}}'
 
   profile:check:
     desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins

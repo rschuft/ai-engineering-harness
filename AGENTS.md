@@ -102,6 +102,7 @@ unless adaptation is necessary.
   python -I -B -m unittest discover -s integrations/store/tests -v
   python -I -B -m unittest discover -s integrations/effects/tests -v
   python -I -B -m unittest discover -s integrations/planning/tests -v
+  python -I -B -m unittest discover -s integrations/lineage/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the
