@@ -62,11 +62,13 @@ The repository holds a working implementation foundation, not the completed appl
 - **F-02: repository foundation.** Repository structure, developer commands, integrity verification and contributor documentation.
 - **M-1.** The blueprint was reconciled with [decision 0001](decisions/0001-agent-server-dispatch-precondition-and-version-line.md).
 - **F-03: managed execution environment.** Passed for the Windows reference profile, QEMU with WHPX, on the reference host. Guest lifecycle, filesystem and credential surfaces, network policy and teardown are evidenced in the profile's [qualification record](profiles/strong-windows-qemu-whpx/QUALIFICATION.md). The strong isolation tier is **not yet operational**: the S-02 security tests are pending. The Linux (Incus) and macOS (Lima) profiles are not qualified.
-- **F-05.1: integration receipt store.** The Integration Service's local SQLite store for attempt receipts and rebuildable projections ([`integrations/store/`](integrations/store/)).
+- **F-05: local operational persistence.** Passes on fixtures.
+  - **F-05.1: integration receipt store.** The Integration Service's local SQLite store for attempt receipts and rebuildable projections ([`integrations/store/`](integrations/store/)).
+  - **F-05.2: privileged-effect store.** A separate store for the executor's effect receipts, with custody verification, and backup and restore for both stores ([`integrations/effects/`](integrations/effects/)), under Accepted [decision 0004](decisions/0004-privileged-effect-store-custody-and-restore-semantics.md). No live store exists yet. The limits, including a fixture oracle in place of real target probes, are in the [F-05.2 evidence](evidence/F-05.2-effects-store-backup-restore.md).
 - **P-01.1: intent schema and normalization Skill.** An OpenSpec workflow schema whose proposal carries an intent record, and an Agent Skill that turns a request into that record ([`catalog/`](catalog/)).
 - **Publication licensing audit.** No violation was found in what the repository publishes ([audit](composition/inventory/PUBLICATION-AUDIT.md)).
 
-Next: **F-05.2**, the privileged-effect store with backup and restore, under Proposed [decision 0004](decisions/0004-privileged-effect-store-custody-and-restore-semantics.md). **P-01.2**, the Skill's live qualification on model runs, is pending.
+Next: **P-01.2**, the Skill's live qualification on model runs.
 
 The [evidence log](evidence/bootstrap-log.md) records each verdict with its revision and evidence; it is where progress is recorded. Decision records (accepted and proposed) are in [`decisions/`](decisions/). The [plan](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json) defines the work; its own status fields are its original baseline, not progress.
 
