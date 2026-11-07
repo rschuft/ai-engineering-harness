@@ -51,7 +51,7 @@ flowchart TB
 
 OpenHands Software Agent SDK and Agent Server, Agent Canvas, assistant-ui, OpenSpec, Backlog.md and Gitea are **selected and locked**. Their exact upstream versions are recorded in the [compatibility matrix](composition/compatibility-matrix.md) and pinned by hash, integrity and digest in the [component lock](composition/lock/README.md).
 
-**None of these components is integrated or operational yet.** The harness does not yet run OpenHands sessions, provision execution environments or provide the Owner application.
+**None of these components is integrated or operational yet.** The harness does not yet run OpenHands sessions or provide the Owner application. It can provision disposable execution guests with its Windows reference profile, but their strong isolation tier is not yet operational (see [Current status](#current-status)).
 
 ## Current status
 
@@ -61,10 +61,14 @@ The repository holds a working implementation foundation, not the completed appl
 - **F-01: upstream composition.** Components were selected and locked, with a resolver that verifies every pinned artifact.
 - **F-02: repository foundation.** Repository structure, developer commands, integrity verification and contributor documentation.
 - **M-1.** The blueprint was reconciled with [decision 0001](decisions/0001-agent-server-dispatch-precondition-and-version-line.md).
+- **F-03: managed execution environment.** Passed for the Windows reference profile, QEMU with WHPX, on the reference host. Guest lifecycle, filesystem and credential surfaces, network policy and teardown are evidenced in the profile's [qualification record](profiles/strong-windows-qemu-whpx/QUALIFICATION.md). The strong isolation tier is **not yet operational**: the S-02 security tests are pending. The Linux (Incus) and macOS (Lima) profiles are not qualified.
+- **F-05.1: integration receipt store.** The Integration Service's local SQLite store for attempt receipts and rebuildable projections ([`integrations/store/`](integrations/store/)).
+- **P-01.1: intent schema and normalization Skill.** An OpenSpec workflow schema whose proposal carries an intent record, and an Agent Skill that turns a request into that record ([`catalog/`](catalog/)).
+- **Publication licensing audit.** No violation was found in what the repository publishes ([audit](composition/inventory/PUBLICATION-AUDIT.md)).
 
-In progress: **F-03.1**, the managed execution environment provider selection and isolation contract.
+Next: **F-05.2**, the privileged-effect store with backup and restore, under Proposed [decision 0004](decisions/0004-privileged-effect-store-custody-and-restore-semantics.md). **P-01.2**, the Skill's live qualification on model runs, is pending.
 
-The [evidence log](evidence/bootstrap-log.md) records each verdict with its revision and evidence; it is where progress is recorded. Accepted decisions are in [`decisions/`](decisions/). The [plan](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json) defines the work; its own status fields are its original baseline, not progress.
+The [evidence log](evidence/bootstrap-log.md) records each verdict with its revision and evidence; it is where progress is recorded. Decision records (accepted and proposed) are in [`decisions/`](decisions/). The [plan](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json) defines the work; its own status fields are its original baseline, not progress.
 
 ## Getting started
 

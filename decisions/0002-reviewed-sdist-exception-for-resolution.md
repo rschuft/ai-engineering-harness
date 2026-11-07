@@ -59,3 +59,8 @@ Only `PKG-INFO` (LGPLv2) and the `setup.py` header (LGPLv2.1) say otherwise. Ups
 is inconsistent, and the shipped text governs; see
 `composition/inventory/PUBLICATION-AUDIT.md`, finding C8. The decision and its other
 consequences are unchanged: the LGPL licence remains an open distribution item.
+
+**2026-11-06, after the audit:** the "open distribution item" consequences above, for
+`func-timeout` and `lmnr-claude-code-proxy`, are now conditional on
+[decision 0005](0005-distribution-model-upstream-download-no-redistribution.md). They
+apply only if a design redistributes third-party components.
