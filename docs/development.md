@@ -572,6 +572,44 @@ The example projections are in `integrations/lineage/examples/`. Live statement 
 authorities, and the shape of a real dispatcher's reservation intent, are **not yet
 verified** (see the [lineage README](../integrations/lineage/README.md#lineage-traversal-p-032)).
 
+## Owner host
+
+Plan leaf U-01.1 adds [`apps/owner-host/`](../apps/owner-host/README.md): the Owner's
+single React application (blueprint
+[`#conversation`](../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#conversation)).
+It has routes for chat, Work and engineering, persistent navigation, one local session
+identity, and a narrow and a wide layout. The chat is assistant-ui's headless primitives
+over a model-free `LocalRuntime`. Agent Canvas 1.36.0 is embedded as a library with no
+backend. Nothing is connected (no model, store, Work system or Agent Server), and every
+surface says so. The session identity is a random, non-secret value kept in the browser's
+local storage. It is not authentication: the Owner UI's access to the Agent Server is the
+open finding `fd-owner-ui-access` in the [security inventory](#security-inventory). The
+app's README records the routes, the identity design and the evidence for the
+compatibility-matrix row "agent-canvas 1.36.0 / assistant-ui 0.15.32".
+
+These targets need the **component tier** (Node.js ≥ 24, npm ≥ 11), and `owner-host:install`
+needs access to the npm registry. They are not part of `setup` or `test`, whose basic tier
+needs only Python and git. The app has its own `package.json` and `package-lock.json` with
+the component lock's versions for every package they share. Install it with
+`npm ci --ignore-scripts`, which runs no package's install scripts. `node_modules/` and
+`dist/` are not committed (decision 0005).
+
+| Task target | Command without Task (in `apps/owner-host`) | Network | Result |
+|---|---|---|---|
+| `owner-host:install` | `npm ci --ignore-scripts --no-audit --no-fund` | yes | Installs the locked dependencies; npm checks each tarball's integrity. |
+| `owner-host:typecheck` | `npm run typecheck` (`tsc --noEmit -p tsconfig.json`) | no | TypeScript 7.0.2 check of the app, its tests and the build plugin. |
+| `owner-host:test` | `npm test` (`vitest run`) | no | Component, routing, identity, responsive-logic, no-network and Canvas compatibility tests in jsdom. |
+| `owner-host:build` | `npm run build` (`vite build`) | no | Production build into `apps/owner-host/dist/`. Canvas is a lazy chunk. |
+
+`npm run dev` and `npm run preview` serve the app on 127.0.0.1 only. Neither has a
+Task target.
+
+Verified on Windows 11 x86_64 with Node.js 24.19.0 and npm 11.17.0, with an isolated npm
+cache and empty npm configuration: install, type check, tests (7 files, 43 tests) and build
+PASS. `vite preview` on 127.0.0.1 served every route and the built assets. Rendering in a
+real browser (including the responsive layout), every other host and the Task targets
+themselves are **not yet verified**.
+
 ## Security inventory
 
 Plan leaf S-01.1 records the harness's trust domains, principals, protected assets,
@@ -656,6 +694,7 @@ Directories exist only when they hold real content.
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
 | `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2 |
+| `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |
@@ -674,6 +713,7 @@ sources stay external (pinned in `composition/`) unless adaptation is necessary.
 | Policy (permissions, controls) | `policy/` (created by S-01.2.1: the role-token matrix) | S-01.2.1, G-01.1 |
 | Agent and Skill catalog | `catalog/` (created by P-01.1: the `intent-driven` OpenSpec schema and the `intent-normalization` Skill) | P-01.1, then A-01.1 and E-03.1 |
 | Contract tests | `tests/` | F-03.3.1, S-02.1, E-01.3.2 |
+| Owner-facing applications | `apps/` (created by U-01.1: `apps/owner-host/`). A separate home because it is a Node application with its own npm toolchain and lock, unlike the Python tools and integrations | U-01.1, then U-01.2 and U-02.x |
 
 ## Changing integrity-tracked files
 

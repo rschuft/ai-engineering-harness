@@ -199,6 +199,32 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/lineage/tests/lineage_example.py {{.CLI_ARGS}}'
 
+  # Owner host (plan leaf U-01.1): the React shell in apps/owner-host. These targets need
+  # the component tier (Node.js >= 24, npm >= 11), so they are not part of setup or test.
+  owner-host:install:
+    desc: "Install the Owner host's locked npm dependencies without install scripts; needs Node 24, npm 11 and the npm registry (npm ci --ignore-scripts --no-audit --no-fund, in apps/owner-host)"
+    dir: apps/owner-host
+    cmds:
+      - npm ci --ignore-scripts --no-audit --no-fund
+
+  owner-host:typecheck:
+    desc: Type-check the Owner host (npm run typecheck, in apps/owner-host)
+    dir: apps/owner-host
+    cmds:
+      - npm run typecheck
+
+  owner-host:test:
+    desc: Run the Owner host's component, routing and compatibility tests in jsdom (npm test, in apps/owner-host)
+    dir: apps/owner-host
+    cmds:
+      - npm test
+
+  owner-host:build:
+    desc: Build the Owner host into apps/owner-host/dist (npm run build, in apps/owner-host)
+    dir: apps/owner-host
+    cmds:
+      - npm run build
+
   profile:check:
     desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins
     cmds:

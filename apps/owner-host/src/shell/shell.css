@@ -1,0 +1,268 @@
+/*
+ * Owner host shell styles (plan leaf U-01.1).
+ *
+ * Isolation rule, checked by src/shell/shell-css.test.ts: every selector here
+ * is html, body, #root, :root or starts with an .owner- class, and every custom
+ * property is named --owner-*. Agent Canvas scopes its own styles under
+ * [data-agent-server-ui] and names its variables --oh-*, so neither side
+ * restyles the other. No @import, no web fonts, no remote URLs.
+ *
+ * The layout breakpoint lives in src/shell/layout.ts (WIDE_MIN_WIDTH); rules
+ * here key on the shell's data-layout attribute instead of repeating it.
+ */
+
+:root {
+  --owner-bg: #f6f7f9;
+  --owner-surface: #ffffff;
+  --owner-text: #1b1f24;
+  --owner-muted: #5a6370;
+  --owner-border: #d8dde3;
+  --owner-accent: #2457c5;
+  --owner-accent-soft: #e6edfb;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --owner-bg: #121417;
+    --owner-surface: #1b1e23;
+    --owner-text: #e7e9ec;
+    --owner-muted: #9aa3ae;
+    --owner-border: #2e333a;
+    --owner-accent: #8fb0ff;
+    --owner-accent-soft: #1f2a44;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--owner-bg);
+  color: var(--owner-text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.45;
+}
+
+.owner-shell {
+  display: grid;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+.owner-shell[data-layout="wide"] {
+  grid-template-columns: 15rem minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "header header"
+    "nav main";
+}
+
+.owner-shell[data-layout="narrow"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "header"
+    "nav"
+    "main";
+}
+
+.owner-shell__header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: var(--owner-surface);
+  border-bottom: 1px solid var(--owner-border);
+}
+
+.owner-shell__brand {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.owner-shell__nav {
+  grid-area: nav;
+  background: var(--owner-surface);
+}
+
+.owner-shell[data-layout="wide"] .owner-shell__nav {
+  border-right: 1px solid var(--owner-border);
+  padding: 0.75rem 0.5rem;
+}
+
+.owner-shell[data-layout="narrow"] .owner-shell__nav {
+  border-bottom: 1px solid var(--owner-border);
+  overflow-x: auto;
+}
+
+.owner-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.owner-nav[aria-orientation="vertical"] {
+  flex-direction: column;
+}
+
+.owner-nav[aria-orientation="horizontal"] {
+  flex-direction: row;
+  padding: 0 0.5rem;
+}
+
+.owner-nav__link {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  min-height: 2.75rem;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.owner-nav__link:hover {
+  background: var(--owner-accent-soft);
+}
+
+.owner-nav__link:focus-visible {
+  outline: 2px solid var(--owner-accent);
+  outline-offset: 2px;
+}
+
+.owner-nav__link--active {
+  background: var(--owner-accent-soft);
+  color: var(--owner-accent);
+  font-weight: 600;
+}
+
+.owner-nav__summary {
+  font-size: 0.8rem;
+  color: var(--owner-muted);
+  font-weight: 400;
+}
+
+.owner-shell__main {
+  grid-area: main;
+  min-width: 0;
+  padding: 1rem;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.owner-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.owner-identity__role {
+  font-weight: 600;
+}
+
+.owner-identity__label,
+.owner-identity__auth {
+  color: var(--owner-muted);
+}
+
+.owner-identity__id {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.owner-area__title {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+}
+
+.owner-empty {
+  border: 1px dashed var(--owner-border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: var(--owner-surface);
+  margin: 0 0 1rem;
+}
+
+.owner-empty__title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+
+.owner-empty__body p {
+  margin: 0.25rem 0;
+}
+
+.owner-work {
+  display: grid;
+  gap: 1rem;
+}
+
+.owner-shell[data-layout="wide"] .owner-work {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.owner-work__heading {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.owner-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 20rem;
+}
+
+.owner-chat__viewport {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.owner-chat__composer {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.owner-chat__input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 0.5rem;
+  border: 1px solid var(--owner-border);
+  border-radius: 6px;
+  font: inherit;
+  background: var(--owner-surface);
+  color: inherit;
+}
+
+.owner-chat__send {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--owner-border);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.owner-chat__message {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  background: var(--owner-surface);
+}
+
+.owner-canvas-frame {
+  border: 1px solid var(--owner-border);
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 6rem;
+}

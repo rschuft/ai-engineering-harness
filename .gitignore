@@ -23,6 +23,8 @@ __pycache__/
 *.db-shm
 *.sqlite-wal
 *.sqlite-shm
+node_modules/
+dist/
 
 # Local/editor artifacts
 .DS_Store
