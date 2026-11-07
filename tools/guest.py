@@ -5623,8 +5623,23 @@ def provisioning_property(profile, record, obs):
     return out
 
 
+def _n_moby_sockets(value, profile):
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    for key in ('root_view', 'open_to_others'):
+        if isinstance(out.get(key), list):
+            out[key] = sorted({json.dumps(dict(s, path=MOBY_VOLATILE_SOCKET.sub(r'\1*\2', str(
+                s.get('path')))), sort_keys=True) for s in out[key] if isinstance(s, dict)})
+    return out
+
+
+MOBY_VOLATILE_SOCKET = re.compile(r'^(/run/docker/libnetwork/)[0-9a-f]+(\.sock)$')
+NORMALIZERS['moby-sockets'] = _n_moby_sockets
+
 CHECK_CLASSES.update({
-    ('profiles P6', 'guest Moby sockets'): (STABLE, None),
+    # libnetwork names its per-daemon socket with a random id at every start
+    ('profiles P6', 'guest Moby sockets'): (STABLE, 'moby-sockets'),
     ('profiles P6', 'agent cannot reach Moby'): (STABLE, None),
     ('profiles P7', 'guest TCP listeners (Moby)'): (STABLE, None),
     ('profiles P8', 'agent not in group docker'): (STABLE, None),
@@ -5634,7 +5649,9 @@ CHECK_CLASSES.update({
     (PROVISIONING_PROPERTY, 'Moby daemon'): (STABLE, None),
     (PROVISIONING_PROPERTY, 'image'): (STABLE, None),
     (PROVISIONING_PROPERTY, 'containers'): (STABLE, None),
-    (PROVISIONING_PROPERTY, 'kernel modules for Moby'): (STABLE, None),
+    # the loaded set depends on what ran since boot (veth after a container); the verdict
+    # (overlay loaded) must stay equal
+    (PROVISIONING_PROPERTY, 'kernel modules for Moby'): (VOLATILE, None),
     (PROVISIONING_PROPERTY, 'upload and staging removed'): (STABLE, None),
     (PROVISIONING_PROPERTY, 'root step disabled'): (STABLE, None),
 })

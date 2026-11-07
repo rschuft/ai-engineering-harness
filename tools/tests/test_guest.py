@@ -2979,6 +2979,38 @@ class ProvisionedInspect(LaunchRecord):
         ok, summary = guest.inspect_ok(a)
         self.assertTrue(ok, summary)
 
+    def test_restart_varies_libnetwork_socket_and_loaded_modules_only(self):
+        """Observed in F-04.1b: across a restart libnetwork's socket gets a new random id
+        and veth is loaded only after a container ran; neither is a difference."""
+        a = provisioned_identity_record(self.record, 'one')
+        b = copy.deepcopy(a)
+
+        def facts_of(record, **override):
+            obs = record['observations']
+            facts = moby_facts(**override)
+            obs['guest']['moby_facts']['out'] = json.dumps(facts)
+            props = guest.evaluate(PROFILE, provisioned_record(self.record) | {
+                'instance': dict(self.record['instance'], instance_id=record['instance_id'])},
+                obs)
+            record['properties'] = props
+            record['verdicts'] = {p['property']: p['verdict'] for p in props}
+        sockets = moby_facts()['sockets']
+        facts_of(a, sockets=sockets + [{'path': '/run/docker/libnetwork/cbf2467bc0a7.sock',
+                                        'state': 'socket', 'owner': 'root', 'group': 'root',
+                                        'mode': '600'}],
+                 modules={'loaded': ['overlay', 'veth'], 'overlay_filesystem': True})
+        facts_of(b, sockets=sockets + [{'path': '/run/docker/libnetwork/4f050e0d44ad.sock',
+                                        'state': 'socket', 'owner': 'root', 'group': 'root',
+                                        'mode': '600'}],
+                 modules={'loaded': ['overlay'], 'overlay_filesystem': True})
+        out = guest.compare_inspect(PROFILE, a, b, 'start')
+        not_ok = [f for f in out['not_ok'] if 'Moby' in f]
+        self.assertEqual(not_ok, [])
+        facts_of(b, sockets=sockets + [{'path': '/run/docker/other.sock', 'state': 'socket',
+                                        'owner': 'root', 'group': 'root', 'mode': '600'}])
+        self.assertIn('profiles P6 / guest Moby sockets',
+                      guest.compare_inspect(PROFILE, a, b, 'start')['not_ok'])
+
 
 if __name__ == '__main__':
     unittest.main()

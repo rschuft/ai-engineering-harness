@@ -199,7 +199,40 @@ Detail and raw outputs: [`evidence/F-04.1a-provision-pins-fetch.md`](../evidence
   placeholder for a digest reference), so `docker load` creates that tag. The root step
   must remove it and keep only the local immutable tag, whose image ID is checked.
 
+## Current facts (2026-11-06, F-04.1 slice (b))
+Detail and raw outputs: [`evidence/F-04.1b-provision-moby.md`](../evidence/F-04.1b-provision-moby.md).
+- **Root step.** The seed (`profiles/seed/user-data.tmpl`) always carries
+  `/usr/local/sbin/aieh-provision`, `aieh-provision.path` (`PathExists=…/READY`),
+  `aieh-provision.service` and `aieh-docker-facts.service`; only `create --provision`
+  seeds a manifest (base64, root `0600`), and without one the units are inert. The step
+  copies into a root-only staging directory, verifies every sha256 against the seeded
+  manifest, writes `daemon.json` and a sysctl drop-in, installs with `apt-get install
+  --no-install-recommends ./…` from local files (no `apt-get update`, no `--force-*`, no
+  network), replaces containerd's packaged config, loads the image, checks its ID, keeps
+  only the local tag, runs it once, deletes the upload, disables its trigger and writes
+  `RESULT.json` last.
+- **Observed** in three fresh guests (two runs and `smoke --provision`, whose recreate
+  provisions again): upload of 7 files, 1,476,711,620 bytes, by one `sftp -b` batch in
+  10.8 to 12.6 s (about 125 MiB/s over SLIRP); root step 77.4 to 77.9 s, of which
+  `docker load` about 60 s. Moby: docker.io 26.1.5+dfsg1 (containerd 1.7.24~ds1, runc
+  1.1.15+ds1), data root `/srv/scratch/docker`, overlay2, runc, cgroup v2 with the systemd
+  driver, security options apparmor, seccomp (builtin), cgroupns, no-new-privileges; dockerd
+  loaded overlay, br_netfilter, bridge and the netfilter NAT modules itself. Image ID
+  `sha256:e8959dfc…42cb` = the locked config digest; only `aieh/agent-server:1.60.1-b43ee580`
+  remains; `docker run --rm --entrypoint true` exited 0. `agent` is not in group docker,
+  `connect()` to both daemon sockets is `EACCES` and `docker info` is refused; no TCP
+  listener of Moby; no IPv6 on `docker0`. P1 to P9, P11 and P12 PASS after provisioning,
+  after a restart (Moby and the image back) and after recreate; the smoke test passed.
+- **Found and fixed forward:** Debian's containerd enables the CRI plugin, whose
+  streaming server listened on the guest's `127.0.0.1`; `docker0` took an IPv6
+  link-local address after a container ran. Both are now turned off by declared files
+  (`provisioning.moby.containerd_config`, `provisioning.moby.sysctl`).
+- **Not yet:** the Agent Server service, its configuration and secrets (slice (c)).
+  `conversation_image` is the local tag; item 3 holds as observed.
+
 ## Evidence
+- [`evidence/F-04.1b-provision-moby.md`](../evidence/F-04.1b-provision-moby.md): the
+  slice (b) runs, timings, RESULT.json, inspect verdicts and the smoke test.
 - [`evidence/F-04.1a-provision-pins-fetch.md`](../evidence/F-04.1a-provision-pins-fetch.md):
   the resolve.py run, the resolution guest, the lock, the fetch runs and the tests.
 - [`profiles/strong-windows-qemu-whpx/provision.lock.json`](../profiles/strong-windows-qemu-whpx/provision.lock.json),
