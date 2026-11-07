@@ -174,7 +174,7 @@ Only what is listed as verified has been exercised.
 | `paths:init` | `python -I -B integrations/paths/aieh_paths.py init` | no | Creates the managed data root, its `persistent/`, `ephemeral/` and `assets/` directories and its `aieh-root.json` marker. Idempotent. |
 | `paths:doctor` | `python -I -B integrations/paths/aieh_paths.py doctor` | no | Reports the root, what exists, the marker and the legacy locations with their migration recipes. Moves and changes nothing. |
 | `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`), wheels only, under the managed data root; prints its interpreter. Not part of `setup`. |
-| `gitea:test` | `python -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows). The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary. |
+| `gitea:test` | `python -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login, role bots, fixture and rotation with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows); the guest profile declares no path to a token store. The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary; the live authorization tests only with `AIEH_GITEA_AUTHZ=1` (`gitea:authz`). |
 | `gitea:install [-- --port N \| --from-file EXE]` | `python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]` | yes (GitHub, once) | Creates the managed data root (`init`), downloads the pinned Gitea Windows binary into `assets/`, verifies it against the lock and records it, and writes `app.ini` once with Gitea-generated secrets. Windows only. |
 | `gitea:up` | `python -I -B integrations/gitea/gitea_host.py up` | no | Starts the managed environment (a supervisor holding a kill-on-close Job Object) with Gitea inside it on `127.0.0.1:13300`; waits for `/api/healthz`. |
 | `gitea:down` | `python -I -B integrations/gitea/gitea_host.py down` | no | Stops Gitea with its own `manager shutdown`, then the supervisor. |
@@ -182,6 +182,8 @@ Only what is listed as verified has been exercised.
 | `gitea:verify` | `python -I -B integrations/gitea/gitea_host.py verify` | no | The F-06.1 proof set against the running instance. Exit 0 PASS, 1 any check failed, 2 refused. |
 | `gitea:identities` | `python -I -B integrations/gitea/gitea_host.py identities` | no | Creates the site administrator and the non-administrator Owner account; each temporary password goes only into Windows Credential Manager. |
 | `gitea:finish-first-login` | `python -I -B integrations/gitea/gitea_host.py finish-first-login` | no | After the Owner's first sign-in: checks the password changes and that no temporary password remains usable or stored, then deletes the two temporary entries. |
+| `gitea:roles -- provision\|fixture [--admin-merge-probe]\|rotate ROLE\|status` | `python -I -B integrations/gitea/gitea_roles.py <command>` | no | [Role credentials](#host-gitea) (S-01.2.2): creates the restricted, non-administrator Bot accounts and mints each role's narrowest token into Credential Manager (`AIEH Gitea bot <role>`); `fixture` applies the authorization fixture with a short-lived, revoked site-administrator token (only after the first sign-in); `rotate` revokes a token, proves it fails closed and re-issues it; `status` changes nothing. Prints fingerprints, never a token. |
+| `gitea:authz` | `AIEH_GITEA_AUTHZ=1`, then `python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v` | no | Live allowed and forbidden calls of each bot token against the running Gitea. Opt-in; skips with its reason when Gitea is down, an entry is missing, or (per class) the fixture is absent. `AIEH_GITEA_AUTHZ_REPORT=<file>` records every probe. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -286,6 +288,19 @@ Lifecycle, in order:
 5. `task gitea:finish-first-login`: verifies, then deletes the temporary entries.
 
 `task gitea:status` and `task gitea:verify` report the state and the proof set at any time.
+
+**Role credentials (S-01.2.2).** `task gitea:roles -- provision` creates one restricted,
+non-administrator Gitea Bot account per role that holds a Gitea credential (`aieh-bot-planner`,
+`aieh-bot-builder`, `aieh-bot-reviewer`, `aieh-bot-verifier`; no password, so no interactive sign-in)
+and mints each token with Gitea's CLI using the narrowest categorical scope (`write:repository`, the
+verifier `read:repository`). The token goes from the CLI's captured output into one Credential
+Manager entry, `AIEH Gitea bot <role>`: the bootstrap custody until the dispatcher exists. Gitea
+28.3.0 has no token lifetime, so tokens rotate (`-- rotate ROLE`, through `DELETE /api/v1/token`).
+`-- fixture` creates the authorization fixture (organization `aieh-authz-fixture`, repository
+`authz`, protected `main` with `aieh-owner` as the only merger) with a short-lived site-administrator
+token that it revokes; Gitea refuses that account's API calls until the Owner's first sign-in, so it
+runs only after step 5. `task gitea:authz` then runs the live allowed and forbidden calls. Record:
+[`evidence/S-01.2.2-segregated-credentials.md`](../evidence/S-01.2.2-segregated-credentials.md).
 
 ## Integration store
 

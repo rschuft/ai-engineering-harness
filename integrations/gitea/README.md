@@ -16,6 +16,9 @@ nothing is written into the checkout. Windows only.
 | Path | What |
 |---|---|
 | `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `status`, `verify`, `identities`, `finish-first-login` (and the internal `supervise`) |
+| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `rotate ROLE`, `status` |
+| `tests/test_gitea_roles.py` | Bots, tokens, custody, fixture, revocation and rotation with a fake CLI and a fake API; the guest profile declares no path to a token store |
+| `tests/test_authorization_live.py` | Opt-in (`AIEH_GITEA_AUTHZ=1`, `task gitea:authz`) allowed and forbidden calls of each bot token against the running Gitea |
 | `tests/test_gitea_host.py` | Pin, layout, `app.ini`, acquisition, the binary lock, identities and first login with fakes; the Job Object, socket table and token code against real child processes; an opt-in live lifecycle test |
 | `../../composition/lock/components.lock.json` | The pin: `release_assets` entry `gitea-28.3.0-windows-amd64.exe` (sha256, URL, checksum sources) |
 
@@ -28,7 +31,9 @@ python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EX
 python -I -B integrations/gitea/gitea_host.py up | down | status | verify
 python -I -B integrations/gitea/gitea_host.py identities
 python -I -B integrations/gitea/gitea_host.py finish-first-login
+python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | rotate ROLE | status
 python -I -B -m unittest discover -s integrations/gitea/tests -v                    # task gitea:test
+AIEH_GITEA_AUTHZ=1 python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v   # task gitea:authz
 ```
 
 Exit 0 done, 1 failed, 2 refused (a stable code). Every command prints JSON and never a secret.
@@ -98,8 +103,47 @@ temporary password no longer signs in (HTTP basic authentication against `/api/v
 in no file of the managed root or of the checkout (UTF-8 and UTF-16), and only then deletes the two
 entries. The final passwords exist only as Gitea's password hashes.
 
+## Role credentials (S-01.2.2)
+
+Record: [`evidence/S-01.2.2-segregated-credentials.md`](../../evidence/S-01.2.2-segregated-credentials.md);
+matrix: [`policy/role-tokens.json`](../../policy/README.md).
+
+- **Accounts.** `provision` creates, with Gitea's CLI, one account per role that holds a Gitea
+  credential: `aieh-bot-planner`, `aieh-bot-builder`, `aieh-bot-reviewer` and `aieh-bot-verifier`
+  (`admin user create --user-type Bot --restricted`). They are not administrators and have no
+  password, so they cannot sign in interactively. An existing account that is not a
+  non-administrator Bot is refused.
+- **Tokens.** Each is minted with `admin user generate-access-token --raw` and the narrowest scope
+  Gitea 28.3.0 can express: `write:repository` for the planner, builder and reviewer, and
+  `read:repository` for the verifier. Gitea's scopes are categorical; the per-repository and
+  per-branch limits come from collaborator permission and branch protection. The CLI's output is
+  captured in memory and must be exactly one token, which `CredWriteW` writes into a generic Credential
+  Manager entry, `AIEH Gitea bot <role>`. Reports carry a fingerprint (`sha256:` and 16 hex digits)
+  only. An existing entry is kept.
+- **Rotation.** `rotate ROLE` revokes the token through Gitea's `DELETE /api/v1/token`, proves that
+  its next call gets 401, mints a new one and replaces the entry. Gitea 28.3.0 has no token
+  lifetime, so per-attempt rotation is the dispatcher's job (S-01.3.1).
+- **Fixture.** `fixture` mints a token for `aieh-site-admin` with the CLI (scopes
+  `write:organization,write:repository`), holds it in memory, and checks it first. It then creates the
+  private organization `aieh-authz-fixture` and repository `authz`, the collaborators (planner and
+  builder write, reviewer and verifier read, `aieh-owner` write) and three protection rules:
+  - `main`: no push or force-push; only `aieh-owner` merges; one approval from the reviewer bot;
+    the administrator's merge override blocked;
+  - `work/*`: the planner and builder bots push;
+  - `**`: nobody pushes.
+
+  It revokes the token in every outcome and reports whether that worked.
+  `--admin-merge-probe` also has the site administrator try to merge a proposal PR, which must be
+  refused. Gitea refuses every API call of an account that must still change its password, so
+  `fixture` works only after the Owner's first sign-in and `finish-first-login`.
+- **Live tests.** `task gitea:authz` reads the four tokens into memory and probes what each may and
+  may not do; the fixture-dependent classes skip while the fixture is absent, and the executor test
+  is not applicable (G-04.2.1).
+
 ## Not yet verified
 
 - Anything but Windows 11 on x86_64.
 - Gitea's egress proxy beyond the 407 answer, and the effective `EGRESS_MODE` policy.
-- The Gitea-dependent role-token behaviour (bots, scopes, branch protection) of S-01.2.2.
+- The repository-level role-token behaviour of S-01.2.2: branch protection, merge allowlists,
+  PRs and reviews (the fixture awaits the site administrator's first sign-in).
+- The `--restricted` flag's effect, and the site administrator's path to revoke another account's token.

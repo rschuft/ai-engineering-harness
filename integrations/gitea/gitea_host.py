@@ -67,6 +67,9 @@ DEFAULT_PORT = 13300
 SITE_ADMIN, OWNER = 'aieh-site-admin', 'aieh-owner'
 EMAIL_DOMAIN = 'localhost.invalid'
 CRED_TARGETS = {SITE_ADMIN: 'AIEH Gitea site-admin (temporary)', OWNER: 'AIEH Gitea owner (temporary)'}
+# The role bots of S-01.2.2 (gitea_roles.py): restricted, non-administrator Gitea Bot accounts.
+BOT_ACCOUNTS = {'planner': 'aieh-bot-planner', 'builder': 'aieh-bot-builder', 'reviewer': 'aieh-bot-reviewer',
+                'verifier': 'aieh-bot-verifier'}
 SECRET_NAMES = ('SECRET_KEY', 'INTERNAL_TOKEN', 'JWT_SECRET')
 RANDOM_PASSWORD_LENGTH = 24
 READY_CEILING_S, STOP_CEILING_S = 120.0, 60.0
@@ -835,7 +838,8 @@ def password_bytes(blob: bytes) -> bytes:
 
 
 def gitea_users(binary: Path, lay: Layout, run: Callable = subprocess.run) -> dict:
-    """{name: {'admin': bool}} from `gitea admin user list` (its columns are named in its header)."""
+    """{name: {'admin': bool}} from `gitea admin user list` (its columns are named in its header), plus
+    {'type': 'User' | 'Bot'} where the header has Gitea 28's Type column."""
     result = run_quiet(gitea_argv(binary, lay, 'admin', 'user', 'list'), child_env(lay), lay.home, run)
     if result.returncode != 0:
         raise GiteaError('USER_LIST_FAILED', f'gitea admin user list exited {result.returncode}', refusal=False)
@@ -849,7 +853,8 @@ def gitea_users(binary: Path, lay: Layout, run: Callable = subprocess.run) -> di
     for line in lines[1:]:
         cells = line.split()
         row = dict(zip(header, cells))
-        users[row['Username']] = {'admin': row.get('IsAdmin') == 'true'}
+        users[row['Username']] = {'admin': row.get('IsAdmin') == 'true',
+                                  **({'type': row['Type']} if 'Type' in row else {})}
     return users
 
 
@@ -1044,7 +1049,9 @@ def verify(res, lay: Layout, pinned: dict) -> dict:
     with verified_binary(lay, pinned['sha256']) as binary:
         users = gitea_users(binary, lay)
     checks['no_account_created_by_probe'] = PROBE_USER not in users
-    checks['accounts_are_the_expected_ones'] = set(users) <= set(CRED_TARGETS)
+    checks['accounts_are_the_expected_ones'] = set(users) <= set(CRED_TARGETS) | set(BOT_ACCOUNTS.values())
+    checks['bots_are_non_admin_bot_accounts'] = all(
+        not users[u]['admin'] and users[u].get('type') == 'Bot' for u in BOT_ACCOUNTS.values() if u in users)
     checks['anonymous_api_refused'] = all(probes[k] in (401, 403) for k in probes if k.startswith('api '))
     checks['anonymous_web_redirected_to_login'] = probes['explore_users'] in (302, 303)
     secret_values = [ini['security']['SECRET_KEY'].encode(), ini['security']['INTERNAL_TOKEN'].encode(),

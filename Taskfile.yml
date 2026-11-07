@@ -232,7 +232,7 @@ tasks:
   # as an asset, its state under the managed data root, run inside a supervising managed
   # environment whose kill-on-close Job Object ends Gitea with it (integrations/gitea/README.md).
   gitea:test:
-    desc: "Run the host Gitea tests (python -I -B -m unittest discover -s integrations/gitea/tests -v); the live lifecycle test runs only when AIEH_GITEA_BINARY names a copy of the pinned binary"
+    desc: "Run the host Gitea tests (python -I -B -m unittest discover -s integrations/gitea/tests -v); the live lifecycle test runs only when AIEH_GITEA_BINARY names a copy of the pinned binary, and the live authorization tests only with AIEH_GITEA_AUTHZ=1 (gitea:authz)"
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/gitea/tests -v'
 
@@ -270,6 +270,21 @@ tasks:
     desc: "After the Owner has signed in and changed both passwords: check no must-change flag remains, that each temporary password no longer signs in and is in no file of the managed root or the checkout, then delete the two temporary Credential Manager entries (python -I -B integrations/gitea/gitea_host.py finish-first-login)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py finish-first-login'
+
+  # Segregated role credentials (plan leaf S-01.2.2; decision 0007): restricted Bot accounts, their
+  # narrowest tokens in Credential Manager ("AIEH Gitea bot <role>"), the authorization fixture and the
+  # live denial tests (integrations/gitea/README.md).
+  gitea:roles:
+    desc: "Role bots and the authorization fixture (python -I -B integrations/gitea/gitea_roles.py <command>): pass -- provision | fixture [--admin-merge-probe] | rotate ROLE | status; fixture needs the site administrator's first sign-in"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_roles.py {{.CLI_ARGS}}'
+
+  gitea:authz:
+    desc: "Live authorization tests of the role bots against the running Gitea, opt-in through AIEH_GITEA_AUTHZ=1 (python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v); reads the bot tokens from Credential Manager into memory; the fixture tests skip until the fixture exists"
+    env:
+      AIEH_GITEA_AUTHZ: '1'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v'
 
   # Owner host (plan leaf U-01.1): the React shell in apps/owner-host. These targets need
   # the component tier (Node.js >= 24, npm >= 11), so they are not part of setup or test.
