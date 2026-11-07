@@ -51,18 +51,24 @@ write_files:
       #              against the seeded manifest, write daemon.json and the sysctl drop-in,
       #              install the packages with apt from the local files, replace containerd's
       #              packaged config (CRI plugin off), docker load the image, check its ID, fix its
-      #              tag, run it once, enable the facts unit, delete the staging directory and
-      #              the upload, disable the trigger, then write RESULT.json (last).
+      #              tag, run it once, install the Agent Server (system user openhands, the
+      #              release binary, its scratch directories and its non-secret config), generate
+      #              its two guest-local secrets, start its unit, enable the facts unit, delete
+      #              the staging directory and the upload, disable the trigger, then write
+      #              RESULT.json (last).
       #   facts      run at every boot by aieh-docker-facts.service: a read-only report of the
-      #              daemon, the image store and the sockets for inspect.
+      #              daemon, the image store, the sockets and the Agent Server for inspect.
       # It reads only the seeded manifest and the files it names. It prints step names and
-      # outcomes only (journal and console); it holds and prints no secret.
+      # outcomes only (journal and console). The two secrets it generates are written only to
+      # their root-only environment file (and the session key to its agent-readable file);
+      # records carry their fingerprints, never their values.
       import grp
       import hashlib
       import json
       import os
       import pwd
       import re
+      import secrets
       import shutil
       import stat
       import subprocess
@@ -101,6 +107,30 @@ write_files:
       # docker's Go template for one JSON document, assembled so that no doubled brace occurs in
       # this file (the seed generator treats doubled braces as placeholders)
       GO_JSON = '{' + '{json .}' + '}'
+      # The Agent Server (F-04.1 slice (c)): paths equal provisioning.agent_server of the profile.
+      AS_USER = 'openhands'
+      AS_SHELL = '/usr/sbin/nologin'
+      AS_BINARY = '/opt/aieh/agent-server/agent-server'
+      AS_CONFIG = '/etc/aieh/agent-server/config.json'
+      AS_SECRETS = '/etc/aieh/agent-server/secrets.env'
+      AS_SESSION_DIR = '/var/lib/aieh/agent-server'
+      AS_SESSION_KEY = AS_SESSION_DIR + '/session.key'
+      AS_UNIT = 'aieh-agent-server.service'
+      AS_PROCESS = 'agent-server'
+      AS_SECRET_VARS = ('OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0')
+      SECRET_VALUE = re.compile(r'^[A-Za-z0-9_-]{43}$')
+      FINGERPRINT_PREFIX = b'aieh-secret-fingerprint/v1\n'
+      AS_UNIT_PROPERTIES = ('LoadState', 'ActiveState', 'SubState', 'UnitFileState', 'MainPID',
+                            'NRestarts', 'User', 'Group', 'Environment', 'EnvironmentFiles',
+                            'NoNewPrivileges', 'ProtectSystem', 'ProtectHome', 'PrivateTmp',
+                            'PrivateDevices', 'ProtectProc', 'RestrictNamespaces', 'RestrictSUIDSGID',
+                            'CapabilityBoundingSet', 'AmbientCapabilities', 'IPAddressDeny',
+                            'IPAddressAllow', 'RestrictAddressFamilies', 'SystemCallArchitectures',
+                            'UMask', 'ReadWritePaths')
+      # start-up log lines worth keeping as evidence (egress attempts, failures); the log is
+      # read by root, the secret values are redacted and counted before anything is written
+      LOG_NOTE = re.compile(r'(?i)(error|warn|fail|refused|unreachable|resolv|timed? ?out|connect|'
+                            r'https?://|network|dns|docker|telemetry|listen|start)')
 
 
       class Failed(Exception):
@@ -233,6 +263,21 @@ write_files:
                   not isinstance(docker.get('containerd_config'), str):
               raise Failed('manifest: docker needs daemon_json, server_version, sysctl and '
                            'containerd_config')
+          server = manifest.get('agent_server') or {}
+          binary = server.get('binary') or {}
+          by_name = {f['name']: f for f in files}
+          if by_name.get(binary.get('name'), {}).get('role') != 'release-binary' or \
+                  by_name[binary['name']]['sha256'] != binary.get('sha256'):
+              raise Failed('manifest: agent_server.binary must name the release-binary file')
+          dirs = server.get('directories')
+          if not isinstance(server.get('config'), dict) or not isinstance(dirs, list) or not dirs or \
+                  not all(isinstance(d, dict) and str(d.get('path', '')).startswith('/srv/scratch/') and
+                          '..' not in str(d['path']).split('/') and
+                          re.match(r'^[0-7]{3}$', str(d.get('mode', ''))) for d in dirs) or \
+                  not isinstance(server.get('home'), str) or \
+                  not isinstance((server.get('listener') or {}).get('port'), int):
+              raise Failed('manifest: agent_server needs config, directories on /srv/scratch, home '
+                           'and listener')
           return manifest
 
 
@@ -273,6 +318,168 @@ write_files:
               return {'rc': rc, 'error': 'unparsable: ' + tail(out, 600)}
 
 
+      def fingerprint(value):
+          return hashlib.sha256(FINGERPRINT_PREFIX + value.encode('ascii')).hexdigest()
+
+
+      def secret_values():
+          """{variable: value} from the root-only environment file; {} before it exists."""
+          try:
+              with open(AS_SECRETS, encoding='ascii') as handle:
+                  text = handle.read()
+          except OSError:
+              return {}
+          out = {}
+          for line in text.splitlines():
+              name, sep, value = line.partition('=')
+              if sep and name in AS_SECRET_VARS:
+                  out[name] = value
+          return out
+
+
+      def redact(text, values):
+          """The text with every secret value replaced by its variable's name, and the count."""
+          counts = {}
+          for name, value in values.items():
+              counts[name] = text.count(value) if value else 0
+              if value:
+                  text = text.replace(value, '<' + name + ' redacted>')
+          return text, counts
+
+
+      def stat_entry(path):
+          try:
+              st = os.lstat(path)
+          except OSError:
+              return {'path': path, 'state': 'absent'}
+          kind = 'directory' if stat.S_ISDIR(st.st_mode) else 'file' if stat.S_ISREG(st.st_mode) \
+              else 'other'
+          try:
+              owner = pwd.getpwuid(st.st_uid).pw_name
+          except KeyError:
+              owner = str(st.st_uid)
+          try:
+              group = grp.getgrgid(st.st_gid).gr_name
+          except KeyError:
+              group = str(st.st_gid)
+          return {'path': path, 'state': kind, 'owner': owner, 'group': group,
+                  'mode': format(stat.S_IMODE(st.st_mode), 'o')}
+
+
+      def unit_show(unit, names):
+          rc, out, err = run(['systemctl', 'show', unit] + ['--property=' + n for n in names], 60)
+          props = {}
+          for line in out.splitlines():
+              key, sep, value = line.partition('=')
+              if sep:
+                  props[key] = value
+          return props
+
+
+      def unit_journal(values):
+          rc, out, err = run(['journalctl', '-b', '-u', AS_UNIT, '-o', 'short-iso', '--no-pager'], 120)
+          text, counts = redact(out if rc == 0 else '', values)
+          lines = text.splitlines()
+          noted = [line[:400] for line in lines[30:] if LOG_NOTE.search(line)]
+          return {'rc': rc, 'lines': len(lines), 'secret_occurrences': counts,
+                  'head': [line[:400] for line in lines[:30]], 'noted': noted[-60:]}
+
+
+      def process_facts(pid, values):
+          out = {'pid': pid}
+          try:
+              with open('/proc/' + pid + '/status', encoding='utf-8') as handle:
+                  status = dict(line.split(':', 1) for line in handle if ':' in line)
+              out['name'] = status.get('Name', '').strip()
+              uid = int(status.get('Uid', '-1').split()[0])
+              gid = int(status.get('Gid', '-1').split()[0])
+              out['user'] = pwd.getpwuid(uid).pw_name
+              out['group'] = grp.getgrgid(gid).gr_name
+              out['groups'] = sorted(grp.getgrgid(int(g)).gr_name for g in status.get('Groups', '').split())
+              out['exe'] = os.readlink('/proc/' + pid + '/exe')
+              with open('/proc/' + pid + '/environ', 'rb') as handle:
+                  pairs = [p.decode('utf-8', 'replace').partition('=') for p in handle.read().split(b'\0') if p]
+              # names only; the values of DOCKER_* (the engine endpoint) with secrets redacted
+              out['environment_names'] = sorted(p[0] for p in pairs)
+              out['docker_environment'] = {p[0]: redact(p[2], values)[0] for p in pairs
+                                           if p[0].startswith('DOCKER_')}
+          except (OSError, KeyError, ValueError) as exc:
+              out['error'] = type(exc).__name__ + ': ' + str(exc)
+          return out
+
+
+      def agent_server_facts(manifest):
+          """Root-only facts of the Agent Server for inspect. No secret value is returned: the
+          two secrets are read only to compute their fingerprints and to count and redact any
+          occurrence in the start-up log and the records."""
+          conf = manifest['agent_server']
+          values = secret_values()
+          unit = unit_show(AS_UNIT, AS_UNIT_PROPERTIES)
+          procs_path = '/sys/fs/cgroup/system.slice/' + AS_UNIT + '/cgroup.procs'
+          try:
+              with open(procs_path, encoding='ascii') as handle:
+                  pids = [p.strip() for p in handle if p.strip()]
+          except OSError:
+              pids = []
+          try:
+              user = pwd.getpwnam(AS_USER)
+              account = {'name': user.pw_name, 'uid': user.pw_uid, 'home': user.pw_dir,
+                         'shell': user.pw_shell, 'groups': run(['id', '-nG', AS_USER], 30)[1].split(),
+                         'password': (run(['passwd', '-S', AS_USER], 30)[1].split() + ['', ''])[1]}
+          except KeyError:
+              account = {'name': AS_USER, 'state': 'absent'}
+          paths = []
+          for d in conf['directories']:
+              entry = stat_entry(d['path'])
+              rc, mnt, err = run(['findmnt', '-n', '-o', 'TARGET,FSTYPE', '--target', d['path']], 30)
+              entry['mount'] = mnt.split()
+              paths.append(entry)
+          as_user = ['setpriv', '--reuid=' + AS_USER, '--regid=' + AS_USER, '--init-groups',
+                     '--reset-env', '--']
+          rc, ctx_out, err = run(as_user + ['docker', 'context', 'inspect'], 60)
+          try:
+              endpoint = json.loads(ctx_out)[0]['Endpoints']['docker']['Host']
+          except (ValueError, LookupError, TypeError):
+              endpoint = {'rc': rc, 'error': tail(err or ctx_out, 300)}
+          rc, ver_out, err = run(as_user + ['docker', 'version', '--format', GO_JSON], 60)
+          try:
+              server_version = (json.loads(ver_out).get('Server') or {}).get('Version')
+          except (ValueError, AttributeError):
+              server_version = {'rc': rc, 'error': tail(err or ver_out, 300)}
+          try:
+              with open(AS_CONFIG, encoding='utf-8') as handle:
+                  config = json.load(handle)
+          except (OSError, ValueError) as exc:
+              config = {'error': str(exc)}
+          scanned = {}
+          for path in (RESULT, AS_CONFIG, MANIFEST, AS_SESSION_KEY, '/var/log/cloud-init.log',
+                       '/var/log/cloud-init-output.log'):
+              text = read_text(path)
+              counts = redact(text, values)[1]
+              if path == AS_SESSION_KEY:          # the session key file holds that key by design
+                  counts.pop('OH_SESSION_API_KEYS_0', None)
+              scanned[path] = counts
+          return {'unit': unit, 'enabled': run(['systemctl', 'is-enabled', AS_UNIT], 30)[1].strip(),
+                  'processes': [process_facts(p, values) for p in pids], 'account': account,
+                  'binary': dict(stat_entry(AS_BINARY), sha256=sha256_path(AS_BINARY)
+                                 if os.path.isfile(AS_BINARY) else None),
+                  'config': {'file': stat_entry(AS_CONFIG), 'content': config},
+                  'secrets': {'env_file': stat_entry(AS_SECRETS),
+                              'variables': sorted(values),
+                              'values_valid': len(values) == len(AS_SECRET_VARS) and
+                              len(set(values.values())) == len(values) and
+                              all(SECRET_VALUE.match(v) for v in values.values()),
+                              'fingerprints': {k: fingerprint(v) for k, v in sorted(values.items())},
+                              'session_dir': stat_entry(AS_SESSION_DIR),
+                              'session_key': stat_entry(AS_SESSION_KEY),
+                              'session_key_matches': read_text(AS_SESSION_KEY) ==
+                              values.get('OH_SESSION_API_KEYS_0'),
+                              'occurrences': scanned},
+                  'paths': paths, 'engine': {'docker_context_host': endpoint,
+                                             'docker_server_version_as_openhands': server_version},
+                  'journal': unit_journal(values)}
+
+
       def facts():
           manifest = load_manifest()
           tag = manifest['image']['local_tag']
@@ -308,8 +515,17 @@ write_files:
                   else {'rc': rc, 'error': tail(err, 600)},
                   'sockets': socket_facts(), 'modules': loaded_modules(), 'ipv6': ipv6_state(),
                   'host_config': host_config}
-          units = ('docker.service', 'docker.socket', 'containerd.service', FACTS_UNIT)
+          units = ('docker.service', 'docker.socket', 'containerd.service', FACTS_UNIT, AS_UNIT)
           data['units'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip() for u in units}
+          try:
+              data['agent_server'] = agent_server_facts(manifest)
+          except Exception as exc:              # recorded, never fatal to the Moby facts
+              data['agent_server'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
+          # the report is agent-readable: a secret value never reaches it (counted, redacted)
+          text, counts = redact(json.dumps(data, sort_keys=True), secret_values())
+          if any(counts.values()):
+              data = json.loads(text)
+          data['secret_occurrences_in_report'] = counts
           os.makedirs(FACTS_DIR, mode=0o755, exist_ok=True)
           write_json(FACTS, data, 0o644)
           say('facts written for boot ' + boot_id)
@@ -517,15 +733,144 @@ write_files:
           return result
 
 
+      def copy_file(src, dst, mode):
+          """A regular file copied without following links into a new file (no overwrite)."""
+          fd_in = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+          try:
+              if not stat.S_ISREG(os.fstat(fd_in).st_mode):
+                  raise Failed('agent-server-install: ' + src + ' is not a regular file')
+              tmp = dst + '.partial'
+              fd_out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+              with os.fdopen(fd_out, 'wb') as out:
+                  while True:
+                      block = os.read(fd_in, 1 << 20)
+                      if not block:
+                          break
+                      out.write(block)
+                  out.flush()
+                  os.fsync(out.fileno())
+          finally:
+              os.close(fd_in)
+          os.chmod(tmp, mode)
+          if os.path.lexists(dst):
+              raise Failed('agent-server-install: ' + dst + ' already exists')
+          os.rename(tmp, dst)
+
+
+      def install_agent_server(manifest):
+          """The system user openhands (no login shell, group docker), its scratch directories,
+          the release binary (copied from the verified staging copy and hashed again) and the
+          non-secret config."""
+          conf = manifest['agent_server']
+          step = 'agent-server-install'
+          try:
+              pwd.getpwnam(AS_USER)
+              raise Failed(step + ': user ' + AS_USER + ' already exists (single use)')
+          except KeyError:
+              pass
+          try:
+              grp.getgrnam('docker')
+          except KeyError:
+              raise Failed(step + ': group docker does not exist')
+          for path in (AS_BINARY, os.path.dirname(AS_BINARY), AS_CONFIG):
+              if os.path.lexists(path):
+                  raise Failed(step + ': ' + path + ' already exists (single use)')
+          must(step, ['useradd', '--system', '--user-group', '--groups', 'docker', '--home-dir',
+                      conf['home'], '--no-create-home', '--shell', AS_SHELL, '--comment',
+                      'OpenHands Agent Server (AIEH)', AS_USER], 60)
+          user = pwd.getpwnam(AS_USER)
+          made = []
+          for d in conf['directories']:                # parents before children
+              mode = int(d['mode'], 8)
+              os.mkdir(d['path'], mode)
+              os.chown(d['path'], user.pw_uid, user.pw_gid, follow_symlinks=False)
+              os.chmod(d['path'], mode)
+              made.append(stat_entry(d['path']))
+          os.makedirs(os.path.dirname(AS_BINARY), mode=0o755)
+          copy_file(os.path.join(STAGING, conf['binary']['name']), AS_BINARY, 0o755)
+          got = sha256_path(AS_BINARY)
+          if got != conf['binary']['sha256']:
+              raise Failed(step + ': ' + AS_BINARY + ' has sha256 ' + got + ', the manifest says ' +
+                           conf['binary']['sha256'])
+          os.makedirs(os.path.dirname(AS_CONFIG), mode=0o755, exist_ok=True)
+          write_json(AS_CONFIG, conf['config'], 0o644)
+          return {'user': {'name': user.pw_name, 'uid': user.pw_uid, 'home': user.pw_dir,
+                           'shell': user.pw_shell,
+                           'groups': must(step, ['id', '-nG', AS_USER], 30).split()},
+                  'directories': made, 'binary': dict(stat_entry(AS_BINARY), sha256=got),
+                  'config': dict(stat_entry(AS_CONFIG), sha256=sha256_path(AS_CONFIG))}
+
+
+      def write_secret_file(path, text, mode, gid):
+          fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+          with os.fdopen(fd, 'w', encoding='ascii') as handle:
+              os.fchown(handle.fileno(), 0, gid)
+              os.fchmod(handle.fileno(), mode)
+              handle.write(text)
+              handle.flush()
+              os.fsync(handle.fileno())
+
+
+      def agent_server_secrets(manifest):
+          """OH_SECRET_KEY and the session API key, generated here and written only to the
+          root-only environment file; the session key also to its agent-readable file, which
+          the host fetches into the instance directory. Only fingerprints are returned."""
+          step = 'agent-server-secrets'
+          for path in (AS_SECRETS, AS_SESSION_DIR):
+              if os.path.lexists(path):
+                  raise Failed(step + ': ' + path + ' already exists (single use)')
+          values = {name: secrets.token_urlsafe(32) for name in AS_SECRET_VARS}
+          if len(set(values.values())) != len(values) or \
+                  not all(SECRET_VALUE.match(v) for v in values.values()):
+              raise Failed(step + ': generated values are not distinct 43-character tokens')
+          write_secret_file(AS_SECRETS, ''.join(n + '=' + values[n] + '\n' for n in AS_SECRET_VARS),
+                            0o600, 0)
+          agent_gid = pwd.getpwnam(AGENT).pw_gid
+          os.mkdir(AS_SESSION_DIR, 0o750)
+          os.chown(AS_SESSION_DIR, 0, agent_gid, follow_symlinks=False)
+          os.chmod(AS_SESSION_DIR, 0o750)
+          write_secret_file(AS_SESSION_KEY, values['OH_SESSION_API_KEYS_0'], 0o440, agent_gid)
+          prints = {n: fingerprint(v) for n, v in values.items()}
+          return {'env_file': stat_entry(AS_SECRETS), 'session_dir': stat_entry(AS_SESSION_DIR),
+                  'session_key': stat_entry(AS_SESSION_KEY), 'variables': list(AS_SECRET_VARS),
+                  'fingerprints': prints}
+
+
+      def start_agent_server(manifest):
+          """Enable and start the unit; its ExecStartPost returns once GET /ready answers 200.
+          Then exactly the declared listener belongs to the Agent Server, and none to Moby."""
+          step = 'agent-server-start'
+          listener = manifest['agent_server']['listener']
+          must(step, ['systemctl', 'daemon-reload'], 120)
+          rc, out, err = run(['systemctl', 'enable', '--now', AS_UNIT], 600)
+          unit = unit_show(AS_UNIT, AS_UNIT_PROPERTIES)
+          if rc != 0 or unit.get('ActiveState') != 'active':
+              journal = unit_journal(secret_values())
+              raise Failed(step + ': ' + AS_UNIT + ' is ' + repr(unit.get('ActiveState')) +
+                           ' (systemctl exited ' + str(rc) + ': ' + tail(err or out, 300) +
+                           '); log: ' + tail('\n'.join(journal['head'] + journal['noted']), 1200))
+          lines, moby_owned = moby_tcp_listeners()
+          want = listener['address'] + ':' + str(listener['port'])
+          mine = sorted({line.split()[3] for line in lines if '(("' + AS_PROCESS + '"' in line
+                         and len(line.split()) > 3})
+          if mine != [want] or moby_owned:
+              raise Failed(step + ': the Agent Server listens on ' + repr(mine) + ' (declared ' + want +
+                           '); Moby listeners ' + repr(moby_owned))
+          return {'unit': unit, 'listeners': lines, 'agent_server_listeners': mine}
+
+
       def enable_facts():
           must('facts', ['systemctl', 'enable', FACTS_UNIT], 60)
           must('facts', ['systemctl', 'start', FACTS_UNIT], 300)
           with open(FACTS, encoding='utf-8') as handle:
               data = json.load(handle)
+          server = data.get('agent_server') or {}
           return {'unit': FACTS_UNIT, 'enabled': run(['systemctl', 'is-enabled', FACTS_UNIT], 30)[1].strip(),
                   'boot_id': data.get('boot_id'), 'info': data.get('info'),
                   'sockets': data.get('sockets'), 'tcp_listeners': data.get('tcp_listeners'),
-                  'modules': data.get('modules')}
+                  'modules': data.get('modules'),
+                  'agent_server': {k: server.get(k) for k in ('enabled', 'engine', 'error')},
+                  'secret_occurrences_in_report': data.get('secret_occurrences_in_report')}
 
 
       def cleanup():
@@ -557,7 +902,9 @@ write_files:
                ('sysctl', write_sysctl), ('apt-install', apt_install),
                ('containerd-config', containerd_config), ('docker-ready', docker_ready),
                ('docker-load', load_image), ('image-id', check_image_id), ('tag', fix_tag),
-               ('run', verify_run))
+               ('run', verify_run), ('agent-server-install', install_agent_server),
+               ('agent-server-secrets', agent_server_secrets),
+               ('agent-server-start', start_agent_server))
 
 
       def provision():
@@ -659,10 +1006,10 @@ write_files:
     permissions: '0644'
     content: |
       [Unit]
-      Description=AIEH read-only Moby facts for inspect (written at every boot)
+      Description=AIEH read-only Moby and Agent Server facts for inspect (written at every boot)
       ConditionFileNotEmpty=/etc/aieh/provision.json
       Requires=docker.service
-      After=docker.service
+      After=docker.service aieh-agent-server.service
 
       [Service]
       Type=oneshot
@@ -670,6 +1017,100 @@ write_files:
       ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision facts
       StandardOutput=journal
       StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/sbin/aieh-agent-server-ready
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/python3
+      # aieh-agent-server-ready: ExecStartPost of aieh-agent-server.service (F-04.1). The
+      # server exposes no start notification, so this polls GET /ready on its loopback
+      # listener every 0.5 s until it answers 200, under the ceiling given in argv. It sends
+      # no credential (the route is unauthenticated) and prints only the outcome.
+      import http.client
+      import sys
+      import time
+
+      host, port, ceiling = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+      deadline = time.monotonic() + ceiling
+      while True:
+          status = None
+          try:
+              conn = http.client.HTTPConnection(host, port, timeout=5)
+              conn.request('GET', '/ready')
+              response = conn.getresponse()
+              response.read()
+              status = response.status
+              conn.close()
+          except OSError:
+              pass
+          if status == 200:
+              print('aieh-agent-server-ready: ready', flush=True)
+              sys.exit(0)
+          if time.monotonic() >= deadline:
+              print('aieh-agent-server-ready: not ready within ' + str(ceiling) + ' s (last status ' +
+                    str(status) + ')', flush=True)
+              sys.exit(1)
+          time.sleep(0.5)
+  - path: /etc/systemd/system/aieh-agent-server.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=OpenHands Agent Server 1.60.1 (AIEH F-04.1 inspection workload, guest loopback only)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      ConditionPathExists=/opt/aieh/agent-server/agent-server
+      ConditionPathExists=/etc/aieh/agent-server/secrets.env
+      Wants=docker.service
+      After=docker.service
+      RequiresMountsFor=/srv/scratch
+
+      [Service]
+      Type=exec
+      User=openhands
+      Group=openhands
+      EnvironmentFile=/etc/aieh/agent-server/secrets.env
+      Environment=OPENHANDS_AGENT_SERVER_CONFIG_PATH=/etc/aieh/agent-server/config.json
+      Environment=OH_PERSISTENCE_DIR=/srv/scratch/openhands/persistence
+      Environment=HOME=/srv/scratch/openhands/home
+      Environment=TMPDIR=/srv/scratch/openhands/tmp
+      Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+      Environment=LANG=C.UTF-8
+      WorkingDirectory=/srv/scratch/openhands/home
+      ExecStart=/opt/aieh/agent-server/agent-server --host 127.0.0.1 --port 8000
+      ExecStartPost=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-ready 127.0.0.1 8000 280
+      TimeoutStartSec=300
+      Restart=on-failure
+      RestartSec=5
+      StandardOutput=journal
+      StandardError=journal
+      NoNewPrivileges=yes
+      CapabilityBoundingSet=
+      AmbientCapabilities=
+      ProtectSystem=strict
+      ReadWritePaths=/srv/scratch/openhands
+      ProtectHome=yes
+      PrivateTmp=yes
+      PrivateDevices=yes
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectKernelLogs=yes
+      ProtectControlGroups=yes
+      ProtectClock=yes
+      ProtectHostname=yes
+      ProtectProc=invisible
+      RestrictSUIDSGID=yes
+      RestrictRealtime=yes
+      RestrictNamespaces=yes
+      LockPersonality=yes
+      SystemCallArchitectures=native
+      SystemCallFilter=@system-service
+      RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+      IPAddressDeny=any
+      IPAddressAllow=localhost
+      UMask=0077
 
       [Install]
       WantedBy=multi-user.target

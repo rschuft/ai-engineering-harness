@@ -121,9 +121,17 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
 - **Launch:** the provider's launch environment is scrubbed to an allowlist. The seed
   and cloud-init hold only the per-instance public key and non-secret configuration.
 - **Allowed and labelled:** per-instance guest-local secrets, namely the guest's SSH
-  keypair and `OH_SECRET_KEY` (decision 0001). Provider and LLM credentials never enter
-  the guest. They are used only behind the brokered `inference` endpoint class
-  (`profiles P7`).
+  keypair and `OH_SECRET_KEY` (decision 0001), and in a provisioned guest the Agent
+  Server's session API key (amended 2026-11-07, F-04.1). Provider and LLM credentials
+  never enter the guest. They are used only behind the brokered `inference` endpoint
+  class (`profiles P7`).
+- **Custody of the Agent Server's two secrets (amended 2026-11-07, F-04.1).** The root
+  step generates `OH_SECRET_KEY` and the session API key inside the guest. Both live only
+  in a root-only environment file that systemd reads for the service; neither is in the
+  seed, the manifest, a log or a record (records carry fingerprints only).
+  `OH_SECRET_KEY` never leaves the guest. The session API key alone is exported, by SFTP
+  as `agent` over the management channel, into the instance directory, which `destroy`
+  removes.
 - **trusted-workload:** the same rule.
 - **Inspect:** inside the guest, scan pid 1's environment, the `agent` login shell's
   environment, every home directory and `/etc` for Owner-class patterns:
@@ -134,6 +142,11 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
 
   A positive control plants a canary of each class in a scratch file, confirms that the
   scan reports it, and removes it. Without the positive control the result is UNKNOWN.
+- **Inspect, provisioned guest (amended 2026-11-07):** `agent` cannot open the
+  environment file or the service's process environments. Neither secret appears in the
+  instance directory on the host, the collection above or the guest's own records. The
+  session key is searched for as a literal, and `OH_SECRET_KEY` by its fingerprint over
+  every 43-character window.
 
 ### P6 No host-management sockets or interop
 - **strong:**
@@ -149,6 +162,10 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     no access at all. Neither the daemon nor containerd listens on a TCP port
     (containerd's CRI plugin is off). `agent` is not in group `docker` and cannot connect
     to any of them.
+  - **The Agent Server's service user (amended 2026-11-07, F-04.1).** The system user
+    `openhands` has no login shell and is in group `docker`. It is the guest's own
+    service principal and reaches only the guest's own daemon socket. `agent` stays
+    outside `docker`.
   - A provider agent channel (incus-agent, QEMU guest agent) is declared, and is
     host→guest only.
 - **trusted-workload (WSL):**
@@ -195,6 +212,12 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   guest**. Decision 0001's `host.docker.internal:host-gateway` resolves to the guest,
   not to the host, so a container must not reach the host through the guest either.
 - **IPv6** is off unless the profile lists it.
+- **Guest-internal listeners (amended 2026-11-07, F-04.1).** A provisioned guest's Agent
+  Server listens on the guest's own `127.0.0.1` only, at the port the profile declares
+  (`provisioning.agent_server.listener`, class management, guest-local). It is not
+  forwarded to the host: there is no `hostfwd` and no new host port, and the Agent
+  Server forward stays deferred (decision 0006). Every other TCP listener in a
+  provisioned guest must belong to the base image (`sshd`, `systemd-resolved`).
 - **trusted-workload:**
   - WSL `networkingMode` is VM-wide, so it is observed only (C1).
   - Egress is not enforced outside the distribution, and the network namespace is
@@ -203,7 +226,10 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   - connection attempts to the host gateway and the host's other addresses fail, both
     from the guest and from a container inside it;
   - a positive control to one allowlisted endpoint succeeds;
-  - `ip route`, `ip addr` and `ip -6 addr` are recorded.
+  - `ip route`, `ip addr` and `ip -6 addr` are recorded;
+  - for a provisioned guest: root's boot-time `ss -ltnp` shows exactly the declared
+    Agent Server bind for that process, and no listener of any other process beyond the
+    base image's. `agent` sees the same bind.
 
 ### P8 Identity
 - **Per instance:** a unique instance name. machine-id and SSH host keys are

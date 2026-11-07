@@ -114,7 +114,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "25fefa0e9fe73f570a5e4f4431e7ac648a0a2f5c4e66f208a29fa011a77e8ce1"
+          "sha256": "505d00a8454ac647fd457d97b2d54963b18c376f106103ff1b19c7ddcf2c3026"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -203,7 +203,15 @@
       {"role": "exchange", "path": "/home/agent/exchange", "owner": "agent", "group": "agent", "mode": "750", "mount": "/"},
       {"role": "scratch", "path": "/srv/scratch/agent", "owner": "agent", "group": "agent", "mode": "750", "mount": "/srv/scratch"},
       {"role": "moby-data-root", "path": "/srv/scratch/docker", "owner": "root", "group": "root", "mode": "710", "mount": "/srv/scratch", "provisioned_only": true},
-      {"role": "provisioning-state", "path": "/var/lib/aieh", "owner": "root", "group": "root", "mode": "755", "mount": "/", "provisioned_only": true}
+      {"role": "provisioning-state", "path": "/var/lib/aieh", "owner": "root", "group": "root", "mode": "755", "mount": "/", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands", "owner": "openhands", "group": "openhands", "mode": "711", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands/conversations", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands/workspace", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands/bash_events", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands/persistence", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands/worktrees", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands/home", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server", "path": "/srv/scratch/openhands/tmp", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true}
     ],
     "forbidden_fstypes": ["9p", "virtiofs", "drvfs", "fuse", "fuse.sshfs", "cifs", "smb3", "nfs", "nfs4"],
     "forbidden_paths": ["/mnt/c", "/mnt/wslg"],
@@ -221,7 +229,7 @@
     "plan_leaf": "F-04.1",
     "decision": "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
     "authority": "decision 0006, 'Owner authorization (2026-11-06)', Part B: a single-use root step seeded by cloud-init, Moby and the agent-server image for inspection only, under the guest-validation conditions of decision 0003 as that authorization amends them. No guest network, no guestfwd, no host share and no launch.argv change.",
-    "scope": "slice (b): Moby (Debian docker.io and its closure) and the pinned agent-server image. The Agent Server service, its configuration and its guest-local secrets are slice (c).",
+    "scope": "slices (b) and (c): Moby (Debian docker.io and its closure), the pinned agent-server image, and the Agent Server release binary as a hardened systemd service under the system user openhands with its configuration and its two guest-generated secrets (agent_server).",
     "lock": "provider.provision_lock",
     "create": "create --provision re-verifies the host stage of the lock (provision-fetch) and writes the manifest into the seed (profiles/seed/README.md, placeholder provision_manifest). An ordinary create writes an empty manifest: the seeded units carry ConditionFileNotEmpty on it and the trigger is never enabled.",
     "upload": {
@@ -241,13 +249,13 @@
       "staging": "/var/lib/aieh/provision-staging",
       "result": "/var/lib/aieh/provision/RESULT.json",
       "timeout_s": 3600,
-      "sequence": ["copy", "verify", "daemon-json", "sysctl", "apt-install", "containerd-config", "docker-ready", "docker-load", "image-id", "tag", "run", "facts", "cleanup"],
+      "sequence": ["copy", "verify", "daemon-json", "sysctl", "apt-install", "containerd-config", "docker-ready", "docker-load", "image-id", "tag", "run", "agent-server-install", "agent-server-secrets", "agent-server-start", "facts", "cleanup"],
       "single_use": "the trigger is disabled, stopped and its unit file removed in every outcome; the service refuses to run once RESULT.json or the staging directory exists"
     },
     "facts": {
       "service": "aieh-docker-facts.service",
       "path": "/run/aieh/docker-facts.json",
-      "use": "Enabled by a successful root step. At every boot, after docker.service, root writes a read-only report (docker version and info, the image store, containers, daemon.json, TCP listeners, Moby's sockets, kernel modules) that inspect reads as agent. It takes no input from the guest user."
+      "use": "Enabled by a successful root step. At every boot, after docker.service and aieh-agent-server.service, root writes a read-only report (docker version and info, the image store, containers, daemon.json, TCP listeners, Moby's sockets, kernel modules, and the Agent Server's binary, unit, process identity, data paths, engine endpoint, secret-file modes, secret fingerprints and start-up log with the secret values redacted and counted) that inspect reads as agent. It takes no input from the guest user and never writes a secret value."
     },
     "moby": {
       "server_version": "26.1.5+dfsg1",
@@ -285,6 +293,112 @@
       "local_tag": "aieh/agent-server:1.60.1-b43ee580",
       "rule": "decision 0006 item 3: the image ID equals the locked config digest; after docker load the archive's placeholder tag is removed and only this local immutable tag remains",
       "verify_run": "docker run --rm --entrypoint true <local_tag>, as root inside the root step: proves the runtime without starting the agent-server entrypoint (slice (c))"
+    },
+    "agent_server": {
+      "plan_leaf": "F-04.1 slice (c)",
+      "use": "Inspection only (decision 0006, Owner authorization Part B): no LLM, no repository content, no untrusted workload. No conversation is created by F-04.1; F-04.2 creates the disposable one from the fixture below.",
+      "version": "1.60.1",
+      "binary": {
+        "upload_name": "agent-server-1.60.1-linux-x86_64",
+        "path": "/opt/aieh/agent-server/agent-server",
+        "owner": "root",
+        "group": "root",
+        "mode": "755",
+        "source": "provision lock release_binary (SHA256SUMS of the v1.60.1 release); copied from the verified staging copy, re-hashed, then the upload is deleted"
+      },
+      "user": {
+        "name": "openhands",
+        "system": true,
+        "groups": ["docker"],
+        "shell": "/usr/sbin/nologin",
+        "home": "/srv/scratch/openhands/home",
+        "rule": "a system user with no login shell and a locked password, created by the root step; member of docker so that the server's docker CLI reaches the guest's own daemon socket. agent is never in docker (decision 0006 item 4)."
+      },
+      "service": {
+        "unit": "aieh-agent-server.service",
+        "ready": "/usr/local/sbin/aieh-agent-server-ready",
+        "argv": ["--host", "127.0.0.1", "--port", "8000"],
+        "bind_rule": "The 1.60.1 entry point binds 0.0.0.0 by default once a session API key is configured (__main__.py), so --host 127.0.0.1 is explicit.",
+        "start": "Type=exec; ExecStartPost waits for GET /ready on 127.0.0.1:8000 (200) with a 280 s ceiling, so the unit is active only when the server is ready and the boot-time facts report (ordered after it) sees its listener.",
+        "hardening": {
+          "options": ["NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=", "ProtectSystem=strict", "ReadWritePaths=/srv/scratch/openhands", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes", "ProtectProc=invisible", "RestrictSUIDSGID=yes", "RestrictRealtime=yes", "RestrictNamespaces=yes", "LockPersonality=yes", "SystemCallArchitectures=native", "SystemCallFilter=@system-service", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "IPAddressDeny=any", "IPAddressAllow=localhost", "UMask=0077"],
+          "justification": "The server needs only: its own files under /srv/scratch/openhands (the one writable path), loopback TCP (its listener, and the loopback ports Moby publishes for conversation containers in F-04.2), and AF_UNIX to /run/docker.sock through the docker CLI it runs as a child. Containers are created by dockerd (root, outside this unit), so the unit needs no capability, namespace, device, kernel tunable or SUID binary; read-only mounts do not stop connect() to a unix socket. IPAddressDeny=any with IPAddressAllow=localhost refuses any non-loopback packet from the server's cgroup (defence in depth beside SLIRP restrict=on). Not set: MemoryDenyWriteExecute (the PyInstaller-built CPython and its native extensions are not qualified under it), PrivateNetwork (the listener must be reachable from the guest's loopback) and PrivateUsers (it would hide the docker group from the docker CLI)."
+        }
+      },
+      "config": {
+        "path": "/etc/aieh/agent-server/config.json",
+        "owner": "root",
+        "group": "root",
+        "mode": "644",
+        "mechanism": "OPENHANDS_AGENT_SERVER_CONFIG_PATH (1.60.1 config.py CONFIG_PATH_ENV); OH_* variables override it, and the unit sets none of its fields. Non-secret: delivered in the seeded manifest and written by the root step.",
+        "content": {
+          "conversation_runtime": "docker",
+          "conversation_runtime_selectable": false,
+          "conversation_image": "aieh/agent-server:1.60.1-b43ee580",
+          "conversation_container_memory": "4g",
+          "conversation_container_cpus": 2.0,
+          "conversation_container_pids_limit": 512,
+          "max_concurrent_runs": 3,
+          "conversations_path": "/srv/scratch/openhands/conversations",
+          "workspace_path": "/srv/scratch/openhands/workspace",
+          "bash_events_dir": "/srv/scratch/openhands/bash_events",
+          "conversation_worktree_root": "/srv/scratch/openhands/worktrees",
+          "webhooks": [],
+          "enable_vscode": false,
+          "preload_tools": false,
+          "telemetry": {"exporter": "none"}
+        },
+        "caps_rule": "decision 0001 s3: explicit per-conversation caps inside the guest ceilings. Each conversation container gets --memory 4g, --cpus 2.0 and --pids-limit 512 (registry.py _build_container); max_concurrent_runs 3 keeps three running conversations at 12 GiB of the 16 GiB and 6 of the 8 vCPUs, leaving the rest for the guest, dockerd and the server. A create request's container options replace the memory and CPU caps and are not capped by them (openapi ConversationContainerOptions): that 0001 s3 finding stays an obligation of F-04.2 and E-01.2.2.",
+        "not_configured": "no LLM, no webhook, no session_api_keys or secret_key (they are secrets, in the environment file), no telemetry (exporter none, also the 1.60.1 default), no VSCode server and no tool preload (the browser preload would start chromium)."
+      },
+      "environment": {
+        "OPENHANDS_AGENT_SERVER_CONFIG_PATH": "/etc/aieh/agent-server/config.json",
+        "OH_PERSISTENCE_DIR": "/srv/scratch/openhands/persistence",
+        "HOME": "/srv/scratch/openhands/home",
+        "TMPDIR": "/srv/scratch/openhands/tmp",
+        "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "environment_rule": "OH_PERSISTENCE_DIR is read by openhands-sdk get_user_persistence_dir, not by Config: it holds the runtime persistence (runtime-control and runtime-data of the Docker runtime) and the profile stores. TMPDIR keeps the PyInstaller extraction and the tmux directory on scratch (/tmp is a tmpfs).",
+      "secrets": {
+        "env_file": "/etc/aieh/agent-server/secrets.env",
+        "owner": "root",
+        "group": "root",
+        "mode": "600",
+        "variables": ["OH_SECRET_KEY", "OH_SESSION_API_KEYS_0"],
+        "generated": "in the guest by the root step (python3 secrets.token_urlsafe(32), 43 characters each); never in the seed, the manifest, the upload or a log",
+        "delivery": "EnvironmentFile= of the unit, read by systemd as root before it drops to openhands, so the file needs no access for openhands. The process environment (/proc/<pid>/environ) is readable only by openhands and root.",
+        "fingerprint": "sha256 of 'aieh-secret-fingerprint/v1' + LF + the value: published in RESULT.json and the facts report so that host-side records can be scanned for the value without holding it"
+      },
+      "session_key": {
+        "guest_path": "/var/lib/aieh/agent-server/session.key",
+        "guest_dir_owner": "root",
+        "guest_dir_group": "agent",
+        "guest_dir_mode": "750",
+        "owner": "root",
+        "group": "agent",
+        "mode": "440",
+        "host_path": "{instance_dir}/agent-server/session.key",
+        "rule": "profiles P5 (amended 2026-11-07): the per-instance session API key is the one guest-local secret exported, by SFTP as agent, into the instance directory only; destroy removes it with the instance. It is never logged, recorded or committed; records carry its fingerprint only."
+      },
+      "listener": {
+        "address": "127.0.0.1",
+        "port": 8000,
+        "process": "agent-server",
+        "class": "management (guest-local)",
+        "rule": "profiles P7 (amended 2026-11-07): the guest-internal listener of the Agent Server, on the guest's loopback only; not forwarded to the host (the Agent Server hostfwd stays deferred, decision 0006)."
+      },
+      "fixture": {
+        "path": "profiles/strong-windows-qemu-whpx/agent-server/conversation-create.json",
+        "sha256": "ab10e3f311c3a840405f489b803d450f11f92ed96742c9acf9cda3eca511964e",
+        "purpose": "The immutable POST /api/conversations body of the disposable conversation that F-04.2 creates: Docker runtime, a fixed conversation id, no initial message, no LLM credential, a bare agent with no tools, the server-provisioned workspace (/workspace, no host path) and no container override of the caps. F-04.1 does not send it.",
+        "openapi": {
+          "asset": "openapi.json of release v1.60.1",
+          "sha256": "3de49fac4670eff9c8b6635ffd8bc5b6d4219788877747135333cec9f8c5e0d0",
+          "schema": "#/components/schemas/StartConversationRequest",
+          "check": "tools/check_profile.py --openapi <downloaded openapi.json>: the file's sha256 must equal this pin (composition/lock/components.lock.json release_assets); the fixture is then validated against the schema with a standard-library JSON Schema subset. openapi.json is not committed (decision 0005)."
+        }
+      }
     }
   },
   "network": {

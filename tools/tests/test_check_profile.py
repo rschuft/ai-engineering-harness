@@ -66,6 +66,9 @@ class Negative(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-profile-test-'))
         shutil.copytree(REPO / 'profiles', self.tmp / 'profiles')
+        lock = Path('composition') / 'lock' / 'components.lock.json'   # the openapi pin, read only
+        (self.tmp / lock.parent).mkdir(parents=True)
+        shutil.copy(REPO / lock, self.tmp / lock)
         self.qemu = load(QEMU, self.tmp)
         self.incus = load(INCUS, self.tmp)
         point = self.qemu['network']['enforcement_point']
@@ -598,6 +601,171 @@ class Negative(unittest.TestCase):
     def test_exchange_bounds_positive(self):
         self.qemu['exchange']['push']['max_bytes'] = 0
         self.assertFails(self.qemu, 'exchange.push.max_bytes')
+
+
+class AgentServerBlock(unittest.TestCase):
+    """F-04.1 slice (c): provisioning.agent_server, the agent-server directories and the
+    conversation fixture; each mutation must FAIL naming the rule."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-profile-as-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        shutil.copytree(REPO / 'profiles', self.tmp / 'profiles')
+        lock = Path('composition') / 'lock' / 'components.lock.json'
+        (self.tmp / lock.parent).mkdir(parents=True)
+        shutil.copy(REPO / lock, self.tmp / lock)
+        point = load(QEMU)['network']['enforcement_point']
+        (self.tmp / 'evidence').mkdir()
+        shutil.copy(REPO / point['evidence'], self.tmp / point['evidence'])
+        self.qemu = load(QEMU, self.tmp)
+        self.server = self.qemu['provisioning']['agent_server']
+        self.fixture_path = self.tmp / self.server['fixture']['path']
+
+    def errors(self, profile=None):
+        return check_profile.check(profile or self.qemu, self.tmp).errors
+
+    def assertFails(self, fragment, profile=None):
+        errors = self.errors(profile)
+        self.assertTrue(any(fragment in e for e in errors),
+                        f'expected an error containing {fragment!r}, got {errors}')
+
+    def test_committed_block_passes(self):
+        self.assertEqual(self.errors(), [])
+
+    def test_runtime_image_and_selectability(self):
+        cfg = self.server['config']['content']
+        cfg['conversation_runtime'] = 'local'
+        self.assertFails('conversation_runtime docker')
+        cfg['conversation_runtime'], cfg['conversation_runtime_selectable'] = 'docker', True
+        self.assertFails('conversation_runtime_selectable')
+        cfg['conversation_runtime_selectable'] = False
+        cfg['conversation_image'] = 'ghcr.io/openhands/agent-server:latest-python'
+        self.assertFails('conversation_image')
+
+    def test_caps_are_explicit_and_inside_the_ceilings(self):
+        cfg = self.server['config']['content']
+        del cfg['conversation_container_pids_limit']
+        self.assertFails('explicit conversation_container_memory')
+        cfg['conversation_container_pids_limit'] = 512
+        cfg['conversation_container_memory'] = '8g'
+        self.assertFails('inside the guest ceilings')
+        cfg['conversation_container_memory'], cfg['conversation_container_cpus'] = '4g', 4.0
+        self.assertFails('inside the guest ceilings')
+
+    def test_secrets_llm_webhooks_and_telemetry_stay_out_of_the_config(self):
+        for key, value, fragment in (('secret_key', 'x', 'secret_key is not allowed'),
+                                     ('session_api_keys', ['x'], 'session_api_keys is not allowed'),
+                                     ('webhooks', [{'base_url': 'https://example.invalid'}],
+                                      'no webhook'),
+                                     ('telemetry', {'exporter': 'posthog'}, 'telemetry exporter'),
+                                     ('enable_vscode', True, 'no VSCode'),
+                                     ('llm', {'api_key': 'x'}, 'no LLM')):
+            profile = copy.deepcopy(self.qemu)
+            profile['provisioning']['agent_server']['config']['content'][key] = value
+            self.assertFails(fragment, profile)
+
+    def test_paths_must_be_declared_scratch_directories(self):
+        self.server['config']['content']['conversation_worktree_root'] = '/tmp/conversation-worktrees'
+        self.assertFails('config.conversation_worktree_root')
+        profile = copy.deepcopy(load(QEMU, self.tmp))
+        profile['provisioning']['agent_server']['environment']['OH_PERSISTENCE_DIR'] = '/var/lib/x'
+        self.assertFails('environment.OH_PERSISTENCE_DIR', profile)
+        profile = copy.deepcopy(load(QEMU, self.tmp))
+        entry = next(d for d in profile['guest_storage']['directories'] if d['role'] == 'agent-server')
+        entry['owner'] = 'agent'
+        self.assertFails('owned by the service user', profile)
+        entry['owner'], entry['mount'] = 'openhands', '/'
+        self.assertFails('on the scratch disk', profile)
+
+    def test_bind_user_and_secret_custody(self):
+        for mutate, fragment in (
+                (lambda s: s['service'].__setitem__('argv', ['--port', '8000']), 'service.argv'),
+                (lambda s: s['listener'].__setitem__('address', '0.0.0.0'), 'listener'),
+                (lambda s: s['user'].__setitem__('name', 'agent'), '.user'),
+                (lambda s: s['user'].__setitem__('shell', '/bin/bash'), '.user'),
+                (lambda s: s['user'].__setitem__('groups', ['docker', 'sudo']), '.user'),
+                (lambda s: s['secrets'].__setitem__('mode', '640'), '.secrets'),
+                (lambda s: s['session_key'].__setitem__('host_path', 'C:/keys/session.key'),
+                 '.session_key'),
+                (lambda s: s['environment'].__setitem__('OH_SECRET_KEY', 'x'), 'environment'),
+                (lambda s: s['service']['hardening']['options'].remove('IPAddressDeny=any'),
+                 'hardening'),
+                (lambda s: s['binary'].__setitem__('upload_name', 'agent-server-1.59.0-linux-x86_64'),
+                 'binary.upload_name')):
+            profile = copy.deepcopy(load(QEMU, self.tmp))
+            mutate(profile['provisioning']['agent_server'])
+            self.assertFails(fragment, profile)
+
+    def test_fixture_is_pinned_and_structural(self):
+        body = json.loads(self.fixture_path.read_text(encoding='utf-8'))
+        self.assertEqual(check_profile.fixture_problems(body), [])
+        for mutate, fragment in (
+                (lambda b: b.__setitem__('conversation_runtime', 'local'), 'conversation_runtime'),
+                (lambda b: b.__setitem__('conversation_id', 'not-a-uuid'), 'conversation_id'),
+                (lambda b: b.__setitem__('initial_message', {'role': 'user'}), 'initial message'),
+                (lambda b: b['workspace'].__setitem__('working_dir', '/home/agent'), 'workspace'),
+                (lambda b: b['container'].__setitem__('memory', '64g'), 'container'),
+                (lambda b: b['agent_settings'].__setitem__('llm', {'model': 'x'}), 'no llm'),
+                (lambda b: b['agent_settings'].__setitem__('api_key', 'x'), 'credential'),
+                (lambda b: b.__setitem__('agent_profile_id', 'x'), 'one agent source')):
+            mutated = copy.deepcopy(body)
+            mutate(mutated)
+            self.assertTrue(any(fragment in p for p in check_profile.fixture_problems(mutated)),
+                            (fragment, check_profile.fixture_problems(mutated)))
+        self.fixture_path.write_text(json.dumps(dict(body, autotitle=True)), encoding='utf-8')
+        self.assertFails('fixture: profiles/')
+
+    def test_openapi_pin_is_the_lock(self):
+        self.server['fixture']['openapi']['sha256'] = '0' * 64
+        self.assertFails('fixture.openapi.sha256')
+
+
+class OpenApiSubset(unittest.TestCase):
+    """The standard-library JSON Schema subset that validates the fixture (synthetic
+    documents; the locked openapi.json itself is downloaded, never committed)."""
+
+    DOC = {'components': {'schemas': {
+        'Req': {'type': 'object', 'required': ['id', 'ws'], 'properties': {
+            'id': {'anyOf': [{'type': 'string', 'format': 'uuid'}, {'type': 'null'}]},
+            'rt': {'anyOf': [{'enum': ['local', 'docker'], 'type': 'string'}, {'type': 'null'}]},
+            'ws': {'$ref': '#/components/schemas/Ws', 'description': 'x'},
+            'n': {'type': 'integer', 'minimum': 1},
+            'opts': {'additionalProperties': False, 'type': 'object',
+                     'properties': {'mem': {'type': 'string', 'pattern': '^\\d+g$'}}},
+            'tags': {'type': 'object', 'additionalProperties': {'type': 'string'}}}},
+        'Ws': {'type': 'object', 'required': ['dir'], 'properties': {
+            'kind': {'const': 'Local', 'type': 'string'}, 'dir': {'type': 'string'}}},
+        'Odd': {'type': 'object', 'not': {'required': ['x']}}}}}
+    GOOD = {'id': '929f0d8a-f3d8-4da3-8ac3-9d0017709d71', 'rt': 'docker',
+            'ws': {'kind': 'Local', 'dir': '/w'}, 'n': 1, 'opts': {'mem': '4g'}, 'tags': {'a': 'b'}}
+
+    def errors(self, value, name='Req'):
+        return check_profile.schema_errors(value, {'$ref': f'#/components/schemas/{name}'}, self.DOC)
+
+    def test_valid(self):
+        self.assertEqual(self.errors(self.GOOD), [])
+
+    def test_each_keyword_refuses(self):
+        for change in ({'id': 'nope'}, {'rt': 'k8s'}, {'ws': {'kind': 'Other', 'dir': '/w'}},
+                       {'ws': {'kind': 'Local'}}, {'n': 0}, {'n': True}, {'opts': {'mem': 'x'}},
+                       {'opts': {'mem': '4g', 'cpus': 1}}, {'tags': {'a': 1}}):
+            self.assertTrue(self.errors(dict(self.GOOD, **change)), change)
+        missing = dict(self.GOOD)
+        del missing['ws']
+        self.assertIn("$: missing required 'ws'", self.errors(missing))
+
+    def test_unsupported_keywords_and_references_fail_closed(self):
+        self.assertIn('unsupported schema keywords', self.errors({}, 'Odd')[0])
+        self.assertIn('unresolvable reference', self.errors({}, 'Missing')[0])
+
+    def test_command_line_refuses_an_unpinned_openapi_file(self):
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-openapi-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        fake = tmp / 'openapi.json'
+        fake.write_text(json.dumps(self.DOC), encoding='utf-8')
+        result = run_checker('--openapi', str(fake), str(REPO / 'profiles' / QEMU))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('is not the locked openapi.json', result.stdout)
 
 
 class CommandLine(unittest.TestCase):

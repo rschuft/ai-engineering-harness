@@ -153,7 +153,7 @@ Only what is listed as verified has been exercised.
 | `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:qualify -- <run\|check\|prompt\|system-prompt> [options]` | `python -I -B tools/qualify_intent_skill.py <subcommand> [options]` | `run`: the model command's own (a live model) | Runs the intent-normalization Skill's [behavioural qualification](#intent-records): one corpus item and turn through a JSON model-command template in an empty working directory, then the checker, then a ledger entry; refuses past `--max-invocations` (default 25). `check` scores a saved proposal against an item's messages. |
-| `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. |
+| `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict] [--openapi <file>]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. `--openapi` validates the Agent Server conversation fixture against the locked `openapi.json` (F-04.1). |
 | `guest:preflight PROFILE=<dir> STATE_DIR=<dir>` | `python -I -B tools/guest.py preflight --profile <dir> --state-dir <dir>` | no | Read-only capability report for a strong guest profile; each failure names its Owner act (A1, A2, A3). See [Execution guests](#execution-guests). |
 | `guest:create PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name>` | no | Creates, boots and waits for a disposable guest. Refuses an existing instance. |
 | `guest:start`, `guest:inspect`, `guest:stop`, `guest:destroy`, `guest:recreate` (same variables) | `python -I -B tools/guest.py <operation> --profile <dir> --state-dir <dir> --name <name>` | no | The rest of the lifecycle; `destroy` deletes only the instance directory. |
@@ -375,6 +375,20 @@ defaults them.
   P8 group, and a `provisioning (F-04.1)` entry: version, daemon, image, containers,
   modules, leftovers, units), reading root's boot-time report
   `/run/aieh/docker-facts.json` as `agent`.
+- The same root step installs the OpenHands Agent Server (F-04.1 slice (c)): the release
+  binary as `aieh-agent-server.service` under the no-login system user `openhands`
+  (group `docker`), bound to the guest's `127.0.0.1:8000` only, configured by the
+  profile's `provisioning.agent_server` (Docker runtime, the local immutable image,
+  explicit caps, every data path under `/srv/scratch/openhands`), with `OH_SECRET_KEY`
+  and the session API key generated in the guest into a root-only environment file.
+  `provision` fetches the session key alone into `<instance>\agent-server\session.key`
+  (destroyed with the instance; records hold fingerprints only). `inspect` adds the
+  `/server_info` runtime conditions of decision 0001 s2 (queried as `agent` on the guest
+  loopback), the binary, service, config, engine endpoint, data paths, session-key
+  enforcement, the declared listener (P7) and the secret custody and search (P5).
+  `python -I -B tools/check_profile.py --openapi <openapi.json>` also validates the
+  disposable conversation fixture against the release's `openapi.json` (downloaded,
+  pinned by sha256, never committed).
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);

@@ -61,7 +61,10 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                inotify event, under a ceiling), fetch it and check it. The root step
                copies, verifies, installs Moby with apt from the local files, docker
                loads the image, checks its ID, keeps only the local immutable tag, runs it
-               once, deletes the upload and disables itself. No network at any point.
+               once, installs and starts the OpenHands Agent Server under the no-login
+               user openhands with its two guest-generated secrets (F-04.1 slice (c)),
+               deletes the upload and disables itself; provision then fetches the session
+               API key alone into the instance directory. No network at any point.
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -2122,7 +2125,7 @@ def scan_host_file(path, literals, patterns, owner=True):
     return [{'label': lab, 'member': Path(path).name} for lab in sorted(scan_bytes(data, use, pats))]
 
 
-def collect_p5(ssh, idir, record, canaries):
+def collect_p5(ssh, idir, record, canaries, secret_scan=None):
     """The P5 test: plant the positive control, collect, remove it, scan on the host.
 
     Canary values never travel to the guest: the guest's data comes to the host and is
@@ -2153,6 +2156,8 @@ def collect_p5(ssh, idir, record, canaries):
     try:
         scan = scan_tar(collected.stdout, literals, patterns)
         names = tar_member_names(collected.stdout)
+        if secret_scan is not None:          # F-04.1: the Agent Server secrets (counts only)
+            out['agent_server_secrets'] = secret_scan(collected.stdout)
     except (tarfile.TarError, OSError, EOFError) as exc:
         out['collection']['error'] = f'{type(exc).__name__}: {exc}'
         return out
@@ -2980,7 +2985,8 @@ def evaluate(profile, record, obs):
     formal = 'F-03.3.1; S-02.1, S-02.2'
     props.append(prop('P3', p3, formal=formal))
     props.append(prop('P4', p4, formal=formal))
-    props.append(prop('P5', p5_checks(record, obs), formal=formal, note=(
+    agent = agent_server_checks(profile, record, obs) if record.get('provisioning') else {}
+    props.append(prop('P5', p5_checks(record, obs) + agent.get('P5', []), formal=formal, note=(
         'Scanned as the unprivileged agent user: root-only files in the guest (for example '
         '/proc/1/environ, /etc/shadow and the user-data.txt of cloud-init) are not read there; '
         'their source, the seed, is scanned on the host (seed.iso).')))
@@ -3030,7 +3036,7 @@ def evaluate(profile, record, obs):
               rules == declared_rules),
     ] + (netprobe_checks(record, obs.get('netprobe')) if netprobe_mode
          else [enforcement_check(profile)]) +
-        (moby_p7_checks(obs) if record.get('provisioning') else []),
+        (moby_p7_checks(obs) if record.get('provisioning') else []) + agent.get('P7', []),
         formal='F-03.3.2; S-02.1, S-02.2',
         note=('Validation instance: the netprobe checks are the F-03.3.2 test (guest root, '
               'routes, every denied path, both positive controls, decoys).' if netprobe_mode
@@ -3111,7 +3117,7 @@ def evaluate(profile, record, obs):
         check('/dev/kvm', 'absent', out_text('dev_kvm'), 'guest: test -e', out_text('dev_kvm') == 'absent'),
     ]))
     if record.get('provisioning'):
-        props.append(provisioning_property(profile, record, obs))
+        props.append(provisioning_property(profile, record, obs, agent.get('provisioning', [])))
     return props
 
 
@@ -3156,7 +3162,26 @@ def inspect(ctx, name, canaries=None):
                         'probes_expected': len(probes), 'probes_parsed': len(obs['guest'])}
     root = ssh.run(['true'], user='root', timeout=60)
     obs['root_login'] = {'rc': root.returncode, 'stderr': root.stderr.strip()}
-    obs['p5'] = collect_p5(ssh, idir, record, canaries)
+    p5_scan = None
+    if record.get('provisioning'):
+        custody = idir / 'agent-server' / 'session.key'
+        session_key = custody.read_bytes().strip() if custody.is_file() else None
+        facts = _probe_json(obs, 'moby_facts') or {}
+        secret_fp = ((((facts.get('agent_server') or {}).get('secrets') or {})
+                      .get('fingerprints') or {}).get('OH_SECRET_KEY'))
+        obs['agent_server_custody'] = {
+            'present': custody.is_file(),
+            'host_fingerprint': secret_fingerprint(session_key) if session_key else None}
+
+        def p5_scan(tar_bytes):
+            return tar_secret_scan(tar_bytes, session_key, secret_fp)
+    obs['p5'] = collect_p5(ssh, idir, record, canaries, secret_scan=p5_scan)
+    if record.get('provisioning'):
+        mine = json.dumps(obs, sort_keys=True, default=str).encode('utf-8')
+        obs['agent_server_secrets'] = {
+            'host': agent_server_secret_scan(idir, session_key, secret_fp,
+                                             {'this inspect (observations)': mine}),
+            'p5_collection': obs['p5'].get('agent_server_secrets')}
     kh = (idir / 'ssh' / 'known_hosts').read_text(encoding='ascii').split('\n')
     obs['known_hosts_fingerprints'] = [key_fingerprint(line.split()[2]) for line in kh if line.strip()]
     obs['stderr'] = stderr_findings(idir)
@@ -5322,7 +5347,8 @@ for path in sys.argv[1:]:
 def provisioning_config(profile):
     conf = profile.get('provisioning')
     if not isinstance(conf, dict) or not all(isinstance(conf.get(k), dict) for k in
-                                             ('upload', 'root_step', 'facts', 'moby', 'image')):
+                                             ('upload', 'root_step', 'facts', 'moby', 'image',
+                                              'agent_server')):
         raise Refused('REFUSED', f'profile {profile.get("name")} declares no provisioning')
     return conf
 
@@ -5339,6 +5365,32 @@ def guest_moby_socket_paths(profile, record):
         if path.startswith('/run/'):
             paths.add('/var' + path)
     return paths
+
+
+def agent_server_directories(profile):
+    """guest_storage directories of the Agent Server (role agent-server), parents first."""
+    dirs = [d for d in (profile.get('guest_storage') or {}).get('directories') or []
+            if d.get('role') == 'agent-server']
+    return sorted(dirs, key=lambda d: d['path'].count('/'))
+
+
+def agent_server_manifest(profile, files):
+    """The manifest's agent_server section (F-04.1 slice (c)): the uploaded release binary
+    by name and sha256, the non-secret config, the user's home, the scratch directories
+    with their modes and the declared listener. No secret: the root step generates them."""
+    server = profile['provisioning']['agent_server']
+    name = server['binary']['upload_name']
+    binary = [f for f in files if f['role'] == 'release-binary' and f['name'] == name]
+    if len(binary) != 1:
+        raise Refused('REFUSED', f'provisioning.agent_server.binary.upload_name {name!r} is not '
+                      'the one release-binary file of the lock')
+    return {'binary': {'name': name, 'sha256': binary[0]['sha256']},
+            'config': server['config']['content'],
+            'home': server['user']['home'],
+            'directories': [{'path': d['path'], 'mode': d['mode']}
+                            for d in agent_server_directories(profile)],
+            'listener': {'address': server['listener']['address'],
+                         'port': server['listener']['port']}}
 
 
 def build_provision_manifest(ctx):
@@ -5375,6 +5427,7 @@ def build_provision_manifest(ctx):
         raise Refused('REFUSED', 'the staged image archive names no tag; docker load would '
                       'leave the image untagged')
     moby = conf['moby']
+    agent_server = agent_server_manifest(ctx.profile, files)
     manifest = {
         'schema': PROVISION_MANIFEST_SCHEMA,
         'profile': ctx.profile['name'],
@@ -5391,6 +5444,7 @@ def build_provision_manifest(ctx):
         'docker': {'server_version': moby['server_version'], 'daemon_json': moby['daemon_json'],
                    'sysctl': moby['sysctl']['content'],
                    'containerd_config': moby['containerd_config']['content']},
+        'agent_server': agent_server,
     }
     data = (json.dumps(manifest, indent=1, sort_keys=True) + '\n').encode('ascii')
     digest = hashlib.sha256(data).hexdigest()
@@ -5400,7 +5454,9 @@ def build_provision_manifest(ctx):
                        'local_tag': conf['image']['local_tag'],
                        'files': len(files), 'bytes': sum(f['size'] for f in files),
                        'staged_dir': posix(staged_dir), 'stage_verify_seconds':
-                       verified['seconds']}}
+                       verified['seconds'],
+                       'agent_server': {'version': conf['agent_server'].get('version'),
+                                        'binary_sha256': agent_server['binary']['sha256']}}}
 
 
 def provisioning_probes(conf):
@@ -5427,7 +5483,127 @@ def provisioning_probes(conf):
         ('provision_units', f'for u in {units}; do printf "%s %s %s\\n" "$u" '
                             '"$(systemctl is-enabled "$u" 2>&1 | head -n1)" '
                             '"$(systemctl is-active "$u" 2>&1 | head -n1)"; done'),
+    ] + agent_server_probes(conf)
+
+
+# The Agent Server probe, run as agent (F-04.1 slice (c)): the API on the guest's loopback
+# with and without the session key, which it reads from its agent-readable file and never
+# prints (its fingerprint only), and whether agent can open the secret files and the
+# server's process environments (open only; nothing is read from them).
+AGENT_SERVER_PROBE = r'''import errno, hashlib, http.client, json, subprocess, sys
+key_path, host, port, user = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+paths = sys.argv[5:]
+out = {}
+def get(path, key=None):
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request('GET', path, headers={'X-Session-API-Key': key} if key is not None else {})
+        r = conn.getresponse()
+        body = r.read(1 << 20).decode('utf-8', 'replace')
+        try:
+            body = json.loads(body)
+        except ValueError:
+            body = body[:2000]
+        return {'status': r.status, 'body': body}
+    except OSError as exc:
+        return {'error': errno.errorcode.get(exc.errno, str(exc))}
+    finally:
+        conn.close()
+def can_open(path):
+    try:
+        with open(path, 'rb'):
+            return 'READABLE'
+    except OSError as exc:
+        return errno.errorcode.get(exc.errno, str(exc))
+try:
+    with open(key_path, encoding='ascii') as handle:
+        key = handle.read().strip()
+    out['session_key_fingerprint'] = hashlib.sha256(
+        b'aieh-secret-fingerprint/v1\n' + key.encode('ascii')).hexdigest()
+except OSError as exc:
+    key = None
+    out['session_key_error'] = errno.errorcode.get(exc.errno, str(exc))
+out['alive'] = get('/alive')
+out['server_info'] = get('/server_info')
+out['count_with_key'] = get('/api/conversations/count', key) if key else None
+out['count_without_key'] = get('/api/conversations/count')
+out['count_wrong_key'] = get('/api/conversations/count', 'x' * 43)
+out['agent_open'] = {p: can_open(p) for p in paths}
+pids = subprocess.run(['pgrep', '-u', user], capture_output=True, text=True).stdout.split()
+out['server_environ_agent'] = sorted({can_open('/proc/' + p + '/environ') for p in pids})
+out['server_processes'] = len(pids)
+print(json.dumps(out, sort_keys=True))
+'''
+
+
+def agent_server_probes(conf):
+    server = conf['agent_server']
+    listener, key = server['listener'], server['session_key']
+    files = [server['binary']['path'], server['config']['path'], server['secrets']['env_file'],
+             key['guest_path'].rsplit('/', 1)[0], key['guest_path']]
+    quoted = ' '.join(f"'{f}'" for f in files)
+    secret_files = ' '.join(f"'{f}'" for f in (server['secrets']['env_file'], key['guest_path']))
+    return [
+        ('agent_server_api', f"timeout 120 python3 - '{key['guest_path']}' '{listener['address']}' "
+                             f"'{listener['port']}' '{server['user']['name']}' {secret_files} "
+                             f"<<'PYEOF'\n" + AGENT_SERVER_PROBE + 'PYEOF'),
+        ('agent_server_files', f"stat -c '%n|%U|%G|%a|%F' -- {quoted}"),
+        ('agent_server_config', f"cat '{server['config']['path']}'"),
     ]
+
+
+def secret_fingerprint(value):
+    """The fingerprint the root step publishes for a guest-local secret (never the value)."""
+    data = value if isinstance(value, bytes) else str(value).encode('ascii')
+    return hashlib.sha256(b'aieh-secret-fingerprint/v1\n' + data).hexdigest()
+
+
+SECRET_TOKEN = re.compile(rb'[A-Za-z0-9_-]{43,}')
+SECRET_WINDOW = 43
+SECRET_SCAN_SKIP = ('root.qcow2', 'scratch.qcow2')     # the guest's own disks hold them
+
+
+def scan_secret_bytes(data, session_key, secret_fp):
+    """Occurrences of the session key (a literal) and of the secret whose fingerprint is
+    secret_fp (every 43-character window of every token run is fingerprinted) in data."""
+    hits = {'OH_SESSION_API_KEYS_0': data.count(session_key) if session_key else None,
+            'OH_SECRET_KEY': None}
+    if secret_fp:
+        found = 0
+        for match in SECRET_TOKEN.finditer(data):
+            run = match.group()
+            for i in range(len(run) - SECRET_WINDOW + 1):
+                if secret_fingerprint(run[i:i + SECRET_WINDOW]) == secret_fp:
+                    found += 1
+        hits['OH_SECRET_KEY'] = found
+    return hits
+
+
+def agent_server_secret_scan(idir, session_key, secret_fp, extra=None):
+    """Host-side search of the instance directory (every file but the guest disks; the
+    session key's own custody file only for OH_SECRET_KEY) and of ``extra`` byte strings
+    for the two Agent Server secrets. Returns counts, never a value."""
+    idir = Path(idir)
+    custody = idir / 'agent-server' / 'session.key'
+    hits, scanned = {}, 0
+    for path in sorted(idir.rglob('*')):
+        if not path.is_file() or path.name in SECRET_SCAN_SKIP:
+            continue
+        scanned += 1
+        found = scan_secret_bytes(path.read_bytes(), session_key, secret_fp)
+        if path == custody:
+            found['OH_SESSION_API_KEYS_0'] = None
+        found = {k: v for k, v in found.items() if v}
+        if found:
+            hits[posix(path.relative_to(idir))] = found
+    for label, data in (extra or {}).items():
+        scanned += 1
+        found = {k: v for k, v in scan_secret_bytes(data, session_key, secret_fp).items() if v}
+        if found:
+            hits[label] = found
+    return {'files_scanned': scanned, 'hits': hits,
+            'searched': {'OH_SESSION_API_KEYS_0': session_key is not None,
+                         'OH_SECRET_KEY': secret_fp is not None}}
 
 
 def _probe_json(obs, key):
@@ -5517,7 +5693,280 @@ def moby_p8_checks(obs):
                   'agent' not in members)]
 
 
-def provisioning_property(profile, record, obs):
+def tar_secret_scan(tar_bytes, session_key, secret_fp):
+    """scan_secret_bytes over every regular member of the P5 collection (as agent)."""
+    totals = {'OH_SESSION_API_KEYS_0': 0 if session_key else None,
+              'OH_SECRET_KEY': 0 if secret_fp else None}
+    members = 0
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode='r:*') as tf:
+        for member in tf:
+            if not member.isfile() or member.size > MEMBER_MAX_BYTES:
+                continue
+            handle = tf.extractfile(member)
+            if handle is None:
+                continue
+            members += 1
+            for key, count in scan_secret_bytes(handle.read(), session_key, secret_fp).items():
+                if count:
+                    totals[key] += count
+    return {'members': members, 'hits': {k: v for k, v in totals.items() if v}}
+
+
+# Listeners of the base guest image (sshd, systemd-resolved); every other TCP listener of a
+# provisioned guest must be declared (profiles P7: the Agent Server's guest-local bind).
+BASE_LISTENER_PROCESSES = ('sshd', 'systemd-resolve')
+AGENT_SERVER_ENGINE_WARNINGS = ('Failed to list stale conversation containers',
+                                'Docker CLI not found')
+
+
+def _listener_process(line):
+    match = re.search(r'users:\(\("([^"]+)"', line)
+    return match.group(1) if match else None
+
+
+def agent_server_checks(profile, record, obs):
+    """The Agent Server of a provisioned instance (F-04.1 slice (c)) against the profile's
+    provisioning.agent_server, decision 0001 s2 and the lock: {'P5': [...], 'P7': [...],
+    'provisioning': [...]}. Root-only facts come from the boot-time report."""
+    g = obs.get('guest', {})
+    out_text = lambda key: (g.get(key) or {}).get('out', '')      # noqa: E731
+    conf = (profile.get('provisioning') or {}).get('agent_server') or {}
+    prov = record.get('provisioning') or {}
+    facts = _probe_json(obs, 'moby_facts') or {}
+    server = facts.get('agent_server') if isinstance(facts.get('agent_server'), dict) else {}
+    api = _probe_json(obs, 'agent_server_api') or {}
+    info = ((api.get('server_info') or {}).get('body')) if isinstance(api.get('server_info'), dict) else None
+    info = info if isinstance(info, dict) else {}
+    sec = server.get('secrets') if isinstance(server.get('secrets'), dict) else {}
+    fps = sec.get('fingerprints') if isinstance(sec.get('fingerprints'), dict) else {}
+    secrets_conf, key_conf = conf.get('secrets') or {}, conf.get('session_key') or {}
+    listener = conf.get('listener') or {}
+    want_bind = f"{listener.get('address')}:{listener.get('port')}"
+    files = {line.split('|', 1)[0]: line.split('|')[1:] for line in
+             out_text('agent_server_files').splitlines() if '|' in line}
+    key_dir = str(key_conf.get('guest_path', '')).rsplit('/', 1)[0]
+    want_files = {
+        conf.get('binary', {}).get('path'): [conf.get('binary', {}).get('owner'),
+                                             conf.get('binary', {}).get('group'),
+                                             conf.get('binary', {}).get('mode'), 'regular file'],
+        conf.get('config', {}).get('path'): [conf.get('config', {}).get('owner'),
+                                             conf.get('config', {}).get('group'),
+                                             conf.get('config', {}).get('mode'), 'regular file'],
+        secrets_conf.get('env_file'): [secrets_conf.get('owner'), secrets_conf.get('group'),
+                                       secrets_conf.get('mode'), 'regular file'],
+        key_dir: [key_conf.get('guest_dir_owner'), key_conf.get('guest_dir_group'),
+                  key_conf.get('guest_dir_mode'), 'directory'],
+        key_conf.get('guest_path'): [key_conf.get('owner'), key_conf.get('group'),
+                                     key_conf.get('mode'), 'regular file'],
+    }
+    agent_open = api.get('agent_open') if isinstance(api.get('agent_open'), dict) else {}
+    custody = obs.get('agent_server_custody') or {}
+    host_fp = custody.get('host_fingerprint')
+    scan = obs.get('agent_server_secrets') or {}
+    occurrences = sec.get('occurrences') if isinstance(sec.get('occurrences'), dict) else None
+    journal = server.get('journal') if isinstance(server.get('journal'), dict) else {}
+    guest_counts = None if occurrences is None else {
+        'files': {k: {n: c for n, c in v.items() if c} for k, v in occurrences.items()
+                  if any((v or {}).values())},
+        'start-up log': {n: c for n, c in (journal.get('secret_occurrences') or {}).items() if c},
+        'facts report': {n: c for n, c in (facts.get('secret_occurrences_in_report') or {}).items()
+                         if c}}
+    p5 = [
+        check('Agent Server secrets (custody)', {
+            'files': want_files, 'agent_open': {secrets_conf.get('env_file'): 'EACCES',
+                                                key_conf.get('guest_path'): 'READABLE'},
+            'server_environment_as_agent': ['EACCES'],
+            'values': 'two distinct 43-character values; the session key file holds the key',
+            'host_copy': f"{key_conf.get('host_path')} equals the guest's session key (fingerprint)"},
+            {'files': files, 'agent_open': agent_open,
+             'server_environment_as_agent': api.get('server_environ_agent'),
+             'values_valid': sec.get('values_valid'),
+             'session_key_matches': sec.get('session_key_matches'),
+             'host_copy': {'present': custody.get('present'),
+                           'equal': bool(host_fp) and host_fp == fps.get('OH_SESSION_API_KEYS_0')
+                           and host_fp == api.get('session_key_fingerprint')}},
+            "guest, as agent: stat; open() of the secret files and /proc/<openhands pid>/environ "
+            "(nothing read); facts (root): values and the session key file; host: the "
+            "custody file's fingerprint",
+            bool(files) and files == want_files and
+            agent_open.get(secrets_conf.get('env_file')) == 'EACCES' and
+            agent_open.get(key_conf.get('guest_path')) == 'READABLE' and
+            api.get('server_environ_agent') == ['EACCES'] and sec.get('values_valid') is True and
+            sec.get('session_key_matches') is True and bool(host_fp) and
+            host_fp == fps.get('OH_SESSION_API_KEYS_0') == api.get('session_key_fingerprint')),
+        check('Agent Server secret values in records', {'host': {}, 'p5_collection': {},
+                                                         'guest': 'no occurrence'},
+              {'host': {'files_scanned': (scan.get('host') or {}).get('files_scanned'),
+                        'hits': (scan.get('host') or {}).get('hits'),
+                        'searched': (scan.get('host') or {}).get('searched')},
+               'p5_collection': scan.get('p5_collection'), 'guest': guest_counts},
+              'host: the session key and every 43-character window fingerprinted against '
+              "OH_SECRET_KEY's, over the instance directory (not the guest disks), this "
+              "inspect's observations and the P5 collection; guest (root): RESULT.json, the "
+              'config, the manifest, cloud-init logs, the start-up log and the facts report',
+              bool(scan) and (scan.get('host') or {}).get('hits') == {} and
+              all((scan.get('host') or {}).get('searched', {}).values()) and
+              isinstance(scan.get('p5_collection'), dict) and
+              scan['p5_collection'].get('hits') == {} and guest_counts is not None and
+              not any(guest_counts.values())),
+        check('Agent Server key fingerprints', 'per instance',
+              {k: fps.get(k) for k in secrets_conf.get('variables') or []},
+              'facts (root): sha256 of the domain prefix and the value', len(fps) == 2 and
+              all(isinstance(v, str) and len(v) == 64 for v in fps.values())),
+    ]
+
+    root_lines = facts.get('tcp_listeners') if isinstance(facts.get('tcp_listeners'), list) else None
+    by_process = {}
+    for line in root_lines or []:
+        by_process.setdefault(_listener_process(line), []).extend(_listener_addresses([line]))
+    agent_view = _listener_addresses((g.get('tcp_listeners') or {}).get('out', '').splitlines())
+    undeclared = {p: a for p, a in by_process.items()
+                  if p not in BASE_LISTENER_PROCESSES + (listener.get('process'),)}
+    p7 = [check('guest TCP listeners (Agent Server)',
+                {'agent-server': [want_bind], 'others': f'only {list(BASE_LISTENER_PROCESSES)}'},
+                {'agent-server': sorted(set(by_process.get(listener.get('process'), []))),
+                 'undeclared': undeclared, 'seen_by_agent': want_bind in agent_view},
+                'facts: ss -ltnpH (root, at boot); guest: ss -ltnH (agent)',
+                None if root_lines is None else
+                sorted(set(by_process.get(listener.get('process'), []))) == [want_bind] and
+                not undeclared and want_bind in agent_view)]
+
+    unit = server.get('unit') if isinstance(server.get('unit'), dict) else {}
+    account = server.get('account') if isinstance(server.get('account'), dict) else {}
+    procs = server.get('processes') if isinstance(server.get('processes'), list) else []
+    user = conf.get('user') or {}
+    config_want = (conf.get('config') or {}).get('content')
+    try:
+        config_seen = json.loads(out_text('agent_server_config'))
+    except ValueError:
+        config_seen = None
+    paths = server.get('paths') if isinstance(server.get('paths'), list) else []
+    dirs = agent_server_directories(profile)
+    want_paths = [{'path': d['path'], 'state': 'directory', 'owner': d['owner'],
+                   'group': d['group'], 'mode': d['mode'], 'mount': ['/srv/scratch', 'ext4']}
+                  for d in dirs]
+    env = conf.get('environment') or {}
+    config_paths = {k: (config_want or {}).get(k) for k in (
+        'conversations_path', 'workspace_path', 'bash_events_dir', 'conversation_worktree_root')}
+    config_paths.update({k: env.get(k) for k in ('OH_PERSISTENCE_DIR', 'HOME', 'TMPDIR')})
+    declared_dirs = {d['path'] for d in dirs}
+    engine = server.get('engine') if isinstance(server.get('engine'), dict) else {}
+    docker_env = sorted({json.dumps(p.get('docker_environment'), sort_keys=True) for p in procs})
+    engine_warnings = [line for line in (journal.get('head') or []) + (journal.get('noted') or [])
+                       if any(w in line for w in AGENT_SERVER_ENGINE_WARNINGS)]
+    moby = (profile.get('provisioning') or {}).get('moby') or {}
+    caps = ('conversation_runtime_routes_v1', 'idempotent_conversation_create_v1')
+    runtime_ok = (info.get('conversation_runtime') == 'docker' or
+                  'docker' in (info.get('available_conversation_runtimes') or [])) and \
+        all(c in (info.get('capabilities') or []) for c in caps)
+    statuses = {k: (api.get(k) or {}).get('status') for k in
+                ('count_with_key', 'count_without_key', 'count_wrong_key', 'alive')}
+    image = facts.get('image') if isinstance(facts.get('image'), dict) else {}
+    hardening = (conf.get('service') or {}).get('hardening', {}).get('options') or []
+    unit_view = {k: unit.get(k) for k in ('LoadState', 'ActiveState', 'SubState', 'UnitFileState',
+                                          'NRestarts', 'User', 'Group', 'NoNewPrivileges',
+                                          'ProtectSystem', 'ProtectHome', 'PrivateTmp',
+                                          'PrivateDevices', 'ProtectProc', 'RestrictNamespaces',
+                                          'RestrictSUIDSGID', 'CapabilityBoundingSet',
+                                          'AmbientCapabilities', 'IPAddressDeny', 'IPAddressAllow',
+                                          'RestrictAddressFamilies', 'SystemCallArchitectures',
+                                          'UMask', 'ReadWritePaths')}
+    proc_view = sorted({json.dumps({k: p.get(k) for k in ('name', 'user', 'group', 'groups', 'exe',
+                                                           'error')}, sort_keys=True)
+                        for p in procs})
+    service_ok = (unit.get('ActiveState') == 'active' and unit.get('UnitFileState') == 'enabled' and
+                  unit.get('NRestarts') == '0' and unit.get('User') == user.get('name') and
+                  unit.get('NoNewPrivileges') == 'yes' and unit.get('ProtectSystem') == 'strict' and
+                  unit.get('ProtectProc') == 'invisible' and
+                  unit.get('CapabilityBoundingSet') == '' and
+                  unit.get('IPAddressDeny') and unit.get('IPAddressAllow') and
+                  account.get('shell') == user.get('shell') and account.get('password') == 'L' and
+                  sorted(account.get('groups') or []) == sorted([user.get('name')] +
+                                                                (user.get('groups') or [])) and
+                  bool(procs) and all(p.get('user') == user.get('name') and
+                                      'docker' in (p.get('groups') or []) and
+                                      p.get('exe') == conf.get('binary', {}).get('path')
+                                      for p in procs))
+    provisioning = [
+        check('Agent Server binary', {'sha256': prov.get('agent_server', {}).get('binary_sha256'),
+                                      'path': conf.get('binary', {}).get('path'),
+                                      'owner': 'root:root', 'mode': conf.get('binary', {}).get('mode')},
+              server.get('binary'), 'facts: sha256 and stat (root)',
+              bool(server.get('binary')) and
+              server['binary'].get('sha256') == prov.get('agent_server', {}).get('binary_sha256') and
+              server['binary'].get('owner') == 'root' and server['binary'].get('group') == 'root' and
+              server['binary'].get('mode') == conf.get('binary', {}).get('mode')),
+        check('Agent Server version (/server_info)', {'version': conf.get('version')},
+              {k: info.get(k) for k in ('title', 'version', 'sdk_version', 'tools_version',
+                                        'workspace_version', 'build_git_sha', 'build_git_ref')},
+              'guest, as agent: GET /server_info on the loopback listener',
+              info.get('version') == conf.get('version')),
+        check('runtime selection (decision 0001 s2)', {
+            'conversation_runtime': 'docker', 'available_conversation_runtimes': [],
+            'capabilities': f'including {list(caps)}',
+            'condition': "(conversation_runtime == 'docker' or 'docker' in "
+                         "available_conversation_runtimes) and both capabilities"},
+              {'conversation_runtime': info.get('conversation_runtime'),
+               'available_conversation_runtimes': info.get('available_conversation_runtimes'),
+               'capabilities': info.get('capabilities')},
+              'guest, as agent: GET /server_info',
+              runtime_ok and info.get('conversation_runtime') == 'docker' and
+              info.get('available_conversation_runtimes') == []),
+        check('Agent Server service', {
+            'unit': 'enabled, active, no restart, as the declared user, hardened',
+            'hardening': hardening, 'user': user,
+            'processes': f"as {user.get('name')} with group docker, exe {conf.get('binary', {}).get('path')}"},
+              {'unit': unit_view, 'account': account, 'processes': proc_view,
+               'enabled': server.get('enabled')},
+              'facts: systemctl show, getent/id/passwd -S, /proc/<pid>/status and exe (root)',
+              bool(service_ok)),
+        check('Agent Server config', config_want, config_seen,
+              f"guest, as agent: cat {conf.get('config', {}).get('path')}",
+              config_seen is not None and config_seen == config_want and
+              (server.get('config') or {}).get('content') == config_want),
+        check('engine endpoint', {'docker_context_host': 'unix:///var/run/docker.sock',
+                                  'server_environment': 'no DOCKER_* variable',
+                                  'docker_server_version_as_openhands': moby.get('server_version'),
+                                  'start-up log': f'none of {list(AGENT_SERVER_ENGINE_WARNINGS)}'},
+              {'docker_context_host': engine.get('docker_context_host'),
+               'server_environment': docker_env,
+               'docker_server_version_as_openhands': engine.get('docker_server_version_as_openhands'),
+               'start-up log': engine_warnings},
+              'facts (root): docker context inspect and docker version as openhands (setpriv), '
+              'DOCKER_* of the server processes, the start-up log',
+              engine.get('docker_context_host') == 'unix:///var/run/docker.sock' and
+              docker_env == ['{}'] and
+              engine.get('docker_server_version_as_openhands') == moby.get('server_version') and
+              not engine_warnings),
+        check('conversation image', {'conversation_image': prov.get('local_tag'),
+                                     'Id': prov.get('image_id')},
+              {'conversation_image': (config_seen or {}).get('conversation_image'),
+               'Id': image.get('Id'), 'RepoTags': image.get('RepoTags')},
+              'config (agent); facts: docker image inspect of the tag (root, offline)',
+              (config_seen or {}).get('conversation_image') == prov.get('local_tag') and
+              image.get('Id') == prov.get('image_id') and
+              image.get('RepoTags') == [prov.get('local_tag')]),
+        check('Agent Server data paths', {'directories': want_paths, 'configured': config_paths},
+              {'directories': paths, 'configured_declared': {
+                  k: v in declared_dirs for k, v in config_paths.items()}},
+              'facts: stat and findmnt --target (root); config and unit environment',
+              paths == want_paths and all(v in declared_dirs for v in config_paths.values())),
+        check('session API key enforced', {'count_with_key': 200, 'count_without_key': 401,
+                                           'count_wrong_key': 401, 'alive': 200},
+              statuses, 'guest, as agent: GET /api/conversations/count and /alive',
+              statuses == {'count_with_key': 200, 'count_without_key': 401,
+                           'count_wrong_key': 401, 'alive': 200}),
+        check('Agent Server start-up log', 'recorded; secret values counted and redacted (none)',
+              {'lines': journal.get('lines'), 'secret_occurrences': journal.get('secret_occurrences'),
+               'head': journal.get('head'), 'noted': journal.get('noted')},
+              'facts: journalctl -b -u (root), redacted before it is written',
+              bool(journal) and journal.get('rc') == 0 and
+              not any((journal.get('secret_occurrences') or {}).values())),
+    ]
+    return {'P5': p5, 'P7': p7, 'provisioning': provisioning}
+
+
+def provisioning_property(profile, record, obs, extra=()):
     """The provisioned instance's Moby state against the profile and the lock (F-04.1):
     an inspect entry beside P1-P12, not a contract property."""
     g = obs.get('guest', {})
@@ -5615,10 +6064,12 @@ def provisioning_property(profile, record, obs):
               service[0] in ('static', 'disabled', 'not-found') and service[1] in
               ('inactive', 'failed') and bool(facts_unit) and facts_unit[0] == 'enabled'),
     ]
-    out = prop('provisioning', checks, formal='F-04.1 slice (b)', note=(
-        'Not a contract property: the provisioned instance\'s Moby and image state against '
-        'the profile\'s provisioning block and the provision lock. Root-only facts come '
-        'from the boot-time report of aieh-docker-facts.service, read as agent.'))
+    checks += list(extra)
+    out = prop('provisioning', checks, formal='F-04.1 slices (b) and (c)', note=(
+        'Not a contract property: the provisioned instance\'s Moby, image and Agent Server '
+        'state against the profile\'s provisioning block, decision 0001 s2 and the provision '
+        'lock. Root-only facts come from the boot-time report of aieh-docker-facts.service, '
+        'read as agent; the Agent Server API is queried as agent on the guest loopback.'))
     out['property'] = PROVISIONING_PROPERTY
     return out
 
@@ -5654,7 +6105,39 @@ CHECK_CLASSES.update({
     (PROVISIONING_PROPERTY, 'kernel modules for Moby'): (VOLATILE, None),
     (PROVISIONING_PROPERTY, 'upload and staging removed'): (STABLE, None),
     (PROVISIONING_PROPERTY, 'root step disabled'): (STABLE, None),
+    # F-04.1 slice (c): the Agent Server
+    ('profiles P5', 'Agent Server secrets (custody)'): (STABLE, None),
+    # the instance directory gains records between inspects: only the hits are compared
+    ('profiles P5', 'Agent Server secret values in records'): (STABLE, 'secret-scan'),
+    # generated per instance: equal across a restart, different across recreate
+    ('profiles P5', 'Agent Server key fingerprints'): (PER_INSTANCE, None),
+    ('profiles P7', 'guest TCP listeners (Agent Server)'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'Agent Server binary'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'Agent Server version (/server_info)'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'runtime selection (decision 0001 s2)'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'Agent Server service'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'Agent Server config'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'engine endpoint'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'conversation image'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'Agent Server data paths'): (STABLE, None),
+    (PROVISIONING_PROPERTY, 'session API key enforced'): (STABLE, None),
+    # timestamps and process ids change with every start; the verdict (no secret value in
+    # it) must stay equal
+    (PROVISIONING_PROPERTY, 'Agent Server start-up log'): (VOLATILE, None),
 })
+
+
+def _n_secret_scan(value, profile):
+    if not isinstance(value, dict):
+        return value
+    return {'host_hits': (value.get('host') or {}).get('hits'),
+            'host_searched': (value.get('host') or {}).get('searched'),
+            'p5_hits': (value.get('p5_collection') or {}).get('hits')
+            if isinstance(value.get('p5_collection'), dict) else value.get('p5_collection'),
+            'guest': value.get('guest')}
+
+
+NORMALIZERS['secret-scan'] = _n_secret_scan
 
 
 def _guest_states(ssh, paths):
@@ -5770,7 +6253,27 @@ def provision(ctx, name):
         'cleanup': (result or {}).get('upload_present') is False and
         (result or {}).get('staging_present') is False,
         'trigger_removed': ((result or {}).get('trigger') or {}).get('path_unit_file') == 'absent',
+        'agent_server_started': ((steps.get('agent-server-start') or {}).get('detail') or {}).get(
+            'agent_server_listeners') == [f"{conf['agent_server']['listener']['address']}:"
+                                          f"{conf['agent_server']['listener']['port']}"],
     }
+    # profiles P5 (amended 2026-11-07): the session API key is exported, by SFTP as agent,
+    # into the instance directory only. Neither it nor OH_SECRET_KEY is recorded; the
+    # record says only whether the copy's fingerprint equals the one the root step published.
+    published = ((((steps.get('agent-server-secrets') or {}).get('detail') or {})
+                  .get('fingerprints') or {}).get('OH_SESSION_API_KEYS_0'))
+    custody = idir / 'agent-server' / 'session.key'
+    session = {'host_path': posix(custody), 'fetched': False, 'fingerprint_matches': False}
+    if verdict['provisioned'] and published and not custody.exists():
+        custody.parent.mkdir(exist_ok=True)
+        guest_key = conf['agent_server']['session_key']['guest_path']
+        got = Sftp(ssh).batch([f'get {sftp_quote(guest_key)} {sftp_quote(custody)}'], work)
+        session['fetched'] = got['rc'] == 0 and custody.is_file()
+        if session['fetched']:
+            session['fingerprint_matches'] = secret_fingerprint(
+                custody.read_bytes().strip()) == published
+    out['session_key'] = session
+    verdict['session_key_exported'] = session['fingerprint_matches']
     out['checks'] = verdict
     out['timings'] = {'upload_s': out['upload']['seconds'],
                       'guest_check_s': out['guest_check']['seconds'],

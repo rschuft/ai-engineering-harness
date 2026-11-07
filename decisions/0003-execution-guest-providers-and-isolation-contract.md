@@ -268,6 +268,30 @@ conditions, recorded here and in the execution-profile contract:
     `OH_SECRET_KEY` belong to slice (c).
   - Ordinary guests are unaffected: their seed carries an empty manifest and the seeded
     units stay inert (`profiles/seed/README.md`).
+- **2026-11-07, F-04.1c: contract amendments for the Agent Server in a provisioned guest
+  (Overseer decision as contract owner, under the same Owner authorization).** The root
+  step now also installs the OpenHands Agent Server release binary as a hardened systemd
+  service under the system user `openhands`, with a non-secret configuration and two
+  guest-generated secrets. Guest network, a `guestfwd`, a host share, an LLM credential
+  and a new host port still need separate approval. `launch.argv` is unchanged, and the
+  tier stays not operational (C6). The contract and the QEMU profile now say:
+  - **P5:** the Agent Server's session API key joins the allowed, labelled guest-local
+    secrets, beside the SSH keypair and `OH_SECRET_KEY`. Both secrets are generated in
+    the guest into a root-only environment file. Neither is ever in the seed, the
+    manifest, a log or a record; records carry fingerprints only. `OH_SECRET_KEY` never
+    leaves the guest. The session key alone is exported, by SFTP as `agent`, into the
+    instance directory, which `destroy` removes. The inspection adds: `agent` cannot
+    open the environment file or the service's process environments, and neither value
+    appears on the host or in the guest's records.
+  - **P6:** `openhands` (system user, no login) is in group `docker`, as the guest's own
+    service principal. `agent` stays outside `docker`.
+  - **P7:** the Agent Server's listener on the guest's own `127.0.0.1` (class management,
+    guest-local) is declared (`provisioning.agent_server.listener`). It is not forwarded:
+    no `hostfwd` and no new host port; the Agent Server forward stays deferred (decision
+    0006). Any other TCP listener in a provisioned guest must belong to the base image.
+  - **P3, P4 (`guest_storage`):** the service's scratch directories under
+    `/srv/scratch/openhands` (role `agent-server`, `provisioned_only`, owner
+    `openhands`) are declared. Every data path of the configuration is one of them.
 
 ## Evidence
 - **Blueprint:** #infrastructure-state, #containment-architecture, #platforms, extracted

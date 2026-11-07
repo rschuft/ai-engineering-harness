@@ -21,6 +21,12 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
 - a provisioning block (F-04.1b) bounds the upload, names the root step's paths and
   declares Moby with no TCP socket, its data root on scratch, root-owned sockets closed
   to others, the locked docker.io version and a local immutable image tag;
+- its agent_server block (F-04.1 slice (c)) installs the lock's release binary under a
+  no-login service user, binds 127.0.0.1 only, configures the decision 0001 s2 runtime
+  with the local image and explicit caps inside the ceilings, keeps every data path on
+  declared scratch directories and the secrets in a root-only file, and pins the
+  disposable conversation fixture; with ``--openapi FILE`` the fixture is also validated
+  against the locked openapi.json (a standard-library JSON Schema subset);
 - ceilings are declared and match the provider configuration (profiles P2);
 - exactly one accelerator and no TCG fallback (contract section 4);
 - the lifecycle is the contract's closed set (contract section 3).
@@ -31,7 +37,7 @@ shipped by an Incus server) may be declared with ``"pin_status": "unknown"`` and
 them. Anything else unpinned is a FAIL.
 
 Usage (from the repository root):
-    python -I -B tools/check_profile.py [--strict] [PROFILE ...]
+    python -I -B tools/check_profile.py [--strict] [--openapi FILE] [PROFILE ...]
 
 PROFILE is a profile directory or its profile.json; the default is every
 profiles/*/profile.json. Exit status 0 when every profile passes, 1 otherwise.
@@ -499,6 +505,9 @@ DIRECTORY_ROLES = ('exchange', 'scratch')
 # Directories present only on a provisioned instance (F-04.1): Moby's data root and the
 # root step's state. Each carries "provisioned_only": true.
 PROVISIONED_DIRECTORY_ROLES = ('moby-data-root', 'provisioning-state')
+# The Agent Server's scratch directories (F-04.1 slice (c)): several, each provisioned_only,
+# on the scratch disk and owned by its service user.
+AGENT_SERVER_ROLE = 'agent-server'
 STORAGE_FILE = re.compile(r'^(\{instance_dir\}/[A-Za-z0-9._-]+|\{input:[a-z_]+\})$')
 
 
@@ -631,9 +640,23 @@ def check_guest_storage(report, profile):
                         '(profiles P4)')
         if any('provisioned_only' in e for e in by_role.get(role, [])):
             report.fail(f'guest_storage.directories: the {role} directory is never provisioned_only')
-    known = set(DIRECTORY_ROLES) | set(PROVISIONED_DIRECTORY_ROLES)
+    known = set(DIRECTORY_ROLES) | set(PROVISIONED_DIRECTORY_ROLES) | {AGENT_SERVER_ROLE}
     if set(by_role) - known:
         report.fail(f'guest_storage.directories: unknown roles {sorted(set(by_role) - known)}')
+    server_dirs = by_role.get(AGENT_SERVER_ROLE, [])
+    scratch_disk_targets = {m.get('target') for m in mounts if isinstance(m, dict) and
+                            devices.get(m.get('disk'), {}).get('role') == 'scratch'}
+    for entry in server_dirs:
+        if entry.get('provisioned_only') is not True or entry.get('mount') not in scratch_disk_targets \
+                or entry.get('owner') in ('root', 'agent'):
+            report.fail(f'guest_storage.directories: the {AGENT_SERVER_ROLE} directory '
+                        f'{entry.get("path")} must be provisioned_only, on the scratch disk and '
+                        'owned by the service user (neither root nor agent)')
+    if server_dirs and not isinstance((profile.get('provisioning') or {}).get('agent_server'), dict):
+        report.fail(f'guest_storage.directories: {AGENT_SERVER_ROLE} directories need '
+                    'provisioning.agent_server')
+    if len({e.get('path') for e in server_dirs}) != len(server_dirs):
+        report.fail(f'guest_storage.directories: repeated {AGENT_SERVER_ROLE} path')
     for role in PROVISIONED_DIRECTORY_ROLES:
         entries = by_role.get(role, [])
         if len(entries) > 1 or any(e.get('provisioned_only') is not True for e in entries):
@@ -814,6 +837,8 @@ def check_provisioning(report, profile, root=REPO):
     if not LOCAL_TAG.match(tag) or tag.endswith(':latest') or '.' in repo.split('/')[0] or             '/' not in repo:
         report.fail('provisioning.image.local_tag: a local repository:tag with no registry '
                     'host and no "latest"')
+    if 'agent_server' in conf:
+        check_agent_server(report, profile, root, conf)
     entry = provider.get('provision_lock') or {}
     try:
         lock = json.loads((root / entry['path']).read_text(encoding='utf-8'))
@@ -824,6 +849,342 @@ def check_provisioning(report, profile, root=REPO):
     if len(docker) != 1 or str(docker[0].get('version', '')).rsplit('-', 1)[0] !=             moby.get('server_version'):
         report.fail('provisioning.moby.server_version: must be the upstream version of the '
                     'locked docker.io')
+
+
+AGENT_SERVER_SECRET_VARS = ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0']
+# Config fields that are secrets or that would send data out of the guest: never in the
+# non-secret config of an inspection-only server (decision 0006, Owner authorization).
+AGENT_SERVER_FORBIDDEN_CONFIG = ('session_api_keys', 'secret_key', 'previous_secret_keys',
+                                 'web_url', 'app_backend_public_url', 'registered_marketplaces',
+                                 'allow_cors_origins', 'allow_cors_origin_regex',
+                                 'trust_forwarded_headers', 'deferred_init')
+AGENT_SERVER_PATH_FIELDS = ('conversations_path', 'workspace_path', 'bash_events_dir',
+                            'conversation_worktree_root')
+AGENT_SERVER_PATH_ENV = ('OH_PERSISTENCE_DIR', 'HOME', 'TMPDIR')
+AGENT_SERVER_HARDENING = ('NoNewPrivileges=yes', 'CapabilityBoundingSet=', 'ProtectSystem=strict',
+                          'ProtectHome=yes', 'PrivateDevices=yes', 'IPAddressDeny=any',
+                          'IPAddressAllow=localhost', 'UMask=0077')
+MEMORY_SIZE = re.compile(r'^(\d+)([kmg])$')
+
+
+def memory_mib(text):
+    match = MEMORY_SIZE.match(str(text))
+    if not match:
+        return None
+    return int(match.group(1)) * {'k': 1 / 1024, 'm': 1, 'g': 1024}[match.group(2)]
+
+
+def check_agent_server(report, profile, root, conf):
+    """provisioning.agent_server (F-04.1 slice (c), decisions 0001 and 0006): the release
+    binary of the lock, a no-login service user in group docker (never agent), a
+    127.0.0.1-only listener, the decision 0001 s2 configuration with the local immutable
+    image and explicit caps inside the guest ceilings, every data path on the declared
+    scratch directories, secrets only in a root-only file, the session key's custody,
+    no LLM, webhook or telemetry, and the pinned conversation fixture."""
+    server = conf.get('agent_server')
+    if not isinstance(server, dict):
+        report.fail('provisioning.agent_server: must be an object')
+        return
+    label = 'provisioning.agent_server'
+    dirs = {d.get('path') for d in (profile.get('guest_storage') or {}).get('directories') or []
+            if isinstance(d, dict) and d.get('role') == AGENT_SERVER_ROLE}
+    if not dirs:
+        report.fail(f'{label}: needs {AGENT_SERVER_ROLE} directories in guest_storage')
+    binary = server.get('binary') or {}
+    try:
+        lock = json.loads((root / (profile.get('provider') or {})['provision_lock']['path'])
+                          .read_text(encoding='utf-8'))
+        release = lock.get('release_binary') or {}
+    except (OSError, ValueError, KeyError, TypeError):
+        release = {}
+    if binary.get('upload_name') != release.get('name') or not release.get('name'):
+        report.fail(f'{label}.binary.upload_name: must be the provision lock\'s release_binary')
+    if binary.get('owner') != 'root' or binary.get('group') != 'root' or binary.get('mode') != '755' \
+            or not str(binary.get('path', '')).startswith('/opt/'):
+        report.fail(f'{label}.binary: root:root 755 under /opt')
+    if server.get('version') and release.get('name') and \
+            f"-{server['version']}-" not in release['name']:
+        report.fail(f'{label}.version: differs from the release binary of the lock')
+    user = server.get('user') or {}
+    if user.get('name') in (None, '', 'root', 'agent') or user.get('groups') != ['docker'] or \
+            user.get('shell') not in ('/usr/sbin/nologin', '/bin/false') or \
+            user.get('system') is not True or user.get('home') not in dirs:
+        report.fail(f'{label}.user: a system user (not root, not agent) with no login shell, '
+                    'only group docker and its home in an agent-server directory')
+    if ((conf.get('moby') or {}).get('agent_in_docker_group')) is not False:
+        report.fail(f'{label}: agent must stay outside group docker')
+    listener = server.get('listener') or {}
+    port = listener.get('port')
+    if listener.get('address') != LOOPBACK or not isinstance(port, int) or isinstance(port, bool) \
+            or not 1024 <= port <= 65535:
+        report.fail(f'{label}.listener: 127.0.0.1 and an unprivileged port (profiles P7)')
+    service = server.get('service') or {}
+    if service.get('argv') != ['--host', LOOPBACK, '--port', str(port)]:
+        report.fail(f'{label}.service.argv: must bind --host 127.0.0.1 --port <listener.port> '
+                    'explicitly (1.60.1 binds 0.0.0.0 by default once a session key is set)')
+    options = (service.get('hardening') or {}).get('options') or []
+    missing = [o for o in AGENT_SERVER_HARDENING if o not in options]
+    if missing or not (service.get('hardening') or {}).get('justification'):
+        report.fail(f'{label}.service.hardening: needs {missing} and a justification')
+    cfg_entry = server.get('config') or {}
+    cfg = cfg_entry.get('content')
+    if not isinstance(cfg, dict):
+        report.fail(f'{label}.config.content: must be an object')
+        cfg = {}
+    if cfg_entry.get('owner') != 'root' or cfg_entry.get('mode') not in ('644', '640'):
+        report.fail(f'{label}.config: root-owned, readable by the service user')
+    if cfg.get('conversation_runtime') != 'docker' or cfg.get('conversation_runtime_selectable') \
+            is not False:
+        report.fail(f'{label}.config: conversation_runtime docker, conversation_runtime_selectable '
+                    'false (decision 0001 s2)')
+    if cfg.get('conversation_image') != (conf.get('image') or {}).get('local_tag'):
+        report.fail(f'{label}.config.conversation_image: must be provisioning.image.local_tag '
+                    '(decision 0006 item 3)')
+    ceilings = profile.get('ceilings') or {}
+    mem = memory_mib(cfg.get('conversation_container_memory'))
+    cpus = cfg.get('conversation_container_cpus')
+    pids = cfg.get('conversation_container_pids_limit')
+    runs = cfg.get('max_concurrent_runs')
+    if mem is None or not isinstance(cpus, (int, float)) or isinstance(cpus, bool) or cpus <= 0 \
+            or not isinstance(pids, int) or isinstance(pids, bool) or pids <= 0 or \
+            not isinstance(runs, int) or isinstance(runs, bool) or runs <= 0:
+        report.fail(f'{label}.config: explicit conversation_container_memory, _cpus, _pids_limit '
+                    'and max_concurrent_runs (decision 0001 s3)')
+    elif mem * runs >= ceilings.get('memory_mib', 0) or cpus * runs >= ceilings.get('vcpu', 0):
+        report.fail(f'{label}.config: max_concurrent_runs x the per-conversation caps must stay '
+                    'inside the guest ceilings (decision 0001 s3)')
+    for key in AGENT_SERVER_FORBIDDEN_CONFIG:
+        if key in cfg:
+            report.fail(f'{label}.config: {key} is not allowed (secret or outbound)')
+    if cfg.get('webhooks') not in (None, []) or \
+            (cfg.get('telemetry') or {}).get('exporter', 'none') != 'none' or \
+            cfg.get('enable_vscode') is not False or cfg.get('preload_tools') is not False:
+        report.fail(f'{label}.config: no webhook, telemetry exporter none, no VSCode, no tool '
+                    'preload')
+    if any(k in json.dumps(cfg).lower() for k in ('api_key', '"llm', 'posthog_api_key')):
+        report.fail(f'{label}.config: no LLM or credential setting')
+    for key in AGENT_SERVER_PATH_FIELDS:
+        if cfg.get(key) not in dirs:
+            report.fail(f'{label}.config.{key}: must be an agent-server directory on scratch')
+    env = server.get('environment') or {}
+    for key in AGENT_SERVER_PATH_ENV:
+        if env.get(key) not in dirs:
+            report.fail(f'{label}.environment.{key}: must be an agent-server directory on scratch')
+    if env.get('OPENHANDS_AGENT_SERVER_CONFIG_PATH') != cfg_entry.get('path'):
+        report.fail(f'{label}.environment: OPENHANDS_AGENT_SERVER_CONFIG_PATH must be the config path')
+    if any(k.startswith('OH_') and k != 'OH_PERSISTENCE_DIR' for k in env) or \
+            any(k in env for k in AGENT_SERVER_SECRET_VARS):
+        report.fail(f'{label}.environment: no OH_* override and no secret (secrets live in the '
+                    'environment file)')
+    secrets = server.get('secrets') or {}
+    if secrets.get('owner') != 'root' or secrets.get('group') != 'root' or \
+            secrets.get('mode') != '600' or secrets.get('variables') != AGENT_SERVER_SECRET_VARS:
+        report.fail(f'{label}.secrets: a root:root 600 environment file holding '
+                    f'{AGENT_SERVER_SECRET_VARS}')
+    key = server.get('session_key') or {}
+    if key.get('owner') != 'root' or key.get('group') != 'agent' or key.get('mode') != '440' or \
+            not str(key.get('host_path', '')).startswith('{instance_dir}/'):
+        report.fail(f'{label}.session_key: root:agent 440 in the guest, exported only into '
+                    '{instance_dir} (profiles P5)')
+    fixture = server.get('fixture') or {}
+    check_repo_file(report, root, f'{label}.fixture', fixture)
+    openapi = fixture.get('openapi') or {}
+    if openapi.get('sha256') != locked_openapi_sha256(root):
+        report.fail(f'{label}.fixture.openapi.sha256: must be the locked openapi.json '
+                    '(composition/lock/components.lock.json release_assets)')
+    try:
+        body = json.loads((root / fixture['path']).read_text(encoding='utf-8'))
+    except (OSError, ValueError, KeyError, TypeError):
+        return                                   # reported by check_repo_file
+    for problem in fixture_problems(body):
+        report.fail(f'{label}.fixture: {problem}')
+
+
+def locked_openapi_sha256(root):
+    try:
+        lock = json.loads((root / 'composition' / 'lock' / 'components.lock.json')
+                          .read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    found = [a.get('sha256') for a in lock.get('release_assets') or []
+             if a.get('component') == 'openhands-agent-server' and a.get('name') == 'openapi.json']
+    return found[0] if len(found) == 1 else None
+
+
+UUID_TEXT = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+FIXTURE_KEYS = {'conversation_id', 'conversation_runtime', 'workspace', 'agent_settings',
+                'autotitle', 'container', 'tags'}
+CREDENTIAL_KEYS = re.compile(r'(?i)(api_?key|secret|password|token|credential|auth)')
+
+
+def fixture_problems(body):
+    """Structural rules for the disposable conversation create (F-04.1, for F-04.2):
+    Docker runtime, a fixed id, no initial message, no LLM credential or secret, one agent
+    source, the server-provisioned workspace and no override of the container caps."""
+    if not isinstance(body, dict):
+        return ['must be one JSON object']
+    problems = []
+    if set(body) - FIXTURE_KEYS:
+        problems.append(f'unexpected fields {sorted(set(body) - FIXTURE_KEYS)}')
+    if body.get('conversation_runtime') != 'docker':
+        problems.append('conversation_runtime must be "docker" (decision 0001 s2)')
+    if not UUID_TEXT.match(str(body.get('conversation_id', ''))):
+        problems.append('conversation_id must be a fixed lowercase UUID')
+    if 'initial_message' in body:
+        problems.append('no initial message')
+    sources = [k for k in ('agent', 'agent_settings', 'agent_profile_id') if k in body]
+    if sources != ['agent_settings']:
+        problems.append('exactly one agent source: agent_settings')
+    if body.get('workspace') != {'kind': 'LocalWorkspace', 'working_dir': '/workspace'}:
+        problems.append('workspace must be the server-provisioned /workspace (no host path)')
+    container = body.get('container')
+    if container is not None and (not isinstance(container, dict) or
+                                  {'memory', 'cpus'} & set(container)):
+        problems.append('container must not override the memory or CPU caps')
+    settings = body.get('agent_settings') if isinstance(body.get('agent_settings'), dict) else {}
+    if 'llm' in settings:
+        problems.append('agent_settings: no llm block (no LLM credential)')
+
+    def walk(value, path):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if CREDENTIAL_KEYS.search(str(k)):
+                    problems.append(f'{path}.{k}: no credential or secret field')
+                walk(v, f'{path}.{k}')
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                walk(v, f'{path}[{i}]')
+    walk(body, '$')
+    return problems
+
+
+# A standard-library subset of JSON Schema (2020-12, as OpenAPI 3.1 uses it), enough for
+# the request schemas of the locked Agent Server API. An assertion keyword outside the
+# subset is an error (fail closed), never silently ignored.
+SCHEMA_ANNOTATIONS = {'title', 'description', 'default', 'examples', 'example', 'deprecated',
+                      'readOnly', 'writeOnly', 'discriminator', 'x-nullable', '$schema', '$id',
+                      'contentMediaType', 'contentEncoding'}
+SCHEMA_SUPPORTED = {'$ref', 'type', 'enum', 'const', 'anyOf', 'oneOf', 'allOf', 'properties',
+                    'required', 'additionalProperties', 'items', 'pattern', 'format',
+                    'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum',
+                    'exclusiveMaximum', 'minItems', 'maxItems', 'propertyNames'}
+JSON_TYPES = {'object': dict, 'array': list, 'string': str, 'boolean': bool}
+
+
+def _type_ok(value, name):
+    if name == 'null':
+        return value is None
+    if name == 'integer':
+        return isinstance(value, int) and not isinstance(value, bool)
+    if name == 'number':
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    expected = JSON_TYPES.get(name)
+    return expected is not None and isinstance(value, expected) and \
+        (name != 'boolean' or isinstance(value, bool))
+
+
+def schema_errors(value, schema, document, path='$', depth=0):
+    """Errors of value against schema; $ref resolves inside document ('#/...')."""
+    if depth > 64:
+        return [f'{path}: schema nesting deeper than 64']
+    if schema is True or schema == {}:
+        return []
+    if schema is False:
+        return [f'{path}: not allowed']
+    if not isinstance(schema, dict):
+        return [f'{path}: unusable schema']
+    errors = []
+    unknown = set(schema) - SCHEMA_SUPPORTED - SCHEMA_ANNOTATIONS
+    if unknown:
+        return [f'{path}: unsupported schema keywords {sorted(unknown)} (subset validator)']
+    if '$ref' in schema:
+        ref = schema['$ref']
+        if not str(ref).startswith('#/'):
+            return [f'{path}: only local references are supported ({ref})']
+        target = document
+        for part in ref[2:].split('/'):
+            part = part.replace('~1', '/').replace('~0', '~')
+            if not isinstance(target, dict) or part not in target:
+                return [f'{path}: unresolvable reference {ref}']
+            target = target[part]
+        errors += schema_errors(value, target, document, path, depth + 1)
+    if 'type' in schema:
+        names = schema['type'] if isinstance(schema['type'], list) else [schema['type']]
+        if not any(_type_ok(value, n) for n in names):
+            return errors + [f'{path}: expected type {names}']
+    if 'const' in schema and value != schema['const']:
+        errors.append(f'{path}: must be {schema["const"]!r}')
+    if 'enum' in schema and value not in schema['enum']:
+        errors.append(f'{path}: must be one of {schema["enum"]!r}')
+    for key in ('anyOf', 'oneOf'):
+        if key in schema:
+            passing = [b for b in schema[key] if not schema_errors(value, b, document, path, depth + 1)]
+            if not passing or (key == 'oneOf' and len(passing) != 1):
+                errors.append(f'{path}: {len(passing)} of the {key} branches match')
+    for branch in schema.get('allOf') or []:
+        errors += schema_errors(value, branch, document, path, depth + 1)
+    if isinstance(value, str):
+        if 'pattern' in schema and not re.search(schema['pattern'], value):
+            errors.append(f'{path}: does not match {schema["pattern"]!r}')
+        if schema.get('format') == 'uuid' and not UUID_TEXT.match(value.lower()):
+            errors.append(f'{path}: not a UUID')
+        if len(value) < schema.get('minLength', 0) or len(value) > schema.get('maxLength', len(value)):
+            errors.append(f'{path}: length out of bounds')
+    if _type_ok(value, 'number'):
+        for key, ok in (('minimum', lambda b: value >= b), ('maximum', lambda b: value <= b),
+                        ('exclusiveMinimum', lambda b: value > b),
+                        ('exclusiveMaximum', lambda b: value < b)):
+            if key in schema and not ok(schema[key]):
+                errors.append(f'{path}: {key} {schema[key]}')
+    if isinstance(value, dict):
+        for name in schema.get('required') or []:
+            if name not in value:
+                errors.append(f'{path}: missing required {name!r}')
+        props = schema.get('properties') or {}
+        extra = schema.get('additionalProperties', True)
+        for name, item in value.items():
+            if 'propertyNames' in schema:
+                errors += schema_errors(name, schema['propertyNames'], document,
+                                        f'{path}.<name {name}>', depth + 1)
+            if name in props:
+                errors += schema_errors(item, props[name], document, f'{path}.{name}', depth + 1)
+            elif extra is False:
+                errors.append(f'{path}: additional property {name!r} not allowed')
+            elif isinstance(extra, dict):
+                errors += schema_errors(item, extra, document, f'{path}.{name}', depth + 1)
+    if isinstance(value, list):
+        if len(value) < schema.get('minItems', 0) or len(value) > schema.get('maxItems', len(value)):
+            errors.append(f'{path}: item count out of bounds')
+        if 'items' in schema:
+            for i, item in enumerate(value):
+                errors += schema_errors(item, schema['items'], document, f'{path}[{i}]', depth + 1)
+    return errors
+
+
+def validate_fixture_openapi(profile, root, openapi_path):
+    """The pinned fixture against the locked openapi.json (a downloaded file, never
+    committed): its sha256 must equal both pins, then the request schema is applied with
+    the subset validator. Returns (ok, lines)."""
+    server = (profile.get('provisioning') or {}).get('agent_server') or {}
+    fixture = server.get('fixture') or {}
+    pin = (fixture.get('openapi') or {}).get('sha256')
+    data = Path(openapi_path).read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != pin or digest != locked_openapi_sha256(root):
+        return False, [f'{openapi_path}: sha256 {digest} is not the locked openapi.json {pin}']
+    document = json.loads(data.decode('utf-8'))
+    body = json.loads((root / fixture['path']).read_text(encoding='utf-8'))
+    ref = (fixture.get('openapi') or {}).get('schema', '')
+    errors = schema_errors(body, {'$ref': ref}, document)
+    request = (((document.get('paths') or {}).get('/api/conversations') or {}).get('post') or {})
+    used = (((request.get('requestBody') or {}).get('content') or {}).get('application/json')
+            or {}).get('schema', {}).get('$ref')
+    if used != ref:
+        errors.append(f'POST /api/conversations takes {used}, the profile names {ref}')
+    lines = [f'openapi {document.get("info", {}).get("version")} sha256 {digest}',
+             f'fixture {fixture["path"]} against {ref}: ' + ('valid' if not errors else
+                                                            f'{len(errors)} error(s)')]
+    return not errors, lines + errors
 
 
 def check_exchange(report, profile):
@@ -1154,6 +1515,9 @@ def main(argv=None):
     parser.add_argument('profiles', nargs='*', help='profile directories or profile.json files')
     parser.add_argument('--strict', action='store_true',
                         help='also fail on inputs declared with an unknown pin')
+    parser.add_argument('--openapi', metavar='FILE',
+                        help='the downloaded openapi.json of the locked Agent Server release: '
+                             'also validate the conversation fixture against it (F-04.1)')
     parser.add_argument('--root', default=str(REPO), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -1176,6 +1540,15 @@ def main(argv=None):
             print(f'FAIL {report.name}: {message}')
         for message in report.unresolved:
             print(f'UNRESOLVED {report.name}: {message}')
+        if args.openapi and isinstance((profile.get('provisioning') or {}).get('agent_server'), dict):
+            try:
+                ok, lines = validate_fixture_openapi(profile, root, args.openapi)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                ok, lines = False, [f'{args.openapi}: cannot validate ({exc})']
+            for line in lines:
+                print(f'{"OPENAPI" if ok else "FAIL"} {report.name}: {line}')
+            if not ok:
+                report.fail('provisioning.agent_server.fixture: not valid against the locked openapi.json')
         bad = bool(report.errors) or (args.strict and bool(report.unresolved))
         failed = failed or bad
         verdict = 'FAIL' if bad else 'PASS'

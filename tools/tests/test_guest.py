@@ -2720,6 +2720,97 @@ LISTENERS = ['LISTEN 0      128          0.0.0.0:22        0.0.0.0:*',
              'LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*',
              'LISTEN 0      128             [::]:22           [::]:*']
 MOBY_SOCKETS = ['/run/docker.sock', '/run/containerd/containerd.sock']
+AS = PCONF['agent_server']
+AS_LISTENER = 'LISTEN 0      2048       127.0.0.1:8000      0.0.0.0:*'
+BINARY_SHA = 'b2fbcf8cf1495bdbef97f26583917bc188b765c71c181effc3e47c14da08ce72'
+CAPABILITIES = ['conversation_runtime_routes_v1', 'profile_secret_scope_v1',
+                'idempotent_conversation_create_v1', 'tool_catalog_v1']
+
+
+def keys(token='one'):
+    """Synthetic per-instance secrets (43 token characters) and their fingerprints."""
+    secret = (token * 43)[:43]
+    session = (token.upper() * 43)[:43]
+    return secret, session, {'OH_SECRET_KEY': guest.secret_fingerprint(secret),
+                             'OH_SESSION_API_KEYS_0': guest.secret_fingerprint(session)}
+
+
+def _stat(path, owner, group, mode, kind='file'):
+    return {'path': path, 'state': kind, 'owner': owner, 'group': group, 'mode': mode}
+
+
+def agent_server_facts(token='one', **override):
+    _, _, fps = keys(token)
+    zero = {'OH_SECRET_KEY': 0, 'OH_SESSION_API_KEYS_0': 0}
+    key_dir = AS['session_key']['guest_path'].rsplit('/', 1)[0]
+    facts = {
+        'unit': {'LoadState': 'loaded', 'ActiveState': 'active', 'SubState': 'running',
+                 'UnitFileState': 'enabled', 'MainPID': '1500', 'NRestarts': '0',
+                 'User': 'openhands', 'Group': 'openhands', 'NoNewPrivileges': 'yes',
+                 'ProtectSystem': 'strict', 'ProtectHome': 'yes', 'PrivateTmp': 'yes',
+                 'PrivateDevices': 'yes', 'ProtectProc': 'invisible', 'RestrictNamespaces': 'yes',
+                 'RestrictSUIDSGID': 'yes', 'CapabilityBoundingSet': '', 'AmbientCapabilities': '',
+                 'IPAddressDeny': '0.0.0.0/0 ::/0', 'IPAddressAllow': '127.0.0.0/8 ::1/128',
+                 'RestrictAddressFamilies': 'AF_UNIX AF_INET AF_INET6 AF_NETLINK',
+                 'SystemCallArchitectures': 'native', 'UMask': '0077',
+                 'ReadWritePaths': '/srv/scratch/openhands'},
+        'enabled': 'enabled',
+        'processes': [{'pid': pid, 'name': 'agent-server', 'user': 'openhands',
+                       'group': 'openhands', 'groups': ['docker', 'openhands'],
+                       'exe': AS['binary']['path'], 'environment_names': ['HOME', 'PATH'],
+                       'docker_environment': {}} for pid in ('1500', '1501')],
+        'account': {'name': 'openhands', 'uid': 999, 'home': AS['user']['home'],
+                    'shell': AS['user']['shell'], 'groups': ['openhands', 'docker'],
+                    'password': 'L'},
+        'binary': dict(_stat(AS['binary']['path'], 'root', 'root', '755'), sha256=BINARY_SHA),
+        'config': {'file': _stat(AS['config']['path'], 'root', 'root', '644'),
+                   'content': copy.deepcopy(AS['config']['content'])},
+        'secrets': {'env_file': _stat(AS['secrets']['env_file'], 'root', 'root', '600'),
+                    'variables': list(AS['secrets']['variables']), 'values_valid': True,
+                    'fingerprints': fps,
+                    'session_dir': _stat(key_dir, 'root', 'agent', '750', 'directory'),
+                    'session_key': _stat(AS['session_key']['guest_path'], 'root', 'agent', '440'),
+                    'session_key_matches': True,
+                    'occurrences': {'/var/lib/aieh/provision/RESULT.json': dict(zero),
+                                    AS['config']['path']: dict(zero)}},
+        'paths': [{'path': d['path'], 'state': 'directory', 'owner': d['owner'],
+                   'group': d['group'], 'mode': d['mode'], 'mount': ['/srv/scratch', 'ext4']}
+                  for d in guest.agent_server_directories(PROFILE)],
+        'engine': {'docker_context_host': 'unix:///var/run/docker.sock',
+                   'docker_server_version_as_openhands': PCONF['moby']['server_version']},
+        'journal': {'rc': 0, 'lines': 9, 'secret_occurrences': dict(zero),
+                    'head': ['2026-11-07T00:00:00+00:00 guest agent-server[1500]: Starting '
+                             'OpenHands Agent Server on 127.0.0.1:8000'], 'noted': []},
+    }
+    facts.update(override)
+    return facts
+
+
+def agent_server_api(token='one', **override):
+    _, _, fps = keys(token)
+    info = {'title': 'OpenHands Agent Server', 'version': AS['version'], 'uptime': 3,
+            'idle_time': 3, 'conversation_runtime': 'docker',
+            'available_conversation_runtimes': [], 'capabilities': list(CAPABILITIES)}
+    api = {'session_key_fingerprint': fps['OH_SESSION_API_KEYS_0'],
+           'alive': {'status': 200, 'body': {'status': 'ok'}},
+           'server_info': {'status': 200, 'body': info},
+           'count_with_key': {'status': 200, 'body': 0},
+           'count_without_key': {'status': 401, 'body': {'detail': 'Unauthorized'}},
+           'count_wrong_key': {'status': 401, 'body': {'detail': 'Unauthorized'}},
+           'agent_open': {AS['secrets']['env_file']: 'EACCES',
+                          AS['session_key']['guest_path']: 'READABLE'},
+           'server_environ_agent': ['EACCES'], 'server_processes': 2}
+    api.update(override)
+    return api
+
+
+def agent_server_files():
+    key = AS['session_key']
+    return '\n'.join([f"{AS['binary']['path']}|root|root|755|regular file",
+                      f"{AS['config']['path']}|root|root|644|regular file",
+                      f"{AS['secrets']['env_file']}|root|root|600|regular file",
+                      f"{key['guest_path'].rsplit('/', 1)[0]}|root|agent|750|directory",
+                      f"{key['guest_path']}|root|agent|440|regular file"])
 
 
 def moby_facts(boot_id='boot-1', **override):
@@ -2736,7 +2827,8 @@ def moby_facts(boot_id='boot-1', **override):
                     'Tag': LOCAL_TAG.split(':')[1]}],
         'containers': [],
         'daemon_json': copy.deepcopy(PCONF['moby']['daemon_json']),
-        'tcp_listeners': [line + ' users:(("sshd",pid=600,fd=3))' for line in LISTENERS],
+        'tcp_listeners': [line + ' users:(("sshd",pid=600,fd=3))' for line in LISTENERS] +
+                         [AS_LISTENER + ' users:(("agent-server",pid=1501,fd=7))'],
         'sockets': [
             {'path': '/run/containerd/containerd.sock', 'state': 'socket', 'owner': 'root',
              'group': 'root', 'mode': '660'},
@@ -2748,6 +2840,8 @@ def moby_facts(boot_id='boot-1', **override):
         'host_config': {'sysctl': PCONF['moby']['sysctl']['content'],
                         'containerd_config': PCONF['moby']['containerd_config']['content']},
         'ipv6': {'docker0_disable_ipv6': '1', 'addresses': []},
+        'agent_server': agent_server_facts(),
+        'secret_occurrences_in_report': {'OH_SECRET_KEY': 0, 'OH_SESSION_API_KEYS_0': 0},
     }
     facts.update(override)
     return facts
@@ -2757,18 +2851,29 @@ def provisioned_record(base_record):
     record = copy.deepcopy(base_record)
     record['provisioning'] = {'manifest_sha256': MANIFEST_SHA, 'lock_sha256': 'e' * 64,
                               'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG, 'files': 7,
-                              'bytes': 1476711620, 'staged_dir': 'D:/x/provision/e'}
+                              'bytes': 1476711620, 'staged_dir': 'D:/x/provision/e',
+                              'agent_server': {'version': AS['version'],
+                                               'binary_sha256': BINARY_SHA}}
     return record
 
 
-def provisioned_observation(record):
+def provisioned_observation(record, token='one'):
     obs = passing_observation(record)
     g = obs['guest']
 
     def put(key, out, rc=0):
         g[key] = {'rc': rc, 'out': out}
     put('boot_id', 'boot-1')
-    put('moby_facts', json.dumps(moby_facts()))
+    put('moby_facts', json.dumps(moby_facts(agent_server=agent_server_facts(token))))
+    put('agent_server_api', json.dumps(agent_server_api(token)))
+    put('agent_server_files', agent_server_files())
+    put('agent_server_config', json.dumps(AS['config']['content'], indent=2))
+    obs['agent_server_custody'] = {'present': True,
+                                   'host_fingerprint': keys(token)[2]['OH_SESSION_API_KEYS_0']}
+    obs['agent_server_secrets'] = {
+        'host': {'files_scanned': 14, 'hits': {},
+                 'searched': {'OH_SESSION_API_KEYS_0': True, 'OH_SECRET_KEY': True}},
+        'p5_collection': {'members': 1321, 'hits': {}}}
     put('provision_result', json.dumps({
         'schema': guest.PROVISION_RESULT_SCHEMA, 'result': 'provisioned', 'failed_step': None,
         'manifest': {'sha256': MANIFEST_SHA}, 'upload_present': False, 'staging_present': False}))
@@ -2779,8 +2884,8 @@ def provisioned_observation(record):
                            'socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2F'
                            'docker.sock/v1.45/info": dial unix /var/run/docker.sock: connect: '
                            'permission denied', rc=1)
-    put('tcp_listeners', '\n'.join(LISTENERS))
-    put('agent_docker_group', 'agent\ndocker:x:104:')
+    put('tcp_listeners', '\n'.join(LISTENERS + [AS_LISTENER]))
+    put('agent_docker_group', 'agent\ndocker:x:104:openhands')
     put('provision_leftovers', 'absent /srv/scratch/agent/provision\n'
                                'absent /var/lib/aieh/provision-staging')
     put('provision_units', 'aieh-provision.path not-found inactive\n'
@@ -2788,6 +2893,9 @@ def provisioned_observation(record):
                            'aieh-docker-facts.service enabled active')
     g['storage_dirs']['out'] += ('\n/srv/scratch/docker|root|root|710|directory|/srv/scratch\n'
                                  '/var/lib/aieh|root|root|755|directory|/')
+    g['storage_dirs']['out'] += ''.join(
+        f"\n{d['path']}|{d['owner']}|{d['group']}|{d['mode']}|directory|/srv/scratch"
+        for d in PROFILE['guest_storage']['directories'] if d['role'] == 'agent-server')
     g['socket_inventory']['out'] = '\n'.join(RECON_SOCKETS + MOBY_SOCKETS + ['end'])
     g['unix_sockets']['out'] += ''.join(f'\nu_str LISTEN 0      4096 {s} {7000 + i} * 0'
                                         for i, s in enumerate(MOBY_SOCKETS))
@@ -2801,7 +2909,7 @@ def provisioned_observation(record):
 def provisioned_identity_record(base_record, token):
     record = identity_record(base_record, token)
     prov = provisioned_record(base_record)
-    obs = provisioned_observation(prov)
+    obs = provisioned_observation(prov, token)
     for key in ('machine_id', 'host_keys', 'cpu_flags'):
         obs['guest'][key] = record['observations']['guest'][key]
     obs['known_hosts_fingerprints'] = record['observations']['known_hosts_fingerprints']
@@ -2834,7 +2942,7 @@ class ProvisionedInspect(LaunchRecord):
         props = self.props()
         self.assertEqual(self.failing(), [])
         self.assertEqual(props[guest.PROVISIONING_PROPERTY]['verdict'], 'PASS')
-        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 9)
+        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 19)
         names = {c['check'] for c in props['profiles P6']['checks']}
         self.assertTrue({'guest Moby sockets', 'agent cannot reach Moby'} <= names)
 
@@ -2850,7 +2958,12 @@ class ProvisionedInspect(LaunchRecord):
         added = set(prov) - set(ordinary)
         self.assertEqual(added, {'boot_id', 'moby_facts', 'provision_result', 'moby_sockets',
                                  'moby_agent_connect', 'docker_as_agent', 'tcp_listeners',
-                                 'agent_docker_group', 'provision_leftovers', 'provision_units'})
+                                 'agent_docker_group', 'provision_leftovers', 'provision_units',
+                                 'agent_server_api', 'agent_server_files', 'agent_server_config'})
+        self.assertIn('/srv/scratch/openhands/worktrees', prov['storage_dirs'])
+        self.assertNotIn('/srv/scratch/openhands', ordinary['storage_dirs'])
+        # the session key is read from its file inside the probe, never put on a command line
+        self.assertNotIn('X-Session-API-Key: ', prov['agent_server_api'])
         self.assertNotIn('/srv/scratch/docker', ordinary['storage_dirs'])
         self.assertIn('/srv/scratch/docker', prov['storage_dirs'])
         for name in added:                      # read-only, as agent: no privilege escalation
@@ -2897,8 +3010,10 @@ class ProvisionedInspect(LaunchRecord):
             'LISTEN 0 4096 0.0.0.0:2375 0.0.0.0:* users:(("dockerd",pid=900,fd=9))']
         obs = self.facts(tcp_listeners=listeners)
         obs['guest']['tcp_listeners']['out'] += '\nLISTEN 0 4096 0.0.0.0:2375 0.0.0.0:*'
-        self.assertEqual(self.failing(obs), [('profiles P7', 'guest TCP listeners (Moby)')])
-        obs = self.mutate('tcp_listeners', '\n'.join(LISTENERS + ['LISTEN 0 5 0.0.0.0:8000 0.0.0.0:*']))
+        self.assertEqual(self.failing(obs), [('profiles P7', 'guest TCP listeners (Agent Server)'),
+                                             ('profiles P7', 'guest TCP listeners (Moby)')])
+        obs = self.mutate('tcp_listeners', '\n'.join(LISTENERS + [AS_LISTENER,
+                                                                  'LISTEN 0 5 0.0.0.0:8001 0.0.0.0:*']))
         self.assertEqual(self.failing(obs), [('profiles P7', 'guest TCP listeners (Moby)')])
 
     def test_image_mismatches(self):
@@ -2906,8 +3021,10 @@ class ProvisionedInspect(LaunchRecord):
                          {'image': {'Id': IMAGE_ID, 'RepoTags': [
                              LOCAL_TAG, 'ghcr.io/openhands/agent-server:i-was-a-digest']}},
                          {'images': moby_facts()['images'] * 2}):
-            self.assertEqual(self.failing(self.facts(**override)),
-                             [(guest.PROVISIONING_PROPERTY, 'image')], override)
+            want = [(guest.PROVISIONING_PROPERTY, 'image')]
+            if 'image' in override:               # the configured image no longer resolves to it
+                want.insert(0, (guest.PROVISIONING_PROPERTY, 'conversation image'))
+            self.assertEqual(self.failing(self.facts(**override)), want, override)
 
     def test_daemon_and_version_mismatches(self):
         info = dict(moby_facts()['info'], SecurityOptions=['name=seccomp,profile=builtin'])
@@ -2979,6 +3096,124 @@ class ProvisionedInspect(LaunchRecord):
         ok, summary = guest.inspect_ok(a)
         self.assertTrue(ok, summary)
 
+    # ---- F-04.1 slice (c): the Agent Server
+
+    def server(self, **override):
+        return self.facts(agent_server=agent_server_facts(**override))
+
+    def api(self, **override):
+        return self.mutate('agent_server_api', json.dumps(agent_server_api(**override)))
+
+    def test_agent_server_secret_custody(self):
+        p5 = ('profiles P5', 'Agent Server secrets (custody)')
+        readable = {AS['secrets']['env_file']: 'READABLE', AS['session_key']['guest_path']: 'READABLE'}
+        self.assertEqual(self.failing(self.api(agent_open=readable)), [p5])
+        self.assertEqual(self.failing(self.api(server_environ_agent=['READABLE'])), [p5])
+        obs = self.mutate('agent_server_files', agent_server_files().replace('|root|root|600|',
+                                                                             '|root|root|644|'))
+        self.assertEqual(self.failing(obs), [p5])
+        obs = copy.deepcopy(self.obs)
+        obs['agent_server_custody']['host_fingerprint'] = keys('two')[2]['OH_SESSION_API_KEYS_0']
+        self.assertEqual(self.failing(obs), [p5])
+        secrets_ = dict(agent_server_facts()['secrets'], values_valid=False)
+        self.assertEqual(self.failing(self.server(secrets=secrets_)), [p5])
+
+    def test_agent_server_secret_values_in_records(self):
+        check = ('profiles P5', 'Agent Server secret values in records')
+        obs = copy.deepcopy(self.obs)
+        obs['agent_server_secrets']['host']['hits'] = {'serial.log': {'OH_SECRET_KEY': 1}}
+        self.assertEqual(self.failing(obs), [check])
+        obs = copy.deepcopy(self.obs)
+        obs['agent_server_secrets']['p5_collection'] = {'members': 9, 'hits': {
+            'OH_SESSION_API_KEYS_0': 1}}
+        self.assertEqual(self.failing(obs), [check])
+        obs = copy.deepcopy(self.obs)
+        obs['agent_server_secrets']['host']['searched']['OH_SECRET_KEY'] = False
+        self.assertEqual(self.failing(obs), [check])
+        occurrences = {'/var/log/cloud-init.log': {'OH_SECRET_KEY': 1, 'OH_SESSION_API_KEYS_0': 0}}
+        secrets_ = dict(agent_server_facts()['secrets'], occurrences=occurrences)
+        self.assertEqual(self.failing(self.server(secrets=secrets_)), [check])
+        journal = dict(agent_server_facts()['journal'],
+                       secret_occurrences={'OH_SECRET_KEY': 0, 'OH_SESSION_API_KEYS_0': 2})
+        self.assertEqual(self.failing(self.server(journal=journal)), [
+            check, (guest.PROVISIONING_PROPERTY, 'Agent Server start-up log')])
+
+    def test_agent_server_listener(self):
+        check = ('profiles P7', 'guest TCP listeners (Agent Server)')
+        wide = 'LISTEN 0      2048         0.0.0.0:8000      0.0.0.0:*'
+        listeners = [line + ' users:(("sshd",pid=600,fd=3))' for line in LISTENERS] + \
+            [wide + ' users:(("agent-server",pid=1501,fd=7))']
+        obs = self.facts(tcp_listeners=listeners)
+        obs['guest']['tcp_listeners']['out'] = '\n'.join(LISTENERS + [wide])
+        self.assertEqual(self.failing(obs), [check])
+        listeners = moby_facts()['tcp_listeners'] + [
+            'LISTEN 0 5 127.0.0.1:8001 0.0.0.0:* users:(("node",pid=1600,fd=3))']
+        obs = self.facts(tcp_listeners=listeners)
+        obs['guest']['tcp_listeners']['out'] += '\nLISTEN 0 5 127.0.0.1:8001 0.0.0.0:*'
+        self.assertEqual(self.failing(obs), [check])
+
+    def test_runtime_selection_is_the_decision_0001_premise(self):
+        check = (guest.PROVISIONING_PROPERTY, 'runtime selection (decision 0001 s2)')
+        for info in ({'conversation_runtime': 'local'},
+                     {'capabilities': ['conversation_runtime_routes_v1']},
+                     {'capabilities': ['idempotent_conversation_create_v1']},
+                     {'available_conversation_runtimes': ['local', 'docker']}):
+            body = dict(agent_server_api()['server_info']['body'], **info)
+            obs = self.api(server_info={'status': 200, 'body': body})
+            self.assertEqual(self.failing(obs), [check], info)
+        body = dict(agent_server_api()['server_info']['body'], version='unknown')
+        self.assertEqual(self.failing(self.api(server_info={'status': 200, 'body': body})),
+                         [(guest.PROVISIONING_PROPERTY, 'Agent Server version (/server_info)')])
+
+    def test_agent_server_service_config_engine_paths_and_key(self):
+        prov = guest.PROVISIONING_PROPERTY
+        unit = dict(agent_server_facts()['unit'], User='root')
+        self.assertEqual(self.failing(self.server(unit=unit)), [(prov, 'Agent Server service')])
+        unit = dict(agent_server_facts()['unit'], NRestarts='2')
+        self.assertEqual(self.failing(self.server(unit=unit)), [(prov, 'Agent Server service')])
+        account = dict(agent_server_facts()['account'], shell='/bin/bash')
+        self.assertEqual(self.failing(self.server(account=account)), [(prov, 'Agent Server service')])
+        binary = dict(agent_server_facts()['binary'], sha256='0' * 64)
+        self.assertEqual(self.failing(self.server(binary=binary)), [(prov, 'Agent Server binary')])
+        config = dict(AS['config']['content'], conversation_container_memory='64g')
+        obs = self.mutate('agent_server_config', json.dumps(config))
+        self.assertEqual(self.failing(obs), [(prov, 'Agent Server config')])
+        procs = agent_server_facts()['processes']
+        procs[0]['docker_environment'] = {'DOCKER_HOST': 'tcp://10.0.2.2:2375'}
+        self.assertEqual(self.failing(self.server(processes=procs)), [(prov, 'engine endpoint')])
+        engine = {'docker_context_host': 'unix:///var/run/docker.sock',
+                  'docker_server_version_as_openhands': {'rc': 1, 'error': 'permission denied'}}
+        self.assertEqual(self.failing(self.server(engine=engine)), [(prov, 'engine endpoint')])
+        journal = dict(agent_server_facts()['journal'],
+                       noted=['... Failed to list stale conversation containers'])
+        self.assertEqual(self.failing(self.server(journal=journal)), [(prov, 'engine endpoint')])
+        paths = agent_server_facts()['paths']
+        paths[1]['mode'] = '755'
+        self.assertEqual(self.failing(self.server(paths=paths)), [(prov, 'Agent Server data paths')])
+        paths = agent_server_facts()['paths']
+        paths[2]['mount'] = ['/', 'ext4']
+        self.assertEqual(self.failing(self.server(paths=paths)), [(prov, 'Agent Server data paths')])
+        obs = self.api(count_without_key={'status': 200, 'body': 0})
+        self.assertEqual(self.failing(obs), [(prov, 'session API key enforced')])
+
+    def test_agent_server_fingerprints_are_per_instance(self):
+        a = provisioned_identity_record(self.record, 'one')
+        b = provisioned_identity_record(self.record, 'one')
+        out = guest.compare_inspect(PROFILE, a, b, 'start')
+        self.assertEqual(out['result'], 'PASS', out['not_ok'])
+        c = provisioned_identity_record(self.record, 'one')
+        obs = c['observations']
+        facts = json.loads(obs['guest']['moby_facts']['out'])
+        facts['agent_server'] = agent_server_facts('two')        # new keys after a restart
+        obs['guest']['moby_facts']['out'] = json.dumps(facts)
+        obs['agent_server_custody']['host_fingerprint'] = keys('two')[2]['OH_SESSION_API_KEYS_0']
+        obs['guest']['agent_server_api']['out'] = json.dumps(agent_server_api('two'))
+        props = guest.evaluate(PROFILE, provisioned_record(self.record) | {
+            'instance': dict(self.record['instance'], instance_id=c['instance_id'])}, obs)
+        c['properties'] = props
+        self.assertIn('profiles P5 / Agent Server key fingerprints',
+                      guest.compare_inspect(PROFILE, a, c, 'start')['not_ok'])
+
     def test_restart_varies_libnetwork_socket_and_loaded_modules_only(self):
         """Observed in F-04.1b: across a restart libnetwork's socket gets a new random id
         and veth is loaded only after a container ran; neither is a difference."""
@@ -3010,6 +3245,53 @@ class ProvisionedInspect(LaunchRecord):
                                         'owner': 'root', 'group': 'root', 'mode': '600'}])
         self.assertIn('profiles P6 / guest Moby sockets',
                       guest.compare_inspect(PROFILE, a, b, 'start')['not_ok'])
+
+
+class AgentServerSecretScan(unittest.TestCase):
+    """F-04.1 slice (c): the host-side search for the two guest-local secrets. OH_SECRET_KEY
+    never leaves the guest, so it is found by fingerprint over every 43-character window."""
+
+    SECRET, SESSION, FPS = keys('xy')
+
+    def test_bytes(self):
+        data = f'a {self.SESSION} b {self.SESSION}\nprefix{self.SECRET}suffix'.encode()
+        hits = guest.scan_secret_bytes(data, self.SESSION.encode(), self.FPS['OH_SECRET_KEY'])
+        self.assertEqual(hits, {'OH_SESSION_API_KEYS_0': 2, 'OH_SECRET_KEY': 1})
+        clean = guest.scan_secret_bytes(b'nothing ' + b'A' * 200, self.SESSION.encode(),
+                                        self.FPS['OH_SECRET_KEY'])
+        self.assertEqual(clean, {'OH_SESSION_API_KEYS_0': 0, 'OH_SECRET_KEY': 0})
+        self.assertEqual(guest.scan_secret_bytes(b'x', None, None),
+                         {'OH_SESSION_API_KEYS_0': None, 'OH_SECRET_KEY': None})
+
+    def test_instance_directory_and_custody_file(self):
+        idir = Path(tempfile.mkdtemp(prefix='aieh-secret-scan-'))
+        self.addCleanup(shutil.rmtree, idir, True)
+        (idir / 'agent-server').mkdir()
+        (idir / 'agent-server' / 'session.key').write_text(self.SESSION, encoding='ascii')
+        (idir / 'records').mkdir()
+        (idir / 'records' / 'inspect-1.json').write_text('{"ok": true}', encoding='utf-8')
+        (idir / 'root.qcow2').write_bytes(self.SECRET.encode())        # the guest's own disk
+        out = guest.agent_server_secret_scan(idir, self.SESSION.encode(), self.FPS['OH_SECRET_KEY'],
+                                             {'observations': b'{}'})
+        self.assertEqual(out['hits'], {})
+        self.assertEqual(out['files_scanned'], 3)
+        (idir / 'serial.log').write_text(f'leak {self.SECRET} and {self.SESSION}', encoding='utf-8')
+        out = guest.agent_server_secret_scan(idir, self.SESSION.encode(), self.FPS['OH_SECRET_KEY'])
+        self.assertEqual(out['hits'], {'serial.log': {'OH_SESSION_API_KEYS_0': 1,
+                                                      'OH_SECRET_KEY': 1}})
+        self.assertNotIn(self.SECRET, json.dumps(out))
+        self.assertNotIn(self.SESSION, json.dumps(out))
+
+    def test_p5_collection(self):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w:gz') as tf:
+            for name, data in (('etc/hostname', b'guest\n'),
+                               ('srv/scratch/agent/note', f'k={self.SECRET}'.encode())):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+        out = guest.tar_secret_scan(buf.getvalue(), self.SESSION.encode(), self.FPS['OH_SECRET_KEY'])
+        self.assertEqual(out, {'members': 2, 'hits': {'OH_SECRET_KEY': 1}})
 
 
 if __name__ == '__main__':

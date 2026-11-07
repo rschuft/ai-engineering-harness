@@ -44,6 +44,7 @@ PROFILE = json.loads((PROFILE_DIR / 'profile.json').read_text(encoding='utf-8'))
 PCONF = PROFILE['provisioning']
 TEMPLATE = (REPO / 'profiles' / 'seed' / 'user-data.tmpl').read_text(encoding='utf-8')
 ARCHIVE_TAG = 'ghcr.io/openhands/agent-server:i-was-a-digest'
+SESSION_KEY = 'S' * 43                     # a synthetic session API key (fake guest only)
 
 
 def write_file_entries(text):
@@ -94,7 +95,9 @@ class SeededRootStep(unittest.TestCase):
             '/etc/ssh/sshd_config.d/10-aieh.conf', '/etc/aieh/provision.json',
             '/usr/local/sbin/aieh-provision',
             '/etc/systemd/system/aieh-provision.service', '/etc/systemd/system/aieh-provision.path',
-            '/etc/systemd/system/aieh-docker-facts.service'})
+            '/etc/systemd/system/aieh-docker-facts.service',
+            '/usr/local/sbin/aieh-agent-server-ready',
+            '/etc/systemd/system/aieh-agent-server.service'})
         self.assertIn('  - path: /etc/aieh/provision.json\n    owner: root:root\n'
                       "    permissions: '0600'\n    encoding: b64\n"
                       '    content: "{{provision_manifest}}"\n', TEMPLATE)
@@ -174,6 +177,67 @@ class SeededRootStep(unittest.TestCase):
         self.assertEqual(PCONF['moby']['daemon_json']['data-root'], PCONF['moby']['data_root'])
 
 
+class AgentServerSeed(unittest.TestCase):
+    """F-04.1 slice (c): the seeded Agent Server unit, its readiness wait and the root
+    step's constants against provisioning.agent_server."""
+    SERVER = PCONF['agent_server']
+
+    def test_script_constants_equal_the_profile(self):
+        c, s = script_constants(), self.SERVER
+        self.assertEqual(c['AS_USER'], s['user']['name'])
+        self.assertEqual(c['AS_SHELL'], s['user']['shell'])
+        self.assertEqual(c['AS_BINARY'], s['binary']['path'])
+        self.assertEqual(c['AS_CONFIG'], s['config']['path'])
+        self.assertEqual(c['AS_SECRETS'], s['secrets']['env_file'])
+        self.assertEqual(c['AS_SESSION_DIR'] + '/session.key', s['session_key']['guest_path'])
+        self.assertEqual(c['AS_UNIT'], s['service']['unit'])
+        self.assertEqual(c['AS_PROCESS'], s['listener']['process'])
+        self.assertEqual(c['AS_SECRET_VARS'], tuple(s['secrets']['variables']))
+
+    def test_unit(self):
+        s = self.SERVER
+        text = FILES[f"/etc/systemd/system/{s['service']['unit']}"]
+        lines = unit(s['service']['unit'])
+        self.assertIn(f"User={s['user']['name']}", lines)
+        self.assertIn(f"ExecStart={s['binary']['path']} {' '.join(s['service']['argv'])}", lines)
+        listener = s['listener']
+        self.assertIn(f"ExecStartPost=/usr/bin/python3 -I {s['service']['ready']} "
+                      f"{listener['address']} {listener['port']} 280", lines)
+        self.assertIn(f"EnvironmentFile={s['secrets']['env_file']}", lines)
+        env = {l.split('=', 1)[1].split('=', 1)[0]: l.split('=', 2)[2] for l in lines
+               if l.startswith('Environment=')}
+        self.assertEqual(env, s['environment'])
+        for option in s['service']['hardening']['options']:
+            self.assertIn(option, lines)
+        self.assertIn('ConditionFileNotEmpty=/etc/aieh/provision.json', lines)
+        self.assertIn('WantedBy=multi-user.target', lines)
+        for word in ('OH_SECRET_KEY', 'OH_SESSION_API_KEYS', '0.0.0.0', 'SupplementaryGroups',
+                     'AmbientCapabilities=CAP'):
+            self.assertNotIn(word, text)
+        facts = unit('aieh-docker-facts.service')
+        self.assertIn(f"After=docker.service {s['service']['unit']}", facts)
+
+    def test_ready_wait_sends_no_credential(self):
+        script = FILES[self.SERVER['service']['ready']]
+        ast.parse(script)
+        self.assertIn("conn.request('GET', '/ready')", script)
+        self.assertNotIn('Session-API-Key', script)
+        self.assertNotIn('environ', script)
+
+    def test_root_step_prints_no_secret(self):
+        tree = ast.parse(SCRIPT)
+        prints = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and
+                  getattr(n.func, 'id', None) == 'print']
+        self.assertEqual(len(prints), 1)                   # only say()
+        secrets_fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                          and n.name == 'agent_server_secrets')
+        returned = [ast.unparse(n.value) for n in ast.walk(secrets_fn) if isinstance(n, ast.Return)]
+        self.assertEqual(len(returned), 1)
+        self.assertNotIn('values', returned[0])           # fingerprints only
+        self.assertIn('token_urlsafe(32)', SCRIPT)
+        self.assertIn("write_secret_file(AS_SECRETS", SCRIPT)
+
+
 class ManifestFixture(unittest.TestCase):
     """A temporary repository with a synthetic lock, staged by provision-fetch with fakes,
     whose image archive carries crane's placeholder tag as the real one does."""
@@ -251,6 +315,14 @@ class Manifest(ManifestFixture):
         self.assertEqual(m['docker']['sysctl'], PCONF['moby']['sysctl']['content'])
         self.assertEqual(m['docker']['containerd_config'],
                          PCONF['moby']['containerd_config']['content'])
+        server = m['agent_server']                   # F-04.1 slice (c): no secret, only config
+        binary = next(f for f in m['files'] if f['role'] == 'release-binary')
+        self.assertEqual(server['binary'], {'name': binary['name'], 'sha256': binary['sha256']})
+        self.assertEqual(server['config'], PCONF['agent_server']['config']['content'])
+        self.assertEqual([d['path'] for d in server['directories']][0], '/srv/scratch/openhands')
+        self.assertEqual(server['listener'], {'address': '127.0.0.1', 'port': 8000})
+        self.assertNotIn('OH_SECRET_KEY', json.dumps(server))
+        self.assertEqual(built['record']['agent_server']['binary_sha256'], binary['sha256'])
         self.assertEqual(built['sha256'], hashlib.sha256(built['bytes']).hexdigest())
         self.assertEqual(built['record']['manifest_sha256'], built['sha256'])
         self.assertNotIn(str(self.state).replace('\\', '/'), built['bytes'].decode())
@@ -277,8 +349,10 @@ class FakeGuest:
     """The guest as the provision operation sees it: SSH commands and SFTP batches act on
     a temporary directory; the READY marker runs a stand-in for the seeded root step."""
 
-    def __init__(self, root, conf, outcome='provisioned', corrupt=None, armed='active'):
+    def __init__(self, root, conf, outcome='provisioned', corrupt=None, armed='active',
+                 published=None):
         self.root, self.conf, self.outcome, self.corrupt, self.armed = root, conf, outcome, corrupt, armed
+        self.published = published
         self.calls = []
 
     def path(self, guest_path):
@@ -357,6 +431,19 @@ class FakeGuest:
                             {'step': 'run', 'ok': True, 'seconds': 0.5, 'detail': {'rc': 0}}]
                   if ok else [], 'trigger': {'path_unit_file': 'absent'},
                   'upload_present': not ok, 'staging_present': not ok, 'seconds': 3.0}
+        if ok:                                   # the Agent Server steps (F-04.1 slice (c))
+            server = self.conf['agent_server']
+            key = self.path(server['session_key']['guest_path'])
+            key.parent.mkdir(parents=True, exist_ok=True)
+            key.write_text(SESSION_KEY, encoding='ascii')
+            published = SESSION_KEY if self.published is None else self.published
+            result['steps'] += [
+                {'step': 'agent-server-secrets', 'ok': True, 'seconds': 0.0, 'detail': {
+                    'fingerprints': {'OH_SECRET_KEY': guest.secret_fingerprint('K' * 43),
+                                     'OH_SESSION_API_KEYS_0': guest.secret_fingerprint(published)}}},
+                {'step': 'agent-server-start', 'ok': True, 'seconds': 9.0, 'detail': {
+                    'agent_server_listeners': [f"{server['listener']['address']}:"
+                                               f"{server['listener']['port']}"]}}]
         target = self.path(self.conf['root_step']['result'])
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(result), encoding='utf-8')
@@ -408,6 +495,22 @@ class ProvisionOperation(ManifestFixture):
         self.assertEqual(len(records), 1)
         for key in ('upload_s', 'guest_check_s', 'root_step_s', 'wait_s', 'total_s'):
             self.assertIn(key, result['timings'])
+        # profiles P5 (amended): the session key is exported into the instance directory
+        # only, by SFTP as agent; no record carries it
+        custody = self.idir / 'agent-server' / 'session.key'
+        self.assertEqual(custody.read_text(encoding='ascii'), SESSION_KEY)
+        self.assertEqual(result['session_key'], {'host_path': guest.posix(custody),
+                                                 'fetched': True, 'fingerprint_matches': True})
+        gets = [c[1] for c in fake.calls if c[0] == 'sftp' and c[1][0].startswith('get ')]
+        self.assertEqual(gets[-1][0].split()[1].strip('"'),
+                         PCONF['agent_server']['session_key']['guest_path'])
+        for path in self.idir.rglob('*.json'):
+            self.assertNotIn(SESSION_KEY, path.read_text(encoding='utf-8'), path)
+
+    def test_session_key_whose_fingerprint_differs_fails(self):
+        error = self.refused('PROVISION_FAILED', published='Z' * 43)
+        self.assertFalse(error.detail['checks']['session_key_exported'])
+        self.assertTrue(error.detail['session_key']['fetched'])
 
     def test_not_created_with_provision(self):
         record = dict(self.record)
