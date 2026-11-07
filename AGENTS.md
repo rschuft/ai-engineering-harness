@@ -58,9 +58,12 @@ Where to find what is authoritative:
 
 - Treat something as implemented only when evidence in `evidence/` or a command
   you ran shows it. The blueprint and the plan describe the target and the
-  proposed work; most of it is not built yet. The README's
-  [Component status](README.md#component-status) says which selected components
-  are integrated and operational.
+  proposed work; most of it is not built yet. Whether a selected component is
+  integrated and operational is recorded in the evidence, during bootstrap in
+  [`evidence/bootstrap-log.md`](evidence/bootstrap-log.md) and
+  [`evidence/`](evidence/); the README's
+  [Component status](README.md#component-status) separates the target from what
+  is verified.
 - [`docs/development.md`](docs/development.md) marks everything not yet run as
   **not yet verified**. Keep that distinction in anything you write.
 - An agent's own report, documentation alone, or a mock-only test is not proof

@@ -59,11 +59,14 @@ hash-checked and installed into that directory.
 | Component verification | CPython **3.12** with pip ≥ 23.1, Node.js ≥ 24 with npm ≥ 11, git, and HTTPS access to the registries listed in [`composition/lock/README.md`](../composition/lock/README.md). | `composition/resolve.py` (`task resolve`, `task qualify`). |
 | Optional inventory | A resolver work directory from `task resolve` or `task qualify`, plus network access to PyPI (metadata) and GitHub and the image registries (SBOM). The SBOM scan downloads its pinned Syft 1.57.0 and Grant 0.7.0 archives itself and checks their sha256 before running them; only Windows x86_64 archives are pinned. Syft and Grant are **not** host prerequisites. | `task inventory`, `task sbom`. |
 
-Later milestones will need more. These are named by plan leaf and are **not
-claimed** here: a managed Linux guest VM and its provider (F-03.1, F-03.2.x),
-Moby/Docker Engine inside that guest (F-04.1), Gitea (D-01.1, Q-02.x), scanner
-tooling such as Grype (G-02.1), and Dulwich for Python Git operations in
-adapters (first needed by an adapter that performs Git operations).
+Later milestones need more tools and environments than these tiers cover, such
+as managed execution guests and the services that run in them, Gitea, scanner
+tooling such as Grype, and Dulwich for Python Git operations in adapters. The
+Windows reference guest profile has its own provider prerequisites in
+[`profiles/strong-windows-qemu-whpx/PREREQUISITES.md`](../profiles/strong-windows-qemu-whpx/PREREQUISITES.md).
+This guide does not record whether any of them is verified. That is recorded in
+the evidence: the [bootstrap log](../evidence/bootstrap-log.md),
+[`evidence/`](../evidence/) and each profile's `QUALIFICATION.md`.
 
 Check a tier with `task prereqs`, `task prereqs:components` or
 `task prereqs:inventory`, or run `python -I -B tools/check_prereqs.py --tier <basic|components|inventory>`.
@@ -425,7 +428,7 @@ Directories exist only when they hold real content.
 | `composition/` | Component lock, compatibility matrix, resolver, licence/inventory ledger and generated inventory | F-01.1, F-01.2 |
 | `decisions/` | Accepted decision records | Overseer |
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
-| `profiles/` | Execution-profile contract, platform-provider matrix and property list; later the profile declarations (F-03.2.1, F-03.3.x) and per-OS packaging (R-03.x) | F-03.1 |
+| `profiles/` | Execution-profile contract, platform-provider matrix and property list, the profile declarations, and per-OS packaging when added | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
 | `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
