@@ -1,0 +1,21 @@
+{
+  "format": "lineage-sample-attempts/v1",
+  "sample": true,
+  "note": "SAMPLE data, not an observation of a running Agent Server. Each record stands in for the OpenHands Agent Server's conversation info (GET /api/conversations/{id}) and carries only fields that F-04.2 recorded (evidence/F-04.2-conversation-lifecycle.md, section 4.2): id, title, tags, created_at and workspace. The ids are the integration store's reserved conversation ids (uuid5 of the operation keys work-TASK-1/implement/revision-1 and work-TASK-2/implement/revision-1); the values are samples.",
+  "records": [
+    {
+      "id": "7ba9bc0d-5cec-5c9b-ade8-c83221abf8e0",
+      "title": null,
+      "tags": {"aieh": "p-03.2-sample"},
+      "created_at": "2026-11-07T00:00:00Z",
+      "workspace": {"kind": "LocalWorkspace", "working_dir": "/workspace"}
+    },
+    {
+      "id": "7c62aa3a-e345-5777-8e7f-3f8fd7d4f0b0",
+      "title": null,
+      "tags": {"aieh": "p-03.2-sample"},
+      "created_at": "2026-11-07T00:00:00Z",
+      "workspace": {"kind": "LocalWorkspace", "working_dir": "/workspace"}
+    }
+  ]
+}

@@ -157,9 +157,11 @@ Only what is listed as verified has been exercised.
 | `planning:create PROJECT=<repo> PLAN=<file> REVISION=<rev> BACKLOG=<cmd> [-- --openspec <cmd>]` | `python -I -B integrations/planning/planning_adapter.py create --project <repo> --plan <file> --revision <rev> --backlog <cmd> [--openspec <cmd>]` | no | Creates a plan's Backlog.md tasks and their dependencies through `backlog task create`; each task carries OpenSpec source pointers at the exact design revision. Refuses a change with a `tasks.md` or a tracked schema, and any status. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `planning:readiness PROJECT=<repo> BACKLOG=<cmd> [-- --task ID --no-pointers]` | `python -I -B integrations/planning/planning_readiness.py --project <repo> --backlog <cmd> [--task ID ...] [--no-pointers]` | no | Reports Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; blocking and missing dependency ids from Backlog.md's `readiness`. Exit 1 on a missing dependency, a failing pointer or unknown readiness; blocked tasks alone exit 0. |
 | `planning:resolve PROJECT=<repo> -- --backlog <cmd> [--task ID]` (or `-- --pointer <p>`) | `python -I -B integrations/planning/planning_adapter.py resolve --project <repo> (--backlog <cmd> [--task ID ...] \| --pointer <p> ...)` | no | Re-resolves source pointers; exit 1 on a missing revision, a missing artifact, a digest mismatch or a task without a pointer. |
-| `lineage:test` | `python -I -B -m unittest discover -s integrations/lineage/tests -v` | no | [Lineage references](#lineage-references) tests: parsing and formatting of every kind, the schema, the span anchor, and every outcome of each implemented resolver against throwaway git repositories, the fake Backlog.md and its recorded fixtures, and effects-store fixtures. The live tests run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name the pinned tools. |
+| `lineage:test` | `python -I -B -m unittest discover -s integrations/lineage/tests -v` | no | [Lineage references](#lineage-references) tests: parsing and formatting of every kind, the schema, the span anchor, every outcome of each implemented resolver against throwaway git repositories, the fake Backlog.md and its recorded fixtures, and effects-store fixtures, and the P-03.2 traversal with its example and negative resolution fixtures. The live tests run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name the pinned tools. |
 | `lineage:schema` | `python -I -B integrations/lineage/lineage_resolve.py schema` | no | Checks `integrations/lineage/lineage_schema.json` against the typed references and lists each kind's authority and status. Exit 0 PASS, 1 FAIL. |
 | `lineage:resolve -- REF ... [--current] [--project <repo>] [--backlog <cmd>] [--repo NAME=<dir>] [--effects-root <dir>]` | `python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [options]` | no | Resolves references read-only and prints one JSON resolution each. Exit 0 when all resolved, 1 on any other outcome or a malformed reference, 2 could not run. |
+| `lineage:trace -- OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | `python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | no | Projects the lineage of one outcome id read-only (statement, objective, design, task, attempt), with the real authorities only, and prints the `lineage-projection/v1` JSON. Exit 0 complete, 1 the projection carries uncertainty, 2 could not run. |
+| `lineage:example [-- --record]` | `python -I -B integrations/lineage/tests/lineage_example.py [--record]` | no | Rebuilds the lineage projection example offline (sample authorities and real registry) and prints each verdict; `--record` rewrites `integrations/lineage/examples/`. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -555,6 +557,21 @@ resolution of effect receipts, which needs the store's custody identity (G-04.2.
 host but Windows 11 x86_64, and every kind marked unavailable or unsettled are **not yet
 verified**.
 
+Plan leaf P-03.2 adds `lineage_trace.py`: a read-only traversal from one outcome id
+through the Owner's statements, the declaring change's design, the Backlog.md tasks that
+reference it (found with Backlog.md's own `task list --json`, since it keeps no reverse
+index) and the attempts that integration-store reservations record for those tasks. It
+returns a `lineage-projection/v1` projection. Every node carries its authority, its
+`authority_mode` (`authoritative`, `sample` or `unavailable`), and its resolution as
+written and at the current revision. Every edge carries the record that asserts it, and an
+explicit uncertainty list covers anything missing, changed, moved, gone, unavailable or
+sample-backed. The verdict is `complete` only when that list is empty. The statement and
+attempt authorities do not exist yet, so a full chain is shown only with the clearly
+labelled sample authorities in `lineage_samples.py`, which the command line never uses.
+The example projections are in `integrations/lineage/examples/`. Live statement and attempt
+authorities, and the shape of a real dispatcher's reservation intent, are **not yet
+verified** (see the [lineage README](../integrations/lineage/README.md#lineage-traversal-p-032)).
+
 ## Security inventory
 
 Plan leaf S-01.1 records the harness's trust domains, principals, protected assets,
@@ -638,7 +655,7 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
-| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1 |
+| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |

@@ -174,7 +174,7 @@ tasks:
   # Lineage references (plan leaf P-03.1): typed source references, their schema and the
   # read-only resolvers (integrations/lineage/README.md).
   lineage:test:
-    desc: "Run the lineage reference and resolver tests (python -I -B -m unittest discover -s integrations/lineage/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
+    desc: "Run the lineage reference, resolver and traversal tests (python -I -B -m unittest discover -s integrations/lineage/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/lineage/tests -v'
 
@@ -187,6 +187,17 @@ tasks:
     desc: "Resolve lineage references read-only; exit 1 on any outcome other than resolved (python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [--current] [--project DIR] [--backlog CMD] [--repo NAME=DIR] [--effects-root DIR])"
     cmds:
       - '{{.PYTHON}} -I -B integrations/lineage/lineage_resolve.py resolve {{.CLI_ARGS}}'
+
+  # Lineage traversal (plan leaf P-03.2): the read-only projection from one outcome id.
+  lineage:trace:
+    desc: "Project the lineage of one outcome read-only with the real authorities; exit 1 when the projection carries uncertainty (python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project DIR [--backlog CMD] [--store DB])"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/lineage/lineage_trace.py trace {{.CLI_ARGS}}'
+
+  lineage:example:
+    desc: "Rebuild the lineage projection example offline and print each projection's verdict; pass -- --record to rewrite integrations/lineage/examples/ (python -I -B integrations/lineage/tests/lineage_example.py)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/lineage/tests/lineage_example.py {{.CLI_ARGS}}'
 
   profile:check:
     desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins

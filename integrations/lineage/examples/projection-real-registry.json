@@ -1,0 +1,599 @@
+{
+  "format": "lineage-projection/v1",
+  "root": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+  "verdict": "incomplete",
+  "sources": {
+    "project_head": "baed27667818a70aa5770c2576973d5e8be5847d",
+    "backlog": "task list --json (working tree)",
+    "store_schema_version": 2
+  },
+  "authority_modes": {
+    "authoritative": 9,
+    "sample": 0,
+    "unavailable": 4
+  },
+  "nodes": [
+    {
+      "reference": "conversation:qual-02/message-1",
+      "kind": "message",
+      "role": "statement",
+      "authority": "Owner conversation store",
+      "authority_mode": "unavailable",
+      "pinned": false,
+      "resolution": {
+        "query": "reference",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by U-02.1, U-02.2",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "current": {
+        "query": "current",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by U-02.1, U-02.2",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "freshness": "unknown",
+      "quotes": [
+        {
+          "item": "Q1",
+          "outcome": "not-checked",
+          "detail": "the statement did not resolve, so the quote cannot be checked"
+        }
+      ]
+    },
+    {
+      "reference": "conversation:qual-02/message-2",
+      "kind": "message",
+      "role": "statement",
+      "authority": "Owner conversation store",
+      "authority_mode": "unavailable",
+      "pinned": false,
+      "resolution": {
+        "query": "reference",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by U-02.1, U-02.2",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "current": {
+        "query": "current",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by U-02.1, U-02.2",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "freshness": "unknown"
+    },
+    {
+      "reference": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "kind": "objective",
+      "role": "objective",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "O1 of openspec/changes/qual-02-search-freshness",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "O1 of openspec/changes/qual-02-search-freshness",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+      },
+      "freshness": "current",
+      "facts": {
+        "change": "openspec/changes/qual-02-search-freshness",
+        "item": "O1",
+        "statement": "A product added to the catalogue appears in search results within 5 minutes of being added, so customers can find new stock.",
+        "acceptance": "conversation:qual-02/message-2",
+        "source": [
+          "Q1",
+          "conversation:qual-02/message-2"
+        ],
+        "acceptance_criteria": [
+          "AC1"
+        ]
+      }
+    },
+    {
+      "reference": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "openspec:changes/qual-02-search-freshness/design.md@baed27667818a70aa5770c2576973d5e8be5847d#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+        "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "openspec:changes/qual-02-search-freshness/proposal.md@baed27667818a70aa5770c2576973d5e8be5847d#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@baed27667818a70aa5770c2576973d5e8be5847d#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+      "kind": "design",
+      "role": "design",
+      "authority": "OpenSpec",
+      "authority_mode": "authoritative",
+      "pinned": true,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "HEAD is baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+        "observed_digest": "42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "backlog:TASK-1",
+      "kind": "work",
+      "role": "work",
+      "authority": "Backlog.md",
+      "authority_mode": "authoritative",
+      "pinned": false,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-1",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-1",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "backlog:TASK-2",
+      "kind": "work",
+      "role": "work",
+      "authority": "Backlog.md",
+      "authority_mode": "authoritative",
+      "pinned": false,
+      "resolution": {
+        "query": "reference",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-2",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "current": {
+        "query": "current",
+        "outcome": "resolved",
+        "code": null,
+        "detail": "Backlog.md task TASK-2",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "freshness": "current"
+    },
+    {
+      "reference": "openhands:conversation/7ba9bc0d-5cec-5c9b-ade8-c83221abf8e0",
+      "kind": "attempt",
+      "role": "attempt",
+      "authority": "OpenHands Agent Server",
+      "authority_mode": "unavailable",
+      "pinned": false,
+      "resolution": {
+        "query": "reference",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by E-01.3.1, E-01.4.1",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "current": {
+        "query": "current",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by E-01.3.1, E-01.4.1",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "freshness": "unknown"
+    },
+    {
+      "reference": "openhands:conversation/7c62aa3a-e345-5777-8e7f-3f8fd7d4f0b0",
+      "kind": "attempt",
+      "role": "attempt",
+      "authority": "OpenHands Agent Server",
+      "authority_mode": "unavailable",
+      "pinned": false,
+      "resolution": {
+        "query": "reference",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by E-01.3.1, E-01.4.1",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "current": {
+        "query": "current",
+        "outcome": "authority-unavailable",
+        "code": "AUTHORITY_NOT_YET_AVAILABLE",
+        "detail": "no local authority or adapter exists yet (not yet verified); supplied by E-01.3.1, E-01.4.1",
+        "observed_revision": null,
+        "observed_digest": null
+      },
+      "freshness": "unknown"
+    }
+  ],
+  "edges": [
+    {
+      "from": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "to": "conversation:qual-02/message-2",
+      "relation": "accepted_by",
+      "provenance": [
+        {
+          "record": "openspec/changes/qual-02-search-freshness/proposal.md (intent record, declaring change)",
+          "authority": "OpenSpec",
+          "revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+          "digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+          "item": "O1",
+          "field": "acceptance",
+          "declaration": "openspec/changes/qual-02-search-freshness/.openspec.yaml x-outcomes (decision 0008)"
+        }
+      ]
+    },
+    {
+      "from": "backlog:TASK-1",
+      "to": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "relation": "cites",
+      "provenance": [
+        {
+          "record": "Backlog.md task TASK-1 references",
+          "authority": "Backlog.md",
+          "revision": null,
+          "via": [
+            "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+          ]
+        }
+      ]
+    },
+    {
+      "from": "backlog:TASK-1",
+      "to": "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+      "relation": "cites",
+      "provenance": [
+        {
+          "record": "Backlog.md task TASK-1 references",
+          "authority": "Backlog.md",
+          "revision": null,
+          "via": [
+            "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+          ]
+        }
+      ]
+    },
+    {
+      "from": "backlog:TASK-2",
+      "to": "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "relation": "cites",
+      "provenance": [
+        {
+          "record": "Backlog.md task TASK-2 references",
+          "authority": "Backlog.md",
+          "revision": null,
+          "via": [
+            "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f"
+          ]
+        }
+      ]
+    },
+    {
+      "from": "backlog:TASK-2",
+      "to": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+      "relation": "cites",
+      "provenance": [
+        {
+          "record": "Backlog.md task TASK-2 references",
+          "authority": "Backlog.md",
+          "revision": null,
+          "via": [
+            "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+          ]
+        }
+      ]
+    },
+    {
+      "from": "backlog:TASK-1",
+      "to": "openhands:conversation/7ba9bc0d-5cec-5c9b-ade8-c83221abf8e0",
+      "relation": "executed_by",
+      "provenance": [
+        {
+          "record": "integration store attempt reservation (F-05.1)",
+          "authority": "integration store (operational receipt, not the attempt's authority)",
+          "operation_key": "work-TASK-1/implement/revision-1",
+          "intent_digest": "22391cc48b47aa0f8d2174ef227b6f5dce0df6ce4770c87ceb5245b5f030a76a",
+          "event_seq": 0,
+          "event_id": 1
+        }
+      ]
+    },
+    {
+      "from": "backlog:TASK-2",
+      "to": "openhands:conversation/7c62aa3a-e345-5777-8e7f-3f8fd7d4f0b0",
+      "relation": "executed_by",
+      "provenance": [
+        {
+          "record": "integration store attempt reservation (F-05.1)",
+          "authority": "integration store (operational receipt, not the attempt's authority)",
+          "operation_key": "work-TASK-2/implement/revision-1",
+          "intent_digest": "51f74eb6dd0badf51829998c700bd5e3e4b6c1aaed734bb964b71e2dd2d047bf",
+          "event_seq": 0,
+          "event_id": 2
+        }
+      ]
+    },
+    {
+      "from": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "to": "backlog:TASK-1",
+      "relation": "fulfilled_by",
+      "provenance": [
+        {
+          "record": "Backlog.md task TASK-1 references",
+          "authority": "Backlog.md",
+          "revision": null,
+          "via": [
+            "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+            "openspec:changes/qual-02-search-freshness/proposal.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba"
+          ]
+        }
+      ]
+    },
+    {
+      "from": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "to": "backlog:TASK-2",
+      "relation": "fulfilled_by",
+      "provenance": [
+        {
+          "record": "Backlog.md task TASK-2 references",
+          "authority": "Backlog.md",
+          "revision": null,
+          "via": [
+            "openspec:changes/qual-02-search-freshness/design.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+            "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@8eacfa81953a9129f3a8ee4c943f3030fd1c4fb7#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a"
+          ]
+        }
+      ]
+    },
+    {
+      "from": "conversation:qual-02/message-1",
+      "to": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "relation": "originates",
+      "provenance": [
+        {
+          "record": "openspec/changes/qual-02-search-freshness/proposal.md (intent record, declaring change)",
+          "authority": "OpenSpec",
+          "revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+          "digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+          "item": "O1",
+          "field": "source",
+          "via": "Q1"
+        }
+      ]
+    },
+    {
+      "from": "conversation:qual-02/message-2",
+      "to": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "relation": "originates",
+      "provenance": [
+        {
+          "record": "openspec/changes/qual-02-search-freshness/proposal.md (intent record, declaring change)",
+          "authority": "OpenSpec",
+          "revision": "baed27667818a70aa5770c2576973d5e8be5847d",
+          "digest": "456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+          "item": "O1",
+          "field": "source"
+        }
+      ]
+    },
+    {
+      "from": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "to": "openspec:changes/qual-02-search-freshness/design.md@baed27667818a70aa5770c2576973d5e8be5847d#sha256=ae48b2a7fee65117db9af8b45bb768a15b0cdc496c57c8f9e3811bba68fb4f6f",
+      "relation": "shaped_by",
+      "provenance": [
+        {
+          "record": "openspec/changes/qual-02-search-freshness (declaring change, its files)",
+          "authority": "OpenSpec",
+          "revision": "baed27667818a70aa5770c2576973d5e8be5847d"
+        }
+      ]
+    },
+    {
+      "from": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "to": "openspec:changes/qual-02-search-freshness/proposal.md@baed27667818a70aa5770c2576973d5e8be5847d#sha256=456a4d1093189dacd221c57da41c777ea3250c703e284007a178f94c42913aba",
+      "relation": "shaped_by",
+      "provenance": [
+        {
+          "record": "openspec/changes/qual-02-search-freshness (declaring change, its files)",
+          "authority": "OpenSpec",
+          "revision": "baed27667818a70aa5770c2576973d5e8be5847d"
+        }
+      ]
+    },
+    {
+      "from": "outcome:5c6f4c1e-8d3a-4a3b-9b2e-1f0e7d6c5b4a@baed27667818a70aa5770c2576973d5e8be5847d",
+      "to": "openspec:changes/qual-02-search-freshness/specs/catalogue-search/new-product-visibility/spec.md@baed27667818a70aa5770c2576973d5e8be5847d#sha256=42fa4eab472195035d77b164ba4f1decd04cf707b5f79efc2ec8613c66f2a18a",
+      "relation": "shaped_by",
+      "provenance": [
+        {
+          "record": "openspec/changes/qual-02-search-freshness (declaring change, its files)",
+          "authority": "OpenSpec",
+          "revision": "baed27667818a70aa5770c2576973d5e8be5847d"
+        }
+      ]
+    }
+  ],
+  "uncertainties": [
+    {
+      "reference": "conversation:qual-02/message-1",
+      "reason": "unresolved",
+      "code": "AUTHORITY_NOT_YET_AVAILABLE",
+      "detail": "no local authority or adapter exists yet (not yet verified); supplied by U-02.1, U-02.2",
+      "outcome": "authority-unavailable"
+    },
+    {
+      "reference": "conversation:qual-02/message-2",
+      "reason": "unresolved",
+      "code": "AUTHORITY_NOT_YET_AVAILABLE",
+      "detail": "no local authority or adapter exists yet (not yet verified); supplied by U-02.1, U-02.2",
+      "outcome": "authority-unavailable"
+    },
+    {
+      "reference": "openhands:conversation/7ba9bc0d-5cec-5c9b-ade8-c83221abf8e0",
+      "reason": "unresolved",
+      "code": "AUTHORITY_NOT_YET_AVAILABLE",
+      "detail": "no local authority or adapter exists yet (not yet verified); supplied by E-01.3.1, E-01.4.1",
+      "outcome": "authority-unavailable"
+    },
+    {
+      "reference": "openhands:conversation/7c62aa3a-e345-5777-8e7f-3f8fd7d4f0b0",
+      "reason": "unresolved",
+      "code": "AUTHORITY_NOT_YET_AVAILABLE",
+      "detail": "no local authority or adapter exists yet (not yet verified); supplied by E-01.3.1, E-01.4.1",
+      "outcome": "authority-unavailable"
+    }
+  ]
+}

@@ -7,7 +7,8 @@ integrations/planning/README.md describes. The project is the P-02.1 two-task fi
 built in a throwaway directory; the tools' per-user state is kept inside it. Backlog.md
 is run only with task list and task view. LiveObjective adds the decision 0008
 declaration to the throwaway copy only, then runs openspec validate --strict and
-openspec archive --yes there.
+openspec archive --yes there. LiveTrace (P-03.2) runs the lineage traversal over the tasks
+the pinned Backlog.md created and lists itself, then again after a real openspec archive.
 """
 import importlib.util
 import json
@@ -160,6 +161,75 @@ class LiveObjective(unittest.TestCase):
         pinned = resolver.resolve(L.parse(f'outcome:{OUTCOME}@{self.declared}'))
         self.assertEqual((pinned.outcome, pinned.facts['change']), (L.RESOLVED, f'openspec/changes/{fx.CHANGE}'))
         self.assertEqual(current.observed_digest, pinned.observed_digest)
+
+
+@unittest.skipUnless(BACKLOG and OPENSPEC, 'set AIEH_BACKLOG and AIEH_OPENSPEC to run the live tests')
+class LiveTrace(unittest.TestCase):
+    """The P-03.2 traversal over tasks the pinned Backlog.md created and lists itself, then
+    after a real openspec archive (moved, not gone)."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(HERE))
+        import lineage_example as example
+        cls.E = example
+        cls.T = example.T
+        cls.backlog = fx.adapter.tool_argv(BACKLOG)
+        cls.openspec = fx.adapter.tool_argv(OPENSPEC)
+        cls.work = Path(tempfile.mkdtemp(prefix='lt-'))  # short: the archived paths are deep
+        (cls.work / 'home').mkdir()
+        cls.env = fx.isolated_env(cls.work / 'home')
+        with mock.patch.dict(os.environ, cls.env):
+            if fx.tool_version(cls.backlog, cls.work) != fx.BACKLOG_VERSION:
+                raise unittest.SkipTest('not the pinned Backlog.md')
+            cls.repo, cls.design_commit, _capture = fx.live_capture(cls.backlog, cls.openspec, cls.work)
+            fx.commit_all(cls.repo, 'Backlog.md tasks')
+            example.declare(cls.repo)
+            cls.declared = fx.commit_all(cls.repo, 'declare the outcome of O1')
+        cls.store = cls.work / 'st' / 'integration.sqlite'
+        example.build_store(cls.store, [(example.operation_key(t), example.task_intent(t)) for t in ('TASK-1', 'TASK-2')])
+
+    @classmethod
+    def tearDownClass(cls):
+        fx.rmtree(cls.work)
+
+    def trace(self, outcome):
+        with mock.patch.dict(os.environ, self.env):
+            auth = self.T.Authorities(R.build_registry(project=self.repo, backlog=self.backlog),
+                                      self.E.S.sample_authorities())
+            before = fx.git(self.repo, 'status', '--porcelain', '--untracked-files=all', '--ignored')
+            projection = self.T.trace(outcome, auth, project=self.repo, backlog=self.backlog, store=self.store)
+            self.assertEqual(fx.git(self.repo, 'status', '--porcelain', '--untracked-files=all', '--ignored'), before)
+        return projection
+
+    def test_the_chain_through_live_backlog_then_after_archive(self):
+        projection = self.trace(f'outcome:{OUTCOME}@{self.declared}')
+        self.assertEqual({u['reason'] for u in projection['uncertainties']}, {'sample-authority'},
+                         json.dumps(projection['uncertainties'], indent=1))
+        tasks = {e['to'] for e in projection['edges'] if e['relation'] == self.T.FULFILLED_BY}
+        self.assertEqual(tasks, {'backlog:TASK-1', 'backlog:TASK-2'})
+        cited = {e['to'] for e in projection['edges'] if e['relation'] == self.T.CITES}
+        self.assertTrue(cited)
+        self.assertTrue(all(f'@{self.design_commit}#' in text for text in cited))
+        self.assertEqual(len([e for e in projection['edges'] if e['relation'] == self.T.EXECUTED_BY]), 2)
+
+        with mock.patch.dict(os.environ, self.env):
+            archived = subprocess.run([*self.openspec, 'archive', fx.CHANGE, '--yes'], cwd=self.repo,
+                                      capture_output=True, text=True, encoding='utf-8', stdin=subprocess.DEVNULL,
+                                      timeout=fx.WAIT_CEILING_S)
+            self.assertEqual(archived.returncode, 0, archived.stdout + archived.stderr)
+            fx.commit_all(self.repo, 'openspec archive')
+        projection = self.trace(f'outcome:{OUTCOME}')
+        nodes = {n['reference']: n for n in projection['nodes']}
+        for text in cited:
+            with self.subTest(pointer=text):
+                self.assertEqual((nodes[text]['resolution']['outcome'], nodes[text]['freshness']),
+                                 (L.RESOLVED, self.T.MOVED))
+                self.assertRegex(nodes[text]['moved_to']['path'],
+                                 rf'^openspec/changes/archive/\d{{4}}-\d{{2}}-\d{{2}}-{fx.CHANGE}/')
+        reasons = {u['reason'] for u in projection['uncertainties']}
+        self.assertNotIn('gone', reasons)
+        self.assertIn('moved', reasons)
 
 
 if __name__ == '__main__':
