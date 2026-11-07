@@ -241,10 +241,11 @@
       "independently_isolated": true,
       "identity": {
         "planned": "A small read-only verifier: a webhook only wakes it; it reads the protected ref, the PR, merged_by, the exact blob and the policy, and never executes.",
-        "observed": null
+        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-verifier, a non-administrator Gitea Bot account without a password, with a token of scope read:repository only in the Owner account's Credential Manager. No verifier is built and none has used it."
       },
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"]
     },
     {
       "id": "inference-broker",
@@ -307,11 +308,12 @@
       "independently_isolated": true,
       "identity": {
         "planned": "The Gitea instance's site administrator. Can change protection rules and impersonate users, so it is in the trusted computing base and is never exposed to agents or CI.",
-        "observed": null
+        "observed": "aieh-site-admin, created by F-06.1 with Gitea's CLI as the instance's administrator account. It must still change its temporary password at the Owner's first sign-in, and until then Gitea 28.3.0 refuses every API call it makes (S-01.2.2). During bootstrap Gitea administration is performed by the Owner's host account (observed performer owner-os-account) through Gitea's CLI, which creates accounts and mints tokens for any account without a password."
       },
-      "status": "planned",
+      "status": "observed",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
-      "findings": ["fd-gitea-version-docs"]
+      "evidence": ["evidence/F-06.1-gitea-loopback.md", "evidence/S-01.2.2-segregated-credentials.md"],
+      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "engineering-agent",
@@ -323,14 +325,14 @@
       "independently_isolated": true,
       "identity": {
         "planned": "A per-conversation container started by the guest's Agent Server Docker runtime: approved read-only definitions, a working copy only, a minimal tool set; a dedicated Gitea 28 token-only bot account with non-admin repository write and PR scope. No Owner, merge, admin, executor, Docker or guest-management credential.",
-        "observed": "Only the container identity is observed, for the no-LLM fixture conversation: uid:gid of the Agent Server's service user (999:989), cap-drop ALL, no-new-privileges, exactly three binds under the server's scratch, port 8000 published on the guest's loopback only, and its own per-conversation OH_SECRET_KEY and session key in its environment. No agent workload, LLM or repository content has run."
+        "observed": "Only the container identity is observed, for the no-LLM fixture conversation: uid:gid of the Agent Server's service user (999:989), cap-drop ALL, no-new-privileges, exactly three binds under the server's scratch, port 8000 published on the guest's loopback only, and its own per-conversation OH_SECRET_KEY and session key in its environment. No agent workload, LLM or repository content has run. Its Gitea identities exist (S-01.2.2): aieh-bot-planner and aieh-bot-builder, non-administrator Gitea Bot accounts without passwords, each with a token of scope write:repository only in the Owner account's Credential Manager pending the dispatcher; no agent has held either."
       },
       "status": "planned",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
       ],
-      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.2.2-segregated-credentials.md"],
       "findings": ["fd-container-shares-service-uid", "fd-acp-provider-auth"]
     },
     {
@@ -343,14 +345,15 @@
       "independently_isolated": true,
       "identity": {
         "planned": "A separate session, runner or model and context from the builder; its own Gitea bot identity that can submit reviews but cannot merge, administer or reach the executor.",
-        "observed": null
+        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-reviewer, a non-administrator Gitea Bot account without a password, with a token of scope write:repository in the Owner account's Credential Manager (Gitea 28.3.0 has no review-only scope; the account holds no repository permission yet). No reviewer session has run."
       },
       "status": "planned",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
-      ]
+      ],
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"]
     },
     {
       "id": "ci-job",
@@ -635,16 +638,17 @@
       "holder": "engineering-agent",
       "manager": "management-dispatcher",
       "readable_by": [],
-      "storage": "Agent-visible environment only, provisioned per attempt by the credential broker.",
-      "scope": "Non-admin repository write and PR on the proposal branch; no merge, admin, protection, credential or executor privilege.",
-      "lifetime": "One attempt where the pinned Gitea supports attempt-bounded tokens, otherwise rotated at attempt end (S-01.2.1; to verify at S-01.2.2).",
+      "storage": "Bootstrap (S-01.2.2): one generic Windows Credential Manager entry of the Owner's account, \"AIEH Gitea bot builder\", written with CredWriteW from the Gitea CLI's captured output; records carry fingerprints only. Planned: delivered per attempt into the attempt environment only.",
+      "scope": "Non-admin repository write and PR on the proposal branch; no merge, admin, protection, credential or executor privilege. Token scope write:repository only (Gitea 28.3.0 scopes are categorical; the repository and branch limits come from collaborator permission and branch protection)",
+      "lifetime": "Gitea 28.3.0 has no token lifetime, so it is rotated at attempt end (planned). It is revoked by DELETE /api/v1/token, after which Gitea refuses it (observed, S-01.2.2).",
       "rotation_revocation_owner": "management-dispatcher",
-      "status": "planned",
+      "status": "observed",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
       ],
-      "findings": ["fd-gitea-version-docs"]
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
+      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "cred-gitea-bot-planner",
@@ -654,17 +658,18 @@
       "holder": "engineering-agent",
       "manager": "management-dispatcher",
       "readable_by": [],
-      "storage": "Agent-visible environment only, delivered per attempt by the dispatcher; never in an image, seed, repository, log or record.",
-      "scope": "Read the repositories in scope, push work/* proposal branches and open PRs whose writes are planning artefacts only (path-level realization pending the planning-artefact layout); no merge, protected-ref push, admin, protection, Work-status, executor, session-key or Docker privilege.",
-      "lifetime": "One attempt where the pinned Gitea supports attempt-bounded tokens, otherwise rotated at attempt end (S-01.2.1; to verify at S-01.2.2).",
+      "storage": "Bootstrap (S-01.2.2): one generic Windows Credential Manager entry of the Owner's account, \"AIEH Gitea bot planner\", written with CredWriteW from the Gitea CLI's captured output; records carry fingerprints only. Planned: delivered per attempt into the attempt environment only.",
+      "scope": "Read the repositories in scope, push work/* proposal branches and open PRs whose writes are planning artefacts only (path-level realization pending the planning-artefact layout); no merge, protected-ref push, admin, protection, Work-status, executor, session-key or Docker privilege. Token scope write:repository only (Gitea 28.3.0 scopes are categorical; the repository and branch limits come from collaborator permission and branch protection)",
+      "lifetime": "Gitea 28.3.0 has no token lifetime, so it is rotated at attempt end (planned). It is revoked by DELETE /api/v1/token, after which Gitea refuses it (observed, S-01.2.2).",
       "rotation_revocation_owner": "management-dispatcher",
-      "status": "planned",
+      "status": "observed",
       "sources": [
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#agent-skills",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
       ],
-      "findings": ["fd-gitea-version-docs"]
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
+      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "cred-gitea-bot-reviewer",
@@ -674,16 +679,17 @@
       "holder": "reviewer-agent",
       "manager": "management-dispatcher",
       "readable_by": [],
-      "storage": "The reviewer session's environment only.",
-      "scope": "Read the PR and submit a review; no merge, push to protected refs, admin or executor privilege.",
-      "lifetime": "One attempt where the pinned Gitea supports attempt-bounded tokens, otherwise rotated at attempt end (S-01.2.1; to verify at S-01.2.2).",
+      "storage": "Bootstrap (S-01.2.2): one generic Windows Credential Manager entry of the Owner's account, \"AIEH Gitea bot reviewer\", written with CredWriteW from the Gitea CLI's captured output; records carry fingerprints only. Planned: delivered per attempt into the attempt environment only.",
+      "scope": "Read the PR and submit a review; no merge, push to protected refs, admin or executor privilege. Token scope write:repository only (Gitea 28.3.0 scopes are categorical; the repository and branch limits come from collaborator permission and branch protection)",
+      "lifetime": "Gitea 28.3.0 has no token lifetime, so it is rotated at attempt end (planned). It is revoked by DELETE /api/v1/token, after which Gitea refuses it (observed, S-01.2.2).",
       "rotation_revocation_owner": "management-dispatcher",
-      "status": "planned",
+      "status": "observed",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
       ],
-      "findings": ["fd-gitea-version-docs"]
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
+      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "cred-ci-job-token",
@@ -725,12 +731,14 @@
       "holder": "authorization-verifier",
       "manager": "authorization-verifier",
       "readable_by": [],
-      "storage": "The verifier's own identity; unreachable from code runners.",
-      "scope": "Read the protected authorization ref, PRs, merged_by and blobs.",
-      "lifetime": "Not defined yet.",
+      "storage": "Bootstrap (S-01.2.2): one generic Windows Credential Manager entry of the Owner's account, \"AIEH Gitea bot verifier\", written with CredWriteW from the Gitea CLI's captured output; records carry fingerprints only. Planned: delivered per attempt into the attempt environment only. Unreachable from code runners.",
+      "scope": "Read the protected authorization ref, PRs, merged_by and blobs. Token scope read:repository only.",
+      "lifetime": "Gitea 28.3.0 has no token lifetime, so it is rotated at attempt end (planned). It is revoked by DELETE /api/v1/token, after which Gitea refuses it (observed, S-01.2.2).",
       "rotation_revocation_owner": "gitea-site-admin",
-      "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+      "status": "observed",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
     },
     {
       "id": "cred-executor-identity",
@@ -1480,9 +1488,12 @@
       "owner_only": false,
       "credentials": ["cred-gitea-admin"],
       "assets": ["gitea-server", "repo-gitea-authorization", "repo-gitea-policy"],
-      "status": "planned",
+      "observed_performer": "owner-os-account",
+      "performed_via": "Gitea's CLI under the Owner's account: the two identities (F-06.1), the four bot accounts and their tokens (S-01.2.2). The API path through the site administrator awaits its first sign-in; no branch protection exists yet.",
+      "status": "observed",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
-      "findings": ["fd-gitea-version-docs"]
+      "evidence": ["evidence/F-06.1-gitea-loopback.md", "evidence/S-01.2.2-segregated-credentials.md"],
+      "findings": ["fd-gitea-version-docs", "fd-gitea-fixture-blocked", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "op-open-proposal-pr",
@@ -1620,7 +1631,7 @@
       "id": "fd-bootstrap-shared-identity",
       "kind": "limit",
       "title": "Host-side bootstrap agents share the Owner's Windows account",
-      "detail": "The host-side agent sessions run as the Owner's account and are not independently isolated security principals. Every credential and store in that account's custody (the public-repository push credential, the provider login, the guest SSH keys, the exported session keys, QMP, the guest-state root, the integration store) is reachable by them. Their elevation is gated by the Owner's interactive UAC consent, which is not an OS security boundary. This is the accepted bootstrap limit; the guest boundary is the boundary against untrusted agents, and the genuine OS boundary for privileged effects is the executor's separate identity (G-04.2.1). No credential is designated to an agent principal here; the reachability is disclosed, not prevented. Since F-06.1 this includes the host-loopback Gitea: any process of the Owner's account, host agents included, can read Gitea's app.ini secrets (SECRET_KEY, INTERNAL_TOKEN, JWT_SECRET) and its SQLite database under the managed data root. The INTERNAL_TOKEN reaches Gitea's private API, and write access to the database can change any account, its administrator flag or its password hash, so such a process can forge or take over Gitea sessions and identities, the site administrator's and the Owner account's included. Until task gitea:finish-first-login, the two temporary first-login passwords in Credential Manager are readable the same way. The final passwords exist only as Gitea's password hashes. Directory placement is not a security boundary (decision 0009, point 11).",
+      "detail": "The host-side agent sessions run as the Owner's account and are not independently isolated security principals. Every credential and store in that account's custody (the public-repository push credential, the provider login, the guest SSH keys, the exported session keys, QMP, the guest-state root, the integration store) is reachable by them. Their elevation is gated by the Owner's interactive UAC consent, which is not an OS security boundary. This is the accepted bootstrap limit; the guest boundary is the boundary against untrusted agents, and the genuine OS boundary for privileged effects is the executor's separate identity (G-04.2.1). No credential is designated to an agent principal here; the reachability is disclosed, not prevented. Since F-06.1 this includes the host-loopback Gitea: any process of the Owner's account, host agents included, can read Gitea's app.ini secrets (SECRET_KEY, INTERNAL_TOKEN, JWT_SECRET) and its SQLite database under the managed data root. The INTERNAL_TOKEN reaches Gitea's private API, and write access to the database can change any account, its administrator flag or its password hash, so such a process can forge or take over Gitea sessions and identities, the site administrator's and the Owner account's included. Until task gitea:finish-first-login, the two temporary first-login passwords in Credential Manager are readable the same way. The final passwords exist only as Gitea's password hashes. Directory placement is not a security boundary (decision 0009, point 11). Since S-01.2.2 it also includes the four bot tokens in Credential Manager (\"AIEH Gitea bot <role>\"), which CredReadW returns to any process of the account without a prompt, and Gitea's CLI, which mints a token for any account, the site administrator's and the Owner account's included, without a password. None of this is reachable from the execution guest (profiles P3-P5, F-03.3.1).",
       "refs": [
         "bootstrap-host-agents", "owner-os-account", "cred-owner-github", "cred-owner-provider-login",
         "cred-guest-ssh-key", "cred-agent-server-session-key", "cred-uac-consent", "store-integration",
@@ -1754,15 +1765,25 @@
       "carried_to": ["S-01.2.1", "S-01.4"]
     },
     {
+      "id": "fd-gitea-fixture-blocked",
+      "kind": "unknown",
+      "title": "Repository-level denials of the bot tokens are unverified: the site administrator's first sign-in is pending",
+      "detail": "S-01.2.2 could not create its fixture repository and branch protection: Gitea 28.3.0 refuses every API call of aieh-site-admin (HTTP 403, must change password) until the Owner's first sign-in, and the CLI cannot create organizations, collaborators or protection rules. Protected merge, protected-ref push and deletion, protection and settings changes, PRs and reviews are therefore untested. A site-administrator token minted for the fixture (aieh-s0122-fixture-..., scopes write:organization and write:repository) could most probably not be revoked for the same reason; its value was never stored or shown. The Owner deletes it at the first sign-in, then the fixture and the live suite are run.",
+      "refs": ["gitea-site-admin", "cred-gitea-admin", "cred-gitea-bot-planner", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer", "cred-verifier-read", "op-protected-merge", "op-gitea-administration"],
+      "citations": ["evidence/S-01.2.2-segregated-credentials.md", "evidence/F-06.1-gitea-loopback.md"],
+      "carried_to": ["S-01.2.2"]
+    },
+    {
       "id": "fd-gitea-version-docs",
       "kind": "unknown",
       "title": "Gitea bot and token behaviour is unverified at the pinned version",
-      "detail": "The blueprint's SEC-02 qualification cites Gitea 28 token-only bot accounts and audit logging and names 28.2.0 as its baseline; composition/ pins 28.3.0, whose OpenAPI document was not retrieved. Bot-account and token-scope behaviour at 28.3.0 cannot be confirmed offline.",
-      "refs": ["gitea-server", "gitea-site-admin", "cred-gitea-bot-planner", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer"],
+      "detail": "The blueprint's SEC-02 qualification cites Gitea 28 token-only bot accounts and audit logging and names 28.2.0 as its baseline; composition/ pins 28.3.0, whose OpenAPI document was not retrieved. Bot-account and token-scope behaviour at 28.3.0 cannot be confirmed offline. S-01.2.2 observed on the running 28.3.0 instance: the Bot account type (created without a password), categorical token scopes (read: and write: of activitypub, issue, misc, notification, organization, package, repository, user and admin, plus all), no token lifetime, self-revocation through DELETE /api/v1/token, sudo refused to non-administrators and the reverse-proxy user header ignored. Still unverified: branch protection and merge allowlists, the scope a review needs, the site administrator's path to revoke another account's token, the restricted flag's effect and audit logging.",
+      "refs": ["gitea-server", "gitea-site-admin", "cred-gitea-bot-planner", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer", "cred-verifier-read"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
         "composition/candidates.json",
-        "composition/compatibility-matrix.md"
+        "composition/compatibility-matrix.md",
+        "evidence/S-01.2.2-segregated-credentials.md"
       ],
       "carried_to": ["S-01.2.1", "S-01.2.2"]
     },

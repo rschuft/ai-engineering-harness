@@ -4,7 +4,7 @@
 inventory (``security/inventory.json``, S-01.1) and grants it inventory operations
 (``op-*``), named capabilities (``cap-*``) and credentials (``cred-*``). It also
 records each credential's issuance and revocation, how each role is to be realized
-(never verified here), and, for the host-side bootstrap agents, the leaf at which each
+(verified only with evidence, by S-01.2.2 and later leaves), and, for the host-side bootstrap agents, the leaf at which each
 operation they perform today moves to its planned principal. ``policy/README.md`` is
 its human-readable record. This checker enforces the leaf's acceptance mechanically:
 no agent, reviewer or CI role has Owner or privileged-effect capability in the
@@ -659,13 +659,14 @@ def render(policy, inventory):
                        f"{_ids([delivered] if delivered else [])} | "
                        f"{_cell(_str(i.get('delivery')))} | `{v.get('revoker')}` | {method} | "
                        f"{', '.join(str(x) for x in _list(v.get('triggers')))} | {rotation} |")
-    out += ['', '### Realization (none verified here)', '',
-            '| Role | Mechanism | Verified | Verify at |', '|---|---|---|---|']
+    out += ['', '### Realization', '',
+            '| Role | Mechanism | Verified | Verify at | Evidence |', '|---|---|---|---|---|']
     for r in roles:
         for m in _dicts(r.get('realization')):
             note = f" Note: {_str(m.get('notes'))}" if m.get('notes') else ''
             out.append(f"| `{r.get('id')}` | {_cell(_str(m.get('mechanism')) + note)} | "
-                       f"{'yes' if m.get('verified') is True else 'no'} | {m.get('verify_at')} |")
+                       f"{'yes' if m.get('verified') is True else 'no'} | {m.get('verify_at')} | "
+                       f"{_ids(m.get('evidence'))} |")
     out += ['', '### Target and bootstrap', '',
             '| Role | Target | Bootstrap: observed performer | Bootstrap: note |',
             '|---|---|---|---|']

@@ -100,12 +100,19 @@ class CommittedMatrix(unittest.TestCase):
                 self.assertNotIn('cap-code-merge-integration', r['grants']['capabilities'])
                 self.assertFalse(r.get('custodian_of'))
 
-    def test_every_realization_is_unverified_until_s_01_2_2(self):
-        rows = [m for r in POLICY['roles'] for m in r['realization']]
+    def test_realizations_as_s_01_2_2_left_them(self):
+        # S-01.2.2 verified only what its evidence shows; every other row stays unverified and says why.
+        rows = [(r['id'], m) for r in POLICY['roles'] for m in r['realization']]
         self.assertTrue(rows)
-        for m in rows:
-            self.assertIs(m['verified'], False, m['mechanism'])
-            self.assertEqual(m['verify_at'], 'S-01.2.2')
+        self.assertEqual(sorted(rid for rid, m in rows if m['verified'] is True),
+                         ['authorization-verifier', 'planner'])
+        for rid, m in rows:
+            if m['verified'] is True:
+                self.assertIn('evidence/S-01.2.2-segregated-credentials.md', m['evidence'])
+            else:
+                self.assertIs(m['verified'], False, m['mechanism'])
+                self.assertTrue(m.get('notes'), m['mechanism'])
+            self.assertEqual(m['verify_at'], 'G-04.2.1' if rid == 'privileged-executor' else 'S-01.2.2')
 
     def test_every_role_binds_to_one_inventory_principal(self):
         principals = {p['id'] for p in INVENTORY['principals']}
@@ -257,7 +264,9 @@ class Acceptance(unittest.TestCase):
 
     def test_verified_realization_without_evidence_fails(self):
         pol = fresh()
-        role(pol, 'builder')['realization'][0]['verified'] = True
+        m = role(pol, 'builder')['realization'][0]
+        m['verified'] = True
+        m.pop('evidence', None)
         self.assert_code('REALIZATION_UNSUPPORTED', pol)
 
     def test_verified_realization_with_evidence_passes_that_rule(self):
