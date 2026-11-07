@@ -1008,8 +1008,17 @@
         {
           "mechanism": "The sole holder of the Agent Server session key, on the trusted side; admission to the create and admin routes is limited to its identity and network (S-01.3.1).",
           "verified": false,
-          "verify_at": "S-01.2.2",
-          "notes": "Unknown at S-01.2.2: no dispatcher exists; S-01.3.1 decides the session-key admission."
+          "verify_at": "E-01.2.2",
+          "notes": "Not realized at S-01.3.1: no dispatcher exists, and during bootstrap the Owner's account holds the key through the operator login. The admission half is verified (next row); sole custody of the key is decided with the dispatcher (E-01.2.x)."
+        },
+        {
+          "mechanism": "Admission to the Agent Server's management API by key and by network: every key-gated route refuses a missing or wrong key (HTTP 401, WebSocket close 4001 or handshake 403); the server does not start without a valid key; the listener is on the guest loopback only and no conversation container reaches it, the guest itself or another container (container guard, icc off). The per-route allowlist of the dispatcher (routes.json) is policy for the dispatcher, not a server control.",
+          "verified": true,
+          "verify_at": "S-01.3.1",
+          "evidence": [
+            "evidence/S-01.3.1-management-api-admission.md"
+          ],
+          "notes": "Verified live on a disposable provisioned guest (guest.py admission-probe, before and after a guest restart): all 193 routes of the inventory, and connections from two conversation containers to every guest address."
         },
         {
           "mechanism": "Custodian of the standing bot credentials; delivers each agent role token per attempt into the attempt environment only, with fingerprints only in records.",
@@ -1026,7 +1035,7 @@
           "credential": "cred-agent-server-session-key",
           "issuer": "guest-root",
           "delivered_by": null,
-          "delivery": "Generated in the guest at provisioning; it is to reach only the dispatcher over a trusted channel (S-01.3.1). Records carry fingerprints only."
+          "delivery": "Generated in the guest at provisioning; read by the operator login from its root:agent 0440 file during bootstrap (S-01.3.1); it is to reach only the dispatcher over a trusted channel (E-01.2.x). Records carry fingerprints only."
         }
       ],
       "revocation": [
@@ -1063,7 +1072,6 @@
       ],
       "findings": [
         "fd-session-key-not-fine-grained",
-        "fd-agent-server-route-inventory",
         "fd-child-conversation-tool"
       ]
     },

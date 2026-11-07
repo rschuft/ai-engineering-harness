@@ -437,14 +437,15 @@
       "independently_isolated": true,
       "identity": {
         "planned": "The guest's non-root login for operators and provisioning: exec is never offered to agents, who reach the guest only through the Agent Server path.",
-        "observed": "User agent (uid 1000), no sudo, not in group docker (connect to both daemon sockets: EACCES). SSH login only with the per-instance key over the host-loopback forward. Host tooling uses it for exec, exchange, the provisioning upload, the facts requests and the API probes, and it can read the Agent Server session key (root:agent 0440)."
+        "observed": "User agent (uid 1000), no sudo, not in group docker (connect to both daemon sockets: EACCES). SSH login only with the per-instance key over the host-loopback forward. Host tooling uses it for exec, exchange, the provisioning upload, the facts requests and the API probes, and it can read the Agent Server session key (root:agent 0440). During bootstrap it is the dispatcher's interim vantage (the Owner's account through tools/guest.py); no agent workload has the login or its key (S-01.3.1)."
       },
       "status": "observed",
       "sources": ["profiles/README.md", "profiles/strong-windows-qemu-whpx/profile.json"],
       "evidence": [
         "evidence/F-03.2.2b-guest-lifecycle.md",
         "evidence/F-04.1c-agent-server.md",
-        "evidence/F-04.2-conversation-lifecycle.md"
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/S-01.3.1-management-api-admission.md"
       ],
       "findings": ["fd-guest-login-name-and-key"]
     }
@@ -540,14 +541,14 @@
       "manager": "guest-root",
       "readable_by": ["guest-login-agent", "owner-os-account"],
       "storage": "Generated in the guest by the root step into a root-only environment file read by systemd; an agent-readable copy (root:agent 0440 in a root:agent 0750 directory); exported by SFTP as agent into the per-instance directory on the host. Records carry fingerprints only.",
-      "scope": "Every /api/* route of the outer Agent Server: one key, no per-route scope.",
+      "scope": "Every key-gated route of the outer Agent Server (profiles/strong-windows-qemu-whpx/agent-server/routes.json): one key, no per-route scope; it also mints the workspace and app-backend sessions.",
       "lifetime": "From provisioning until destroy; unchanged by a guest restart; new on recreate.",
       "rotation_revocation_owner": "owner-os-account",
       "status": "observed",
       "sources": ["profiles/README.md", "decisions/0006-guest-provisioning-channel-and-image-conformance.md"],
-      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"],
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.3.1-management-api-admission.md"],
       "findings": ["fd-guest-login-name-and-key", "fd-session-key-not-fine-grained", "fd-bootstrap-shared-identity"],
-      "notes": "Planned holder: management-dispatcher alone (S-01.3.1). Rotation today is recreate and provision only."
+      "notes": "Planned holder: management-dispatcher alone (E-01.2.x). Rotation today is recreate and provision only. The unit's ExecStartPre refuses to start the server without a valid key, because 1.60.1 serves an unsecured API when its key list is empty (S-01.3.1)."
     },
     {
       "id": "cred-oh-secret-key",
@@ -911,10 +912,10 @@
       "name": "Guest sshd",
       "kind": "listener",
       "custodian": "guest-root",
-      "location": "Base-image sshd on 0.0.0.0:22 and [::]:22 in the guest; root login refused.",
+      "location": "Base-image sshd on 0.0.0.0:22 and [::]:22 in the guest; root login refused. Unreachable from the container bridges: the container guard refuses every new connection from docker0 or br-* to the guest (S-01.3.1).",
       "credentials": ["cred-guest-ssh-key", "cred-guest-host-keys"],
       "status": "observed",
-      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-03.2.2b-guest-lifecycle.md"],
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-03.2.2b-guest-lifecycle.md", "evidence/S-01.3.1-management-api-admission.md"],
       "findings": ["fd-container-network-deviations"]
     },
     {
@@ -996,14 +997,23 @@
       "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/F-04.1c-agent-server.md"]
     },
     {
+      "id": "guest-container-guard",
+      "name": "Container guard and key check (management API admission)",
+      "kind": "privileged-unit",
+      "custodian": "guest-root",
+      "location": "aieh-container-guard.service (seeded; docker.service Requires and starts After it): an INPUT chain for IPv4 and IPv6 that logs (rate-limited, kernel log) and refuses every new connection from docker0 or br-* to the guest itself, TCP with a reset; icc false in daemon.json; and the Agent Server unit's ExecStartPre key check, which refuses to start the server without a valid session key. Verified by the root step's admission step, reported by the boot facts and checked by inspect.",
+      "status": "observed",
+      "evidence": ["evidence/S-01.3.1-management-api-admission.md"]
+    },
+    {
       "id": "conversation-container",
       "name": "Conversation container",
       "kind": "container",
       "custodian": "guest-service-openhands",
-      "location": "One per Docker conversation: the locked image ID, three binds under the server's scratch, cap-drop ALL, no-new-privileges, the server's uid:gid, Moby's default bridge with host.docker.internal mapped to the guest's docker0. Its inner server also starts VSCode on port 8001 inside its network namespace.",
+      "location": "One per Docker conversation: the locked image ID, three binds under the server's scratch, cap-drop ALL, no-new-privileges, the server's uid:gid, Moby's default bridge with host.docker.internal mapped to the guest's docker0. Its inner server also starts VSCode on port 8001 inside its network namespace. icc is off on the default bridge (no connection between containers), and the container guard refuses its new connections to any address of the guest (S-01.3.1).",
       "credentials": ["cred-conversation-keys"],
       "status": "observed",
-      "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
+      "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.3.1-management-api-admission.md"],
       "findings": ["fd-container-network-deviations", "fd-container-shares-service-uid"]
     },
     {
@@ -1011,11 +1021,11 @@
       "name": "Outer Agent Server management API",
       "kind": "api",
       "custodian": "guest-service-openhands",
-      "location": "/api/* on the guest's 127.0.0.1:8000; X-Session-API-Key required (401 without it or with a wrong key). Recorded routes: POST /api/conversations; GET /api/conversations/{id}, /search, /count; GET, DELETE /api/conversations/{id}/runtime; POST /api/conversations/{id}/runtime/reprovision; DELETE /api/conversations/{id}; events search; POST /api/conversations/{id}/pause (present, not used).",
+      "location": "/api/* (and /v1/*, /app-backends/*, /sockets/*) on the guest's 127.0.0.1:8000. Every route of 1.60.1 is listed in profiles/strong-windows-qemu-whpx/agent-server/routes.json (193: 10 public reads, 12 management reads, 171 privileged) with its credential and expected refusal. Without the session key or with a wrong one every key-gated HTTP route answers 401, a WebSocket is closed with 4001 or its handshake refused (403), and the Canvas App backend proxy answers 503 (ingress not configured) (S-01.3.1, all 193 probed live). The listener is unreachable from the conversation containers at every guest address. The trusted dispatcher's lifecycle and inspection routes are marked allowed in the inventory; the server cannot scope its key per route.",
       "credentials": ["cred-agent-server-session-key"],
       "status": "observed",
-      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"],
-      "findings": ["fd-session-key-not-fine-grained", "fd-agent-server-route-inventory"]
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.3.1-management-api-admission.md"],
+      "findings": ["fd-session-key-not-fine-grained"]
     },
     {
       "id": "api-agent-server-public",
@@ -1028,13 +1038,13 @@
     },
     {
       "id": "api-agent-server-unenumerated",
-      "name": "Further Agent Server capabilities",
+      "name": "Agent Server capability routes beyond the conversation lifecycle",
       "kind": "api",
       "custodian": "guest-service-openhands",
-      "location": "Capability families advertised by /server_info at 1.60.1 whose routes are not recorded: credential_binding_v1 (with readiness probe and activation guard), profile_secret_scope_v1, canvas_app_backend_secret_grants_v1, canvas_app_backend_enable_lifecycle_v1, agent_launch_pipeline_v1, agent_profile_draft_materialize_v1, profile_persona_v1, profile_public_skills_v1, skill_catalog_v1, tool_catalog_v1; and the usable tool start_child_conversation.",
-      "status": "unknown",
-      "evidence": ["evidence/F-04.1c-agent-server.md"],
-      "findings": ["fd-agent-server-route-inventory", "fd-child-conversation-tool"]
+      "location": "The routes behind the capability families /server_info advertises at 1.60.1, enumerated in profiles/strong-windows-qemu-whpx/agent-server/routes.json: credential bindings, settings and secrets, agent profiles, meta-profiles, profiles, skills, plugins, LLM models, provider connections and subscriptions, MCP, Canvas extensions and app backends, workspaces, files, git, bash, hooks, sub-agents, ACP, the OpenAI-compatible /v1 routes, VSCode, POST /api/init, the auth workspace session, the WebSockets and the Docker runtime's conversation proxy. Each needs the session key or a credential the key mints (S-01.3.1). The usable tool start_child_conversation sends its request to the conversation's own inner server, not to this API.",
+      "status": "observed",
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/S-01.3.1-management-api-admission.md"],
+      "findings": ["fd-session-key-not-fine-grained", "fd-child-conversation-tool"]
     },
     {
       "id": "api-moby",
@@ -1262,26 +1272,33 @@
     {
       "id": "op-as-unenumerated-routes",
       "name": "Other Agent Server management capabilities",
-      "mechanism": "Routes behind the advertised credential-binding, secret-grant, agent-launch, profile and skill capability families (not enumerated)",
+      "mechanism": "The key-gated routes of profiles/strong-windows-qemu-whpx/agent-server/routes.json beyond the conversation lifecycle and the inspection reads (dispatcher use not-used): settings, secrets, credential bindings, profiles, skills, plugins, LLM and MCP configuration, extensions, files, git, bash, workspaces, init and the WebSockets",
       "principal": "management-dispatcher",
       "owner_only": false,
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-unenumerated"],
-      "status": "unknown",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"],
-      "findings": ["fd-agent-server-route-inventory"]
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"
+      ],
+      "findings": ["fd-session-key-not-fine-grained"],
+      "evidence": ["evidence/S-01.3.1-management-api-admission.md"]
     },
     {
       "id": "op-child-conversation",
       "name": "Conversation creation requested from inside a conversation",
-      "mechanism": "The usable tool start_child_conversation (path to a server not established)",
+      "mechanism": "POST /api/conversations/{id}/children on the outer server (key-gated; the Docker runtime proxies it to the conversation's inner server, which starts the child in the same container). The in-container tool start_child_conversation sends its request to OH_INTERNAL_SERVER_URL, http://127.0.0.1:8000 inside the container (its own inner server), with that server's own key; the outer listener is unreachable from there",
       "principal": "management-dispatcher",
       "owner_only": false,
-      "credentials": [],
+      "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-unenumerated", "conversation-container"],
-      "status": "unknown",
-      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.1"],
-      "evidence": ["evidence/F-04.1c-agent-server.md"],
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.1",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"
+      ],
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/S-01.3.1-management-api-admission.md"],
       "findings": ["fd-child-conversation-tool"]
     },
     {
@@ -1662,68 +1679,58 @@
     },
     {
       "id": "fd-guest-login-name-and-key",
-      "kind": "unknown",
-      "title": "The guest login named `agent` is an operator login that holds the management key",
-      "detail": "The contract makes the guest user `agent` the operators' and provisioning login (exec is never offered to agents) and lets it read the Agent Server session key (P5 as amended at F-04.1). The same user is the unprivileged vantage of the P6 negative checks, and its name collides with the engineering-agent role. If any untrusted workload were ever given this login, it would hold the full management API key and could create conversations, against S-01's proof. Whether the management key stays readable by the login user once a dispatcher exists is not decided by any accepted record: it belongs to S-01.3.1.",
+      "kind": "limit",
+      "title": "The operator login `agent` reads the management key; no agent workload has that login",
+      "detail": "Custody as of S-01.3.1. No dispatcher exists. During bootstrap the dispatcher's role is performed by the Owner's account through tools/guest.py, over the instance's host-loopback SSH forward with the per-instance key, as the operator login agent, which reads the session key from its root:agent 0440 file inside the guest (never on a command line). No agent workload ever has that login: an engineering agent runs in a conversation container as 999:989 in its own namespaces, holds no SSH key, cannot reach the guest's sshd (the container guard refuses it at every guest address), cannot reach the management listener, and its readable process environments hold only its own conversation keys (the outer key's fingerprint was absent from both containers, S-01.3.1). The name still collides with the engineering-agent role, and anyone given the login would hold the full management key. Moving the key to a separate guest identity (a dispatch group that agent is not in) is proposed to the Overseer, not done; whether the login keeps the key once a dispatcher exists is decided with the dispatcher (E-01.2.x).",
       "refs": ["guest-login-agent", "cred-agent-server-session-key", "guest-session-key-file", "op-as-conversation-create"],
       "citations": [
+        "evidence/S-01.3.1-management-api-admission.md",
         "profiles/README.md",
         "profiles/strong-windows-qemu-whpx/profile.json",
-        "evidence/F-04.1c-agent-server.md",
-        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"
+        "evidence/F-04.1c-agent-server.md"
       ],
-      "carried_to": ["S-01.3.1", "S-01.3.2"]
+      "carried_to": ["S-01.3.2", "E-01.2.2"]
     },
     {
       "id": "fd-session-key-not-fine-grained",
       "kind": "open-risk",
       "title": "One session key grants the whole management API",
-      "detail": "The outer Agent Server accepts one X-Session-API-Key for every /api/* route; there is no per-route or per-role scope, and the only rotation is recreate and provision. The blueprint warns not to assume a session API key is a fine-grained permission token and to keep the broad management API behind the trusted execution network.",
+      "detail": "The outer Agent Server accepts one X-Session-API-Key for every key-gated route; there is no per-route or per-role scope, and the only rotation is recreate and provision. S-01.3.1 enumerated the routes (193; the key admits 166 HTTP routes directly and mints the workspace and app-backend sessions) and marks in the route inventory which ones the trusted dispatcher may call: that allowlist is the dispatcher's policy, not a server control. What the server and the guest enforce is admission by key and by network: the listener is on the guest's loopback only, the unit drops non-loopback packets, and the container guard refuses every new connection from a container bridge to the guest. The blueprint warns not to assume a session API key is a fine-grained permission token.",
       "refs": ["cred-agent-server-session-key", "api-agent-server-management"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
-        "evidence/F-04.1c-agent-server.md"
-      ],
-      "carried_to": ["S-01.2.1", "S-01.3.1"]
-    },
-    {
-      "id": "fd-agent-server-route-inventory",
-      "kind": "unknown",
-      "title": "The Agent Server's privileged routes are only partly enumerated",
-      "detail": "Committed evidence records the Docker-runtime lifecycle routes (from the locked wheel's docker_runtime/routers.py and the running server's /openapi.json) and the unauthenticated /server_info, /alive and /openapi.json. /server_info also advertises capability families (credential binding, secret scopes and grants, agent launch pipeline, profiles, skills and tools) whose routes are not recorded. The release openapi.json documents the local runtime only and is not committed (decision 0005). No routes are invented here; S-01.3.1 must enumerate them from the locked artefacts.",
-      "refs": ["api-agent-server-unenumerated", "op-as-unenumerated-routes", "api-agent-server-management"],
-      "citations": [
         "evidence/F-04.1c-agent-server.md",
-        "evidence/F-04.2-conversation-lifecycle.md",
-        "decisions/0005-distribution-model-upstream-download-no-redistribution.md"
+        "evidence/S-01.3.1-management-api-admission.md"
       ],
-      "carried_to": ["S-01.3.1"]
+      "carried_to": ["S-01.2.1", "E-01.2.2"]
     },
     {
       "id": "fd-child-conversation-tool",
-      "kind": "unknown",
-      "title": "An agent tool can start child conversations",
-      "detail": "The server's usable_tools include start_child_conversation. Whether an agent inside a conversation can thereby cause conversation creation, and on which server and with which credential, is not established by the committed evidence. S-01's proof requires that an agent cannot invoke privileged conversation creation.",
-      "refs": ["op-child-conversation", "api-agent-server-unenumerated", "engineering-agent"],
+      "kind": "limit",
+      "title": "start_child_conversation reaches only the conversation's own inner server",
+      "detail": "Established at S-01.3.1 from the locked binary and live: the tool (openhands-tools child_conversation) posts to OH_INTERNAL_SERVER_URL + /api/conversations/{parent}/children with the key of the agent-server running it. In a conversation container that URL is http://127.0.0.1:8000, the inner server, and the key is the conversation's own (cred-conversation-keys); the inner server is a local runtime (OH_CONVERSATION_RUNTIME=local), so a child runs in the same container. From inside both disposable containers the inner children route answered 401 without a key and 422 with the inner key and an empty body (nothing created); the outer listener refused the inner key at every address (no connection); the outer count stayed 2. The tool therefore cannot invoke privileged conversation creation on the outer server. Not exercised: a valid child launch, which would start an agent step and an LLM call. A child in the same container shares that container's caps and mounts: E-01.2.2's ceilings.",
+      "refs": ["op-child-conversation", "api-agent-server-unenumerated", "engineering-agent", "cred-conversation-keys"],
       "citations": [
-        "evidence/F-04.1c-agent-server.md",
-        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.1"
+        "evidence/S-01.3.1-management-api-admission.md",
+        "profiles/strong-windows-qemu-whpx/agent-server/routes.json",
+        "evidence/F-04.1c-agent-server.md"
       ],
-      "carried_to": ["S-01.3.1", "S-01.3.2", "E-01.2.2"]
+      "carried_to": ["E-01.2.2"]
     },
     {
       "id": "fd-container-network-deviations",
       "kind": "open-risk",
       "title": "Conversation containers keep upstream network defaults",
-      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Inference, not observed: from a container, the guest's sshd (bound to all addresses) is reachable at the docker0 address, and other conversation containers' inner servers (port 8000, and VSCode on 8001) are reachable across the default bridge. Not tested; carried.",
+      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Observed at S-01.3.1 before the admission controls: from a conversation container the guest's sshd (172.17.0.1:22 and 10.0.2.15:22, banner) and systemd-resolved's LLMNR (TCP 5355) were reachable, and the other container's inner server (8000, /server_info 200) and VSCode (8001, 403) too; the management listener and the published ports refused. After them (container guard, icc false): every guest address and port refuses (TCP reset, logged) and the peer container times out, in both containers and after a guest restart. Remaining: host.docker.internal still names the guest (refused), the container keeps a NAT path out through the guest (no route out, SLIRP restrict=on; the deny-by-default matrix is S-01.4), and the request caps override (E-01.2.2).",
       "refs": ["conversation-container", "guest-sshd", "guest-conversation-listeners"],
       "citations": [
         "decisions/0001-agent-server-dispatch-precondition-and-version-line.md",
         "evidence/F-04.2-conversation-lifecycle.md",
         "evidence/F-04.1b-provision-moby.md",
-        "profiles/strong-windows-qemu-whpx/profile.json"
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "evidence/S-01.3.1-management-api-admission.md"
       ],
-      "carried_to": ["S-01.3.1", "S-01.3.2", "E-01.2.2", "S-02.1"]
+      "carried_to": ["S-01.3.2", "S-01.4", "E-01.2.2", "S-02.1"]
     },
     {
       "id": "fd-container-shares-service-uid",
@@ -1792,13 +1799,14 @@
       "id": "fd-owner-ui-access",
       "kind": "unknown",
       "title": "The Owner UI's access to the Agent Server is not defined",
-      "detail": "Agent Canvas is to reach only the backend needed for an Owner-authorized engineering session, but no accepted record says which credential it uses or whether it would hold the management key. The Agent Server host forward is deferred (decision 0006).",
+      "detail": "Agent Canvas is to reach only the backend needed for an Owner-authorized engineering session, but no accepted record says which credential it uses or whether it would hold the management key. The Agent Server host forward is deferred (decision 0006). S-01.3.1 records the Owner UI's path to management as planned and undecided (provisioning.agent_server.admission.dispatcher.owner_ui); no route or credential is assigned to it.",
       "refs": ["cred-owner-ui-access", "api-agent-server-management"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
-        "decisions/0006-guest-provisioning-channel-and-image-conformance.md"
+        "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+        "evidence/S-01.3.1-management-api-admission.md"
       ],
-      "carried_to": ["S-01.3.1"]
+      "carried_to": ["S-01.4"]
     },
     {
       "id": "fd-owner-credential-custody",
