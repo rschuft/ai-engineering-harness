@@ -1,6 +1,6 @@
 # 0007 - Role-token matrix and revocation contract
 
-Status: Proposed (Overseer) - 2026-11-07
+Status: Accepted (Overseer) - 2026-11-07, at the completion of S-01.2.1 (`05ad4ff`). It refines decision 0004 within the blueprint and issues, installs or creates nothing. The items under "Owner confirmation" remain pending and are not needed before a Gitea instance exists. Proposed 2026-11-07.
 Gate: architecture consultation before S-01.2.1, gate G (the least-privilege boundary
 between the Owner, privileged effects and the agent, reviewer and CI roles).
 Supersedes: none. It refines [decision 0004](0004-privileged-effect-store-custody-and-restore-semantics.md)
