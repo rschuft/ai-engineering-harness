@@ -107,7 +107,7 @@ python -I tools/verify_seed.py --baseline seed
 
 ## Scope and licence
 
-- This project is separate from the existing custom Tarinala Control Plane.
+- AI Engineering Harness is a standalone open-source project.
 - Repository-authored code and documentation are licensed under the [MIT License](LICENSE).
 - Third-party dependencies are downloaded from their upstream distributors onto the user's machine, pinned and hash-verified; this project does not redistribute them ([decision 0005](decisions/0005-distribution-model-upstream-download-no-redistribution.md)).
 - Third-party components and artifacts keep their own licences and distribution obligations. Licence compliance of the composition is not yet verified; open items are tracked in the [licence ledger](composition/inventory/LEDGER.md). What this repository itself publishes is covered by the [publication audit](composition/inventory/PUBLICATION-AUDIT.md).

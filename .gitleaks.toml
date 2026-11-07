@@ -171,3 +171,12 @@ id = "credential-store-keyring"
 description = "GnuPG homes and keyrings (.gnupg/, keyrings/, *.keyring, pubring/secring)."
 path = '''(?:^|/)(?:\.gnupg/|keyrings/|[^/]+\.keyring$|(?:pub|sec)ring\.(?:gpg|kbx)$)'''
 tags = ["credential-store"]
+
+# ---------------------------------------------------------------------------
+# Known false positives in English prose, allowed by exact value only.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Seed-plan prose 'Credential profile, issuance/revocation procedure' (the S-01 parent outcome in AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json and its .html projection) is English text, not a credential. generic-api-key reads the comma as an assignment and 'issuance/revocation' (entropy 3.51) as the value; these are the 3 generic-api-key findings of the 2026-11-06 history scan recorded in evidence/bootstrap-log.md. Exact value only, this rule only."
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^issuance/revocation$''']

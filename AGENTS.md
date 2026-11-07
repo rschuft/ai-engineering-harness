@@ -34,7 +34,7 @@ and Claude Code, which reads them through [`CLAUDE.md`](CLAUDE.md).
 AI Engineering Harness is an adoption-first, open-source engineering system: it
 composes established open-source products, integrates them through small,
 replaceable modules, and builds custom software only where a demonstrated gap
-remains. It is separate from the custom Tarinala Control Plane.
+remains.
 [`README.md`](README.md) gives the overview and current status.
 
 Where to find what is authoritative:
