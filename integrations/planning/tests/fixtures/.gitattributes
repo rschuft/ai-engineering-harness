@@ -1,0 +1,3 @@
+# The fixture files are copied byte for byte into a throwaway git repository whose
+# commit id and blob digests the recorded capture names. Keep LF on every host.
+* text eol=lf

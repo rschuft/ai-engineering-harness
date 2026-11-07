@@ -29,9 +29,9 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests, the integration store
-tests and the effects store tests. It is offline and takes seconds. Before your first commit, also run
+tests, the effects store tests and the planning adapter tests. It is offline and takes seconds. Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the six commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the seven commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -40,6 +40,7 @@ python -I tools/verify_seed.py --baseline seed
 python -I -B -m unittest discover -s tools/tests -v
 python -I -B -m unittest discover -s integrations/store/tests -v
 python -I -B -m unittest discover -s integrations/effects/tests -v
+python -I -B -m unittest discover -s integrations/planning/tests -v
 ```
 
 Use `python3` instead of `python` outside Windows.
@@ -133,14 +134,14 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the six commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the seven commands in [Quick start](#quick-start) | no | Supported setup command. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, then `effects:test` | no | Tool tests, integration store tests and effects store tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test` and `planning:test` | no | Tool tests, integration store tests, effects store tests and planning adapter tests (stdlib `unittest`). |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -151,6 +152,9 @@ Only what is listed as verified has been exercised.
 | `effects:backup ROOT=<dir> ACTOR=<name>` | `python -I -B integrations/effects/effects_store.py backup --root <dir> --actor <name>` | no | Backs the effects store up into `<root>/backups/` and prints the manifest. |
 | `effects:restore ROOT=<dir> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/effects/effects_store.py restore --root <dir> --manifest <file> --actor <name> [--accept-rollback]` | no | The Owner's elevated act, with the executor stopped: restores a verified backup and opens a restore epoch. |
 | `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
+| `planning:test` | `python -I -B -m unittest discover -s integrations/planning/tests -v` | no | [Planning adapter](#planning-adapter) tests: offline with a fake Backlog.md and git. The live tests against the pinned Backlog.md and OpenSpec run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name their entry points, and are skipped otherwise. |
+| `planning:create PROJECT=<repo> PLAN=<file> REVISION=<rev> BACKLOG=<cmd> [-- --openspec <cmd>]` | `python -I -B integrations/planning/planning_adapter.py create --project <repo> --plan <file> --revision <rev> --backlog <cmd> [--openspec <cmd>]` | no | Creates a plan's Backlog.md tasks and their dependencies through `backlog task create`; each task carries OpenSpec source pointers at the exact design revision. Refuses a change with a `tasks.md` or a tracked schema, and any status. Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `planning:resolve PROJECT=<repo> -- --backlog <cmd> [--task ID]` (or `-- --pointer <p>`) | `python -I -B integrations/planning/planning_adapter.py resolve --project <repo> (--backlog <cmd> [--task ID ...] \| --pointer <p> ...)` | no | Re-resolves source pointers; exit 1 on a missing revision, a missing artifact, a digest mismatch or a task without a pointer. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -461,6 +465,41 @@ OpenSpec 1.16.0 checks the schema (`openspec schema validate intent-driven`) and
 readiness of a change's artifacts (`openspec status`), and `openspec validate` checks
 delta specs. It does not check the content of a proposal; that is this checker's job.
 
+## Planning adapter
+
+Plan leaf P-02.1 adds [`integrations/planning/`](../integrations/planning/README.md),
+the small resolver between OpenSpec and Backlog.md that blueprint section
+[`#authority`](../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority)
+calls for. OpenSpec owns the design; Backlog.md owns tasks, dependencies and status.
+The adapter reads a task plan for one OpenSpec change and creates the tasks with
+Backlog.md's own command line (`backlog task create --ref ... --dep ...`, then
+`task view --json` to check each one). It never writes Backlog.md's files and never
+sets, derives or reports a status. It refuses a change that carries its own
+implementation checklist (`tasks.md`) or whose schema tracks one (`apply.tracks`).
+This repository does not adopt Backlog.md or OpenSpec for its own Work: both run in
+a managed project's repository, and in the tests in a throwaway one.
+
+Every task carries one source pointer per design artifact it implements:
+
+```
+openspec:changes/<change-id>/<artifact-path>@<full commit id>#sha256=<blob sha256>
+```
+
+`planning:resolve` re-resolves the pointers from git objects alone. It fails visibly
+on a missing revision, a missing artifact, a digest mismatch, or a task with no
+pointer. The format, the plan input and every failure code are in the adapter's
+[README](../integrations/planning/README.md).
+
+The pinned Backlog.md 1.55.3 and OpenSpec 1.16.0 come from the component lock
+(`composition/lock/npm/`), installed with `npm ci --ignore-scripts` into a directory
+outside the checkout. Backlog.md runs without install scripts: npm installs its
+platform package from `optionalDependencies`. The offline tests use a fake Backlog.md
+and need git only. The live tests (`AIEH_BACKLOG`, `AIEH_OPENSPEC`) regenerate the
+committed two-task capture in `integrations/planning/tests/fixtures/two-task/` and
+compare it with the recorded one. They ran on Windows 11 x86_64 only; other hosts,
+Backlog.md's MCP surface and concurrent writers are **not yet verified**. Reading
+readiness and blocking states is P-02.2.
+
 ## Security inventory
 
 Plan leaf S-01.1 records the harness's trust domains, principals, protected assets,
@@ -544,7 +583,7 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
-| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share | F-05.1, F-05.2 |
+| `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter and its `tests/` | F-05.1, F-05.2, P-02.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
 | repository root | Blueprint, plan and its projections, `task_manifest.json`, `SEED_MANIFEST.json`, `OVERSEER_START.md`, `Taskfile.yml`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` | seed, F-02, contributor onboarding |

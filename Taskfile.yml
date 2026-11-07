@@ -67,11 +67,12 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), then the effects store tests (effects:test)
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test) and the planning adapter tests (planning:test)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
       - task: effects:test
+      - task: planning:test
 
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
@@ -139,6 +140,28 @@ tasks:
       vars: [ROOT]
     cmds:
       - '{{.PYTHON}} -I -B integrations/effects/effects_store.py verify-chain --root "{{.ROOT}}" {{.CLI_ARGS}}'
+
+  # Planning adapter (plan leaf P-02.1): OpenSpec design references into Backlog.md tasks.
+  # BACKLOG and OPENSPEC name the pinned tools' entry points, installed outside the
+  # checkout (integrations/planning/README.md); PROJECT is the managed project's repository.
+  planning:test:
+    desc: "Run the planning adapter tests (python -I -B -m unittest discover -s integrations/planning/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/planning/tests -v'
+
+  planning:create:
+    desc: "Create a plan's Backlog.md tasks with OpenSpec source pointers at one design revision (python -I -B integrations/planning/planning_adapter.py create --project PROJECT --plan PLAN --revision REVISION --backlog BACKLOG [-- --openspec OPENSPEC])"
+    requires:
+      vars: [PROJECT, PLAN, REVISION, BACKLOG]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/planning/planning_adapter.py create --project "{{.PROJECT}}" --plan "{{.PLAN}}" --revision "{{.REVISION}}" --backlog "{{.BACKLOG}}" {{.CLI_ARGS}}'
+
+  planning:resolve:
+    desc: "Re-resolve OpenSpec source pointers; exit 1 on any missing revision, missing artifact, digest mismatch or task without a pointer (python -I -B integrations/planning/planning_adapter.py resolve --project PROJECT -- --backlog BACKLOG [--task ID] | --pointer P)"
+    requires:
+      vars: [PROJECT]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/planning/planning_adapter.py resolve --project "{{.PROJECT}}" {{.CLI_ARGS}}'
 
   profile:check:
     desc: Check the execution-profile declarations (python -I -B tools/check_profile.py); pass -- --strict to fail on unknown pins

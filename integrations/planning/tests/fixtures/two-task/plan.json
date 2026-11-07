@@ -1,0 +1,19 @@
+{
+  "format": "planning-map/v1",
+  "change": "qual-02-search-freshness",
+  "tasks": [
+    {
+      "key": "measure-delay",
+      "title": "Measure where new products are delayed before search",
+      "description": "Design D1: record when an added product reaches the catalogue store, the search index and the search responses, with the cache bypassed and in use (the test of hypothesis H2).",
+      "artifacts": ["design.md", "proposal.md"]
+    },
+    {
+      "key": "refresh-on-add",
+      "title": "Refresh affected search cache entries when a product is added",
+      "description": "Design D2: meet the requirement that new products are findable within 5 minutes, using method M2 if D1 shows the cache is the main cause.",
+      "artifacts": ["design.md", "specs/catalogue-search/new-product-visibility/spec.md"],
+      "depends_on": ["measure-delay"]
+    }
+  ]
+}
