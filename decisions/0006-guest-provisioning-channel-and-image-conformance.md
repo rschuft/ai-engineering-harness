@@ -280,7 +280,38 @@ Detail and raw outputs: [`evidence/F-04.1c-agent-server.md`](../evidence/F-04.1c
   recreate in `smoke --provision` (evidence section 7: run 4 PASS after a fix forward of
   the comparison of the unit's address sets). Not operational (C6).
 
+## Current facts (2026-11-07, F-04.2)
+Detail and raw outputs: [`evidence/F-04.2-conversation-lifecycle.md`](../evidence/F-04.2-conversation-lifecycle.md).
+- **Item 3, observed on running conversation containers.** Run A (`f042-a`, commit
+  `fec83d9`) ran the profile's disposable conversation fixture: Docker runtime, the fixed
+  id, no message, no LLM. It was created (201), created again (200, the same container),
+  stopped (`DELETE …/runtime`, 204), reopened (`POST …/runtime/reprovision`, 200), the
+  guest was restarted and the conversation reopened again, then deleted (200). Each of
+  the three containers had `.Image` `sha256:e8959dfc…42cb` (the locked image ID) and
+  `Config.Image` `aieh/agent-server:1.60.1-b43ee580`. Their effective mounts were exactly
+  the three declared binds under `/srv/scratch/openhands`; they ran as `openhands`
+  (`999:989`) with cap-drop ALL and no-new-privileges, and published only
+  `127.0.0.1:<ephemeral>` → 8000 through `docker-proxy`. The facts come from
+  `docker container inspect`, read by root through the on-demand reporter (decision 0003,
+  Current facts, 2026-11-07 F-04.2), never by `agent`.
+- **State.** Retained across the stop, both reopens and the guest restart: the same id,
+  `execution_status` idle and the stored `base_state.json` and `meta.json` (sha256
+  unchanged). The conversation is listed after the restart. The persisted event log was
+  empty throughout, because no message was sent.
+- **No LLM, no network.** The only outbound attempts were LiteLLM's model-cost-map
+  fetches by the server and by each conversation container at start-up, each denied at
+  name resolution.
+- **Recorded for S-01.3.x and E-01.2.2, not changed:**
+  - `--add-host host.docker.internal:host-gateway`;
+  - the default bridge network (no `--network none`);
+  - request caps that would replace the server's (the fixture sends none);
+  - the inner server's own VSCode and tool preload inside the container, unpublished.
+- The strong tier stays not operational (C6).
+
 ## Evidence
+- [`evidence/F-04.2-conversation-lifecycle.md`](../evidence/F-04.2-conversation-lifecycle.md):
+  the F-04.2 lifecycle run, the conversation containers' facts, the declared-versus-observed
+  table for the F-04 proof and the recorded deviations.
 - [`evidence/F-04.1c-agent-server.md`](../evidence/F-04.1c-agent-server.md): the
   slice (c) runs, the `/server_info` JSON, the configuration, the secret custody, the
   declared-versus-observed table for the F-04.1 proof and the smoke test.
