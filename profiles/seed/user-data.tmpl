@@ -156,6 +156,15 @@ write_files:
       SECRET_NAME = re.compile(r'(?i)(key|secret|token|password|credential)')
       CONTAINER_ID = re.compile(r'^[0-9a-f]{64}$')
       PROXY_PROCESSES = ('docker-proxy', 'dockerd')
+      # S-01.3.1: the management API admission (provisioning.agent_server.admission)
+      GUARD = '/usr/local/sbin/aieh-container-guard'
+      GUARD_UNIT = 'aieh-container-guard.service'
+      GUARD_CHAIN = 'AIEH-CONTAINER-GUARD'
+      GUARD_LOG_PREFIX = 'aieh-container-guard: '
+      GUARD_TOOLS = ('iptables', 'ip6tables')
+      GUARD_DROPIN = '/etc/systemd/system/docker.service.d/10-aieh-container-guard.conf'
+      KEYCHECK = '/usr/local/sbin/aieh-agent-server-keycheck'
+      UNIT_STATE = ('LoadState', 'ActiveState', 'SubState', 'Result', 'UnitFileState')
       INVENTORY_MAX = 400
       HASH_MAX = 16 << 20
       LOG_TAIL = 1 << 20
@@ -508,6 +517,53 @@ write_files:
                   'journal': unit_journal(values)}
 
 
+      def admission_facts():
+          """S-01.3.1: the container guard (unit, rules of both families, docker.service's
+          dependency on it), the default bridge's icc and the Agent Server's key check."""
+          rc, out, err = run(['/usr/bin/python3', '-I', GUARD, 'check'], 120)
+          try:
+              rules = json.loads(out.strip().splitlines()[-1])
+          except (IndexError, ValueError):
+              rules = {'ok': False, 'error': tail(err or out, 300)}
+          deps = unit_show('docker.service', ('Requires', 'After'))
+          bridge = docker_json(['network', 'inspect', 'bridge', '--format', GO_JSON])
+          options = bridge.get('Options') if isinstance(bridge, dict) else None
+          pre = unit_show(AS_UNIT, ('ExecStartPre',)).get('ExecStartPre') or ''
+          keycheck = {'script': stat_entry(KEYCHECK), 'exec_start_pre': KEYCHECK in pre}
+          return {'guard_unit': unit_show(GUARD_UNIT, UNIT_STATE), 'rules': rules,
+                  'dropin': stat_entry(GUARD_DROPIN),
+                  'docker_requires_guard': GUARD_UNIT in str(deps.get('Requires', '')).split(),
+                  'docker_after_guard': GUARD_UNIT in str(deps.get('After', '')).split(),
+                  'bridge_enable_icc': (options or {}).get('com.docker.network.bridge.enable_icc')
+                  if isinstance(options, dict) else bridge,
+                  'keycheck': keycheck}
+
+
+      def admission_counters():
+          """S-01.3.1: what was refused since boot: the guard's per-rule packet counters and
+          its kernel log lines (rate-limited), and the Agent Server's own refusal log lines."""
+          out = {}
+          for tool in GUARD_TOOLS:
+              rc, text, err = run([tool, '-w', '-n', '-v', '-x', '-L', GUARD_CHAIN], 60)
+              rows = []
+              for line in text.splitlines()[2:] if rc == 0 else []:
+                  f = line.split()
+                  if len(f) >= 3 and f[0].isdigit():
+                      rows.append({'packets': int(f[0]), 'bytes': int(f[1]), 'target': f[2]})
+              out[tool] = rows if rc == 0 else {'rc': rc, 'error': tail(err, 300)}
+          rc, text, err = run(['journalctl', '-k', '-b', '--no-pager', '-o', 'short-iso',
+                               '-g', GUARD_LOG_PREFIX], 60)
+          lines = [line for line in text.splitlines() if GUARD_LOG_PREFIX in line]
+          out['log'] = {'count': len(lines), 'tail': lines[-20:]}
+          rc, text, err = run(['journalctl', '-b', '-u', AS_UNIT, '-o', 'short-iso', '--no-pager'], 120)
+          lines = text.splitlines() if rc == 0 else []
+          http = [line for line in lines if 'HTTPException 401 on ' in line]
+          ws = [line for line in lines if 'WebSocket' in line and 'auth' in line and 'fail' in line]
+          out['server'] = {'http_401': len(http), 'websocket_auth_failed': len(ws),
+                           'tail': [line[:300] for line in (http + ws)[-6:]]}
+          return out
+
+
       def facts():
           manifest = load_manifest()
           tag = manifest['image']['local_tag']
@@ -549,6 +605,10 @@ write_files:
               data['agent_server'] = agent_server_facts(manifest)
           except Exception as exc:              # recorded, never fatal to the Moby facts
               data['agent_server'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
+          try:
+              data['admission'] = admission_facts()
+          except Exception as exc:              # recorded, never fatal to the Moby facts
+              data['admission'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
           # the report is agent-readable: a secret value never reaches it (counted, redacted)
           text, counts = redact(json.dumps(data, sort_keys=True), secret_values())
           if any(counts.values()):
@@ -792,6 +852,7 @@ write_files:
                   'server_journal': unit_journal(values),
                   'units': {u: run(['systemctl', 'is-enabled', u], 30)[1].strip()
                             for u in (CONV_PATH_UNIT, CONV_FACTS_UNIT)},
+                  'admission': admission_counters(),
                   }
           # the report is agent-readable: no secret value reaches it (counted, redacted)
           text, counts = redact(json.dumps(data, sort_keys=True), values)
@@ -951,6 +1012,20 @@ write_files:
               raise Failed('docker-ready: a TCP listener of Moby: ' + repr(moby_owned))
           return {'server_version': server, 'client_version': (version.get('Client') or {}).get('Version'),
                   'modules_after_start': loaded_modules(), 'tcp_listeners': listeners}
+
+
+      def check_admission(manifest):
+          """S-01.3.1, right after Moby's first start and before the Agent Server exists: the
+          container guard is active with the declared rules in both families, docker.service
+          requires it, and the default bridge has icc off."""
+          step = 'admission'
+          must(step, ['systemctl', 'enable', GUARD_UNIT], 60)
+          found = admission_facts()
+          if (found['guard_unit'].get('ActiveState') != 'active' or
+                  not found['rules'].get('ok') or not found['docker_requires_guard'] or
+                  not found['docker_after_guard'] or found['bridge_enable_icc'] != 'false'):
+              raise Failed(step + ': ' + json.dumps(found, sort_keys=True)[:1500])
+          return found
 
 
       def inspect_image(ref):
@@ -1202,7 +1277,7 @@ write_files:
       STEPS = (('copy', None), ('verify', verify_staging), ('daemon-json', write_daemon_json),
                ('sysctl', write_sysctl), ('apt-install', apt_install),
                ('containerd-config', containerd_config), ('docker-ready', docker_ready),
-               ('docker-load', load_image), ('image-id', check_image_id), ('tag', fix_tag),
+               ('admission', check_admission), ('docker-load', load_image), ('image-id', check_image_id), ('tag', fix_tag),
                ('run', verify_run), ('agent-server-install', install_agent_server),
                ('agent-server-secrets', agent_server_secrets),
                ('agent-server-start', start_agent_server),
@@ -1367,6 +1442,158 @@ write_files:
       ProtectHome=read-only
       PrivateTmp=yes
       IPAddressDeny=any
+  - path: /usr/local/sbin/aieh-container-guard
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/python3
+      # aieh-container-guard (S-01.3.1): no new connection from a container bridge to the guest
+      # itself. In the filter table's INPUT chain, a packet from docker0 or a br-* bridge that
+      # does not belong to a connection the guest opened jumps to AIEH-CONTAINER-GUARD: it is
+      # logged (rate-limited, kernel log at the LOG target's default level warning, this
+      # prefix) and refused, TCP with a reset, anything
+      # else with an ICMP port-unreachable. IPv4 and IPv6 alike. Forwarded traffic is untouched.
+      # Run by aieh-container-guard.service, which docker.service requires (fail closed: no
+      # rules, no Moby). Modes: (none) install and verify; check: verify only. Prints one JSON
+      # line: the rules as iptables -S prints them, and whether they are the declared ones.
+      import json
+      import shlex
+      import subprocess
+      import sys
+
+      CHAIN = 'AIEH-CONTAINER-GUARD'
+      INTERFACES = ('docker0', 'br-+')
+      LOG_PREFIX = 'aieh-container-guard: '
+      TOOLS = ('iptables', 'ip6tables')
+      RULES = ('-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+               '-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "' + LOG_PREFIX + '"',
+               '-p tcp -j REJECT --reject-with tcp-reset',
+               '-j REJECT')
+      ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
+
+
+      def run(argv):
+          r = subprocess.run(argv, capture_output=True, text=True, timeout=60, env=ENV, check=False)
+          return r.returncode, r.stdout, r.stderr
+
+
+      def must(argv):
+          rc, out, err = run(argv)
+          if rc != 0:
+              raise RuntimeError(' '.join(argv) + ' exited ' + str(rc) + ': ' + err.strip()[-300:])
+          return out
+
+
+      def install(tool):
+          if run([tool, '-w', '-n', '-L', CHAIN])[0] != 0:
+              must([tool, '-w', '-N', CHAIN])
+          must([tool, '-w', '-F', CHAIN])
+          for rule in RULES:
+              must([tool, '-w', '-A', CHAIN] + shlex.split(rule))
+          for iface in INTERFACES:
+              while run([tool, '-w', '-D', 'INPUT', '-i', iface, '-j', CHAIN])[0] == 0:
+                  pass
+              must([tool, '-w', '-I', 'INPUT', '1', '-i', iface, '-j', CHAIN])
+
+
+      def observe(tool):
+          rc, out, err = run([tool, '-w', '-S', CHAIN])
+          chain = [line for line in out.splitlines() if line.startswith('-A ')] if rc == 0 else None
+          rc2, out2, _ = run([tool, '-w', '-S', 'INPUT'])
+          jumps = [line for line in out2.splitlines() if line.endswith('-j ' + CHAIN)] \
+              if rc2 == 0 else None
+          want = ['-A ' + CHAIN + ' ' + rule for rule in RULES]
+          ok = chain is not None and len(chain) == len(want) and \
+              all(line == w or line.startswith(w + ' ') for line, w in zip(chain, want)) and \
+              jumps is not None and sorted(jumps) == sorted(
+                  '-A INPUT -i ' + i + ' -j ' + CHAIN for i in INTERFACES) and \
+              out2.splitlines()[1:1 + len(INTERFACES)] == [
+                  '-A INPUT -i ' + i + ' -j ' + CHAIN for i in reversed(INTERFACES)]
+          return {'chain': chain, 'input_jumps': jumps, 'ok': ok,
+                  'error': None if rc == 0 else err.strip()[-300:]}
+
+
+      def main(argv):
+          out = {'mode': 'check' if argv == ['check'] else 'install'}
+          try:
+              if argv not in ([], ['check']):
+                  raise RuntimeError('usage: aieh-container-guard [check]')
+              if not argv:
+                  for tool in TOOLS:
+                      install(tool)
+              out['families'] = {tool: observe(tool) for tool in TOOLS}
+              out['ok'] = all(f['ok'] for f in out['families'].values())
+          except Exception as exc:
+              out['ok'], out['error'] = False, (type(exc).__name__ + ': ' + str(exc))[:600]
+          print(json.dumps(out, sort_keys=True), flush=True)
+          return 0 if out['ok'] else 1
+
+
+      if __name__ == '__main__':
+          sys.exit(main(sys.argv[1:]))
+  - path: /etc/systemd/system/aieh-container-guard.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH container guard: no new connection from a container bridge to the guest (S-01.3.1)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      DefaultDependencies=no
+      After=local-fs.target
+      Before=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-container-guard
+      StandardOutput=journal+console
+      StandardError=journal+console
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/docker.service.d/10-aieh-container-guard.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # S-01.3.1: Moby starts only after the container guard's rules are in place (fail closed).
+      [Unit]
+      Requires=aieh-container-guard.service
+      After=aieh-container-guard.service
+  - path: /usr/local/sbin/aieh-agent-server-keycheck
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/python3
+      # aieh-agent-server-keycheck: ExecStartPre of aieh-agent-server.service (S-01.3.1). The
+      # 1.60.1 server treats an empty session-key list as "unsecured" (Config.session_api_keys)
+      # and drops empty values, so a lost key must stop the start instead of opening the API.
+      # It refuses unless the session key and OH_SECRET_KEY are 43-character token_urlsafe
+      # values, distinct, and no other session-key variable is set. Names only are printed.
+      import os
+      import re
+      import sys
+
+      VALUE = re.compile(r'^[A-Za-z0-9_-]{43}$')
+      REQUIRED = ('OH_SESSION_API_KEYS_0', 'OH_SECRET_KEY')
+      OTHER_KEY = re.compile(r'^(OH_SESSION_API_KEYS_[0-9]+|SESSION_API_KEY)$')
+
+
+      def problems(environ):
+          out = [name + ' is missing or not a 43-character token' for name in REQUIRED
+                 if not VALUE.match(environ.get(name, ''))]
+          if not out and environ[REQUIRED[0]] == environ[REQUIRED[1]]:
+              out.append(' and '.join(REQUIRED) + ' are equal')
+          out += [name + ' is set (one session key only)' for name in sorted(environ)
+                  if OTHER_KEY.match(name) and name != REQUIRED[0]]
+          return out
+
+
+      if __name__ == '__main__':
+          found = problems(dict(os.environ))
+          if found:
+              print('aieh-agent-server-keycheck: refused: ' + '; '.join(found), flush=True)
+              sys.exit(1)
+          print('aieh-agent-server-keycheck: ok', flush=True)
   - path: /usr/local/sbin/aieh-agent-server-ready
     owner: root:root
     permissions: '0755'
@@ -1426,6 +1653,7 @@ write_files:
       Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
       Environment=LANG=C.UTF-8
       WorkingDirectory=/srv/scratch/openhands/home
+      ExecStartPre=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-keycheck
       ExecStart=/opt/aieh/agent-server/agent-server --host 127.0.0.1 --port 8000
       ExecStartPost=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-ready 127.0.0.1 8000 280
       TimeoutStartSec=300

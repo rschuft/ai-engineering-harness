@@ -203,6 +203,7 @@ Only what is listed as verified has been exercised.
 | `guest:create-provisioned PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py create --profile <dir> --state-dir <dir> --name <name> --provision` | no | `create` whose seed carries the provisioning manifest of the verified `provision-fetch` stage (F-04.1b). `recreate` and `smoke` take `--provision` too. |
 | `guest:provision PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py provision --profile <dir> --state-dir <dir> --name <name>` | no | Guest side of provisioning (F-04.1b): transfers the stage over SFTP, triggers the seeded single-use root step and checks its `RESULT.json`. See [Execution guests](#execution-guests). |
 | `guest:conversation-smoke PROFILE=… STATE_DIR=… NAME=<name> [-- --restart --openapi <file> --canaries <dir> --out <file>]` | `python -I -B tools/guest.py conversation-smoke --profile <dir> --state-dir <dir> --name <name> [--restart] [--openapi <file>] [--canaries <dir>] [--out <file>]` | no | The contained conversation lifecycle (F-04.2) on a running provisioned guest: create the disposable Docker conversation of the pinned fixture, inspect it and its container, create it again (idempotent), read its events, stop its runtime, reopen it, optionally restart the guest and reopen again, delete it. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:admission-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --out <file>]` | `python -I -B tools/guest.py admission-probe --profile <dir> --state-dir <dir> --name <name> [--out <file>]` | no | The management API admission (S-01.3.1) on a running provisioned guest: the pinned route inventory against the running server, every route without the key and with a wrong one, the agent network's reach from inside two disposable conversation containers, the key check and the logged refusals. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -518,6 +519,25 @@ defaults them.
   uses the same report for its P7 listener checks and its `conversation containers`
   entry. The upstream deviations it records (`host-gateway`, no `--network none`,
   request caps override) are evidence for S-01.3.x and E-01.2.2, not failures.
+- `admission-probe` (S-01.3.1) checks the management API admission declared in
+  `provisioning.agent_server.admission`. It compares the running server's own
+  `/openapi.json` with the pinned route inventory
+  ([`agent-server/routes.json`](../profiles/strong-windows-qemu-whpx/agent-server/routes.json):
+  every route, its credential, its class and whether the trusted dispatcher uses it),
+  then sends every route a request without the key and with a wrong one (WebSockets:
+  four refusals each). A key-gated route that answers 2xx without the key is a stop
+  condition. It creates two disposable conversations and, through the outer server's
+  proxied bash route (the agent's own terminal), connects from inside each container to
+  the management listener, the guest's `sshd` and LLMNR, the published ports and the
+  peer container at every address the container can see; checks that no readable
+  process environment holds the outer key and where `start_child_conversation` sends
+  its request; runs the seeded key check under synthetic environments; reads what the
+  guard and the server logged; and deletes both conversations. The guest side of the
+  admission is seeded: `aieh-container-guard.service` (which `docker.service` requires)
+  rejects and logs any new connection from a container bridge to the guest itself,
+  `icc` is off on Moby's default bridge, and the Agent Server's `ExecStartPre` refuses
+  to start without a valid session key. `inspect` checks all three from the boot-time
+  facts.
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);

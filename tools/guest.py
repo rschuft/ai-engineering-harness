@@ -3129,7 +3129,8 @@ def evaluate(profile, record, obs):
         check('/dev/kvm', 'absent', out_text('dev_kvm'), 'guest: test -e', out_text('dev_kvm') == 'absent'),
     ]))
     if record.get('provisioning'):
-        props.append(provisioning_property(profile, record, obs, agent.get('provisioning', [])))
+        props.append(provisioning_property(profile, record, obs, agent.get('provisioning', []) +
+                                           admission_check(profile, obs)))
     return props
 
 
@@ -7201,6 +7202,622 @@ def conversation_smoke(ctx, name, canary_dir=None, restart=False, openapi=None, 
     return out
 
 
+# ---------------------------------------------------------------- management API admission (S-01.3.1)
+
+ADMISSION_PROBE_SCHEMA = 'ai-engineering-harness/profiles/admission-probe-record/v1'
+ADMISSION_CHECK = 'management API admission (S-01.3.1)'
+# The concrete values a path parameter gets in the unauthenticated sweep: an id that names
+# no conversation, and a name that names nothing.
+PROBE_UUID = '00000000-0000-4000-8000-0000000a0131'
+PROBE_NAME = 'aieh-probe'
+# The second disposable conversation (the fixture with this id): the peer of the first on
+# Moby's default bridge, for the container-to-container probes.
+SECOND_CONVERSATION_ID = 'a0131b00-0000-4000-8000-000000000b01'
+WS_VARIANTS = ('no_auth_message', 'first_message_wrong_key', 'query_wrong_key',
+               'header_wrong_key')
+
+
+def admission_config(profile):
+    return ((profile.get('provisioning') or {}).get('agent_server') or {}).get('admission') or {}
+
+
+def load_routes(ctx):
+    """The pinned route inventory (sha256 checked) and its problems (check_profile
+    route_problems)."""
+    entry = admission_config(ctx.profile).get('routes') or {}
+    path = ctx.repo / entry['path']
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != entry.get('sha256'):
+        raise Refused('HASH_MISMATCH', f'{entry["path"]} differs from its pinned sha256')
+    routes = json.loads(data.decode('utf-8'))
+    return routes, load_profile_checker().route_problems(routes)
+
+
+def concrete_path(path):
+    """A requestable path for a route template: *_id parameters get PROBE_UUID, every
+    other parameter PROBE_NAME."""
+    def sub(match):
+        name = match.group(1).split(':')[0]
+        return PROBE_UUID if name.endswith('_id') else PROBE_NAME
+    return re.sub(r'\{([^}]+)\}', sub, path)
+
+
+def _guard_line_ok(line, want):
+    # iptables -S may append the default of an option it was not given
+    # (REJECT --reject-with icmp-port-unreachable / icmp6-port-unreachable)
+    return line == want or str(line).startswith(want + ' ')
+
+
+def admission_check(profile, obs):
+    """The guard, icc and the key check of a provisioned instance against
+    provisioning.agent_server.admission, from the boot-time facts (root)."""
+    conf = admission_config(profile)
+    if not conf:
+        return []
+    guard = (conf.get('network') or {}).get('guard') or {}
+    chain = guard.get('chain')
+    facts = _probe_json(obs, 'moby_facts') or {}
+    adm = facts.get('admission') if isinstance(facts.get('admission'), dict) else {}
+    rules = adm.get('rules') if isinstance(adm.get('rules'), dict) else {}
+    families = rules.get('families') if isinstance(rules.get('families'), dict) else {}
+    want = [f'-A {chain} {r}' for r in guard.get('rules') or []]
+    want_jumps = sorted(f'-A INPUT -i {i} -j {chain}' for i in guard.get('interfaces') or [])
+    unit = adm.get('guard_unit') if isinstance(adm.get('guard_unit'), dict) else {}
+    keycheck = adm.get('keycheck') if isinstance(adm.get('keycheck'), dict) else {}
+    script = keycheck.get('script') if isinstance(keycheck.get('script'), dict) else {}
+    observed = {
+        'guard_unit': {k: unit.get(k) for k in ('ActiveState', 'Result', 'UnitFileState')},
+        'families': {tool: {'chain': (families.get(tool) or {}).get('chain'),
+                            'input_jumps': (families.get(tool) or {}).get('input_jumps')}
+                     for tool in guard.get('families') or []},
+        'docker_requires_guard': adm.get('docker_requires_guard'),
+        'docker_after_guard': adm.get('docker_after_guard'),
+        'bridge_enable_icc': adm.get('bridge_enable_icc'),
+        'keycheck_exec_start_pre': keycheck.get('exec_start_pre'),
+        'keycheck_script': {k: script.get(k) for k in ('state', 'owner', 'group', 'mode')},
+    }
+
+    def family_ok(tool):
+        f = observed['families'].get(tool) or {}
+        lines, jumps = f.get('chain'), f.get('input_jumps')
+        return isinstance(lines, list) and len(lines) == len(want) and \
+            all(_guard_line_ok(line, w) for line, w in zip(lines, want)) and \
+            isinstance(jumps, list) and sorted(jumps) == want_jumps
+    ok = bool(adm) and unit.get('ActiveState') == 'active' and \
+        unit.get('UnitFileState') == 'enabled' and bool(guard.get('families')) and \
+        all(family_ok(t) for t in guard.get('families')) and \
+        adm.get('docker_requires_guard') is True and adm.get('docker_after_guard') is True and \
+        str(adm.get('bridge_enable_icc')) == 'false' and keycheck.get('exec_start_pre') is True and \
+        script.get('state') == 'file' and script.get('owner') == 'root'
+    return [check(ADMISSION_CHECK, {
+        'guard_unit': 'active, enabled', 'chain': want, 'input_jumps': want_jumps,
+        'families': guard.get('families'), 'docker.service': f"Requires and After {guard.get('unit')}",
+        'bridge_enable_icc': 'false', 'keycheck': f"ExecStartPre {conf.get('session_key', {}).get('start_check')}"},
+        observed, 'facts: aieh-container-guard check, systemctl show, docker network inspect '
+        'bridge (root, at boot)', ok)]
+
+
+CHECK_CLASSES[(PROVISIONING_PROPERTY, ADMISSION_CHECK)] = (STABLE, None)
+
+# Run as agent: the unauthenticated sweep of every route of the inventory (HTTP: without a
+# key and with a wrong one; WebSocket: four refusals), and the running server's own
+# /openapi.json reduced to its operations. The session key is read from its file only to
+# count and redact any occurrence in a response; it is never sent.
+ADMISSION_SWEEP = r'''import base64, http.client, json, os, secrets, socket, struct, sys, time
+key_path, host, port, spec = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+spec = json.loads(base64.b64decode(spec).decode('utf-8'))
+with open(key_path, encoding='ascii') as handle:
+    key = handle.read().strip()
+wrong = secrets.token_urlsafe(32)
+hits = 0
+def text_of(raw):
+    global hits
+    text = raw.decode('utf-8', 'replace')
+    hits += text.count(key)
+    return text.replace(key, '<redacted>')
+def http_req(method, path, headers=None):
+    conn = http.client.HTTPConnection(host, port, timeout=60)
+    try:
+        conn.request(method, path, headers=headers or {})
+        resp = conn.getresponse()
+        return [resp.status, text_of(resp.read(1 << 16))[:160]]
+    except OSError as exc:
+        return [None, type(exc).__name__]
+    finally:
+        conn.close()
+def frame(op, payload):
+    mask = os.urandom(4)
+    head = bytes([0x80 | op, 0x80 | len(payload)])
+    return head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+def ws(path, auth=None, header_key=None):
+    t0 = time.monotonic()
+    out = {}
+    try:
+        s = socket.create_connection((host, port), timeout=60)
+    except OSError as exc:
+        return {'error': type(exc).__name__}
+    try:
+        req = ('GET ' + path + ' HTTP/1.1\r\nHost: ' + host + ':' + str(port) +
+               '\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ' +
+               base64.b64encode(os.urandom(16)).decode() + '\r\nSec-WebSocket-Version: 13\r\n')
+        if header_key:
+            req += 'X-Session-API-Key: ' + header_key + '\r\n'
+        s.sendall((req + '\r\n').encode())
+        buf = b''
+        while b'\r\n\r\n' not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        head, _, rest = buf.partition(b'\r\n\r\n')
+        line = head.split(b'\r\n')[0].decode('latin-1').split()
+        out['handshake'] = int(line[1]) if len(line) > 1 and line[1].isdigit() else None
+        if out['handshake'] == 101:
+            if auth is not None:
+                s.sendall(frame(1, json.dumps(auth).encode()))
+            data = rest
+            while len(data) < 2:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            if len(data) >= 2:
+                n = data[1] & 0x7f
+                while len(data) < 2 + n:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                payload = data[2:2 + n]
+                out['opcode'] = data[0] & 0x0f
+                if out['opcode'] == 8 and len(payload) >= 2:
+                    out['close_code'] = struct.unpack('!H', payload[:2])[0]
+                    out['close_reason'] = text_of(payload[2:])
+                else:
+                    out['payload'] = text_of(payload)[:120]
+    except OSError as exc:
+        out['error'] = type(exc).__name__
+    finally:
+        s.close()
+    out['seconds'] = round(time.monotonic() - t0, 2)
+    return out
+conn = http.client.HTTPConnection(host, port, timeout=60)
+conn.request('GET', '/openapi.json')
+doc = json.loads(text_of(conn.getresponse().read()))
+conn.close()
+openapi = {p: sorted(m.upper() for m in item if m in ('get', 'post', 'put', 'patch', 'delete', 'head', 'options'))
+           for p, item in (doc.get('paths') or {}).items()}
+out = {'openapi': openapi, 'openapi_version': (doc.get('info') or {}).get('version'), 'http': [], 'ws': []}
+for method, path in spec['http']:
+    out['http'].append({'method': method, 'path': path, 'no_key': http_req(method, path),
+                        'wrong_key': http_req(method, path, {'X-Session-API-Key': wrong})})
+for path in spec['ws']:
+    out['ws'].append({'path': path, 'no_auth_message': ws(path),
+                      'first_message_wrong_key': ws(path, {'type': 'auth', 'session_api_key': wrong}),
+                      'query_wrong_key': ws(path + '?session_api_key=' + wrong),
+                      'header_wrong_key': ws(path, header_key=wrong)})
+out['session_key_occurrences'] = hits
+print(json.dumps(out, sort_keys=True))
+'''
+
+# Run inside a conversation container (through the outer server's proxy to the inner
+# server's bash route: the vantage of the agent's own terminal). One TCP connect per target,
+# with a 4 s ceiling, and for a connected one the first line of the answer to GET /server_info.
+CONTAINER_NET_PROBE = r'''probe() {
+  r=$(timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2 && printf 'GET /server_info HTTP/1.0\r\nHost: x\r\n\r\n' >&3 && timeout 2 head -c 64 <&3 | head -n 1" 2>&1)
+  rc=$?
+  r=$(printf '%s' "$r" | tr -d '\r' | tr '\n' ' ' | head -c 160)
+  [ $rc -eq 124 ] && r=TIMEOUT
+  echo "PROBE $1 $2 rc=$rc $r"
+}
+echo "ID $(id -u):$(id -g)"
+echo "ADDR $(hostname -I)"
+echo "HOSTS_HDI $(awk '$2 == "host.docker.internal" {print $1}' /etc/hosts)"
+for t in $TARGETS; do probe "${t%:*}" "${t##*:}"; done
+'''
+
+# Run inside a conversation container: where the start_child_conversation tool sends its
+# request, which session keys the agent's processes can read (fingerprints only), and what
+# its own inner server and the outer listener answer with that key. The inner key goes into
+# a 0600 header file inside the container (never a command line) and is removed after.
+CONTAINER_KEY_PROBE = r'''fp() { printf 'aieh-secret-fingerprint/v1\n%s' "$1" | sha256sum | cut -c1-64; }
+echo "INTERNAL_URL $OH_INTERNAL_SERVER_URL"
+for d in /proc/[0-9]*; do
+  [ -r "$d/environ" ] || continue
+  for v in OH_SESSION_API_KEYS_0 OH_SECRET_KEY SESSION_API_KEY; do
+    val=$(tr '\0' '\n' < "$d/environ" 2>/dev/null | sed -n "s/^$v=//p" | head -n 1)
+    [ -n "$val" ] && echo "FP $v $(fp "$val")"
+  done
+done
+umask 077
+code() { rm -f /tmp/aieh-body; c=$(curl -s -o /tmp/aieh-body -w '%{http_code}' --max-time 10 "$@"); echo "$c $(head -c 160 /tmp/aieh-body 2>/dev/null | tr '\n' ' ')"; }
+U="$OH_INTERNAL_SERVER_URL/api/conversations/$CID/children"
+printf 'X-Session-API-Key: %s\n' "$(tr '\0' '\n' < /proc/1/environ | sed -n 's/^OH_SESSION_API_KEYS_0=//p')" > /tmp/aieh-hdr
+echo "CHILD_NO_KEY $(code -X POST -H 'Content-Type: application/json' -d '{}' "$U")"
+echo "CHILD_INNER_KEY $(code -X POST -H @/tmp/aieh-hdr -H 'Content-Type: application/json' -d '{}' "$U")"
+for h in $OUTER; do echo "OUTER_WITH_INNER_KEY $h $(code -H @/tmp/aieh-hdr "http://$h/api/conversations/count")"; done
+rm -f /tmp/aieh-hdr /tmp/aieh-body
+echo DONE
+'''
+
+# Run as agent: the seeded key check under synthetic environments (no real secret). Each
+# case: the variables given, the exit status and the printed line.
+KEYCHECK_PROBE = r'''import json, subprocess, sys
+script = sys.argv[1]
+a, b = 'A' * 43, 'B' * 43
+cases = {'no key': {}, 'empty key': {'OH_SESSION_API_KEYS_0': '', 'OH_SECRET_KEY': b},
+         'short key': {'OH_SESSION_API_KEYS_0': 'x' * 8, 'OH_SECRET_KEY': b},
+         'no secret key': {'OH_SESSION_API_KEYS_0': a},
+         'equal values': {'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': a},
+         'second key': {'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': b, 'OH_SESSION_API_KEYS_1': a},
+         'legacy key': {'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': b, 'SESSION_API_KEY': a},
+         'valid': {'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': b}}
+out = {}
+for name, env in cases.items():
+    env = dict(env, PATH='/usr/bin:/bin')
+    r = subprocess.run(['/usr/bin/python3', '-I', script], env=env, capture_output=True, text=True, timeout=60)
+    out[name] = {'rc': r.returncode, 'line': (r.stdout or r.stderr).strip()[-300:]}
+print(json.dumps(out, sort_keys=True))
+'''
+
+
+def _probe_lines(stdout, tag):
+    return [line.split(' ', 1)[1] if ' ' in line else '' for line in (stdout or '').splitlines()
+            if line.startswith(tag + ' ') or line == tag]
+
+
+def _net_outcome(rc, text):
+    if rc == 0 and text and 'TIMEOUT' not in text:
+        return 'connected'
+    if 'TIMEOUT' in text or rc == 124:
+        return 'timeout'
+    if 'refused' in text.lower():
+        return 'refused'
+    if 'no route' in text.lower() or 'unreachable' in text.lower():
+        return 'unreachable'
+    return 'error'
+
+
+def parse_net_probe(stdout):
+    """{'host:port': {'outcome', 'rc', 'answer'}} of CONTAINER_NET_PROBE's PROBE lines."""
+    out = {}
+    for rest in _probe_lines(stdout, 'PROBE'):
+        parts = rest.split(' ', 3)
+        if len(parts) < 3 or not parts[2].startswith('rc='):
+            continue
+        host, port, rc = parts[0], parts[1], parts[2][3:]
+        text = parts[3] if len(parts) > 3 else ''
+        rc = int(rc) if rc.lstrip('-').isdigit() else None
+        out[f'{host}:{port}'] = {'outcome': _net_outcome(rc, text), 'rc': rc, 'answer': text[:120]}
+    return out
+
+
+def admission_probe(ctx, name, out_path=None, channels=None, ssh_fn=None):
+    """admission-probe (S-01.3.1) on a running provisioned instance: the route inventory
+    against the running server's /openapi.json; every route without a key and with a
+    wrong one (HTTP and WebSocket); the trusted side with the key; two disposable
+    conversations, and from inside each container (the agent's own terminal, through the
+    outer server's proxied bash route) the management listener, the guest's services, the
+    published ports and the peer container at every address the container can see; the
+    session keys the agent's processes can read; where start_child_conversation sends its
+    request; the seeded key check; what the guard and the server logged. One machine
+    verdict, PASS or FAIL. A key-gated route that answers 2xx without the key is a stop
+    condition. ``channels(record) -> (api, facts)`` and ``ssh_fn(record)`` stand in for the
+    guest in tests."""
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    conf = admission_config(ctx.profile)
+    if not conf:
+        raise Refused('REFUSED', 'the profile declares no provisioning.agent_server.admission')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    profile = ctx.profile
+    server = provisioning_config(profile)['agent_server']
+    listener = server['listener']
+    routes, inventory_problems = load_routes(ctx)
+    body_a, fixture_problems, _ = _fixture(ctx)
+    body_b = dict(body_a, conversation_id=SECOND_CONVERSATION_ID,
+                  tags={'aieh': 's-01.3.1-disposable-peer'})
+    conversations = [body_a['conversation_id'], SECOND_CONVERSATION_ID]
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    channels = channels or default_channels
+    ssh = (ssh_fn or (lambda rec: Ssh(profile, idir, rec['ports']['ssh'])))(record)
+    api, facts = channels(record)
+    t0, started = time.time(), utc_now()
+    steps, failed, stop_conditions = [], [], []
+    state = {'created': []}
+    memo = {}
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError,
+              subprocess.SubprocessError)
+
+    def run(step, func, always=False):
+        if (failed or stop_conditions) and not always:
+            steps.append({'step': step, 'skipped': 'an earlier step failed'})
+            return None
+        s = time.time()
+        entry = {'step': step, 'started_at': utc_now()}
+        try:
+            ok, detail = func()
+        except caught as exc:
+            ok, detail = False, {'error': getattr(exc, 'code', type(exc).__name__),
+                                 'message': str(exc), 'detail': getattr(exc, 'detail', None)}
+        entry.update(seconds=round(time.time() - s, 1), ok=bool(ok), detail=detail)
+        steps.append(entry)
+        log(f'admission-probe: {step}: {"ok" if ok else "FAILED"} ({entry["seconds"]} s)')
+        if not ok:
+            failed.append(step)
+        return detail
+
+    def call(*requests):
+        data = api(list(requests))
+        if data.get('session_key_occurrences'):
+            raise Refused('SECRET', 'a response carried the session key '
+                          f'({data["session_key_occurrences"]} occurrence(s), redacted)')
+        return data['responses']
+
+    def guest_json(script, args, timeout=900):
+        result = ssh.run(['python3', '-'] + [str(a) for a in args], input_text=script,
+                         timeout=timeout)
+        try:
+            return json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            raise Refused('PROBE', f'the guest probe printed no result (rc {result.returncode}): '
+                          f'{result.stderr.strip()[-500:]}')
+
+    def in_container(conversation, command, timeout=120):
+        response, = call({'method': 'POST',
+                          'path': f'/api/conversations/{conversation}/bash/execute_bash_command',
+                          'json': {'command': command, 'cwd': '/workspace', 'timeout': timeout},
+                          'timeout': timeout + 60})
+        body = response.get('body') if isinstance(response.get('body'), dict) else {}
+        if not _status_ok(response) or body.get('exit_code') is None:
+            raise Refused('CONTAINER', f'the command did not run in {conversation}: '
+                          f'{json.dumps(response)[:400]}')
+        return body.get('stdout') or ''
+
+    def inventory_step():
+        live = guest_json(ADMISSION_SWEEP, [server['session_key']['guest_path'],
+                                            listener['address'], listener['port'],
+                                            base64.b64encode(json.dumps(
+                                                {'http': [], 'ws': []}).encode()).decode()])
+        doc = {(m, p) for p, ms in (live.get('openapi') or {}).items() for m in ms}
+        listed = {(r['method'], r['path']) for r in routes['routes'] if r.get('source') == 'openapi'}
+        memo['openapi_ops'] = len(doc)
+        missing, extra = sorted(doc - listed), sorted(listed - doc)
+        return not inventory_problems and not missing and not extra and \
+            live.get('openapi_version') == routes.get('version'), {
+                'inventory': {'path': conf['routes']['path'], 'sha256': conf['routes']['sha256'],
+                              'routes': len(routes['routes']), 'problems': inventory_problems},
+                'running_openapi': {'version': live.get('openapi_version'),
+                                    'paths': len(live.get('openapi') or {}), 'operations': len(doc)},
+                'in_document_not_in_inventory': [f'{m} {p}' for m, p in missing],
+                'in_inventory_not_in_document': [f'{m} {p}' for m, p in extra]}
+
+    def sweep_step():
+        http = [(r['method'], concrete_path(r['path'])) for r in routes['routes']
+                if r['method'] != 'WEBSOCKET']
+        ws_paths = [concrete_path(r['path']) for r in routes['routes'] if r['method'] == 'WEBSOCKET']
+        live = guest_json(ADMISSION_SWEEP, [server['session_key']['guest_path'],
+                                            listener['address'], listener['port'],
+                                            base64.b64encode(json.dumps(
+                                                {'http': http, 'ws': ws_paths}).encode()).decode()],
+                          timeout=1800)
+        if live.get('session_key_occurrences'):
+            raise Refused('SECRET', 'a refused response carried the session key')
+        got_http = {(e['method'], e['path']): e for e in live.get('http') or []}
+        got_ws = {e['path']: e for e in live.get('ws') or []}
+        mismatches, summary, statuses = [], {}, {}
+        for r in routes['routes']:
+            key = f"{r['method']} {r['path']}"
+            if r['method'] == 'WEBSOCKET':
+                e = got_ws.get(concrete_path(r['path'])) or {}
+                seen = {}
+                for variant in WS_VARIANTS:
+                    v = e.get(variant) or {}
+                    seen[variant] = v.get('close_code') if v.get('handshake') == 101 else v.get('handshake')
+                want = r['expect']
+                if 'handshake' in want:
+                    good = all(seen[v] == want['handshake'] for v in WS_VARIANTS)
+                else:
+                    good = all(seen.get(v) == want.get(v) for v in WS_VARIANTS)
+                if any((e.get(v) or {}).get('handshake') == 101 and
+                       (e.get(v) or {}).get('opcode') != 8 for v in WS_VARIANTS):
+                    stop_conditions.append({'condition': 'a WebSocket route stayed open without '
+                                            'the key', 'route': key, 'observed': e})
+            else:
+                e = got_http.get((r['method'], concrete_path(r['path']))) or {}
+                seen = {'no_key': (e.get('no_key') or [None])[0],
+                        'wrong_key': (e.get('wrong_key') or [None])[0]}
+                good = seen == r['expect']
+                if r['admission'] != 'public' and any(isinstance(s, int) and 200 <= s < 300
+                                                     for s in seen.values()):
+                    stop_conditions.append({'condition': 'a privileged route answered 2xx '
+                                            'without the key', 'route': key, 'observed': e})
+            statuses[key] = seen
+            label = f"{r['admission']} -> {json.dumps(seen, sort_keys=True)}"
+            summary[label] = summary.get(label, 0) + 1
+            if not good:
+                mismatches.append({'route': key, 'expected': r['expect'], 'observed': seen,
+                                   'answer': e})
+        return not mismatches, {'routes': len(routes['routes']), 'outcomes': summary,
+                                'mismatches': mismatches, 'statuses': statuses}
+
+    def trusted_step():
+        count, info, search = call({'method': 'GET', 'path': '/api/conversations/count'},
+                                   {'method': 'GET', 'path': '/server_info', 'auth': False},
+                                   {'method': 'GET', 'path': '/api/conversations/search?limit=10'})
+        memo['count_before'] = count.get('body')
+        return _status_ok(count) and _status_ok(info) and _status_ok(search) and \
+            count.get('body') == 0, {
+                'count': {'status': count.get('status'), 'body': count.get('body')},
+                'server_info': {'status': info.get('status')},
+                'search': {'status': search.get('status')}}
+
+    def create_step():
+        out = {}
+        for body in (body_a, body_b):
+            response, = call({'method': 'POST', 'path': '/api/conversations', 'json': body,
+                              'timeout': 600})
+            out[body['conversation_id']] = {'status': response.get('status'),
+                                            'seconds': response.get('seconds')}
+            if not _status_ok(response):
+                stop_conditions.append({'condition': 'create returned non-2xx (a refusal)',
+                                        'response': response})
+                return False, out
+            state['created'].append(body['conversation_id'])
+        report = facts()
+        view, ok = conversation_containers_view(profile, record, report)
+        allowance = listener_allowance(profile, report)
+        memo['published'] = sorted({str(a.get('local', '')).rpartition(':')[2]
+                                    for a in allowance.get('allowed') or [] if a.get('local')})
+        return ok and view.get('count') == 2 and not allowance['violations'] and \
+            not fixture_problems, {'create': out, 'containers': view, 'allowance': allowance}
+
+    def addresses():
+        result = ssh.run(['ip', '-o', '-4', 'address', 'show'], timeout=60)
+        addrs = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if 'inet' in parts:
+                addr = parts[parts.index('inet') + 1].split('/')[0]
+                if not addr.startswith('127.'):
+                    addrs.append(addr)
+        return sorted(addrs)
+
+    def network_step():
+        guest_addrs = addresses()
+        memo['guest_addresses'] = guest_addrs
+        results, ok_all = {}, True
+        ips = {}
+        for cid in conversations:
+            ips[cid] = (in_container(cid, 'hostname -I', 30).split() or [None])[0]
+        for cid in conversations:
+            peer = ips[conversations[1 - conversations.index(cid)]]
+            targets = []                                  # (host, port, what, allowed outcomes)
+            for host in ['host.docker.internal'] + guest_addrs:
+                targets.append((host, listener['port'], 'management listener', {'refused'}))
+                targets.append((host, 22, 'guest sshd', {'refused'}))
+                targets.append((host, 5355, 'guest LLMNR (systemd-resolved)', {'refused'}))
+                for port in memo.get('published') or []:
+                    targets.append((host, int(port), 'a published conversation port', {'refused'}))
+            targets.append((peer, 8000, 'peer container inner server', {'timeout', 'unreachable'}))
+            targets.append((peer, 8001, 'peer container VSCode', {'timeout', 'unreachable'}))
+            targets.append(('127.0.0.1', 8000, 'own inner server (control)', {'connected'}))
+            spec = ' '.join(f'{h}:{p}' for h, p, _, _ in targets)
+            text = in_container(cid, f'TARGETS="{spec}"\n' + CONTAINER_NET_PROBE, 120)
+            parsed = parse_net_probe(text)
+            rows = []
+            for host, port, what, allowed in targets:
+                got = parsed.get(f'{host}:{port}') or {'outcome': 'missing'}
+                good = got['outcome'] in allowed
+                ok_all = ok_all and good
+                rows.append({'target': f'{host}:{port}', 'what': what, 'expected': sorted(allowed),
+                             'observed': got['outcome'], 'answer': got.get('answer'), 'ok': good})
+                if what == 'management listener' and got['outcome'] == 'connected':
+                    stop_conditions.append({'condition': 'the management listener answered '
+                                            'from a conversation container', 'target': rows[-1]})
+            hdi = (_probe_lines(text, 'HOSTS_HDI') or [''])[0]
+            results[cid] = {'container_address': ips[cid], 'host.docker.internal': hdi,
+                            'identity': (_probe_lines(text, 'ID') or [''])[0], 'targets': rows}
+        return ok_all, {'guest_addresses': guest_addrs, 'published_ports': memo.get('published'),
+                        'containers': results}
+
+    def custody_step():
+        boot = guest_json('import json,sys\nprint(json.dumps(json.load(open(sys.argv[1]))))\n',
+                          [provisioning_config(profile)['facts']['path']], 120)
+        outer = ((boot.get('agent_server') or {}).get('secrets') or {}).get('fingerprints') or {}
+        outer_hosts = ' '.join(f'{h}:{listener["port"]}' for h in
+                               ['host.docker.internal'] + (memo.get('guest_addresses') or []))
+        results, ok_all = {}, bool(outer)
+        for cid in conversations:
+            text = in_container(cid, f'CID={cid}\nOUTER="{outer_hosts}"\n' + CONTAINER_KEY_PROBE, 120)
+            prints = sorted({tuple(x.split(' ', 1)) for x in _probe_lines(text, 'FP')})
+            leaked = [name for name, fp in prints if fp in set(outer.values())]
+            child = {'no_key': (_probe_lines(text, 'CHILD_NO_KEY') or [''])[0][:160],
+                     'inner_key_empty_body': (_probe_lines(text, 'CHILD_INNER_KEY') or [''])[0][:160]}
+            outer_tries = _probe_lines(text, 'OUTER_WITH_INNER_KEY')
+            internal = (_probe_lines(text, 'INTERNAL_URL') or [''])[0]
+            good = not leaked and bool(prints) and internal.startswith('http://127.0.0.1:') and \
+                child['no_key'].startswith('401') and child['inner_key_empty_body'].startswith('422') and \
+                bool(outer_tries) and all(t.split(' ')[1] == '000' for t in outer_tries if ' ' in t)
+            ok_all = ok_all and good
+            results[cid] = {'internal_server_url': internal,
+                            'readable_key_fingerprints': [{'variable': n, 'fingerprint': f}
+                                                          for n, f in prints],
+                            'outer_fingerprint_found': leaked,
+                            'start_child_conversation_target': child,
+                            'outer_listener_with_inner_key': outer_tries, 'ok': good}
+        count, = call({'method': 'GET', 'path': '/api/conversations/count'})
+        return ok_all and count.get('body') == 2, {
+            'outer_fingerprints': outer, 'containers': results,
+            'outer_count_after': count.get('body')}
+
+    def keycheck_step():
+        path = conf['session_key']['start_check']
+        cases = guest_json(KEYCHECK_PROBE, [path], 120)
+        good = all(v.get('rc') == 1 and 'refused' in v.get('line', '')
+                   for k, v in cases.items() if k != 'valid') and \
+            (cases.get('valid') or {}).get('rc') == 0
+        return good, {'script': path, 'cases': cases}
+
+    def logged_step():
+        report = facts()
+        adm = report.get('admission') if isinstance(report.get('admission'), dict) else {}
+        counters = {t: adm.get(t) for t in ('iptables', 'ip6tables')}
+        rejected = sum(r.get('packets', 0) for r in (counters.get('iptables') or [])
+                       if isinstance(r, dict) and r.get('target') in ('REJECT', 'LOG'))
+        log_ = adm.get('log') or {}
+        srv = adm.get('server') or {}
+        return rejected > 0 and log_.get('count', 0) > 0 and srv.get('http_401', 0) > 0 and \
+            srv.get('websocket_auth_failed', 0) > 0, {
+                'guard_counters': counters, 'guard_log': log_, 'server_refusals': srv}
+
+    def delete_step():
+        out = {}
+        for cid in list(state['created']):
+            response, = call({'method': 'DELETE', 'path': f'/api/conversations/{cid}',
+                              'timeout': 300})
+            out[cid] = response.get('status')
+            if _status_ok(response):
+                state['created'].remove(cid)
+        report = facts()
+        view, ok = conversation_containers_view(profile, record, report)
+        count, = call({'method': 'GET', 'path': '/api/conversations/count'})
+        return not state['created'] and ok and view.get('count') == 0 and count.get('body') == 0, {
+            'delete': out, 'containers_after': view.get('count'), 'count_after': count.get('body')}
+
+    run('route inventory against the running server', inventory_step)
+    run('unauthenticated and wrong-key requests to every route', sweep_step)
+    run('trusted side with the key (positive control)', trusted_step)
+    run('create two disposable conversations', create_step)
+    run('agent network: listener, guest services, published ports, peer', network_step)
+    run('agent network: session keys and start_child_conversation', custody_step)
+    run('key check fails closed', keycheck_step)
+    run('refusals logged', logged_step)
+    run('delete the conversations', delete_step, always=bool(state['created']))
+    out = {'schema': ADMISSION_PROBE_SCHEMA, 'operation': 'admission-probe',
+           'labels': labels(profile), 'profile': profile['name'], 'instance': name,
+           'conversations': conversations, 'started_at': started, 'ended_at': utc_now(),
+           'seconds': round(time.time() - t0, 1),
+           'result': 'PASS' if not failed and not stop_conditions else 'FAIL',
+           'failed_steps': failed, 'stop_conditions': stop_conditions, 'steps': steps}
+    out['record'] = write_record(idir, 'admission-probe', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -7223,7 +7840,7 @@ def main(argv=None):
     p.add_argument('--log', required=True)
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
-               'provision-fetch', 'provision', 'conversation-smoke'):
+               'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -7244,7 +7861,7 @@ def main(argv=None):
                            help='a durable root to inventory before and after each destroy and '
                                 'recreate (repeatable; stands for Owner data)')
             p.add_argument('--out', help='also write the smoke record to this new file')
-        if op == 'conversation-smoke':
+        if op in ('conversation-smoke', 'admission-probe'):
             p.add_argument('--out', help='also write the record to this new file')
         if op == 'exchange-push':
             p.add_argument('--repo', required=True, help='the repository to read the branch from')
@@ -7309,6 +7926,8 @@ def main(argv=None):
         elif op == 'conversation-smoke':
             result = conversation_smoke(ctx, args.name, args.canaries, args.restart, args.openapi,
                                         args.out, args.ready_timeout)
+        elif op == 'admission-probe':
+            result = admission_probe(ctx, args.name, args.out)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:
@@ -7317,7 +7936,8 @@ def main(argv=None):
                           'detail': exc.detail}, indent=2, sort_keys=True, default=str))
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
-    if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke'):
+    if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke',
+                                   'admission-probe'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \

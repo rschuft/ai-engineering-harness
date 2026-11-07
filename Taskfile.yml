@@ -474,6 +474,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py conversation-smoke --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
 
+  guest:admission-probe:
+    desc: "Management API admission (S-01.3.1) on a running provisioned guest: the pinned route inventory against the running server's /openapi.json, every route without the key and with a wrong one (HTTP and WebSocket), the trusted side with the key, two disposable conversations and from inside each container the management listener, the guest's services, the published ports and the peer container, the keys the agent can read, start_child_conversation's target, the key check, the logged refusals; exit 0 only on PASS (python -I -B tools/guest.py admission-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --out FILE])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py admission-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
+
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath
     cmds:

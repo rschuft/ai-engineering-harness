@@ -758,6 +758,99 @@ class AgentServerBlock(unittest.TestCase):
         self.assertFails('fixture.openapi.sha256')
 
 
+class AdmissionBlock(unittest.TestCase):
+    """S-01.3.1: provisioning.agent_server.admission and its pinned route inventory; each
+    mutation must FAIL naming the rule."""
+    setUp = AgentServerBlock.setUp
+    errors = AgentServerBlock.errors
+    assertFails = AgentServerBlock.assertFails
+
+    def routes(self):
+        return json.loads((self.tmp / self.server['admission']['routes']['path']).read_text(
+            encoding='utf-8'))
+
+    def write_routes(self, data):
+        path = self.tmp / self.server['admission']['routes']['path']
+        text = json.dumps(data, indent=1) + '\n'
+        path.write_text(text, encoding='utf-8', newline='\n')
+        self.server['admission']['routes']['sha256'] = check_profile.sha256_file(path)
+
+    def test_committed_admission_passes(self):
+        self.assertEqual(self.errors(), [])
+        self.assertEqual(check_profile.route_problems(self.routes()), [])
+
+    def test_routes_are_pinned(self):
+        self.server['admission']['routes']['sha256'] = '0' * 64
+        self.assertFails('admission.routes: profiles/')
+
+    def test_route_rules(self):
+        data = self.routes()
+        gated = next(r for r in data['routes'] if r['admission'] == 'session-key')
+        public = next(r for r in data['routes'] if r['admission'] == 'public')
+        ws = next(r for r in data['routes'] if r['method'] == 'WEBSOCKET' and
+                  set(r['expect']) == set(check_profile.ROUTE_WS_VARIANTS))
+        cases = [
+            (gated, dict(gated, expect={'no_key': 200, 'wrong_key': 401}), 'must not answer 2xx'),
+            (gated, dict(gated, admission='open'), 'admission must be one of'),
+            (gated, dict(gated, **{'class': 'public-read'}), 'go together'),
+            (gated, dict(gated, dispatcher='sometimes'), 'dispatcher must be'),
+            (gated, dict(gated, source='guess'), 'source must be'),
+            (gated, dict(gated, expect={'no_key': 401}), 'expect no_key and wrong_key'),
+            (public, dict(public, method='POST'), 'a public route must be a GET'),
+            (ws, dict(ws, expect=dict(ws['expect'], no_auth_message=101)), 'never 101'),
+            (ws, dict(ws, admission='public', **{'class': 'public-read'}), 'needs a credential'),
+        ]
+        for old, new, fragment in cases:
+            changed = dict(data, routes=[new if r is old else r for r in data['routes']])
+            problems = check_profile.route_problems(changed)
+            self.assertTrue(any(fragment in p for p in problems), (fragment, problems))
+        twice = dict(data, routes=data['routes'] + [gated])
+        self.assertTrue(any('listed twice' in p for p in check_profile.route_problems(twice)))
+        self.assertEqual(check_profile.route_problems({'schema': 'x'}),
+                         [f'schema must be {check_profile.ROUTES_SCHEMA}'])
+        self.write_routes(dict(data, routes=[dict(gated, expect={'no_key': 204, 'wrong_key': 401})]
+                               + data['routes'][1:]))
+        self.assertFails('admission.routes: ')
+
+    def test_route_version_is_the_server_version(self):
+        self.write_routes(dict(self.routes(), version='1.0.0'))
+        self.assertFails('version must be the Agent Server version')
+
+    def test_guard_and_icc(self):
+        guard = self.server['admission']['network']['guard']
+        rules = list(guard['rules'])
+        guard['rules'] = rules[1:]
+        self.assertFails('network.guard.rules')
+        guard['rules'] = rules[:2] + ['-p tcp -j ACCEPT', rules[3]]
+        self.assertFails('network.guard.rules')
+        guard['rules'] = rules
+        for key, value in (('families', ['iptables']), ('interfaces', ['br-+']),
+                           ('log_prefix', 'x'), ('docker_dropin', '/etc/docker/x.conf'),
+                           ('chain', 'x y')):
+            saved = guard[key]
+            guard[key] = value
+            self.assertFails('admission.network.guard: an INPUT chain')
+            guard[key] = saved
+        daemon = self.qemu['provisioning']['moby']['daemon_json']
+        daemon['icc'] = True
+        self.assertFails('must set icc false')
+        del daemon['icc']
+        self.assertFails('must set icc false')
+        daemon['icc'] = False
+        self.assertEqual(self.errors(), [])
+
+    def test_session_key_and_dispatcher(self):
+        adm = self.server['admission']
+        adm['session_key']['header'] = 'Authorization'
+        self.assertFails('admission.session_key')
+        adm['session_key']['header'] = 'X-Session-API-Key'
+        adm['session_key']['start_check'] = '/tmp/check'
+        self.assertFails('admission.session_key')
+        adm['session_key']['start_check'] = '/usr/local/sbin/aieh-agent-server-keycheck'
+        adm['dispatcher']['owner_ui'] = ''
+        self.assertFails('admission.dispatcher')
+
+
 class OpenApiSubset(unittest.TestCase):
     """The standard-library JSON Schema subset that validates the fixture (synthetic
     documents; the locked openapi.json itself is downloaded, never committed)."""

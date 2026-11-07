@@ -994,6 +994,8 @@ def check_agent_server(report, profile, root, conf):
                     '(composition/lock/components.lock.json release_assets)')
     if 'conversations' in server:
         check_conversations(report, profile, server)
+    if 'admission' in server:
+        check_admission(report, profile, root, conf, server)
     try:
         body = json.loads((root / fixture['path']).read_text(encoding='utf-8'))
     except (OSError, ValueError, KeyError, TypeError):
@@ -1088,6 +1090,129 @@ def locked_openapi_sha256(root):
 UUID_TEXT = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
 FIXTURE_KEYS = {'conversation_id', 'conversation_runtime', 'workspace', 'agent_settings',
                 'autotitle', 'container', 'tags'}
+ROUTES_SCHEMA = 'ai-engineering-harness/profiles/agent-server-routes/v1'
+ROUTE_METHODS = ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'WEBSOCKET')
+ROUTE_ADMISSIONS = ('public', 'session-key', 'session-key-or-bearer', 'init-key',
+                    'session-key-or-workspace-cookie', 'app-backend-session',
+                    'first-message-session-key')
+ROUTE_CLASSES = ('public-read', 'management-read', 'privileged')
+ROUTE_WS_VARIANTS = ('no_auth_message', 'first_message_wrong_key', 'query_wrong_key',
+                     'header_wrong_key')
+# S-01.3.1: the container guard's rules as the profile must declare them (iptables syntax;
+# the seeded aieh-container-guard installs exactly these, in this order)
+GUARD_RULES = ['-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+               '-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix '
+               '"aieh-container-guard: "',
+               '-p tcp -j REJECT --reject-with tcp-reset',
+               '-j REJECT']
+
+
+def route_problems(data):
+    """The route inventory of provisioning.agent_server.admission (S-01.3.1): every route
+    has a method, a path, a known credential kind, class, source and dispatcher use, and an
+    expected refusal; a public route is a GET of class public-read; a route that needs a
+    credential is never expected to answer 2xx without one, and a WebSocket route never to
+    stay open (101 without a close); no route appears twice."""
+    problems = []
+    if not isinstance(data, dict) or data.get('schema') != ROUTES_SCHEMA:
+        return [f'schema must be {ROUTES_SCHEMA}']
+    routes = data.get('routes')
+    if not isinstance(routes, list) or not routes:
+        return ['routes must be a non-empty list']
+    seen = set()
+    for i, r in enumerate(routes):
+        if not isinstance(r, dict) or r.get('method') not in ROUTE_METHODS or \
+                not str(r.get('path', '')).startswith('/'):
+            problems.append(f'routes[{i}]: an object with a known method and an absolute path')
+            continue
+        method, where = r['method'], f"{r['method']} {r['path']}"
+        if (method, r['path']) in seen:
+            problems.append(f'{where}: listed twice')
+        seen.add((method, r['path']))
+        if r.get('admission') not in ROUTE_ADMISSIONS:
+            problems.append(f'{where}: admission must be one of {list(ROUTE_ADMISSIONS)}')
+        if r.get('class') not in ROUTE_CLASSES:
+            problems.append(f'{where}: class must be one of {list(ROUTE_CLASSES)}')
+        if r.get('dispatcher') not in ('allowed', 'validation', 'not-used'):
+            problems.append(f'{where}: dispatcher must be allowed, validation or not-used')
+        if r.get('source') not in ('openapi', 'framework', 'binary'):
+            problems.append(f'{where}: source must be openapi, framework or binary')
+        public = r.get('admission') == 'public'
+        if public != (r.get('class') == 'public-read'):
+            problems.append(f'{where}: admission public and class public-read go together')
+        if public and method != 'GET':
+            problems.append(f'{where}: a public route must be a GET')
+        expect = r.get('expect')
+        if not isinstance(expect, dict) or not expect:
+            problems.append(f'{where}: expect must name the refusal')
+        elif method == 'WEBSOCKET':
+            if public or not (set(expect) == {'handshake'} or
+                              set(expect) == set(ROUTE_WS_VARIANTS)):
+                problems.append(f'{where}: a WebSocket route needs a credential and expects '
+                                f'handshake or {list(ROUTE_WS_VARIANTS)}')
+            elif any(v == 101 or not isinstance(v, int) for v in expect.values()):
+                problems.append(f'{where}: a WebSocket refusal is a close code or a refused '
+                                'handshake, never 101')
+        elif set(expect) != {'no_key', 'wrong_key'}:
+            problems.append(f'{where}: expect no_key and wrong_key')
+        elif not public and any(not isinstance(v, int) or 200 <= v < 300
+                                for v in expect.values()):
+            problems.append(f'{where}: a route that needs a credential must not answer 2xx '
+                            'without one')
+    return problems
+
+
+def check_admission(report, profile, root, conf, server):
+    """provisioning.agent_server.admission (S-01.3.1): the pinned route inventory, the
+    session-key header and the fail-closed start check, the container guard (chain, both
+    families, docker0 and the bridges, the declared rules, Moby requires it) and icc off on
+    Moby's default bridge."""
+    label = 'provisioning.agent_server.admission'
+    adm = server.get('admission')
+    if not isinstance(adm, dict):
+        report.fail(f'{label}: must be an object')
+        return
+    entry = adm.get('routes') or {}
+    check_repo_file(report, root, f'{label}.routes', entry)
+    try:
+        data = json.loads((root / entry['path']).read_text(encoding='utf-8'))
+    except (OSError, ValueError, KeyError, TypeError):
+        data = None
+    if data is not None:
+        for problem in route_problems(data):
+            report.fail(f'{label}.routes: {problem}')
+        if isinstance(data, dict) and data.get('version') != server.get('version'):
+            report.fail(f'{label}.routes: version must be the Agent Server version')
+    key = adm.get('session_key') or {}
+    if key.get('header') != 'X-Session-API-Key' or \
+            not str(key.get('start_check', '')).startswith('/usr/local/sbin/'):
+        report.fail(f'{label}.session_key: header X-Session-API-Key and a seeded start check '
+                    'under /usr/local/sbin (fail closed without a key)')
+    guard = (adm.get('network') or {}).get('guard') or {}
+    if guard.get('rules') != GUARD_RULES:
+        report.fail(f'{label}.network.guard.rules: must be {GUARD_RULES}')
+    if not re.match(r'^[A-Z][A-Z0-9-]{2,28}$', str(guard.get('chain', ''))) or \
+            guard.get('families') != ['iptables', 'ip6tables'] or \
+            'docker0' not in (guard.get('interfaces') or []) or \
+            guard.get('log_prefix') != 'aieh-container-guard: ' or \
+            not str(guard.get('script', '')).startswith('/usr/local/sbin/') or \
+            not str(guard.get('docker_dropin', '')).startswith(
+                '/etc/systemd/system/docker.service.d/') or \
+            not str(guard.get('unit', '')).endswith('.service'):
+        report.fail(f'{label}.network.guard: an INPUT chain for both families on docker0 and '
+                    'the bridges, the declared log prefix, a seeded script and unit, and a '
+                    'docker.service drop-in')
+    daemon = (conf.get('moby') or {}).get('daemon_json') or {}
+    if daemon.get('icc') is not False:
+        report.fail(f'{label}: provisioning.moby.daemon_json must set icc false (no '
+                    'container-to-container connection on the default bridge)')
+    dispatcher = adm.get('dispatcher') or {}
+    if not dispatcher.get('principal') or not dispatcher.get('bootstrap') or \
+            not dispatcher.get('owner_ui'):
+        report.fail(f'{label}.dispatcher: name the principal, the bootstrap performer and the '
+                    'Owner UI path (planned or unknown)')
+
+
 CREDENTIAL_KEYS = re.compile(r'(?i)(api_?key|secret|password|token|credential|auth)')
 
 

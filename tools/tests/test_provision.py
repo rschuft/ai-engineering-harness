@@ -99,7 +99,11 @@ class SeededRootStep(unittest.TestCase):
             '/usr/local/sbin/aieh-agent-server-ready',
             '/etc/systemd/system/aieh-agent-server.service',
             '/etc/systemd/system/aieh-conversation-facts.path',
-            '/etc/systemd/system/aieh-conversation-facts.service'})
+            '/etc/systemd/system/aieh-conversation-facts.service',
+            '/usr/local/sbin/aieh-container-guard',
+            '/etc/systemd/system/aieh-container-guard.service',
+            '/etc/systemd/system/docker.service.d/10-aieh-container-guard.conf',
+            '/usr/local/sbin/aieh-agent-server-keycheck'})
         self.assertIn('  - path: /etc/aieh/provision.json\n    owner: root:root\n'
                       "    permissions: '0600'\n    encoding: b64\n"
                       '    content: "{{provision_manifest}}"\n', TEMPLATE)
@@ -365,6 +369,152 @@ class ConversationFactsSeed(unittest.TestCase):
         self.assertIn('os.chown(REQUEST_DIR, 0, agent_gid', source)
         self.assertIn("['systemctl', 'enable', '--now', CONV_PATH_UNIT]", source)
         self.assertIn("data.get('containers') != []", source)
+
+
+class AdmissionSeed(unittest.TestCase):
+    """S-01.3.1: the seeded container guard, its unit and docker.service drop-in, the key
+    check before the Agent Server starts, and the root step's admission step and facts,
+    against provisioning.agent_server.admission."""
+    ADM = PCONF['agent_server']['admission']
+    GUARD = ADM['network']['guard']
+
+    def guard_module(self):
+        """The guard script's definitions, executed (not its main) in a fresh namespace."""
+        namespace = {'__name__': 'aieh_guard_test'}
+        exec(compile(FILES[self.GUARD['script']], 'guard', 'exec'), namespace)
+        return namespace
+
+    def keycheck_module(self):
+        namespace = {'__name__': 'aieh_keycheck_test'}
+        exec(compile(FILES[self.ADM['session_key']['start_check']], 'keycheck', 'exec'), namespace)
+        return namespace
+
+    def test_guard_constants_equal_the_profile(self):
+        g = self.guard_module()
+        self.assertEqual(g['CHAIN'], self.GUARD['chain'])
+        self.assertEqual(list(g['INTERFACES']), self.GUARD['interfaces'])
+        self.assertEqual(g['LOG_PREFIX'], self.GUARD['log_prefix'])
+        self.assertEqual(list(g['TOOLS']), self.GUARD['families'])
+        self.assertEqual(list(g['RULES']), self.GUARD['rules'])
+        c = script_constants()
+        self.assertEqual(c['GUARD'], self.GUARD['script'])
+        self.assertEqual(c['GUARD_UNIT'], self.GUARD['unit'])
+        self.assertEqual(c['GUARD_CHAIN'], self.GUARD['chain'])
+        self.assertEqual(c['GUARD_LOG_PREFIX'], self.GUARD['log_prefix'])
+        self.assertEqual(list(c['GUARD_TOOLS']), self.GUARD['families'])
+        self.assertEqual(c['GUARD_DROPIN'], self.GUARD['docker_dropin'])
+        self.assertEqual(c['KEYCHECK'], self.ADM['session_key']['start_check'])
+
+    def test_guard_units(self):
+        lines = unit(self.GUARD['unit'])
+        self.assertIn('Before=docker.service', lines)
+        self.assertIn('DefaultDependencies=no', lines)
+        self.assertIn('Type=oneshot', lines)
+        self.assertIn('RemainAfterExit=yes', lines)
+        self.assertIn(f"ExecStart=/usr/bin/python3 -I {self.GUARD['script']}", lines)
+        self.assertIn('ConditionFileNotEmpty=/etc/aieh/provision.json', lines)
+        dropin = [line for line in FILES[self.GUARD['docker_dropin']].splitlines() if '=' in line]
+        self.assertEqual(dropin, [f"Requires={self.GUARD['unit']}", f"After={self.GUARD['unit']}"])
+        self.assertIn(f"  - path: {self.GUARD['script']}\n    owner: root:root\n"
+                      "    permissions: '0755'\n", TEMPLATE)
+
+    def test_guard_installs_and_verifies_both_families(self):
+        g = self.guard_module()
+        calls, state = [], {}
+
+        def fake_run(argv):
+            calls.append(argv)
+            tool, op = argv[0], argv[2]
+            chain, inputs = state.setdefault(tool, ([], []))
+            if op == '-L':
+                return (0 if tool + '-chain' in state else 1), '', ''
+            if op == '-N':
+                state[tool + '-chain'] = True
+            elif op == '-A':
+                chain.append(' '.join(f'"{x}"' if ' ' in x else x for x in argv[3:]))
+            elif op == '-D':
+                return 1, '', 'not found'
+            elif op == '-I':
+                inputs.insert(0, ' '.join(argv[5:]))
+            elif op == '-S':
+                if argv[3] == g['CHAIN']:
+                    return 0, '-N ' + g['CHAIN'] + '\n' + ''.join(
+                        f'-A {line}\n' for line in chain), ''
+                return 0, '-P INPUT ACCEPT\n' + ''.join(
+                    f'-A INPUT {line}\n' for line in inputs), ''
+            return 0, '', ''
+        g['run'] = fake_run
+        with mock.patch('builtins.print') as printed:
+            self.assertEqual(g['main']([]), 0)
+        out = json.loads(printed.call_args[0][0])
+        self.assertTrue(out['ok'])
+        self.assertEqual(set(out['families']), {'iptables', 'ip6tables'})
+        added = [c for c in calls if c[2] == '-A']
+        self.assertEqual(len(added), 2 * len(self.GUARD['rules']))
+        self.assertIn(['iptables', '-w', '-A', g['CHAIN'], '-m', 'limit', '--limit', '10/min',
+                       '--limit-burst', '20', '-j', 'LOG', '--log-prefix',
+                       'aieh-container-guard: '], added)
+        # a missing rule, an extra INPUT jump or a jump below another rule is not ok
+        lines = {'iptables': [f"-A {g['CHAIN']} {r}" for r in self.GUARD['rules']]}
+
+        def observed(chain_lines, input_lines):
+            g['run'] = lambda argv: (0, '\n'.join(chain_lines if argv[3] == g['CHAIN']
+                                                   else input_lines) + '\n', '')
+            return g['observe']('iptables')['ok']
+        jumps = [f"-A INPUT -i {i} -j {g['CHAIN']}" for i in reversed(self.GUARD['interfaces'])]
+        want = lines['iptables'][:3] + [lines['iptables'][3] + ' --reject-with icmp-port-unreachable']
+        self.assertTrue(observed(want, ['-P INPUT ACCEPT'] + jumps))
+        self.assertFalse(observed(want[:3], ['-P INPUT ACCEPT'] + jumps))
+        self.assertFalse(observed(want, ['-P INPUT ACCEPT', '-A INPUT -j ACCEPT'] + jumps))
+        self.assertFalse(observed(want, ['-P INPUT ACCEPT'] + jumps[:1]))
+
+    def test_guard_failure_is_reported_and_nonzero(self):
+        g = self.guard_module()
+        g['run'] = lambda argv: (4, '', 'iptables: not available')
+        with mock.patch('builtins.print') as printed:
+            self.assertEqual(g['main']([]), 1)
+        out = json.loads(printed.call_args[0][0])
+        self.assertFalse(out['ok'])
+        self.assertIn('exited 4', out['error'])
+
+    def test_keycheck_refuses_without_a_valid_key(self):
+        problems = self.keycheck_module()['problems']
+        a, b = 'A' * 43, 'B' * 43
+        self.assertEqual(problems({'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': b}), [])
+        for env in ({}, {'OH_SESSION_API_KEYS_0': '', 'OH_SECRET_KEY': b},
+                    {'OH_SESSION_API_KEYS_0': 'short', 'OH_SECRET_KEY': b},
+                    {'OH_SESSION_API_KEYS_0': a},
+                    {'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': a},
+                    {'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': b, 'OH_SESSION_API_KEYS_1': b},
+                    {'OH_SESSION_API_KEYS_0': a, 'OH_SECRET_KEY': b, 'SESSION_API_KEY': a}):
+            found = problems(env)
+            self.assertTrue(found, env)
+            for value in env.values():                       # names only, never a value
+                if value:
+                    self.assertFalse(any(value in p for p in found))
+
+    def test_agent_server_starts_only_after_the_key_check(self):
+        lines = unit(PCONF['agent_server']['service']['unit'])
+        pre = f"ExecStartPre=/usr/bin/python3 -I {self.ADM['session_key']['start_check']}"
+        self.assertIn(pre, lines)
+        self.assertLess(lines.index(pre), next(i for i, l in enumerate(lines)
+                                               if l.startswith('ExecStart=')))
+
+    def test_root_step_admission_checks_everything_declared(self):
+        fn = ast.unparse(script_function('check_admission'))
+        for word in ("'active'", "'ok'", 'docker_requires_guard', 'docker_after_guard',
+                     "bridge_enable_icc'] != 'false'", "'enable', GUARD_UNIT"):
+            self.assertIn(word, fn)
+        facts = ast.unparse(script_function('admission_facts'))
+        for word in ("'check'", "'network', 'inspect', 'bridge'", 'com.docker.network.bridge.enable_icc',
+                     "('Requires', 'After')", 'ExecStartPre'):
+            self.assertIn(word, facts)
+        counters = ast.unparse(script_function('admission_counters'))
+        for word in ("'-v', '-x', '-L', GUARD_CHAIN", "'journalctl', '-k', '-b'",
+                     "'HTTPException 401 on '"):
+            self.assertIn(word, counters)
+        self.assertIn("data['admission'] = admission_facts()", SCRIPT)
+        self.assertIn("'admission': admission_counters(),", SCRIPT)
 
 
 class ManifestFixture(unittest.TestCase):

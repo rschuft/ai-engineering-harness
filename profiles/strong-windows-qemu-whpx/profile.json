@@ -114,7 +114,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "6b3b464b41fb91b89eb5f6c7e34368ce6d5a61d182b85c9babd046c8c13af0a2"
+          "sha256": "dc6c160da8fcd5b58f77f41d586e54ffc1a6671e349ac888e8cf624afb28e9f1"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -250,7 +250,7 @@
       "staging": "/var/lib/aieh/provision-staging",
       "result": "/var/lib/aieh/provision/RESULT.json",
       "timeout_s": 3600,
-      "sequence": ["copy", "verify", "daemon-json", "sysctl", "apt-install", "containerd-config", "docker-ready", "docker-load", "image-id", "tag", "run", "agent-server-install", "agent-server-secrets", "agent-server-start", "conversation-facts", "facts", "cleanup"],
+      "sequence": ["copy", "verify", "daemon-json", "sysctl", "apt-install", "containerd-config", "docker-ready", "admission", "docker-load", "image-id", "tag", "run", "agent-server-install", "agent-server-secrets", "agent-server-start", "conversation-facts", "facts", "cleanup"],
       "single_use": "the trigger is disabled, stopped and its unit file removed in every outcome; the service refuses to run once RESULT.json or the staging directory exists"
     },
     "facts": {
@@ -268,9 +268,11 @@
         "default-runtime": "runc",
         "storage-driver": "overlay2",
         "no-new-privileges": true,
+        "icc": false,
         "log-driver": "json-file",
         "log-opts": {"max-size": "10m", "max-file": "3"}
       },
+      "icc_rule": "S-01.3.1: icc false is Moby's own control for the default bridge: no connection between two containers on it (observed before it: each conversation container reached the others' inner servers on 8000 and 8001). It does not touch the guest's own connection to a container's published loopback port (docker-proxy).",
       "required_security_options": ["name=no-new-privileges"],
       "sysctl": {
         "path": "/etc/sysctl.d/90-aieh-moby.conf",
@@ -434,6 +436,55 @@
           "rate": {"interval_s": 60, "burst": 20},
           "rule": "On demand, root, read-only. agent creates the request file in the root:agent 0730 directory (it can create, not list); the path unit starts the oneshot reporter, which removes the file without reading it (its existence is the only input), runs no container command but docker ps and docker container inspect, and writes an agent-readable report of the containers carrying owner_label (environment by name only, every secret value counted and redacted), root's TCP listeners with the docker-proxy argv, the stored conversations (files, sizes, sha256, event ids and kinds; runtime control files by name and size) and the server's journal. At most 20 runs in 60 s (TriggerLimitBurst and StartLimitBurst); beyond that the units fail closed until the next boot."
         }
+      },
+      "admission": {
+        "plan_leaf": "S-01.3.1",
+        "use": "The management API admission of the outer Agent Server: who may reach its routes, with which credential, and what a refused request sees. Validation only: disposable conversations of the fixture (and one derived from it), no LLM, no repository content, no untrusted workload (Owner authorization of 2026-11-07, evidence/bootstrap-log.md).",
+        "routes": {
+          "path": "profiles/strong-windows-qemu-whpx/agent-server/routes.json",
+          "sha256": "04953de136bf053331c67e76d410f10272fea0d04e188aa7ec94a86a31e38730",
+          "purpose": "The route inventory and the dispatcher's allowlist: every route of the running 1.60.1 server (its /openapi.json) and every route the locked release binary registers outside that document (WebSockets, the Canvas App backend proxy, the documentation routes), each with its credential, class (public-read, management-read, privileged), dispatcher use and the expected refusal. guest.py admission-probe compares the live document with it and probes every route."
+        },
+        "session_key": {
+          "header": "X-Session-API-Key",
+          "server_rule": "1.60.1 dependencies.py check_session_api_key on every /api router (401 HTTPException without or with a wrong key); WebSockets: first-message auth, close 4001 'Authentication failed'; a wrong key in the query or header refuses the handshake (403). Config.session_api_keys: an empty list means the server is unsecured, and empty values are dropped.",
+          "start_check": "/usr/local/sbin/aieh-agent-server-keycheck",
+          "start_rule": "ExecStartPre of the unit (as openhands, with the environment file): the server starts only when the session key and OH_SECRET_KEY are 43-character token_urlsafe values, distinct, and no other session-key variable (OH_SESSION_API_KEYS_<n> for n > 0, SESSION_API_KEY) is set; otherwise systemd never runs ExecStart, so a missing key fails closed instead of serving an unsecured API. It prints variable names only."
+        },
+        "network": {
+          "listener_rule": "The management listener is 127.0.0.1:8000 only (listener above), and the unit's IPAddressDeny=any with IPAddressAllow=localhost drops any non-loopback packet of the server's cgroup: the agent network (Moby's default bridge) has no path to it.",
+          "guard": {
+            "script": "/usr/local/sbin/aieh-container-guard",
+            "unit": "aieh-container-guard.service",
+            "docker_dropin": "/etc/systemd/system/docker.service.d/10-aieh-container-guard.conf",
+            "chain": "AIEH-CONTAINER-GUARD",
+            "interfaces": ["docker0", "br-+"],
+            "log_prefix": "aieh-container-guard: ",
+            "rules": [
+              "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
+              "-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix \"aieh-container-guard: \"",
+              "-p tcp -j REJECT --reject-with tcp-reset",
+              "-j REJECT"
+            ],
+            "families": ["iptables", "ip6tables"],
+            "rule": "Guest-level, because the Agent Server cannot express it: in the filter table's INPUT chain, a packet that arrives from a container bridge (docker0, br-+) and is not part of a connection the guest opened jumps to the chain, is logged (rate-limited, kernel log) and is refused: TCP with a reset, anything else with an ICMP port-unreachable. A container therefore reaches no listener of the guest itself at any of its addresses (host.docker.internal is docker0): not sshd, not systemd-resolved's LLMNR, not the management listener. Replies to the guest's own connections (docker-proxy to a container's port 8000) are RELATED,ESTABLISHED and pass. Forwarded traffic is not touched (S-01.4).",
+            "fail_closed": "The drop-in makes docker.service Require and start After the guard: if the rules cannot be installed, Moby does not start and no conversation container can be created. The root step's admission step verifies the unit, the rules of both families and the bridge's enable_icc before the Agent Server is installed."
+          },
+          "icc": "provisioning.moby.daemon_json icc false (icc_rule)"
+        },
+        "rejection": {
+          "http": "401 {\"detail\": \"Unauthorized\"} for every key-gated route, without a key or with a wrong one; the server logs 'HTTPException 401 on <method> <path>' at info level",
+          "websocket": "first-message auth: accepted, then close 4001 'Authentication failed' (logged 'WebSocket first-message auth failed: ...'); a wrong key in the query or header: the handshake gets 403 ('WebSocket authentication failed: invalid API key')",
+          "app_backend": "the Canvas App backend proxy answers 503 (ingress not configured) and refuses its WebSocket handshake (403)",
+          "network": "from a container bridge: a TCP reset (connection refused) from the guard, logged with the prefix in the kernel log; the management listener refuses at every non-loopback address (no socket bound there)",
+          "dispatcher": "the trusted dispatcher sees a 401 with no further detail for a missing or wrong key, a 2xx for an admitted request, a 422 for an invalid body, and a 503 'Conversation service is not available' or 'server is in deferred-init state' while the server is not ready; it never retries a 401 with another credential"
+        },
+        "dispatcher": {
+          "principal": "management-dispatcher (security/inventory.json; planned, E-01.2.x)",
+          "bootstrap": "No dispatcher exists. During bootstrap its role is performed by the Owner's account through tools/guest.py over the instance's SSH forward as the operator login agent, which reads the session key from its file inside the guest; no agent workload ever has that login or its SSH key.",
+          "owner_ui": "planned, not defined: the Owner UI's path to management is undecided (security finding fd-owner-ui-access); no host forward of the Agent Server exists (decision 0006)."
+        },
+        "probe": "tools/guest.py admission-probe on a running provisioned instance (Task target guest:admission-probe)"
       }
     }
   },

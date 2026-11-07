@@ -2814,6 +2814,34 @@ def agent_server_files():
                       f"{key['guest_path']}|root|agent|440|regular file"])
 
 
+ADM = PCONF['agent_server']['admission']
+GUARD = ADM['network']['guard']
+
+
+def admission_facts():
+    """What the seeded admission_facts reports for a guard in place (iptables -S prints the
+    default --reject-with of the last rule)."""
+    def family(tool):
+        suffix = ' --reject-with ' + ('icmp-port-unreachable' if tool == 'iptables'
+                                      else 'icmp6-port-unreachable')
+        lines = [f"-A {GUARD['chain']} {r}" for r in GUARD['rules']]
+        lines[-1] += suffix
+        return {'chain': lines, 'ok': True, 'error': None,
+                'input_jumps': [f"-A INPUT -i {i} -j {GUARD['chain']}"
+                                for i in reversed(GUARD['interfaces'])]}
+    return {'guard_unit': {'LoadState': 'loaded', 'ActiveState': 'active', 'SubState': 'exited',
+                           'Result': 'success', 'UnitFileState': 'enabled'},
+            'rules': {'mode': 'check', 'ok': True,
+                      'families': {t: family(t) for t in GUARD['families']}},
+            'dropin': {'path': GUARD['docker_dropin'], 'state': 'file', 'owner': 'root',
+                       'group': 'root', 'mode': '644'},
+            'docker_requires_guard': True, 'docker_after_guard': True,
+            'bridge_enable_icc': 'false',
+            'keycheck': {'script': {'path': ADM['session_key']['start_check'], 'state': 'file',
+                                    'owner': 'root', 'group': 'root', 'mode': '755'},
+                         'exec_start_pre': True}}
+
+
 def moby_facts(boot_id='boot-1', **override):
     facts = {
         'schema': guest.MOBY_FACTS_SCHEMA, 'boot_id': boot_id, 'collected_at': 'x',
@@ -2842,6 +2870,7 @@ def moby_facts(boot_id='boot-1', **override):
                         'containerd_config': PCONF['moby']['containerd_config']['content']},
         'ipv6': {'docker0_disable_ipv6': '1', 'addresses': []},
         'agent_server': agent_server_facts(),
+        'admission': admission_facts(),
         'secret_occurrences_in_report': {'OH_SECRET_KEY': 0, 'OH_SESSION_API_KEYS_0': 0},
     }
     facts.update(override)
@@ -3036,7 +3065,7 @@ class ProvisionedInspect(LaunchRecord):
         props = self.props()
         self.assertEqual(self.failing(), [])
         self.assertEqual(props[guest.PROVISIONING_PROPERTY]['verdict'], 'PASS')
-        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 21)
+        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 22)
         names = {c['check'] for c in props['profiles P6']['checks']}
         self.assertTrue({'guest Moby sockets', 'agent cannot reach Moby'} <= names)
 
@@ -3876,6 +3905,283 @@ class AgentServerSecretScan(unittest.TestCase):
                 tf.addfile(info, io.BytesIO(data))
         out = guest.tar_secret_scan(buf.getvalue(), self.SESSION.encode(), self.FPS['OH_SECRET_KEY'])
         self.assertEqual(out, {'members': 2, 'hits': {'OH_SECRET_KEY': 1}})
+
+
+ROUTES = json.loads((REPO / ADM['routes']['path']).read_text(encoding='utf-8'))
+OUTER_FP = {'OH_SECRET_KEY': '1' * 64, 'OH_SESSION_API_KEYS_0': '2' * 64}
+INNER_FP = {'OH_SECRET_KEY': '3' * 64, 'OH_SESSION_API_KEYS_0': '4' * 64}
+
+
+class FakeAdmissionGuest:
+    """The outer Agent Server, its two disposable conversation containers, the root
+    reporter and the operator login, faked for admission_probe with the outcomes observed
+    in the S-01.3.1 exploration guest. ``faults`` inject what the tests look for."""
+
+    def __init__(self, **faults):
+        self.faults = faults
+        self.conversations = {}                 # id -> (container ip, published port)
+        self.serial = 0
+        self.calls = []
+
+    # -- the operator login (ssh as agent)
+    def run(self, argv, input_text=None, timeout=None, user='agent'):
+        out = ''
+        if argv[:2] == ['python3', '-'] and input_text == guest.ADMISSION_SWEEP:
+            out = json.dumps(self.sweep(json.loads(base64.b64decode(argv[-1]).decode())))
+        elif argv[:2] == ['python3', '-'] and input_text == guest.KEYCHECK_PROBE:
+            cases = {k: {'rc': 1, 'line': 'aieh-agent-server-keycheck: refused: x'} for k in (
+                'no key', 'empty key', 'short key', 'no secret key', 'equal values',
+                'second key', 'legacy key')}
+            cases['valid'] = {'rc': 0, 'line': 'aieh-agent-server-keycheck: ok'}
+            if self.faults.get('keycheck_open'):
+                cases['empty key'] = {'rc': 0, 'line': 'aieh-agent-server-keycheck: ok'}
+            out = json.dumps(cases)
+        elif argv[:2] == ['python3', '-']:
+            out = json.dumps({'agent_server': {'secrets': {'fingerprints': OUTER_FP}}})
+        elif argv[0] == 'ip':
+            out = ('1: lo    inet 127.0.0.1/8 scope host lo\n'
+                   '2: enp0s4    inet 10.0.2.15/24 metric 100 brd 10.0.2.255 scope global\n'
+                   '3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\n')
+        self.calls.append(argv[0])
+        return subprocess.CompletedProcess(argv, 0, out + '\n', '')
+
+    def sweep(self, spec):
+        openapi = {}
+        for r in ROUTES['routes']:
+            if r['source'] == 'openapi' and (r['method'], r['path']) != self.faults.get('undocumented'):
+                openapi.setdefault(r['path'], []).append(r['method'])
+        if self.faults.get('new_route'):
+            openapi['/api/new'] = ['POST']
+        expect = {(r['method'], guest.concrete_path(r['path'])): r for r in ROUTES['routes']}
+        http = []
+        for method, path in spec['http']:
+            r = expect[(method, path)]
+            no_key = r['expect']['no_key']
+            if (method, r['path']) == self.faults.get('open_route'):
+                no_key = 200
+            http.append({'method': method, 'path': path, 'no_key': [no_key, 'x'],
+                         'wrong_key': [r['expect']['wrong_key'], 'x']})
+        ws = []
+        for path in spec['ws']:
+            r = expect[('WEBSOCKET', path)]
+            entry = {'path': path}
+            for v in guest.WS_VARIANTS:
+                want = r['expect'].get('handshake', r['expect'].get(v))
+                entry[v] = {'handshake': want} if want in (403, 404) else \
+                    {'handshake': 101, 'opcode': 8, 'close_code': want}
+            ws.append(entry)
+        return {'openapi': openapi, 'openapi_version': '1.60.1', 'http': http, 'ws': ws,
+                'session_key_occurrences': 0}
+
+    # -- the outer server, as agent with the key
+    def container_output(self, cid, command):
+        ip, _ = self.conversations[cid]
+        if command == 'hostname -I':
+            return ip + ' \n'
+        if 'TARGETS="' in command:
+            targets = command.split('TARGETS="', 1)[1].split('"', 1)[0].split()
+            lines = ['ID 999:989', f'ADDR {ip}', 'HOSTS_HDI 172.17.0.1']
+            for t in targets:
+                host, port = t.rsplit(':', 1)
+                if host == '127.0.0.1':
+                    lines.append(f'PROBE {host} {port} rc=0 HTTP/1.1 200 OK')
+                elif host.startswith('172.17.0.') and host != '172.17.0.1':
+                    lines.append(f'PROBE {host} {port} rc=0 HTTP/1.1 200 OK'
+                                 if self.faults.get('peer_open') else f'PROBE {host} {port} rc=124 TIMEOUT')
+                elif port == '22' and self.faults.get('sshd_open'):
+                    lines.append(f'PROBE {host} {port} rc=0 SSH-2.0-OpenSSH_10.0p2')
+                elif port == '8000' and self.faults.get('listener_open'):
+                    lines.append(f'PROBE {host} {port} rc=0 HTTP/1.1 200 OK')
+                else:
+                    lines.append(f'PROBE {host} {port} rc=1 bash: connect: Connection refused '
+                                 f'bash: line 1: /dev/tcp/{host}/{port}: Connection refused')
+            return '\n'.join(lines) + '\n'
+        if 'INTERNAL_URL' in command:
+            fps = OUTER_FP if self.faults.get('outer_key_in_container') else INNER_FP
+            outer = command.split('OUTER="', 1)[1].split('"', 1)[0].split()
+            return '\n'.join(['INTERNAL_URL http://127.0.0.1:8000'] +
+                             [f'FP {k} {v}' for k, v in fps.items()] +
+                             ['CHILD_NO_KEY 401 {"detail":"Unauthorized"}',
+                              'CHILD_INNER_KEY 422 {"detail":[{"type":"missing"}]}'] +
+                             [f'OUTER_WITH_INNER_KEY {h} 000 ' for h in outer] + ['DONE']) + '\n'
+        return ''
+
+    def api(self, requests):
+        out = []
+        for req in requests:
+            method, path = req['method'], req['path'].split('?')[0]
+            self.calls.append((method, path))
+            status, body = 404, {'detail': 'Not Found'}
+            if path == '/api/conversations/count':
+                status, body = 200, len(self.conversations)
+            elif path in ('/server_info', '/api/conversations/search'):
+                status, body = 200, {'items': []}
+            elif method == 'POST' and path == '/api/conversations':
+                cid = req['json']['conversation_id']
+                n = len(self.conversations) + 2
+                self.conversations[cid] = (f'172.17.0.{n}', str(32766 + n))
+                status, body = 201, {'id': cid}
+            elif path.endswith('/bash/execute_bash_command'):
+                cid = path.split('/')[3]
+                status, body = 200, {'exit_code': 0, 'stdout': self.container_output(
+                    cid, req['json']['command'])}
+            elif method == 'DELETE' and path.startswith('/api/conversations/'):
+                self.conversations.pop(path.split('/')[3], None)
+                status, body = 200, None
+            out.append({'method': method, 'path': req['path'], 'status': status, 'body': body,
+                        'seconds': 0.0})
+        return {'responses': out, 'session_key_occurrences': 0}
+
+    def facts(self):
+        self.serial += 1
+        running = []
+        for i, (cid, (ip, port)) in enumerate(sorted(self.conversations.items())):
+            running.append(conversation_container(cid=f'{i + 1:064x}', port=port, ip=ip,
+                                                  hex_id=cid.replace('-', '')))
+        listeners = [proxy_line(c['NetworkSettings']['Ports']['8000/tcp'][0]['HostPort'])
+                     for c in running]
+        proxies = [proxy_entry(c['NetworkSettings']['Ports']['8000/tcp'][0]['HostPort'],
+                               ip=c['NetworkSettings']['Networks']['bridge']['IPAddress'])
+                   for c in running]
+        report = conversation_facts_report(running, listeners, proxies, serial=self.serial)
+        logged = 0 if self.faults.get('nothing_logged') else 7
+        report['admission'] = {
+            'iptables': [{'packets': 40, 'bytes': 1, 'target': 'RETURN'},
+                         {'packets': logged, 'bytes': 1, 'target': 'LOG'},
+                         {'packets': logged, 'bytes': 1, 'target': 'REJECT'},
+                         {'packets': 0, 'bytes': 0, 'target': 'REJECT'}],
+            'ip6tables': [{'packets': 0, 'bytes': 0, 'target': t}
+                          for t in ('RETURN', 'LOG', 'REJECT', 'REJECT')],
+            'log': {'count': logged, 'tail': []},
+            'server': {'http_401': 300, 'websocket_auth_failed': 6, 'tail': []}}
+        return report
+
+
+class AdmissionProbe(TempState):
+    """admission_probe (S-01.3.1) against FakeAdmissionGuest: the steps, the checks and
+    the stop conditions; no guest."""
+
+    def setUp(self):
+        super().setUp()
+        self.idir = self.state / 'instances' / 'adm'
+        self.idir.mkdir(parents=True)
+        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG},
+                       'ports': {'ssh': 40001}}
+        patcher = mock.patch.object(guest, 'running_instance',
+                                    lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_probe(self, **faults):
+        fake = FakeAdmissionGuest(**faults)
+        out = guest.admission_probe(self.ctx(), 'adm', channels=lambda rec: (fake.api, fake.facts),
+                                    ssh_fn=lambda rec: fake)
+        return out, fake
+
+    def steps(self, out):
+        return {s['step']: s.get('ok', s.get('skipped')) for s in out['steps']}
+
+    def test_probe_passes(self):
+        out, fake = self.run_probe()
+        self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
+        self.assertEqual(len(out['steps']), 9)
+        self.assertEqual(fake.conversations, {})                # both deleted
+        sweep = out['steps'][1]['detail']
+        self.assertEqual(sweep['routes'], len(ROUTES['routes']))
+        self.assertEqual(sweep['mismatches'], [])
+        net = out['steps'][4]['detail']['containers']
+        rows = net[CONV_ID]['targets']
+        self.assertTrue(all(r['ok'] for r in rows))
+        self.assertIn('172.17.0.1:22', [r['target'] for r in rows])
+        self.assertIn('10.0.2.15:8000', [r['target'] for r in rows])
+        self.assertTrue(Path(out['record']).is_file())
+        # never a key on a command line: the sweep reads it from its file in the guest
+        self.assertNotIn('X-Session-API-Key: ', guest.ADMISSION_SWEEP.split('header_key')[0])
+
+    def test_a_privileged_route_open_without_the_key_is_a_stop_condition(self):
+        out, fake = self.run_probe(open_route=('POST', '/api/conversations'))
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['stop_conditions'][0]['condition'],
+                         'a privileged route answered 2xx without the key')
+        self.assertEqual(self.steps(out)['create two disposable conversations'],
+                         'an earlier step failed')
+        self.assertEqual(fake.conversations, {})                # nothing was created
+
+    def test_inventory_drift_fails(self):
+        for fault in ({'new_route': True}, {'undocumented': ('GET', '/api/settings')}):
+            out, _ = self.run_probe(**fault)
+            self.assertEqual(out['failed_steps'], ['route inventory against the running server'])
+
+    def test_network_reach_fails_and_cleans_up(self):
+        for fault in ('sshd_open', 'peer_open'):
+            out, fake = self.run_probe(**{fault: True})
+            self.assertEqual(out['failed_steps'],
+                             ['agent network: listener, guest services, published ports, peer'])
+            self.assertTrue(self.steps(out)['delete the conversations'])
+            self.assertEqual(fake.conversations, {})
+        out, fake = self.run_probe(listener_open=True)
+        self.assertEqual(out['stop_conditions'][0]['condition'],
+                         'the management listener answered from a conversation container')
+        self.assertEqual(fake.conversations, {})
+
+    def test_outer_key_in_a_container_fails(self):
+        out, _ = self.run_probe(outer_key_in_container=True)
+        self.assertEqual(out['failed_steps'],
+                         ['agent network: session keys and start_child_conversation'])
+
+    def test_keycheck_and_logging(self):
+        out, _ = self.run_probe(keycheck_open=True)
+        self.assertEqual(out['failed_steps'], ['key check fails closed'])
+        out, _ = self.run_probe(nothing_logged=True)
+        self.assertEqual(out['failed_steps'], ['refusals logged'])
+
+    def test_net_probe_parsing(self):
+        text = ('PROBE 172.17.0.1 22 rc=0 SSH-2.0-OpenSSH_10.0p2\n'
+                'PROBE 172.17.0.3 8000 rc=124 TIMEOUT\n'
+                'PROBE 10.0.2.15 8000 rc=1 bash: connect: Connection refused\n'
+                'PROBE 10.0.2.2 9 rc=1 bash: connect: No route to host\n')
+        parsed = guest.parse_net_probe(text)
+        self.assertEqual({k: v['outcome'] for k, v in parsed.items()},
+                         {'172.17.0.1:22': 'connected', '172.17.0.3:8000': 'timeout',
+                          '10.0.2.15:8000': 'refused', '10.0.2.2:9': 'unreachable'})
+        self.assertEqual(guest.concrete_path('/api/conversations/{conversation_id}/{tail}'),
+                         f'/api/conversations/{guest.PROBE_UUID}/{guest.PROBE_NAME}')
+
+    def test_refusals(self):
+        self.record = {'ports': {'ssh': 40001}}
+        with self.assertRaises(guest.Refused):
+            guest.admission_probe(self.ctx(), 'adm')
+
+
+class AdmissionInspect(LaunchRecord):
+    """The inspect check of the guard, icc and the key check (S-01.3.1)."""
+
+    def obs(self, **admission):
+        facts = moby_facts()
+        facts['admission'] = dict(admission_facts(), **admission)
+        return {'guest': {'moby_facts': {'rc': 0, 'out': json.dumps(facts)}}}
+
+    def verdict(self, **admission):
+        return guest.admission_check(PROFILE, self.obs(**admission))[0]['verdict']
+
+    def test_guard_in_place_passes(self):
+        self.assertEqual(self.verdict(), 'PASS')
+        self.assertEqual(guest.CHECK_CLASSES[(guest.PROVISIONING_PROPERTY, guest.ADMISSION_CHECK)][0],
+                         guest.STABLE)
+
+    def test_each_missing_part_fails(self):
+        good = admission_facts()
+        rules = copy.deepcopy(good['rules'])
+        rules['families']['ip6tables']['chain'] = rules['families']['ip6tables']['chain'][:3]
+        jumps = copy.deepcopy(good['rules'])
+        jumps['families']['iptables']['input_jumps'] = jumps['families']['iptables']['input_jumps'][:1]
+        for change in ({'rules': rules}, {'rules': jumps}, {'bridge_enable_icc': 'true'},
+                       {'docker_requires_guard': False}, {'docker_after_guard': False},
+                       {'guard_unit': dict(good['guard_unit'], ActiveState='failed')},
+                       {'guard_unit': dict(good['guard_unit'], UnitFileState='disabled')},
+                       {'keycheck': dict(good['keycheck'], exec_start_pre=False)}):
+            self.assertEqual(self.verdict(**change), 'FAIL', change)
+        self.assertEqual(guest.admission_check(PROFILE, {'guest': {}})[0]['verdict'], 'FAIL')
 
 
 if __name__ == '__main__':
