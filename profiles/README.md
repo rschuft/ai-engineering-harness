@@ -144,9 +144,11 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     containerd's `/run/containerd/containerd.sock` (`root:root`, `0660`) and every other
     socket under `/run/docker` and `/run/containerd` are the guest's own, declared in the
     profile (`provisioning.moby.sockets`). They are not host sockets and are allowed. Each
-    is owned by root, with group root or docker and no access for others. The daemon
-    listens on no TCP port. `agent` is not in group `docker` and cannot connect to any of
-    them.
+    is owned by root, with group root or docker, and none is writable by others
+    (connecting to a unix socket needs write permission); the declared ones give others
+    no access at all. Neither the daemon nor containerd listens on a TCP port
+    (containerd's CRI plugin is off). `agent` is not in group `docker` and cannot connect
+    to any of them.
   - A provider agent channel (incus-agent, QEMU guest agent) is declared, and is
     host→guest only.
 - **trusted-workload (WSL):**
@@ -163,8 +165,8 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     0003 "Current facts");
   - for WSL, launching a Windows `.exe` from inside the guest fails;
   - for a provisioned guest: the declared Moby sockets with their owner, group and mode;
-    from root's boot-time report, no socket under `/run/docker` or `/run/containerd` open
-    to others; as `agent`, `connect()` to each declared socket fails with `EACCES` and
+    from root's boot-time report, no socket under `/run/docker` or `/run/containerd`
+    writable by others; as `agent`, `connect()` to each declared socket fails with `EACCES` and
     `docker info` is refused; `agent` is not in group `docker`; and no TCP listener
     belongs to dockerd, containerd or docker-proxy.
 

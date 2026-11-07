@@ -2745,6 +2745,9 @@ def moby_facts(boot_id='boot-1', **override):
             {'path': '/run/docker.sock', 'state': 'socket', 'owner': 'root', 'group': 'docker',
              'mode': '660'}],
         'modules': {'loaded': ['br_netfilter', 'bridge', 'overlay'], 'overlay_filesystem': True},
+        'host_config': {'sysctl': PCONF['moby']['sysctl']['content'],
+                        'containerd_config': PCONF['moby']['containerd_config']['content']},
+        'ipv6': {'docker0_disable_ipv6': '1', 'addresses': []},
     }
     facts.update(override)
     return facts
@@ -2918,6 +2921,18 @@ class ProvisionedInspect(LaunchRecord):
                          [(guest.PROVISIONING_PROPERTY, 'Moby daemon')])
         self.assertEqual(self.failing(self.facts(version={'Server': {'Version': '27.0.0'}})),
                          [(guest.PROVISIONING_PROPERTY, 'Moby server version')])
+        packaged = ('version = 2\n\n[plugins]\n  [plugins."io.containerd.grpc.v1.cri"]\n')
+        self.assertEqual(self.failing(self.facts(host_config={
+            'sysctl': PCONF['moby']['sysctl']['content'], 'containerd_config': packaged})),
+            [(guest.PROVISIONING_PROPERTY, 'Moby daemon')])
+        self.assertEqual(self.failing(self.facts(ipv6={'docker0_disable_ipv6': '0',
+                                                       'addresses': []})),
+                         [(guest.PROVISIONING_PROPERTY, 'Moby daemon')])
+
+    def test_metrics_socket_without_write_for_others_is_not_open(self):
+        sockets = moby_facts()['sockets'] + [{'path': '/run/docker/metrics.sock', 'state': 'socket',
+                                              'owner': 'root', 'group': 'root', 'mode': '755'}]
+        self.assertEqual(self.failing(self.facts(sockets=sockets)), [])
 
     def test_stale_facts_failed_root_step_leftovers_and_units(self):
         self.assertIn((guest.PROVISIONING_PROPERTY, 'facts report of this boot'),

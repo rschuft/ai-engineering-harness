@@ -492,6 +492,13 @@ class Negative(unittest.TestCase):
         self.qemu['provisioning']['moby']['sockets'][0].update(mode='660', group='agent')
         self.assertFails(self.qemu, 'no access for others')
 
+    def test_provisioning_containerd_cri_and_docker0_ipv6(self):
+        moby = self.qemu['provisioning']['moby']
+        moby['containerd_config']['content'] = 'version = 2' + chr(10)
+        self.assertFails(self.qemu, "containerd's CRI plugin")
+        moby['sysctl']['content'] = '# nothing' + chr(10)
+        self.assertFails(self.qemu, 'turn IPv6 off on docker0')
+
     def test_provisioning_agent_in_docker_group(self):
         self.qemu['provisioning']['moby']['agent_in_docker_group'] = True
         self.assertFails(self.qemu, 'agent_in_docker_group: must be false')

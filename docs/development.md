@@ -363,8 +363,9 @@ defaults them.
   waits, in one SSH session, on an inotify event for
   `/var/lib/aieh/provision/RESULT.json` under the `root_step.timeout_s` ceiling (waking
   every 10 s only to notice a failed unit). The root step copies to a root-only staging
-  directory, verifies, writes `daemon.json`, installs with `apt-get install
-  --no-install-recommends ./…` (never `apt-get update`), loads the image, checks its ID,
+  directory, verifies, writes `daemon.json` and a sysctl drop-in (no IPv6 on Moby's
+  interfaces), installs with `apt-get install --no-install-recommends ./…` (never
+  `apt-get update`), turns containerd's CRI plugin off, loads the image, checks its ID,
   keeps only the local tag, runs it once with `--entrypoint true`, enables the boot-time
   facts report, deletes the upload and the staging directory, disables its trigger and
   writes `RESULT.json` last. `provision` fetches and checks it into

@@ -48,8 +48,9 @@ write_files:
       # Seeded by cloud-init; never downloaded. Modes:
       #   provision  run once by aieh-provision.service when the host's READY marker appears:
       #              copy the upload into a root-only staging directory, verify every sha256
-      #              against the seeded manifest, write daemon.json, install the packages with
-      #              apt from the local files, docker load the image, check its ID, fix its
+      #              against the seeded manifest, write daemon.json and the sysctl drop-in,
+      #              install the packages with apt from the local files, replace containerd's
+      #              packaged config (CRI plugin off), docker load the image, check its ID, fix its
       #              tag, run it once, enable the facts unit, delete the staging directory and
       #              the upload, disable the trigger, then write RESULT.json (last).
       #   facts      run at every boot by aieh-docker-facts.service: a read-only report of the
@@ -77,6 +78,9 @@ write_files:
       FACTS_DIR = '/run/aieh'
       FACTS = FACTS_DIR + '/docker-facts.json'
       DAEMON_JSON = '/etc/docker/daemon.json'
+      SYSCTL_FILE = '/etc/sysctl.d/90-aieh-moby.conf'
+      CONTAINERD_CONFIG = '/etc/containerd/config.toml'
+      MOBY_PROCESSES = ('dockerd', 'containerd', 'docker-proxy', 'containerd-shim')
       PATH_UNIT = 'aieh-provision.path'
       PATH_UNIT_FILE = '/etc/systemd/system/' + PATH_UNIT
       FACTS_UNIT = 'aieh-docker-facts.service'
@@ -162,6 +166,29 @@ write_files:
           return digest.hexdigest()
 
 
+      def read_text(path):
+          try:
+              with open(path, encoding='utf-8') as handle:
+                  return handle.read()
+          except OSError as exc:
+              return 'unreadable: ' + str(exc)
+
+
+      def ipv6_state():
+          rc, out, err = run(['ip', '-6', '-o', 'addr', 'show'], 30)
+          lines = [line for line in out.splitlines() if line.split()[1:2] != ['lo']]
+          return {'docker0_disable_ipv6': read_text('/proc/sys/net/ipv6/conf/docker0/disable_ipv6').strip(),
+                  'addresses': lines if rc == 0 else ['ip exited ' + str(rc) + ': ' + tail(err, 300)]}
+
+
+      def moby_tcp_listeners():
+          rc, out, err = run(['ss', '-ltnpH'], 30)
+          if rc != 0:
+              raise Failed('listeners: ss exited ' + str(rc) + ': ' + tail(err, 300))
+          lines = out.splitlines()
+          return lines, [line for line in lines if any('(("' + p in line for p in MOBY_PROCESSES)]
+
+
       def loaded_modules():
           names = set()
           with open('/proc/modules', encoding='ascii') as handle:
@@ -201,8 +228,11 @@ write_files:
                   not isinstance(image.get('archive_repo_tags'), list):
               raise Failed('manifest: image needs id, archive, local_tag and archive_repo_tags')
           docker = manifest.get('docker') or {}
-          if not isinstance(docker.get('daemon_json'), dict) or not docker.get('server_version'):
-              raise Failed('manifest: docker needs daemon_json and server_version')
+          if not isinstance(docker.get('daemon_json'), dict) or not docker.get('server_version') or \
+                  not isinstance(docker.get('sysctl'), str) or \
+                  not isinstance(docker.get('containerd_config'), str):
+              raise Failed('manifest: docker needs daemon_json, server_version, sysctl and '
+                           'containerd_config')
           return manifest
 
 
@@ -267,6 +297,8 @@ write_files:
           except (OSError, ValueError) as exc:
               daemon_json = {'error': str(exc)}
           rc, listeners, err = run(['ss', '-ltnpH'], 30)
+          host_config = {'sysctl': read_text(SYSCTL_FILE),
+                         'containerd_config': read_text(CONTAINERD_CONFIG)}
           data = {'schema': FACTS_SCHEMA, 'boot_id': boot_id, 'collected_at': now(),
                   'version': version, 'info': info, 'images': docker_json(
                       ['image', 'ls', '--all', '--no-trunc', '--format', GO_JSON], many=True),
@@ -274,7 +306,8 @@ write_files:
                       ['ps', '--all', '--no-trunc', '--format', GO_JSON], many=True),
                   'daemon_json': daemon_json, 'tcp_listeners': listeners.splitlines() if rc == 0
                   else {'rc': rc, 'error': tail(err, 600)},
-                  'sockets': socket_facts(), 'modules': loaded_modules()}
+                  'sockets': socket_facts(), 'modules': loaded_modules(), 'ipv6': ipv6_state(),
+                  'host_config': host_config}
           units = ('docker.service', 'docker.socket', 'containerd.service', FACTS_UNIT)
           data['units'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip() for u in units}
           os.makedirs(FACTS_DIR, mode=0o755, exist_ok=True)
@@ -347,6 +380,28 @@ write_files:
           return {'path': DAEMON_JSON, 'content': manifest['docker']['daemon_json']}
 
 
+      def write_text(path, text):
+          tmp = path + '.partial'
+          if os.path.lexists(tmp):
+              os.unlink(tmp)
+          fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+          with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+              handle.write(text)
+              handle.flush()
+              os.fsync(handle.fileno())
+          os.chmod(tmp, 0o644)
+          os.rename(tmp, path)
+
+
+      def write_sysctl(manifest):
+          """Before the install: no IPv6 on Moby's bridge and veth interfaces (profiles P7),
+          applied by udev's systemd-sysctl rule as each interface appears."""
+          if os.path.lexists(SYSCTL_FILE):
+              raise Failed('sysctl: ' + SYSCTL_FILE + ' already exists')
+          write_text(SYSCTL_FILE, manifest['docker']['sysctl'])
+          return {'path': SYSCTL_FILE, 'content': manifest['docker']['sysctl']}
+
+
       def apt_install(manifest):
           debs = ['./' + f['name'] for f in manifest['files'] if f['role'] == 'deb']
           before = loaded_modules()
@@ -369,6 +424,28 @@ write_files:
                   'output_tail': tail(out, 1500)}
 
 
+      def containerd_config(manifest):
+          """After the install: replace containerd's packaged config.toml (a conffile, so it is
+          not written before dpkg) with the declared one, which turns the CRI plugin and its
+          TCP streaming listener off; then restart containerd and the daemon."""
+          query = must('containerd-config', ['dpkg-query', '-W', '-f', '${Conffiles}\\n',
+                                             'containerd'], 60)
+          packaged = {}
+          for line in query.splitlines():
+              parts = line.split()
+              if len(parts) >= 2:
+                  packaged[parts[0]] = parts[1]
+          with open(CONTAINERD_CONFIG, 'rb') as handle:
+              before = hashlib.md5(handle.read()).hexdigest()
+          if packaged.get(CONTAINERD_CONFIG) != before:
+              raise Failed('containerd-config: ' + CONTAINERD_CONFIG + ' is not the packaged file')
+          write_text(CONTAINERD_CONFIG, manifest['docker']['containerd_config'])
+          must('containerd-config', ['systemctl', 'restart', 'containerd.service'], 300)
+          must('containerd-config', ['systemctl', 'restart', 'docker.service'], 300)
+          return {'path': CONTAINERD_CONFIG, 'replaced_packaged_md5': before,
+                  'content': manifest['docker']['containerd_config']}
+
+
       def docker_ready(manifest):
           must('docker-ready', ['systemctl', 'start', 'docker.service'], 300)
           version = json.loads(must('docker-ready', ['docker', 'version', '--format', GO_JSON], 120))
@@ -376,8 +453,11 @@ write_files:
           if server != manifest['docker']['server_version']:
               raise Failed('docker-ready: server version ' + repr(server) + ', the manifest says ' +
                            manifest['docker']['server_version'])
+          listeners, moby_owned = moby_tcp_listeners()
+          if moby_owned:
+              raise Failed('docker-ready: a TCP listener of Moby: ' + repr(moby_owned))
           return {'server_version': server, 'client_version': (version.get('Client') or {}).get('Version'),
-                  'modules_after_start': loaded_modules()}
+                  'modules_after_start': loaded_modules(), 'tcp_listeners': listeners}
 
 
       def inspect_image(ref):
@@ -426,11 +506,14 @@ write_files:
           t0 = time.time()
           rc, out, err = run(argv, 300)
           left = must('run', ['docker', 'ps', '--all', '--quiet', '--no-trunc'], 60).split()
+          ipv6 = ipv6_state()
           result = {'argv': argv, 'rc': rc, 'seconds': round(time.time() - t0, 1),
-                    'output': tail(out + err, 600), 'containers_left': left}
+                    'output': tail(out + err, 600), 'containers_left': left, 'ipv6_after': ipv6}
           if rc != 0 or left:
               raise Failed('run: ' + ' '.join(argv) + ' exited ' + str(rc) + ' (containers left ' +
                            repr(left) + '): ' + tail(err or out, 400))
+          if ipv6['docker0_disable_ipv6'] != '1' or ipv6['addresses']:
+              raise Failed('run: IPv6 on a Moby interface after the run: ' + repr(ipv6))
           return result
 
 
@@ -471,7 +554,8 @@ write_files:
 
 
       STEPS = (('copy', None), ('verify', verify_staging), ('daemon-json', write_daemon_json),
-               ('apt-install', apt_install), ('docker-ready', docker_ready),
+               ('sysctl', write_sysctl), ('apt-install', apt_install),
+               ('containerd-config', containerd_config), ('docker-ready', docker_ready),
                ('docker-load', load_image), ('image-id', check_image_id), ('tag', fix_tag),
                ('run', verify_run))
 

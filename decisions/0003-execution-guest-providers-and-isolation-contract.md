@@ -247,7 +247,7 @@ conditions, recorded here and in the execution-profile contract:
   and the tier stays not operational (C6). The contract and the QEMU profile now say:
   - **P6:** a provisioned guest's own Moby sockets (`/run/docker.sock` `root:docker`
     `0660`, containerd's socket `root:root` `0660`, and every socket under `/run/docker`
-    and `/run/containerd` root-owned and closed to others) are declared
+    and `/run/containerd` root-owned and not writable by others) are declared
     (`provisioning.moby.sockets`) and allowed; they are not host sockets. Negative checks:
     `agent` is not in group `docker`, its `connect()` to each declared socket fails with
     `EACCES`, `docker info` as `agent` is refused, and no TCP listener belongs to dockerd,
@@ -260,6 +260,10 @@ conditions, recorded here and in the execution-profile contract:
     and the root-owned directories `/srv/scratch/docker` (data root, on scratch) and
     `/var/lib/aieh` (the root step's state, on root) are declared `provisioned_only`.
     `tools/check_profile.py` checks them and the new `provisioning` block.
+  - **P7:** unchanged. To keep it, the root step turns containerd's CRI plugin off (its
+    streaming server listened on the guest's `127.0.0.1`) and IPv6 off on `docker0` and
+    `veth*` (the first run found a link-local address on `docker0`); both are declared
+    in `provisioning.moby` with the observation that required them.
   - **P5:** unchanged. Slice (b) generates no secret; the session API key and
     `OH_SECRET_KEY` belong to slice (c).
   - Ordinary guests are unaffected: their seed carries an empty manifest and the seeded

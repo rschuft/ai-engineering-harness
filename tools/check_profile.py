@@ -793,6 +793,17 @@ def check_provisioning(report, profile, root=REPO):
         if not isinstance(entry, dict) or not str(entry.get('path', '')).startswith('/run/') or                 entry.get('owner') != 'root' or entry.get('group') not in ('root', 'docker') or                 not re.match(r'^[0-7]{3}$', mode) or int(mode, 8) & 0o007:
             report.fail(f'provisioning.moby.sockets[{i}]: a /run socket owned by root, group '
                         'root or docker, no access for others (profiles P6)')
+    sysctl = moby.get('sysctl') or {}
+    if sysctl.get('path') != '/etc/sysctl.d/90-aieh-moby.conf' or \
+            'net.ipv6.conf.docker0.disable_ipv6 = 1' not in str(sysctl.get('content', '')).splitlines():
+        report.fail('provisioning.moby.sysctl: /etc/sysctl.d/90-aieh-moby.conf must turn IPv6 off '
+                    'on docker0 (profiles P7)')
+    containerd = moby.get('containerd_config') or {}
+    if containerd.get('path') != '/etc/containerd/config.toml' or \
+            'disabled_plugins = ["io.containerd.grpc.v1.cri"]' not in \
+            str(containerd.get('content', '')).splitlines():
+        report.fail('provisioning.moby.containerd_config: /etc/containerd/config.toml must turn '
+                    "containerd's CRI plugin (a TCP listener) off")
     if moby.get('agent_in_docker_group') is not False:
         report.fail('provisioning.moby.agent_in_docker_group: must be false (decision 0006)')
     if not isinstance(moby.get('required_security_options'), list) or             'name=no-new-privileges' not in moby['required_security_options']:

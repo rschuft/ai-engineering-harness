@@ -113,7 +113,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "635e4977090f3b4f0eaf4311651d20a7a3b4dd09de97df161e464aae8768f393"
+          "sha256": "25fefa0e9fe73f570a5e4f4431e7ac648a0a2f5c4e66f208a29fa011a77e8ce1"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -240,7 +240,7 @@
       "staging": "/var/lib/aieh/provision-staging",
       "result": "/var/lib/aieh/provision/RESULT.json",
       "timeout_s": 3600,
-      "sequence": ["copy", "verify", "daemon-json", "apt-install", "docker-ready", "docker-load", "image-id", "tag", "run", "facts", "cleanup"],
+      "sequence": ["copy", "verify", "daemon-json", "sysctl", "apt-install", "containerd-config", "docker-ready", "docker-load", "image-id", "tag", "run", "facts", "cleanup"],
       "single_use": "the trigger is disabled, stopped and its unit file removed in every outcome; the service refuses to run once RESULT.json or the staging directory exists"
     },
     "facts": {
@@ -262,12 +262,22 @@
         "log-opts": {"max-size": "10m", "max-file": "3"}
       },
       "required_security_options": ["name=no-new-privileges"],
+      "sysctl": {
+        "path": "/etc/sysctl.d/90-aieh-moby.conf",
+        "content": "# AIEH (F-04.1): no IPv6 on Moby's bridge and veth interfaces (profiles P7)\nnet.ipv6.conf.docker0.disable_ipv6 = 1\nnet.ipv6.conf.veth*.disable_ipv6 = 1\n",
+        "reason": "Written before the install. Observed in the first provisioning run (F-04.1b): after the verification container ran, docker0 carried the IPv6 link-local fe80::42:c9ff:feaa:9805/64, which the P7 check 'IPv6 off unless listed' refuses. udev's systemd-sysctl rule applies these keys as each interface appears."
+      },
+      "containerd_config": {
+        "path": "/etc/containerd/config.toml",
+        "content": "version = 2\ndisabled_plugins = [\"io.containerd.grpc.v1.cri\"]\n\n[plugins]\n  [plugins.\"io.containerd.internal.v1.opt\"]\n    path = \"/var/lib/containerd/opt\"\n",
+        "reason": "Observed in the first provisioning run (F-04.1b): Debian's containerd ships config.toml (a conffile) with the CRI plugin enabled, and its streaming server listened on the guest's 127.0.0.1:41943, a TCP listener of Moby. Moby does not use CRI. The root step replaces the packaged file after the install (only when its md5 is the packaged one; a conffile cannot be written before dpkg without a prompt or a --force option) and restarts containerd and the daemon. The packaged file's other setting (the opt plugin path) is kept."
+      },
       "sockets": [
         {"path": "/run/docker.sock", "owner": "root", "group": "docker", "mode": "660"},
         {"path": "/run/containerd/containerd.sock", "owner": "root", "group": "root", "mode": "660"}
       ],
-      "socket_rule": "profiles P6 (amended 2026-11-06): the guest's own Moby sockets, never a host socket. Every socket under /run/docker and /run/containerd is owned by root with group root or docker and no access for others; agent is not in group docker and cannot connect.",
-      "tcp_listeners": "none: no hosts entry in daemon.json (unix socket only); no listener owned by dockerd, containerd or docker-proxy",
+      "socket_rule": "profiles P6 (amended 2026-11-06): the guest's own Moby sockets, never a host socket. Every socket under /run/docker and /run/containerd is owned by root with group root or docker and not writable by others (connecting to a unix socket needs write permission); the declared ones have no access for others at all. agent is not in group docker and cannot connect.",
+      "tcp_listeners": "none: no hosts entry in daemon.json (unix socket only), containerd's CRI plugin off; no listener owned by dockerd, containerd or docker-proxy",
       "agent_in_docker_group": false
     },
     "image": {

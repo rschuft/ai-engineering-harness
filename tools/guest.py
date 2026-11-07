@@ -2428,7 +2428,8 @@ def storage_probes(storage, provisioned=False):
     dirs = ' '.join(f"'{d['path']}'" for d in declared_directories(storage, provisioned))
     forbidden = ' '.join(f"'{p}'" for p in storage.get('forbidden_paths') or [])
     return [
-        ('storage_dirs', f"stat -c '%n|%U|%G|%a|%F|%m' -- {dirs}" if dirs else 'echo none'),
+        ('storage_dirs', f'for d in {dirs}; do printf "%s|%s\\n" "$(stat -c \'%n|%U|%G|%a|%F\' -- "$d")" '
+                         '"$(findmnt -n -o TARGET --target "$d")"; done' if dirs else 'echo none'),
         ('forbidden_paths', f'for p in {forbidden}; do if [ -e "$p" ] || [ -L "$p" ]; then '
                             'echo "present $p"; else echo "absent $p"; fi; done' if forbidden
          else 'echo none'),
@@ -5387,7 +5388,9 @@ def build_provision_manifest(ctx):
                   'manifest_digest': image['manifest_digest'],
                   'archive_repo_tags': repo_tags,
                   'local_tag': conf['image']['local_tag']},
-        'docker': {'server_version': moby['server_version'], 'daemon_json': moby['daemon_json']},
+        'docker': {'server_version': moby['server_version'], 'daemon_json': moby['daemon_json'],
+                   'sysctl': moby['sysctl']['content'],
+                   'containerd_config': moby['containerd_config']['content']},
     }
     data = (json.dumps(manifest, indent=1, sort_keys=True) + '\n').encode('ascii')
     digest = hashlib.sha256(data).hexdigest()
@@ -5460,13 +5463,13 @@ def moby_p6_checks(profile, obs):
     open_to_others = None if found is None else [
         s for s in found if s.get('state') == 'socket' and (
             s.get('owner') != 'root' or s.get('group') not in ('root', 'docker') or
-            int(str(s.get('mode', '7')), 8) & 0o007)]
+            int(str(s.get('mode', '7')), 8) & 0o002)]
     connect = dict(line.rsplit(' ', 1) for line in out_text('moby_agent_connect').splitlines()
                    if ' ' in line)
     cli = g.get('docker_as_agent') or {}
     return [
         check('guest Moby sockets', {'declared': declared, 'others': 'root-owned, group root '
-                                     'or docker, no access for others'},
+                                     'or docker, not writable by others (no connect)'},
               {'stat': got, 'root_view': found, 'open_to_others': open_to_others},
               f"guest: stat -c '%n|%U|%G|%a|%F' (agent); the facts report's sockets under "
               f'{list(MOBY_SOCKET_DIRS)} (root)',
@@ -5538,6 +5541,8 @@ def provisioning_property(profile, record, obs):
     facts_unit = units.get((conf.get('facts') or {}).get('service'), [])
     security = info.get('SecurityOptions') if isinstance(info.get('SecurityOptions'), list) else []
     modules = facts.get('modules') if isinstance(facts.get('modules'), dict) else {}
+    host_config = facts.get('host_config') if isinstance(facts.get('host_config'), dict) else {}
+    ipv6 = facts.get('ipv6') if isinstance(facts.get('ipv6'), dict) else {}
     checks = [
         check('root step result', {'result': 'provisioned', 'manifest_sha256':
                                    prov.get('manifest_sha256')},
@@ -5563,16 +5568,27 @@ def provisioning_property(profile, record, obs):
                               'Driver': moby.get('storage_driver'),
                               'DefaultRuntime': moby.get('default_runtime'),
                               'SecurityOptions': f"including {moby.get('required_security_options')}",
-                              'daemon.json': moby.get('daemon_json')},
+                              'daemon.json': moby.get('daemon_json'),
+                              'containerd config.toml': (moby.get('containerd_config') or {}).get('content'),
+                              'sysctl drop-in': (moby.get('sysctl') or {}).get('content'),
+                              'docker0 disable_ipv6': '1'},
               {'DockerRootDir': info.get('DockerRootDir'), 'Driver': info.get('Driver'),
                'DefaultRuntime': info.get('DefaultRuntime'), 'SecurityOptions': security,
-               'daemon.json': facts.get('daemon_json')},
-              'facts: docker info, /etc/docker/daemon.json (root)',
+               'daemon.json': facts.get('daemon_json'),
+               'containerd config.toml': host_config.get('containerd_config'),
+               'sysctl drop-in': host_config.get('sysctl'),
+               'docker0 disable_ipv6': ipv6.get('docker0_disable_ipv6')},
+              'facts: docker info, daemon.json, containerd config.toml, the sysctl drop-in, '
+              'docker0 disable_ipv6 (root)',
               bool(info) and info.get('DockerRootDir') == moby.get('data_root') and
               info.get('Driver') == moby.get('storage_driver') and
               info.get('DefaultRuntime') == moby.get('default_runtime') and
               set(moby.get('required_security_options') or []) <= set(security) and
-              facts.get('daemon_json') == moby.get('daemon_json')),
+              facts.get('daemon_json') == moby.get('daemon_json') and
+              host_config.get('containerd_config') == (moby.get('containerd_config') or {}).get(
+                  'content') and
+              host_config.get('sysctl') == (moby.get('sysctl') or {}).get('content') and
+              ipv6.get('docker0_disable_ipv6') == '1'),
         check('image', {'Id': prov.get('image_id'), 'RepoTags': [image_conf.get('local_tag')],
                         'store': 'that image only'},
               {'Id': image.get('Id'), 'RepoTags': image.get('RepoTags'),

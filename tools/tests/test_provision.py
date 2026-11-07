@@ -127,6 +127,9 @@ class SeededRootStep(unittest.TestCase):
         self.assertEqual(c['ROLES'], tuple(PCONF['upload']['roles']))
         self.assertEqual(c['DAEMON_JSON'], '/etc/docker/daemon.json')
         self.assertEqual(c['MOBY_SOCKET_DIRS'], guest.MOBY_SOCKET_DIRS)
+        self.assertEqual(c['SYSCTL_FILE'], PCONF['moby']['sysctl']['path'])
+        self.assertEqual(c['CONTAINERD_CONFIG'], PCONF['moby']['containerd_config']['path'])
+        self.assertEqual(c['MOBY_PROCESSES'], guest.MOBY_PROCESSES)
 
     def test_script_step_sequence_equals_the_profile(self):
         tree = ast.parse(SCRIPT)
@@ -245,6 +248,9 @@ class Manifest(ManifestFixture):
         self.assertEqual(m['image']['archive_repo_tags'], [ARCHIVE_TAG])
         self.assertEqual(m['image']['local_tag'], PCONF['image']['local_tag'])
         self.assertEqual(m['docker']['daemon_json'], PCONF['moby']['daemon_json'])
+        self.assertEqual(m['docker']['sysctl'], PCONF['moby']['sysctl']['content'])
+        self.assertEqual(m['docker']['containerd_config'],
+                         PCONF['moby']['containerd_config']['content'])
         self.assertEqual(built['sha256'], hashlib.sha256(built['bytes']).hexdigest())
         self.assertEqual(built['record']['manifest_sha256'], built['sha256'])
         self.assertNotIn(str(self.state).replace('\\', '/'), built['bytes'].decode())
