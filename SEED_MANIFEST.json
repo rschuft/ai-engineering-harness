@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "5030ec3c12f9e74bbc1048816bf5abf1a0351a16d83220ce2905633de7dce350",
-      "size_bytes": 2474765
+      "sha256": "2deeed97ccd4388e88034b1a6238686f079f2710631dd77f5d1c46970de39a05",
+      "size_bytes": 2478768
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "b3d196b60e9d822ac97def9c7730f115fdbe7df2b6b645700a0fd2e079ae9b05",
-      "size_bytes": 1286916
+      "sha256": "f4ce5739a46249265495986119412113a146909a8070b5106917c40ec87891f5",
+      "size_bytes": 1289960
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "ba748a41ce7e016905d289cf6147104d2462c3758963e2ffd1b33cd481ac7d98",
-      "size_bytes": 209377
+      "sha256": "2453509f3989740ff31b597110dde4b4af819d87aa98ca27155d34f9fa151fc2",
+      "size_bytes": 209709
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,8 +49,8 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "99b9aae981ceb333806810c32fc68ce05a5881f8199ed78f17b7ddcd6c8cccb0",
-      "size_bytes": 46310
+      "sha256": "6d20ebbd3c92a427cea0cda9768464296a44192012b3c337b365d63a08c81b69",
+      "size_bytes": 46382
     },
     {
       "path": "task_prompts/A-01.1.md",
@@ -69,8 +69,8 @@
     },
     {
       "path": "task_prompts/D-01.2.md",
-      "sha256": "73c1ff38d52625576b4d196cf8b301535f9c1a27e118eec16c5bfa8b505067c7",
-      "size_bytes": 3994
+      "sha256": "a9d322740f3825074d8e5edb61d22747a5bdf433d41b5a9fd6db1dfa72604979",
+      "size_bytes": 4010
     },
     {
       "path": "task_prompts/E-01.1.1.md",
@@ -279,8 +279,8 @@
     },
     {
       "path": "task_prompts/F-06.6.md",
-      "sha256": "65c3781243be20be21dbad704a21f155ba711738b6991388c514092e694a48ed",
-      "size_bytes": 5483
+      "sha256": "a44848dbad041cb58bceb00ccd94515925258312a5106388ef7150931ca5cb2e",
+      "size_bytes": 5499
     },
     {
       "path": "task_prompts/F-07.1.md",
@@ -324,13 +324,13 @@
     },
     {
       "path": "task_prompts/F-09.3.md",
-      "sha256": "4a45971988517f56749b934bb50573e14b8305a3e33f13246dccb91af083b865",
-      "size_bytes": 4513
+      "sha256": "a7bdd7f9d3c7f54beac0e925ef00c15f3996d9fbfa0c5c3331dd642edb2d9376",
+      "size_bytes": 4529
     },
     {
       "path": "task_prompts/F-09.4.md",
-      "sha256": "6d125990ea7156bcbcff96e82e83efb31a2a91675131dcf7bb5e3d0b68e6e1c6",
-      "size_bytes": 4723
+      "sha256": "45215727509fb591e70763ee5800e6ac90a65139a85638e174772c2d0505ce31",
+      "size_bytes": 4739
     },
     {
       "path": "task_prompts/G-01.1.md",
@@ -374,13 +374,13 @@
     },
     {
       "path": "task_prompts/G-04.2.1.md",
-      "sha256": "f09259508cb84b0c0c85aac65ac700cf8b0251d1cd22e67b47699304a750caff",
-      "size_bytes": 4633
+      "sha256": "9e74fddbb4cb19205a3b45104d60dd5356f7ff352bc9a1372a39396dcb273320",
+      "size_bytes": 4767
     },
     {
       "path": "task_prompts/G-04.2.2.md",
-      "sha256": "7759914af88a8f157549e58d0365e52ad207dd35b3c46483625b1a82c0f8d0db",
-      "size_bytes": 4435
+      "sha256": "0e5558268d84ec75d2caa86380359e9092ff6cfa14ad254e0729f73ec36a54c7",
+      "size_bytes": 4569
     },
     {
       "path": "task_prompts/G-04.3.1.md",
@@ -539,13 +539,13 @@
     },
     {
       "path": "task_prompts/P-04.1.md",
-      "sha256": "7370718029fa9b411247fa2409951d26cac82c6d85ff9892deef3d77f22d3ec7",
-      "size_bytes": 4620
+      "sha256": "7e620c56fe7a2976ec43b31d38a7bbef2f19be13e11fd3e8f58cde55c779e3f8",
+      "size_bytes": 4616
     },
     {
       "path": "task_prompts/P-04.2.md",
-      "sha256": "94d4e167d037bc23feeb47ac5ffd8c351ee10bfe27815ad5cf7b28d2c24964ee",
-      "size_bytes": 7119
+      "sha256": "d28c0e4c8990d4f8f515ec836e689de12f360d9a07995f213103c8cea344de47",
+      "size_bytes": 7115
     },
     {
       "path": "task_prompts/Q-01.1.md",

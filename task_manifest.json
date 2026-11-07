@@ -251,10 +251,11 @@
       "title": "Upgrade, recovery and uninstall semantics of the host service",
       "phase": 0,
       "deps": [
-        "F-06.2"
+        "F-06.2",
+        "F-06.3"
       ],
       "path": "task_prompts/F-06.6.md",
-      "sha256": "65c3781243be20be21dbad704a21f155ba711738b6991388c514092e694a48ed"
+      "sha256": "a44848dbad041cb58bceb00ccd94515925258312a5106388ef7150931ca5cb2e"
     },
     {
       "id": "F-05.1",
@@ -386,10 +387,11 @@
       "title": "Build expensive fixtures once and inject process boundaries",
       "phase": 0,
       "deps": [
-        "F-09.1"
+        "F-09.1",
+        "F-09.2"
       ],
       "path": "task_prompts/F-09.3.md",
-      "sha256": "4a45971988517f56749b934bb50573e14b8305a3e33f13246dccb91af083b865"
+      "sha256": "a7bdd7f9d3c7f54beac0e925ef00c15f3996d9fbfa0c5c3331dd642edb2d9376"
     },
     {
       "id": "U-01.1",
@@ -526,7 +528,7 @@
         "P-01.2"
       ],
       "path": "task_prompts/P-04.1.md",
-      "sha256": "7370718029fa9b411247fa2409951d26cac82c6d85ff9892deef3d77f22d3ec7"
+      "sha256": "7e620c56fe7a2976ec43b31d38a7bbef2f19be13e11fd3e8f58cde55c779e3f8"
     },
     {
       "id": "P-04.2",
@@ -537,7 +539,7 @@
         "S-01.2.2"
       ],
       "path": "task_prompts/P-04.2.md",
-      "sha256": "94d4e167d037bc23feeb47ac5ffd8c351ee10bfe27815ad5cf7b28d2c24964ee"
+      "sha256": "d28c0e4c8990d4f8f515ec836e689de12f360d9a07995f213103c8cea344de47"
     },
     {
       "id": "F-09.4",
@@ -545,10 +547,11 @@
       "phase": 1,
       "deps": [
         "P-03.2",
-        "F-09.1"
+        "F-09.1",
+        "F-09.3"
       ],
       "path": "task_prompts/F-09.4.md",
-      "sha256": "6d125990ea7156bcbcff96e82e83efb31a2a91675131dcf7bb5e3d0b68e6e1c6"
+      "sha256": "45215727509fb591e70763ee5800e6ac90a65139a85638e174772c2d0505ce31"
     },
     {
       "id": "E-01.1.1",
@@ -950,10 +953,11 @@
       "title": "Configure protected code merge policy and prove gating",
       "phase": 2,
       "deps": [
-        "D-01.1"
+        "D-01.1",
+        "P-04.2"
       ],
       "path": "task_prompts/D-01.2.md",
-      "sha256": "73c1ff38d52625576b4d196cf8b301535f9c1a27e118eec16c5bfa8b505067c7"
+      "sha256": "a9d322740f3825074d8e5edb61d22747a5bdf433d41b5a9fd6db1dfa72604979"
     },
     {
       "id": "G-01.1",
@@ -1049,7 +1053,7 @@
         "G-04.1.2"
       ],
       "path": "task_prompts/G-04.2.1.md",
-      "sha256": "f09259508cb84b0c0c85aac65ac700cf8b0251d1cd22e67b47699304a750caff"
+      "sha256": "9e74fddbb4cb19205a3b45104d60dd5356f7ff352bc9a1372a39396dcb273320"
     },
     {
       "id": "G-04.2.2",
@@ -1059,7 +1063,7 @@
         "G-04.2.1"
       ],
       "path": "task_prompts/G-04.2.2.md",
-      "sha256": "7759914af88a8f157549e58d0365e52ad207dd35b3c46483625b1a82c0f8d0db"
+      "sha256": "0e5558268d84ec75d2caa86380359e9092ff6cfa14ad254e0729f73ec36a54c7"
     },
     {
       "id": "G-04.3.1",
