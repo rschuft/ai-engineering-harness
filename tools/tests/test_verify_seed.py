@@ -107,8 +107,13 @@ class DefaultMode(SeedCopy):
     def test_unchanged_tree_passes(self):
         result = run_verifier(self.root)
         self.assertPass(result)
-        self.assertIn('141 contract intact, 2 authority intact, 3 ordinary, 0 changed since seed',
-                      result.stdout)
+        # The contract count follows the plan's size (one prompt per leaf), so
+        # derive it from the manifest rather than fixing a number.
+        authority = (BLUEPRINT, 'OVERSEER_START.md')
+        contract = sum(1 for item in self.manifest()['files']
+                       if item['path'] not in ORDINARY + authority)
+        self.assertIn(f'{contract} contract intact, 2 authority intact, 3 ordinary, '
+                      '0 changed since seed', result.stdout)
         self.assertNotIn('INFO:', result.stdout)
 
     def test_ordinary_edits_pass_with_info(self):

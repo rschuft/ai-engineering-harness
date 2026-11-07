@@ -1,5 +1,5 @@
 {
-  "task_count": 136,
+  "task_count": 142,
   "tasks": [
     {
       "id": "F-01.1",
@@ -111,6 +111,38 @@
       "sha256": "b02c3623c2eb6b345986949be583f8bcc3c2034f7f353606f70ddea9cd2939ae"
     },
     {
+      "id": "F-07.1",
+      "title": "Define and implement the managed data root and configuration contract",
+      "phase": 0,
+      "deps": [
+        "F-02"
+      ],
+      "path": "task_prompts/F-07.1.md",
+      "sha256": "e070b736c554bfd595fc632373da78937ffe9e56ea8b06e913ba5cc59549273f"
+    },
+    {
+      "id": "F-07.2",
+      "title": "Adopt the contract across components and plan data migration",
+      "phase": 0,
+      "deps": [
+        "F-07.1"
+      ],
+      "path": "task_prompts/F-07.2.md",
+      "sha256": "2d735386d7c9132274b53cae3c3adcc7c9f19facd9f431873246aa992b8873bf"
+    },
+    {
+      "id": "F-06.1",
+      "title": "Run pinned Gitea on host loopback under the managed data root",
+      "phase": 0,
+      "deps": [
+        "F-01.2",
+        "F-02",
+        "F-07.1"
+      ],
+      "path": "task_prompts/F-06.1.md",
+      "sha256": "d889ca0dc1af6495e91dbf5fd7b05f6beba7d81614a15e48beb09059df9fab40"
+    },
+    {
       "id": "S-01.1",
       "title": "Inventory principals and protected assets",
       "phase": 0,
@@ -136,10 +168,11 @@
       "title": "Issue segregated credentials and test denial",
       "phase": 0,
       "deps": [
-        "S-01.2.1"
+        "S-01.2.1",
+        "F-06.1"
       ],
       "path": "task_prompts/S-01.2.2.md",
-      "sha256": "047600e655cd8ffb752b7dbefdc0ebe00466ed51cbc1972587c43fced7daa2d6"
+      "sha256": "b8f117d4c471c89978e8be566bcef85bfa1e83fcfa9fc4673454b70f03529b27"
     },
     {
       "id": "S-01.3.1",
@@ -211,6 +244,28 @@
       ],
       "path": "task_prompts/S-02.2.md",
       "sha256": "12b6fa8b11ebbc23b5ca9fffa93d740a87b9a48a2f7ca13206120530927fd063"
+    },
+    {
+      "id": "S-03.1",
+      "title": "Design the inference broker and model-access plane",
+      "phase": 0,
+      "deps": [
+        "S-01.2.1",
+        "F-04.2"
+      ],
+      "path": "task_prompts/S-03.1.md",
+      "sha256": "30baaa6e0258b46c5f509fa4ef7760023ddc5f91ae7ed0c944b75a4e9ddfe88c"
+    },
+    {
+      "id": "S-03.2",
+      "title": "Implement and qualify the authorized inference broker",
+      "phase": 0,
+      "deps": [
+        "S-03.1",
+        "S-01.2.2"
+      ],
+      "path": "task_prompts/S-03.2.md",
+      "sha256": "ce10e010e65288c59af6e9efa929a84932dd262451b4109ad985344620d625c0"
     },
     {
       "id": "U-01.1",
@@ -337,6 +392,17 @@
       ],
       "path": "task_prompts/P-03.2.md",
       "sha256": "9a2296540816eeb9f5c388236e71f600730bbafca3bace95371784a3e7cdba49"
+    },
+    {
+      "id": "P-04.1",
+      "title": "Record Owner acceptance and mint outcome identity",
+      "phase": 1,
+      "deps": [
+        "P-03.2",
+        "P-01.2"
+      ],
+      "path": "task_prompts/P-04.1.md",
+      "sha256": "305fde46315267c90216928f20f7b03a6692b1f3082a1f5c1426b30362302bfe"
     },
     {
       "id": "E-01.1.1",
@@ -521,10 +587,11 @@
       "title": "Launch review and verify effective separation",
       "phase": 2,
       "deps": [
-        "E-03.2.1"
+        "E-03.2.1",
+        "S-03.2"
       ],
       "path": "task_prompts/E-03.2.2.md",
-      "sha256": "722fca59e8d052853237dd961f4ad65cedbdc54f0e03fa7468632807f98e1767"
+      "sha256": "4539be915743b512f99018ff06820c9fcffde38c8fa8791bbbae9d5ef3a8491e"
     },
     {
       "id": "E-03.3.1",
@@ -1017,10 +1084,11 @@
       "title": "Generate sourced episodic conversation summaries",
       "phase": 4,
       "deps": [
-        "K-02.1"
+        "K-02.1",
+        "S-03.2"
       ],
       "path": "task_prompts/K-02.2.md",
-      "sha256": "526c5cee4d59e5229dc7c784803c0d7ca31711ddcf56d5c555ac360ca0a2e66c"
+      "sha256": "43e7bea639ce84934413651345ececb7501fab118d61df88a051fbc90b2e31bd"
     },
     {
       "id": "K-03.1",

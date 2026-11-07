@@ -726,6 +726,13 @@ sources stay external (pinned in `composition/`) unless adaptation is necessary.
 | ordinary | `README.md`, `CLAUDE.md`, `.gitignore` | Edit freely. The verifier reports them as `INFO: ordinary file changed since seed`. |
 
 A new manifest entry without a class fails, so classify it in the verifier.
+
+An Owner-directed plan amendment changes the plan JSON, regenerates its HTML and
+CSV projections and the affected task prompts in the generator's exact format,
+and updates `task_manifest.json` and `SEED_MANIFEST.json` (hashes, sizes, new
+prompt entries and `task_count`) in the same commit. The plan records each
+amendment, dated and with its provenance, in its `amendments` list; its original
+statuses and `as_of` stay the seed baseline.
 `python -I tools/verify_seed.py --baseline seed` checks the original import
 strictly at any time, whatever has changed since.
 
