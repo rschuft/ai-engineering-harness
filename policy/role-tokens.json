@@ -643,6 +643,15 @@
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
           "notes": "Verified at S-01.2.2: direct push, force-push and push-deletion of main and a push to a non-work/* branch were declined by the pre-receive hook; merge, force-merge and squash answered 405; protection, settings, collaborator, hook, deploy-token, transfer and deletion calls answered 403; it still opened a proposal PR."
+        },
+        {
+          "mechanism": "The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no management, Owner, admin or bot credential in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs).",
+          "verified": true,
+          "verify_at": "S-01.3.2",
+          "evidence": [
+            "evidence/S-01.3.2-job-daemon-and-management-access.md"
+          ],
+          "notes": "Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran."
         }
       ],
       "issuance": [
@@ -700,7 +709,8 @@
         "evidence": [
           "decisions/0003-execution-guest-providers-and-isolation-contract.md",
           "evidence/F-04.2-conversation-lifecycle.md",
-          "evidence/S-01.2.2-segregated-credentials.md"
+          "evidence/S-01.2.2-segregated-credentials.md",
+          "evidence/S-01.3.2-job-daemon-and-management-access.md"
         ],
         "note": "Its Gitea bot account and token exist (S-01.2.2), in the Owner account's Credential Manager pending the dispatcher; no agent workload has run or held the token (decision 0003, C6)."
       },
@@ -764,6 +774,15 @@
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
           "notes": "Failed in part at S-01.2.2. Shown: read permission on the fixture, on no merge allowlist; it submitted an approving review; its pushes were declined, its merges answered 405, its settings calls 403. Not realizable: Gitea 28.3.0 has no review-only scope (a review with read:repository answered 403, required=[write:repository]), and a read-permission collaborator can open a pull request from an existing branch (201; fd-gitea-reader-opens-pr). Neither reaches an Owner operation."
+        },
+        {
+          "mechanism": "The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no management, Owner, admin or bot credential in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs).",
+          "verified": true,
+          "verify_at": "S-01.3.2",
+          "evidence": [
+            "evidence/S-01.3.2-job-daemon-and-management-access.md"
+          ],
+          "notes": "Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran."
         }
       ],
       "issuance": [
@@ -799,7 +818,8 @@
         "evidence": [
           "decisions/0003-execution-guest-providers-and-isolation-contract.md",
           "evidence/F-04.2-conversation-lifecycle.md",
-          "evidence/S-01.2.2-segregated-credentials.md"
+          "evidence/S-01.2.2-segregated-credentials.md",
+          "evidence/S-01.3.2-job-daemon-and-management-access.md"
         ],
         "note": "Its Gitea bot account and token exist (S-01.2.2), in the Owner account's Credential Manager pending the dispatcher; no agent workload has run or held the token (decision 0003, C6)."
       },
@@ -864,6 +884,12 @@
           "verified": false,
           "verify_at": "S-01.2.2",
           "notes": "Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned)."
+        },
+        {
+          "mechanism": "The runner containment profile carries the job constraints of S-01.3.2: no engine socket or engine TCP endpoint reachable from a job; no management key, Owner, admin or bot token in its environment or readable filesystem; no privileged mode, added capability, device or host namespace; no host-path mount beyond the scoped workspace.",
+          "verified": false,
+          "verify_at": "Q-02.2.2",
+          "notes": "Declared at S-01.3.2 (provisioning.agent_server.jobs.ci), not verified: no CI runner exists. The profile is Q-02.2.1; Q-02.2.2 proves it and Q-02.3.2 attempts the engine socket from a hostile job."
         }
       ],
       "issuance": [

@@ -100,18 +100,21 @@ class CommittedMatrix(unittest.TestCase):
                 self.assertNotIn('cap-code-merge-integration', r['grants']['capabilities'])
                 self.assertFalse(r.get('custodian_of'))
 
-    def test_realizations_as_s_01_3_1_left_them(self):
-        # S-01.2.2 and S-01.3.1 verified only what their evidence shows; every other row stays
-        # unverified and says why.
+    def test_realizations_as_s_01_3_2_left_them(self):
+        # S-01.2.2, S-01.3.1 and S-01.3.2 verified only what their evidence shows; every other
+        # row stays unverified and says why.
         rows = [(r['id'], m) for r in POLICY['roles'] for m in r['realization']]
         self.assertTrue(rows)
         self.assertEqual(sorted(rid for rid, m in rows if m['verified'] is True),
-                         ['authorization-verifier', 'builder', 'builder', 'gitea-site-admin',
-                          'management-dispatcher', 'planner'])
+                         ['authorization-verifier', 'builder', 'builder', 'builder',
+                          'gitea-site-admin', 'management-dispatcher', 'planner', 'reviewer'])
         for rid, m in rows:
             admission = rid == 'management-dispatcher' and m['mechanism'].startswith('Admission')
+            job = m['mechanism'].startswith('The job environment')
+            ci_job = rid == 'ci-job' and m['mechanism'].startswith('The runner containment')
             if m['verified'] is True:
                 self.assertIn('evidence/S-01.3.1-management-api-admission.md' if admission else
+                              'evidence/S-01.3.2-job-daemon-and-management-access.md' if job else
                               'evidence/S-01.2.2-segregated-credentials.md', m['evidence'])
             else:
                 self.assertIs(m['verified'], False, m['mechanism'])
@@ -123,6 +126,12 @@ class CommittedMatrix(unittest.TestCase):
                 carried[rid] = 'E-01.2.2'
             if admission:
                 carried[rid] = 'S-01.3.1'
+            if job:
+                carried[rid] = 'S-01.3.2'
+                self.assertIn(rid, ('builder', 'reviewer'))
+            if ci_job:
+                carried[rid] = 'Q-02.2.2'
+                self.assertIs(m['verified'], False)
             self.assertEqual(m['verify_at'], carried.get(rid, 'S-01.2.2'), m['mechanism'])
 
     def test_every_role_binds_to_one_inventory_principal(self):

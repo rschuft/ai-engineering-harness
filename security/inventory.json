@@ -325,14 +325,18 @@
       "independently_isolated": true,
       "identity": {
         "planned": "A per-conversation container started by the guest's Agent Server Docker runtime: approved read-only definitions, a working copy only, a minimal tool set; a dedicated Gitea 28 token-only bot account with non-admin repository write and PR scope. No Owner, merge, admin, executor, Docker or guest-management credential.",
-        "observed": "Only the container identity is observed, for the no-LLM fixture conversation: uid:gid of the Agent Server's service user (999:989), cap-drop ALL, no-new-privileges, exactly three binds under the server's scratch, port 8000 published on the guest's loopback only, and its own per-conversation OH_SECRET_KEY and session key in its environment. No agent workload, LLM or repository content has run. Its Gitea identities exist (S-01.2.2): aieh-bot-planner and aieh-bot-builder, non-administrator Gitea Bot accounts without passwords, each with a token of scope write:repository only in the Owner account's Credential Manager pending the dispatcher; no agent has held either."
+        "observed": "Only the container identity is observed, for the no-LLM fixture conversation: uid:gid of the Agent Server's service user (999:989), cap-drop ALL, no-new-privileges, exactly three binds under the server's scratch, port 8000 published on the guest's loopback only, and its own per-conversation OH_SECRET_KEY and session key in its environment. No agent workload, LLM or repository content has run. Its Gitea identities exist (S-01.2.2): aieh-bot-planner and aieh-bot-builder, non-administrator Gitea Bot accounts without passwords, each with a token of scope write:repository only in the Owner account's Credential Manager pending the dispatcher; no agent has held either. S-01.3.2 proved its job environment from inside two disposable conversation containers: no engine socket or engine API, no route of the outer Agent Server at any address, no host service through SLIRP's 10.0.2.2, and no fingerprint of the outer session key, OH_SECRET_KEY or any Gitea bot token in its readable files or process environments; root is not obtainable (no_new_privs)."
       },
       "status": "planned",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
       ],
-      "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.2.2-segregated-credentials.md"],
+      "evidence": [
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/S-01.2.2-segregated-credentials.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
       "findings": ["fd-container-shares-service-uid", "fd-acp-provider-auth"]
     },
     {
@@ -345,7 +349,7 @@
       "independently_isolated": true,
       "identity": {
         "planned": "A separate session, runner or model and context from the builder; its own Gitea bot identity that can submit reviews but cannot merge, administer or reach the executor.",
-        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-reviewer, a restricted, non-administrator Gitea Bot account without a password, read collaborator of the fixture, with a token of scope write:repository in the Owner account's Credential Manager (Gitea 28.3.0 needs write:repository to submit a review). It reviewed; its pushes, merges and settings changes were refused; it can open a PR (fd-gitea-reader-opens-pr). No reviewer session has run."
+        "observed": "Only its Gitea identity exists (S-01.2.2): aieh-bot-reviewer, a restricted, non-administrator Gitea Bot account without a password, read collaborator of the fixture, with a token of scope write:repository in the Owner account's Credential Manager (Gitea 28.3.0 needs write:repository to submit a review). It reviewed; its pushes, merges and settings changes were refused; it can open a PR (fd-gitea-reader-opens-pr). No reviewer session has run. Its runs are to execute in the same per-conversation job environment, proved at S-01.3.2 without a reviewer session."
       },
       "status": "planned",
       "sources": [
@@ -353,7 +357,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
         "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
       ],
-      "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
+      "evidence": ["evidence/S-01.2.2-segregated-credentials.md", "evidence/S-01.3.2-job-daemon-and-management-access.md"],
       "findings": ["fd-gitea-reader-opens-pr"]
     },
     {
@@ -365,11 +369,15 @@
       "owner_authority": false,
       "independently_isolated": true,
       "identity": {
-        "planned": "A disposable container or VM on the dedicated runner host, with a restricted Gitea job token; no host-mode execution, broad container socket, user home or Owner credential.",
+        "planned": "A disposable container or VM on the dedicated runner host, with a restricted Gitea job token; no host-mode execution, broad container socket, user home or Owner credential. The runner containment profile (Q-02.2.1, proved by Q-02.2.2 and Q-02.3.2) carries the job constraints S-01.3.2 established for the conversation containers: no engine socket or engine TCP endpoint; no management key, Owner, admin or bot token; no privileged mode; no host-path mount beyond the scoped workspace (declared in provisioning.agent_server.jobs.ci, not verified: no CI runner exists).",
         "observed": null
       },
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#Q-02.2.1"
+      ],
       "findings": ["fd-ci-runner-unpinned"]
     },
     {
@@ -943,19 +951,19 @@
       "name": "Guest Docker daemon socket",
       "kind": "socket",
       "custodian": "guest-root",
-      "location": "/run/docker.sock, root:docker 0660; agent gets EACCES; never mounted into a conversation container.",
+      "location": "/run/docker.sock, root:docker 0660; agent gets EACCES; never mounted into a conversation container. Absent from every job: the path does not exist inside a conversation container (ENOENT, S-01.3.2).",
       "credentials": ["cred-moby-docker-group"],
       "status": "observed",
-      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.2-conversation-lifecycle.md"]
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.3.2-job-daemon-and-management-access.md"]
     },
     {
       "id": "guest-containerd-socket",
       "name": "Guest containerd socket",
       "kind": "socket",
       "custodian": "guest-root",
-      "location": "/run/containerd/containerd.sock, root:root 0660; the CRI plugin is off, so no streaming listener.",
+      "location": "/run/containerd/containerd.sock, root:root 0660; the CRI plugin is off, so no streaming listener. Absent from every job: neither it nor its .ttrpc companion exists inside a conversation container (ENOENT, S-01.3.2).",
       "status": "observed",
-      "evidence": ["evidence/F-04.1b-provision-moby.md"]
+      "evidence": ["evidence/F-04.1b-provision-moby.md", "evidence/S-01.3.2-job-daemon-and-management-access.md"]
     },
     {
       "id": "guest-secrets-env-file",
@@ -1010,11 +1018,15 @@
       "name": "Conversation container",
       "kind": "container",
       "custodian": "guest-service-openhands",
-      "location": "One per Docker conversation: the locked image ID, three binds under the server's scratch, cap-drop ALL, no-new-privileges, the server's uid:gid, Moby's default bridge with host.docker.internal mapped to the guest's docker0. Its inner server also starts VSCode on port 8001 inside its network namespace. icc is off on the default bridge (no connection between containers), and the container guard refuses its new connections to any address of the guest (S-01.3.1).",
+      "location": "One per Docker conversation: the locked image ID, three binds under the server's scratch, cap-drop ALL, no-new-privileges, the server's uid:gid, Moby's default bridge with host.docker.internal mapped to the guest's docker0. Its inner server also starts VSCode on port 8001 inside its network namespace. icc is off on the default bridge (no connection between containers), and the container guard refuses its new connections to any address of the guest (S-01.3.1). It is the job environment of builder and reviewer runs (S-01.3.2, declared in provisioning.agent_server.jobs): not privileged, no added capability, device or host namespace, SecurityOpt exactly no-new-privileges with Moby's builtin seccomp profile and AppArmor docker-default; inside it uid 999 gid 989 with no supplementary group, every capability set empty, NoNewPrivs 1, Seccomp 2. No engine socket exists in it (every Docker, containerd, Podman, BuildKit and CRI-O path ENOENT; no socket file, no bound unix name), the engine ports 2375 and 2376 refuse at every address it can see, and no management, Owner, admin or bot credential is in its files or process environments (searched by fingerprint). The image ships docker, ctr, containerd and runc binaries and setuid-root sudo and su, inert there (fd-job-image-engine-clients).",
       "credentials": ["cred-conversation-keys"],
       "status": "observed",
-      "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.3.1-management-api-admission.md"],
-      "findings": ["fd-container-network-deviations", "fd-container-shares-service-uid"]
+      "evidence": [
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "findings": ["fd-container-network-deviations", "fd-container-shares-service-uid", "fd-job-image-engine-clients"]
     },
     {
       "id": "api-agent-server-management",
@@ -1051,10 +1063,10 @@
       "name": "Guest Docker Engine API",
       "kind": "api",
       "custodian": "guest-root",
-      "location": "Over /run/docker.sock only; reached by the server's docker CLI as openhands.",
+      "location": "Over /run/docker.sock only; reached by the server's docker CLI as openhands. Not reachable from a job: no socket inside a conversation container, and no TCP endpoint (2375 and 2376 refuse at host.docker.internal, every guest address, the container's own loopback and SLIRP's 10.0.2.2 and 10.0.2.3; the peer container does not answer) (S-01.3.2).",
       "credentials": ["cred-moby-docker-group"],
       "status": "observed",
-      "evidence": ["evidence/F-04.1c-agent-server.md"]
+      "evidence": ["evidence/F-04.1c-agent-server.md", "evidence/S-01.3.2-job-daemon-and-management-access.md"]
     },
     {
       "id": "store-agent-server-scratch",
@@ -1544,7 +1556,10 @@
       "credentials": ["cred-ci-job-token"],
       "assets": ["ci-runner-host"],
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
       "findings": ["fd-ci-runner-unpinned"]
     },
     {
@@ -1681,15 +1696,16 @@
       "id": "fd-guest-login-name-and-key",
       "kind": "limit",
       "title": "The operator login `agent` reads the management key; no agent workload has that login",
-      "detail": "Custody as of S-01.3.1. No dispatcher exists. During bootstrap the dispatcher's role is performed by the Owner's account through tools/guest.py, over the instance's host-loopback SSH forward with the per-instance key, as the operator login agent, which reads the session key from its root:agent 0440 file inside the guest (never on a command line). No agent workload ever has that login: an engineering agent runs in a conversation container as 999:989 in its own namespaces, holds no SSH key, cannot reach the guest's sshd (the container guard refuses it at every guest address), cannot reach the management listener, and its readable process environments hold only its own conversation keys (the outer key's fingerprint was absent from both containers, S-01.3.1). The name still collides with the engineering-agent role, and anyone given the login would hold the full management key. Moving the key to a separate guest identity (a dispatch group that agent is not in) is proposed to the Overseer, not done; whether the login keeps the key once a dispatcher exists is decided with the dispatcher (E-01.2.x).",
+      "detail": "Custody as of S-01.3.1. No dispatcher exists. During bootstrap the dispatcher's role is performed by the Owner's account through tools/guest.py, over the instance's host-loopback SSH forward with the per-instance key, as the operator login agent, which reads the session key from its root:agent 0440 file inside the guest (never on a command line). No agent workload ever has that login: an engineering agent runs in a conversation container as 999:989 in its own namespaces, holds no SSH key, cannot reach the guest's sshd (the container guard refuses it at every guest address), cannot reach the management listener, and its readable process environments hold only its own conversation keys (the outer key's fingerprint was absent from both containers, S-01.3.1). The name still collides with the engineering-agent role, and anyone given the login would hold the full management key. Moving the key to a separate guest identity (a dispatch group that agent is not in) is proposed to the Overseer, not done; whether the login keeps the key once a dispatcher exists is decided with the dispatcher (E-01.2.x). S-01.3.2: no job holds the login, its SSH key or the management key: the outer key's fingerprints are absent from every readable file and process environment of two conversation containers, and sshd, the management listener and the instance's host forwards refuse from them. Custody beyond bootstrap stays with E-01.2.2.",
       "refs": ["guest-login-agent", "cred-agent-server-session-key", "guest-session-key-file", "op-as-conversation-create"],
       "citations": [
         "evidence/S-01.3.1-management-api-admission.md",
         "profiles/README.md",
         "profiles/strong-windows-qemu-whpx/profile.json",
-        "evidence/F-04.1c-agent-server.md"
+        "evidence/F-04.1c-agent-server.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
       ],
-      "carried_to": ["S-01.3.2", "E-01.2.2"]
+      "carried_to": ["E-01.2.2"]
     },
     {
       "id": "fd-session-key-not-fine-grained",
@@ -1721,25 +1737,35 @@
       "id": "fd-container-network-deviations",
       "kind": "open-risk",
       "title": "Conversation containers keep upstream network defaults",
-      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Observed at S-01.3.1 before the admission controls: from a conversation container the guest's sshd (172.17.0.1:22 and 10.0.2.15:22, banner) and systemd-resolved's LLMNR (TCP 5355) were reachable, and the other container's inner server (8000, /server_info 200) and VSCode (8001, 403) too; the management listener and the published ports refused. After them (container guard, icc false): every guest address and port refuses (TCP reset, logged) and the peer container times out, in both containers and after a guest restart. Remaining: host.docker.internal still names the guest (refused), the container keeps a NAT path out through the guest (no route out, SLIRP restrict=on; the deny-by-default matrix is S-01.4), and the request caps override (E-01.2.2).",
+      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Observed at S-01.3.1 before the admission controls: from a conversation container the guest's sshd (172.17.0.1:22 and 10.0.2.15:22, banner) and systemd-resolved's LLMNR (TCP 5355) were reachable, and the other container's inner server (8000, /server_info 200) and VSCode (8001, 403) too; the management listener and the published ports refused. After them (container guard, icc false): every guest address and port refuses (TCP reset, logged) and the peer container times out, in both containers and after a guest restart. Remaining: host.docker.internal still names the guest (refused), the container keeps a NAT path out through the guest (no route out, SLIRP restrict=on; the deny-by-default matrix is S-01.4), and the request caps override (E-01.2.2). S-01.3.2: the locked server adds host.docker.internal unconditionally and its Config has no option to remove it (Moby's host-gateway-ip would retarget, not remove, the name), so the mapping stays, refused at every port. Through the NAT path, SLIRP's 10.0.2.2 (the host's loopback: the SSH forward, QMP and the host Gitea's 13300) and 10.0.2.3 refuse every probed port; the deny-by-default matrix stays with S-01.4.",
       "refs": ["conversation-container", "guest-sshd", "guest-conversation-listeners"],
       "citations": [
         "decisions/0001-agent-server-dispatch-precondition-and-version-line.md",
         "evidence/F-04.2-conversation-lifecycle.md",
         "evidence/F-04.1b-provision-moby.md",
         "profiles/strong-windows-qemu-whpx/profile.json",
-        "evidence/S-01.3.1-management-api-admission.md"
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
       ],
-      "carried_to": ["S-01.3.2", "S-01.4", "E-01.2.2", "S-02.1"]
+      "carried_to": ["S-01.4", "E-01.2.2", "S-02.1"]
     },
     {
       "id": "fd-container-shares-service-uid",
       "kind": "open-risk",
       "title": "Conversation containers run as the Agent Server's service uid",
-      "detail": "The Docker runtime starts each container with --user of the server's uid:gid (openhands, 999:989), the principal that is in group docker. The separation of the untrusted workload from the server rests on the container's namespaces, cap-drop ALL, no-new-privileges and the absent socket mount, with no user-namespace remap. Each conversation's keys are environment values visible to openhands and root through docker inspect.",
+      "detail": "The Docker runtime starts each container with --user of the server's uid:gid (openhands, 999:989), the principal that is in group docker. The separation of the untrusted workload from the server rests on the container's namespaces, cap-drop ALL, no-new-privileges and the absent socket mount, with no user-namespace remap. Each conversation's keys are environment values visible to openhands and root through docker inspect. S-01.3.2 narrowed it: the container gets the uid and primary gid only (no supplementary group, so not docker), every capability set is empty, no_new_privs and seccomp are set, and no engine socket or engine endpoint exists in it. A user-namespace remap or another runtime would be a structural change (not made; an architecture question for S-02.1).",
       "refs": ["conversation-container", "guest-service-openhands", "engineering-agent", "cred-conversation-keys"],
-      "citations": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md"],
-      "carried_to": ["S-01.3.2", "S-02.1"]
+      "citations": ["evidence/F-04.1c-agent-server.md", "evidence/F-04.2-conversation-lifecycle.md", "evidence/S-01.3.2-job-daemon-and-management-access.md"],
+      "carried_to": ["S-02.1"]
+    },
+    {
+      "id": "fd-job-image-engine-clients",
+      "kind": "limit",
+      "title": "The conversation image ships engine clients and setuid-root helpers",
+      "detail": "The locked agent-server image holds docker, ctr, containerd and runc binaries and setuid-root sudo, su, mount and passwd, and its own openhands user (uid 10001) is in group sudo. In a job they are inert: no engine socket or engine TCP endpoint exists or answers, the container runs as 999:989 with no passwd entry, no_new_privs makes the kernel ignore setuid (sudo refuses), su needs a password and every capability set is empty (S-01.3.2). Each control is independent of the others, but a job that gained an engine endpoint would find the client already installed. The image is upstream's and pinned by ID (decision 0006 item 3).",
+      "refs": ["conversation-container", "engineering-agent"],
+      "citations": ["evidence/S-01.3.2-job-daemon-and-management-access.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "carried_to": ["S-02.1", "E-01.2.2"]
     },
     {
       "id": "fd-host-loopback-exposure",
