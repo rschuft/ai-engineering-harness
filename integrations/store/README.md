@@ -14,10 +14,12 @@ separate store (F-05.2), never here.
 
 | Path | What |
 |---|---|
-| `integration_store.py` | The library and its command line (`init`, `default-path`) |
+| `integration_store.py` | The library and its command line (`init`, `default-path`, `backup`, `restore`) |
 | `migrations/NNNN_<name>.sql` | Ordered, versioned schema migrations |
 | `tests/test_integration_store.py` | Transaction, restart, crash, contention, migration and projection tests |
+| `tests/test_backup_restore.py` | Backup, restore, restore epochs, manifest checks and the projection rebuild from a synthetic repository (F-05.2) |
 | `tests/store_worker.py` | The subprocess the tests run against one database file |
+| `../storecore/storecore.py` | The SQLite mechanics shared with the effects store: connection policy, migration ledger, write transactions, the projection authorizer, backup and restore |
 
 ## Commands
 
@@ -26,6 +28,8 @@ Run from the repository root (`python3` outside Windows):
 ```
 python -I -B integrations/store/integration_store.py init --db <path>     # task store:init DB=<path>
 python -I -B integrations/store/integration_store.py default-path        # task store:path
+python -I -B integrations/store/integration_store.py backup --db <path> --actor <name>      # task store:backup
+python -I -B integrations/store/integration_store.py restore --db <path> --manifest <file> --actor <name> [--accept-rollback]   # task store:restore
 python -I -B -m unittest discover -s integrations/store/tests -v         # task store:test
 ```
 
@@ -35,7 +39,8 @@ migrations with their sha256, the connection pragmas and the table lists. It is
 idempotent; running it again only re-checks the migrations. It exits 1 with
 `REFUSED: ...` when the store refuses to open.
 
-`default-path` prints the default location and creates nothing.
+`default-path` prints the default location and creates nothing. `backup` and
+`restore` are described in [Backup and restore](#backup-and-restore).
 
 ## Location
 
@@ -66,6 +71,9 @@ the directory inherits the per-user profile's ACL. Neither is otherwise verified
   API for it, and triggers refuse it.
 - SQLite 3.38.0 or newer is required (STRICT tables, built-in JSON functions);
   `open_store` checks the runtime version and refuses an older library.
+- `ATTACH` is impossible on every connection (the attached-database limit is 0).
+- `PRAGMA application_id` is `0x41494E54` (set by migration 0002). Opening refuses
+  a file of another store kind, such as an effects store.
 
 ## Attempt receipts
 
@@ -118,6 +126,7 @@ detail and time.
 | `attempt_state`, `attempt_transition`, `reconciliation_status` | canonical | the closed vocabularies; changed only by a migration |
 | `attempt` | canonical | one row per attempt key; identity columns immutable |
 | `attempt_event` | canonical | append-only history |
+| `restore_epoch`, `restore_epoch_closure` | canonical | one row per restore and its closure; append-only (migration 0002) |
 | `proj_cursor` | projection | per projection: source, source cursor, coverage, rebuild time |
 | `proj_<name>`, `proj_<name>_*` | projection | rebuildable views; no authority |
 
@@ -137,7 +146,8 @@ Opening refuses a database when:
   migration was edited);
 - its version is newer than the migrations this code knows;
 - the recorded list does not match `user_version`;
-- it is not empty but has no version (not an integration store).
+- it is not empty but has no version (not an integration store);
+- its `application_id` names another store kind.
 
 The checksum is taken over the file's text with CRLF normalised to LF, so it is
 the same in any checkout. `integrations/.gitattributes` also keeps these files LF.
@@ -155,5 +165,87 @@ projections, triggers, views, `ATTACH`, pragmas and transaction control. A
 denied or failed rebuild rolls back completely. The tests show that a rebuild
 leaves every canonical table byte-for-byte unchanged.
 
-F-05.1 has only a test fake source. The real OpenSpec and Backlog projections
-come later, and backup and restore are F-05.2.
+The real OpenSpec and Backlog projections come later. Until then the tests use a
+fake source and, for F-05.2, a synthetic git repository holding OpenSpec-shaped
+and Backlog.md-shaped files. The projection reads it with `git ls-tree` and
+`git cat-file` only. The tests show that the repository's HEAD, tree, references,
+`git status` and file bytes are unchanged after a rebuild, and so are the
+canonical tables.
+
+## Backup and restore
+
+Plan leaf F-05.2,
+[decision 0004](../../decisions/0004-privileged-effect-store-custody-and-restore-semantics.md).
+The mechanics are in `../storecore/storecore.py` and are shared with the effects
+store. The two stores are never backed up or restored together.
+
+**Backup** (`store.backup(actor=...)`, `task store:backup`). The SQLite online
+backup API copies the store into `<db dir>/backups/<kind>-<UTC>-hw<N>.sqlite`. The
+live `.sqlite`, `-wal` and `-shm` files are never copied. The copy is switched to
+the rollback journal and must pass `PRAGMA integrity_check` and
+`foreign_key_check`. Only then is its sidecar manifest written,
+`<copy>.manifest.json`, recording:
+
+- the store kind and `application_id`;
+- the schema version and the migrations with their sha256;
+- the UTC time and the actor;
+- the size and sha256 of the copy;
+- the canonical high-water mark and the history digest;
+- the digest of the canonical dump.
+
+A backup without a manifest does not count. Here the high-water mark is the last
+`attempt_event` ID. The history digest chains the attempt events up to it.
+Restore-epoch rows are bookkeeping and are not counted. The manifest's
+`chain_head` is null: only the effects store has a hash chain.
+
+**Restore** (`restore_store(db, manifest, actor=...)`, `task store:restore`). In
+order:
+
+1. Verify the backup against its manifest. Refused: a manifest of another format
+   or store kind; a copy whose sha256 or size differs; a file that is not a
+   rollback-journal backup copy; a schema version newer than this code knows;
+   recorded migrations that differ from the files; a failed integrity check; or
+   facts that differ from the manifest. An older schema is migrated after the
+   restore.
+2. Take exclusive custody of the live file: `locking_mode=EXCLUSIVE` and
+   `BEGIN EXCLUSIVE`. Any other open connection makes the restore refuse
+   (`EXCLUSIVE_CUSTODY`).
+3. Compare histories. If the live store is ahead of the backup, or diverges from
+   it, that is a rollback, refused (`ROLLBACK_REFUSED`) unless `--accept-rollback`
+   is given. A live file that cannot be read, or that is of another store kind, is
+   always refused.
+4. Preserve the live content aside with the backup mechanism, in
+   `backups/superseded/`, with a JSON note. The tools never delete it.
+5. Stage the backup in `backups/staging/`. Migrate it, drop every projection and
+   clear `proj_cursor` (under the projection authorizer), and append a
+   `restore_epoch` row. The row records the backup's identity, high-water mark and
+   history digest, the superseded store's mark and digest, the superseded copy,
+   whether a rollback was accepted, the projections dropped, the actor and the time.
+6. Replace the live content with the staged copy in one backup step, which is one
+   destination transaction. A crash leaves the old store or the new one.
+
+**Restore epochs.** A restore loses knowledge, never effects. While an epoch has
+no closure, `reserve` refuses new attempts (`RestoreEpochOpen`), and so does a
+trigger (`attempt_reservation_gate`). Reads continue. Then:
+
+- `reconcile(oracle, actor=...)` moves every `dispatched` attempt to `unknown`.
+- It then resolves each `unknown` attempt with the oracle's verdict:
+  - `performed` becomes `confirmed`;
+  - `not_performed` becomes `failed`;
+  - `indeterminate` stays `unknown`.
+
+  These are the F-05.1 transitions, unchanged.
+- `close_restore_epoch(actor=...)` closes the epoch once no attempt is
+  `dispatched` or `unknown`.
+- A `reserved` attempt may stay: its conversation ID is deterministic, so a second
+  dispatch cannot create a second conversation (decision 0001).
+
+The real oracle, a lookup in OpenHands, is E-01.4.x. The tests use a fixture.
+
+**Retention.** `store.prune_backups(keep_last=N, older_than_days=None)` deletes
+old backup copies and their manifests. It never deletes the newest copy, the
+source of an open epoch, or anything in `backups/superseded/`. Canonical rows are
+never deleted.
+
+Backups are local-disk only. They inherit the custody of the store's directory,
+which is the Owner's session (decision 0004, point 9).

@@ -20,6 +20,23 @@ Transaction policy
   either and triggers refuse both.
 * Local disk only: UNC paths and Windows network drives are refused. The file
   must never be inside this repository or in agent/guest storage.
+* ``ATTACH`` is impossible on every connection (attached-database limit 0), and
+  ``PRAGMA application_id`` (set by migration 0002) identifies the file as an
+  integration store: the effects store refuses it and this store refuses an
+  effects store file.
+
+Backup and restore (plan leaf F-05.2, decision 0004)
+----------------------------------------------------
+``IntegrationStore.backup`` copies the live store with the SQLite online backup
+API into ``<db dir>/backups/``, checks the copy's integrity and writes a sha256
+manifest; ``restore_store`` verifies a backup against its manifest, takes
+exclusive custody of the live file, refuses a rollback unless explicitly
+accepted, preserves the superseded live content in ``backups/superseded/``,
+drops the projections and appends a restore epoch. While an epoch is open new
+attempt reservations are refused; ``reconcile`` and ``close_restore_epoch``
+resolve it. The mechanics are shared with the effects store through
+``integrations/storecore/storecore.py``; the two stores are never backed up or
+restored together.
 
 Migrations are the ordered files ``migrations/NNNN_<name>.sql``. Each runs in the
 same transaction as its ``schema_migration`` row (with the sha256 of its
@@ -31,18 +48,20 @@ Command line (run from the repository root)::
 
     python -I -B integrations/store/integration_store.py init --db PATH
     python -I -B integrations/store/integration_store.py default-path
+    python -I -B integrations/store/integration_store.py backup --db PATH --actor NAME
+    python -I -B integrations/store/integration_store.py restore --db PATH --manifest FILE --actor NAME [--accept-rollback]
 
 ``init`` creates or migrates the store at an explicit path and prints a JSON
 summary. ``default-path`` only prints the default trusted-host location; it
-creates nothing.
+creates nothing. ``backup`` and ``restore`` print a JSON manifest or report.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 import argparse
-import contextlib
-import datetime
+import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -50,15 +69,33 @@ import re
 import sqlite3
 import sys
 import uuid
-from typing import Callable, Iterator, Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 MIGRATIONS_DIR = HERE / 'migrations'
 
-# STRICT tables need SQLite 3.37.0; JSON functions built in by default need 3.38.0.
-MIN_SQLITE_VERSION = (3, 38, 0)
-DEFAULT_BUSY_TIMEOUT_MS = 10_000
+
+def _load_storecore():
+    """The shared mechanics module, loaded by path (``python -I`` adds no script dir)."""
+    name = 'aieh_storecore'
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, HERE.parent / 'storecore' / 'storecore.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
+storecore = _load_storecore()
+
+MIN_SQLITE_VERSION = storecore.MIN_SQLITE_VERSION
+DEFAULT_BUSY_TIMEOUT_MS = storecore.DEFAULT_BUSY_TIMEOUT_MS
+
+# PRAGMA application_id of an integration store, set by migration 0002 ('AINT').
+APPLICATION_ID = 0x41494E54
+APPLICATION_ID_SINCE = 2
 
 # Fixed namespace for deterministic conversation IDs. NEVER change it: every
 # conversation ID already reserved, and every create already sent with one, is
@@ -79,7 +116,8 @@ RECONCILIATION_STATUSES = ('none', 'required', 'reconciled')
 
 # Canonical tables: never dropped, rebuilt or deleted from.
 CANONICAL_TABLES = ('schema_migration', 'attempt_state', 'attempt_transition',
-                    'reconciliation_status', 'attempt', 'attempt_event')
+                    'reconciliation_status', 'attempt', 'attempt_event',
+                    'restore_epoch', 'restore_epoch_closure')
 PROJECTION_PREFIX = 'proj_'
 PROJECTION_CURSOR_TABLE = 'proj_cursor'
 
@@ -87,24 +125,18 @@ _MIGRATION_NAME = re.compile(r'^(\d{4})_([a-z0-9_]+)\.sql$')
 _PROJECTION_NAME = re.compile(r'^[a-z][a-z0-9]{0,62}$')
 
 
-class StoreError(Exception):
-    """Base class: the store refused an operation; nothing was changed."""
-
-
-class UnsupportedSQLite(StoreError):
-    pass
-
-
-class UnsafeLocation(StoreError):
-    pass
-
-
-class MigrationError(StoreError):
-    pass
-
-
-class PragmaError(StoreError):
-    pass
+StoreError = storecore.StoreError
+UnsupportedSQLite = storecore.UnsupportedSQLite
+UnsafeLocation = storecore.UnsafeLocation
+MigrationError = storecore.MigrationError
+PragmaError = storecore.PragmaError
+ProjectionError = storecore.ProjectionError
+WrongStoreKind = storecore.WrongStoreKind
+BackupError = storecore.BackupError
+RestoreRefused = storecore.RestoreRefused
+RollbackRefused = storecore.RollbackRefused
+RestoreEpochOpen = storecore.RestoreEpochOpen
+Migration = storecore.Migration
 
 
 class ConflictingReservation(StoreError):
@@ -119,8 +151,8 @@ class IllegalTransition(StoreError):
     pass
 
 
-class ProjectionError(StoreError):
-    pass
+class EpochNotReconciled(StoreError):
+    """A restore epoch cannot close while an attempt's outcome is still uncertain."""
 
 
 @dataclass(frozen=True)
@@ -157,15 +189,6 @@ class Event:
 
 
 @dataclass(frozen=True)
-class Migration:
-    version: int
-    name: str
-    path: Path
-    sha256: str
-    text: str
-
-
-@dataclass(frozen=True)
 class Projection:
     """A rebuildable projection.
 
@@ -186,7 +209,7 @@ class Projection:
 # Helpers
 
 def _now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    return storecore.now()
 
 
 def canonical_intent(intent: Mapping) -> str:
@@ -194,8 +217,7 @@ def canonical_intent(intent: Mapping) -> str:
     if not isinstance(intent, Mapping):
         raise StoreError('intent must be a JSON object')
     try:
-        return json.dumps(intent, sort_keys=True, separators=(',', ':'),
-                          ensure_ascii=False, allow_nan=False)
+        return storecore.canonical_json(intent)
     except (TypeError, ValueError) as exc:
         raise StoreError(f'intent is not canonical JSON: {exc}') from None
 
@@ -213,182 +235,110 @@ def sqlite_version() -> str:
     return sqlite3.sqlite_version
 
 
-def check_sqlite_version() -> None:
-    if sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:
-        need = '.'.join(map(str, MIN_SQLITE_VERSION))
-        raise UnsupportedSQLite(
-            f'SQLite {sqlite3.sqlite_version} is too old: the store needs {need} or newer '
-            '(STRICT tables and built-in JSON functions)')
+check_sqlite_version = storecore.check_sqlite_version
+split_statements = storecore.split_statements
+write_transaction = storecore.write_transaction
+pragmas = storecore.pragmas
 
 
 def default_db_path(environ: Mapping[str, str] | None = None,
                     platform: str | None = None) -> Path:
     """The default trusted-host location. Computes a path; creates nothing."""
-    env = os.environ if environ is None else environ
-    plat = sys.platform if platform is None else platform
-    if plat == 'win32':
-        base = env.get('LOCALAPPDATA')
-        if not base:
-            raise UnsafeLocation('LOCALAPPDATA is not set; pass an explicit --db path')
-        return Path(base) / 'ai-engineering-harness' / 'state' / 'integration.sqlite'
-    base = env.get('XDG_DATA_HOME') or str(Path(env.get('HOME') or Path.home()) / '.local' / 'share')
-    return Path(base) / 'ai-engineering-harness' / 'state' / 'integration.sqlite'
-
-
-def _is_within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
+    return storecore.harness_state_root(environ, platform) / 'state' / 'integration.sqlite'
 
 
 def check_location(path: Path) -> Path:
     """Resolve and vet a database path; refuse locations the blueprint forbids."""
-    raw = str(path)
-    if raw in ('', ':memory:') or raw.startswith('file:'):
-        raise UnsafeLocation('the store must be a file path on local disk')
-    if raw.startswith(('\\\\', '//')):
-        raise UnsafeLocation(f'network (UNC) path refused: {raw}')
-    resolved = Path(os.path.abspath(path))
-    if _is_within(resolved, REPO.resolve()):
-        raise UnsafeLocation(f'the store must not be inside the repository checkout: {resolved}')
-    if sys.platform == 'win32':
-        import ctypes
-        drive = os.path.splitdrive(str(resolved))[0]
-        if drive.startswith('\\\\'):
-            raise UnsafeLocation(f'network (UNC) path refused: {resolved}')
-        drive_remote = 4
-        if ctypes.windll.kernel32.GetDriveTypeW(drive + '\\') == drive_remote:
-            raise UnsafeLocation(f'network drive refused: {resolved}')
-    return resolved
+    return storecore.check_local_path(path)
 
 
 def load_migrations(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
-    found = []
-    for entry in sorted(Path(directory).iterdir()):
-        if entry.suffix != '.sql':
-            continue
-        match = _MIGRATION_NAME.match(entry.name)
-        if not match:
-            raise MigrationError(f'migration file name not NNNN_<name>.sql: {entry.name}')
-        text = entry.read_bytes().decode('utf-8').replace('\r\n', '\n')
-        found.append(Migration(int(match.group(1)), entry.name, entry,
-                               hashlib.sha256(text.encode('utf-8')).hexdigest(), text))
-    versions = [m.version for m in found]
-    if versions != list(range(1, len(found) + 1)):
-        raise MigrationError(f'migration versions must run 1..N without gaps: {versions}')
-    return found
+    return storecore.load_migrations(directory)
 
 
-def split_statements(text: str) -> list[str]:
-    """Split an SQL script into complete statements (trigger bodies stay whole).
+# ---------------------------------------------------------------------------
+# Store kind: what backup, restore and opening need to know
 
-    ``executescript`` is not used because it commits any open transaction first.
-    """
-    statements, pending = [], ''
-    for piece in text.split(';'):
-        pending += piece + ';'
-        if sqlite3.complete_statement(pending):
-            body = pending.strip()
-            if _strip_comments(body).strip(' \n\t;'):
-                statements.append(body)
-            pending = ''
-    if _strip_comments(pending).strip(' \n\t;'):
-        raise MigrationError('migration ends with an incomplete statement')
-    return statements
+def _high_water(conn: sqlite3.Connection) -> int:
+    """Canonical high-water mark: the last attempt event (events are append-only)."""
+    return conn.execute('SELECT coalesce(max(event_id), 0) FROM attempt_event').fetchone()[0]
 
 
-def _strip_comments(sql: str) -> str:
-    return '\n'.join(line for line in sql.splitlines() if not line.strip().startswith('--'))
+def _history_digest(conn: sqlite3.Connection, upto: int) -> str:
+    """sha256 over the attempt events up to ``upto``, chained row by row."""
+    digest = storecore.GENESIS_DIGEST
+    for row in conn.execute(f'SELECT {_EVENT_COLUMNS} FROM attempt_event WHERE event_id <= ? '
+                            'ORDER BY event_id', (upto,)):
+        digest = storecore.sha256_text(digest + '\n' + json.dumps(row, ensure_ascii=True))
+    return digest
 
 
-@contextlib.contextmanager
-def write_transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    """One ``BEGIN IMMEDIATE`` transaction: commit on success, roll back on any error."""
-    conn.execute('BEGIN IMMEDIATE')
-    try:
-        yield
-    except BaseException:
-        if conn.in_transaction:
-            conn.execute('ROLLBACK')
-        raise
-    conn.execute('COMMIT')
+def _verify_kind_invariants(conn: sqlite3.Connection) -> None:
+    bad = conn.execute(
+        'SELECT a.operation_key FROM attempt a WHERE a.state_seq <> '
+        '(SELECT max(seq) FROM attempt_event e WHERE e.operation_key = a.operation_key) '
+        'OR NOT EXISTS (SELECT 1 FROM attempt_event e WHERE e.operation_key = a.operation_key AND e.seq = 0)'
+    ).fetchall()
+    if bad:
+        raise StoreError(f'attempts whose event history does not match their state: {bad[:5]}')
+
+
+def _drop_projections(conn: sqlite3.Connection) -> list[str]:
+    """Drop every projection table and clear the cursor; one guarded transaction."""
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name GLOB 'proj_*' "
+        f"AND name <> '{PROJECTION_CURSOR_TABLE}' ORDER BY name")]
+
+    def owned(name):
+        return bool(name) and name.startswith(PROJECTION_PREFIX) and name != PROJECTION_CURSOR_TABLE
+
+    def owned_index(name):
+        return owned(name) or bool(name) and name.startswith('sqlite_autoindex_' + PROJECTION_PREFIX)
+
+    authorizer = storecore.projection_authorizer(owned, owned_index, PROJECTION_CURSOR_TABLE)
+    with storecore.guarded_transaction(conn, authorizer, 'projection drop'):
+        for table in sorted(tables, reverse=True):
+            conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+        conn.execute(f'DELETE FROM {PROJECTION_CURSOR_TABLE}')
+    return tables
+
+
+def _after_restore(conn: sqlite3.Connection, ctx: 'storecore.RestoreContext') -> None:
+    """On the staged copy: drop the projections, then append the restore epoch."""
+    dropped = _drop_projections(conn)
+    manifest = ctx.backup.manifest
+    with write_transaction(conn):
+        conn.execute(
+            'INSERT INTO restore_epoch (backup_manifest_sha256, backup_file, backup_high_water, '
+            'backup_history_digest, previous_live_high_water, previous_live_history_digest, '
+            'superseded_copy, rollback_accepted, projections_dropped_json, actor, opened_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (ctx.backup.manifest_sha256, manifest['backup_file'], manifest['high_water_mark'],
+             manifest['history_digest'], ctx.previous_live_high_water, ctx.previous_live_history_digest,
+             ctx.superseded_copy, int(ctx.rollback_accepted), json.dumps(dropped), ctx.actor, ctx.restored_at))
+
+
+def _canonical_digest(conn: sqlite3.Connection) -> str:
+    return hashlib.sha256(_canonical_dump(conn)).hexdigest()
+
+
+KIND = storecore.StoreKind(
+    name='integration', label='an integration store', application_id=APPLICATION_ID,
+    application_id_since=APPLICATION_ID_SINCE, db_name='integration.sqlite', migrations_dir=MIGRATIONS_DIR,
+    canonical_digest=_canonical_digest, high_water=_high_water, history_digest=_history_digest,
+    chain_head=lambda conn: None, verify=_verify_kind_invariants, after_restore=_after_restore)
 
 
 # ---------------------------------------------------------------------------
 # Opening and migrating
 
 def _connect(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path), isolation_level=None, timeout=busy_timeout_ms / 1000)
-    try:
-        conn.execute(f'PRAGMA busy_timeout = {int(busy_timeout_ms)}')
-        conn.execute('PRAGMA foreign_keys = ON')
-        mode = conn.execute('PRAGMA journal_mode = WAL').fetchone()[0]
-        conn.execute('PRAGMA synchronous = FULL')
-        observed = pragmas(conn)
-        expected = {'journal_mode': 'wal', 'synchronous': 2, 'foreign_keys': 1,
-                    'busy_timeout': int(busy_timeout_ms)}
-        if mode.lower() != 'wal' or observed != expected:
-            raise PragmaError(f'connection did not take the required pragmas: {observed}')
-    except BaseException:
-        conn.close()
-        raise
-    return conn
-
-
-def pragmas(conn: sqlite3.Connection) -> dict:
-    return {
-        'journal_mode': conn.execute('PRAGMA journal_mode').fetchone()[0].lower(),
-        'synchronous': conn.execute('PRAGMA synchronous').fetchone()[0],
-        'foreign_keys': conn.execute('PRAGMA foreign_keys').fetchone()[0],
-        'busy_timeout': conn.execute('PRAGMA busy_timeout').fetchone()[0],
-    }
-
-
-def _verify_applied(conn: sqlite3.Connection, known: Sequence[Migration]) -> int:
-    """Check the recorded migrations against the files; return the database version."""
-    version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > len(known):
-        raise MigrationError(
-            f'database schema version {version} is newer than this code knows ({len(known)}); refusing to open')
-    if version == 0:
-        objects = conn.execute(
-            "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").fetchone()[0]
-        if objects:
-            raise MigrationError('database has user_version 0 but already holds objects; '
-                                 'it is not an integration store')
-        return 0
-    rows = conn.execute('SELECT version, name, sha256 FROM schema_migration ORDER BY version').fetchall()
-    if [r[0] for r in rows] != list(range(1, version + 1)):
-        raise MigrationError(
-            f'recorded migrations {[r[0] for r in rows]} do not match user_version {version}')
-    for (v, name, digest), migration in zip(rows, known):
-        if name != migration.name or digest != migration.sha256:
-            raise MigrationError(
-                f'applied migration {v} ({name}) has changed: recorded sha256 {digest}, '
-                f'file {migration.name} sha256 {migration.sha256}; refusing to open')
-    return version
+    return storecore.connect(path, busy_timeout_ms)
 
 
 def migrate(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
     """Apply pending migrations in one transaction; return the names applied."""
-    known = load_migrations(migrations_dir)
-    applied = []
-    with write_transaction(conn):
-        version = _verify_applied(conn, known)
-        for migration in known[version:]:
-            for statement in split_statements(migration.text):
-                conn.execute(statement)
-            conn.execute('INSERT INTO schema_migration (version, name, sha256, applied_at) '
-                         'VALUES (?, ?, ?, ?)',
-                         (migration.version, migration.name, migration.sha256, _now()))
-            conn.execute(f'PRAGMA user_version = {migration.version}')
-            applied.append(migration.name)
-        violations = conn.execute('PRAGMA foreign_key_check').fetchall()
-        if violations:
-            raise MigrationError(f'foreign key violations after migration: {violations}')
-    return applied
+    return storecore.migrate(conn, KIND, migrations_dir)
 
 
 def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR,
@@ -397,7 +347,8 @@ def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR
     """Open (creating if absent) the store at an explicit path.
 
     The parent directory must already exist. With ``apply_migrations=False`` a
-    database with pending migrations is refused instead of migrated.
+    database with pending migrations is refused instead of migrated. A file of
+    another store kind (by ``PRAGMA application_id``) is refused.
     """
     check_sqlite_version()
     resolved = check_location(Path(path))
@@ -408,18 +359,30 @@ def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR
         if apply_migrations:
             migrate(conn, migrations_dir)
         else:
-            known = load_migrations(migrations_dir)
-            conn.execute('BEGIN')
-            try:
-                version = _verify_applied(conn, known)
-            finally:
-                conn.execute('ROLLBACK')
-            if version != len(known):
-                raise MigrationError(f'database is at version {version}; {len(known)} expected')
+            storecore.check_current(conn, KIND, migrations_dir)
     except BaseException:
         conn.close()
         raise
     return IntegrationStore(conn, resolved)
+
+
+def restore_store(path: os.PathLike | str, manifest: os.PathLike | str, *, actor: str,
+                  accept_rollback: bool = False) -> 'storecore.RestoreReport':
+    """Restore a verified backup over the store at ``path`` (see storecore.restore_store).
+
+    The superseded live content goes to ``<db dir>/backups/superseded/`` and is
+    never deleted; the restored store has an open restore epoch.
+    """
+    check_sqlite_version()
+    resolved = check_location(Path(path))
+    if not resolved.parent.is_dir():
+        raise UnsafeLocation(f'parent directory does not exist: {resolved.parent}')
+    backups = resolved.parent / 'backups'
+    superseded, staging = backups / 'superseded', backups / 'staging'
+    for directory in (backups, superseded, staging):
+        directory.mkdir(mode=0o700, exist_ok=True)
+    return storecore.restore_store(resolved, Path(manifest), KIND, actor=actor, accept_rollback=accept_rollback,
+                                   superseded_dir=superseded, staging_dir=staging)
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +444,8 @@ class IntegrationStore:
         the deterministic conversation ID, with a seq-0 event. Reserving an existing
         key with the same digest returns the existing reservation unchanged; with a
         different digest it raises ConflictingReservation and changes nothing.
+        While a restore epoch is open a new reservation raises RestoreEpochOpen
+        (and a trigger refuses the insert).
         """
         if not isinstance(operation_key, str) or not 1 <= len(operation_key) <= 512:
             raise StoreError('operation_key must be a string of 1 to 512 characters')
@@ -494,6 +459,11 @@ class IntegrationStore:
                         f'operation key {operation_key!r} is already reserved with intent digest '
                         f'{existing.intent_digest}, not {digest}')
                 return ReserveResult(existing, created=False)
+            open_epochs = self.open_epochs()
+            if open_epochs:
+                raise RestoreEpochOpen(
+                    f'restore epoch {open_epochs[0]["epoch_id"]} is open: new attempt reservations are '
+                    'refused until reconciliation closes it')
             self._insert_reservation(operation_key, canonical, digest, actor)
             return ReserveResult(self.get(operation_key), created=True)
 
@@ -570,87 +540,137 @@ class IntegrationStore:
         def owned_index(index: str | None) -> bool:
             return owned(index) or bool(index) and index.startswith('sqlite_autoindex_' + own)
 
-        def authorize(action, arg1, arg2, db, _trigger):
-            allowed = sqlite3.SQLITE_OK
-            if action in (sqlite3.SQLITE_READ, sqlite3.SQLITE_SELECT,
-                          sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE):
-                return allowed
-            if action == sqlite3.SQLITE_PRAGMA:  # FTS5 reads it internally
-                return allowed if (arg1, arg2) == ('data_version', None) else sqlite3.SQLITE_DENY
-            if db != 'main':
-                return sqlite3.SQLITE_DENY
-            if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE):
-                # sqlite_master writes happen only as part of DDL, which is checked
-                # by name below; writable_schema would need a (denied) PRAGMA.
-                if owned(arg1) or arg1 in (PROJECTION_CURSOR_TABLE, 'sqlite_master', 'sqlite_sequence'):
-                    return allowed
-                return sqlite3.SQLITE_DENY
-            if action in (sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_DROP_TABLE,
-                          sqlite3.SQLITE_CREATE_VTABLE, sqlite3.SQLITE_DROP_VTABLE):
-                return allowed if owned(arg1) else sqlite3.SQLITE_DENY
-            if action in (sqlite3.SQLITE_CREATE_INDEX, sqlite3.SQLITE_DROP_INDEX):
-                return allowed if owned(arg2) and owned_index(arg1) else sqlite3.SQLITE_DENY
-            if action == sqlite3.SQLITE_REINDEX:  # issued internally by CREATE INDEX
-                return allowed if owned_index(arg1) else sqlite3.SQLITE_DENY
-            if action == sqlite3.SQLITE_ALTER_TABLE:
-                return allowed if owned(arg2) else sqlite3.SQLITE_DENY
-            return sqlite3.SQLITE_DENY  # triggers, views, temp objects, attach, transactions...
-
+        authorizer = storecore.projection_authorizer(owned, owned_index, PROJECTION_CURSOR_TABLE)
         conn = self.conn
-        conn.execute('BEGIN IMMEDIATE')
-        try:
-            conn.set_authorizer(authorize)
-            try:
-                for table in reversed(projection.tables):
-                    conn.execute(f'DROP TABLE IF EXISTS "{table}"')
-                conn.execute(f'DELETE FROM {PROJECTION_CURSOR_TABLE} WHERE projection = ?',
-                             (projection.name,))
-                for statement in projection.ddl:
-                    conn.execute(statement)
-                cursor, coverage = projection.populate(conn)
-                conn.execute(f'INSERT INTO {PROJECTION_CURSOR_TABLE} '
-                             '(projection, source, cursor, coverage_json, rebuilt_at) VALUES (?, ?, ?, ?, ?)',
-                             (projection.name, projection.source, cursor,
-                              json.dumps(coverage, sort_keys=True, separators=(',', ':')), _now()))
-            finally:
-                conn.set_authorizer(None)
-        except sqlite3.DatabaseError as exc:
-            conn.execute('ROLLBACK')
-            raise ProjectionError(f'rebuild of {projection.name!r} refused and rolled back: {exc}') from exc
-        except BaseException:
-            if conn.in_transaction:
-                conn.execute('ROLLBACK')
-            raise
-        conn.execute('COMMIT')
+        with storecore.guarded_transaction(conn, authorizer, f'rebuild of {projection.name!r}'):
+            for table in reversed(projection.tables):
+                conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+            conn.execute(f'DELETE FROM {PROJECTION_CURSOR_TABLE} WHERE projection = ?',
+                         (projection.name,))
+            for statement in projection.ddl:
+                conn.execute(statement)
+            cursor, coverage = projection.populate(conn)
+            conn.execute(f'INSERT INTO {PROJECTION_CURSOR_TABLE} '
+                         '(projection, source, cursor, coverage_json, rebuilt_at) VALUES (?, ?, ?, ?, ?)',
+                         (projection.name, projection.source, cursor,
+                          json.dumps(coverage, sort_keys=True, separators=(',', ':')), _now()))
 
     def projection_cursor(self, name: str) -> tuple | None:
         return self.conn.execute(
             f'SELECT projection, source, cursor, coverage_json, rebuilt_at FROM {PROJECTION_CURSOR_TABLE} '
             'WHERE projection = ?', (name,)).fetchone()
 
+    # -- backup, restore epochs and reconciliation (F-05.2) ---------------
+
+    def backup(self, *, actor: str, backup_dir: Path | None = None) -> dict:
+        """Back up this store into ``<db dir>/backups/`` (or ``backup_dir``); return the manifest.
+
+        The SQLite online backup API, an integrity check on the copy and a sha256
+        manifest (storecore.backup_store). Never a copy of the live files.
+        """
+        target = Path(backup_dir) if backup_dir is not None else self.path.parent / 'backups'
+        if backup_dir is None:
+            target.mkdir(mode=0o700, exist_ok=True)
+        return storecore.backup_store(self.conn, KIND, target, actor=actor)
+
+    def high_water_mark(self) -> int:
+        return _high_water(self.conn)
+
+    def history_digest(self) -> str:
+        return _history_digest(self.conn, _high_water(self.conn))
+
+    def open_epochs(self) -> list[dict]:
+        """Restore epochs without a closure, oldest first (none before migration 0002)."""
+        if self.conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'restore_epoch'"
+                             ).fetchone() is None:
+            return []
+        cursor = self.conn.execute(
+            'SELECT * FROM restore_epoch e WHERE NOT EXISTS '
+            '(SELECT 1 FROM restore_epoch_closure c WHERE c.epoch_id = e.epoch_id) ORDER BY epoch_id')
+        names = [d[0] for d in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+    def reconcile(self, oracle: Callable[[Reservation], str], *, actor: str) -> dict:
+        """Resolve attempts whose outcome a restore (or a lost acknowledgement) made uncertain.
+
+        While a restore epoch is open, every ``dispatched`` attempt first moves to
+        ``unknown`` (the restore may have lost its outcome). Then, for every
+        ``unknown`` attempt, ``oracle(reservation)`` reports what the external
+        system shows: ``'performed'`` -> ``confirmed``, ``'not_performed'`` ->
+        ``failed``, ``'indeterminate'`` -> stays ``unknown`` and nothing else is
+        done for it. Uses only the F-05.1 transitions. The real oracle (the
+        OpenHands conversation lookup) is E-01.4.x; tests use a fixture.
+        """
+        report = {'confirmed': [], 'failed': [], 'still_unknown': []}
+        if self.open_epochs():
+            for attempt in self.attempts(['dispatched']):
+                self.transition(attempt.operation_key, 'unknown', actor=actor, expected_from='dispatched',
+                                reason='restore epoch: outcome uncertain after restore')
+        for attempt in self.attempts(['unknown']):
+            verdict = oracle(attempt)
+            if verdict == 'performed':
+                self.transition(attempt.operation_key, 'confirmed', actor=actor, expected_from='unknown',
+                                reason='reconciled: observed in the external system')
+                report['confirmed'].append(attempt.operation_key)
+            elif verdict == 'not_performed':
+                self.transition(attempt.operation_key, 'failed', actor=actor, expected_from='unknown',
+                                reason='reconciled: not present in the external system')
+                report['failed'].append(attempt.operation_key)
+            elif verdict == 'indeterminate':
+                report['still_unknown'].append(attempt.operation_key)
+            else:
+                raise StoreError(f'oracle verdict must be performed, not_performed or indeterminate: {verdict!r}')
+        return report
+
+    def close_restore_epoch(self, *, actor: str, summary: Mapping | None = None) -> list[int]:
+        """Close every open restore epoch once no attempt is ``dispatched`` or ``unknown``.
+
+        ``reserved`` attempts may stay: their conversation ID is deterministic, so
+        dispatching them again cannot create a second conversation (decision 0001).
+        Returns the epoch IDs closed; raises EpochNotReconciled otherwise.
+        """
+        storecore._check_actor(actor)
+        detail = canonical_intent(summary or {})
+        with write_transaction(self.conn):
+            epochs = self.open_epochs()
+            if not epochs:
+                raise StoreError('no restore epoch is open')
+            uncertain = self.attempts(['dispatched', 'unknown'])
+            if uncertain:
+                raise EpochNotReconciled(
+                    f'{len(uncertain)} attempt(s) still dispatched or unknown: '
+                    f'{[a.operation_key for a in uncertain][:10]}; reconcile them first')
+            closed_at = _now()
+            body = json.dumps({'reconciliation': json.loads(detail),
+                               'attempt_states': dict(self.conn.execute(
+                                   'SELECT state, count(*) FROM attempt GROUP BY state').fetchall())},
+                              sort_keys=True, separators=(',', ':'))
+            for epoch in epochs:
+                self.conn.execute('INSERT INTO restore_epoch_closure (epoch_id, actor, closed_at, summary_json) '
+                                  'VALUES (?, ?, ?, ?)', (epoch['epoch_id'], actor, closed_at, body))
+            return [e['epoch_id'] for e in epochs]
+
+    def prune_backups(self, *, keep_last: int, older_than_days: float | None = None,
+                      backup_dir: Path | None = None) -> list[str]:
+        """Retention: delete old backups, never the newest, never an open epoch's source."""
+        target = Path(backup_dir) if backup_dir is not None else self.path.parent / 'backups'
+        protected = [e['backup_file'] for e in self.open_epochs()]
+        return storecore.prune_backups(target, KIND, keep_last=keep_last, older_than_days=older_than_days,
+                                       protected=protected)
+
     # -- evidence ---------------------------------------------------------
 
     def canonical_dump(self) -> bytes:
         """A deterministic dump of every canonical table: schema SQL and all rows."""
-        lines = []
-        for table in CANONICAL_TABLES:
-            sql = self.conn.execute("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
-                                    (table,)).fetchone()
-            lines.append(f'-- {table}: {sql[0] if sql else None}')
-            for row in self.conn.execute(f'SELECT * FROM "{table}" ORDER BY 1, 2'):
-                lines.append(json.dumps([[type(v).__name__, v] for v in row], ensure_ascii=True))
-        objects = self.conn.execute(
-            "SELECT type, name, tbl_name, sql FROM sqlite_schema "
-            f"WHERE name NOT GLOB '{PROJECTION_PREFIX}*' AND tbl_name NOT GLOB '{PROJECTION_PREFIX}*' "
-            "AND name <> 'sqlite_sequence' ORDER BY type, name").fetchall()
-        lines.append(json.dumps(objects, ensure_ascii=True))
-        return '\n'.join(lines).encode('utf-8')
+        return _canonical_dump(self.conn)
 
     def summary(self) -> dict:
         tables = [r[0] for r in self.conn.execute(
             "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")]
         return {
             'path': str(self.path),
+            'store_kind': KIND.name,
+            'application_id': self.conn.execute('PRAGMA application_id').fetchone()[0],
             'sqlite_version': sqlite3.sqlite_version,
             'schema_version': self.schema_version(),
             'migrations': [{'version': v, 'name': n, 'sha256': s} for v, n, s, _ in self.applied_migrations()],
@@ -658,7 +678,28 @@ class IntegrationStore:
             'canonical_tables': [t for t in tables if t in CANONICAL_TABLES],
             'projection_tables': [t for t in tables if t.startswith(PROJECTION_PREFIX)],
             'attempts': self.conn.execute('SELECT count(*) FROM attempt').fetchone()[0],
+            'high_water_mark': self.high_water_mark(),
+            'open_restore_epochs': [e['epoch_id'] for e in self.open_epochs()],
         }
+
+
+def _canonical_dump(conn: sqlite3.Connection) -> bytes:
+    """A deterministic dump of every canonical table: schema SQL and all rows."""
+    lines = []
+    for table in CANONICAL_TABLES:
+        sql = conn.execute("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+                           (table,)).fetchone()
+        lines.append(f'-- {table}: {sql[0] if sql else None}')
+        if sql is None:
+            continue
+        for row in conn.execute(f'SELECT * FROM "{table}" ORDER BY 1, 2'):
+            lines.append(json.dumps([[type(v).__name__, v] for v in row], ensure_ascii=True))
+    objects = conn.execute(
+        "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+        f"WHERE name NOT GLOB '{PROJECTION_PREFIX}*' AND tbl_name NOT GLOB '{PROJECTION_PREFIX}*' "
+        "AND name <> 'sqlite_sequence' ORDER BY type, name").fetchall()
+    lines.append(json.dumps(objects, ensure_ascii=True))
+    return '\n'.join(lines).encode('utf-8')
 
 
 def _validate_projection(projection: Projection) -> None:
@@ -682,11 +723,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     init = sub.add_parser('init', help='create or migrate the store at an explicit path; print a JSON summary')
     init.add_argument('--db', required=True, help='database file path (its parent directory is created)')
     sub.add_parser('default-path', help='print the default trusted-host location; creates nothing')
+    backup = sub.add_parser('backup', help='back up the store at an explicit path into <db dir>/backups/; '
+                                           'print the manifest')
+    backup.add_argument('--db', required=True, help='existing database file path')
+    backup.add_argument('--actor', required=True, help='who takes the backup (recorded in the manifest)')
+    restore = sub.add_parser('restore', help='restore a verified backup over the store; print the report')
+    restore.add_argument('--db', required=True, help='database file path (its directory must exist)')
+    restore.add_argument('--manifest', required=True, help='the backup manifest (<backup>.manifest.json)')
+    restore.add_argument('--actor', required=True, help='who restores (recorded in the restore epoch)')
+    restore.add_argument('--accept-rollback', action='store_true',
+                         help='explicitly accept losing live history that is ahead of or diverges from the backup '
+                              '(the live content is still preserved aside)')
     args = parser.parse_args(argv)
 
     if args.command == 'default-path':
         try:
             print(default_db_path())
+        except StoreError as exc:
+            print(f'REFUSED: {exc}', file=sys.stderr)
+            return 1
+        return 0
+
+    if args.command == 'backup':
+        try:
+            target = check_location(Path(args.db))
+            if not target.is_file():
+                raise UnsafeLocation(f'no store at {target}')
+            with open_store(target, apply_migrations=False) as store:
+                print(json.dumps(store.backup(actor=args.actor), indent=2, sort_keys=True))
+        except StoreError as exc:
+            print(f'REFUSED: {exc}', file=sys.stderr)
+            return 1
+        return 0
+
+    if args.command == 'restore':
+        try:
+            report = restore_store(args.db, args.manifest, actor=args.actor, accept_rollback=args.accept_rollback)
+            with open_store(args.db) as store:
+                print(json.dumps({'restore': dataclasses.asdict(report), 'store': store.summary()},
+                                 indent=2, sort_keys=True))
         except StoreError as exc:
             print(f'REFUSED: {exc}', file=sys.stderr)
             return 1

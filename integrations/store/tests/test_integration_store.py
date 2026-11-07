@@ -140,7 +140,7 @@ class LocationTests(StoreTestCase):
         first = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=WAIT_CEILING_S)
         self.assertEqual(first.returncode, 0, first.stderr)
         summary = json.loads(first.stdout)
-        self.assertEqual(summary['schema_version'], 1)
+        self.assertEqual(summary['schema_version'], len(store_mod.load_migrations()))
         self.assertEqual(summary['pragmas']['journal_mode'], 'wal')
         second = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=WAIT_CEILING_S)
         self.assertEqual(second.returncode, 0, second.stderr)
@@ -186,12 +186,13 @@ class MigrationTests(StoreTestCase):
 
     def test_future_schema_version_is_refused(self):
         migrations = self.copy_migrations()
-        (migrations / '0002_future.sql').write_text(
+        current = len(store_mod.load_migrations())
+        (migrations / f'{current + 1:04d}_future.sql').write_text(
             'CREATE TABLE future_thing (id INTEGER PRIMARY KEY) STRICT;\n', encoding='utf-8')
         with self.open(migrations_dir=migrations) as newer:
-            self.assertEqual(newer.schema_version(), 2)
+            self.assertEqual(newer.schema_version(), current + 1)
         with self.assertRaisesRegex(store_mod.MigrationError, 'newer than this code knows'):
-            store_mod.open_store(self.db)  # the code's own migrations know only version 1
+            store_mod.open_store(self.db)  # the code's own migrations know only up to `current`
 
     def test_raw_future_user_version_is_refused(self):
         self.open().close()
@@ -203,23 +204,24 @@ class MigrationTests(StoreTestCase):
 
     def test_pending_migration_applies_and_a_failing_one_rolls_back_entirely(self):
         migrations = self.copy_migrations()
+        current = len(store_mod.load_migrations())
         self.open(migrations_dir=migrations).close()
-        (migrations / '0002_broken.sql').write_text(
+        (migrations / f'{current + 1:04d}_broken.sql').write_text(
             'CREATE TABLE half_done (id INTEGER PRIMARY KEY) STRICT;\n'
             'INSERT INTO no_such_table VALUES (1);\n', encoding='utf-8')
         with self.assertRaises(sqlite3.OperationalError):
             store_mod.open_store(self.db, migrations_dir=migrations)
         with self.open() as store:
-            self.assertEqual(store.schema_version(), 1)
+            self.assertEqual(store.schema_version(), current)
             self.assertIsNone(store.conn.execute(
                 "SELECT name FROM sqlite_schema WHERE name = 'half_done'").fetchone())
-        (migrations / '0002_broken.sql').unlink()
-        (migrations / '0002_fixed.sql').write_text(
+        (migrations / f'{current + 1:04d}_broken.sql').unlink()
+        (migrations / f'{current + 1:04d}_fixed.sql').write_text(
             'CREATE TABLE later_thing (id INTEGER PRIMARY KEY) STRICT;\n', encoding='utf-8')
-        with self.assertRaisesRegex(store_mod.MigrationError, 'version 1; 2 expected'):
+        with self.assertRaisesRegex(store_mod.MigrationError, f'version {current}; {current + 1} expected'):
             store_mod.open_store(self.db, migrations_dir=migrations, apply_migrations=False)
         with self.open(migrations_dir=migrations) as store:
-            self.assertEqual(store.schema_version(), 2)
+            self.assertEqual(store.schema_version(), current + 1)
 
     def test_foreign_database_is_refused(self):
         raw = sqlite3.connect(self.db)
