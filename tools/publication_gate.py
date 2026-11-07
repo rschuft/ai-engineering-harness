@@ -25,7 +25,9 @@ unless .gitleaks.toml allowlists its exact path with a reason. Every file the
 scanner receives carries a per-run marker that the scanner must report, so a
 scanner that silently skips a file, or "succeeds" without output, fails the gate.
 A file that Gitleaks skips by a global path allowlist is rescanned under a
-neutral name. Commit messages are scanned in pre-push and history modes.
+neutral name. Content longer than one scanner read is scanned as overlapping
+windows, so no match is lost where Gitleaks would cut a file into fragments
+(see SCAN_WINDOW). Commit messages are scanned in pre-push and history modes.
 
 Output never contains a matched value: only rule, path, line and commit.
 
@@ -125,6 +127,22 @@ CANARY_RULE = (
     f'keywords = ["{CANARY_PREFIX.lower()}"]\n'
 )
 MESSAGE_PATH = 'COMMIT_EDITMSG'
+
+# Scan windows. Gitleaks 8.30.1 (sources/file.go, sources/common.go) reads a file
+# through a 100,000-byte buffer, extends each read to the next blank line ("\n\n")
+# but by at most 25,000 bytes, and scans the resulting fragments separately and
+# without overlap. Where no blank line follows a read within 25,000 bytes, the cut
+# falls at an arbitrary byte, and a match across it is never reported: a secret
+# there is missed, and the per-run marker can be cut too. The gate therefore never
+# hands the scanner a file it would cut: content longer than SCAN_WINDOW is scanned
+# as overlapping windows, each written as its own file that, with its marker, fits
+# in one read and so is one fragment. Consecutive windows share at least
+# SCAN_OVERLAP bytes, so every match up to that length lies whole in one window.
+SCANNER_READ_BYTES = 100_000
+SCAN_WINDOW = 96 * 1024
+SCAN_OVERLAP = 32 * 1024
+assert SCAN_WINDOW + 1 + len(CANARY_PREFIX) + 32 + 1 <= SCANNER_READ_BYTES
+assert 2 * SCAN_OVERLAP < SCAN_WINDOW
 
 # Content that cannot be inspected as text. gzip is decompressed instead.
 BINARY_SUFFIXES = frozenset('''
@@ -443,6 +461,28 @@ def safe_parts(vpath):
     return parts
 
 
+def scan_windows(content):
+    """Split CONTENT into overlapping windows; return [(start offset, bytes)].
+
+    Content up to SCAN_WINDOW bytes is one window. Otherwise each next window
+    starts SCAN_OVERLAP bytes before the previous one ends, moved back to a line
+    start when one lies within a further SCAN_OVERLAP bytes, so windows rarely
+    begin mid-line. Each step advances by at least SCAN_WINDOW - 2 * SCAN_OVERLAP.
+    """
+    size = len(content)
+    if size <= SCAN_WINDOW:
+        return [(0, content)]
+    out, start = [], 0
+    while True:
+        end = min(start + SCAN_WINDOW, size)
+        out.append((start, content[start:end]))
+        if end == size:
+            return out
+        nxt = end - SCAN_OVERLAP
+        newline = content.rfind(b'\n', max(start + 1, nxt - SCAN_OVERLAP), nxt)
+        start = newline + 1 if newline != -1 else nxt
+
+
 def write_tree(root, numbered, canary, neutral):
     for index, entry in numbered:
         if neutral:
@@ -534,7 +574,13 @@ def scan(items, config_raw, binary):
         ignore_dir = tmp / 'no-ignore-file'
         ignore_dir.mkdir()
         canary = (CANARY_PREFIX + secrets.token_hex(16)).encode()
-        pending = list(enumerate(entries))
+        # One scanned file per window; each maps back to its entry and first line.
+        units, owners = [], []
+        for number, entry in enumerate(entries):
+            for start, part in scan_windows(entry.content):
+                units.append(Entry(entry.item, entry.vpath, part, entry.decompressed))
+                owners.append((number, entry.content.count(b'\n', 0, start) + 1))
+        pending = list(enumerate(units))
         for neutral in (False, True):
             root = tmp / ('neutral' if neutral else 'tree')
             root.mkdir()
@@ -542,19 +588,23 @@ def scan(items, config_raw, binary):
             seen = set()
             report = run_scanner(binary, root, config_path, ignore_dir, tmp / f'report-{int(neutral)}.json', timeout)
             for rule, file_name, line, tags in report:
-                index = index_of(file_name, neutral, len(entries))
+                index = index_of(file_name, neutral, len(units))
                 if rule == CANARY_RULE_ID:
                     seen.add(index)
                 else:
-                    findings.add((index, rule, line, tags))
+                    number, first_line = owners[index]
+                    # Line 0 marks a path-only finding; it has no line to map.
+                    findings.add((number, rule, first_line + line - 1 if line > 0 else line, tags))
             # Files the scanner skipped (e.g. by a global path allowlist) are
             # rescanned once under a neutral name; anything still unseen fails.
             pending = [(i, e) for i, e in pending if i not in seen]
             if not pending:
                 break
         if pending:
-            names = ', '.join(sorted({e.item.path for _, e in pending})[:5])
-            raise GateError(f'the scanner did not inspect {len(pending)} file(s) ({names}); the scan did not complete')
+            paths = sorted({e.item.path for _, e in pending})
+            parts = f' in {len(pending)} scan window(s)' if len(pending) != len(paths) else ''
+            raise GateError(f'the scanner did not inspect {len(paths)} file(s){parts} '
+                            f'({", ".join(paths[:5])}); the scan did not complete')
     return [(entries[i], rule, line, tags) for i, rule, line, tags in sorted(findings)], refusals, allowed
 
 

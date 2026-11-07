@@ -400,6 +400,106 @@ class WithRealScanner(GateTestCase):
         self.assertBlockedClosed(proc, 'not in the index')
         self.assertEqual(r.head(), r.initial)
 
+    # Gitleaks 8.30.1 reads a file through a 100,000-byte buffer and extends each
+    # read to the next blank line, by at most 25,000 bytes; its bufio reader then
+    # refills 4,096 bytes at a time. In text with no blank line, fragments are cut
+    # at byte 125,000 and every 28,672 bytes after (bytes 125,000 + 4,096 * N in
+    # general), and a match across a cut is never reported.
+
+    def test_8_trailing_marker_in_the_former_cut_window_passes(self):
+        # The 2,119,697-byte length at which a plan HTML once failed closed. One
+        # blank line at byte 114,000 puts the cuts at 125,000 + 4,096 * N, and
+        # N = 487 (byte 2,119,752) falls inside the marker line that the gate
+        # appends at byte 2,119,698. The unwindowed gate reported "did not
+        # inspect"; windowed, every marker is read and the clean file passes.
+        r = self.repo()
+        line = b'filler text without blank lines\n'
+
+        def filler(n):
+            return (line * (n // len(line) + 1))[:n]
+
+        body = filler(114_000) + b'\n\n' + filler(2_119_697 - 114_002)
+        body = body[:-1] + b'x'
+        self.assertEqual(len(body), 2_119_697)
+        self.assertEqual(body.count(b'\n\n'), 1)
+        r.write('docs/long.txt', body)
+        r.git('add', 'docs/long.txt')
+        proc = r.commit('add a long file')
+        self.assertEqual(proc.returncode, 0, proc.out)
+        self.assertIn('PASS', proc.out)
+        proc = r.push('main')
+        self.assertEqual(proc.returncode, 0, proc.out)
+
+    def test_9_secret_across_a_scanner_fragment_cut_is_rejected(self):
+        # With no blank line, Gitleaks cuts the first fragment at byte 125,000.
+        # The fake token straddles that cut (unwindowed, the gate passed it); a
+        # second one lies far beyond it. Both are reported at their real lines.
+        r = self.repo()
+        line = b'filler text without blank lines\n'
+        token = FAKE_GITHUB_TOKEN.encode()
+        first = 125_000 - 20
+        head = (line * (first // len(line) + 1))[:first - 1] + b'\n'
+        middle = line * 4000
+        body = head + token + b'\n' + middle + token + b'\n' + line * 100
+        self.assertEqual(body.index(token), first)
+        self.assertNotIn(b'\n\n', body)
+        lines = (head.count(b'\n') + 1, head.count(b'\n') + 2 + middle.count(b'\n'))
+        r.write('data/big.txt', body)
+        r.git('add', 'data/big.txt')
+        proc = r.commit('add data')
+        self.assertRejected(proc, 'github-pat', *(f'data/big.txt:{n}' for n in lines))
+        self.assertIn('2 finding(s)', proc.out)
+        self.assertEqual(r.head(), r.initial)
+
+
+class ScanWindows(unittest.TestCase):
+    """The window split itself; no scanner needed."""
+
+    def check(self, content):
+        windows = gate.scan_windows(content)
+        self.assertEqual(windows[0][0], 0)
+        self.assertEqual(windows[-1][0] + len(windows[-1][1]), len(content))
+        for (start, part), (nxt, _) in zip(windows, windows[1:]):
+            self.assertEqual(part, content[start:start + len(part)])
+            self.assertLessEqual(len(part), gate.SCAN_WINDOW)
+            # consecutive windows overlap by at least SCAN_OVERLAP and always advance
+            self.assertGreaterEqual(start + len(part) - nxt, gate.SCAN_OVERLAP)
+            self.assertGreaterEqual(nxt - start, gate.SCAN_WINDOW - 2 * gate.SCAN_OVERLAP)
+        self.assertLessEqual(len(windows[-1][1]), gate.SCAN_WINDOW)
+        return windows
+
+    def test_small_content_is_one_window(self):
+        for content in (b'', b'x', b'a\n' * (gate.SCAN_WINDOW // 2)):
+            self.assertEqual(gate.scan_windows(content), [(0, content)])
+
+    def test_window_and_marker_fit_one_scanner_read(self):
+        marker = len(gate.CANARY_PREFIX) + 32
+        self.assertLessEqual(gate.SCAN_WINDOW + 1 + marker + 1, gate.SCANNER_READ_BYTES)
+
+    def test_large_content_is_covered_with_overlap(self):
+        rng = random.Random(7)
+        cases = [
+            b'y' * 2_119_697,                                    # one long line
+            b''.join(b'x' * rng.randrange(1, 300) + b'\n' for _ in range(20_000)),
+            b'z' * (gate.SCAN_WINDOW + 1),
+        ]
+        for content in cases:
+            with self.subTest(size=len(content)):
+                windows = self.check(content)
+                self.assertGreater(len(windows), 1)
+
+    def test_windows_start_at_a_line_when_one_is_near(self):
+        content = (b'0123456789abcde\n' * 40_000)
+        for start, _ in self.check(content)[1:]:
+            self.assertEqual(content[start - 1:start], b'\n')
+
+    def test_every_short_match_lies_whole_in_one_window(self):
+        content = b'q' * 1_000_003
+        windows = self.check(content)
+        span = gate.SCAN_OVERLAP
+        for pos in range(0, len(content) - span, 997):
+            self.assertTrue(any(s <= pos and pos + span <= s + len(p) for s, p in windows), pos)
+
 
 STUBS = {
     'fails': 'import sys\nsys.stderr.write("stub scanner failure\\n")\nsys.exit(3)\n',
