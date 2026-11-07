@@ -67,7 +67,7 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test) and the managed data root tests (paths:test)
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test) and the host Gitea tests (gitea:test)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
@@ -75,6 +75,7 @@ tasks:
       - task: planning:test
       - task: lineage:test
       - task: paths:test
+      - task: gitea:test
 
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
@@ -226,6 +227,49 @@ tasks:
     desc: "Network (PyPI): install the hash-locked Python tools venv (PyYAML, for config.yml) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/paths/tools_install.py'
+
+  # Host-loopback Gitea (plan leaf F-06.1; decisions 0007 and 0009): the pinned Windows binary
+  # as an asset, its state under the managed data root, run inside a supervising managed
+  # environment whose kill-on-close Job Object ends Gitea with it (integrations/gitea/README.md).
+  gitea:test:
+    desc: "Run the host Gitea tests (python -I -B -m unittest discover -s integrations/gitea/tests -v); the live lifecycle test runs only when AIEH_GITEA_BINARY names a copy of the pinned binary"
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/gitea/tests -v'
+
+  gitea:install:
+    desc: "Network (GitHub, once): create the managed data root, download the pinned Gitea Windows binary into assets/ and verify it against the lock, and write app.ini with Gitea-generated secrets (python -I -B integrations/gitea/gitea_host.py install); pass -- --port N or -- --from-file EXE"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py install {{.CLI_ARGS}}'
+
+  gitea:up:
+    desc: Start the managed environment (a supervisor holding a kill-on-close Job Object) and Gitea inside it on 127.0.0.1, and wait until it answers (python -I -B integrations/gitea/gitea_host.py up)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py up'
+
+  gitea:down:
+    desc: Stop Gitea through its own manager shutdown, then the supervisor; terminating the supervisor ends Gitea through the job (python -I -B integrations/gitea/gitea_host.py down)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py down'
+
+  gitea:status:
+    desc: Report the supervisor, Gitea, its listeners, token elevation and job; changes nothing (python -I -B integrations/gitea/gitea_host.py status)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py status'
+
+  gitea:verify:
+    desc: "Run the F-06.1 proof set against the running instance: pin, loopback-only listeners, no elevation, the kill-on-close job, resolver paths outside the checkout, refused sign-up and anonymous API, no Gitea secret in the checkout; exit 1 on any failed check (python -I -B integrations/gitea/gitea_host.py verify)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py verify'
+
+  gitea:identities:
+    desc: "Create the site administrator and the non-administrator Owner account with Gitea's CLI, each with a random temporary password that must change at first sign-in, written only into Windows Credential Manager (python -I -B integrations/gitea/gitea_host.py identities)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py identities'
+
+  gitea:finish-first-login:
+    desc: "After the Owner has signed in and changed both passwords: check no must-change flag remains, that each temporary password no longer signs in and is in no file of the managed root or the checkout, then delete the two temporary Credential Manager entries (python -I -B integrations/gitea/gitea_host.py finish-first-login)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py finish-first-login'
 
   # Owner host (plan leaf U-01.1): the React shell in apps/owner-host. These targets need
   # the component tier (Node.js >= 24, npm >= 11), so they are not part of setup or test.

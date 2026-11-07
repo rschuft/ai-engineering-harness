@@ -204,11 +204,13 @@ The Canvas image was built `FROM ghcr.io/openhands/agent-server:1.60.1-python`. 
 | OCI | rootless linux/arm64 manifest | `sha256:226f6b90b42e9d9158d230f7b6015d7cca72c5e3018cc0f85cdeb30294fd0aaf` |
 | Release | `gitea-28.3.0-linux-amd64` | `sha256:5f834e8f04986f3b9206cf14743b5a6e6996ceddc238dac6409866ebda2a0686` |
 | Release | `gitea-28.3.0-linux-arm64` | `sha256:24d146e8f5c986b86e5a3311e3ec349ded35202cba056952ab5b585511ace82d` |
+| Release | `gitea-28.3.0-windows-amd64.exe` | `sha256:4003c068ef0a7d8145ef8c85b8aab052bf1bbf9226f2d0058572f013e096ee06` |
 | Release | `gitea-src-28.3.0.tar.gz` | `sha256:a632833d5ae02a18e8f7ed79177763801604de6ef6f6d1c1405029d28de9d3a4` |
 
 **Artifact digests: pass.**
 
 - For the binaries, three sources agree: the GitHub asset digest, the upstream `.sha256` file on GitHub, and the `.sha256` file on `dl.gitea.com`.
+- The Windows binary `gitea-28.3.0-windows-amd64.exe` (122,948,608 bytes) was added on 2026-11-07 for host-loopback Gitea (plan leaf F-06.1), with the Owner's approval of the same day. The same three sources agree, and the two `.sha256` files are byte-identical. The release publishes no `windows-4.0-amd64` variant. It is consumed by `integrations/gitea/gitea_host.py` from `../lock/components.lock.json`.
 - For the image, Docker Hub and `docker.gitea.com` serve the same index digest.
 
 **Link to the commit: unknown.** The images have no revision label or provenance, and the release's `target_commitish` is `main`.
@@ -382,6 +384,8 @@ curl -sL https://github.com/Fission-AI/OpenSpec/releases/download/v1.16.0/SHA256
 curl -sL https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-linux-amd64.sha256
 curl -sL https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-linux-arm64.sha256
 curl -s  https://dl.gitea.com/gitea/28.3.0/gitea-28.3.0-linux-amd64.sha256
+curl -sL https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-windows-amd64.exe.sha256   # F-06.1
+curl -s  https://dl.gitea.com/gitea/28.3.0/gitea-28.3.0-windows-amd64.exe.sha256                           # F-06.1
 
 # Interface/contract sources at the candidate revision
 curl -s https://raw.githubusercontent.com/OpenHands/OpenHands/v1.36.0/config/defaults.json

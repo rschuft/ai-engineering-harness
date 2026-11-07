@@ -509,6 +509,15 @@
     },
     {
       "component": "gitea",
+      "name": "gitea-28.3.0-windows-amd64.exe",
+      "sha256": "4003c068ef0a7d8145ef8c85b8aab052bf1bbf9226f2d0058572f013e096ee06",
+      "method": "per-asset-checksum-file",
+      "checksum_file": "https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-windows-amd64.exe.sha256",
+      "url": "https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-windows-amd64.exe",
+      "provenance": "Three sources agree (2026-11-07): the GitHub release asset digest (https://api.github.com/repos/go-gitea/gitea/releases/tags/v28.3.0), the upstream .sha256 file on GitHub (checksum_file) and https://dl.gitea.com/gitea/28.3.0/gitea-28.3.0-windows-amd64.exe.sha256 (byte-identical). Approved by the Owner on 2026-11-07 for host-loopback Gitea (F-06.1); consumed by integrations/gitea/gitea_host.py."
+    },
+    {
+      "component": "gitea",
       "name": "gitea-src-28.3.0.tar.gz",
       "sha256": "a632833d5ae02a18e8f7ed79177763801604de6ef6f6d1c1405029d28de9d3a4",
       "method": "github-asset-digest",

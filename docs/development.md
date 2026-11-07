@@ -29,9 +29,9 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests and the managed data root tests. It is offline and takes seconds. Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests and the host Gitea tests. It is offline and takes seconds. Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the nine commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the ten commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -43,6 +43,7 @@ python -I -B -m unittest discover -s integrations/effects/tests -v
 python -I -B -m unittest discover -s integrations/planning/tests -v
 python -I -B -m unittest discover -s integrations/lineage/tests -v
 python -I -B -m unittest discover -s integrations/paths/tests -v
+python -I -B -m unittest discover -s integrations/gitea/tests -v
 ```
 
 Use `python3` instead of `python` outside Windows.
@@ -141,14 +142,14 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the nine commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the ten commands in [Quick start](#quick-start) | no | Supported setup command. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test` and `paths:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests and managed data root tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test` and `gitea:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests and host Gitea tests (stdlib `unittest`). |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -173,6 +174,14 @@ Only what is listed as verified has been exercised.
 | `paths:init` | `python -I -B integrations/paths/aieh_paths.py init` | no | Creates the managed data root, its `persistent/`, `ephemeral/` and `assets/` directories and its `aieh-root.json` marker. Idempotent. |
 | `paths:doctor` | `python -I -B integrations/paths/aieh_paths.py doctor` | no | Reports the root, what exists, the marker and the legacy locations with their migration recipes. Moves and changes nothing. |
 | `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`), wheels only, under the managed data root; prints its interpreter. Not part of `setup`. |
+| `gitea:test` | `python -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows). The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary. |
+| `gitea:install [-- --port N \| --from-file EXE]` | `python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]` | yes (GitHub, once) | Creates the managed data root (`init`), downloads the pinned Gitea Windows binary into `assets/`, verifies it against the lock and records it, and writes `app.ini` once with Gitea-generated secrets. Windows only. |
+| `gitea:up` | `python -I -B integrations/gitea/gitea_host.py up` | no | Starts the managed environment (a supervisor holding a kill-on-close Job Object) with Gitea inside it on `127.0.0.1:13300`; waits for `/api/healthz`. |
+| `gitea:down` | `python -I -B integrations/gitea/gitea_host.py down` | no | Stops Gitea with its own `manager shutdown`, then the supervisor. |
+| `gitea:status` | `python -I -B integrations/gitea/gitea_host.py status` | no | Processes, listeners, token elevation and job; changes nothing. |
+| `gitea:verify` | `python -I -B integrations/gitea/gitea_host.py verify` | no | The F-06.1 proof set against the running instance. Exit 0 PASS, 1 any check failed, 2 refused. |
+| `gitea:identities` | `python -I -B integrations/gitea/gitea_host.py identities` | no | Creates the site administrator and the non-administrator Owner account; each temporary password goes only into Windows Credential Manager. |
+| `gitea:finish-first-login` | `python -I -B integrations/gitea/gitea_host.py finish-first-login` | no | After the Owner's first sign-in: checks the password changes and that no temporary password remains usable or stored, then deletes the two temporary entries. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -245,6 +254,38 @@ F-07.1 defines the contract only. The integration store, the publication gate's 
 and the guest tooling keep their current locations until F-07.2 adopts it, and nothing is moved
 or deleted. Details, the error codes and the OS-managed locations that stay outside the root
 are in the component's [README](../integrations/paths/README.md).
+
+## Host Gitea
+
+[`integrations/gitea/`](../integrations/gitea/README.md) runs the local Git service of plan leaf
+F-06.1 on the Owner's Windows host: Gitea 28.3.0's official Windows binary
+(`gitea-28.3.0-windows-amd64.exe`, pinned by sha256 in `composition/lock/components.lock.json`
+after three upstream sources agreed), bound to `127.0.0.1:13300` only, as the current user without
+elevation. There is no WSL, VM, Windows service, scheduled task, PATH, registry or firewall change.
+The qualification record is [`evidence/F-06.1-gitea-loopback.md`](../evidence/F-06.1-gitea-loopback.md).
+
+Everything Gitea uses comes from the [managed data root](#managed-data-root): the verified binary is
+an asset (`assets/release-binaries/gitea/28.3.0/`), its configuration and state are in
+`persistent/gitea/`, its logs in `persistent/logs/gitea/` and its temporary files in
+`ephemeral/tmp/gitea/`. `app.ini` holds Gitea's secrets (class E). During bootstrap any process of
+the Owner's account, host agents included, can read it and the SQLite database
+(`fd-bootstrap-shared-identity`).
+
+Lifecycle, in order:
+
+1. `task gitea:install` (network once): the root, the verified asset, `app.ini`.
+2. `task gitea:up`: a supervising managed environment starts Gitea inside a Job Object with
+   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so Gitea cannot outlive the supervisor; `task gitea:down`
+   stops it with Gitea's own `manager shutdown`. Killing the supervisor ends Gitea too.
+3. `task gitea:identities`: the site administrator `aieh-site-admin` and the separate
+   non-administrator Owner account `aieh-owner` (decision 0007), each with a temporary password that
+   Gitea generates, that must change at first sign-in, and that is written only into Windows
+   Credential Manager (`AIEH Gitea site-admin (temporary)`, `AIEH Gitea owner (temporary)`).
+4. The Owner signs in once with each account in a browser and sets the final passwords; no command
+   is needed.
+5. `task gitea:finish-first-login`: verifies, then deletes the temporary entries.
+
+`task gitea:status` and `task gitea:verify` report the state and the proof set at any time.
 
 ## Integration store
 
@@ -733,7 +774,7 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
-| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1 |
+| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |

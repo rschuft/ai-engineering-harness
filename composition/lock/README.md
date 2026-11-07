@@ -64,7 +64,7 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 
 | File | Pins | Count |
 |---|---|---|
-| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin, `reviewed_sdists` and `build_requirements`</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps` (empty)</li></ul> | <ul><li>8 source tags</li><li>4 OCI indexes</li><li>12 release assets</li><li>3 tools</li></ul> |
+| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin, `reviewed_sdists` and `build_requirements`</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps` (empty)</li></ul> | <ul><li>8 source tags</li><li>4 OCI indexes</li><li>13 release assets</li><li>3 tools</li></ul> |
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
