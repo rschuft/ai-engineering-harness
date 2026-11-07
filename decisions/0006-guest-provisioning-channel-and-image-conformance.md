@@ -1,8 +1,9 @@
 # 0006 - Guest provisioning channel and image conformance
 
-Status: Proposed (Overseer) - 2026-11-06. The Overseer accepts it once slices (b) and (c)
-of F-04.1 are evidenced. The Owner has already authorized the actions it depends on (see
-"Owner authorization" below).
+Status: Accepted (Overseer) - 2026-11-07, after slices (b) and (c) of F-04.1 were evidenced
+(`evidence/F-04.1b-provision-moby.md`, `evidence/F-04.1c-agent-server.md`). It implements the Owner's
+design direction, and the Owner authorized the actions it depends on (see "Owner authorization" below).
+Proposed 2026-11-06.
 Gate: architecture consultation before F-04.1, gates C (several plausible provisioning
 structures) and G (the isolation boundary of the qualified guest).
 Supersedes: none. Refines how [decision 0001](0001-agent-server-dispatch-precondition-and-version-line.md)
