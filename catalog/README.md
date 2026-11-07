@@ -39,7 +39,7 @@ that supports Agent Skills loads it from wherever that agent reads Skills.
 
 ## Licence
 
-The catalog is repository-owned and licensed under the repository's
+The catalog is repository-authored and licensed under the repository's
 [MIT License](../LICENSE); `SKILL.md` declares the same licence.
 
 The schema follows the OpenSpec schema format. So that OpenSpec can parse its

@@ -395,8 +395,11 @@ strictly at any time, whatever has changed since.
 
 ## Security expectations
 
-This is a **public** repository. Repository-owned code is MIT-licensed
-([`LICENSE`](../LICENSE)). Third-party components keep their own licences. The
+This is a **public** repository. Repository-authored code and documentation are
+MIT-licensed ([`LICENSE`](../LICENSE)). Third-party components keep their own
+licences, and are downloaded from their upstream distributors rather than
+redistributed
+([decision 0005](../decisions/0005-distribution-model-upstream-download-no-redistribution.md)). The
 SBOM and Grant outputs under `composition/inventory/generated/` are metadata about
 third-party packages, not copies of them
 ([publication audit](../composition/inventory/PUBLICATION-AUDIT.md)).

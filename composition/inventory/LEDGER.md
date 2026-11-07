@@ -7,6 +7,13 @@ What this repository itself publishes is audited in
 [`PUBLICATION-AUDIT.md`](PUBLICATION-AUDIT.md) (2026-11-06). That audit also
 verified some of the items below against upstream licence texts.
 
+**2026-11-06, Owner decisions after the audit.** Item 2 is resolved for use. Under
+[decision 0005](../../decisions/0005-distribution-model-upstream-download-no-redistribution.md),
+third-party components are downloaded from upstream onto the user's machine and not
+redistributed. So the *distribution* side of every item below triggers only when a
+concrete design proposes redistribution, and is re-evaluated then, through R-04.x. The
+other items stay open as stated.
+
 This ledger reports on three outputs that differ in kind. Each is named for what it is:
 
 | Output | What it is | Files |
@@ -100,6 +107,8 @@ None of these is resolved. Items 1–8 are what F-01.1 flagged plus what this in
 
    Treat it as LGPL-3.0 ([audit](PUBLICATION-AUDIT.md) C8). `openhands-tools` requires it. Under decision 0002, the resolver builds it from the reviewed, hash-verified sdist into a pure-Python wheel and installs it (see `../lock/README.md`). Its LGPL licence remains an open distribution item for G-02.1 and R-04.1/R-04.2. The Agent Canvas image contains it, built from the sdist in python3.13 site-packages.
 2. **lmnr-claude-code-proxy 0.2.0: `LicenseRef-Proprietary`.** It comes in through `openhands-sdk` → `lmnr>=0.7.60,<0.8.0` (Laminar) → `lmnr-claude-code-proxy>=0.1.22`. It is installed in the host Python set and present in the Canvas image. A proprietary licence in a mandatory transitive dependency of the SDK needs an Owner decision. The wheel's `LICENSE.md` and the Laminar terms it points to are quoted in the [audit](PUBLICATION-AUDIT.md), item U1.
+
+   **2026-11-06: resolved by the Owner.** Local use is accepted under the applicable upstream terms, with no replacement. Laminar's restriction to personal or internal business purposes remains a recorded usage restriction. Redistribution is not performed ([decision 0005](../../decisions/0005-distribution-model-upstream-download-no-redistribution.md)); it is re-evaluated through R-04.x only if a concrete design proposes it.
 3. **OpenHands SDK packages (sdk, tools, workspace, agent-server) declare no licence in PyPI metadata.** Grant reports them as unlicensed. The source repository LICENSE is MIT; the [audit](PUBLICATION-AUDIT.md) verified it at tag v1.60.1, so this item is a metadata gap.
 4. **Backlog.md platform packages** (all 6, including linux-x64 and linux-arm64) declare no licence. Syft also reports the Bun runtime embedded in them as unlicensed.
 5. **Third-party ACP CLIs bundled in the agent-server image** (and in Canvas, which builds FROM it):
@@ -112,6 +121,8 @@ None of these is resolved. Items 1–8 are what F-01.1 flagged plus what this in
    | `@google/gemini-cli` | 0.46.0 | Apache-2.0 |
 
    These packages also carry their own transitive trees. Their terms of use are not assessed. The `LICENSE.md` of `@anthropic-ai/claude-agent-sdk` is quoted in the [audit](PUBLICATION-AUDIT.md), item U2.
+
+   **2026-11-06:** U2 stays carried to R-04.1 for a review of its terms for the intended use; its redistribution side is conditional on decision 0005.
 6. **assistant-ui depends on `assistant-cloud` 0.2.9.** Its npm licence is MIT. It is a client for a hosted service, and the service terms are not assessed.
 7. **Weak copyleft:**
    - MPL-2.0 in npm: `lightningcss` and its 11 platform packages (via Vite and Tailwind), and `dompurify` (MPL-2.0 OR Apache-2.0).

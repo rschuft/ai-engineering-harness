@@ -84,8 +84,11 @@ Never bypass it with `--no-verify`.
   Builder agents) differs from ordinary contribution. You do not need those
   agents.
 
-Repository-owned code is licensed under the [MIT License](LICENSE). The licence does
-not cover third-party components. They keep their own licences, and this repository
-references them by name, version and hash without redistributing them; see the
-[licence ledger](composition/inventory/LEDGER.md) and the
+Repository-authored code and documentation are licensed under the
+[MIT License](LICENSE). The licence does not cover third-party components. They keep
+their own licences, and this repository references them by name, version and hash
+without redistributing them: they are downloaded from their upstream distributors onto
+the user's machine
+([decision 0005](decisions/0005-distribution-model-upstream-download-no-redistribution.md)).
+See the [licence ledger](composition/inventory/LEDGER.md) and the
 [publication audit](composition/inventory/PUBLICATION-AUDIT.md).

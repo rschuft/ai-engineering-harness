@@ -35,6 +35,14 @@ terms cannot be established yet: `lmnr-claude-code-proxy` and
 `@anthropic-ai/claude-agent-sdk` (U1, U2). These items belong to the existing leaves
 G-02.1, R-04.1, R-04.2 and R-03.x; see [Leaf mapping](#leaf-mapping).
 
+**2026-11-06, after the audit: Owner resolutions.**
+- Future-distribution readiness is conditional on
+  [decision 0005](../../decisions/0005-distribution-model-upstream-download-no-redistribution.md).
+  The project downloads third-party dependencies from upstream onto the user's machine
+  and does not redistribute them. So F1–F6, and the redistribution side of U1 and U2,
+  trigger only when a concrete design actually proposes redistribution.
+- U1 and U3 are resolved; U2 stays carried. See [Resolutions](#resolutions-2026-11-06).
+
 ## Findings
 
 ### CURRENT: content already published
@@ -53,6 +61,12 @@ G-02.1, R-04.1, R-04.2 and R-03.x; see [Leaf mapping](#leaf-mapping).
 
 ### FUTURE: triggered by packaging, images or binary distribution
 
+**2026-11-06: conditional on decision 0005.** These items trigger only on actual
+redistribution: when a concrete design proposes vendoring, mirroring, publishing
+modified third-party artifacts, or bundling them into distributable images or
+installers. They are re-evaluated at that point, through R-04.x. Pulling or downloading
+from upstream on the user's machine does not trigger them.
+
 | ID | Component | Licence evidence | Obligation when redistributed | Leaf |
 |---|---|---|---|---|
 | F1 | func-timeout 4.3.5, in a wheelhouse, the Linux guest install or a built image (the Agent Canvas image already contains it) | LGPL-3.0 text (C8) | Ship the LGPL-3.0 and GPL-3.0 texts and a prominent notice. Keep the module replaceable. As pure Python, the module is its own source. Repository code that imports it stays MIT. | R-04.1, R-04.2, R-03.1.1, R-03.3.1 |
@@ -69,6 +83,26 @@ G-02.1, R-04.1, R-04.2 and R-03.x; see [Leaf mapping](#leaf-mapping).
 | U1 | `lmnr-claude-code-proxy` 0.2.0 (platform wheels and an sdist on PyPI). It is a mandatory transitive dependency: `openhands-sdk` 1.60.1 → `lmnr` 0.7.67 (Apache-2.0, requires `lmnr-claude-code-proxy>=0.1.22`). It is installed in the host Python set and present in the Canvas image. | The wheel's `licenses/LICENSE.md` (`fc1b52dc…`) says: "© LMNR AI, Inc. All rights reserved. Use is subject to Laminar's [Terms of Service](https://laminar.sh/policies/terms)." Those Terms (last updated 2026-08-11) license the Content "solely for your personal use or internal business purpose" and say no Content may be "distributed, sold, licensed, or otherwise exploited for resale or redistribution without our express prior written permission". PyPI's Terms of Use say that an uploader of content without a free-redistribution licence grants "all other users of the web site an irrevocable, worldwide, royalty-free, nonexclusive license to reproduce, distribute … the Content", in the exact uploaded form. | Two sources conflict on redistribution. Use is limited to personal or internal-business purposes, and that affects everyone who reproduces the install, not only distributors. **Nothing of this package is published in this repository.** | An Owner decision on use (ledger item 2). Before any redistribution (R-04.2): written permission from Laminar, an upstream clarification from OpenHands, or an architectural change, which would need the Architect. |
 | U2 | `@anthropic-ai/claude-agent-sdk` 0.3.220, inside the referenced agent-server image (ledger item 5) | `package/LICENSE.md` (`8ce94b94…`): "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance." | Those agreements are not assessed. The package arrives with the upstream image; this repository does not publish it. | The R-04.1 provider-terms inventory, then an R-04.2 decision |
 | U3 | MIT scope wording | `LICENSE` grants rights in "this software and associated documentation files". `README.md` and `CONTRIBUTING.md` say "Repository-owned code". | Whether repository-owned documentation, such as the blueprint, the plan and the decision records, is also offered under MIT is the Owner's statement to make. It is not a violation either way. | One Owner sentence, then a one-line wording change |
+
+#### Resolutions (2026-11-06)
+
+The table above is kept as the audit found it. The Owner resolved two of its items
+after the audit:
+
+- **U1: resolved by the Owner.** Local use of the pinned OpenHands dependency chain,
+  including `lmnr-claude-code-proxy`, is accepted under the applicable upstream terms,
+  with no replacement. Laminar's use restriction (personal or internal business
+  purposes) remains a recorded usage restriction. The distribution model is
+  [decision 0005](../../decisions/0005-distribution-model-upstream-download-no-redistribution.md):
+  the redistribution question is re-evaluated, through R-04.x, only if a concrete design
+  proposes redistribution.
+- **U2: still carried** to R-04.1, for a review of its terms for the intended *use*. Its
+  redistribution side is conditional on decision 0005, like F1–F6.
+- **U3: resolved.** Everything authored for this repository, code and documentation
+  alike, is MIT as `LICENSE` states; third-party material keeps its own licence. The
+  wording now says "repository-authored code and documentation" in `README.md`,
+  `CONTRIBUTING.md`, `docs/development.md` and `catalog/README.md`. `LICENSE` is
+  unchanged.
 
 Metadata gaps that this audit verified upstream and are therefore **not** unresolved:
 
@@ -89,6 +123,12 @@ Metadata gaps that this audit verified upstream and are therefore **not** unreso
 | R-03.1.1, R-03.3.1 (packaging) | F1 and F3: whether packaging bundles or downloads; notices and source offers if it bundles |
 | F-04.1 | F2: pull by digest only; no re-publication |
 | Owner | U1 (use), U3 (wording) |
+
+**2026-11-06:** the Owner row is resolved (see [Resolutions](#resolutions-2026-11-06)).
+Under decision 0005, the R-04.1, R-04.2 and R-03.x items for F1–F6, U1 and U2
+redistribution apply only if a concrete design proposes redistribution. R-04.1 still
+carries U2's terms for the intended use. F-04.1 pulls by digest, which the model
+permits.
 
 ## Method and limits
 
