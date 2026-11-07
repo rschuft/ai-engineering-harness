@@ -150,6 +150,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_security_inventory.py {{.CLI_ARGS}}'
 
+  policy:check:
+    desc: "Check the role-token matrix and revocation contract (S-01.2.1): python -I -B tools/check_role_tokens.py; pass -- --list to print each role's grants, or -- --render for the README tables"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_role_tokens.py {{.CLI_ARGS}}'
+
   intent:check:
     desc: "Check a proposal's intent record (P-01.1): python -I -B tools/check_intent_record.py PROPOSAL --source REF=FILE (pass each quote's source after --)"
     requires:

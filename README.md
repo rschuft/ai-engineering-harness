@@ -93,6 +93,7 @@ Three different workflows touch this repository:
 | Decisions | [`decisions/`](decisions/) |
 | Component selection, locks and licence inventory | [`composition/`](composition/) |
 | Trust domains, principals, protected assets and credential requirements | [`security/`](security/) |
+| Role-token matrix and revocation contract | [`policy/`](policy/) |
 | Coding agent instructions | [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md) |
 | The Owner's current implementation arrangement | [`OVERSEER_START.md`](OVERSEER_START.md), [`task_prompts/`](task_prompts/); see [How work is done here](#how-work-is-done-here) |
 

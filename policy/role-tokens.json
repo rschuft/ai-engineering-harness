@@ -1,0 +1,1562 @@
+{
+  "schema": "ai-engineering-harness/policy/role-tokens/v1",
+  "plan_leaf": "S-01.2.1",
+  "title": "Role-token matrix and revocation contract",
+  "as_of": "2026-11-07",
+  "baseline_commit": "421719b",
+  "inventory": "security/inventory.json",
+  "readme": "policy/README.md",
+  "checker": "tools/check_role_tokens.py",
+  "decision": "decisions/0007-role-token-matrix-and-revocation-contract.md",
+  "trigger_classes": {
+    "attempt-end": "The attempt that holds the credential ends, in any outcome.",
+    "suspected-exposure": "The credential may have been read or used outside its role.",
+    "definition-revocation": "The agent or Skill definition the attempt runs is revoked.",
+    "policy-revision": "A policy revision changes what the role may hold.",
+    "expiry": "The credential reaches its lifetime.",
+    "owner-direction": "The Owner directs revocation."
+  },
+  "revocation_contract": {
+    "new_dispatch": "immediate-refusal",
+    "in_flight": [
+      "The dispatcher stops or contains the attempts holding the credential through op-as-runtime-stop and records them as exposed.",
+      "Gitea fails closed at the credential's next authenticated call.",
+      "CI jobs holding it are cancelled."
+    ],
+    "evidence": [
+      "A Gitea audit record, where audit logging is enabled (it is off by default).",
+      "A revocation receipt in the integration store: never the credential itself."
+    ],
+    "receipt_store": "integration-store",
+    "receipt_fields": [
+      "fingerprint",
+      "role",
+      "trigger",
+      "revoker",
+      "affected_attempts"
+    ],
+    "effects_store_exception": "A revocation that is itself an executor effect leaves its receipt in the effects store (decision 0004, point 1).",
+    "privileged_rotation": "Rotating a privileged credential (Owner, admin, executor or management class) is a consequential external effect: an Owner-only manifest applied by the executor in the target, or an Owner act recorded in the bootstrap log during bootstrap.",
+    "never_in": [
+      "an image",
+      "a seed",
+      "a repository",
+      "a log",
+      "a record (fingerprints only)"
+    ],
+    "sources": [
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#agent-skills",
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#decisions",
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+      "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "cap-code-merge-integration",
+      "name": "Merge a code PR into a protected integration branch",
+      "authority": "owner",
+      "description": "Merging a code pull request into a protected integration branch under the branch rules (required checks and independent review). Distinct from the Owner-only merge of an operation manifest on the authorization branch.",
+      "delegation": {
+        "by": "D-01.2",
+        "to": "permitted automation only, by repository policy; never an agent or CI role"
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#decisions",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#D-01.2"
+      ]
+    },
+    {
+      "id": "cap-read-repositories",
+      "name": "Read repositories",
+      "authority": "scoped",
+      "description": "Read the repositories in scope, their pull requests and diffs.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#agent-skills"
+      ]
+    },
+    {
+      "id": "cap-push-proposal-branch",
+      "name": "Push a proposal branch",
+      "authority": "scoped",
+      "description": "Push `work/*` proposal branches; never a protected ref.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts"
+      ]
+    },
+    {
+      "id": "cap-open-pr",
+      "name": "Open a pull request",
+      "authority": "scoped",
+      "description": "Open a pull request from a proposal branch.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts"
+      ]
+    },
+    {
+      "id": "cap-submit-review",
+      "name": "Submit a review",
+      "authority": "scoped",
+      "description": "Submit a review as evidence; a review never merges.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ]
+    },
+    {
+      "id": "cap-ci-statuses-artifacts",
+      "name": "Report CI statuses and artifacts",
+      "authority": "scoped",
+      "description": "Report commit statuses and upload artifacts for the job's own run, within the job token's repository context.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ]
+    },
+    {
+      "id": "cap-protected-ref-push",
+      "name": "Push to a protected ref",
+      "authority": "owner",
+      "description": "Push, force-push or API-merge directly to a protected ref, bypassing the merge rules. No role is granted it: protected refs change only through protected merges.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts"
+      ]
+    },
+    {
+      "id": "cap-work-status-mutation",
+      "name": "Change Work status",
+      "authority": "management",
+      "description": "Change a Work item's status. Backlog status belongs to the deterministic coordinator, which the inventory does not name yet; no role here is granted it.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#agent-skills",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "owner",
+      "name": "The Owner",
+      "principal": "owner",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-guest-boundary-change",
+          "op-host-privileged-change",
+          "op-git-push-public",
+          "op-policy-change",
+          "op-protected-merge",
+          "op-effect-store-custody"
+        ],
+        "capabilities": [
+          "cap-code-merge-integration"
+        ],
+        "credentials": [
+          "cred-uac-consent",
+          "cred-gitea-owner-account",
+          "cred-owner-ui-access"
+        ]
+      },
+      "denied": [],
+      "realization": [
+        {
+          "mechanism": "A separate Gitea Owner account, the only identity on the authorization branch's merge allowlist; interactive sign-in only, never a personal access token in any agent or CI context.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        },
+        {
+          "mechanism": "Code merges into protected integration branches under the D-01.2 branch rules.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-uac-consent",
+          "issuer": "owner",
+          "delivered_by": null,
+          "delivery": "Given interactively on the secure desktop for one specifically authorized elevated operation, which an agent may initiate (decision 0004, Owner clarification 4); never stored."
+        },
+        {
+          "credential": "cred-gitea-owner-account",
+          "issuer": "gitea-site-admin",
+          "delivered_by": null,
+          "delivery": "Created on the Gitea instance as an Owner act (Owner-class credentials are issued only by Owner acts); the Owner signs in independently."
+        },
+        {
+          "credential": "cred-owner-ui-access",
+          "issuer": "external:undefined",
+          "delivered_by": null,
+          "delivery": "Not defined (fd-owner-ui-access); issued only by an Owner act."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-uac-consent",
+          "triggers": [
+            "suspected-exposure",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "It lapses after its one operation; the Owner withholds or withdraws consent.",
+          "rotation_owner": "owner"
+        },
+        {
+          "credential": "cred-gitea-owner-account",
+          "triggers": [
+            "suspected-exposure",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "Disable the account or reset its password and sessions on the Gitea instance, as an Owner act.",
+          "rotation_owner": "owner"
+        },
+        {
+          "credential": "cred-owner-ui-access",
+          "triggers": [
+            "suspected-exposure",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "Not defined until the Owner UI's access is decided (S-01.3.1).",
+          "rotation_owner": "owner",
+          "findings": [
+            "fd-owner-ui-access"
+          ]
+        }
+      ],
+      "target": "Owner-only operations, the Gitea Owner account on the authorization branch's merge allowlist only, UAC consent for specifically authorized elevated acts, public-repository push, and code merges into protected integration branches. Never a personal access token in any agent or CI context.",
+      "bootstrap": {
+        "observed_performer": "owner",
+        "evidence": [
+          "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+          "evidence/bootstrap-log.md"
+        ],
+        "note": "The Owner directs the work and approves privileged host acts by UAC consent. Gitea is not installed, so no Gitea Owner account exists; public pushes run from the Owner's account."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ],
+      "findings": [
+        "fd-owner-authorization-record"
+      ]
+    },
+    {
+      "id": "owner-os-account",
+      "name": "The Owner's host account",
+      "principal": "owner-os-account",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-guest-lifecycle",
+          "op-guest-exec",
+          "op-exchange",
+          "op-session-key-export",
+          "op-provision-fetch"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-guest-ssh-key",
+          "cred-owner-github",
+          "cred-owner-provider-login"
+        ]
+      },
+      "denied": [
+        "cred-executor-identity"
+      ],
+      "realization": [],
+      "issuance": [
+        {
+          "credential": "cred-guest-ssh-key",
+          "issuer": "owner-os-account",
+          "delivered_by": null,
+          "delivery": "Generated per instance at create by the system ssh-keygen into the per-instance directory; recreate issues a new one."
+        },
+        {
+          "credential": "cred-owner-github",
+          "issuer": "external:github",
+          "delivered_by": null,
+          "delivery": "The Owner's own account at the provider; custody not inspected."
+        },
+        {
+          "credential": "cred-owner-provider-login",
+          "issuer": "external:model-provider",
+          "delivered_by": null,
+          "delivery": "The Owner's own coding-assistant login; never a role token."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-guest-ssh-key",
+          "triggers": [
+            "suspected-exposure",
+            "owner-direction"
+          ],
+          "revoker": "owner-os-account",
+          "method": "Guest destroy removes it and recreate issues a new one.",
+          "rotation_owner": "owner-os-account"
+        },
+        {
+          "credential": "cred-owner-github",
+          "triggers": [
+            "suspected-exposure",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "Revoked and reissued at the provider by the Owner.",
+          "rotation_owner": "owner",
+          "findings": [
+            "fd-owner-credential-custody"
+          ]
+        },
+        {
+          "credential": "cred-owner-provider-login",
+          "triggers": [
+            "suspected-exposure",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "Signed out or revoked at the provider by the Owner.",
+          "rotation_owner": "owner",
+          "findings": [
+            "fd-owner-credential-custody"
+          ]
+        }
+      ],
+      "target": "The Owner's interactive host account: guest lifecycle, exec, exchange, session-key export and provisioning fetch. It holds no executor or service identity, and no executor credential is stored in its credential store.",
+      "bootstrap": {
+        "observed_performer": "owner-os-account",
+        "evidence": [
+          "evidence/F-03.2.2b-guest-lifecycle.md",
+          "evidence/F-04.2-conversation-lifecycle.md"
+        ],
+        "note": "Host tooling under this account performs every operation of this row, and the host-side bootstrap agents share the account (fd-bootstrap-shared-identity)."
+      },
+      "status": "observed",
+      "sources": [
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+        "profiles/README.md"
+      ],
+      "evidence": [
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+        "evidence/F-03.2.2b-guest-lifecycle.md"
+      ],
+      "findings": [
+        "fd-bootstrap-shared-identity"
+      ]
+    },
+    {
+      "id": "gitea-site-admin",
+      "name": "Gitea site administrator",
+      "principal": "gitea-site-admin",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-gitea-administration"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-gitea-admin"
+        ]
+      },
+      "denied": [
+        "op-protected-merge",
+        "cap-code-merge-integration",
+        "cap-protected-ref-push"
+      ],
+      "realization": [
+        {
+          "mechanism": "The Gitea site-administrator account; branch protection with the admin force-merge override disabled, so the administrator obeys the branch rules.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        },
+        {
+          "mechanism": "Issues Gitea identities, bot accounts and their tokens, protection rules and runner registration secrets; never exposed to agents or CI.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-gitea-admin",
+          "issuer": "external:gitea-installation",
+          "delivered_by": null,
+          "delivery": "Created when Gitea is installed (no plan leaf installs it); held by the Owner during bootstrap (decision 0007, Owner confirmation 1, pending)."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-gitea-admin",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "Rotated by the Owner on the Gitea instance: a consequential external effect.",
+          "rotation_owner": "owner"
+        }
+      ],
+      "target": "Site administration of Gitea under the branch rules; issues Gitea identities, bot accounts, protection rules and runner registration secrets. Never exposed to agents or CI.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "composition/candidates.json",
+          "security/inventory.json"
+        ],
+        "note": "Gitea is pinned (28.3.0) but not installed; no plan leaf installs it."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "findings": [
+        "fd-gitea-version-docs"
+      ]
+    },
+    {
+      "id": "planner",
+      "name": "Planning agent",
+      "principal": "engineering-agent",
+      "agent_controlled": true,
+      "grants": {
+        "operations": [],
+        "capabilities": [
+          "cap-read-repositories",
+          "cap-push-proposal-branch",
+          "cap-open-pr"
+        ],
+        "credentials": [
+          "cred-gitea-bot-planner",
+          "cred-conversation-keys"
+        ]
+      },
+      "denied": [
+        "op-protected-merge",
+        "cap-code-merge-integration",
+        "cap-protected-ref-push",
+        "op-gitea-administration",
+        "cap-work-status-mutation",
+        "op-effect-apply",
+        "op-effect-receipt-write",
+        "cred-executor-identity",
+        "cred-executor-target-secrets",
+        "cred-agent-server-session-key",
+        "op-as-conversation-create",
+        "op-child-conversation",
+        "cred-moby-docker-group",
+        "op-moby-container-control",
+        "cred-gitea-owner-account",
+        "cred-gitea-admin",
+        "cred-uac-consent",
+        "cred-owner-github",
+        "cred-llm-provider-key",
+        "cred-gitea-bot-builder",
+        "cred-gitea-bot-reviewer"
+      ],
+      "realization": [
+        {
+          "mechanism": "A dedicated, non-administrator Gitea bot account and token.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        },
+        {
+          "mechanism": "Planning-artefact-only writes, pending the layout: a repository-level permission if planning artefacts get their own repository, or a required scoped-workflow check on PR paths if they are co-located.",
+          "verified": false,
+          "verify_at": "S-01.2.2",
+          "notes": "Gitea token scopes are categorical, not path-scoped (blueprint reading)."
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-gitea-bot-planner",
+          "issuer": "gitea-site-admin",
+          "delivered_by": "management-dispatcher",
+          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only; bounded to the attempt where the pinned Gitea supports it, otherwise rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+        },
+        {
+          "credential": "cred-conversation-keys",
+          "issuer": "guest-service-openhands",
+          "delivered_by": null,
+          "delivery": "Passed by the Agent Server's Docker runtime as environment values into the conversation container."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-gitea-bot-planner",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "The site administrator revokes the bot's tokens or disables the bot account. Per attempt, the token ends with the attempt where the pinned Gitea supports attempt-bounded tokens, and is otherwise rotated at attempt end by the dispatcher (both to verify at S-01.2.2).",
+          "rotation_owner": "management-dispatcher",
+          "findings": [
+            "fd-gitea-version-docs"
+          ]
+        },
+        {
+          "credential": "cred-conversation-keys",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "owner-direction"
+          ],
+          "revoker": "guest-service-openhands",
+          "method": "They end with their container: stopping the runtime or deleting the conversation removes them.",
+          "rotation_owner": "guest-service-openhands",
+          "findings": [
+            "fd-container-shares-service-uid"
+          ]
+        }
+      ],
+      "target": "Its own Gitea bot identity and token: read the repositories in scope, push `work/*` proposal branches and open PRs whose writes are planning artefacts only.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+          "evidence/F-04.2-conversation-lifecycle.md"
+        ],
+        "note": "No agent role token exists and no agent workload has run (decision 0003, C6); the only conversation run so far was a no-LLM fixture under the Owner's account."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#agent-skills",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "findings": [
+        "fd-gitea-version-docs"
+      ]
+    },
+    {
+      "id": "builder",
+      "name": "Engineering agent (builder)",
+      "principal": "engineering-agent",
+      "agent_controlled": true,
+      "grants": {
+        "operations": [
+          "op-open-proposal-pr"
+        ],
+        "capabilities": [
+          "cap-read-repositories",
+          "cap-push-proposal-branch",
+          "cap-open-pr"
+        ],
+        "credentials": [
+          "cred-gitea-bot-builder",
+          "cred-conversation-keys"
+        ]
+      },
+      "denied": [
+        "op-protected-merge",
+        "cap-code-merge-integration",
+        "cap-protected-ref-push",
+        "op-gitea-administration",
+        "cap-work-status-mutation",
+        "op-effect-apply",
+        "op-effect-receipt-write",
+        "cred-executor-identity",
+        "cred-executor-target-secrets",
+        "cred-agent-server-session-key",
+        "op-as-conversation-create",
+        "op-child-conversation",
+        "cred-moby-docker-group",
+        "op-moby-container-control",
+        "cred-gitea-owner-account",
+        "cred-gitea-admin",
+        "cred-uac-consent",
+        "cred-owner-github",
+        "cred-llm-provider-key",
+        "cred-gitea-bot-planner",
+        "cred-gitea-bot-reviewer"
+      ],
+      "realization": [
+        {
+          "mechanism": "A dedicated, non-administrator Gitea bot account and token with repository write and PR scope.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        },
+        {
+          "mechanism": "Branch protection denies the bot direct push, force push, API merge and protection changes; it can still open a proposal PR.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-gitea-bot-builder",
+          "issuer": "gitea-site-admin",
+          "delivered_by": "management-dispatcher",
+          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only; bounded to the attempt where the pinned Gitea supports it, otherwise rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+        },
+        {
+          "credential": "cred-conversation-keys",
+          "issuer": "guest-service-openhands",
+          "delivered_by": null,
+          "delivery": "Passed by the Agent Server's Docker runtime as environment values into the conversation container."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-gitea-bot-builder",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "The site administrator revokes the bot's tokens or disables the bot account. Per attempt, the token ends with the attempt where the pinned Gitea supports attempt-bounded tokens, and is otherwise rotated at attempt end by the dispatcher (both to verify at S-01.2.2).",
+          "rotation_owner": "management-dispatcher",
+          "findings": [
+            "fd-gitea-version-docs"
+          ]
+        },
+        {
+          "credential": "cred-conversation-keys",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "owner-direction"
+          ],
+          "revoker": "guest-service-openhands",
+          "method": "They end with their container: stopping the runtime or deleting the conversation removes them.",
+          "rotation_owner": "guest-service-openhands",
+          "findings": [
+            "fd-container-shares-service-uid"
+          ]
+        }
+      ],
+      "target": "Its own Gitea bot identity and token: read the repositories in scope, push `work/*` proposal branches and open PRs.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+          "evidence/F-04.2-conversation-lifecycle.md"
+        ],
+        "note": "No agent role token exists and no agent workload has run (decision 0003, C6); the only conversation run so far was a no-LLM fixture under the Owner's account."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1"
+      ],
+      "findings": [
+        "fd-gitea-version-docs"
+      ]
+    },
+    {
+      "id": "reviewer",
+      "name": "Reviewer agent",
+      "principal": "reviewer-agent",
+      "agent_controlled": true,
+      "grants": {
+        "operations": [
+          "op-submit-review"
+        ],
+        "capabilities": [
+          "cap-read-repositories",
+          "cap-submit-review"
+        ],
+        "credentials": [
+          "cred-gitea-bot-reviewer"
+        ]
+      },
+      "denied": [
+        "op-protected-merge",
+        "cap-code-merge-integration",
+        "cap-protected-ref-push",
+        "op-gitea-administration",
+        "cap-work-status-mutation",
+        "op-effect-apply",
+        "op-effect-receipt-write",
+        "cred-executor-identity",
+        "cred-executor-target-secrets",
+        "cred-agent-server-session-key",
+        "op-as-conversation-create",
+        "op-child-conversation",
+        "cred-moby-docker-group",
+        "op-moby-container-control",
+        "cred-gitea-owner-account",
+        "cred-gitea-admin",
+        "cred-uac-consent",
+        "cred-owner-github",
+        "cred-llm-provider-key",
+        "cap-push-proposal-branch",
+        "cred-gitea-bot-planner",
+        "cred-gitea-bot-builder"
+      ],
+      "realization": [
+        {
+          "mechanism": "A dedicated Gitea bot account and token with read and review permission only, on no merge allowlist.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-gitea-bot-reviewer",
+          "issuer": "gitea-site-admin",
+          "delivered_by": "management-dispatcher",
+          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only; bounded to the attempt where the pinned Gitea supports it, otherwise rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-gitea-bot-reviewer",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "The site administrator revokes the bot's tokens or disables the bot account. Per attempt, the token ends with the attempt where the pinned Gitea supports attempt-bounded tokens, and is otherwise rotated at attempt end by the dispatcher (both to verify at S-01.2.2).",
+          "rotation_owner": "management-dispatcher",
+          "findings": [
+            "fd-gitea-version-docs"
+          ]
+        }
+      ],
+      "target": "Its own Gitea bot identity and token: read the PR and diff and submit reviews as evidence.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+          "evidence/F-04.2-conversation-lifecycle.md"
+        ],
+        "note": "No agent role token exists and no agent workload has run (decision 0003, C6); the only conversation run so far was a no-LLM fixture under the Owner's account."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "findings": [
+        "fd-gitea-version-docs"
+      ]
+    },
+    {
+      "id": "ci-job",
+      "name": "CI job executing pull-request code",
+      "principal": "ci-job",
+      "agent_controlled": true,
+      "grants": {
+        "operations": [
+          "op-ci-untrusted-job"
+        ],
+        "capabilities": [
+          "cap-ci-statuses-artifacts"
+        ],
+        "credentials": [
+          "cred-ci-job-token"
+        ]
+      },
+      "denied": [
+        "op-protected-merge",
+        "cap-code-merge-integration",
+        "cap-protected-ref-push",
+        "op-gitea-administration",
+        "cap-work-status-mutation",
+        "op-effect-apply",
+        "op-effect-receipt-write",
+        "cred-executor-identity",
+        "cred-executor-target-secrets",
+        "cred-agent-server-session-key",
+        "op-as-conversation-create",
+        "op-child-conversation",
+        "cred-moby-docker-group",
+        "op-moby-container-control",
+        "cred-gitea-owner-account",
+        "cred-gitea-admin",
+        "cred-uac-consent",
+        "cred-owner-github",
+        "cred-llm-provider-key",
+        "op-release-signing-deploy",
+        "cred-runner-registration",
+        "cap-push-proposal-branch"
+      ],
+      "realization": [
+        {
+          "mechanism": "The Gitea Actions job token with restricted repository and workflow token maxima.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        },
+        {
+          "mechanism": "A disposable container or VM on a dedicated runner host: no host-mode execution, host Docker socket, user home, Owner credential or release, signing or deployment secret.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-ci-job-token",
+          "issuer": "external:gitea-actions",
+          "delivered_by": null,
+          "delivery": "Minted by Gitea Actions for one job into the job environment, within the configured token maxima."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-ci-job-token",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "It expires with its job; on exposure the site administrator cancels the job and disables the runner.",
+          "rotation_owner": "gitea-site-admin",
+          "findings": [
+            "fd-ci-runner-unpinned"
+          ]
+        }
+      ],
+      "target": "The job token's repository context for its own run only.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "composition/candidates.json"
+        ],
+        "note": "No CI runner is selected or pinned, and no CI job has run."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ]
+    },
+    {
+      "id": "ci-runner-service",
+      "name": "CI runner service",
+      "principal": "ci-runner-service",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-ci-runner-registration"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-runner-registration"
+        ]
+      },
+      "denied": [],
+      "realization": [
+        {
+          "mechanism": "The runner's registration secret on the dedicated runner host, unreachable from the job filesystem.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-runner-registration",
+          "issuer": "gitea-site-admin",
+          "delivered_by": null,
+          "delivery": "Issued by the site administrator to register the runner; stored on the runner host outside every job's filesystem."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-runner-registration",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "Unregister the runner and issue a new registration secret; the rotation is a consequential external effect.",
+          "rotation_owner": "owner",
+          "findings": [
+            "fd-ci-runner-unpinned"
+          ]
+        }
+      ],
+      "target": "The registration secret, unreachable from jobs.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "composition/candidates.json"
+        ],
+        "note": "No CI runner is selected or pinned."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ]
+    },
+    {
+      "id": "management-dispatcher",
+      "name": "Trusted dispatcher and credential broker",
+      "principal": "management-dispatcher",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-as-conversation-create",
+          "op-as-runtime-stop",
+          "op-as-runtime-reprovision",
+          "op-as-conversation-delete",
+          "op-as-conversation-pause",
+          "op-as-management-read",
+          "op-as-unenumerated-routes",
+          "op-child-conversation"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-agent-server-session-key"
+        ]
+      },
+      "custodian_of": [
+        "cred-gitea-bot-planner",
+        "cred-gitea-bot-builder",
+        "cred-gitea-bot-reviewer"
+      ],
+      "denied": [
+        "op-effect-apply",
+        "op-effect-receipt-write",
+        "cred-executor-identity"
+      ],
+      "realization": [
+        {
+          "mechanism": "The sole holder of the Agent Server session key, on the trusted side; admission to the create and admin routes is limited to its identity and network (S-01.3.1).",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        },
+        {
+          "mechanism": "Custodian of the standing bot credentials; delivers each agent role token per attempt into the attempt environment only, with fingerprints only in records.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-agent-server-session-key",
+          "issuer": "guest-root",
+          "delivered_by": null,
+          "delivery": "Generated in the guest at provisioning; it is to reach only the dispatcher over a trusted channel (S-01.3.1). Records carry fingerprints only."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-agent-server-session-key",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "owner-direction"
+          ],
+          "revoker": "guest-root",
+          "method": "Only guest recreate and provision revokes it, which ends every conversation.",
+          "rotation_owner": "owner-os-account",
+          "findings": [
+            "fd-session-key-not-fine-grained"
+          ]
+        }
+      ],
+      "target": "Sole holder of the Agent Server session key; the Agent Server management operations; custodian and per-attempt deliverer of the standing bot credentials. It writes no effect receipt.",
+      "bootstrap": {
+        "observed_performer": "owner-os-account",
+        "evidence": [
+          "evidence/F-04.2-conversation-lifecycle.md",
+          "evidence/F-04.1c-agent-server.md"
+        ],
+        "note": "No dispatcher exists. The Owner's account performs conversation create and runtime control through the operator login (see the sunset map)."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"
+      ],
+      "findings": [
+        "fd-session-key-not-fine-grained",
+        "fd-agent-server-route-inventory",
+        "fd-child-conversation-tool"
+      ]
+    },
+    {
+      "id": "integration-service",
+      "name": "Integration Service",
+      "principal": "integration-service",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-integration-store-write"
+        ],
+        "capabilities": [],
+        "credentials": []
+      },
+      "denied": [
+        "cred-gitea-owner-account",
+        "cred-uac-consent",
+        "op-effect-receipt-write"
+      ],
+      "realization": [
+        {
+          "mechanism": "Its own process identity with custody of the integration store and no access to the effects store.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [],
+      "revocation": [],
+      "target": "Integration-store writes. Never the Owner approval credential or an effect receipt.",
+      "bootstrap": {
+        "observed_performer": "owner-os-account",
+        "evidence": [
+          "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+        ],
+        "note": "The integration store stays in Owner-session custody during bootstrap (decision 0004, point 9)."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ]
+    },
+    {
+      "id": "authorization-verifier",
+      "name": "Authorization verifier",
+      "principal": "authorization-verifier",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-authorization-verify"
+        ],
+        "capabilities": [
+          "cap-read-repositories"
+        ],
+        "credentials": [
+          "cred-verifier-read"
+        ]
+      },
+      "denied": [
+        "cap-push-proposal-branch",
+        "cap-open-pr",
+        "op-protected-merge",
+        "op-effect-apply"
+      ],
+      "realization": [
+        {
+          "mechanism": "A read-only Gitea credential for the verifier's own identity; it never executes.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-verifier-read",
+          "issuer": "gitea-site-admin",
+          "delivered_by": null,
+          "delivery": "Issued by the site administrator to the verifier's own identity; unreachable from code runners."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-verifier-read",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "The site administrator revokes and reissues it.",
+          "rotation_owner": "gitea-site-admin"
+        }
+      ],
+      "target": "A read-only Gitea credential: reads the protected ref, the PR, merged_by, the exact blob and the policy.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "security/inventory.json"
+        ],
+        "note": "Not built; Gitea is not installed."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ]
+    },
+    {
+      "id": "privileged-executor",
+      "name": "Privileged effect executor",
+      "principal": "privileged-executor",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-effect-apply",
+          "op-effect-receipt-write"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-executor-identity",
+          "cred-executor-target-secrets"
+        ]
+      },
+      "denied": [
+        "op-gitea-administration",
+        "cap-push-proposal-branch",
+        "cap-open-pr",
+        "cap-protected-ref-push",
+        "cap-code-merge-integration"
+      ],
+      "realization": [
+        {
+          "mechanism": "A separate Windows service identity created by Owner act A4 at G-04.2.1, with Modify on the effects root only.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        },
+        {
+          "mechanism": "It issues nothing and holds no Gitea write credential.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-executor-identity",
+          "issuer": "owner",
+          "delivered_by": null,
+          "delivery": "Created by Owner act A4 at G-04.2.1: a service identity with no stored password, never in the Owner's credential store."
+        },
+        {
+          "credential": "cred-executor-target-secrets",
+          "issuer": "owner",
+          "delivered_by": null,
+          "delivery": "Provided by an Owner act into the executor's separate custody; not defined until G-04.2.x."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-executor-identity",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "An Owner elevated act during bootstrap; in the target, an Owner-only manifest that the executor applies.",
+          "rotation_owner": "owner",
+          "receipt_store": "effects-store"
+        },
+        {
+          "credential": "cred-executor-target-secrets",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "An Owner elevated act during bootstrap; in the target, an Owner-only manifest that the executor applies.",
+          "rotation_owner": "owner",
+          "receipt_store": "effects-store"
+        }
+      ],
+      "target": "The executor identity and target secrets, effect application and effect receipts. It issues nothing and writes nothing in Gitea.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+          "evidence/F-05.2-effects-store-backup-restore.md"
+        ],
+        "note": "Nothing live exists: no effects root, executor principal, service or scheduled task (decision 0004, Current facts)."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#decisions",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#G-04.2.1"
+      ]
+    },
+    {
+      "id": "inference-broker",
+      "name": "Inference broker",
+      "principal": "inference-broker",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-inference-call"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-llm-provider-key"
+        ]
+      },
+      "denied": [],
+      "realization": [
+        {
+          "mechanism": "The host-side broker behind the guest's inference endpoint class; it alone issues per-attempt inference access.",
+          "verified": false,
+          "verify_at": "S-01.2.2",
+          "notes": "Realization unknown: no plan leaf builds the broker (a plan gap routed to the Owner)."
+        }
+      ],
+      "issuance": [
+        {
+          "credential": "cred-llm-provider-key",
+          "issuer": "external:model-provider",
+          "delivered_by": null,
+          "delivery": "Loaded into the broker only, by the Owner. No provider credential is ever a role token."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-llm-provider-key",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "Rotated at the provider by the Owner, then reloaded into the broker only.",
+          "rotation_owner": "owner",
+          "findings": [
+            "fd-acp-provider-auth"
+          ]
+        }
+      ],
+      "target": "The provider credential and per-attempt inference access.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "profiles/README.md"
+        ],
+        "note": "The inference endpoint class is deferred, and no plan leaf builds the broker."
+      },
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "profiles/README.md"
+      ],
+      "findings": [
+        "fd-acp-provider-auth"
+      ]
+    },
+    {
+      "id": "release-job-environment",
+      "name": "Release-signing or deployment job environment",
+      "principal": "release-job-environment",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-release-signing-deploy"
+        ],
+        "capabilities": [],
+        "credentials": []
+      },
+      "denied": [
+        "cred-executor-identity"
+      ],
+      "invariants": [
+        "Trusted side only: never ci-job or any agent role.",
+        "Its credential is of a privileged class.",
+        "Activation goes through op-effect-apply.",
+        "The signing identity is distinct from the executor's effect identity unless Q-02.4 decides otherwise."
+      ],
+      "realization": [
+        {
+          "mechanism": "Not decided: Q-02.4 and G-04.2.1 decide the principal and its credential.",
+          "verified": false,
+          "verify_at": "S-01.2.2"
+        }
+      ],
+      "issuance": [],
+      "revocation": [],
+      "target": "Narrowly authorized release or deployment jobs in a separately credentialed environment, after verifying the protected revision.",
+      "bootstrap": {
+        "observed_performer": null,
+        "evidence": [
+          "security/inventory.json"
+        ],
+        "note": "Undecided (fd-release-job-principal); no release has been signed or deployed."
+      },
+      "status": "unknown",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "findings": [
+        "fd-release-job-principal"
+      ]
+    },
+    {
+      "id": "guest-root",
+      "name": "Guest root",
+      "principal": "guest-root",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-moby-daemon-admin",
+          "op-guest-provision",
+          "op-guest-facts"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-guest-host-keys"
+        ]
+      },
+      "denied": [],
+      "realization": [],
+      "issuance": [
+        {
+          "credential": "cred-guest-host-keys",
+          "issuer": "guest-root",
+          "delivered_by": null,
+          "delivery": "Regenerated at every create; the fingerprints reach the host through the serial log."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-guest-host-keys",
+          "triggers": [
+            "suspected-exposure",
+            "owner-direction"
+          ],
+          "revoker": "guest-root",
+          "method": "Regenerated at every create.",
+          "rotation_owner": "guest-root"
+        }
+      ],
+      "target": "Root inside the execution guest, reached only through cloud-init at create and declared systemd units.",
+      "bootstrap": {
+        "observed_performer": "guest-root",
+        "evidence": [
+          "evidence/F-04.1b-provision-moby.md",
+          "evidence/F-03.2.2b-guest-lifecycle.md"
+        ],
+        "note": "Root acts only in the single-use provision step and the facts reporters."
+      },
+      "status": "observed",
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "decisions/0006-guest-provisioning-channel-and-image-conformance.md"
+      ],
+      "evidence": [
+        "evidence/F-04.1b-provision-moby.md",
+        "evidence/F-03.2.2b-guest-lifecycle.md"
+      ]
+    },
+    {
+      "id": "guest-service-openhands",
+      "name": "Guest service user (outer Agent Server)",
+      "principal": "guest-service-openhands",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [
+          "op-moby-container-control"
+        ],
+        "capabilities": [],
+        "credentials": [
+          "cred-oh-secret-key",
+          "cred-moby-docker-group"
+        ]
+      },
+      "denied": [],
+      "realization": [],
+      "issuance": [
+        {
+          "credential": "cred-oh-secret-key",
+          "issuer": "guest-root",
+          "delivered_by": null,
+          "delivery": "Generated by the root provisioning step into a root-only environment file; it never leaves the guest."
+        },
+        {
+          "credential": "cred-moby-docker-group",
+          "issuer": "guest-root",
+          "delivered_by": null,
+          "delivery": "Group membership set by the root provisioning step."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-oh-secret-key",
+          "triggers": [
+            "suspected-exposure",
+            "owner-direction"
+          ],
+          "revoker": "guest-root",
+          "method": "Only guest recreate and provision replaces it.",
+          "rotation_owner": "guest-root"
+        },
+        {
+          "credential": "cred-moby-docker-group",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "owner-direction"
+          ],
+          "revoker": "guest-root",
+          "method": "Only guest recreate and provision changes it.",
+          "rotation_owner": "guest-root"
+        }
+      ],
+      "target": "The guest's own service principal for the Agent Server and the guest's Docker API. It validates the session key but is not a role that uses it.",
+      "bootstrap": {
+        "observed_performer": "guest-service-openhands",
+        "evidence": [
+          "evidence/F-04.1c-agent-server.md"
+        ],
+        "note": "Runs the outer Agent Server and starts conversation containers through the guest's Docker."
+      },
+      "status": "observed",
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "evidence": [
+        "evidence/F-04.1c-agent-server.md"
+      ]
+    },
+    {
+      "id": "guest-login-agent",
+      "name": "Guest operator login",
+      "principal": "guest-login-agent",
+      "agent_controlled": false,
+      "grants": {
+        "operations": [],
+        "capabilities": [],
+        "credentials": []
+      },
+      "denied": [],
+      "realization": [],
+      "issuance": [],
+      "revocation": [],
+      "target": "An operator and provisioning login, never an agent role token: exec is never offered to agents. Whether it keeps read access to the session key is S-01.3.1's decision.",
+      "bootstrap": {
+        "observed_performer": "owner-os-account",
+        "evidence": [
+          "evidence/F-04.1c-agent-server.md",
+          "profiles/README.md"
+        ],
+        "note": "Host tooling uses this login for exec, exchange, the provisioning upload and the facts requests; it can read the Agent Server session key today."
+      },
+      "status": "observed",
+      "sources": [
+        "profiles/README.md"
+      ],
+      "evidence": [
+        "evidence/F-04.1c-agent-server.md"
+      ],
+      "findings": [
+        "fd-guest-login-name-and-key"
+      ]
+    }
+  ],
+  "non_roles": [
+    {
+      "id": "bootstrap-host-agents",
+      "name": "Host-side bootstrap agent sessions",
+      "principal": "bootstrap-host-agents",
+      "grants": [],
+      "inherits_reach_of": "owner-os-account",
+      "sunset": [
+        {
+          "scope": "Conversation create and runtime control on the Agent Server management API",
+          "operations": [
+            "op-as-conversation-create",
+            "op-as-runtime-stop",
+            "op-as-runtime-reprovision",
+            "op-as-conversation-delete",
+            "op-as-management-read"
+          ],
+          "at": "S-01.3.1"
+        },
+        {
+          "scope": "Privileged effects and effect-store custody",
+          "operations": [
+            "op-effect-apply",
+            "op-effect-receipt-write",
+            "op-effect-store-custody"
+          ],
+          "at": "G-04.2.1"
+        },
+        {
+          "scope": "Gitea administration",
+          "operations": [
+            "op-gitea-administration"
+          ],
+          "at": null,
+          "gap": "No plan leaf installs Gitea: a plan gap routed to the Owner."
+        }
+      ],
+      "status": "observed",
+      "sources": [
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ],
+      "evidence": [
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+        "evidence/bootstrap-log.md"
+      ],
+      "findings": [
+        "fd-bootstrap-shared-identity"
+      ],
+      "notes": "Not a role: they are not independently isolated, so they are granted nothing. They act with the reach of the Owner's account, and each operation they perform today moves to its planned principal at the leaf named in the sunset map."
+    }
+  ],
+  "sources": [
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#agent-skills",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#decisions",
+    "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.2.1",
+    "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+    "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md",
+    "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+    "decisions/0007-role-token-matrix-and-revocation-contract.md",
+    "security/inventory.json"
+  ],
+  "notes": "Every realization is unverified: S-01.2.2 tests allowed and forbidden calls for each non-Owner principal against a pinned Gitea. Nothing here issues, installs, creates or configures an identity, token or permission (decision 0004, Owner clarification 7)."
+}

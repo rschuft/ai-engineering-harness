@@ -152,6 +152,7 @@ Only what is listed as verified has been exercised.
 | `effects:restore ROOT=<dir> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/effects/effects_store.py restore --root <dir> --manifest <file> --actor <name> [--accept-rollback]` | no | The Owner's elevated act, with the executor stopped: restores a verified backup and opens a restore epoch. |
 | `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:qualify -- <run\|check\|prompt\|system-prompt> [options]` | `python -I -B tools/qualify_intent_skill.py <subcommand> [options]` | `run`: the model command's own (a live model) | Runs the intent-normalization Skill's [behavioural qualification](#intent-records): one corpus item and turn through a JSON model-command template in an empty working directory, then the checker, then a ledger entry; refuses past `--max-invocations` (default 25). `check` scores a saved proposal against an item's messages. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict] [--openapi <file>]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. `--openapi` validates the Agent Server conversation fixture against the locked `openapi.json` (F-04.1). |
@@ -484,6 +485,32 @@ machine paths, and requires the README to name every operation and finding. Its 
 committed inventory and fail its mutations. When an entry changes, update the JSON,
 keep the README's tables and summary consistent with it, and run the checker.
 
+## Role-token matrix
+
+Plan leaf S-01.2.1 binds each role to exactly one principal of the security inventory
+and grants it inventory operations, named capabilities (`cap-*`) and credentials, in
+[`policy/role-tokens.json`](../policy/role-tokens.json), with the human-readable record
+in [`policy/README.md`](../policy/README.md) and the decision in
+[0007](../decisions/0007-role-token-matrix-and-revocation-contract.md) (Proposed). It
+also records each credential's issuance and revocation (triggers, revoker, rotation
+owner) and, for the host-side bootstrap agents, which are a non-role row with no grants,
+the leaf at which each operation they perform today moves to its planned principal.
+Every realization is `verified: false` until S-01.2.2 tests it: the matrix issues,
+installs and configures nothing.
+
+[`tools/check_role_tokens.py`](../tools/check_role_tokens.py) (`task policy:check`)
+enforces the leaf's acceptance with the standard library only, reusing the inventory
+checker's link, status and machine-path rules: no agent, reviewer or CI role is granted
+an Owner-only, executor, Gitea administration or Agent Server management operation,
+`cap-code-merge-integration` or another privileged capability, a credential of Owner,
+admin, executor or management authority, or a provider credential; no grant goes to a
+principal that is not independently isolated; every granted operation belongs to the
+role's own principal; issuers and rotation owners agree with the inventory; and the
+README's generated tables equal `--render`. Its tests
+(`tools/tests/test_check_role_tokens.py`, part of `task test`) pass the committed
+matrix and fail its mutations. When the matrix changes, edit the JSON, replace the
+README's generated block with the output of `--render`, and run both checkers.
+
 ## Task
 
 The Taskfile targets Task **3.54.0** (release `v3.54.0`, published 2026-10-01,
@@ -513,9 +540,10 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list, the profile declarations, and per-OS packaging when added | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
+| `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
 | `integrations/` | `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share | F-05.1, F-05.2 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |
@@ -532,7 +560,7 @@ sources stay external (pinned in `composition/`) unless adaptation is necessary.
 |---|---|---|
 | Configuration (Agent Server and service configuration) | `config/` | F-04.1 |
 | Integrations (Integration Service adapters and schemas) | `integrations/` (created by F-05.1: `integrations/store/`) | F-05.1, then P-02.1 and E-01.x |
-| Policy (permissions, controls) | `policy/` | S-01.2.1, G-01.1 |
+| Policy (permissions, controls) | `policy/` (created by S-01.2.1: the role-token matrix) | S-01.2.1, G-01.1 |
 | Agent and Skill catalog | `catalog/` (created by P-01.1: the `intent-driven` OpenSpec schema and the `intent-normalization` Skill) | P-01.1, then A-01.1 and E-03.1 |
 | Contract tests | `tests/` | F-03.3.1, S-02.1, E-01.3.2 |
 

@@ -280,7 +280,7 @@ class References(unittest.TestCase):
 
     def test_unknown_plan_leaf_fails(self):
         inv = fresh()
-        entry(inv, 'findings', 'fd-rotation-undecided')['carried_to'].append('S-01.9')
+        entry(inv, 'findings', 'fd-release-job-principal')['carried_to'].append('S-01.9')
         found, _ = codes(inv)
         self.assertIn('DANGLING_REF', found)
 
@@ -331,6 +331,7 @@ class StatusesAndLinks(unittest.TestCase):
     def test_undecided_rotation_owner_needs_a_finding(self):
         inv = fresh()
         cred = entry(inv, 'credentials', 'cred-verifier-read')
+        cred['rotation_revocation_owner'] = None
         cred['findings'] = []
         found, _ = codes(inv)
         self.assertIn('STATUS_UNSUPPORTED', found)
