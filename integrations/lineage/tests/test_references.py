@@ -214,6 +214,23 @@ class Malformed(unittest.TestCase):
             with self.subTest(case=number), self.assertRaises(L.MalformedReference):
                 make()
 
+    def test_a_trailing_newline_cannot_be_constructed(self):
+        # Python's $ also matches before a final newline: each grammar is checked whole. (A
+        # native ID such as a conversation thread may hold any text: it is percent-encoded.)
+        cases = [
+            lambda: L.DesignRef('x\n', 'd.md', C40, D), lambda: L.DesignRef('x', 'd.md\n', C40, D),
+            lambda: L.DesignRef('x', 'd.md', C40 + '\n', D), lambda: L.DesignRef('x', 'd.md', C40, D + '\n'),
+            lambda: L.WorkRef('TASK-2\n'),
+            lambda: L.AttemptRef(UUID + '\n'), lambda: L.CommitRef('r', C40 + '\n'),
+        ]
+        for number, make in enumerate(cases):
+            with self.subTest(case=number), self.assertRaises(L.MalformedReference):
+                make()
+        good = L.DesignRef('qual-02-search-freshness', 'design.md', C40, D).text
+        self.assertIsNone(L.DesignRef.parse_text(good + '\n'))
+        with self.assertRaises(L.MalformedReference):
+            L.parse(good + '\n')
+
     def test_format_refuses_what_is_not_a_typed_reference(self):
         for value in ('backlog:TASK-1', None, L.Reference()):
             with self.subTest(value=value), self.assertRaises(L.MalformedReference):

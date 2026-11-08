@@ -118,7 +118,7 @@ def encode_segment(value):
 
 def decode_segment(text):
     """The native ID of one canonical segment; refuses any non-canonical spelling."""
-    if not isinstance(text, str) or not _FULL['segment'].match(text):
+    if not isinstance(text, str) or not _FULL['segment'].fullmatch(text):
         raise MalformedReference('REFERENCE_MALFORMED', f'not a segment: {text!r}', text)
     out = bytearray()
     index = 0
@@ -144,7 +144,7 @@ def _require(condition, kind, message):
 
 
 def _is(name, value):
-    return isinstance(value, str) and bool(_FULL[name].match(value))
+    return isinstance(value, str) and bool(_FULL[name].fullmatch(value))
 
 
 def _is_count(value, minimum):
@@ -192,7 +192,7 @@ class Reference:
 
     @classmethod
     def parse_text(cls, text):
-        match = cls.PATTERN.match(text)
+        match = cls.PATTERN.fullmatch(text)
         return cls._from_match(match) if match else None
 
 
@@ -339,9 +339,9 @@ class DesignRef(Reference):
     digest: str
 
     def __post_init__(self):
-        _require(isinstance(self.change, str) and bool(planning.CHANGE_ID_RE.match(self.change)), self.KIND,
+        _require(isinstance(self.change, str) and bool(planning.CHANGE_ID_RE.fullmatch(self.change)), self.KIND,
                  f'not an OpenSpec change id: {self.change!r}')
-        _require(isinstance(self.artifact, str) and bool(planning.ARTIFACT_RE.match(self.artifact)), self.KIND,
+        _require(isinstance(self.artifact, str) and bool(planning.ARTIFACT_RE.fullmatch(self.artifact)), self.KIND,
                  f'not a relative artifact path: {self.artifact!r}')
         _require(_is('commit', self.revision), self.KIND, 'revision must be a full commit id')
         _require(_is('hex64', self.digest), self.KIND, 'digest must be 64 lower-case hex digits')
