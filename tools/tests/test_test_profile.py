@@ -17,6 +17,7 @@ import tempfile
 import textwrap
 import types
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / 'tools' / 'test_profile.py'
@@ -130,6 +131,22 @@ class TaskfileSuitesTests(unittest.TestCase):
             """)
         self.assertEqual(tp.taskfile_suites(text),
                          [('tools', 'tools/tests'), ('a', 'integrations/a/tests')])
+
+    def test_scratch_removes_only_what_it_created(self):
+        # Faked, so that this unit test creates no directory itself.
+        made = mock.MagicMock()
+        made.__enter__.return_value = 'made'
+        with mock.patch.object(tp.tempfile, 'TemporaryDirectory', return_value=made) as factory:
+            with tp.scratch() as workdir:
+                self.assertEqual(workdir, Path('made'))
+                made.__exit__.assert_not_called()
+        factory.assert_called_once_with(prefix='aieh-test-profile-', ignore_cleanup_errors=True)
+        made.__exit__.assert_called_once()
+        with mock.patch.object(tp, '_workdir', return_value=Path('given')) as given,                 mock.patch.object(tp.tempfile, 'TemporaryDirectory') as factory:
+            with tp.scratch('given') as workdir:
+                self.assertEqual(workdir, Path('given'))
+        given.assert_called_once_with('given')
+        factory.assert_not_called()
 
     def test_unreadable_targets_are_refused(self):
         with self.assertRaises(tp.ProfileError):

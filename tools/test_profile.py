@@ -49,6 +49,7 @@ runs; ``compare``: identical), 1 FAIL, 2 could not run.
 """
 import argparse
 import collections
+import contextlib
 import hashlib
 import json
 import os
@@ -941,6 +942,17 @@ def _workdir(path=None):
     return Path(tempfile.mkdtemp(prefix='aieh-test-profile-'))
 
 
+@contextlib.contextmanager
+def scratch(path=None):
+    """A working directory for children's files: `path` (kept), or a new temporary directory
+    removed on exit, so that `categories` and `compare` leave nothing behind."""
+    if path:
+        yield _workdir(path)
+        return
+    with tempfile.TemporaryDirectory(prefix='aieh-test-profile-', ignore_cleanup_errors=True) as tmp:
+        yield Path(tmp)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     sub = parser.add_subparsers(dest='command', required=True)
@@ -986,7 +998,8 @@ def main(argv=None):
             print('PASS' if not reasons else 'FAIL')
             return 0 if not reasons else 1
         if args.command == 'categories':
-            rows, failed = check_categories(suites, _workdir(args.workdir))
+            with scratch(args.workdir) as workdir:
+                rows, failed = check_categories(suites, workdir)
             bad = [r for r in rows if r['category'] not in CATEGORIES]
             counts = collections.Counter(r['category'] for r in rows if r['category'] in CATEGORIES)
             if args.list:
@@ -1005,7 +1018,8 @@ def main(argv=None):
             profile = json.loads(Path(args.profile).read_text(encoding='utf-8'))
             if profile.get('schema') != PROFILE_SCHEMA:
                 raise ProfileError('compare needs a full profile (run --out), not a compact one')
-            differences = compare(profile, suites, _workdir(args.workdir))
+            with scratch(args.workdir) as workdir:
+                differences = compare(profile, suites, workdir)
             for d in differences:
                 print(f'DIFF: {d}')
             print('PASS: identical ids and outcomes' if not differences else 'FAIL')
