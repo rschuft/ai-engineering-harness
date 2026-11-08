@@ -925,7 +925,10 @@ def git_env(home):
 
 
 def run_git(args, home, repo=None, timeout=600):
-    argv = [git_binary(), '-c', f'core.hooksPath={os.devnull}', '-c', 'core.fsmonitor=false']
+    # core.longpaths: the exchange's verify repositories sit deep below the state directory;
+    # without it Git for Windows cannot create or read paths of 260 characters or more.
+    argv = [git_binary(), '-c', f'core.hooksPath={os.devnull}', '-c', 'core.fsmonitor=false',
+            '-c', 'core.longpaths=true']
     if repo is not None:
         argv += ['-C', str(repo)]
     result = subprocess.run(argv + list(args), capture_output=True, env=git_env(home),

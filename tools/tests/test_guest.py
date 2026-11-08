@@ -1516,6 +1516,23 @@ class Exchange(TempState):
         self.assertNotIn('-p', argv)
 
 
+class RunGit(unittest.TestCase):
+    """The host git's own options (no process is launched: subprocess.run is replaced)."""
+
+    def test_the_host_git_runs_without_hooks_and_with_long_paths(self):
+        # core.longpaths: the exchange's verify repository is about 138 characters below the
+        # state directory, so under a long TEMP Git for Windows needs it (F-09.3, section 7).
+        completed = subprocess.CompletedProcess([], 0, b'out\r\n', b'')
+        with mock.patch.object(guest, 'git_binary', return_value='git'), \
+                mock.patch.object(guest.subprocess, 'run', return_value=completed) as run:
+            result = guest.run_git(['init', '--bare', 'x.git'], Path('home'), repo=Path('repo'))
+        argv = run.call_args.args[0]
+        self.assertEqual(argv, ['git', '-c', f'core.hooksPath={os.devnull}', '-c', 'core.fsmonitor=false',
+                                '-c', 'core.longpaths=true', '-C', 'repo', 'init', '--bare', 'x.git'])
+        self.assertEqual(run.call_args.kwargs['env'], guest.git_env(Path('home')))
+        self.assertEqual((result.args, result.returncode, result.stdout), (argv, 0, 'out\n'))
+
+
 # ---------------------------------------------------------------- netprobe (F-03.3.2)
 
 NETPROBE_FILE = PROFILE_DIR / 'validation' / 'netprobe' / 'netprobe.py'
