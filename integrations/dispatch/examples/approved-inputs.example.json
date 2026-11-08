@@ -1,0 +1,21 @@
+{
+  "schema": "ai-engineering-harness/dispatch/approved-inputs/v1",
+  "version": 1,
+  "repositories": [
+    {"id": "example-app"}
+  ],
+  "designs": [
+    {"repository": "example-app", "change": "add-search-freshness", "commit": "1111111111111111111111111111111111111111"}
+  ],
+  "profiles": [
+    {"id": "strong-example-profile", "sha256": "2222222222222222222222222222222222222222222222222222222222222222"}
+  ],
+  "catalog_pins": [
+    {"id": "example-builder-pin", "repository": "example-catalog", "commit": "3333333333333333333333333333333333333333", "manifest_sha256": "4444444444444444444444444444444444444444444444444444444444444444"},
+    {"id": "example-reviewer-pin", "repository": "example-catalog", "commit": "3333333333333333333333333333333333333333", "manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555"}
+  ],
+  "bindings": [
+    {"repository": "example-app", "stage": "implement", "profiles": ["strong-example-profile"], "catalog_pins": ["example-builder-pin"]},
+    {"repository": "example-app", "stage": "review", "profiles": ["strong-example-profile"], "catalog_pins": ["example-reviewer-pin"]}
+  ]
+}

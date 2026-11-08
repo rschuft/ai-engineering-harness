@@ -29,9 +29,9 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests and the host Gitea tests. It is offline and takes seconds. Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution tests. It is offline and takes seconds. Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the ten commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the eleven commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -44,6 +44,7 @@ python -I -B -m unittest discover -s integrations/planning/tests -v
 python -I -B -m unittest discover -s integrations/lineage/tests -v
 python -I -B -m unittest discover -s integrations/paths/tests -v
 python -I -B -m unittest discover -s integrations/gitea/tests -v
+python -I -B -m unittest discover -s integrations/dispatch/tests -v
 ```
 
 Use `python3` instead of `python` outside Windows.
@@ -142,14 +143,14 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the ten commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the eleven commands in [Quick start](#quick-start) | no | Supported setup command. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test` and `gitea:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests and host Gitea tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch input resolution tests (stdlib `unittest`). |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -175,6 +176,9 @@ Only what is listed as verified has been exercised.
 | `paths:doctor` | `python -I -B integrations/paths/aieh_paths.py doctor` | no | Reports the root, what exists, the marker and the legacy locations with their migration recipes. Moves and changes nothing. |
 | `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`), wheels only, under the managed data root; prints its interpreter. Not part of `setup`. |
 | `gitea:test` | `python -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login, role bots, fixture and rotation with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows); the guest profile declares no path to a token store. The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary; the live authorization tests only with `AIEH_GITEA_AUTHZ=1` (`gitea:authz`). |
+| `dispatch:test` | `python -I -B -m unittest discover -s integrations/dispatch/tests -v` | no | [Dispatch input resolution](#dispatch-input-resolution) tests: every refusal before any reservation, a resolved record reserving in a throwaway store, determinism and the pinned policy digest, the approved-input manifest's schema check and custody. Uses Backlog.md's recorded readiness output and a throwaway design repository; needs git. |
+| `dispatch:check-manifest MANIFEST=<file>` | `python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest <file>` | no | Schema-checks an approved-input manifest and prints a JSON report. Admits nothing. Exit 0 PASS, 1 FAIL, 2 could not read. |
+| `dispatch:manifest-path` | `python -I -B integrations/dispatch/dispatch_inputs.py manifest-path` | no | Prints where the live approved-input manifest is expected (`<state>/dispatch/approved-inputs.json` under the managed data root). Creates and reads nothing there. |
 | `gitea:install [-- --port N \| --from-file EXE]` | `python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]` | yes (GitHub, once) | Creates the managed data root (`init`), downloads the pinned Gitea Windows binary into `assets/`, verifies it against the lock and records it, and writes `app.ini` once with Gitea-generated secrets. Windows only. |
 | `gitea:up` | `python -I -B integrations/gitea/gitea_host.py up` | no | Starts the managed environment (a supervisor holding a kill-on-close Job Object) with Gitea inside it on `127.0.0.1:13300`; waits for `/api/healthz`. |
 | `gitea:down` | `python -I -B integrations/gitea/gitea_host.py down` | no | Stops Gitea with its own `manager shutdown`, then the supervisor. |
@@ -349,6 +353,27 @@ per work, design revision and stage. Stores created before 0003 migrate when
 opened; their attempts stay valid and untyped. The contract is in the store's
 [README](../integrations/store/README.md#typed-attempt-identity). No live store
 has been migrated: **not yet verified** outside the tests' throwaway directories.
+
+## Dispatch input resolution
+
+[`integrations/dispatch/`](../integrations/dispatch/README.md) is the trusted-side resolver of
+dispatch step 01 (plan leaf E-01.2.1, blueprint `#execution-qualification`). A dispatch
+request names identifiers only: the Work (a Backlog.md task id), the repository, the stage,
+the execution profile and the agent catalog pin. The resolver checks them against the
+approved-input manifest, Backlog.md's own readiness, the task's OpenSpec source pointers and
+the profile file's sha256. It returns an immutable record for `reserve_attempt` (design
+revision, profile, agent manifest and policy digests, planned workspace, and the manifest
+version and digest that approved them), or a typed refusal with a stable code, before any
+reservation or external call. A field that tries to supply a path, digest, mount, resource,
+runtime, revision or ordinal is refused, as is any unknown field.
+
+The live manifest is an authorization record under the managed data root,
+`<state>/dispatch/approved-inputs.json` (`dispatch:manifest-path`); a manifest inside the
+checkout is refused. The repository holds only its schema check (`dispatch:check-manifest`),
+a synthetic example and test fixtures. Writing the live manifest belongs to governance and,
+for catalog pins, to A-01.1. Until A-01.1 promotes an approved catalog pin, every dispatch is
+refused: that is intended. No live manifest, Backlog.md or store has been used: **not yet
+verified** outside the tests' throwaway directories.
 
 ## Effects store
 
@@ -933,7 +958,7 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`); the [containment cases](#containment-cases) (`containment-cases.json`) | S-01.1, S-02.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
-| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1 |
+| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/`; `dispatch/`: the trusted dispatch input resolver, the approved-input manifest's schema check, its synthetic `examples/` and `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1, E-01.2.1 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |

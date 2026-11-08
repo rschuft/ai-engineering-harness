@@ -67,7 +67,7 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test) and the host Gitea tests (gitea:test)
+    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the host Gitea tests (gitea:test) and the dispatch input resolution tests (dispatch:test)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
@@ -76,6 +76,7 @@ tasks:
       - task: lineage:test
       - task: paths:test
       - task: gitea:test
+      - task: dispatch:test
 
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
@@ -227,6 +228,25 @@ tasks:
     desc: "Network (PyPI): install the hash-locked Python tools venv (PyYAML, for config.yml) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/paths/tools_install.py'
+
+  # Trusted dispatch input resolution (plan leaf E-01.2.1; decisions 0009 and 0010): the resolver,
+  # the approved-input manifest's schema check and its managed location (integrations/dispatch/README.md).
+  dispatch:test:
+    desc: Run the dispatch input resolution tests (python -I -B -m unittest discover -s integrations/dispatch/tests -v)
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/dispatch/tests -v'
+
+  dispatch:check-manifest:
+    desc: Schema-check an approved-input manifest file; admits nothing (python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest MANIFEST)
+    requires:
+      vars: [MANIFEST]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest "{{.MANIFEST}}"'
+
+  dispatch:manifest-path:
+    desc: Print where the live approved-input manifest is expected under the managed data root; creates nothing (python -I -B integrations/dispatch/dispatch_inputs.py manifest-path)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/dispatch/dispatch_inputs.py manifest-path'
 
   # Host-loopback Gitea (plan leaf F-06.1; decisions 0007 and 0009): the pinned Windows binary
   # as an asset, its state under the managed data root, run inside a supervising managed
