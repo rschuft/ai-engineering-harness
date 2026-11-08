@@ -17,7 +17,9 @@ empty cache, a corrupted binary, or a stub scanner run by a throwaway copy of
 the gate whose pinned scanner identity is replaced.
 """
 from pathlib import Path
+import atexit
 import gzip
+import hashlib
 import importlib.util
 import io
 import os
@@ -90,10 +92,88 @@ def clean_environ():
             if not k.upper().startswith(('GIT_', 'GITLEAKS'))}
 
 
-class GateRepo:
-    """A throwaway repository wired to the gate, with a bare 'origin'."""
+def shared_scanner_cache(testcase_class, scanner):
+    """A tool cache holding a copy of SCANNER, shared by the tests of one class that only run
+    the scanner (plan leaf F-09.3): the gate reads the cache and never writes it, so one copy
+    serves every repository of the class. Removed when the class finishes."""
+    cache = Path(tempfile.mkdtemp(prefix='aieh-gate-cache-'))
+    testcase_class.addClassCleanup(remove_tree, cache)
+    tool_dir = gate.tool_dir({'LOCALAPPDATA': str(cache), 'XDG_CACHE_HOME': str(cache)})
+    tool_dir.mkdir(parents=True)
+    shutil.copyfile(scanner, tool_dir / gate.expected_scanner()[0])
+    return cache
 
-    def __init__(self, testcase, scanner=None, gate_source=None, config=None):
+
+# Golden gate repositories (plan leaf F-09.3): the initial repository pair (the work tree
+# with its first commit, pushed to a bare 'origin') is built once per process for each set of
+# inputs and copied per test with plain file copies.
+_golden_root = None
+_golden = {}
+
+
+def _golden_repositories(files):
+    """(directory holding 'work' and 'origin.git', initial commit) for FILES ({path: bytes})."""
+    global _golden_root
+    digest = hashlib.sha256()
+    for path, data in sorted(files.items()):
+        digest.update(path.encode('utf-8') + b'\x00' + hashlib.sha256(data).digest())
+    key = digest.hexdigest()[:16]
+    if key not in _golden:
+        if _golden_root is None:
+            _golden_root = Path(tempfile.mkdtemp(prefix='aieh-gate-golden-'))
+            atexit.register(remove_tree, _golden_root)
+        base = _golden_root / key
+        root, remote, no_hooks, home = base / 'work', base / 'origin.git', base / 'no-hooks', base / 'home'
+        no_hooks.mkdir(parents=True)
+        home.mkdir()
+        env = isolated_git_env(home)
+
+        def git(*args):
+            subprocess.run(['git', '-C', str(root), *args], env=env, check=True, capture_output=True,
+                           timeout=TIMEOUT)
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(root)], env=env, check=True)
+        subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(remote)], env=env, check=True)
+        for rel, data in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        git('add', '-A')
+        git('update-index', '--chmod=+x', '.githooks/pre-commit', '.githooks/pre-push')
+        git('-c', f'core.hooksPath={no_hooks}', 'commit', '-q', '-m', 'add the gate')
+        git('remote', 'add', 'origin', str(remote))
+        git('-c', f'core.hooksPath={no_hooks}', 'push', '-q', 'origin', 'main')
+        git('config', 'core.hooksPath', '.githooks')
+        initial = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], env=env, check=True,
+                                 capture_output=True).stdout.decode('ascii').strip()
+        _golden[key] = (base, initial)
+    return _golden[key]
+
+
+def isolated_git_env(home, cache=None, shims=None):
+    """The gate repositories' environment: no system or global git config, a fixed identity,
+    HOME and the tool cache in temporary directories."""
+    env = clean_environ()
+    cache = home.parent / 'cache' if cache is None else cache
+    env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0',
+               GIT_AUTHOR_NAME='test', GIT_AUTHOR_EMAIL='test@example.invalid',
+               GIT_COMMITTER_NAME='test', GIT_COMMITTER_EMAIL='test@example.invalid',
+               HOME=str(home), USERPROFILE=str(home),
+               XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache),
+               GNUPGHOME=str(home.parent / 'gnupg'))
+    if shims is not None:
+        env['PATH'] = str(shims) + os.pathsep + os.environ.get('PATH', '')
+    return env
+
+
+class GateRepo:
+    """A throwaway repository wired to the gate, with a bare 'origin'.
+
+    The initial pair (the gate, its hooks and configuration committed and pushed) is a copy of
+    a golden pair built once per set of inputs; the copy's 'origin' is then pointed at its own
+    bare repository. With CACHE (a shared_scanner_cache), the tool cache is shared; otherwise
+    each repository has its own, holding a copy of SCANNER if given."""
+
+    def __init__(self, testcase, scanner=None, gate_source=None, config=None, cache=None):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-gate-test-'))
         testcase.addCleanup(remove_tree, self.tmp)
         self.root = self.tmp / 'work'
@@ -101,7 +181,6 @@ class GateRepo:
         self.no_hooks = self.tmp / 'no-hooks'
         self.no_hooks.mkdir()
         (self.tmp / 'home').mkdir()
-        cache = self.tmp / 'cache'
         # The hooks look for python3 first: point it at this interpreter, so the
         # temporary LOCALAPPDATA cannot confuse a platform launcher.
         shims = self.tmp / 'bin'
@@ -109,32 +188,19 @@ class GateRepo:
         (shims / 'python3').write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
                                        encoding='utf-8', newline='\n')
         os.chmod(shims / 'python3', 0o755)
-        env = clean_environ()
-        env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0',
-                   GIT_AUTHOR_NAME='test', GIT_AUTHOR_EMAIL='test@example.invalid',
-                   GIT_COMMITTER_NAME='test', GIT_COMMITTER_EMAIL='test@example.invalid',
-                   HOME=str(self.tmp / 'home'), USERPROFILE=str(self.tmp / 'home'),
-                   XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache),
-                   GNUPGHOME=str(self.tmp / 'gnupg'),
-                   PATH=str(shims) + os.pathsep + os.environ.get('PATH', ''))
-        self.env = env
-        self.tool_dir = gate.tool_dir(env)
-        self.tool_dir.mkdir(parents=True)
-        if scanner is not None:
-            shutil.copyfile(scanner, self.tool_dir / gate.expected_scanner()[0])
-        subprocess.run(['git', 'init', '-q', '-b', 'main', str(self.root)], env=env, check=True)
-        subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(self.remote)], env=env, check=True)
-        for name in HOOK_FILES:
-            self.write(f'.githooks/{name}', (REPO / '.githooks' / name).read_bytes())
-        self.write('tools/publication_gate.py', gate_source if gate_source is not None else GATE.read_bytes())
-        self.write('.gitleaks.toml', config if config is not None else (REPO / '.gitleaks.toml').read_bytes())
-        self.git('add', '-A')
-        self.git('update-index', '--chmod=+x', '.githooks/pre-commit', '.githooks/pre-push')
-        self.git('-c', f'core.hooksPath={self.no_hooks}', 'commit', '-q', '-m', 'add the gate')
-        self.git('remote', 'add', 'origin', str(self.remote))
-        self.git('-c', f'core.hooksPath={self.no_hooks}', 'push', '-q', 'origin', 'main')
-        self.git('config', 'core.hooksPath', '.githooks')
-        self.initial = self.head()
+        self.env = isolated_git_env(self.tmp / 'home', None if cache is None else Path(cache), shims)
+        self.tool_dir = gate.tool_dir(self.env)
+        if cache is None:
+            self.tool_dir.mkdir(parents=True)
+            if scanner is not None:
+                shutil.copyfile(scanner, self.tool_dir / gate.expected_scanner()[0])
+        files = {f'.githooks/{name}': (REPO / '.githooks' / name).read_bytes() for name in HOOK_FILES}
+        files['tools/publication_gate.py'] = gate_source if gate_source is not None else GATE.read_bytes()
+        files['.gitleaks.toml'] = config if config is not None else (REPO / '.gitleaks.toml').read_bytes()
+        golden, self.initial = _golden_repositories(files)
+        shutil.copytree(golden / 'work', self.root, symlinks=True)
+        shutil.copytree(golden / 'origin.git', self.remote, symlinks=True)
+        self.git('remote', 'set-url', 'origin', str(self.remote))
 
     def write(self, rel, content):
         path = self.root / rel
@@ -221,9 +287,10 @@ class WithRealScanner(GateTestCase):
             if REQUIRE_SCANNER:
                 raise AssertionError(message)
             raise unittest.SkipTest(message)
+        cls.cache = shared_scanner_cache(cls, cls.scanner)
 
     def repo(self, **kwargs):
-        return GateRepo(self, self.scanner, **kwargs)
+        return GateRepo(self, self.scanner, cache=self.cache, **kwargs)
 
     # Required case 1
     def test_1_staged_fake_credential_is_rejected(self):
