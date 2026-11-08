@@ -322,6 +322,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_security_inventory.py {{.CLI_ARGS}}'
 
+  security:containment-check:
+    desc: "Check the containment case catalogue and its expected-denial matrix (S-02.1): python -I -B tools/check_containment_cases.py; pass -- --list to print each case's category, kind and positive control, or -- --render for the README block"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_containment_cases.py {{.CLI_ARGS}}'
+
   policy:check:
     desc: "Check the role-token matrix and revocation contract (S-01.2.1): python -I -B tools/check_role_tokens.py; pass -- --list to print each role's grants, or -- --render for the README tables"
     cmds:
@@ -492,6 +497,13 @@ tasks:
       vars: [PROFILE, STATE_DIR, NAME]
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py job-access-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
+
+  guest:containment-probe:
+    desc: "Containment probes (S-02.1) on a running provisioned guest: the versioned catalogue security/containment-cases.json in one pass (admission-probe and job-access-probe unchanged; the rest from inside two further disposable conversation containers with generated canary workspaces); per case the attempt, principal, observations, positive control and verdict (PASS, FAIL or UNKNOWN) with the runtime-configuration snapshot; --sensitivity also runs the live mutations; exit 0 only on PASS (python -I -B tools/guest.py containment-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --sensitivity --token-fingerprint LABEL=sha256:HEX16 --out FILE])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py containment-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
 
   guest:host-census:
     desc: "Read-only, unelevated census (S-01.4) of the harness's host listeners by PID (QEMU, the host Gitea, the Owner host's Vite servers; each must be on 127.0.0.1) and the Windows Firewall profiles and rule count, recorded as disclosure; changes no rule; exit 0 only on PASS (python -I -B tools/guest.py host-census [-- --exclude-pid PID --out FILE])"

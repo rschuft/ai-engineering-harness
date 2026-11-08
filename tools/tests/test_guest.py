@@ -4857,5 +4857,438 @@ class JobContainerShape(unittest.TestCase):
         self.assertIn('job environment Privileged (S-01.3.2)', [p['check'] for p in problems])
 
 
+# ---------------------------------------------------------------- containment probes (S-02.1)
+
+CATALOGUE = json.loads((REPO / 'security' / 'containment-cases.json').read_text(encoding='utf-8'))
+SCRATCH = CATALOGUE['scratch']
+
+
+def disk_mount(target, root, dev='8:17'):
+    return {'dev': dev, 'root': root, 'target': target, 'options': 'rw,relatime', 'optional': [],
+            'fstype': 'ext4', 'source': '/dev/vdb'}
+
+
+def _containment_of(command):
+    """(script, spec) of a container_python_z command, or (None, None)."""
+    m = re.match(r"^echo (\S+) \| base64 -d \| python3 -c '[^']*' > /tmp/aieh-job\.py && "
+                 r"python3 /tmp/aieh-job\.py (\S+); rc=", command)
+    if not m:
+        return None, None
+    return (zlib.decompress(base64.b64decode(m.group(1))).decode('utf-8'),
+            json.loads(zlib.decompress(base64.b64decode(m.group(2))).decode('utf-8')))
+
+
+class FakeContainmentGuest(FakeJobGuest):
+    """FakeJobGuest with the containment probe's own container script, answering each
+    operation with the outcome a hardened job gives (the S-01.3.2 observations and the
+    kernel's behaviour under cap-drop ALL, no_new_privs, seccomp and AppArmor). ``faults``
+    of the form ``c_<op>`` map an argument value (or '*') to an observed outcome."""
+
+    def __init__(self, **faults):
+        super().__init__(**faults)
+        self.containment_specs = []
+        self.cleaned = []
+        self.commands = []
+
+    def mounts_of(self, cid):
+        hex_id = cid.replace('-', '')
+        out = [{'dev': '0:51', 'root': '/', 'target': '/', 'options': 'rw', 'optional': [],
+                'fstype': 'overlay', 'source': 'overlay'},
+               {'dev': '0:22', 'root': '/', 'target': '/proc', 'options': 'rw', 'optional': [],
+                'fstype': 'proc', 'source': 'proc'}]
+        for m in CONV['mounts']:
+            src = m['source'].replace('{conversation_hex}', hex_id).replace('/srv/scratch', '', 1)
+            out.append(disk_mount(m['destination'].replace('{conversation_hex}', hex_id), src))
+        for f in ('resolv.conf', 'hostname', 'hosts'):
+            out.append(disk_mount(f'/etc/{f}', f'/docker/containers/{hex_id[-12:]}/{f}'))
+        if self.faults.get('shared_mount'):
+            out.append(disk_mount('/shared', '/openhands/shared'))
+        if self.faults.get('host_share'):
+            out.append({'dev': '0:60', 'root': '/', 'target': '/mnt/host', 'options': 'rw',
+                        'optional': [], 'fstype': '9p', 'source': 'hostshare'})
+        return out
+
+    def outcome(self, cid, op, args):
+        fault = self.faults.get('c_' + op.replace('-', '_'))
+        key = args.get('path') or args.get('type') or args.get('kind') or args.get('variant') or \
+            (args.get('argv') or [None])[0] or ','.join(args.get('flags') or []) or '*'
+        if isinstance(fault, dict) and (key in fault or '*' in fault):
+            return {'outcome': fault.get(key, fault.get('*'))}
+        canaries = self.canaries
+        if op == 'read':
+            path = args['path']
+            if path == '/etc/hostname' or path.startswith(SCRATCH['workspace'] + '/' + canaries[cid]):
+                return {'outcome': 'ok', 'bytes_read': 5}
+            return {'outcome': 'EACCES' if path == '/etc/shadow' else 'ENOENT'}
+        if op == 'list':
+            if args['path'] == '/workspace':
+                return {'outcome': 'ok', 'entries': 1}
+            return {'outcome': 'EACCES' if args['path'] == '/root' else 'ENOENT'}
+        if op == 'stat':
+            return {'outcome': 'ENOENT'}
+        if op == 'access-write':
+            if args['path'] == SCRATCH['container']:
+                return {'outcome': 'ok'}
+            return {'outcome': 'EACCES' if args['path'] == '/proc/sysrq-trigger' else 'ENOENT'}
+        if op == 'proc-root-search':
+            return {'outcome': 'found' if args['name'] == canaries[cid] else 'not-found'}
+        if op == 'writable-scan':
+            if args.get('own_binds'):
+                return {'outcome': 'ok', 'binds': {}}
+            return {'outcome': 'none', 'writable': []}
+        if op == 'canary-scan':
+            return {'outcome': 'found' if args.get('include_control') else 'not-found',
+                    'control_outcome': 'not-found' if self.faults.get('canary_blind') else 'found',
+                    'hits': []}
+        if op == 'unix-control':
+            return {'outcome': 'connected'}
+        if op == 'connect-tcp':
+            return {'outcome': 'connected'}
+        if op == 'socket':
+            return {'outcome': 'EPERM' if args['type'] == 'raw-icmp' else 'ok'}
+        if op == 'unshare':
+            return {'outcome': 'EPERM'}                  # filtered for every flag value
+        if op == 'fork-control':
+            return {'outcome': 'ok'}
+        if op == 'mknod':
+            return {'outcome': 'EPERM' if args['kind'] == 'char' else 'ok'}
+        if op == 'init-module':
+            return {'outcome': 'EPERM' if args['variant'] == 'probe' else 'ok'}
+        if op == 'ptrace-read':
+            return {'outcome': 'ok'}
+        if op == 'proc-census':
+            return {'outcome': 'none-visible', 'processes': 6, 'foreign': []}
+        if op == 'dev-list':
+            return {'outcome': 'default-set', 'extra': []}
+        if op == 'exec':
+            return {'outcome': 'ok' if args['argv'][0] == 'id' else 'refused', 'rc': 0 if args['argv'][0] == 'id' else 1}
+        if op == 'net-ifaces':
+            return {'outcome': 'bridge', 'interfaces': ['eth0', 'lo']}
+        return {'outcome': 'probe-error'}
+
+    canaries = None
+
+    def container_output(self, cid, command):
+        script, spec = _containment_of(command)
+        if script != guest.CONTAINMENT_PROBE:
+            return super().container_output(cid, command)
+        self.commands.append(command)
+        self.containment_specs.append((cid, spec))
+        if self.canaries is None:
+            self.canaries = {}
+        results = {}
+        for item in spec['attempts']:
+            op, args = item['op'], item.get('args') or {}
+            if op == 'own-workspace':
+                name = f'ws-canary-{cid[-8:]}.txt'
+                self.canaries[cid] = name
+                res = {'outcome': self.faults.get('plant', 'ok'), 'name': name, 'sha256': 'f' * 64,
+                       'listed': True}
+            elif op == 'mountinfo':
+                res = {'outcome': 'collected', 'mounts': self.mounts_of(cid)}
+            else:
+                res = self.outcome(cid, op, args)
+            res['seconds'] = 0.01
+            results[item['key']] = res
+        out = {'uid': 999, 'gid': 989, 'groups': [989], 'results': results}
+        if spec.get('cleanup'):
+            self.cleaned.append(cid)
+            out['cleanup'] = {SCRATCH['container']: False, SCRATCH['workspace']: False}
+        return guest.JOB_MARKER + json.dumps(out) + '\n'
+
+
+class ContainmentProbe(TempState):
+    """containment_probe (S-02.1) against FakeContainmentGuest, with admission-probe and
+    job-access-probe run unchanged against the same fake: verdicts, controls, the no-silent-
+    downgrade rules, the sensitivity proof per category; no guest."""
+
+    def setUp(self):
+        super().setUp()
+        self.idir = self.state / 'instances' / 'cp'
+        self.idir.mkdir(parents=True)
+        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG,
+                                        'egress_falsification': True,
+                                        'manifest_sha256': 'a' * 64, 'lock_sha256': 'b' * 64},
+                       'ports': {'ssh': 40001, 'qmp': 40002},
+                       'profile_revision': {'kind': 'git-revision', 'head': 'c' * 40},
+                       'profile': {'sha256': 'd' * 64}, 'inputs': {'seed': {'sha256': 'e' * 64}}}
+        patcher = mock.patch.object(guest, 'running_instance',
+                                    lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_probe(self, sensitivity=False, **faults):
+        fake = FakeContainmentGuest(**faults)
+        out = guest.containment_probe(self.ctx(), 'cp', sensitivity=sensitivity,
+                                      channels=lambda rec: (fake.api, fake.facts),
+                                      ssh_fn=lambda rec: fake)
+        return out, fake
+
+    def verdicts(self, out):
+        return {c['id']: c['verdict'] for c in out['cases']}
+
+    def test_vocabularies_match_the_checker(self):
+        checker = guest.load_containment_checker()
+        self.assertEqual(sorted(checker.OPS), sorted(guest.CONTAINMENT_OP_NAMES))
+        self.assertEqual({k: sorted(v) for k, v in checker.EXTRACTORS.items()},
+                         {k: sorted(v) for k, v in guest.CONTAINMENT_EXTRACT_NAMES.items()})
+        ops = re.search(r"^OPS = \{(.*?)\}$", guest.CONTAINMENT_PROBE, re.S | re.M).group(1)
+        self.assertEqual(sorted(re.findall(r"'([a-z-]+)': op_", ops)), sorted(checker.OPS))
+        # the script never carries the canary marker contiguously (it would find itself)
+        self.assertNotIn('aieh-canary', guest.CONTAINMENT_PROBE)
+
+    def test_probe_passes(self):
+        out, fake = self.run_probe()
+        bad = {c['id']: (c['verdict'], c['reason']) for c in out['cases'] if c['verdict'] != 'PASS'}
+        self.assertEqual(bad, {})
+        self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
+        self.assertEqual(out['totals'], {'PASS': len(CATALOGUE['cases']), 'FAIL': 0, 'UNKNOWN': 0})
+        self.assertEqual(set(out['by_category']), set(guest.load_containment_checker().CATEGORIES))
+        self.assertEqual(out['primitives']['admission-probe']['result'], 'PASS')
+        self.assertEqual(out['primitives']['job-access-probe']['result'], 'PASS')
+        self.assertEqual(fake.conversations, {})                  # every conversation deleted
+        self.assertEqual(sorted(fake.cleaned), sorted(guest.CONTAINMENT_CONVERSATIONS))
+        self.assertEqual(out['docker_inspect']['distinct'], 1)
+        self.assertEqual(out['principal']['uid_gid'], ['999:989'])
+        self.assertTrue(Path(out['record']).is_file())
+
+    def test_every_case_record_carries_its_evidence(self):
+        out, _ = self.run_probe()
+        for c in out['cases']:
+            for key in ('attempt', 'principal', 'observations', 'classification', 'verdict',
+                        'enforcement', 'snapshot'):
+                self.assertIn(key, c)
+            self.assertTrue(c['observations'], c['id'])
+            if c['kind'] != 'permitted':
+                self.assertEqual(c['control_verdict'], 'PASS', c['id'])
+        snap = out['snapshots']
+        self.assertEqual(set(snap), {'before', 'after'})
+        pins = snap['before']['pins']
+        self.assertEqual(pins['profile_blocks'], guest.profile_block_digests(PROFILE))
+        self.assertEqual(pins['catalogue_version'], CATALOGUE['version'])
+        self.assertTrue(pins['egress_falsification'])
+        self.assertIn('counters', snap['before']['container_guard'])
+        self.assertIn('iptables', snap['before']['egress_guard'])
+        shadow = next(c for c in out['cases'] if c['id'] == 'file-shadow')
+        self.assertEqual(set(shadow['snapshot']), {'docker_inspect', 'pins'})
+
+    def test_canary_workspaces_are_generated_and_placeholders_filled(self):
+        out, fake = self.run_probe()
+        attempts = [spec for cid, spec in fake.containment_specs if spec['attempts'] and
+                    spec['attempts'][0]['op'] != 'own-workspace']
+        self.assertEqual(len(attempts), 2)
+        text = json.dumps(attempts)
+        self.assertNotIn('{peer_hex}', text)
+        self.assertNotIn('{peer_canary}', text)
+        for cid, spec in fake.containment_specs:
+            peer = [c for c in guest.CONTAINMENT_CONVERSATIONS if c != cid][0]
+            paths = [a['args'].get('path') for a in spec['attempts'] if a['args'].get('path')]
+            if any('runtime-data/' in str(p) for p in paths):
+                self.assertTrue(any(peer.replace('-', '') in p for p in paths))
+                self.assertTrue(any(fake.canaries[peer] in p for p in paths))
+        # each op runs once per container (the control and the scan share one walk)
+        for cid, spec in fake.containment_specs:
+            keys = [a['key'] for a in spec['attempts']]
+            self.assertEqual(len(keys), len(set(keys)))
+            self.assertLessEqual(sum(1 for a in spec['attempts'] if a['op'] == 'canary-scan'), 1)
+
+    # ---- the no-silent-downgrade rules
+
+    def test_failed_control_makes_paired_denials_unknown(self):
+        out, _ = self.run_probe(canary_blind=True)
+        v = self.verdicts(out)
+        self.assertEqual(v['ctl-canary-scan-control'], 'FAIL')
+        self.assertEqual(v['sec-canaries'], 'UNKNOWN')
+        self.assertEqual(out['result'], 'FAIL')                 # a failed control fails the run
+
+    def test_unknown_only_run_is_not_pass(self):
+        out, _ = self.run_probe(c_exec={'id': 'refused'})
+        v = self.verdicts(out)
+        self.assertEqual(v['ctl-exec-id'], 'FAIL')
+        for cid in ('priv-sudo', 'priv-su', 'sock-docker-client', 'priv-no-new-privs'):
+            self.assertEqual(v[cid], 'UNKNOWN', cid)
+        self.assertNotEqual(out['result'], 'PASS')
+
+    def test_missing_hardening_control_fails(self):
+        out, _ = self.run_probe(daemon_nnp_off=True)
+        self.assertEqual(self.verdicts(out)['hard-daemon-nnp'], 'FAIL')
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_missing_falsification_guest_fails_route_present(self):
+        self.record['provisioning']['egress_falsification'] = False
+        out, _ = self.run_probe()
+        case = next(c for c in out['cases'] if c['id'] == 'egr-offlink-route-present')
+        self.assertEqual(case['verdict'], 'FAIL')
+        self.assertEqual(case['classification'], ['not-available'])
+        self.assertEqual(self.verdicts(out)['egr-network-none'], 'FAIL')   # compensation broke
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_unsearched_gitea_fingerprint_fails(self):
+        with mock.patch.object(guest, 'load_containment_catalogue') as load:
+            cat = copy.deepcopy(CATALOGUE)
+            cat['fingerprints']['gitea']['extra-bot'] = 'sha256:' + '0' * 16
+            load.return_value = (cat, 'f' * 64, guest.load_containment_checker())
+            fake = FakeContainmentGuest()
+            out = guest.containment_probe(
+                self.ctx(), 'cp', channels=lambda rec: (fake.api, fake.facts),
+                ssh_fn=lambda rec: fake,
+                job_fn=lambda: guest.job_access_probe(
+                    self.ctx(), 'cp', token_fingerprints=['builder=sha256:2edcc7070632f15d'],
+                    channels=lambda rec: (fake.api, fake.facts), ssh_fn=lambda rec: fake))
+        case = next(c for c in out['cases'] if c['id'] == 'sec-gitea-bot-tokens')
+        self.assertEqual(case['verdict'], 'FAIL')
+        self.assertEqual(case['classification'], ['not-searched'])
+
+    def test_unexecuted_case_fails_never_skipped(self):
+        out, _ = self.run_probe(c_proc_census={'*': 'probe-error'})
+        self.assertEqual(self.verdicts(out)['priv-ptrace-foreign'], 'FAIL')
+        case = next(c for c in out['cases'] if c['id'] == 'priv-ptrace-foreign')
+        self.assertIn('outside the expected', case['reason'])
+
+    def test_catalogue_failing_its_checker_is_refused(self):
+        checker = guest.load_containment_checker()
+        with mock.patch.object(checker, 'check', lambda *a, **k: ['CONTROL_MISSING: x']):
+            fake = FakeContainmentGuest()
+            with self.assertRaises(guest.Refused):
+                guest.containment_probe(self.ctx(), 'cp', channels=lambda rec: (fake.api, fake.facts),
+                                        ssh_fn=lambda rec: fake)
+        self.assertEqual(fake.calls, [])                          # nothing touched the guest
+
+    def test_stop_condition_halts_later_primitives(self):
+        out, fake = self.run_probe(open_route=('GET', '/api/conversations/count'))
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertTrue(out['stop_conditions'])
+        skipped = [s['step'] for s in out['steps'] if 'skipped' in s]
+        self.assertIn('job-access-probe (S-01.3.2 and S-01.4 primitive, unchanged)', skipped)
+        self.assertEqual(self.verdicts(out)['mgmt-unauth-sweep'], 'FAIL')
+        self.assertEqual(fake.conversations, {})
+        self.assertEqual(out['steps'][-1]['step'], 'runtime snapshot (after)')
+
+    # ---- the sensitivity proof, offline: one would-be success per category is a FAIL
+
+    def assert_case_fails(self, case_id, **faults):
+        out, fake = self.run_probe(**faults)
+        case = next(c for c in out['cases'] if c['id'] == case_id)
+        self.assertEqual(case['verdict'], 'FAIL', (case_id, case['reason'], case['observations']))
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(fake.conversations, {})
+        return out, case
+
+    def test_sensitivity_file(self):
+        out, case = self.assert_case_fails('file-guest-session-key',
+                                           c_read={'/var/lib/aieh/agent-server/session.key': 'ok'})
+        self.assertIn('the attempt succeeded', case['reason'])
+        self.assertTrue(any(s.get('case') == 'file-guest-session-key' for s in out['stop_conditions']))
+        self.assert_case_fails('file-host-share', host_share=True)
+
+    def test_sensitivity_sibling_workspace(self):
+        peer_hex = guest.CONTAINMENT_CONVERSATIONS[1].replace('-', '')
+        path = f'/srv/scratch/openhands/persistence/runtime-data/{peer_hex}/workspace'
+        self.assert_case_fails('sib-list-bind-source', c_list={path: 'ok'})
+        self.assert_case_fails('sib-shared-mount', shared_mount=True)
+        self.assert_case_fails('sib-service-uid-write', c_writable_scan={'*': 'writable-found'})
+        self.assert_case_fails('sib-proc-root', c_proc_root_search={'*': 'found'})
+
+    def test_sensitivity_secret(self):
+        self.assert_case_fails('sec-outer-session-key', outer_in_job=True)
+        self.assert_case_fails('sec-gitea-bot-tokens', gitea_in_job=True)
+        self.assert_case_fails('sec-canaries', c_canary_scan={'*': 'found'})
+
+    def test_sensitivity_socket(self):
+        _, case = self.assert_case_fails('sock-run-docker', socket_open=True)
+        self.assertIn('connected', case['classification'])
+        self.assert_case_fails('sock-docker-client', c_exec={'docker': 'ok'})
+
+    def test_sensitivity_egress(self):
+        self.assert_case_fails('egr-host-ports-tcp', host_service=True)
+        out, _ = self.assert_case_fails('egr-offlink-route-present', route_timeout=True)
+        self.assertEqual(self.verdicts(out)['egr-network-none'], 'FAIL')
+
+    def test_sensitivity_privilege_expansion(self):
+        self.assert_case_fails('priv-sudo', root=True)
+        self.assert_case_fails('priv-caps-empty', capability=True)
+        self.assert_case_fails('priv-unshare-user', c_unshare={'user': 'ok'})
+        self.assert_case_fails('priv-module-load', c_init_module={'probe': 'EINVAL'})
+
+    def test_sensitivity_management_api(self):
+        self.assert_case_fails('mgmt-from-job-routes', listener_answers=True)
+        self.assert_case_fails('mgmt-keycheck', keycheck_open=True)
+
+    def test_live_mutations_classify_as_fail(self):
+        out, fake = self.run_probe(sensitivity=True)
+        rows = out['sensitivity']['rows']
+        self.assertEqual(len(rows), len(CATALOGUE['mutations']))
+        self.assertTrue(all(r['ok'] and r['classified'] == 'FAIL' for r in rows), rows)
+        self.assertEqual({r['category'] for r in rows}, set(guest.load_containment_checker().CATEGORIES))
+        self.assertTrue(out['sensitivity']['ok'])
+        self.assertEqual(out['result'], 'PASS')                 # mutations are not cases
+        self.assertFalse(out['stop_conditions'])
+
+    def test_blind_mutation_fails_the_sensitivity_proof(self):
+        out, _ = self.run_probe(sensitivity=True, c_connect_tcp={'*': 'ECONNREFUSED'})
+        self.assertFalse(out['sensitivity']['ok'])
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_verdict_rule(self):
+        denial = {'kind': 'denial', 'expected': {'outcomes': ['ENOENT']}, 'positive_control': 'c'}
+        o = lambda *xs: [{'where': 'x', 'outcome': x} for x in xs]   # noqa: E731
+        self.assertEqual(guest.containment_verdict(denial, o('ENOENT'), 'PASS')[0], 'PASS')
+        self.assertEqual(guest.containment_verdict(denial, o('ok'), 'FAIL'), ('FAIL', "the attempt succeeded: ['ok']", True))
+        self.assertEqual(guest.containment_verdict(denial, o('ENOENT'), 'FAIL')[0], 'UNKNOWN')
+        self.assertEqual(guest.containment_verdict(denial, o('ENOENT'), None)[0], 'UNKNOWN')
+        self.assertEqual(guest.containment_verdict(denial, [], 'PASS')[0], 'FAIL')
+        self.assertEqual(guest.containment_verdict(denial, o('EACCES'), 'PASS')[0], 'FAIL')
+        dev = dict(denial, kind='deviation', expected={'outcomes': ['bridge']})
+        self.assertEqual(guest.containment_verdict(dev, o('bridge'), 'PASS', {'a': 'PASS'})[0], 'PASS')
+        self.assertEqual(guest.containment_verdict(dev, o('bridge'), 'PASS', {'a': 'UNKNOWN'})[0], 'FAIL')
+        self.assertEqual(guest.containment_verdict(dev, o('none'), 'PASS', {'a': 'PASS'})[0], 'FAIL')
+        permitted = {'kind': 'permitted', 'expected': {'outcomes': ['ok']}}
+        self.assertEqual(guest.containment_verdict(permitted, o('ok'), None)[0], 'PASS')
+        self.assertEqual(guest.containment_verdict(permitted, [], None)[0], 'FAIL')
+
+    def test_mountinfo_outcomes(self):
+        fake = FakeContainmentGuest()
+        a, b = guest.CONTAINMENT_CONVERSATIONS
+        own = guest.own_bind_destinations(PROFILE, a.replace('-', ''))
+        self.assertEqual(guest.mountinfo_outcome('own-binds', fake.mounts_of(a), own)[0], 'found')
+        self.assertEqual(guest.mountinfo_outcome('share', fake.mounts_of(a), own)[0], 'no-share')
+        self.assertEqual(guest.mountinfo_outcome('shared-with-peer', fake.mounts_of(a), own,
+                                                 fake.mounts_of(b))[0], 'none-shared')
+        nested = fake.mounts_of(b) + [disk_mount('/peek', '/openhands/persistence')]
+        self.assertEqual(guest.mountinfo_outcome('shared-with-peer', fake.mounts_of(a), own,
+                                                 nested)[0], 'shared-with-peer')
+        extra = fake.mounts_of(a) + [disk_mount('/data', '/elsewhere')]
+        self.assertEqual(guest.mountinfo_outcome('share', extra, own)[0], 'undeclared-mount')
+        self.assertEqual(guest.mountinfo_outcome('own-binds', fake.mounts_of(a)[:3], own)[0], 'missing')
+
+    def test_container_commands_fit_the_command_line_cap(self):
+        out, fake = self.run_probe(sensitivity=True)
+        self.assertTrue(fake.commands)
+        for command in fake.commands:
+            request = [{'method': 'POST', 'path': '/api/conversations/x/bash/execute_bash_command',
+                        'json': {'command': command, 'cwd': '/workspace', 'timeout': 900},
+                        'timeout': 960}]
+            self.assertLess(len(base64.b64encode(json.dumps(request).encode())), 24 << 10)
+
+    def test_no_secret_or_key_on_a_container_command_line(self):
+        out, fake = self.run_probe()
+        for cid, spec in fake.containment_specs:
+            text = json.dumps(spec)
+            for fp in list(OUTER_FP.values()) + list(CATALOGUE['fingerprints']['gitea'].values()):
+                self.assertNotIn(fp, text)
+            self.assertNotIn('session.key', json.dumps([a for a in spec['attempts']
+                                                        if a['op'] != 'read']))
+
+    def test_inspect_digest_ignores_the_conversation_and_port(self):
+        keys = ['Privileged', 'CapDrop', 'NetworkMode']
+        a = conversation_container(hex_id='a' * 32, port='32768')
+        b = conversation_container(cid='2' * 64, hex_id='b' * 32, port='32769')
+        self.assertEqual(guest.container_inspect_digest(a, 'a' * 32, keys),
+                         guest.container_inspect_digest(b, 'b' * 32, keys))
+        c = conversation_container(hex_id='a' * 32, HostConfig={'Privileged': True})
+        self.assertNotEqual(guest.container_inspect_digest(a, 'a' * 32, keys),
+                            guest.container_inspect_digest(c, 'a' * 32, keys))
+
+
 if __name__ == '__main__':
     unittest.main()

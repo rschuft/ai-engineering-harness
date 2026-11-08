@@ -185,6 +185,7 @@ Only what is listed as verified has been exercised.
 | `gitea:roles -- provision\|fixture [--admin-merge-probe]\|rotate ROLE\|status` | `python -I -B integrations/gitea/gitea_roles.py <command>` | no | [Role credentials](#host-gitea) (S-01.2.2): creates the restricted, non-administrator Bot accounts and mints each role's narrowest token into the credential provider (`AIEH Gitea bot <role>`); `fixture` applies the authorization fixture as the site administrator, with its harness-held password in memory and no token (only after `gitea:finalize-credentials`); `rotate` revokes a token, proves it fails closed and re-issues it; `status` changes nothing. Prints fingerprints, never a token. |
 | `gitea:authz` | `AIEH_GITEA_AUTHZ=1`, then `python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v` | no | Live allowed and forbidden calls of each bot token against the running Gitea. Opt-in; skips with its reason when Gitea is down, an entry is missing, or (per class) the fixture is absent. `AIEH_GITEA_AUTHZ_REPORT=<file>` records every probe. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `security:containment-check [-- --list\|--render]` | `python -I -B tools/check_containment_cases.py [--list] [--render]` | no | Checks the [containment cases](#containment-cases) (S-02.1): every category covered by a denial case; every probe names an enforcement location whose references resolve (profiles P-ids, network-matrix edges, inventory assets, credentials or findings) and a positive control that is an existing permitted case; every attempt is non-destructive (a closed operation set, writes only in the probe's scratch, no deny-listed command, no off-host target outside the S-01.4 sweeps); every category has a live mutation; no machine path; the README block equals `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:network-check [-- --list\|--render]` | `python -I -B tools/check_network_matrix.py [--list] [--render]` | no | Checks the [network matrix](#network-matrix) (S-01.4): every ordered pair of trust domains has a classified row; no allow from an untrusted or contained domain into a trusted one names anything but a profiles P7 endpoint class or reaches a management or credential asset; every allow names a prevention mechanism and every disclosed path a finding; every id, plan leaf and profile endpoint resolves; every active profile endpoint and forward is an allow row; an observed Owner act cites its approval; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
@@ -206,6 +207,7 @@ Only what is listed as verified has been exercised.
 | `guest:conversation-smoke PROFILE=… STATE_DIR=… NAME=<name> [-- --restart --openapi <file> --canaries <dir> --out <file>]` | `python -I -B tools/guest.py conversation-smoke --profile <dir> --state-dir <dir> --name <name> [--restart] [--openapi <file>] [--canaries <dir>] [--out <file>]` | no | The contained conversation lifecycle (F-04.2) on a running provisioned guest: create the disposable Docker conversation of the pinned fixture, inspect it and its container, create it again (idempotent), read its events, stop its runtime, reopen it, optionally restart the guest and reopen again, delete it. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:admission-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --out <file>]` | `python -I -B tools/guest.py admission-probe --profile <dir> --state-dir <dir> --name <name> [--out <file>]` | no | The management API admission (S-01.3.1) on a running provisioned guest: the pinned route inventory against the running server, every route without the key and with a wrong one, the agent network's reach from inside two disposable conversation containers, the key check and the logged refusals. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:job-access-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --token-fingerprint LABEL=sha256:<hex16> --out <file>]` | `python -I -B tools/guest.py job-access-probe --profile <dir> --state-dir <dir> --name <name> [--token-fingerprint LABEL=sha256:<hex16>] [--out <file>]` | no | The job environment (S-01.3.2) on a running provisioned guest: from inside two disposable conversation containers, their effective hardening, every engine socket, the engine API and the host aliases over TCP, every privileged Agent Server route at every address, the management, Owner, admin and bot credentials by name and fingerprint, and the S-01.4 egress sweep (public literals, SLIRP's aliases, an unconfigured guestfwd-class address) against the egress guard's counters. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:containment-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --sensitivity --token-fingerprint LABEL=sha256:<hex16> --out <file>]` | `python -I -B tools/guest.py containment-probe --profile <dir> --state-dir <dir> --name <name> [--sensitivity] [--token-fingerprint LABEL=sha256:<hex16>] [--out <file>]` | no | The containment probes (S-02.1) on a running provisioned guest: the versioned catalogue in one pass, reusing `admission-probe` and `job-access-probe` unchanged and running the remaining cases inside two further disposable conversation containers with generated canary workspaces; per case the attempt, principal, observations, positive control and verdict (PASS, FAIL or UNKNOWN) with the runtime-configuration snapshot. `--sensitivity` adds the live mutations. The route-present egress case needs a guest created with `--egress-falsification`. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:host-census [-- --exclude-pid <pid> --out <file>]` | `python -I -B tools/guest.py host-census [--exclude-pid <pid>] [--out <file>]` | no | S-01.4, read only and unelevated: the harness's host listeners by PID (QEMU, the host Gitea and its proxy, the Owner host's Vite servers), each of which must be on 127.0.0.1, and the Windows Firewall profiles and rule count, recorded as disclosure (UNKNOWN when a cmdlet is refused). No profile or state directory; it changes no rule. Exit 0 only on PASS. |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
@@ -586,6 +588,25 @@ defaults them.
   (`provisioning.agent_server.admission.network.egress_guard`). The root step's admission
   step, the boot facts (with the rules the guard printed before Moby started) and
   `inspect`'s `container egress guard (S-01.4)` check verify it.
+- `containment-probe` (S-02.1) runs the versioned containment catalogue
+  ([`security/containment-cases.json`](../security/containment-cases.json), refused unless
+  its checker passes) in one pass. It runs `admission-probe` and `job-access-probe`
+  unchanged and reads their cases from their records; the remaining cases run inside two
+  further disposable conversation containers, as the job's default user, after each job
+  has written a generated canary file into its own `/workspace/.aieh-probe` (no repository
+  content). The attempts are a closed, non-destructive set: reads, listings, `access(2)`
+  checks, connects to the container's own loopback, sockets created and closed, namespace
+  calls in a forked child that exits at once, an empty module image, and writes only in the
+  probe's scratch directories, which it removes. Each case is classified: a denial PASSes
+  only when its paired positive control succeeded in the same run (otherwise UNKNOWN); an
+  attempt that succeeds is a FAIL and a stop condition (later primitives do not start); a
+  missing hardening control or observation is a FAIL, never skipped; a recorded deviation
+  (no `--network none`, `host.docker.internal`) PASSes only while its compensating cases
+  pass. The record carries a runtime-configuration snapshot before and after (normalized
+  `docker inspect` digests, both guards' counters, `daemon.json` and `SecurityOptions`, and
+  the profile, seed, manifest, image, route-inventory, fixture and catalogue pins).
+  `--sensitivity` also runs the catalogue's mutations: each points a denial case at an
+  operation the job may perform and must be classified a success (FAIL).
 - `host-census` (S-01.4) is a read-only, unelevated census of the harness's host
   listeners by PID, each of which must be on `127.0.0.1`, with the Windows Firewall
   profiles and rule count recorded as disclosure. It reads no file and changes no rule;
@@ -806,6 +827,22 @@ machine paths, and requires the README to name every operation and finding. Its 
 committed inventory and fail its mutations. When an entry changes, update the JSON,
 keep the README's tables and summary consistent with it, and run the checker.
 
+## Containment cases
+
+Plan leaf S-02.1 records the job environment's expected-denial matrix as versioned data in
+[`security/containment-cases.json`](../security/containment-cases.json), rendered in
+[`security/README.md`](../security/README.md#containment-cases-s-021). Each case names its
+category (file, sibling-workspace, secret, socket, egress, privilege-expansion,
+management-api), its principal, the exact non-destructive attempt, the expected outcome
+classes, the enforcement location with its references, and the permitted case that is its
+positive control. [`tools/check_containment_cases.py`](../tools/check_containment_cases.py)
+(`task security:containment-check`) enforces the leaf's acceptance with the standard
+library only; its tests (`tools/tests/test_check_containment_cases.py`, part of `task
+test`) pass the committed catalogue and fail its mutations. `tools/guest.py
+containment-probe` runs it (see [Execution guests](#execution-guests)). When the catalogue
+changes, edit the JSON, replace the README's generated block with the output of
+`--render`, and run the checker.
+
 ## Role-token matrix
 
 Plan leaf S-01.2.1 binds each role to exactly one principal of the security inventory
@@ -882,9 +919,9 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list, the profile declarations, and per-OS packaging when added | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py`, `check_network_matrix.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1, S-01.4 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py`, `check_network_matrix.py`, `check_containment_cases.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1, S-01.4, S-02.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
-| `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
+| `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`); the [containment cases](#containment-cases) (`containment-cases.json`) | S-01.1, S-02.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
 | `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |

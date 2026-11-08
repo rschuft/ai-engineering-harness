@@ -80,6 +80,13 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                containers; job-access-probe also runs the predeclared egress sweep of S-01.4
                (public literals, SLIRP's aliases, an unconfigured guestfwd-class address)
                against the egress guard's counters.
+    containment-probe  S-02.1: the versioned containment catalogue
+               (security/containment-cases.json) in one pass: admission-probe and
+               job-access-probe unchanged, the remaining cases inside two further disposable
+               conversation containers with generated canary workspaces; per case the
+               attempt, principal, observations, control result and verdict (PASS, FAIL,
+               UNKNOWN) with the runtime-configuration snapshot; --sensitivity also runs
+               the catalogue's mutations, which must classify as FAIL.
     host-census  S-01.4: a read-only, unelevated census of the harness's host listeners by
                PID (QEMU, Gitea, the Owner host's Vite servers; each must be on 127.0.0.1)
                and the Windows Firewall profiles and rule count, recorded as disclosure.
@@ -108,6 +115,8 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py provision --profile PROFILE --state-dir STATE --name NAME
     python -I -B tools/guest.py conversation-smoke --profile PROFILE --state-dir STATE --name NAME
                                           [--restart] [--openapi FILE] [--canaries DIR] [--out FILE]
+    python -I -B tools/guest.py containment-probe --profile PROFILE --state-dir STATE --name NAME
+                                          [--sensitivity] [--token-fingerprint L=sha256:H] [--out FILE]
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
     before it launches anything, inspect searches the guest for it; create, recreate
@@ -8992,6 +9001,1201 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     return out
 
 
+# ---------------------------------------------------------------- containment probes (S-02.1)
+
+CONTAINMENT_SCHEMA = 'ai-engineering-harness/profiles/containment-probe-record/v1'
+CONTAINMENT_CATALOGUE = ('security', 'containment-cases.json')
+# The two disposable conversations of the containment probe's own cases (the fixture with
+# these ids); admission-probe and job-access-probe create and delete their own.
+CONTAINMENT_CONVERSATIONS = ('a0221b00-0000-4000-8000-000000000c01',
+                             'a0221b00-0000-4000-8000-000000000c02')
+CONTAINMENT_PLACEHOLDERS = ('own_hex', 'peer_hex', 'own_canary', 'peer_canary', 'uid')
+CONTAINMENT_SECRET_NAMES = ('OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0')
+DISK_FSTYPES = frozenset({'ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'vfat', 'f2fs'})
+SHARE_FSTYPE_SET = frozenset(SHARE_FSTYPES.split(','))
+# Moby's per-container files bound from its data root
+DOCKER_FILE_MOUNTS = ('/etc/resolv.conf', '/etc/hostname', '/etc/hosts')
+
+# Run inside a conversation container as its default user (python3; spec as zlib-compressed
+# base64 JSON {scratch, workspace, attempts: [{key, op, args}], cleanup, own_binds}; see
+# container_python_z). Each operation is one of the
+# catalogue's closed, non-destructive set (tools/check_containment_cases.py OPS); writes go
+# only to the probe's own scratch directories, which cleanup removes. Outcomes are errno
+# names or a class; no file content and no secret value is printed.
+CONTAINMENT_PROBE = r'''import base64, ctypes, errno, hashlib, json, os, platform, secrets, shutil, socket, stat, subprocess, sys, time, zlib
+spec = json.loads(zlib.decompress(base64.b64decode(sys.argv[1])).decode('utf-8'))
+SCR, WS = spec['scratch'], spec['workspace']
+MARK = ('aieh' + '-' + 'canary').encode()
+WS_MARK = 'aieh-ws-' + 'canary-'
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+os.makedirs(SCR, exist_ok=True)
+FLAGS = {'user': 0x10000000, 'mount': 0x00020000, 'net': 0x40000000}
+DEV_DEFAULT = {'console', 'core', 'fd', 'full', 'mqueue', 'null', 'ptmx', 'pts', 'random', 'shm',
+               'stderr', 'stdin', 'stdout', 'tty', 'urandom', 'zero'}
+def ename(exc):
+    n = getattr(exc, 'errno', None)
+    if isinstance(n, int) and n:
+        return errno.errorcode.get(n, str(n))
+    return type(exc).__name__
+def cerr():
+    n = ctypes.get_errno()
+    return errno.errorcode.get(n, str(n))
+def scratch(name):
+    os.makedirs(SCR, exist_ok=True)
+    return os.path.join(SCR, name)
+def op_read(a):
+    try:
+        fd = os.open(a['path'], os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+    try:
+        st = os.fstat(fd)
+        n = len(os.read(fd, 4096)) if stat.S_ISREG(st.st_mode) else None
+        return {'outcome': 'ok', 'bytes_read': n, 'type': stat.S_IFMT(st.st_mode)}
+    except OSError as exc:
+        return {'outcome': 'ok', 'read_error': ename(exc)}
+    finally:
+        os.close(fd)
+def op_list(a):
+    try:
+        return {'outcome': 'ok', 'entries': len(os.listdir(a['path']))}
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+def op_stat(a):
+    try:
+        st = os.lstat(a['path'])
+        return {'outcome': 'ok', 'type': stat.S_IFMT(st.st_mode)}
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+def op_access_write(a):
+    r = libc.access(a['path'].encode(), 2)
+    return {'outcome': 'ok' if r == 0 else cerr()}
+def op_own_workspace(a):
+    os.makedirs(WS, exist_ok=True)
+    name = 'ws-canary-' + secrets.token_hex(8) + '.txt'
+    data = (WS_MARK + secrets.token_hex(16) + '\n').encode()
+    path = os.path.join(WS, name)
+    with open(path, 'xb') as fh:
+        fh.write(data)
+    with open(path, 'rb') as fh:
+        back = fh.read()
+    listed = name in os.listdir(WS)
+    good = back == data and listed
+    return {'outcome': 'ok' if good else 'mismatch', 'name': name,
+            'sha256': hashlib.sha256(data).hexdigest(), 'listed': listed}
+def op_proc_root_search(a):
+    rel = WS.lstrip('/') + '/' + a['name']
+    pids = ['self'] if a.get('self_only') else sorted(d for d in os.listdir('/proc') if d.isdigit())
+    found, errs = [], {}
+    for pid in pids:
+        try:
+            os.lstat('/proc/%s/root/%s' % (pid, rel))
+            found.append(pid)
+        except OSError as exc:
+            errs[ename(exc)] = errs.get(ename(exc), 0) + 1
+    return {'outcome': 'found' if found else 'not-found', 'pids': len(pids), 'found_in': found,
+            'errors': errs}
+def mounts():
+    out = []
+    for line in open('/proc/self/mountinfo').read().splitlines():
+        left, _, right = line.partition(' - ')
+        f, r = left.split(), right.split()
+        if len(f) < 6 or len(r) < 2:
+            continue
+        out.append({'dev': f[2], 'root': f[3], 'target': f[4], 'options': f[5],
+                    'optional': f[6:], 'fstype': r[0], 'source': r[1]})
+    return out
+def op_mountinfo(a):
+    return {'outcome': 'collected', 'mounts': mounts()}
+def op_writable_scan(a):
+    ms = mounts()
+    own = spec['own_binds']
+    if a.get('own_binds'):
+        res = {d: libc.access(d.encode(), 2) == 0 for d in own}
+        conv = [d for d in own if d.startswith('/var/openhands/conversations/')]
+        listing = {}
+        for d in conv:
+            try:
+                listing[d] = sorted([n, libc.access(os.path.join(d, n).encode(), 2) == 0]
+                                    for n in os.listdir(d))[:40]
+            except OSError as exc:
+                listing[d] = ename(exc)
+        return {'outcome': 'ok' if len(res) == 3 and all(res.values()) else 'not-writable',
+                'binds': res, 'own_conversation_store': listing}
+    uid = os.getuid()
+    writable, scanned, roots = [], 0, []
+    for m in ms:
+        if m['fstype'] not in spec['disk_fstypes'] or m['target'] in own:
+            continue
+        roots.append(m['target'])
+        todo = [m['target']]
+        while todo and scanned < 20000:
+            p = todo.pop()
+            scanned += 1
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if libc.access(p.encode(), 2) == 0 and not stat.S_ISLNK(st.st_mode):
+                writable.append([p, st.st_uid, st.st_uid == uid])
+            if stat.S_ISDIR(st.st_mode):
+                try:
+                    todo.extend(os.path.join(p, n) for n in os.listdir(p))
+                except OSError:
+                    pass
+    return {'outcome': 'writable-found' if writable else 'none', 'mount_points': roots,
+            'scanned': scanned, 'writable': writable[:40]}
+def op_canary_scan(a):
+    os.makedirs(WS, exist_ok=True)
+    control = os.path.join(WS, 'canary-control-' + secrets.token_hex(8))
+    with open(control, 'xb') as fh:
+        fh.write(MARK + b'-control-' + secrets.token_hex(16).encode() + b'\n')
+    hits, control_found = [], False
+    stats = {'files': 0, 'unreadable': 0, 'over_bound': 0, 'process_files': 0}
+    t0 = time.monotonic()
+    for root, dirs, files in os.walk('/', onerror=lambda e: None):
+        if root in ('/proc', '/sys', '/dev'):
+            dirs[:] = []
+            continue
+        for n in files:
+            p = os.path.join(root, n)
+            try:
+                st = os.lstat(p)
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                if st.st_size > spec['max_bytes']:
+                    stats['over_bound'] += 1
+                    continue
+                with open(p, 'rb') as fh:
+                    data = fh.read()
+            except OSError:
+                stats['unreadable'] += 1
+                continue
+            stats['files'] += 1
+            if MARK in data:
+                if p == control:
+                    control_found = True
+                    if not a.get('include_control'):
+                        continue
+                hits.append(p)
+    for d in sorted(os.listdir('/proc')):
+        if d.isdigit():
+            for part in ('environ', 'cmdline'):
+                try:
+                    data = open('/proc/%s/%s' % (d, part), 'rb').read()
+                except OSError:
+                    stats['unreadable'] += 1
+                    continue
+                stats['process_files'] += 1
+                if MARK in data:
+                    hits.append('/proc/%s/%s' % (d, part))
+    return dict(stats, outcome='found' if hits else 'not-found', hits=hits[:40],
+                control_outcome='found' if control_found else 'not-found',
+                seconds=round(time.monotonic() - t0, 1))
+def op_unix_control(a):
+    path = scratch('ctl.sock')
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    cli = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        srv.bind(path)
+        srv.listen(1)
+        cli.settimeout(4)
+        cli.connect(path)
+        return {'outcome': 'connected'}
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+    finally:
+        cli.close()
+        srv.close()
+        if os.path.lexists(path):
+            os.unlink(path)
+def op_connect_tcp(a):
+    if a['host'] != '127.0.0.1':
+        return {'outcome': 'refused-by-probe'}
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(4)
+    try:
+        s.connect((a['host'], int(a['port'])))
+        return {'outcome': 'connected'}
+    except socket.timeout:
+        return {'outcome': 'timeout'}
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+    finally:
+        s.close()
+def op_socket(a):
+    kind = socket.SOCK_RAW if a['type'] == 'raw-icmp' else socket.SOCK_DGRAM
+    try:
+        s = socket.socket(socket.AF_INET, kind, socket.IPPROTO_ICMP)
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+    s.close()
+    return {'outcome': 'ok'}
+def op_unshare(a):
+    mask = 0
+    for f in a['flags']:
+        mask |= FLAGS[f]
+    pid = os.fork()
+    if pid == 0:
+        r = libc.unshare(ctypes.c_int(mask))
+        os._exit(0 if r == 0 else (ctypes.get_errno() or 255) & 0xff)
+    _, status = os.waitpid(pid, 0)
+    code = os.waitstatus_to_exitcode(status)
+    return {'outcome': 'ok' if code == 0 else errno.errorcode.get(code, 'exit %d' % code)}
+def op_fork_control(a):
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    _, status = os.waitpid(pid, 0)
+    code = os.waitstatus_to_exitcode(status)
+    return {'outcome': 'ok' if code == 0 else errno.errorcode.get(code, 'exit %d' % code)}
+def op_mknod(a):
+    if a['kind'] == 'char':
+        path, mode, dev = scratch('aieh-null'), stat.S_IFCHR | 0o600, os.makedev(1, 3)
+    else:
+        path, mode, dev = scratch('aieh-fifo'), stat.S_IFIFO | 0o600, 0
+    try:
+        os.mknod(path, mode, dev)
+        return {'outcome': 'ok'}
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+def op_init_module(a):
+    if platform.machine() != 'x86_64':
+        return {'outcome': 'unsupported-arch'}
+    if a['variant'] == 'control':
+        r = libc.syscall(ctypes.c_long(39))
+        return {'outcome': 'ok' if r == os.getpid() else 'unexpected'}
+    r = libc.syscall(ctypes.c_long(175), ctypes.c_char_p(b''), ctypes.c_ulong(0), ctypes.c_char_p(b''))
+    return {'outcome': 'ok' if r == 0 else cerr()}
+def op_ptrace_read(a):
+    child = subprocess.Popen(['sleep', '1'], stdin=subprocess.DEVNULL)
+    try:
+        fd = os.open('/proc/%d/mem' % child.pid, os.O_RDONLY)
+        os.close(fd)
+        return {'outcome': 'ok'}
+    except OSError as exc:
+        return {'outcome': ename(exc)}
+    finally:
+        child.wait()
+def op_proc_census(a):
+    me, foreign, seen = os.getuid(), [], 0
+    for d in sorted(x for x in os.listdir('/proc') if x.isdigit()):
+        try:
+            lines = open('/proc/%s/status' % d).read().splitlines()
+        except OSError:
+            continue
+        seen += 1
+        info = {k: v.split() for k, _, v in (l.partition(':') for l in lines) if k in ('Uid', 'Name')}
+        uid = int((info.get('Uid') or ['-1'])[0])
+        if uid != me:
+            try:
+                fd = os.open('/proc/%s/mem' % d, os.O_RDONLY)
+                os.close(fd)
+                mem = 'ok'
+            except OSError as exc:
+                mem = ename(exc)
+            foreign.append([d, ' '.join(info.get('Name') or []), uid, mem])
+    if not foreign:
+        outcome = 'none-visible'
+    elif any(f[3] == 'ok' for f in foreign):
+        outcome = 'foreign-mem-readable'
+    else:
+        outcome = 'foreign-visible-denied'
+    return {'outcome': outcome, 'processes': seen, 'foreign': foreign[:20]}
+def op_dev_list(a):
+    names = sorted(os.listdir('/dev'))
+    extra = sorted(set(names) - DEV_DEFAULT)
+    return {'outcome': 'extra-devices' if extra else 'default-set', 'names': names, 'extra': extra}
+def op_exec(a):
+    try:
+        r = subprocess.run(a['argv'], capture_output=True, text=True, timeout=30,
+                           stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return {'outcome': 'absent'}
+    except subprocess.TimeoutExpired:
+        return {'outcome': 'timeout'}
+    out = ' '.join((r.stdout + r.stderr).split())[:240]
+    return {'outcome': 'ok' if r.returncode == 0 else 'refused', 'rc': r.returncode, 'out': out}
+def op_net_ifaces(a):
+    names = sorted(os.listdir('/sys/class/net'))
+    outcome = 'bridge' if names == ['eth0', 'lo'] else ('none' if names == ['lo'] else 'other')
+    return {'outcome': outcome, 'interfaces': names}
+OPS = {'read': op_read, 'list': op_list, 'stat': op_stat, 'access-write': op_access_write,
+       'own-workspace': op_own_workspace, 'proc-root-search': op_proc_root_search,
+       'mountinfo': op_mountinfo, 'writable-scan': op_writable_scan, 'canary-scan': op_canary_scan,
+       'unix-control': op_unix_control, 'connect-tcp': op_connect_tcp, 'socket': op_socket,
+       'unshare': op_unshare, 'fork-control': op_fork_control, 'mknod': op_mknod, 'init-module': op_init_module,
+       'ptrace-read': op_ptrace_read, 'proc-census': op_proc_census, 'dev-list': op_dev_list,
+       'exec': op_exec, 'net-ifaces': op_net_ifaces}
+results = {}
+for item in spec['attempts']:
+    t0 = time.monotonic()
+    try:
+        res = OPS[item['op']](item.get('args') or {})
+    except Exception as exc:
+        res = {'outcome': 'probe-error', 'error': (type(exc).__name__ + ': ' + str(exc))[:200]}
+    res['seconds'] = round(time.monotonic() - t0, 2)
+    results[item['key']] = res
+out = {'uid': os.getuid(), 'gid': os.getgid(), 'groups': os.getgroups(), 'results': results}
+if spec.get('cleanup'):
+    for d in (SCR, WS):
+        shutil.rmtree(d, ignore_errors=True)
+    out['cleanup'] = {d: os.path.lexists(d) for d in (SCR, WS)}
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+
+
+_CONTAINMENT_CHECKER = []
+
+
+def container_python_z(script, spec):
+    """container_python with the script and its JSON spec zlib-compressed: the operator API
+    carries each request as one SSH argument, and Windows caps a command line at 32 KiB."""
+    s = base64.b64encode(zlib.compress(script.encode('utf-8'), 9)).decode('ascii')
+    a = base64.b64encode(zlib.compress(json.dumps(spec).encode('utf-8'), 9)).decode('ascii')
+    return (f"echo {s} | base64 -d | python3 -c 'import sys, zlib; sys.stdout.buffer.write("
+            f"zlib.decompress(sys.stdin.buffer.read()))' > /tmp/aieh-job.py && "
+            f"python3 /tmp/aieh-job.py {a}; rc=$?; rm -f /tmp/aieh-job.py; exit $rc")
+
+
+def load_containment_checker():
+    """tools/check_containment_cases.py (loaded once): the catalogue's rules and its closed
+    vocabularies (operations, extractors, success outcomes) that this runner implements."""
+    if not _CONTAINMENT_CHECKER:
+        spec = importlib.util.spec_from_file_location(
+            'check_containment_cases', REPO / 'tools' / 'check_containment_cases.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _CONTAINMENT_CHECKER.append(module)
+    return _CONTAINMENT_CHECKER[0]
+
+
+def load_containment_catalogue(ctx):
+    """(catalogue, sha256, checker module): the committed catalogue, refused unless the
+    checker passes it (a catalogue that fails its own rules never runs)."""
+    checker = load_containment_checker()
+    path = ctx.repo.joinpath(*CONTAINMENT_CATALOGUE)
+    data = path.read_bytes()
+    catalogue = json.loads(data.decode('utf-8'))
+    inventory = json.loads(ctx.repo.joinpath(catalogue.get('inventory', '')).read_text(encoding='utf-8'))
+    problems = checker.check(catalogue, inventory, ctx.repo)
+    if problems:
+        raise Refused('REFUSED', f'{"/".join(CONTAINMENT_CATALOGUE)} fails its checker '
+                      f'({len(problems)} problem(s)); run tools/check_containment_cases.py',
+                      [str(p) for p in problems[:20]])
+    return catalogue, hashlib.sha256(data).hexdigest(), checker
+
+
+def _step_of(record, name):
+    """The step entry of a primitive's record, or None (skipped or absent)."""
+    for s in (record or {}).get('steps') or []:
+        if isinstance(s, dict) and s.get('step') == name and 'skipped' not in s:
+            return s
+    return None
+
+
+def _obs(where, outcome, **detail):
+    return dict({'where': where, 'outcome': str(outcome)}, **detail)
+
+
+def _job_step(record, name):
+    return _step_of(record, name) or {}
+
+
+JOB_STEPS = {
+    'trusted': 'trusted side with the key (positive control)',
+    'inspected': 'job environment as inspected (docker inspect, root facts)',
+    'env': 'job environment from inside (identity, capabilities, variables, root)',
+    'socket': 'engine sockets from inside each job',
+    'tcp': 'engine API over TCP, guest and host aliases, from inside each job',
+    'routes': 'privileged Agent Server routes from inside each job, every address',
+    'tokens': 'credentials by name and fingerprint inside each job',
+    'controls': 'hardening controls present (boot facts)',
+    'egress-route': 'route-present egress falsification from inside each job (S-01.4)',
+    'egress': 'egress sweep from inside each job (S-01.4)',
+}
+ADMISSION_STEPS = {
+    'sweep': 'unauthenticated and wrong-key requests to every route',
+    'trusted': 'trusted side with the key (positive control)',
+    'network': 'agent network: listener, guest services, published ports, peer',
+    'custody': 'agent network: session keys and start_child_conversation',
+    'keycheck': 'key check fails closed',
+    'logged': 'refusals logged',
+}
+
+
+def _norm_net(outcome):
+    out = str(outcome)
+    return 'answered' if out.startswith('answered') else out
+
+
+def extract_job(record, extract, args, context):
+    """Observations of one job-access-probe case from its record."""
+    def detail_of(key):
+        step = _step_of(record, JOB_STEPS[key])
+        return (step or {}).get('detail') if step else None
+    out = []
+    if extract == 'socket':
+        d = detail_of('socket')
+        pattern = re.compile('^' + re.escape(args['path']).replace(re.escape('{uid}'), r'\d+') + '$')
+        for cid, per in (d or {}).items():
+            for who, entry in (per or {}).items():
+                for row in (entry or {}).get('attempts') or []:
+                    if pattern.match(str(row.get('path', ''))):
+                        out.append(_obs(f'{cid} {who}', row.get('observed'), path=row.get('path')))
+    elif extract == 'sockets-found':
+        d = detail_of('socket')
+        for cid, per in (d or {}).items():
+            for who, entry in (per or {}).items():
+                rows = [r for r in (entry or {}).get('attempts') or [] if r.get('declared') is False]
+                if not rows:
+                    out.append(_obs(f'{cid} {who}', 'none'))
+                for row in rows:
+                    got = row.get('observed')
+                    out.append(_obs(f'{cid} {who}', 'refused' if got in ('ENOENT', 'ECONNREFUSED',
+                                                                         'EACCES') else got,
+                                    path=row.get('path')))
+    elif extract == 'tcp':
+        d = detail_of('tcp')
+        for cid, c in ((d or {}).get('containers') or {}).items():
+            for row in c.get('targets') or []:
+                if row.get('what') == args['what']:
+                    got = row.get('observed')
+                    if args['what'].endswith('(control)') and got == 'connected' and not row.get('ok'):
+                        got = 'connected-without-200'
+                    out.append(_obs(cid, got, target=row.get('target'), answer=row.get('answer')))
+    elif extract == 'routes':
+        d = detail_of('routes')
+        for cid, c in ((d or {}).get('containers') or {}).items():
+            for host, h in (c.get('hosts') or {}).items():
+                outcomes = set((h.get('outcomes') or {}))
+                if h.get('answered'):
+                    got = 'answered'
+                elif outcomes == {'refused'} and h.get('attempts') == 2 * (d.get('routes') or -1):
+                    got = 'refused'
+                else:
+                    got = 'other: ' + ','.join(sorted(outcomes))
+                out.append(_obs(f'{cid} {host}', got, attempts=h.get('attempts')))
+    elif extract in ('tokens', 'credential-files', 'token-control'):
+        d = detail_of('tokens')
+        searched = (d or {}).get('searched') or {}
+        label = args.get('label', '')
+        for cid, c in ((d or {}).get('containers') or {}).items():
+            if extract == 'credential-files':
+                out.append(_obs(cid, 'found' if c.get('credential_files') else 'none',
+                                files=c.get('credential_files')))
+                continue
+            if extract == 'token-control':
+                out.append(_obs(cid, 'found' if c.get('control_found') else 'not-found'))
+                continue
+            hits = [h[1] for h in c.get('hits') or [] if isinstance(h, list) and len(h) == 2]
+            if label == 'gitea:*':
+                want = sorted(context.get('gitea_labels') or [])
+                have = set(searched.get('gitea (sha256 prefix)') or [])
+                missing = [w for w in want if w not in have]
+                if not want or missing:
+                    got = 'not-searched'
+                else:
+                    got = 'found' if any(str(h).startswith('gitea:') for h in hits) else 'absent'
+                out.append(_obs(cid, got, searched=sorted(have), missing=missing))
+            else:
+                family, _, name_ = label.partition(':')
+                have = set(searched.get('outer (aieh v1)') or []) if family == 'aieh' else set()
+                if name_ not in have:
+                    out.append(_obs(cid, 'not-searched'))
+                else:
+                    out.append(_obs(cid, 'found' if label in hits else 'absent'))
+    elif extract == 'env':
+        d = detail_of('env')
+        field = args['field']
+        for cid, c in (d or {}).items():
+            st, p1 = c.get('status') or {}, c.get('pid1_status') or {}
+            if field in ('sudo', 'su'):
+                r = c.get(field)
+                got = 'absent' if r is None else ('root-obtained' if r.get('rc') == 0 else 'refused')
+                out.append(_obs(cid, got, rc=(r or {}).get('rc'), out=(r or {}).get('out')))
+            elif field in ('no_new_privs', 'seccomp'):
+                key = {'no_new_privs': 'NoNewPrivs', 'seccomp': 'Seccomp'}[field]
+                got = st.get(key) if st.get(key) == p1.get(key) else f'mixed {st.get(key)}/{p1.get(key)}'
+                out.append(_obs(cid, got))
+            elif field == 'capabilities':
+                caps = [s.get(k) for s in (st, p1) for k in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd',
+                                                             'CapAmb')]
+                got = 'empty' if caps and all(v == '0' * 16 for v in caps) else 'present'
+                out.append(_obs(cid, got, CapEff=st.get('CapEff'), CapBnd=st.get('CapBnd')))
+            elif field == 'apparmor':
+                out.append(_obs(cid, c.get('apparmor')))
+            elif field == 'variable-names':
+                allowed = set(context.get('secret_names') or CONTAINMENT_SECRET_NAMES)
+                extra = sorted({n for e in (c.get('process_environments') or {}).values()
+                                for n in (e.get('names') or []) if n not in allowed})
+                got = 'extra' if extra or c.get('terminal_names') else 'only-own-keys'
+                out.append(_obs(cid, got, extra=extra, terminal=c.get('terminal_names')))
+    elif extract == 'inspected':
+        step = _step_of(record, JOB_STEPS['inspected'])
+        d = (step or {}).get('detail') or {}
+        if args['field'] == 'declared':
+            if step:
+                out.append(_obs('guest', 'as-declared' if step.get('ok') else 'loosened',
+                                containers=len(d.get('effective') or [])))
+        else:
+            for c in d.get('effective') or []:
+                value = (c.get('HostConfig') or {}).get(args['field'])
+                got = ','.join(str(v) for v in value) if isinstance(value, list) else str(value)
+                out.append(_obs(c.get('conversation') or c.get('id'), got))
+    elif extract == 'controls':
+        step = _step_of(record, JOB_STEPS['controls'])
+        observed = ((step or {}).get('detail') or {}).get('observed')
+        if isinstance(observed, dict):
+            key = args['key']
+            if key == 'observed':
+                out.append(_obs('guest', 'ok' if all(k in observed for k in (
+                    'daemon.json icc', 'SecurityOptions', 'guard unit', 'key check ExecStartPre'))
+                    else 'incomplete'))
+            elif key == 'SecurityOptions':
+                have = observed.get(key) if isinstance(observed.get(key), list) else []
+                missing = [o for o in context.get('required_security_options') or [] if o not in have]
+                out.append(_obs('guest', 'missing' if missing or not have else 'includes-required',
+                                missing=missing))
+            elif key in observed:
+                out.append(_obs('guest', observed.get(key)))
+    elif extract == 'egress':
+        d = detail_of('egress')
+        for r in (d or {}).get('results') or []:
+            what = str(r.get('what', ''))
+            if what == args['what'] or (args['what'] == 'public literal' and
+                                         what.startswith('public literal')):
+                out.append(_obs(f"{r.get('conversation')} {r.get('proto')}:{r.get('host')}:{r.get('port')}",
+                                _norm_net(r.get('outcome')), verdict=r.get('verdict')))
+    elif extract == 'egress-route':
+        step = _step_of(record, JOB_STEPS['egress-route'])
+        d = (step or {}).get('detail') or {}
+        if step and str(d.get('error', '')).startswith('not available'):
+            out.append(_obs('guest', 'not-available', error=d.get('error')))
+        elif step:
+            rows = d.get('results') or []
+            counters = d.get('counters') or {}
+            for r in rows:
+                got = _norm_net(r.get('outcome'))
+                if got not in ('connected', 'answered'):
+                    got = 'refused-by-guard' if step.get('ok') and got == EGRESS_REFUSED else \
+                        f'guard-not-proved ({got})'
+                out.append(_obs(f"{r.get('conversation')} {r.get('proto')}:{r.get('host')}:{r.get('port')}",
+                                got))
+            if not rows:
+                out.append(_obs('guest', 'guard-not-proved (no attempt)', error=d.get('error')))
+            for o in out:
+                o.update(counters_exact=counters.get('exact'),
+                         log_out_uplink=counters.get('log_out_uplink'), route_gone=d.get('route_gone'))
+    elif extract == 'trusted':
+        step = _step_of(record, JOB_STEPS['trusted'])
+        if step:
+            out.append(_obs('guest', 'ok' if step.get('ok') else 'failed'))
+    return out
+
+
+def extract_admission(record, extract, args, context):
+    """Observations of one admission-probe case from its record."""
+    step = _step_of(record, ADMISSION_STEPS[extract])
+    if not step:
+        return []
+    d = step.get('detail') or {}
+    if extract == 'sweep':
+        answered = [s for s in (record or {}).get('stop_conditions') or []
+                    if 'without the key' in str(s.get('condition'))]
+        got = 'answered-2xx' if answered else ('refused-as-inventoried' if step.get('ok') else 'mismatch')
+        return [_obs('guest', got, routes=d.get('routes'), outcomes=d.get('outcomes'),
+                     mismatches=len(d.get('mismatches') or []))]
+    if extract == 'network':
+        out = []
+        for cid, c in (d.get('containers') or {}).items():
+            for row in c.get('targets') or []:
+                if row.get('what') == args['what']:
+                    out.append(_obs(cid, row.get('observed'), target=row.get('target')))
+        return out
+    if extract == 'custody':
+        out = []
+        for cid, c in (d.get('containers') or {}).items():
+            got = 'found' if c.get('outer_fingerprint_found') else \
+                ('inner-only' if c.get('ok') else 'mismatch')
+            out.append(_obs(cid, got, target=c.get('internal_server_url'),
+                            child=c.get('start_child_conversation_target')))
+        return out
+    if extract == 'keycheck':
+        return [_obs('guest', 'fails-closed' if step.get('ok') else 'keycheck-open')]
+    if extract == 'logged':
+        return [_obs('guest', 'logged' if step.get('ok') else 'not-logged')]
+    if extract == 'trusted':
+        return [_obs('guest', 'ok' if step.get('ok') else 'failed')]
+    return []
+
+
+CONTAINMENT_EXTRACTORS = {'job-access-probe': extract_job, 'admission-probe': extract_admission}
+CONTAINMENT_EXTRACT_NAMES = {
+    'job-access-probe': ('socket', 'sockets-found', 'tcp', 'routes', 'tokens', 'credential-files',
+                         'token-control', 'env', 'inspected', 'controls', 'egress', 'egress-route',
+                         'trusted'),
+    'admission-probe': tuple(ADMISSION_STEPS)}
+CONTAINMENT_OP_NAMES = ('read', 'list', 'stat', 'access-write', 'own-workspace', 'proc-root-search',
+                        'mountinfo', 'writable-scan', 'canary-scan', 'unix-control', 'connect-tcp',
+                        'socket', 'unshare', 'fork-control', 'mknod', 'init-module', 'ptrace-read', 'proc-census',
+                        'dev-list', 'exec', 'net-ifaces')
+
+
+def own_bind_destinations(profile, hex_id):
+    return [m['destination'].replace('{conversation_hex}', hex_id)
+            for m in conversations_config(provisioning_config(profile)).get('mounts') or []]
+
+
+def mountinfo_outcome(check, mounts, own_dests, peer_mounts=None):
+    """The outcome of a mountinfo case from the parsed /proc/self/mountinfo of the job (and,
+    for shared-with-peer, of its peer)."""
+    disk = [m for m in mounts or [] if m.get('fstype') in DISK_FSTYPES]
+    if check == 'own-binds':
+        targets = {m.get('target') for m in disk}
+        return ('found' if own_dests and all(d in targets for d in own_dests) else 'missing',
+                {'own_binds': own_dests})
+    if check == 'share':
+        shares = [m for m in mounts or [] if m.get('fstype') in SHARE_FSTYPE_SET or
+                  str(m.get('fstype', '')).startswith('fuse')]
+        undeclared = [m for m in disk if m.get('target') not in own_dests and
+                      m.get('target') not in DOCKER_FILE_MOUNTS]
+        if shares:
+            return 'share-found', {'shares': shares}
+        if undeclared:
+            return 'undeclared-mount', {'undeclared': undeclared}
+        return 'no-share', {'disk_mounts': [m.get('target') for m in disk]}
+    if check == 'shared-with-peer':
+        if peer_mounts is None:
+            return 'peer-not-observed', {}
+        mine = {(m.get('dev'), m.get('root')) for m in disk}
+        theirs = {(m.get('dev'), m.get('root')) for m in peer_mounts if m.get('fstype') in DISK_FSTYPES}
+        shared = sorted([list(x) for x in mine & theirs])
+        nested = sorted([[a[0], a[1], b[1]] for a in mine for b in theirs if a[0] == b[0] and a != b and
+                         (b[1].startswith(a[1].rstrip('/') + '/') or a[1].startswith(b[1].rstrip('/') + '/'))])
+        if shared or nested:
+            return 'shared-with-peer', {'shared': shared, 'nested': nested}
+        return 'none-shared', {'compared': [len(mine), len(theirs)]}
+    return 'unknown-check', {}
+
+
+def containment_verdict(case, observations, control_verdict, compensating=None):
+    """(verdict, reason, stop) of one case under the catalogue's rule for its kind. A success
+    outcome of a denial is a FAIL and a stop condition; a denial whose positive control did
+    not pass is UNKNOWN, never PASS; a missing observation is a FAIL, never skipped."""
+    checker = load_containment_checker()
+    success_set = checker.SUCCESS_OUTCOMES
+    kind = case.get('kind')
+    expected = set((case.get('expected') or {}).get('outcomes') or [])
+    outcomes = [str(o.get('outcome')) for o in observations]
+    if kind == 'permitted':
+        if not outcomes:
+            return 'FAIL', 'not observed', False
+        bad = sorted({o for o in outcomes if o not in expected})
+        return ('FAIL', f'unexpected {bad}', False) if bad else ('PASS', 'succeeded', False)
+    success = sorted({o for o in outcomes if o in success_set})
+    if success:
+        return 'FAIL', f'the attempt succeeded: {success}', kind == 'denial'
+    if control_verdict != 'PASS':
+        return 'UNKNOWN', f"positive control {case.get('positive_control')} is {control_verdict}", False
+    if not outcomes:
+        return 'FAIL', 'not observed (a case is never skipped)', False
+    bad = sorted({o for o in outcomes if o not in expected})
+    if bad:
+        return 'FAIL', f'outside the expected outcomes: {bad}', False
+    if kind == 'deviation':
+        failing = sorted(cid for cid, v in (compensating or {}).items() if v != 'PASS')
+        if failing or not compensating:
+            return 'FAIL', f'compensating cases not PASS: {failing}', False
+    return 'PASS', 'as expected', False
+
+
+def container_inspect_digest(container, hex_id, keys):
+    """sha256 of one container's normalized docker inspect: what the job environment
+    depends on, with the conversation id and the ephemeral host port replaced."""
+    host = container.get('HostConfig') or {}
+    config = container.get('Config') or {}
+    norm = {'Image': container.get('Image'), 'Config.Image': config.get('Image'),
+            'Config.User': config.get('User'), 'AppArmorProfile': container.get('AppArmorProfile'),
+            'HostConfig': {k: host.get(k) for k in sorted(keys)}}
+    norm['HostConfig']['Binds'] = sorted(str(b).replace(hex_id, '{conversation_hex}')
+                                         for b in host.get('Binds') or [])
+    ports = host.get('PortBindings') or {}
+    norm['HostConfig']['PortBindings'] = {p: [{'HostIp': (b or {}).get('HostIp')} for b in v or []]
+                                          for p, v in sorted(ports.items())}
+    return hashlib.sha256(json.dumps(norm, sort_keys=True, default=str).encode('utf-8')).hexdigest()
+
+
+def guard_counters(report):
+    adm = report.get('admission') if isinstance(report.get('admission'), dict) else {}
+    container = {fam: [r.get('packets') for r in adm.get(fam) or [] if isinstance(r, dict)]
+                 for fam in ('iptables', 'ip6tables')}
+    egress, log_ = egress_counters(report)
+    return ({'counters': container, 'log_count': (adm.get('log') or {}).get('count')},
+            {'iptables': egress, 'log_count': log_.get('count')})
+
+
+def profile_block_digests(profile):
+    return {k: hashlib.sha256(json.dumps(profile.get(k), sort_keys=True).encode('utf-8')).hexdigest()
+            for k in ('launch', 'network', 'host_shares')}
+
+
+def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensitivity=False,
+                      channels=None, ssh_fn=None, admission_fn=None, job_fn=None):
+    """containment-probe (S-02.1) on a running provisioned instance: the versioned catalogue
+    (security/containment-cases.json, refused unless its checker passes) run in one pass.
+    admission-probe and job-access-probe run unchanged for the cases they cover; the rest
+    run inside two further disposable conversation containers as the job's default user,
+    with generated canary workspaces. Every case gets its attempt, principal, observations,
+    classification, control result and verdict (PASS, FAIL or UNKNOWN), and the run a
+    runtime-configuration snapshot before and after. ``sensitivity`` also runs the
+    catalogue's mutations, each of which must be classified a success (FAIL). A denial that
+    succeeds is a stop condition: later primitives are not started. One machine verdict:
+    PASS only when every case passed. ``channels``, ``ssh_fn``, ``admission_fn`` and
+    ``job_fn`` stand in for the guest in tests."""
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    if not jobs_config(ctx.profile) or not admission_config(ctx.profile):
+        raise Refused('REFUSED', 'the profile declares no provisioning.agent_server.jobs and admission')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    catalogue, catalogue_sha, checker = load_containment_catalogue(ctx)
+    gitea = dict((catalogue.get('fingerprints') or {}).get('gitea') or {})
+    extra = parse_token_fingerprints(token_fingerprints)
+    for label, fp in extra.items():
+        gitea.setdefault(label, fp)
+    fingerprint_args = [f'{k}={v}' for k, v in sorted(gitea.items())]
+    profile = ctx.profile
+    jobs = jobs_config(profile)
+    server = provisioning_config(profile)['agent_server']
+    scratch = catalogue['scratch']
+    cases = [c for c in catalogue['cases'] if c.get('status') == 'executable']
+    by_id = {c['id']: c for c in cases}
+    body_a, fixture_problems, _ = _fixture(ctx)
+    bodies = [dict(body_a, conversation_id=cid, tags={'aieh': 's-02.1-containment'})
+              for cid in CONTAINMENT_CONVERSATIONS]
+    conversations = list(CONTAINMENT_CONVERSATIONS)
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    channels = channels or default_channels
+    ssh = (ssh_fn or (lambda rec: Ssh(profile, idir, rec['ports']['ssh'])))(record)
+    api, facts = channels(record)
+    admission_fn = admission_fn or (lambda: admission_probe(ctx, name, channels=channels,
+                                                            ssh_fn=ssh_fn))
+    job_fn = job_fn or (lambda: job_access_probe(ctx, name, token_fingerprints=fingerprint_args,
+                                                 channels=channels, ssh_fn=ssh_fn))
+    t0, started = time.time(), utc_now()
+    steps, failed, stop_conditions = [], [], []
+    state = {'created': []}
+    memo = {'primitives': {}, 'own': {}, 'mutations': {}}
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError,
+              subprocess.SubprocessError)
+
+    def run(step, func, always=False):
+        if stop_conditions and not always:
+            steps.append({'step': step, 'skipped': 'a stop condition was reached'})
+            return None
+        s = time.time()
+        entry = {'step': step, 'started_at': utc_now()}
+        try:
+            ok, detail = func()
+        except caught as exc:
+            ok, detail = False, {'error': getattr(exc, 'code', type(exc).__name__),
+                                 'message': str(exc), 'detail': getattr(exc, 'detail', None)}
+        entry.update(seconds=round(time.time() - s, 1), ok=bool(ok), detail=detail)
+        steps.append(entry)
+        log(f'containment-probe: {step}: {"ok" if ok else "FAILED"} ({entry["seconds"]} s)')
+        if not ok:
+            failed.append(step)
+        return detail
+
+    def call(*requests):
+        data = api(list(requests))
+        if data.get('session_key_occurrences'):
+            raise Refused('SECRET', 'a response carried the session key '
+                          f'({data["session_key_occurrences"]} occurrence(s), redacted)')
+        return data['responses']
+
+    def in_container(conversation, command, timeout=600):
+        response, = call({'method': 'POST',
+                          'path': f'/api/conversations/{conversation}/bash/execute_bash_command',
+                          'json': {'command': command, 'cwd': '/workspace', 'timeout': timeout},
+                          'timeout': timeout + 60})
+        body = response.get('body') if isinstance(response.get('body'), dict) else {}
+        if not _status_ok(response) or body.get('exit_code') is None:
+            raise Refused('CONTAINER', f'the command did not run in {conversation}: '
+                          f'{json.dumps(response)[:400]}')
+        return body.get('stdout') or ''
+
+    def boot_facts():
+        result = ssh.run(['python3', '-', provisioning_config(profile)['facts']['path']],
+                         input_text='import json,sys\nprint(json.dumps(json.load(open(sys.argv[1]))))\n',
+                         timeout=120)
+        try:
+            return json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            raise Refused('PROBE', f'no boot facts (rc {result.returncode})')
+
+    def snapshot(phase):
+        report = facts()
+        boot = boot_facts()
+        container_guard, egress_guard = guard_counters(report)
+        daemon = boot.get('daemon_json') if isinstance(boot.get('daemon_json'), dict) else {}
+        info = boot.get('info') if isinstance(boot.get('info'), dict) else {}
+        adm = boot.get('admission') if isinstance(boot.get('admission'), dict) else {}
+        prov = record.get('provisioning') or {}
+        snap = {
+            'phase': phase, 'collected_at': utc_now(),
+            'container_guard': container_guard, 'egress_guard': egress_guard,
+            'daemon': {'daemon_json_sha256': hashlib.sha256(json.dumps(
+                daemon, sort_keys=True).encode('utf-8')).hexdigest(),
+                'no-new-privileges': daemon.get('no-new-privileges'), 'icc': daemon.get('icc'),
+                'hosts': daemon.get('hosts'), 'SecurityOptions': info.get('SecurityOptions'),
+                'guard_unit': (adm.get('guard_unit') or {}).get('ActiveState')
+                if isinstance(adm.get('guard_unit'), dict) else None,
+                'key_check_exec_start_pre': (adm.get('keycheck') or {}).get('exec_start_pre')
+                if isinstance(adm.get('keycheck'), dict) else None},
+            'pins': {'profile_revision': record.get('profile_revision'),
+                     'profile_sha256_launch': (record.get('profile') or {}).get('sha256'),
+                     'profile_sha256_now': sha256_file(ctx.profile_path),
+                     'profile_blocks': profile_block_digests(profile),
+                     'inputs': {k: (v or {}).get('sha256') for k, v in
+                                sorted((record.get('inputs') or {}).items())},
+                     'provision_manifest_sha256': prov.get('manifest_sha256'),
+                     'provision_lock_sha256': prov.get('lock_sha256'),
+                     'image_id': prov.get('image_id'),
+                     'agent_server_binary_sha256': (prov.get('agent_server') or {}).get('binary_sha256'),
+                     'egress_falsification': prov.get('egress_falsification') is True,
+                     'routes_sha256': admission_config(profile)['routes'].get('sha256'),
+                     'fixture_sha256': server['fixture'].get('sha256'),
+                     'catalogue_sha256': catalogue_sha,
+                     'catalogue_version': catalogue.get('version')}}
+        memo.setdefault('snapshots', {})[phase] = snap
+        return True, snap
+
+    def primitive(key, fn):
+        def step():
+            rec = fn()
+            memo['primitives'][key] = rec
+            stop_conditions.extend(dict(s, primitive=key) for s in rec.get('stop_conditions') or [])
+            # the primitive's own verdict is evidence, not this step's: its cases are judged
+            # one by one below
+            return True, {'result': rec.get('result'), 'failed_steps': rec.get('failed_steps'),
+                          'stop_conditions': rec.get('stop_conditions'),
+                          'seconds': rec.get('seconds'), 'record': rec.get('record')}
+        return step
+
+    def create_step():
+        out = {}
+        for body in bodies:
+            response, = call({'method': 'POST', 'path': '/api/conversations', 'json': body,
+                              'timeout': 600})
+            out[body['conversation_id']] = {'status': response.get('status'),
+                                            'seconds': response.get('seconds')}
+            if not _status_ok(response):
+                return False, out
+            state['created'].append(body['conversation_id'])
+        report = facts()
+        view, ok = conversation_containers_view(profile, record, report)
+        keys = [k for k in (jobs.get('host_config') or {}) if k not in ('rule', 'AppArmorProfile')] + [
+            'ExtraHosts', 'NetworkMode', 'ReadonlyRootfs', 'Ulimits', 'Runtime', 'Memory',
+            'NanoCpus', 'PidsLimit', 'AutoRemove']
+        digests = {}
+        for c in report.get('containers') or []:
+            hex_id = conversation_hex(c)
+            digests[hex_id] = container_inspect_digest(c, hex_id, keys)
+        memo['docker_inspect'] = {'fields': sorted(set(keys) | {'Image', 'Config.Image', 'Config.User',
+                                                                 'AppArmorProfile', 'Binds',
+                                                                 'PortBindings'}),
+                                  'digests': digests, 'distinct': len(set(digests.values()))}
+        memo['server_user'] = report.get('server_user') or {}
+        return ok and view.get('count') == 2 and not fixture_problems and \
+            len(set(digests.values())) == 1, {'create': out, 'containers': view,
+                                              'docker_inspect': memo['docker_inspect'],
+                                              'fixture_problems': fixture_problems}
+
+    def container_run(cid, attempts, cleanup=False, timeout=900):
+        own = [d for d in own_bind_destinations(profile, cid.replace('-', ''))]
+        spec = {'scratch': scratch['container'], 'workspace': scratch['workspace'],
+                'attempts': attempts, 'cleanup': cleanup, 'own_binds': own,
+                'disk_fstypes': sorted(DISK_FSTYPES), 'max_bytes': JOB_SCAN_MAX_BYTES}
+        return _job_json(in_container(cid, container_python_z(CONTAINMENT_PROBE, spec), timeout))
+
+    def plant_step():
+        out, ok_all = {}, True
+        for cid in conversations:
+            data = container_run(cid, [{'key': 'plant', 'op': 'own-workspace', 'args': {}},
+                                       {'key': 'mountinfo', 'op': 'mountinfo',
+                                        'args': {'check': 'collect'}}])
+            res = data.get('results') or {}
+            memo['own'][cid] = {'plant': res.get('plant') or {}, 'mountinfo': res.get('mountinfo') or {},
+                                'uid': data.get('uid'), 'gid': data.get('gid'),
+                                'groups': data.get('groups')}
+            ok = (res.get('plant') or {}).get('outcome') == 'ok'
+            ok_all = ok_all and ok
+            out[cid] = {'identity': f"{data.get('uid')}:{data.get('gid')}",
+                        'canary': {k: (res.get('plant') or {}).get(k) for k in ('name', 'sha256',
+                                                                                 'listed', 'outcome')},
+                        'mounts': len((res.get('mountinfo') or {}).get('mounts') or [])}
+        return ok_all, out
+
+    def substitute(value, cid):
+        peer = conversations[1 - conversations.index(cid)]
+        values = {'own_hex': cid.replace('-', ''), 'peer_hex': peer.replace('-', ''),
+                  'own_canary': ((memo['own'].get(cid) or {}).get('plant') or {}).get('name'),
+                  'peer_canary': ((memo['own'].get(peer) or {}).get('plant') or {}).get('name'),
+                  'uid': (memo['own'].get(cid) or {}).get('uid')}
+        if isinstance(value, str):
+            for key in CONTAINMENT_PLACEHOLDERS:
+                token = '{' + key + '}'
+                if token in value:
+                    if values.get(key) in (None, ''):
+                        raise Refused('PROBE', f'placeholder {token} has no value for {cid}')
+                    value = value.replace(token, str(values[key]))
+            return value
+        if isinstance(value, list):
+            return [substitute(v, cid) for v in value]
+        if isinstance(value, dict):
+            return {k: substitute(v, cid) for k, v in value.items()}
+        return value
+
+    def exec_key(op, args):
+        args = {k: v for k, v in (args or {}).items() if k not in ('report', 'profile_value')}
+        if op == 'mountinfo':
+            args = {}
+        return op + ' ' + json.dumps(args, sort_keys=True)
+
+    def attempts_step():
+        out, ok_all = {}, True
+        for cid in conversations:
+            attempts, seen = [], set()
+            for case in cases:
+                probe = case['probe']
+                if probe.get('source') != 'containment-probe' or probe['op'] in ('own-workspace',
+                                                                                  'mountinfo'):
+                    continue
+                args = substitute(probe.get('args') or {}, cid)
+                key = exec_key(probe['op'], args)
+                if key not in seen:
+                    seen.add(key)
+                    attempts.append({'key': key, 'op': probe['op'],
+                                     'args': {k: v for k, v in args.items()
+                                              if k not in ('report', 'profile_value')}})
+            data = container_run(cid, attempts)
+            memo['own'][cid]['results'] = data.get('results') or {}
+            memo['own'][cid]['attempts'] = attempts
+            missing = [a['key'] for a in attempts if a['key'] not in (data.get('results') or {})]
+            ok_all = ok_all and not missing
+            out[cid] = {'attempts': len(attempts), 'missing': missing,
+                        'outcomes': {k: v.get('outcome') for k, v in (data.get('results') or {}).items()}}
+        return ok_all, out
+
+    def mutation_step():
+        out, ok_all = {}, True
+        mutations = catalogue.get('mutations') or []
+        cid = conversations[0]
+        attempts = [{'key': m['id'], 'op': m['op'], 'args': substitute(m.get('args') or {}, cid)}
+                    for m in mutations]
+        data = container_run(cid, attempts)
+        for m in mutations:
+            res = (data.get('results') or {}).get(m['id']) or {}
+            memo['mutations'][m['id']] = {'conversation': cid, 'attempt': attempts[mutations.index(m)],
+                                          'result': res}
+            out[m['id']] = res.get('outcome')
+        return ok_all, out
+
+    def cleanup_and_delete_step():
+        out = {'cleanup': {}, 'delete': {}}
+        for cid in list(state['created']):
+            try:
+                out['cleanup'][cid] = container_run(cid, [], cleanup=True, timeout=120).get('cleanup')
+            except caught as exc:
+                out['cleanup'][cid] = {'error': str(exc)[:200]}
+        for cid in list(state['created']):
+            response, = call({'method': 'DELETE', 'path': f'/api/conversations/{cid}',
+                              'timeout': 300})
+            out['delete'][cid] = response.get('status')
+            if _status_ok(response):
+                state['created'].remove(cid)
+        report = facts()
+        view, ok = conversation_containers_view(profile, record, report)
+        count, = call({'method': 'GET', 'path': '/api/conversations/count'})
+        cleaned = all(isinstance(v, dict) and not any(v.values()) for v in out['cleanup'].values())
+        out.update(containers_after=view.get('count'), count_after=count.get('body'))
+        return not state['created'] and ok and view.get('count') == 0 and count.get('body') == 0 \
+            and cleaned, out
+
+    run('catalogue checked (tools/check_containment_cases.py)', lambda: (True, {
+        'path': '/'.join(CONTAINMENT_CATALOGUE), 'sha256': catalogue_sha,
+        'version': catalogue.get('version'), 'cases': len(cases),
+        'gitea_fingerprint_labels': sorted(gitea)}))
+    run('runtime snapshot (before)', lambda: snapshot('before'))
+    run('admission-probe (S-01.3.1 primitive, unchanged)', primitive('admission-probe', admission_fn))
+    run('job-access-probe (S-01.3.2 and S-01.4 primitive, unchanged)',
+        primitive('job-access-probe', job_fn))
+    run('create two disposable containment conversations', create_step)
+    if state['created']:
+        run('plant generated canary workspaces (positive control)', plant_step)
+        run('containment attempts from inside each job', attempts_step)
+        if sensitivity:
+            run('live sensitivity mutations', mutation_step)
+    run('remove the probe scratch and delete the conversations', cleanup_and_delete_step,
+        always=bool(state['created']))
+    run('runtime snapshot (after)', lambda: snapshot('after'), always=True)
+
+    # ---- classify every case
+    context = {'gitea_labels': sorted(gitea),
+               'secret_names': (jobs.get('environment') or {}).get('secret_names'),
+               'required_security_options': (provisioning_config(profile).get('moby') or {})
+               .get('required_security_options')}
+
+    def own_observations(case, override=None):
+        probe = override or case['probe']
+        obs = []
+        for cid in conversations:
+            own = memo['own'].get(cid) or {}
+            op_ = probe['op']
+            if op_ == 'own-workspace':
+                res = own.get('plant')
+                if res:
+                    obs.append(_obs(cid, res.get('outcome'), name=res.get('name')))
+                continue
+            if op_ == 'mountinfo':
+                mounts = (own.get('mountinfo') or {}).get('mounts')
+                if mounts is None:
+                    continue
+                peer = conversations[1 - conversations.index(cid)]
+                peer_mounts = ((memo['own'].get(peer) or {}).get('mountinfo') or {}).get('mounts')
+                got, detail = mountinfo_outcome(probe['args'].get('check'), mounts,
+                                                own_bind_destinations(profile, cid.replace('-', '')),
+                                                peer_mounts)
+                obs.append(_obs(cid, got, **detail))
+                continue
+            if override is not None:
+                res = (memo['mutations'].get(override['id']) or {}).get('result')
+                if res and cid == memo['mutations'][override['id']]['conversation']:
+                    obs.append(_obs(cid, res.get('outcome'), **{k: v for k, v in res.items()
+                                                                 if k != 'outcome'}))
+                continue
+            results = own.get('results')
+            if results is None:
+                continue
+            try:
+                key = exec_key(op_, substitute(probe.get('args') or {}, cid))
+            except Refused:
+                continue
+            res = results.get(key)
+            if res is None:
+                continue
+            outcome = res.get('outcome')
+            if op_ == 'canary-scan' and (probe.get('args') or {}).get('report') == 'control':
+                outcome = res.get('control_outcome')
+            obs.append(_obs(cid, outcome, **{k: v for k, v in res.items()
+                                             if k not in ('outcome', 'control_outcome')}))
+        return obs
+
+    observations = {}
+    for case in cases:
+        probe = case['probe']
+        source = probe.get('source')
+        if source == 'containment-probe':
+            observations[case['id']] = own_observations(case)
+        else:
+            rec = memo['primitives'].get(source)
+            observations[case['id']] = CONTAINMENT_EXTRACTORS[source](
+                rec, probe.get('extract'), probe.get('args') or {}, context) if rec else []
+    verdicts, reasons = {}, {}
+    order = [c for c in cases if c['kind'] == 'permitted'] + \
+        [c for c in cases if c['kind'] in ('denial', 'hardening')] + \
+        [c for c in cases if c['kind'] == 'deviation']
+    for case in order:
+        control = verdicts.get(case.get('positive_control')) if case.get('positive_control') else None
+        comp = {cid: verdicts.get(cid) for cid in case.get('compensated_by') or []}
+        verdict, reason, stop = containment_verdict(case, observations[case['id']], control, comp)
+        verdicts[case['id']], reasons[case['id']] = verdict, reason
+        if stop:
+            stop_conditions.append({'condition': 'a denial probe succeeded', 'case': case['id'],
+                                    'observations': observations[case['id']]})
+    snapshots = memo.get('snapshots') or {}
+    case_records = []
+    for case in cases:
+        snap = {}
+        for key in case.get('depends_on') or []:
+            if key == 'docker_inspect':
+                snap[key] = memo.get('docker_inspect')
+            else:
+                snap[key] = {phase: (s or {}).get(key) for phase, s in snapshots.items()}
+        case_records.append({
+            'id': case['id'], 'category': case['category'], 'kind': case['kind'],
+            'principal': case['principal'], 'attempt': case['attempt'], 'probe': case['probe'],
+            'expected': case['expected']['outcomes'], 'enforcement': case['enforcement'],
+            'observations': observations[case['id']],
+            'classification': sorted({o['outcome'] for o in observations[case['id']]}),
+            'positive_control': case.get('positive_control'),
+            'control_verdict': verdicts.get(case.get('positive_control')),
+            'compensated_by': {c: verdicts.get(c) for c in case.get('compensated_by') or []} or None,
+            'verdict': verdicts[case['id']], 'reason': reasons[case['id']],
+            'carried': case.get('carried'), 'snapshot': snap})
+    sensitivity_rows = []
+    if sensitivity:
+        for m in catalogue.get('mutations') or []:
+            case = by_id.get(m['case'])
+            if case is None:
+                continue
+            override = {'id': m['id'], 'op': m['op'], 'args': m.get('args') or {}}
+            obs = own_observations(case, override)
+            verdict, reason, _ = containment_verdict(case, obs, verdicts.get(case.get('positive_control')))
+            sensitivity_rows.append({'mutation': m['id'], 'case': m['case'], 'category': case['category'],
+                                     'attempt': {'op': m['op'], 'args': m.get('args')},
+                                     'observations': obs, 'classified': verdict, 'reason': reason,
+                                     'expected': 'FAIL',
+                                     'ok': verdict == 'FAIL' and any(o['outcome'] in checker.SUCCESS_OUTCOMES
+                                                                     for o in obs)})
+    totals = {v: sum(1 for x in verdicts.values() if x == v) for v in ('PASS', 'FAIL', 'UNKNOWN')}
+    by_category = {}
+    for case in cases:
+        row = by_category.setdefault(case['category'], {'PASS': 0, 'FAIL': 0, 'UNKNOWN': 0})
+        row[verdicts[case['id']]] += 1
+    sensitivity_ok = all(r['ok'] for r in sensitivity_rows) if sensitivity else None
+    if stop_conditions or totals['FAIL'] or failed or (sensitivity and not sensitivity_ok):
+        result = 'FAIL'
+    elif totals['UNKNOWN']:
+        result = 'UNKNOWN'
+    else:
+        result = 'PASS'
+    principal = {'uid_gid': sorted({f"{(o or {}).get('uid')}:{(o or {}).get('gid')}"
+                                    for o in memo['own'].values()}),
+                 'groups': sorted({str((o or {}).get('groups')) for o in memo['own'].values()}),
+                 'server_user': memo.get('server_user')}
+    out = {'schema': CONTAINMENT_SCHEMA, 'operation': 'containment-probe',
+           'labels': labels(profile), 'profile': profile['name'], 'instance': name,
+           'catalogue': {'path': '/'.join(CONTAINMENT_CATALOGUE), 'sha256': catalogue_sha,
+                         'version': catalogue.get('version')},
+           'conversations': conversations, 'principal': principal,
+           'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
+           'result': result, 'totals': totals, 'by_category': by_category,
+           'failed_steps': failed, 'stop_conditions': stop_conditions,
+           'snapshots': snapshots, 'docker_inspect': memo.get('docker_inspect'),
+           'cases': case_records,
+           'sensitivity': {'ran': bool(sensitivity), 'ok': sensitivity_ok, 'rows': sensitivity_rows},
+           'steps': steps, 'primitives': memo['primitives']}
+    out['record'] = write_record(idir, 'containment-probe', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
 # ---------------------------------------------------------------- host census (S-01.4)
 
 HOST_CENSUS_SCHEMA = 'ai-engineering-harness/profiles/host-census-record/v1'
@@ -9129,7 +10333,7 @@ def main(argv=None):
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
-               'job-access-probe'):
+               'job-access-probe', 'containment-probe'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -9150,9 +10354,13 @@ def main(argv=None):
                            help='a durable root to inventory before and after each destroy and '
                                 'recreate (repeatable; stands for Owner data)')
             p.add_argument('--out', help='also write the smoke record to this new file')
-        if op in ('conversation-smoke', 'admission-probe', 'job-access-probe'):
+        if op in ('conversation-smoke', 'admission-probe', 'job-access-probe', 'containment-probe'):
             p.add_argument('--out', help='also write the record to this new file')
-        if op == 'job-access-probe':
+        if op == 'containment-probe':
+            p.add_argument('--sensitivity', action='store_true',
+                           help="S-02.1: also run the catalogue's live mutations, each of which "
+                                'must be classified a success (FAIL)')
+        if op in ('job-access-probe', 'containment-probe'):
             p.add_argument('--token-fingerprint', action='append', default=[],
                            help='LABEL=sha256:<16 hex digits>: a Gitea token fingerprint '
                                 '(S-01.2.2 form) to search for inside the jobs (repeatable)')
@@ -9235,6 +10443,9 @@ def main(argv=None):
             result = admission_probe(ctx, args.name, args.out)
         elif op == 'job-access-probe':
             result = job_access_probe(ctx, args.name, args.out, args.token_fingerprint)
+        elif op == 'containment-probe':
+            result = containment_probe(ctx, args.name, args.out, args.token_fingerprint,
+                                       args.sensitivity)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:
@@ -9244,7 +10455,7 @@ def main(argv=None):
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke',
-                                   'admission-probe', 'job-access-probe'):
+                                   'admission-probe', 'job-access-probe', 'containment-probe'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \

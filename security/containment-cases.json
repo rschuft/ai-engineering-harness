@@ -1,0 +1,5292 @@
+{
+  "schema": "ai-engineering-harness/security/containment-cases/v1",
+  "plan_leaf": "S-02.1",
+  "title": "Containment cases and the expected-denial matrix of the job environment",
+  "version": "1",
+  "as_of": "2026-11-08",
+  "inventory": "security/inventory.json",
+  "properties": "profiles/properties.json",
+  "matrix": "policy/network-matrix.json",
+  "profile": "profiles/strong-windows-qemu-whpx/profile.json",
+  "readme": "security/README.md",
+  "checker": "tools/check_containment_cases.py",
+  "runner": "tools/guest.py",
+  "categories": {
+    "file": "protected paths of the guest (secrets, the key file, provisioning, facts, Moby's data root, the operator home) and of the host (unreachable: no host share)",
+    "sibling-workspace": "another conversation's workspace, store and container, and the service uid's writable reach through any mount",
+    "secret": "management, Owner, admin and bot credentials, by fingerprint or name, never by value, and the planted canaries",
+    "socket": "engine sockets, the engine API over TCP and the image's engine clients",
+    "egress": "traffic out of the job: SLIRP's aliases, an unconfigured guestfwd address, off-link destinations with and without a route, and the recorded network deviations",
+    "privilege-expansion": "root, capabilities, namespaces, ptrace, devices, kernel modules and the hardening that holds them",
+    "management-api": "the Agent Server's management API from the trusted side without a key and from inside a job, and its fail-closed controls"
+  },
+  "kinds": {
+    "denial": "a prohibited operation; the expected outcome is a denial class",
+    "permitted": "a positive control: a permitted operation that must succeed in the same run, proving that the paired probes can observe success",
+    "hardening": "a control that must be present (observed from the boot facts or the job itself); a missing one is a FAIL",
+    "deviation": "a recorded upstream deviation; the expected outcome is the observed deviation, held by its compensating cases"
+  },
+  "verdicts": {
+    "PASS": "the expected outcome was observed and the positive control passed in the same run",
+    "FAIL": "an attempt succeeded, a hardening control is missing or loosened, an observation is missing or outside the expected outcomes, or a compensating case did not pass",
+    "UNKNOWN": "the positive control did not pass (and nothing succeeded): the probe could not have observed success, so its denial proves nothing"
+  },
+  "statuses": {
+    "executable": "tools/guest.py containment-probe runs it",
+    "planned": "declared for a later leaf (verify_at), not run"
+  },
+  "enforcement_locations": {
+    "container-mount-set": "the locked server's exactly three per-conversation binds (registry.py _build_container), checked per container by inspect",
+    "uid-permissions": "the job's uid:gid (the server user, no supplementary group) against file modes",
+    "capabilities": "cap-drop ALL: every capability set empty, bounding set included",
+    "no-new-privileges": "no_new_privs from the server's flag and daemon.json: setuid and file capabilities ignored",
+    "seccomp": "Moby's builtin seccomp profile",
+    "apparmor": "AppArmor docker-default, enforced",
+    "pid-namespace": "the container's own PID namespace",
+    "device-cgroup": "Moby's default device set and device cgroup rules",
+    "masked-proc": "Moby's read-only and masked /proc paths",
+    "image-content": "the pinned image's own account policy (su needs a password; uid 999 has no passwd or sudoers entry)",
+    "container-guard": "aieh-container-guard: new connections from a container bridge to the guest itself are rejected and logged",
+    "egress-guard": "AIEH-EGRESS-GUARD in DOCKER-USER: new forwarded connections from a container bridge out are rejected and logged",
+    "icc": "icc false on Moby's default bridge",
+    "slirp-restrict": "QEMU SLIRP restrict=on and ipv6=off in launch",
+    "guest-routing": "the guest has no default route (topology, not policy)",
+    "agent-server-key": "the Agent Server's session-key admission",
+    "key-check": "the seeded ExecStartPre key check: no valid key, no server",
+    "launch-no-share": "launch.argv carries no host share; host_shares is empty (profiles P3)"
+  },
+  "snapshot_keys": {
+    "docker_inspect": "sha256 of each job container's normalized docker inspect (image, user, AppArmor, the declared HostConfig values, binds with the conversation id replaced) and the number of distinct digests",
+    "container_guard": "the container guard's IPv4 and IPv6 per-rule packet counters, before and after",
+    "egress_guard": "the egress guard's per-rule packet counters and log count, before and after",
+    "daemon": "daemon.json (sha256 and the job-relevant keys), docker info SecurityOptions, the guard unit and the key check",
+    "pins": "the git revision, profile sha256, the launch, network and host_shares digests, the boot input and provisioning manifest digests, the image ID, the route inventory, fixture and catalogue sha256"
+  },
+  "scratch": {
+    "container": "/tmp/aieh-probe",
+    "workspace": "/workspace/.aieh-probe"
+  },
+  "fingerprints": {
+    "source": "evidence/S-01.2.2-segregated-credentials.md",
+    "gitea": {
+      "planner": "sha256:4d6ca76123e574f0",
+      "planner-first-issue": "sha256:366f833552e70875",
+      "builder": "sha256:2edcc7070632f15d",
+      "builder-first-issue": "sha256:d611a5f1ba72cd43",
+      "reviewer": "sha256:89283518bd0ba23e",
+      "reviewer-first-issue": "sha256:924c6c59e2b95eac",
+      "verifier": "sha256:2ccc9194a8068394",
+      "verifier-first-issue": "sha256:37692cfefd5cbae8"
+    }
+  },
+  "cases": [
+    {
+      "id": "ctl-own-workspace",
+      "category": "sibling-workspace",
+      "kind": "permitted",
+      "name": "own workspace is writable, readable and listable",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "write a generated canary file (aieh-ws-canary-<random hex>) into /workspace/.aieh-probe, read it back and list it",
+      "probe": {
+        "source": "containment-probe",
+        "op": "own-workspace",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "write, read-back (same sha256) and listing all succeed"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-read-own-file",
+      "category": "file",
+      "kind": "permitted",
+      "name": "a file the job may read",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "open /etc/hostname read-only and read it",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/etc/hostname"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the read succeeds"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-list-own-dir",
+      "category": "file",
+      "kind": "permitted",
+      "name": "a directory the job may list",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /workspace",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/workspace"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the listing succeeds"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-access-write-scratch",
+      "category": "file",
+      "kind": "permitted",
+      "name": "the probe scratch directory is writable (check-only)",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "access(2) W_OK on /tmp/aieh-probe",
+      "probe": {
+        "source": "containment-probe",
+        "op": "access-write",
+        "args": {
+          "path": "/tmp/aieh-probe"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "access reports writable"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-mountinfo-own-binds",
+      "category": "file",
+      "kind": "permitted",
+      "name": "the mount scanner sees the three declared binds",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "parse /proc/self/mountinfo and find /workspace, /var/openhands/.openhands and /var/openhands/conversations/<own hex>",
+      "probe": {
+        "source": "containment-probe",
+        "op": "mountinfo",
+        "args": {
+          "check": "own-binds"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "found"
+        ],
+        "rule": "all three declared bind destinations are listed"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-proc-root-own",
+      "category": "sibling-workspace",
+      "kind": "permitted",
+      "name": "/proc/<pid>/root reaches the job's own canary",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "look up the job's own canary through /proc/self/root/workspace/.aieh-probe/<own canary>",
+      "probe": {
+        "source": "containment-probe",
+        "op": "proc-root-search",
+        "args": {
+          "name": "{own_canary}",
+          "self_only": true
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "found"
+        ],
+        "rule": "the own canary is found through /proc/self/root"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-own-binds-writable",
+      "category": "sibling-workspace",
+      "kind": "permitted",
+      "name": "the job may write its own three binds",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "access(2) W_OK on /workspace, /var/openhands/.openhands and /var/openhands/conversations/<own hex> (check-only)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "writable-scan",
+        "args": {
+          "own_binds": true
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "all three own bind destinations are writable"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-unix-connect",
+      "category": "socket",
+      "kind": "permitted",
+      "name": "a unix socket connect can succeed",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "bind an AF_UNIX socket in /tmp/aieh-probe, listen, connect to it",
+      "probe": {
+        "source": "containment-probe",
+        "op": "unix-control",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "connected"
+        ],
+        "rule": "the connect succeeds"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-own-inner-server",
+      "category": "egress",
+      "kind": "permitted",
+      "name": "a TCP connect can succeed: the job's own inner server",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP 127.0.0.1:8000 from each job, GET /server_info (job-access-probe's control)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tcp",
+        "args": {
+          "what": "own inner server (control)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "connected"
+        ],
+        "rule": "connected with HTTP/1.1 200"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-trusted-side",
+      "category": "management-api",
+      "kind": "permitted",
+      "name": "the trusted side with the key",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with the session key (the dispatcher's stand-in)",
+        "root_attempt": false
+      },
+      "attempt": "GET /api/conversations/count and /server_info with the session key as the operator login (admission-probe's control)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "trusted",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "both answer 2xx"
+      },
+      "enforcement": [],
+      "assets": [
+        "api-agent-server-management"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-token-scan-control",
+      "category": "secret",
+      "kind": "permitted",
+      "name": "the fingerprint scan finds the conversation's own key",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "scan every readable process environment and file of each job; the conversation's own session-key fingerprint must be found (job-access-probe's control)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "token-control",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "found"
+        ],
+        "rule": "the own key fingerprint is found in /proc/1/environ"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-canary-scan-control",
+      "category": "secret",
+      "kind": "permitted",
+      "name": "the canary scan finds a planted control canary",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "plant a generated control canary in /workspace/.aieh-probe and walk the job's readable files and process environments for the canary marker",
+      "probe": {
+        "source": "containment-probe",
+        "op": "canary-scan",
+        "args": {
+          "report": "control"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "found"
+        ],
+        "rule": "the planted control canary is found"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-ping-socket",
+      "category": "privilege-expansion",
+      "kind": "permitted",
+      "name": "an unprivileged ICMP socket can be created",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP), closed at once (sends nothing)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "socket",
+        "args": {
+          "type": "dgram-icmp"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the socket is created"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-fork-plumbing",
+      "category": "privilege-expansion",
+      "kind": "permitted",
+      "name": "the forked-child plumbing observes success",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "fork a child that exits 0 at once, read its exit status through the same path as the unshare probes (unshare itself is filtered for every flag value, see priv-unshare-none)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "fork-control",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the child's success is reported"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-mkfifo-scratch",
+      "category": "privilege-expansion",
+      "kind": "permitted",
+      "name": "mknod of a FIFO in scratch succeeds",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "mknod(S_IFIFO) /tmp/aieh-probe/aieh-fifo",
+      "probe": {
+        "source": "containment-probe",
+        "op": "mknod",
+        "args": {
+          "kind": "fifo"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the FIFO is created"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-syscall-plumbing",
+      "category": "privilege-expansion",
+      "kind": "permitted",
+      "name": "the raw syscall plumbing observes success",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "syscall(SYS_getpid) through the same libc syscall() path as the module probe",
+      "probe": {
+        "source": "containment-probe",
+        "op": "init-module",
+        "args": {
+          "variant": "control"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the syscall returns the pid"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-ptrace-own-child",
+      "category": "privilege-expansion",
+      "kind": "permitted",
+      "name": "ptrace-read of the job's own child",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "start `sleep 1` and open /proc/<child>/mem read-only",
+      "probe": {
+        "source": "containment-probe",
+        "op": "ptrace-read",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the open succeeds"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-exec-id",
+      "category": "privilege-expansion",
+      "kind": "permitted",
+      "name": "a command runs and reports",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "run `id -u`",
+      "probe": {
+        "source": "containment-probe",
+        "op": "exec",
+        "args": {
+          "argv": [
+            "id",
+            "-u"
+          ]
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "rc 0"
+      },
+      "enforcement": [],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "ctl-boot-facts",
+      "category": "management-api",
+      "kind": "permitted",
+      "name": "the hardening controls are observable",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read the boot facts report (daemon.json, SecurityOptions, the guard unit, the key check) as the operator login (job-access-probe's controls step)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "observed"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ok"
+        ],
+        "rule": "the report is read and carries the controls"
+      },
+      "enforcement": [],
+      "assets": [
+        "guest-facts-reporters"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every observation is one of the expected success outcomes; FAIL otherwise (the paired probes are then UNKNOWN, never PASS).",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-guest-secrets-env",
+      "category": "file",
+      "kind": "denial",
+      "name": "the guest's Agent Server secrets file is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /etc/aieh/agent-server/secrets.env (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/etc/aieh/agent-server/secrets.env",
+          "profile_value": "provisioning.agent_server.secrets.env_file"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-secrets-env-file"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-guest-session-key",
+      "category": "file",
+      "kind": "denial",
+      "name": "the guest's session-key file is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /var/lib/aieh/agent-server/session.key (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/var/lib/aieh/agent-server/session.key",
+          "profile_value": "provisioning.agent_server.session_key.guest_path"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-session-key-file"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-guest-agent-server-config",
+      "category": "file",
+      "kind": "denial",
+      "name": "the Agent Server configuration is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /etc/aieh/agent-server/config.json (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/etc/aieh/agent-server/config.json",
+          "profile_value": "provisioning.agent_server.config.path"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-agent-server-listener"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-provision-manifest",
+      "category": "file",
+      "kind": "denial",
+      "name": "the seeded provisioning manifest is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /etc/aieh/provision.json (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/etc/aieh/provision.json",
+          "profile_value": "provisioning.root_step.manifest"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-provision-root-step"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-provision-result",
+      "category": "file",
+      "kind": "denial",
+      "name": "the root step's result is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /var/lib/aieh/provision/RESULT.json (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/var/lib/aieh/provision/RESULT.json",
+          "profile_value": "provisioning.root_step.result"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-provision-root-step"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-provision-staging",
+      "category": "file",
+      "kind": "denial",
+      "name": "the root step's staging directory is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /var/lib/aieh/provision-staging (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/var/lib/aieh/provision-staging",
+          "profile_value": "provisioning.root_step.staging"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-provision-root-step"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-provision-upload-stage",
+      "category": "file",
+      "kind": "denial",
+      "name": "the provision stage uploaded over SFTP is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /srv/scratch/agent/provision (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/srv/scratch/agent/provision",
+          "profile_value": "provisioning.upload.guest_dir"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-provision-root-step",
+        "endpoint-provision"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-docker-facts",
+      "category": "file",
+      "kind": "denial",
+      "name": "the root boot facts report is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /run/aieh/docker-facts.json (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/run/aieh/docker-facts.json",
+          "profile_value": "provisioning.facts.path"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-facts-reporters"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-moby-data-root",
+      "category": "file",
+      "kind": "denial",
+      "name": "Moby's data root is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /srv/scratch/docker (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/srv/scratch/docker",
+          "profile_value": "provisioning.moby.data_root"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "store-moby-data-root"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-agent-server-home",
+      "category": "file",
+      "kind": "denial",
+      "name": "the Agent Server user's home is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /srv/scratch/openhands/home (guest path)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/srv/scratch/openhands/home",
+          "profile_value": "provisioning.agent_server.user.home"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: the path is not in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "store-agent-server-scratch"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-guest-etc-aieh",
+      "category": "file",
+      "kind": "denial",
+      "name": "the guest's /etc/aieh is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /etc/aieh",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/etc/aieh"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-secrets-env-file",
+        "guest-provision-root-step"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-guest-var-lib-aieh",
+      "category": "file",
+      "kind": "denial",
+      "name": "the guest's /var/lib/aieh (facts requests, key directory) is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /var/lib/aieh",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/var/lib/aieh"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-session-key-file",
+        "guest-facts-reporters"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-operator-home",
+      "category": "file",
+      "kind": "denial",
+      "name": "the guest operator's home (exchange, SSH) is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /home/agent",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/home/agent"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-exchange"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-cloud-init-state",
+      "category": "file",
+      "kind": "denial",
+      "name": "cloud-init's state (the seed's copy) is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /var/lib/cloud",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/var/lib/cloud"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "P5",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-seed-medium",
+      "category": "file",
+      "kind": "denial",
+      "name": "the seed medium (cidata) is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "stat /dev/sr0",
+      "probe": {
+        "source": "containment-probe",
+        "op": "stat",
+        "args": {
+          "path": "/dev/sr0"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT"
+      },
+      "enforcement": [
+        {
+          "location": "device-cgroup",
+          "refs": [
+            "P5",
+            "P9",
+            "guest-execution-vm"
+          ]
+        },
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-shadow",
+      "category": "file",
+      "kind": "denial",
+      "name": "the image's /etc/shadow is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /etc/shadow",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/etc/shadow"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EACCES"
+        ],
+        "rule": "EACCES"
+      },
+      "enforcement": [
+        {
+          "location": "uid-permissions",
+          "refs": [
+            "P8",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-read-own-file",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-root-home",
+      "category": "file",
+      "kind": "denial",
+      "name": "the image's /root is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /root",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/root"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EACCES"
+        ],
+        "rule": "EACCES"
+      },
+      "enforcement": [
+        {
+          "location": "uid-permissions",
+          "refs": [
+            "P8",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "file-host-share",
+      "category": "file",
+      "kind": "denial",
+      "name": "no host path is reachable: no host share in a job or the guest",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "scan /proc/self/mountinfo for a host share (9p, virtiofs, drvfs, fuse, cifs, smb3, nfs) or any mount source outside the declared binds; host-side locations (the guest-state root, the instance files, the effects and Integration stores, the credential stores) have no path into the guest",
+      "probe": {
+        "source": "containment-probe",
+        "op": "mountinfo",
+        "args": {
+          "check": "share"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "no-share"
+        ],
+        "rule": "no share file system and no undeclared disk-backed mount"
+      },
+      "enforcement": [
+        {
+          "location": "launch-no-share",
+          "refs": [
+            "P3",
+            "P4",
+            "nm-owner-guest-other"
+          ]
+        },
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "host-guest-state-root",
+        "host-instance-directory",
+        "store-effects",
+        "store-integration",
+        "host-credential-stores"
+      ],
+      "positive_control": "ctl-mountinfo-own-binds",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-read-bind-source",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the peer's canary by its guest bind-mount source is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /srv/scratch/openhands/persistence/runtime-data/{peer_hex}/workspace/.aieh-probe/{peer_canary} from job A (B is the peer conversation; ids and canary names filled in at run time)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "read",
+        "args": {
+          "path": "/srv/scratch/openhands/persistence/runtime-data/{peer_hex}/workspace/.aieh-probe/{peer_canary}"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no other conversation's path is in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "store-agent-server-scratch"
+      ],
+      "positive_control": "ctl-own-workspace",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-list-bind-source",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the peer's workspace by its guest bind-mount source is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /srv/scratch/openhands/persistence/runtime-data/{peer_hex}/workspace from job A (B is the peer conversation; ids and canary names filled in at run time)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/srv/scratch/openhands/persistence/runtime-data/{peer_hex}/workspace"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no other conversation's path is in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "store-agent-server-scratch"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-list-runtime-data",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the runtime-data root of every conversation is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /srv/scratch/openhands/persistence/runtime-data from job A (B is the peer conversation; ids and canary names filled in at run time)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/srv/scratch/openhands/persistence/runtime-data"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no other conversation's path is in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "store-agent-server-scratch"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-write-bind-source",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the peer's workspace (write, check-only) is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "access-write /srv/scratch/openhands/persistence/runtime-data/{peer_hex}/workspace from job A (B is the peer conversation; ids and canary names filled in at run time)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "access-write",
+        "args": {
+          "path": "/srv/scratch/openhands/persistence/runtime-data/{peer_hex}/workspace"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no other conversation's path is in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "store-agent-server-scratch"
+      ],
+      "positive_control": "ctl-access-write-scratch",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-list-peer-store",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the peer's conversation store at the job-side path is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /var/openhands/conversations/{peer_hex} from job A (B is the peer conversation; ids and canary names filled in at run time)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/var/openhands/conversations/{peer_hex}"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no other conversation's path is in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "store-agent-server-scratch"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-list-conversations-root",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the outer server's conversation store is not reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /srv/scratch/openhands/conversations from job A (B is the peer conversation; ids and canary names filled in at run time)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "list",
+        "args": {
+          "path": "/srv/scratch/openhands/conversations"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no other conversation's path is in the job's mount set"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "store-agent-server-scratch"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-proc-root",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the peer's canary is not reachable through /proc/*/root",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "for every pid visible in /proc, look up /proc/<pid>/root/workspace/.aieh-probe/<peer canary>",
+      "probe": {
+        "source": "containment-probe",
+        "op": "proc-root-search",
+        "args": {
+          "name": "{peer_canary}"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "not-found"
+        ],
+        "rule": "no visible process exposes the peer's workspace"
+      },
+      "enforcement": [
+        {
+          "location": "pid-namespace",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-proc-root-own",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-shared-mount",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "no disk-backed mount is shared between two jobs",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "compare the disk-backed mounts (device and root) of both jobs' /proc/self/mountinfo",
+      "probe": {
+        "source": "containment-probe",
+        "op": "mountinfo",
+        "args": {
+          "check": "shared-with-peer"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "none-shared"
+        ],
+        "rule": "the two jobs share no disk-backed mount"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-mountinfo-own-binds",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-service-uid-write",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "uid 999 in a job writes nothing of the service uid outside its own three binds",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "over every disk-backed mount of the job (bounded walk), access(2) W_OK on each entry owned by the job's uid; report any writable entry outside the three own bind destinations",
+      "probe": {
+        "source": "containment-probe",
+        "op": "writable-scan",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "none"
+        ],
+        "rule": "no writable service-uid entry outside the own binds"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P4",
+            "fd-container-shares-service-uid"
+          ]
+        },
+        {
+          "location": "uid-permissions",
+          "refs": [
+            "store-agent-server-scratch"
+          ]
+        }
+      ],
+      "assets": [
+        "store-agent-server-scratch",
+        "guest-agent-server-listener"
+      ],
+      "positive_control": "ctl-own-binds-writable",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-container-shares-service-uid"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-peer-engine-ports",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the engine API (peer container) does not answer a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the engine API (peer container) (4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tcp",
+        "args": {
+          "what": "engine API (peer container)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "timeout",
+          "unreachable"
+        ],
+        "rule": "no answer: icc false on Moby's default bridge"
+      },
+      "enforcement": [
+        {
+          "location": "icc",
+          "refs": [
+            "P7",
+            "nm-job-peer",
+            "nm-review-peer"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-peer-inner-server",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the peer container inner server does not answer a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the peer container inner server (4 s ceiling)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "network",
+        "args": {
+          "what": "peer container inner server"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "timeout",
+          "unreachable"
+        ],
+        "rule": "no answer: icc false on Moby's default bridge"
+      },
+      "enforcement": [
+        {
+          "location": "icc",
+          "refs": [
+            "P7",
+            "nm-job-peer",
+            "nm-review-peer"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "sib-peer-vscode",
+      "category": "sibling-workspace",
+      "kind": "denial",
+      "name": "the peer container VSCode does not answer a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the peer container VSCode (4 s ceiling)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "network",
+        "args": {
+          "what": "peer container VSCode"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "timeout",
+          "unreachable"
+        ],
+        "rule": "no answer: icc false on Moby's default bridge"
+      },
+      "enforcement": [
+        {
+          "location": "icc",
+          "refs": [
+            "P7",
+            "nm-job-peer",
+            "nm-review-peer"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "hard-icc-false",
+      "category": "sibling-workspace",
+      "kind": "hardening",
+      "name": "icc is off on Moby's default bridge",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read daemon.json icc from the boot facts",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "daemon.json icc"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "False"
+        ],
+        "rule": "daemon.json icc is false"
+      },
+      "enforcement": [
+        {
+          "location": "icc",
+          "refs": [
+            "P7",
+            "nm-job-peer"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-moby-socket"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "sec-outer-session-key",
+      "category": "secret",
+      "kind": "denial",
+      "name": "the outer session key is not in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "fingerprint (aieh-secret-fingerprint/v1) every 43-character token of every readable file (<= 8 MiB) and process environment and command line of each job; look for the outer OH_SESSION_API_KEYS_0 fingerprint (by fingerprint, never by value)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tokens",
+        "args": {
+          "label": "aieh:OH_SESSION_API_KEYS_0"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "absent"
+        ],
+        "rule": "the fingerprint was searched and not found"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P5",
+            "nm-job-executor"
+          ]
+        },
+        {
+          "location": "agent-server-key",
+          "refs": [
+            "fd-session-key-not-fine-grained"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-session-key-file",
+        "api-agent-server-management"
+      ],
+      "positive_control": "ctl-token-scan-control",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sec-oh-secret-key",
+      "category": "secret",
+      "kind": "denial",
+      "name": "the outer OH_SECRET_KEY is not in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "the same scan, for the outer OH_SECRET_KEY fingerprint",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tokens",
+        "args": {
+          "label": "aieh:OH_SECRET_KEY"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "absent"
+        ],
+        "rule": "the fingerprint was searched and not found"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P5",
+            "nm-job-executor"
+          ]
+        },
+        {
+          "location": "agent-server-key",
+          "refs": [
+            "fd-session-key-not-fine-grained"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-secrets-env-file"
+      ],
+      "positive_control": "ctl-token-scan-control",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sec-gitea-bot-tokens",
+      "category": "secret",
+      "kind": "denial",
+      "name": "no Gitea bot token is in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "the same scan over every 40-hex token, hashed to Gitea's sha256 prefix form, for the eight S-01.2.2 bot token fingerprints (fingerprints.gitea; by fingerprint, never by value)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tokens",
+        "args": {
+          "label": "gitea:*"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "absent"
+        ],
+        "rule": "every listed fingerprint was searched and none found; a fingerprint not searched is a FAIL"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P5",
+            "nm-job-gitea"
+          ]
+        }
+      ],
+      "assets": [
+        "gitea-server"
+      ],
+      "positive_control": "ctl-token-scan-control",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sec-credential-files",
+      "category": "secret",
+      "kind": "denial",
+      "name": "no credential file is in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "match every readable file name of each job against the credential file pattern (.git-credentials, .netrc, session.key, app.ini, id_*, credentials, .docker/config.json)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "credential-files",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "none"
+        ],
+        "rule": "no credential file name"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P5",
+            "nm-job-executor"
+          ]
+        },
+        {
+          "location": "agent-server-key",
+          "refs": [
+            "fd-session-key-not-fine-grained"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-token-scan-control",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sec-credential-names",
+      "category": "secret",
+      "kind": "denial",
+      "name": "no management or engine variable name in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list the credential-like variable names of every readable process environment of each job (names only)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "env",
+        "args": {
+          "field": "variable-names"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "only-own-keys"
+        ],
+        "rule": "only the conversation's own two keys"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P5",
+            "nm-job-executor"
+          ]
+        },
+        {
+          "location": "agent-server-key",
+          "refs": [
+            "fd-session-key-not-fine-grained"
+          ]
+        },
+        {
+          "location": "uid-permissions",
+          "refs": [
+            "cred-conversation-keys"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-token-scan-control",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sec-canaries",
+      "category": "secret",
+      "kind": "denial",
+      "name": "no planted Owner-side canary reaches a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "walk every readable file (<= 8 MiB) and process environment and command line of each job for the canary marker of the synthetic canary set (create --canaries), excluding the probe's own planted control",
+      "probe": {
+        "source": "containment-probe",
+        "op": "canary-scan",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "not-found"
+        ],
+        "rule": "no canary outside the probe's control"
+      },
+      "enforcement": [
+        {
+          "location": "launch-no-share",
+          "refs": [
+            "P5",
+            "nm-job-executor"
+          ]
+        }
+      ],
+      "assets": [
+        "host-credential-stores",
+        "host-owner-windows"
+      ],
+      "positive_control": "ctl-canary-scan-control",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-run-docker",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/docker.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/docker.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/docker.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-moby-socket",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-var-run-docker",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/var/run/docker.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /var/run/docker.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/var/run/docker.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-moby-socket",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-containerd",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/containerd/containerd.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/containerd/containerd.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/containerd/containerd.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-containerd-socket",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-containerd-ttrpc",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/containerd/containerd.sock.ttrpc is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/containerd/containerd.sock.ttrpc from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/containerd/containerd.sock.ttrpc"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-containerd-socket",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-var-run-containerd",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/var/run/containerd/containerd.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /var/run/containerd/containerd.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/var/run/containerd/containerd.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-containerd-socket",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-docker-metrics",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/docker/metrics.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/docker/metrics.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/docker/metrics.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-moby-socket",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-podman",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/podman/podman.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/podman/podman.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/podman/podman.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-buildkit",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/buildkit/buildkitd.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/buildkit/buildkitd.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/buildkit/buildkitd.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-crio",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/crio/crio.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/crio/crio.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/crio/crio.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-rootless-docker",
+      "category": "socket",
+      "kind": "denial",
+      "name": "/run/user/{uid}/docker.sock is absent in a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "connect() to /run/user/{uid}/docker.sock from each job as its default user",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "socket",
+        "args": {
+          "path": "/run/user/{uid}/docker.sock"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENOENT"
+        ],
+        "rule": "ENOENT: no engine socket is mounted into a job"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby",
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-found-files",
+      "category": "socket",
+      "kind": "denial",
+      "name": "no socket file or bound unix name in a job answers",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "every socket file on the job's filesystem and every name in /proc/net/unix, connected",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "sockets-found",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "none",
+          "refused"
+        ],
+        "rule": "none found, or every one refuses or is absent"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby"
+      ],
+      "positive_control": "ctl-unix-connect",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-engine-tcp-guest",
+      "category": "socket",
+      "kind": "denial",
+      "name": "the engine API (guest) on 2375 and 2376 refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the engine API (guest) ports 2375 and 2376 (4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tcp",
+        "args": {
+          "what": "engine API (guest)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P6",
+            "P7",
+            "nm-job-engine",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-engine-tcp-loopback",
+      "category": "socket",
+      "kind": "denial",
+      "name": "the engine API (own loopback) on 2375 and 2376 refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the engine API (own loopback) ports 2375 and 2376 (4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tcp",
+        "args": {
+          "what": "engine API (own loopback)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-engine-tcp-slirp",
+      "category": "socket",
+      "kind": "denial",
+      "name": "the engine API (SLIRP alias) on 2375 and 2376 refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the engine API (SLIRP alias) ports 2375 and 2376 (4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tcp",
+        "args": {
+          "what": "engine API (SLIRP alias)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused"
+      },
+      "enforcement": [
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "nm-job-host"
+          ]
+        },
+        {
+          "location": "slirp-restrict",
+          "refs": [
+            "P7",
+            "nm-job-host"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-docker-client",
+      "category": "socket",
+      "kind": "denial",
+      "name": "the image's docker client reaches no engine",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "run `docker version` (a read-only client call) in each job",
+      "probe": {
+        "source": "containment-probe",
+        "op": "exec",
+        "args": {
+          "argv": [
+            "docker",
+            "version"
+          ]
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused",
+          "absent"
+        ],
+        "rule": "a non-zero exit (no engine endpoint) or no binary"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-job-image-engine-clients"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "sock-ctr-client",
+      "category": "socket",
+      "kind": "denial",
+      "name": "the image's ctr client reaches no engine",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "run `ctr version` (a read-only client call) in each job",
+      "probe": {
+        "source": "containment-probe",
+        "op": "exec",
+        "args": {
+          "argv": [
+            "ctr",
+            "version"
+          ]
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused",
+          "absent"
+        ],
+        "rule": "a non-zero exit (no engine endpoint) or no binary"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "nm-job-engine",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-job-image-engine-clients"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "hard-daemon-no-tcp",
+      "category": "socket",
+      "kind": "hardening",
+      "name": "Moby has no TCP listener (no hosts)",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read daemon.json hosts from the boot facts",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "daemon.json hosts"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "None"
+        ],
+        "rule": "daemon.json names no hosts"
+      },
+      "enforcement": [
+        {
+          "location": "container-mount-set",
+          "refs": [
+            "P6",
+            "P7",
+            "api-moby"
+          ]
+        }
+      ],
+      "assets": [
+        "api-moby"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "egr-host-loopback",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the host's loopback services through 10.0.2.2 (the SSH forward, QMP, the host Gitea 13300) refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one TCP connect (and one UDP DNS query where listed) from each job to the host's loopback services through 10.0.2.2 (the SSH forward, QMP, the host Gitea 13300) (job-access-probe's S-01.4 sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "egress",
+        "args": {
+          "what": "SLIRP host-loopback alias (host service)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ECONNREFUSED"
+        ],
+        "rule": "ECONNREFUSED: the egress guard's reset or ICMP reject"
+      },
+      "enforcement": [
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "nm-job-host",
+            "nm-job-gitea"
+          ]
+        },
+        {
+          "location": "slirp-restrict",
+          "refs": [
+            "P7",
+            "nm-job-host"
+          ]
+        }
+      ],
+      "assets": [
+        "listener-host-ssh-forward",
+        "listener-host-qmp",
+        "gitea-server"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "egr-resolver-alias",
+      "category": "egress",
+      "kind": "denial",
+      "name": "SLIRP's resolver alias 10.0.2.3:53 (TCP and UDP) refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one TCP connect (and one UDP DNS query where listed) from each job to SLIRP's resolver alias 10.0.2.3:53 (TCP and UDP) (job-access-probe's S-01.4 sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "egress",
+        "args": {
+          "what": "SLIRP resolver alias"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ECONNREFUSED"
+        ],
+        "rule": "ECONNREFUSED: the egress guard's reset or ICMP reject"
+      },
+      "enforcement": [
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "nm-job-host"
+          ]
+        },
+        {
+          "location": "slirp-restrict",
+          "refs": [
+            "P7",
+            "nm-job-host"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "egr-guestfwd-class",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the unconfigured guestfwd-class address 10.0.2.100:7000 refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one TCP connect (and one UDP DNS query where listed) from each job to the unconfigured guestfwd-class address 10.0.2.100:7000 (job-access-probe's S-01.4 sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "egress",
+        "args": {
+          "what": "unconfigured guestfwd-class address"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ECONNREFUSED"
+        ],
+        "rule": "ECONNREFUSED: the egress guard's reset or ICMP reject"
+      },
+      "enforcement": [
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "nm-job-management"
+          ]
+        },
+        {
+          "location": "slirp-restrict",
+          "refs": [
+            "P7",
+            "nm-job-host"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "egr-host-ports-tcp",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the host loopback services through SLIRP refuse a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to 10.0.2.2 at the SSH forward, QMP and 13300 ports (job-access-probe's S-01.3.2 sweep)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "tcp",
+        "args": {
+          "what": "host loopback service (SLIRP alias)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused"
+      },
+      "enforcement": [
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "nm-job-host",
+            "nm-ext-job-egress",
+            "guest-container-guard"
+          ]
+        },
+        {
+          "location": "slirp-restrict",
+          "refs": [
+            "P7",
+            "nm-job-host"
+          ]
+        }
+      ],
+      "assets": [
+        "listener-host-ssh-forward",
+        "listener-host-qmp",
+        "gitea-server"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "egr-offlink-no-route",
+      "category": "egress",
+      "kind": "denial",
+      "name": "off-link destinations without a route",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP 1.1.1.1:443 and 8.8.8.8:53 and UDP 8.8.8.8:53 from each job with the guest's ordinary routes (no default route)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "egress",
+        "args": {
+          "what": "public literal"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ENETUNREACH",
+          "EHOSTUNREACH",
+          "timeout"
+        ],
+        "rule": "no connection: the guest's routing has no route out (topology); the policy is proved by egr-offlink-route-present"
+      },
+      "enforcement": [
+        {
+          "location": "guest-routing",
+          "refs": [
+            "P7",
+            "nm-ext-job-egress"
+          ]
+        },
+        {
+          "location": "slirp-restrict",
+          "refs": [
+            "P7",
+            "nm-ext-guest-egress"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-container-network-deviations"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "egr-offlink-route-present",
+      "category": "egress",
+      "kind": "denial",
+      "name": "off-link destinations with a route present",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "with a temporary default route via 10.0.2.2 (added and always removed by the seeded root unit), TCP 1.1.1.1:443 and 8.8.8.8:53 and UDP 8.8.8.8:53 from each job; the guard's IPv4 REJECT counters up by exactly the attempts and its log OUT= the uplink",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "egress-route",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "refused-by-guard"
+        ],
+        "rule": "every attempt refused by the egress guard with exact counters and the uplink in its log"
+      },
+      "enforcement": [
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "nm-ext-job-egress",
+            "nm-ext-review-egress"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-container-network-deviations"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "pins"
+      ],
+      "requires": [
+        "egress-falsification"
+      ]
+    },
+    {
+      "id": "egr-network-none",
+      "category": "egress",
+      "kind": "deviation",
+      "name": "a job has a network (no --network none)",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /sys/class/net in each job",
+      "probe": {
+        "source": "containment-probe",
+        "op": "net-ifaces",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "bridge"
+        ],
+        "rule": "the recorded deviation: eth0 on Moby's default bridge and lo; compensated by the guards, icc and the routing"
+      },
+      "enforcement": [
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "fd-container-network-deviations"
+          ]
+        },
+        {
+          "location": "icc",
+          "refs": [
+            "nm-job-peer"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when the observed deviation equals the recorded one and every compensating case passed; FAIL when the deviation differs or a compensating case did not pass; UNKNOWN when the positive control did not pass.",
+      "carried": [
+        "fd-container-network-deviations"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "egress_guard",
+        "container_guard",
+        "pins"
+      ],
+      "compensated_by": [
+        "egr-host-loopback",
+        "egr-resolver-alias",
+        "egr-guestfwd-class",
+        "egr-offlink-route-present",
+        "sib-peer-inner-server",
+        "mgmt-from-job-listener",
+        "sock-engine-tcp-guest"
+      ]
+    },
+    {
+      "id": "egr-host-gateway-alias",
+      "category": "egress",
+      "kind": "deviation",
+      "name": "host.docker.internal names the guest",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read HostConfig.ExtraHosts of each job (docker inspect from the root facts)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inspected",
+        "args": {
+          "field": "ExtraHosts"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "host.docker.internal:host-gateway"
+        ],
+        "rule": "the recorded deviation; every port there is refused by the container guard"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "fd-container-network-deviations"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when the observed deviation equals the recorded one and every compensating case passed; FAIL when the deviation differs or a compensating case did not pass; UNKNOWN when the positive control did not pass.",
+      "carried": [
+        "fd-container-network-deviations"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ],
+      "compensated_by": [
+        "mgmt-from-job-listener",
+        "sock-engine-tcp-guest",
+        "mgmt-from-job-routes"
+      ]
+    },
+    {
+      "id": "priv-sudo",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "sudo gives no root",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": true
+      },
+      "attempt": "run `sudo -n true` in each job (job-access-probe; setuid-root binary)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "env",
+        "args": {
+          "field": "sudo"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "a non-zero exit: no root"
+      },
+      "enforcement": [
+        {
+          "location": "no-new-privileges",
+          "refs": [
+            "P8",
+            "fd-job-image-engine-clients"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-job-image-engine-clients"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-su",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "su gives no root",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": true
+      },
+      "attempt": "run `su -c true root` in each job (job-access-probe; setuid-root binary)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "env",
+        "args": {
+          "field": "su"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "a non-zero exit: no root"
+      },
+      "enforcement": [
+        {
+          "location": "image-content",
+          "refs": [
+            "P8",
+            "fd-job-image-engine-clients"
+          ]
+        },
+        {
+          "location": "no-new-privileges",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-job-image-engine-clients"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-no-new-privs",
+      "category": "privilege-expansion",
+      "kind": "hardening",
+      "name": "no_new_privs is set (setuid ignored)",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /proc/self/status and /proc/1/status (no_new_privs) in each job (job-access-probe)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "env",
+        "args": {
+          "field": "no_new_privs"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "1"
+        ],
+        "rule": "no_new_privs equals 1 for the job and PID 1"
+      },
+      "enforcement": [
+        {
+          "location": "no-new-privileges",
+          "refs": [
+            "P8",
+            "fd-job-image-engine-clients"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-caps-empty",
+      "category": "privilege-expansion",
+      "kind": "hardening",
+      "name": "every capability set is empty",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /proc/self/status and /proc/1/status (capabilities) in each job (job-access-probe)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "env",
+        "args": {
+          "field": "capabilities"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "empty"
+        ],
+        "rule": "capabilities equals empty for the job and PID 1"
+      },
+      "enforcement": [
+        {
+          "location": "capabilities",
+          "refs": [
+            "P8",
+            "fd-container-shares-service-uid"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-seccomp",
+      "category": "privilege-expansion",
+      "kind": "hardening",
+      "name": "a seccomp filter is applied",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /proc/self/status and /proc/1/status (seccomp) in each job (job-access-probe)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "env",
+        "args": {
+          "field": "seccomp"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "2"
+        ],
+        "rule": "seccomp equals 2 for the job and PID 1"
+      },
+      "enforcement": [
+        {
+          "location": "seccomp",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-apparmor",
+      "category": "privilege-expansion",
+      "kind": "hardening",
+      "name": "AppArmor docker-default is enforced",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "read /proc/self/status and /proc/1/status (apparmor) in each job (job-access-probe)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "env",
+        "args": {
+          "field": "apparmor"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "docker-default (enforce)"
+        ],
+        "rule": "apparmor equals docker-default (enforce) for the job and PID 1"
+      },
+      "enforcement": [
+        {
+          "location": "apparmor",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-exec-id",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-host-config",
+      "category": "privilege-expansion",
+      "kind": "hardening",
+      "name": "each job container is as declared",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "docker container inspect of each job (root facts) against provisioning.agent_server.jobs.host_config: not privileged, CapDrop ALL, no added capability, device or host namespace, SecurityOpt no-new-privileges",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inspected",
+        "args": {
+          "field": "declared"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "as-declared"
+        ],
+        "rule": "every declared value matches"
+      },
+      "enforcement": [
+        {
+          "location": "capabilities",
+          "refs": [
+            "P6",
+            "P8",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "hard-daemon-nnp",
+      "category": "privilege-expansion",
+      "kind": "hardening",
+      "name": "daemon.json sets no-new-privileges",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read daemon.json no-new-privileges from the boot facts",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "daemon.json no-new-privileges"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "True"
+        ],
+        "rule": "true"
+      },
+      "enforcement": [
+        {
+          "location": "no-new-privileges",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-moby-socket"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "hard-security-options",
+      "category": "privilege-expansion",
+      "kind": "hardening",
+      "name": "Moby runs with the required security options",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read docker info SecurityOptions from the boot facts",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "SecurityOptions"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "includes-required"
+        ],
+        "rule": "includes apparmor, seccomp (builtin), cgroupns, no-new-privileges"
+      },
+      "enforcement": [
+        {
+          "location": "seccomp",
+          "refs": [
+            "P8"
+          ]
+        },
+        {
+          "location": "apparmor",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-moby-socket"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-raw-socket",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "CAP_NET_RAW is not usable",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "socket(AF_INET, SOCK_RAW, IPPROTO_ICMP), closed at once if it were created (sends nothing)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "socket",
+        "args": {
+          "type": "raw-icmp"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EPERM"
+        ],
+        "rule": "EPERM"
+      },
+      "enforcement": [
+        {
+          "location": "capabilities",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-ping-socket",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-unshare-user",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "no user namespace can be created",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "unshare(CLONE_NEWUSER) in a forked child that exits at once",
+      "probe": {
+        "source": "containment-probe",
+        "op": "unshare",
+        "args": {
+          "flags": [
+            "user"
+          ]
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EPERM"
+        ],
+        "rule": "EPERM"
+      },
+      "enforcement": [
+        {
+          "location": "seccomp",
+          "refs": [
+            "P8"
+          ]
+        },
+        {
+          "location": "capabilities",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-fork-plumbing",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-unshare-none",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "the unshare syscall itself is filtered",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "unshare(0) (no namespace) in a forked child that exits at once",
+      "probe": {
+        "source": "containment-probe",
+        "op": "unshare",
+        "args": {
+          "flags": []
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EPERM"
+        ],
+        "rule": "EPERM: only a filter refuses unshare(0), so the refusal is the seccomp filter's"
+      },
+      "enforcement": [
+        {
+          "location": "seccomp",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-fork-plumbing",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-unshare-mount",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "CAP_SYS_ADMIN is not usable (no mount namespace)",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "unshare(CLONE_NEWNS) in a forked child that exits at once (no mount is attempted)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "unshare",
+        "args": {
+          "flags": [
+            "mount"
+          ]
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EPERM"
+        ],
+        "rule": "EPERM"
+      },
+      "enforcement": [
+        {
+          "location": "capabilities",
+          "refs": [
+            "P8"
+          ]
+        },
+        {
+          "location": "seccomp",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-fork-plumbing",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-ptrace-foreign",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "no process of another principal is visible to ptrace",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /proc; for each process of another uid open /proc/<pid>/mem read-only",
+      "probe": {
+        "source": "containment-probe",
+        "op": "proc-census",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "none-visible"
+        ],
+        "rule": "only the job's own processes are visible"
+      },
+      "enforcement": [
+        {
+          "location": "pid-namespace",
+          "refs": [
+            "P8",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-ptrace-own-child",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-sysrq",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "/proc/sysrq-trigger is not writable (check-only)",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "access(2) W_OK on /proc/sysrq-trigger (opens nothing, writes nothing)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "access-write",
+        "args": {
+          "path": "/proc/sysrq-trigger"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EACCES",
+          "EROFS"
+        ],
+        "rule": "EACCES or EROFS"
+      },
+      "enforcement": [
+        {
+          "location": "masked-proc",
+          "refs": [
+            "P8"
+          ]
+        },
+        {
+          "location": "uid-permissions",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-access-write-scratch",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-mknod-device",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "no device node can be created",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "mknod(S_IFCHR, 1:3) /tmp/aieh-probe/aieh-null (the probe's scratch)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "mknod",
+        "args": {
+          "kind": "char"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EPERM"
+        ],
+        "rule": "EPERM"
+      },
+      "enforcement": [
+        {
+          "location": "capabilities",
+          "refs": [
+            "P8"
+          ]
+        },
+        {
+          "location": "device-cgroup",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-mkfifo-scratch",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-devices",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "only Moby's default device nodes are present",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "list /dev",
+      "probe": {
+        "source": "containment-probe",
+        "op": "dev-list",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "default-set"
+        ],
+        "rule": "no device beyond null, zero, full, random, urandom, tty, console, ptmx, pts, shm, mqueue"
+      },
+      "enforcement": [
+        {
+          "location": "device-cgroup",
+          "refs": [
+            "P8",
+            "conversation-container"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-list-own-dir",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "priv-module-load",
+      "category": "privilege-expansion",
+      "kind": "denial",
+      "name": "no kernel module can be loaded",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "init_module(2) with an empty image (cannot load anything even if allowed)",
+      "probe": {
+        "source": "containment-probe",
+        "op": "init-module",
+        "args": {
+          "variant": "probe"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "EPERM"
+        ],
+        "rule": "EPERM"
+      },
+      "enforcement": [
+        {
+          "location": "seccomp",
+          "refs": [
+            "P8"
+          ]
+        },
+        {
+          "location": "capabilities",
+          "refs": [
+            "P8"
+          ]
+        }
+      ],
+      "assets": [
+        "conversation-container",
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-syscall-plumbing",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-unauth-sweep",
+      "category": "management-api",
+      "kind": "denial",
+      "name": "every route refuses without the key or with a wrong one",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "every route of the pinned admission inventory, without a key and with a wrong one (HTTP and WebSocket), as the operator login on the guest loopback (admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "sweep",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "refused-as-inventoried"
+        ],
+        "rule": "every route answers its inventoried refusal (401, 503, 4001 or 403; public routes as listed); a key-gated 2xx is a stop condition"
+      },
+      "enforcement": [
+        {
+          "location": "agent-server-key",
+          "refs": [
+            "P7",
+            "api-agent-server-management",
+            "cred-agent-server-session-key"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "api-agent-server-public"
+      ],
+      "positive_control": "ctl-trusted-side",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-from-job-routes",
+      "category": "management-api",
+      "kind": "denial",
+      "name": "no management route is reachable from a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "every route of the admission inventory at port 8000 of host.docker.internal and each guest address, without a key and with the conversation's own inner key, from each job (job-access-probe)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "routes",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "refused at connect, every attempt"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-management-api",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-from-job-listener",
+      "category": "management-api",
+      "kind": "denial",
+      "name": "the management listener refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the management listener at host.docker.internal and each guest address (admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "network",
+        "args": {
+          "what": "management listener"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused (the container guard's reset)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-management-api",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "guest-sshd",
+        "guest-conversation-listeners"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-from-job-sshd",
+      "category": "management-api",
+      "kind": "denial",
+      "name": "the guest's sshd refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the guest's sshd at host.docker.internal and each guest address (admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "network",
+        "args": {
+          "what": "guest sshd"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused (the container guard's reset)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "guest-sshd",
+        "guest-conversation-listeners"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-from-job-llmnr",
+      "category": "management-api",
+      "kind": "denial",
+      "name": "the guest's LLMNR responder refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the guest's LLMNR responder at host.docker.internal and each guest address (admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "network",
+        "args": {
+          "what": "guest LLMNR (systemd-resolved)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused (the container guard's reset)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "guest-sshd",
+        "guest-conversation-listeners"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-from-job-published",
+      "category": "management-api",
+      "kind": "denial",
+      "name": "the published conversation ports refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "TCP connect from each job to the published conversation ports at host.docker.internal and each guest address (admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "network",
+        "args": {
+          "what": "a published conversation port"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "refused"
+        ],
+        "rule": "connection refused (the container guard's reset)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "guest-sshd",
+        "guest-conversation-listeners"
+      ],
+      "positive_control": "ctl-own-inner-server",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-start-child",
+      "category": "management-api",
+      "kind": "denial",
+      "name": "start_child_conversation reaches only the inner server",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "from each job: the tool's target URL, POST .../children without a key and with the inner key (empty body), and the inner key sent to the outer listener at every address (admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "custody",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "inner-only"
+        ],
+        "rule": "target 127.0.0.1 (inner), 401 without a key, 422 with the inner key, no connection to the outer listener, no outer key fingerprint readable"
+      },
+      "enforcement": [
+        {
+          "location": "agent-server-key",
+          "refs": [
+            "P7",
+            "api-agent-server-management",
+            "cred-agent-server-session-key"
+          ]
+        },
+        {
+          "location": "container-guard",
+          "refs": [
+            "nm-job-management-api"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management"
+      ],
+      "positive_control": "ctl-trusted-side",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-child-conversation-tool"
+      ],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-keycheck",
+      "category": "management-api",
+      "kind": "hardening",
+      "name": "the server refuses to start without a valid key",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "run the seeded key check under synthetic environments (no key, empty, short, equal values, a second or legacy key) as the operator login (admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "keycheck",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "fails-closed"
+        ],
+        "rule": "every bad environment refused, the valid one accepted"
+      },
+      "enforcement": [
+        {
+          "location": "key-check",
+          "refs": [
+            "P7",
+            "api-agent-server-management"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management"
+      ],
+      "positive_control": "ctl-trusted-side",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "docker_inspect",
+        "pins"
+      ]
+    },
+    {
+      "id": "mgmt-refusals-logged",
+      "category": "management-api",
+      "kind": "hardening",
+      "name": "refusals are observable",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read the container guard's counters and log and the server's refusal counts (root facts, admission-probe)",
+      "probe": {
+        "source": "admission-probe",
+        "extract": "logged",
+        "args": {}
+      },
+      "expected": {
+        "outcomes": [
+          "logged"
+        ],
+        "rule": "the guard counted and logged refusals and the server logged 401s and WebSocket refusals"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-container-guard"
+      ],
+      "positive_control": "ctl-trusted-side",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "container_guard",
+        "pins"
+      ]
+    },
+    {
+      "id": "hard-guard-unit",
+      "category": "management-api",
+      "kind": "hardening",
+      "name": "the container guard unit is active",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read guard unit from the boot facts",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "guard unit"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "active"
+        ],
+        "rule": "guard unit: active"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "guest-container-guard"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "hard-docker-requires-guard",
+      "category": "management-api",
+      "kind": "hardening",
+      "name": "Moby cannot start without the guard",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read docker.service requires the guard from the boot facts",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "docker.service requires the guard"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "True"
+        ],
+        "rule": "docker.service requires the guard: True"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "guest-container-guard"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    },
+    {
+      "id": "hard-keycheck-execstartpre",
+      "category": "management-api",
+      "kind": "hardening",
+      "name": "the key check is the server's ExecStartPre",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent with no key or a wrong key (an unauthenticated caller on the guest loopback)",
+        "root_attempt": false
+      },
+      "attempt": "read key check ExecStartPre from the boot facts",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "controls",
+        "args": {
+          "key": "key check ExecStartPre"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "True"
+        ],
+        "rule": "key check ExecStartPre: True"
+      },
+      "enforcement": [
+        {
+          "location": "key-check",
+          "refs": [
+            "P7",
+            "api-agent-server-management"
+          ]
+        }
+      ],
+      "assets": [
+        "api-agent-server-management",
+        "guest-container-guard"
+      ],
+      "positive_control": "ctl-boot-facts",
+      "verdict_rule": "PASS when the observed control state equals the expected value and the positive control passed; FAIL when the control is missing, loosened or not observed (a missing hardening control is never skipped); UNKNOWN when the positive control did not pass.",
+      "carried": [],
+      "status": "executable",
+      "depends_on": [
+        "daemon",
+        "pins"
+      ]
+    }
+  ],
+  "mutations": [
+    {
+      "id": "mut-file",
+      "case": "file-shadow",
+      "op": "read",
+      "args": {
+        "path": "/etc/hostname"
+      },
+      "note": "the shadow probe pointed at a file the job may read: classified a success (FAIL)"
+    },
+    {
+      "id": "mut-sibling",
+      "case": "sib-read-bind-source",
+      "op": "read",
+      "args": {
+        "path": "/workspace/.aieh-probe/{own_canary}"
+      },
+      "note": "the sibling read pointed at the job's own canary: a success (FAIL)"
+    },
+    {
+      "id": "mut-secret",
+      "case": "sec-canaries",
+      "op": "canary-scan",
+      "args": {
+        "include_control": true
+      },
+      "note": "the canary scan without excluding its planted control: a found canary (FAIL)"
+    },
+    {
+      "id": "mut-socket",
+      "case": "sock-run-docker",
+      "op": "unix-control",
+      "args": {},
+      "note": "the engine socket rule applied to a socket the probe binds in its scratch: connected (FAIL)"
+    },
+    {
+      "id": "mut-egress",
+      "case": "egr-guestfwd-class",
+      "op": "connect-tcp",
+      "args": {
+        "host": "127.0.0.1",
+        "port": 8000
+      },
+      "note": "the egress rule applied to the job's own inner server: connected (FAIL)"
+    },
+    {
+      "id": "mut-privilege",
+      "case": "priv-raw-socket",
+      "op": "socket",
+      "args": {
+        "type": "dgram-icmp"
+      },
+      "note": "the raw-socket rule applied to the permitted ICMP datagram socket: created (FAIL)"
+    },
+    {
+      "id": "mut-management-api",
+      "case": "mgmt-from-job-listener",
+      "op": "connect-tcp",
+      "args": {
+        "host": "127.0.0.1",
+        "port": 8000
+      },
+      "note": "the listener rule applied to the job's own inner server: connected (FAIL)"
+    }
+  ],
+  "sources": [
+    "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-02.1",
+    "evidence/S-01.3.1-management-api-admission.md",
+    "evidence/S-01.3.2-job-daemon-and-management-access.md",
+    "evidence/S-01.4-network-matrix.md",
+    "evidence/S-01.2.2-segregated-credentials.md",
+    "profiles/strong-windows-qemu-whpx/profile.json"
+  ],
+  "notes": [
+    "Every attempt is non-destructive by construction: reads, listings, stats, access(2) checks, connects that send at most an HTTP GET to the container's own loopback, sockets created and closed, namespace calls in a forked child that exits at once, an empty module image, and writes only in the probe's own scratch directories, which the runner removes. The checker refuses anything else.",
+    "Synthetic canary workspaces only: each canary is generated inside the job at run time; no repository content enters a guest.",
+    "The reused primitives (admission-probe, job-access-probe) run unchanged; a case names the extractor that reads its observation from their records."
+  ]
+}
