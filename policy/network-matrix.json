@@ -3494,7 +3494,7 @@
         "guest.py job-access-probe (job environment; S-01.4 egress sweep)",
         "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
       ],
-      "notes": "The egress sweep's decision rule was fixed before observation (evidence/S-01.4-network-matrix.md). Observed at S-01.4, before and after a guest restart: SLIRP's aliases and the unconfigured guestfwd-class address were refused by the egress guard, whose counters rose by exactly the refused attempts; the public literals were answered by the guest's routing (ENETUNREACH, and a UDP timeout), so the guard did not engage there: FAIL under the fixed decision rule (topology, not policy), recorded and carried."
+      "notes": "The egress sweep's decision rule was fixed before observation (evidence/S-01.4-network-matrix.md). Observed at S-01.4, before and after a guest restart: SLIRP's aliases and the unconfigured guestfwd-class address were refused by the egress guard, whose counters rose by exactly the refused attempts; the public literals were answered by the guest's routing (ENETUNREACH, and a UDP timeout), so the guard did not engage there: FAIL under the fixed decision rule (topology, not policy), recorded. Fix-forward (Overseer ruling): with a temporary default route via 10.0.2.2 in a falsification guest, 1.1.1.1:443 and 8.8.8.8:53 (TCP and UDP) were refused from both jobs by the guard (IPv4 REJECT counters +4 tcp-reset and +2 REJECT, exactly the attempts; every LOG line OUT=enp0s4), before and after a restart: PASS; the route was removed and verified gone each time."
     },
     {
       "id": "nm-ext-review-egress",
@@ -3538,7 +3538,7 @@
       "inspection": [
         "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
       ],
-      "notes": "The reviewer's job environment is the conversation container (S-01.3.2 ruling), proved without a reviewer session. Observed at S-01.4, before and after a guest restart: SLIRP's aliases and the unconfigured guestfwd-class address were refused by the egress guard, whose counters rose by exactly the refused attempts; the public literals were answered by the guest's routing (ENETUNREACH, and a UDP timeout), so the guard did not engage there: FAIL under the fixed decision rule (topology, not policy), recorded and carried."
+      "notes": "The reviewer's job environment is the conversation container (S-01.3.2 ruling), proved without a reviewer session. Observed at S-01.4, before and after a guest restart: SLIRP's aliases and the unconfigured guestfwd-class address were refused by the egress guard, whose counters rose by exactly the refused attempts; the public literals were answered by the guest's routing (ENETUNREACH, and a UDP timeout), so the guard did not engage there: FAIL under the fixed decision rule (topology, not policy), recorded. Fix-forward (Overseer ruling): with a temporary default route via 10.0.2.2 in a falsification guest, 1.1.1.1:443 and 8.8.8.8:53 (TCP and UDP) were refused from both jobs by the guard (IPv4 REJECT counters +4 tcp-reset and +2 REJECT, exactly the attempts; every LOG line OUT=enp0s4), before and after a restart: PASS; the route was removed and verified gone each time."
     },
     {
       "id": "nm-ext-guest-egress",
