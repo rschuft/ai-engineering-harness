@@ -32,7 +32,7 @@
     {
       "date": "2026-11-08",
       "provenance": "The Overseer's rulings of 2026-11-08 on the findings of the preceding amendment, within the same Owner directive. Applied through the documented integrity process (docs/development.md, Changing integrity-tracked files).",
-      "summary": "E-03.1, which depends on A-01.2, takes the sentence that E-01.3.1 could not carry (phase order): the create body's agent block equals the A-01.2 materialized profile, validated by admission. E-01.5's added text keeps only the lineage attempt resolver; U-02.2 and U-04.1 carry the message and statement resolvers. New deps: U-03.1 on E-01.3.3 and F-06.3 (U-03.1 and U-03.2 now follow E-01.3.2 in the work order); E-01.3.3 on F-06.3. Group deps follow the convention."
+      "summary": "E-03.1, which depends on A-01.2, takes the sentence that E-01.3.1 could not carry (phase order): the create body's agent block equals the A-01.2 materialized profile, validated by admission. E-01.5's added text keeps only the lineage attempt resolver; U-02.2 and U-04.1 carry the message and statement resolvers. New deps: U-03.1 on E-01.3.3 and F-06.3 (U-03.1 and U-03.2 now follow E-01.3.2 in the work order); E-01.3.3 on F-06.3. Group deps follow the convention. A-01.1 depends on P-04.3 (catalog pins enter the approved-input manifest only through P-04.3); A-01 group deps += P-04."
     }
   ],
   "scope": "Adoption-first open-source implementation.",
@@ -3287,7 +3287,8 @@
       "size": "S",
       "deps": [
         "F-01.2",
-        "S-01.4"
+        "S-01.4",
+        "P-04.3"
       ],
       "action": "Version agent definitions and Agent Skills in Gitea, with source provenance, format/security checks and immutable revisions. Publish each qualified catalog revision as a catalog pin through P-04.3.",
       "artifact": "Agent/Skill catalog schema and protected promotion pipeline.",
@@ -3301,7 +3302,7 @@
         "execution_scope": "Version agent definitions and Agent Skills in Gitea, with source provenance, format/security checks and immutable revisions. Publish each qualified catalog revision as a catalog pin through P-04.3.",
         "required_inputs": [
           "Pinned authoritative blueprint section #security",
-          "Verified prerequisites: F-01.2, S-01.4",
+          "Verified prerequisites: F-01.2, S-01.4, P-04.3",
           "Original parent outcome contract: A-01",
           "Approved repository scope, agent/Skill revisions and execution profile"
         ],
@@ -3320,7 +3321,7 @@
       ],
       "root_group": "standalone",
       "acceptance_gates": [],
-      "overseer_prompt": "Carry out the following single Small work package through the existing Overseer delegation process. Do not dispatch an original Medium/Large acceptance group.\n\nTASK\nID: A-01.1\nTitle: Create protected catalog and qualification workflow\nMilestone: I2\nStream / priority: security / P0\nApproved architecture section: #security\nSource files: AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html; AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json\nDependencies (must be verified PASS before dispatch): F-01.2, S-01.4\n\nBOUNDED SCOPE\nVersion agent definitions and Agent Skills in Gitea, with source provenance, format/security checks and immutable revisions. Publish each qualified catalog revision as a catalog pin through P-04.3.\n\nREQUIRED OUTPUT\nAgent/Skill catalog schema and protected promotion pipeline.\n\nEXACT ACCEPTANCE EVIDENCE\nUnqualified Skill or mutable definition cannot be assigned to a run. Catalog pins (repository, full commit, agent/Skill manifest sha256) enter the approved-input manifest only through P-04.3; the catalog manifest's digest is verified at the pinned commit before dispatch, and a mismatch refuses the dispatch; a Skill revision change, or a model or channel change for a qualified Skill (such as the P-01 intent Skill), requires re-qualification before assignment, and an assignment without it is refused.\n\nUPSTREAM CAPABILITY TO REUSE\nOpenHands native agents/Skills + skills-ref + scanner; Gitea protection.\n\nREQUIRED INPUTS\n- Pinned authoritative blueprint section #security\n- Verified prerequisites: F-01.2, S-01.4\n- Original parent outcome contract: A-01\n- Approved repository scope, agent/Skill revisions and execution profile\n\nINHERITED PARENT CONTRACTS (all are non-executable)\n- A-01 (NON-EXECUTABLE): Govern agent and Skill definitions. Required outcome: Project-local agent override, inherited MCP server and skill shell execution cannot expand the assigned capability ceiling.\n\nPARENT ACCEPTANCE CHECKS AT THIS STEP\n- No parent acceptance gate is scheduled at this leaf; preserve inherited obligations for later acceptance.\n\nTASK-SPECIFIC GUARDRAILS\n- Do not change accepted Owner intent, policy or authorization scope.\n- Use existing upstream mechanisms and avoid unrelated implementation.\n- Do not invent passed security, CI or integration evidence; preserve failed/unknown outcomes.\n\nHANDOFF EXPECTATION\nPublish Agent/Skill catalog schema and protected promotion pipeline. with exact source IDs, test commands and observed pass/fail/unknown. Next: A-01.2 after acceptance.\n\nIMPLEMENTATION PROTOCOL\n- You are the coordinating Overseer for the adoption-first project, NOT the implementer. Execute this one Small leaf through Builder. Keep the Architect optional: consult it only for a real unresolved architectural/interface/authority/security/schema choice or consequential design tradeoff. If consulted, obtain a bounded, evidence-backed decision and pass its applicable constraints to Builder. The agents' own definition files select their models.\n- Read the actual blueprint and plan plus current repository state before dispatch. The task details below are planned contracts, not proof of current readiness. Do not assume prerequisite success.\n- Reuse maintained upstream OSS and supported interfaces; avoid building duplicate platforms, spreading into adjacent tasks, or modifying unrelated repositories.\n- Require exact artifact/revision, reproducible validation and measured pass/fail/unknown. Use formatting, linting, targeted tests, security/coverage and independent review as proportionate to the change, with enforced CI/Owner authorization at applicable boundaries.\n- Never let Builder self-authorize protected policy, merge, deployment, or privileged external effect. Preserve durable user data and fail closed on uncertain effects.\n- Evaluate all inherited parent acceptance gates explicitly before unlocking downstream tasks. Keep completion records in the native Work system or a minimal temporary bootstrap log; do not write a second authoritative task system.\n- Report task status; Architect/Builder delegations; exact modified artifacts and Git revision; tests/controls and outcomes; acceptance and parent-gate verdicts; blockers; next eligible task(s). Continue to other ready work only when operating under the full Overseer policy.",
+      "overseer_prompt": "Carry out the following single Small work package through the existing Overseer delegation process. Do not dispatch an original Medium/Large acceptance group.\n\nTASK\nID: A-01.1\nTitle: Create protected catalog and qualification workflow\nMilestone: I2\nStream / priority: security / P0\nApproved architecture section: #security\nSource files: AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html; AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json\nDependencies (must be verified PASS before dispatch): F-01.2, S-01.4, P-04.3\n\nBOUNDED SCOPE\nVersion agent definitions and Agent Skills in Gitea, with source provenance, format/security checks and immutable revisions. Publish each qualified catalog revision as a catalog pin through P-04.3.\n\nREQUIRED OUTPUT\nAgent/Skill catalog schema and protected promotion pipeline.\n\nEXACT ACCEPTANCE EVIDENCE\nUnqualified Skill or mutable definition cannot be assigned to a run. Catalog pins (repository, full commit, agent/Skill manifest sha256) enter the approved-input manifest only through P-04.3; the catalog manifest's digest is verified at the pinned commit before dispatch, and a mismatch refuses the dispatch; a Skill revision change, or a model or channel change for a qualified Skill (such as the P-01 intent Skill), requires re-qualification before assignment, and an assignment without it is refused.\n\nUPSTREAM CAPABILITY TO REUSE\nOpenHands native agents/Skills + skills-ref + scanner; Gitea protection.\n\nREQUIRED INPUTS\n- Pinned authoritative blueprint section #security\n- Verified prerequisites: F-01.2, S-01.4, P-04.3\n- Original parent outcome contract: A-01\n- Approved repository scope, agent/Skill revisions and execution profile\n\nINHERITED PARENT CONTRACTS (all are non-executable)\n- A-01 (NON-EXECUTABLE): Govern agent and Skill definitions. Required outcome: Project-local agent override, inherited MCP server and skill shell execution cannot expand the assigned capability ceiling.\n\nPARENT ACCEPTANCE CHECKS AT THIS STEP\n- No parent acceptance gate is scheduled at this leaf; preserve inherited obligations for later acceptance.\n\nTASK-SPECIFIC GUARDRAILS\n- Do not change accepted Owner intent, policy or authorization scope.\n- Use existing upstream mechanisms and avoid unrelated implementation.\n- Do not invent passed security, CI or integration evidence; preserve failed/unknown outcomes.\n\nHANDOFF EXPECTATION\nPublish Agent/Skill catalog schema and protected promotion pipeline. with exact source IDs, test commands and observed pass/fail/unknown. Next: A-01.2 after acceptance.\n\nIMPLEMENTATION PROTOCOL\n- You are the coordinating Overseer for the adoption-first project, NOT the implementer. Execute this one Small leaf through Builder. Keep the Architect optional: consult it only for a real unresolved architectural/interface/authority/security/schema choice or consequential design tradeoff. If consulted, obtain a bounded, evidence-backed decision and pass its applicable constraints to Builder. The agents' own definition files select their models.\n- Read the actual blueprint and plan plus current repository state before dispatch. The task details below are planned contracts, not proof of current readiness. Do not assume prerequisite success.\n- Reuse maintained upstream OSS and supported interfaces; avoid building duplicate platforms, spreading into adjacent tasks, or modifying unrelated repositories.\n- Require exact artifact/revision, reproducible validation and measured pass/fail/unknown. Use formatting, linting, targeted tests, security/coverage and independent review as proportionate to the change, with enforced CI/Owner authorization at applicable boundaries.\n- Never let Builder self-authorize protected policy, merge, deployment, or privileged external effect. Preserve durable user data and fail closed on uncertain effects.\n- Evaluate all inherited parent acceptance gates explicitly before unlocking downstream tasks. Keep completion records in the native Work system or a minimal temporary bootstrap log; do not write a second authoritative task system.\n- Report task status; Architect/Builder delegations; exact modified artifacts and Git revision; tests/controls and outcomes; acceptance and parent-gate verdicts; blockers; next eligible task(s). Continue to other ready work only when operating under the full Overseer policy.",
       "overseer_execution_policy": "Overseer coordinates, Architect only for consequential/uncertain design, Builder executes one small task, Overseer independently evaluates evidence and all original parent gates."
     },
     {
@@ -8205,11 +8206,9 @@
       "S-01.4",
       "K-02.2",
       "S-02.1",
-      "A-01.1",
       "Q-02.1",
       "G-01.1",
       "S-02.2",
-      "A-01.2",
       "Q-02.2.1",
       "G-01.2",
       "E-01.1.1",
@@ -8226,8 +8225,10 @@
       "Q-02.4",
       "K-03.3.1",
       "E-01.3.1",
+      "A-01.1",
       "K-03.3.2",
       "E-01.3.3",
+      "A-01.2",
       "K-03.4",
       "E-01.3.2",
       "U-03.1",
@@ -9218,7 +9219,8 @@
         "size": "M",
         "deps": [
           "F-01",
-          "S-01.4"
+          "S-01.4",
+          "P-04"
         ],
         "action": "Curate role and skill definitions as immutable Git revisions; validate source, scripts, transitive requirements and effective tool profile before materializing.",
         "artifact": "Protected agent/Skill catalog, qualified materialization and role assignment.",

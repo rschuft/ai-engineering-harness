@@ -721,10 +721,11 @@
       "phase": 2,
       "deps": [
         "F-01.2",
-        "S-01.4"
+        "S-01.4",
+        "P-04.3"
       ],
       "path": "task_prompts/A-01.1.md",
-      "sha256": "12d73ede40c207babf16003425d29314ad596a3ef156587457f43f6afdce4ce5"
+      "sha256": "d07b53ca8fb218cad6daf7ac43be9cadfbb7382c69d3849f1316c0caa498f5a3"
     },
     {
       "id": "A-01.2",
