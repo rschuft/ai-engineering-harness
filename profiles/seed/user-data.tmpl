@@ -168,6 +168,17 @@ write_files:
       EGRESS_CHAIN = 'AIEH-EGRESS-GUARD'
       EGRESS_HOOK = 'DOCKER-USER'
       EGRESS_LOG_PREFIX = 'aieh-egress-guard: '
+      # S-01.4 fix-forward: the route-present falsification of the egress guard, only in a guest
+      # created with create --provision --egress-falsification (manifest validation.egress_route).
+      # agent creates the request file; root adds a temporary IPv4 default route via SLIRP's
+      # gateway, waits for the off request (or the ceiling) and always deletes it again.
+      EGRESS_ROUTE_REQUEST = '/var/lib/aieh/facts-request/egress-route'
+      EGRESS_ROUTE_OFF = '/var/lib/aieh/facts-request/egress-route-off'
+      EGRESS_ROUTE_REPORT = '/run/aieh/egress-route.json'
+      EGRESS_ROUTE_SCHEMA = 'ai-engineering-harness/profiles/egress-route/v1'
+      EGRESS_ROUTE_GATEWAY = '10.0.2.2'
+      EGRESS_ROUTE_CEILING_S = 300
+      EGRESS_ROUTE_PATH_UNIT = 'aieh-egress-route.path'
       KEYCHECK = '/usr/local/sbin/aieh-agent-server-keycheck'
       UNIT_STATE = ('LoadState', 'ActiveState', 'SubState', 'Result', 'UnitFileState')
       INVENTORY_MAX = 400
@@ -1270,10 +1281,93 @@ write_files:
           if data.get('schema') != CONV_FACTS_SCHEMA or data.get('containers') != []:
               raise Failed(step + ': the first report is ' + repr({k: data.get(k) for k in (
                   'schema', 'containers', 'listed')})[:600])
+          route = None
+          if egress_route_enabled(manifest):
+              # S-01.4 fix-forward: only a falsification guest gets the route-present request
+              must(step, ['systemctl', 'enable', '--now', EGRESS_ROUTE_PATH_UNIT], 120)
+              route = {'path_unit': EGRESS_ROUTE_PATH_UNIT, 'gateway': EGRESS_ROUTE_GATEWAY}
           return {'request_dir': stat_entry(REQUEST_DIR), 'units': data.get('units'),
+                  'egress_route': route,
                   'serial': data.get('serial'), 'containers': data.get('containers'),
                   'containers_all_count': data.get('containers_all_count'),
                   'seconds': data.get('seconds')}
+
+
+      def egress_route_enabled(manifest):
+          validation = manifest.get('validation') if isinstance(manifest.get('validation'), dict) else {}
+          return validation.get('egress_route') is True
+
+
+      def ipv4_routes():
+          rc, out, err = run(['ip', '-4', 'route', 'show'], 30)
+          return out.strip().splitlines() if rc == 0 else ['error: ' + tail(err, 200)]
+
+
+      def egress_route():
+          """S-01.4 fix-forward, on request (aieh-egress-route.path), only in a falsification guest:
+          add a temporary IPv4 default route via SLIRP's gateway on the uplink, report the routes
+          before and with it, wait for the off request or the ceiling, then always delete the
+          route and report the routes after. The request files are removed, never read."""
+          for path in (EGRESS_ROUTE_REQUEST,):
+              try:
+                  os.unlink(path)
+              except FileNotFoundError:
+                  pass
+          os.makedirs(FACTS_DIR, 0o755, exist_ok=True)
+          serial = 1
+          try:
+              with open(EGRESS_ROUTE_REPORT, encoding='utf-8') as handle:
+                  serial = int(json.load(handle).get('serial', 0)) + 1
+          except (OSError, ValueError, TypeError, AttributeError):
+              pass
+          report = {'schema': EGRESS_ROUTE_SCHEMA, 'serial': serial, 'state': 'refused',
+                    'gateway': EGRESS_ROUTE_GATEWAY, 'ceiling_s': EGRESS_ROUTE_CEILING_S,
+                    'requested_at': now(), 'error': None}
+          added, dev = False, None
+          try:
+              manifest = load_manifest()
+              if not egress_route_enabled(manifest):
+                  raise Failed('egress-route: not a falsification guest (manifest validation.egress_route)')
+              before = ipv4_routes()
+              report['before'] = before
+              if any(line.startswith('default') for line in before):
+                  raise Failed('egress-route: a default route exists already')
+              link = [line.split() for line in before if line.startswith('10.0.2.0/24 ')]
+              if len(link) != 1 or 'dev' not in link[0]:
+                  raise Failed('egress-route: no single 10.0.2.0/24 route names the uplink')
+              dev = link[0][link[0].index('dev') + 1]
+              if os.path.lexists(EGRESS_ROUTE_OFF):
+                  os.unlink(EGRESS_ROUTE_OFF)
+              must('egress-route', ['ip', '-4', 'route', 'add', 'default', 'via',
+                                    EGRESS_ROUTE_GATEWAY, 'dev', dev], 30)
+              added = True
+              report.update(state='present', uplink=dev, present=ipv4_routes(), added_at=now())
+              write_json(EGRESS_ROUTE_REPORT, report, 0o644)
+              say('egress-route ' + str(serial) + ': default via ' + EGRESS_ROUTE_GATEWAY + ' dev ' + dev)
+              started = time.monotonic()
+              while not os.path.lexists(EGRESS_ROUTE_OFF) and \
+                      time.monotonic() - started < EGRESS_ROUTE_CEILING_S:
+                  time.sleep(0.2)
+              report['ended_by'] = 'off request' if os.path.lexists(EGRESS_ROUTE_OFF) else 'ceiling'
+          except Exception as exc:
+              report['error'] = (type(exc).__name__ + ': ' + str(exc))[:600]
+          finally:
+              if added:
+                  rc, out, err = run(['ip', '-4', 'route', 'del', 'default', 'via',
+                                      EGRESS_ROUTE_GATEWAY, 'dev', dev], 30)
+                  report['delete_rc'] = rc
+              try:
+                  os.unlink(EGRESS_ROUTE_OFF)
+              except OSError:
+                  pass
+              after = ipv4_routes()
+              report['after'] = after
+              report['removed_at'] = now()
+              if added:
+                  report['state'] = 'REMAINS' if any(l.startswith('default') for l in after) else 'removed'
+              write_json(EGRESS_ROUTE_REPORT, report, 0o644)
+              say('egress-route ' + str(serial) + ': ' + report['state'])
+          return 0 if report['state'] == 'removed' and not report['error'] else 1
 
 
       def enable_facts():
@@ -1384,7 +1478,9 @@ write_files:
               return facts()
           if argv == ['conversation-facts']:
               return conversation_facts()
-          say('usage: aieh-provision provision|facts|conversation-facts')
+          if argv == ['egress-route']:
+              return egress_route()
+          say('usage: aieh-provision provision|facts|conversation-facts|egress-route')
           return 2
 
 
@@ -1472,6 +1568,47 @@ write_files:
       Type=oneshot
       ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision conversation-facts
       TimeoutStartSec=120
+      StandardOutput=journal
+      StandardError=journal
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      RuntimeDirectory=aieh
+      RuntimeDirectoryMode=0755
+      RuntimeDirectoryPreserve=yes
+      ReadWritePaths=-/var/lib/aieh/facts-request
+      ProtectHome=read-only
+      PrivateTmp=yes
+      IPAddressDeny=any
+  - path: /etc/systemd/system/aieh-egress-route.path
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH route-present egress falsification: agent's request file (S-01.4; falsification guests only)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+
+      [Path]
+      PathExists=/var/lib/aieh/facts-request/egress-route
+      Unit=aieh-egress-route.service
+      TriggerLimitIntervalSec=60
+      TriggerLimitBurst=5
+
+      [Install]
+      WantedBy=paths.target
+  - path: /etc/systemd/system/aieh-egress-route.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH temporary default route via SLIRP's gateway, always removed (S-01.4 falsification)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      StartLimitIntervalSec=60
+      StartLimitBurst=5
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision egress-route
+      TimeoutStartSec=420
       StandardOutput=journal
       StandardError=journal
       NoNewPrivileges=yes

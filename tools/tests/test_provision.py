@@ -103,6 +103,8 @@ class SeededRootStep(unittest.TestCase):
             '/etc/systemd/system/aieh-conversation-facts.service',
             '/usr/local/sbin/aieh-container-guard',
             '/etc/systemd/system/aieh-container-guard.service',
+            '/etc/systemd/system/aieh-egress-route.path',
+            '/etc/systemd/system/aieh-egress-route.service',
             '/etc/systemd/system/docker.service.d/10-aieh-container-guard.conf',
             '/usr/local/sbin/aieh-agent-server-keycheck'})
         self.assertIn('  - path: /etc/aieh/provision.json\n    owner: root:root\n'
@@ -627,6 +629,133 @@ class AdmissionSeed(unittest.TestCase):
         self.assertIn("'admission': admission_counters(),", SCRIPT)
 
 
+class EgressRouteSeed(unittest.TestCase):
+    """S-01.4 fix-forward: the seeded route-present falsification unit. Only a falsification
+    guest enables it; root always deletes the temporary default route it adds, and refuses
+    without the manifest flag or when a default route exists already."""
+    FALS = PCONF['agent_server']['admission']['network']['egress_guard']['falsification']
+    ROUTES = ['10.0.2.0/24 dev enp0s4 proto kernel scope link src 10.0.2.15',
+              '172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1']
+
+    def test_constants_equal_the_profile_and_the_tool(self):
+        c = script_constants()
+        self.assertEqual(c['EGRESS_ROUTE_REQUEST'], self.FALS['request'])
+        self.assertEqual(c['EGRESS_ROUTE_OFF'], self.FALS['off_request'])
+        self.assertEqual(c['EGRESS_ROUTE_REPORT'], self.FALS['report'])
+        self.assertEqual(c['EGRESS_ROUTE_GATEWAY'], self.FALS['gateway'])
+        self.assertEqual(c['EGRESS_ROUTE_CEILING_S'], self.FALS['ceiling_s'])
+        self.assertEqual(c['EGRESS_ROUTE_PATH_UNIT'], self.FALS['path_unit'])
+        for name in ('EGRESS_ROUTE_REQUEST', 'EGRESS_ROUTE_OFF', 'EGRESS_ROUTE_REPORT',
+                     'EGRESS_ROUTE_GATEWAY', 'EGRESS_ROUTE_CEILING_S'):
+            self.assertEqual(getattr(guest, name), c[name], name)
+        self.assertTrue(c['EGRESS_ROUTE_REQUEST'].startswith(c['REQUEST_DIR'] + '/'))
+
+    def test_units(self):
+        path = unit(self.FALS['path_unit'])
+        self.assertIn(f"PathExists={self.FALS['request']}", path)
+        self.assertIn(f"Unit={self.FALS['service']}", path)
+        self.assertIn('TriggerLimitBurst=5', path)
+        service = unit(self.FALS['service'])
+        self.assertIn('ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision egress-route',
+                      service)
+        self.assertIn('Type=oneshot', service)
+        self.assertIn('IPAddressDeny=any', service)
+        self.assertIn('ReadWritePaths=-/var/lib/aieh/facts-request', service)
+        self.assertIn("if argv == ['egress-route']:", SCRIPT)
+        # enabled only for a falsification guest, by the root step
+        fn = ast.unparse(script_function('enable_conversation_facts'))
+        self.assertIn('if egress_route_enabled(manifest):', fn)
+        self.assertIn("'enable', '--now', EGRESS_ROUTE_PATH_UNIT", fn)
+        # never enabled elsewhere
+        self.assertEqual(SCRIPT.count('EGRESS_ROUTE_PATH_UNIT]'), 1)
+
+    def namespace(self, manifest, routes=None, fail_add=False, sleep_raises=False):
+        ns = script_functions('egress_route', 'egress_route_enabled', 'ipv4_routes', 'tail')
+
+        class Failed(Exception):
+            pass
+        state = {'routes': list(routes or self.ROUTES), 'calls': [], 'written': []}
+
+        def run(argv, timeout, cwd=None):
+            state['calls'].append(argv)
+            if argv[:4] == ['ip', '-4', 'route', 'show']:
+                return 0, '\n'.join(state['routes']) + '\n', ''
+            if argv[:4] == ['ip', '-4', 'route', 'add']:
+                if fail_add:
+                    return 2, '', 'RTNETLINK answers: File exists'
+                state['routes'].insert(0, 'default via 10.0.2.2 dev ' + argv[-1])
+                return 0, '', ''
+            if argv[:4] == ['ip', '-4', 'route', 'del']:
+                state['routes'] = [r for r in state['routes'] if not r.startswith('default')]
+                return 0, '', ''
+            return 1, '', 'unexpected'
+
+        def must(step, argv, timeout, cwd=None):
+            rc, out, err = run(argv, timeout, cwd)
+            if rc != 0:
+                raise Failed(step + ': ' + err)
+            return out
+
+        class Clock:
+            t = 0.0
+
+            @staticmethod
+            def monotonic():
+                return Clock.t
+
+            @staticmethod
+            def sleep(s):
+                if sleep_raises:
+                    raise KeyboardInterrupt('interrupted')
+                Clock.t += s
+        fake_os = mock.MagicMock()
+        fake_os.path.lexists.return_value = False
+        fake_os.unlink.side_effect = FileNotFoundError
+        ns.update(Failed=Failed, run=run, must=must, load_manifest=lambda: manifest,
+                  write_json=lambda path, data, mode: state['written'].append(json.loads(
+                      json.dumps(data))),
+                  say=lambda text: None, now=lambda: 'T', time=Clock, os=fake_os,
+                  FACTS_DIR='/run/aieh')
+        return ns, state
+
+    def test_adds_then_always_deletes_the_route(self):
+        ns, state = self.namespace({'validation': {'egress_route': True}})
+        self.assertEqual(ns['egress_route'](), 0)       # the ceiling ends the wait
+        present, final = state['written']
+        self.assertEqual(present['state'], 'present')
+        self.assertIn('default via 10.0.2.2 dev enp0s4', present['present'])
+        self.assertEqual(present['before'], self.ROUTES)
+        self.assertEqual(final['state'], 'removed')
+        self.assertEqual(final['after'], self.ROUTES)
+        self.assertEqual(final['ended_by'], 'ceiling')
+        self.assertIn(['ip', '-4', 'route', 'add', 'default', 'via', '10.0.2.2', 'dev', 'enp0s4'],
+                      state['calls'])
+        self.assertIn(['ip', '-4', 'route', 'del', 'default', 'via', '10.0.2.2', 'dev', 'enp0s4'],
+                      state['calls'])
+
+    def test_deletes_the_route_even_when_interrupted(self):
+        ns, state = self.namespace({'validation': {'egress_route': True}}, sleep_raises=True)
+        with self.assertRaises(KeyboardInterrupt):
+            ns['egress_route']()
+        self.assertFalse(any(r.startswith('default') for r in state['routes']))
+        self.assertEqual(state['written'][-1]['state'], 'removed')
+
+    def test_refusals(self):
+        for manifest in ({}, {'validation': {'egress_route': 'yes'}}, {'validation': None}):
+            ns, state = self.namespace(manifest)
+            self.assertEqual(ns['egress_route'](), 1)
+            self.assertEqual(state['written'][-1]['state'], 'refused')
+            self.assertFalse([c for c in state['calls'] if c[:4] == ['ip', '-4', 'route', 'add']])
+        ns, state = self.namespace({'validation': {'egress_route': True}},
+                                   routes=['default via 10.0.2.2 dev enp0s4'] + self.ROUTES)
+        self.assertEqual(ns['egress_route'](), 1)
+        self.assertIn('a default route exists already', state['written'][-1]['error'])
+        self.assertFalse([c for c in state['calls'] if c[:4] == ['ip', '-4', 'route', 'del']])
+        ns, state = self.namespace({'validation': {'egress_route': True}}, fail_add=True)
+        self.assertEqual(ns['egress_route'](), 1)
+        self.assertEqual(state['written'][-1]['state'], 'refused')
+
+
 class ManifestFixture(unittest.TestCase):
     """A temporary repository with a synthetic lock, staged by provision-fetch with fakes,
     whose image archive carries crane's placeholder tag as the real one does."""
@@ -719,6 +848,20 @@ class Manifest(ManifestFixture):
         self.assertEqual(guest.build_provision_manifest(self.ctx())['bytes'], built['bytes'])
         value = nocloud_seed.provision_manifest_value(built['bytes'])
         self.assertEqual(base64.b64decode(value), built['bytes'])
+
+    def test_egress_falsification_marks_only_its_own_manifest(self):
+        """S-01.4 fix-forward: create --provision --egress-falsification alone carries
+        validation.egress_route; an ordinary provisioned manifest is unchanged by it."""
+        plain = guest.build_provision_manifest(self.ctx())
+        marked = guest.build_provision_manifest(self.ctx(), egress_falsification=True)
+        self.assertNotIn('validation', plain['manifest'])
+        self.assertIs(plain['record']['egress_falsification'], False)
+        self.assertEqual(marked['manifest']['validation'],
+                         {'egress_route': True, 'gateway': '10.0.2.2', 'ceiling_s': 300})
+        self.assertIs(marked['record']['egress_falsification'], True)
+        self.assertNotEqual(marked['sha256'], plain['sha256'])
+        with self.assertRaises(guest.Refused):
+            guest.create(self.ctx(), 'abc', egress_falsification=True)
 
     def test_a_changed_stage_is_refused(self):
         deb = self.staged / 'debs' / 'tini_0.19.0-3+b8_amd64.deb'

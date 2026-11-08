@@ -4269,6 +4269,10 @@ def _script_of(command):
     return script, arg
 
 
+ROUTES_NO_DEFAULT = ['10.0.2.0/24 dev enp0s4 proto kernel scope link src 10.0.2.15',
+                     '172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1']
+
+
 class FakeJobGuest(FakeAdmissionGuest):
     """FakeAdmissionGuest with the job-side scripts of job_access_probe, answering with the
     outcomes observed in the S-01.3.2 exploration guest (s0132-x). ``faults`` inject what
@@ -4283,9 +4287,52 @@ class FakeJobGuest(FakeAdmissionGuest):
                 facts['daemon_json'] = dict(facts['daemon_json'], **{'no-new-privileges': False})
             self.calls.append('boot')
             return subprocess.CompletedProcess(argv, 0, json.dumps(facts) + '\n', '')
+        # S-01.4 fix-forward: the seeded root route unit, ip route, the guest control
+        if argv[:2] == ['python3', '-'] and input_text == guest.EGRESS_ROUTE_WAIT:
+            report = dict(self.route_report)
+            serial, states = int(argv[3]), argv[4].split(',')
+            if not (report.get('serial', 0) > serial and report.get('state') in states):
+                report['wait'] = 'ceiling reached'
+            return subprocess.CompletedProcess(argv, 0, json.dumps(report) + '\n', '')
+        if argv[:2] == ['touch', guest.EGRESS_ROUTE_REQUEST]:
+            self.route_calls.append('on')
+            if not self.faults.get('route_refused'):
+                self.route = True
+            self.route_report = {'serial': self.route_report.get('serial', 0) + 1,
+                                 'state': 'present' if self.route else 'refused',
+                                 'uplink': 'enp0s4', 'before': ROUTES_NO_DEFAULT,
+                                 'present': self.routes()}
+            return subprocess.CompletedProcess(argv, 0, '', '')
+        if argv[:2] == ['touch', guest.EGRESS_ROUTE_OFF]:
+            self.route_calls.append('off')
+            if not self.faults.get('route_stuck'):
+                self.route = False
+            self.route_report = dict(self.route_report, state='REMAINS' if self.route else 'removed',
+                                     ended_by='off request', after=self.routes())
+            return subprocess.CompletedProcess(argv, 0, '', '')
+        if argv[:4] == ['ip', '-4', 'route', 'show']:
+            return subprocess.CompletedProcess(argv, 0, '\n'.join(self.routes()) + '\n', '')
+        if argv[:2] == ['python3', '-'] and input_text == guest.JOB_EGRESS_SWEEP:
+            spec = json.loads(base64.b64decode(argv[2]).decode('utf-8'))
+            self.control_specs = getattr(self, 'control_specs', []) + [spec]
+            results = [{'proto': pr, 'host': h, 'port': po, 'what': w,
+                        'outcome': 'ECONNREFUSED' if self.route else 'ENETUNREACH', 'seconds': 0.01}
+                       for pr, h, po, w in spec['targets']]
+            return subprocess.CompletedProcess(argv, 0, guest.JOB_MARKER + json.dumps(
+                {'results': results}) + '\n', '')
         return super().run(argv, input_text, timeout, user)
 
     egress_counts = None
+    route = False
+    route_report = {}
+    log_tail = ()
+
+    def __init__(self, **faults):
+        super().__init__(**faults)
+        self.route_calls = []
+
+    def routes(self):
+        return (['default via 10.0.2.2 dev enp0s4'] if self.route else []) + ROUTES_NO_DEFAULT
 
     def facts(self):
         report = super().facts()
@@ -4295,8 +4342,8 @@ class FakeJobGuest(FakeAdmissionGuest):
         report['admission']['egress'] = {
             'iptables': rows,
             'ip6tables': [dict(r, packets=0, bytes=0) for r in rows],
-            'log': {'count': counts[1], 'tail': ['aieh-egress-guard: IN=docker0 OUT=enp0s4 '
-                                                 'DST=10.0.2.2 PROTO=TCP DPT=13300 SYN']}}
+            'log': {'count': counts[1], 'tail': list(self.log_tail) or [
+                'aieh-egress-guard: IN=docker0 OUT=enp0s4 DST=10.0.2.2 PROTO=TCP DPT=13300 SYN']}}
         if self.faults.get('privileged'):
             for c in report['containers']:
                 c['HostConfig'] = dict(c['HostConfig'], Privileged=True)
@@ -4358,20 +4405,29 @@ class FakeJobGuest(FakeAdmissionGuest):
         self.egress_specs = getattr(self, 'egress_specs', []) + [spec]
         counts = list(self.egress_counts or [3, 0, 0, 0])
         results = []
+        log = list(self.log_tail)
         for proto, host, port, what in spec['targets']:
             outcome = 'ECONNREFUSED'
-            if self.faults.get('egress_topology') and not host.startswith('10.0.2.'):
-                outcome = 'ENETUNREACH'
+            off_link = not host.startswith('10.0.2.')
+            if off_link and not self.route:          # no default route: the guest's routing
+                outcome = 'ENETUNREACH' if proto == 'tcp' else 'timeout'
             if self.faults.get('egress_timeout') and host == '10.0.2.100':
+                outcome = 'timeout'
+            if self.route and self.faults.get('route_timeout') and proto == 'udp':
                 outcome = 'timeout'
             if self.faults.get('egress_connects') and host == '1.1.1.1':
                 outcome = 'connected'
-            if outcome == 'ECONNREFUSED' and not self.faults.get('egress_uncounted'):
+            if outcome == 'ECONNREFUSED' and not (self.faults.get('egress_uncounted') and not self.route) and \
+                    not (self.route and self.faults.get('route_uncounted')):
                 counts[2 if proto == 'tcp' else 3] += 1
                 counts[1] += 1
+                out = 'eth9' if self.faults.get('route_wrong_out') else 'enp0s4'
+                log.append(f'aieh-egress-guard: IN=docker0 OUT={out} SRC=172.17.0.2 DST={host} '
+                           f'PROTO={proto.upper()} DPT={port}')
             results.append({'proto': proto, 'host': host, 'port': port, 'what': what,
                             'outcome': outcome, 'seconds': 0.01})
         self.egress_counts = counts
+        self.log_tail = tuple(log[-20:])
         return {'results': results}
 
     def container_output(self, cid, command):
@@ -4419,7 +4475,8 @@ class JobAccessProbe(TempState):
         super().setUp()
         self.idir = self.state / 'instances' / 'job'
         self.idir.mkdir(parents=True)
-        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG},
+        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG,
+                                        'egress_falsification': True},
                        'ports': {'ssh': 40001, 'qmp': 40002}}
         patcher = mock.patch.object(guest, 'running_instance',
                                     lambda ctx, name: (self.idir, self.record))
@@ -4439,7 +4496,9 @@ class JobAccessProbe(TempState):
     def test_probe_passes(self):
         out, fake = self.run_probe()
         self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
-        self.assertEqual(len(out['steps']), 11)
+        self.assertEqual(len(out['steps']), 12)
+        self.assertEqual(fake.route_calls, ['on', 'off'])
+        self.assertFalse(fake.route)
         self.assertEqual(fake.conversations, {})                # both deleted
         self.assertEqual(out['ci']['status'], 'not applicable yet: no CI runner exists')
         self.assertEqual(out['ci']['carried_to'], JOBS['ci']['carried_to'])
@@ -4464,7 +4523,7 @@ class JobAccessProbe(TempState):
         out, fake = self.run_probe()
         step = next(s for s in out['steps'] if s['step'].startswith('egress sweep'))
         self.assertTrue(step['ok'])
-        targets = {f'{p}:{h}:{n}' for p, h, n, _ in fake.egress_specs[0]['targets']}
+        targets = {f'{p}:{h}:{n}' for p, h, n, _ in fake.egress_specs[-1]['targets']}
         for want in ('tcp:1.1.1.1:443', 'tcp:8.8.8.8:53', 'udp:8.8.8.8:53', 'tcp:10.0.2.2:40001',
                      'tcp:10.0.2.2:40002', 'tcp:10.0.2.2:13300', 'tcp:10.0.2.3:53',
                      'udp:10.0.2.3:53', 'tcp:10.0.2.100:7000'):
@@ -4473,23 +4532,103 @@ class JobAccessProbe(TempState):
         self.assertEqual(counters['delta']['REJECT tcp-reset'], counters['refused_tcp'])
         self.assertEqual(counters['delta']['REJECT'], counters['refused_other'])
         self.assertTrue(counters['incremented'] and counters['exact'])
-        self.assertEqual(len(step['detail']['results']), 2 * len(fake.egress_specs[0]['targets']))
+        self.assertEqual(len(step['detail']['results']), 2 * len(fake.egress_specs[-1]['targets']))
+
+    def test_no_route_off_link_rows_are_topology_not_verdict(self):
+        out, fake = self.run_probe()
+        step = next(s for s in out['steps'] if s['step'] == 'egress sweep from inside each job (S-01.4)')
+        self.assertTrue(step['ok'])
+        verdicts = {(r['host'], r['proto'], r['outcome'], r['verdict']) for r in step['detail']['results']}
+        self.assertIn(('1.1.1.1', 'tcp', 'ENETUNREACH', guest.EGRESS_NO_ROUTE_CLASS), verdicts)
+        self.assertIn(('8.8.8.8', 'udp', 'timeout', guest.EGRESS_NO_ROUTE_CLASS), verdicts)
+        # judged under the original rule (the S-01.4 A/B record), the same rows FAIL
+        ok, rows, _, _ = guest.egress_verdict(step['detail']['results'],
+                                              step['detail']['counters']['before'],
+                                              step['detail']['counters']['after'])
+        self.assertFalse(ok)
+
+    def test_route_present_step(self):
+        out, fake = self.run_probe()
+        step = next(s for s in out['steps'] if s['step'].startswith('route-present'))
+        self.assertTrue(step['ok'], json.dumps(step, default=str)[:2000])
+        d = step['detail']
+        self.assertEqual(d['routes_before'], ROUTES_NO_DEFAULT)
+        self.assertIn('default via 10.0.2.2 dev enp0s4', d['routes_with_route'])
+        self.assertEqual(d['routes_after'], ROUTES_NO_DEFAULT)
+        self.assertTrue(d['route_gone'])
+        self.assertEqual(d['route_removed_report']['state'], 'removed')
+        self.assertEqual(d['counters']['delta']['REJECT tcp-reset'], 4)
+        self.assertEqual(d['counters']['delta']['REJECT'], 2)
+        self.assertTrue(d['counters']['exact'] and d['counters']['log_out_uplink'])
+        self.assertEqual(len(d['results']), 6)
+        self.assertEqual(d['guest_control'][0]['host'], '1.1.1.1')
+        self.assertEqual(fake.control_specs[0]['targets'], guest.EGRESS_ROUTE_CONTROL)
+        # the route is gone before the no-route sweep runs
+        self.assertEqual([s['step'] for s in out['steps']].index(step['step']) + 1,
+                         [s['step'] for s in out['steps']].index(
+                             'egress sweep from inside each job (S-01.4)'))
+
+    def test_route_present_decision_rule(self):
+        name = 'route-present egress falsification from inside each job (S-01.4)'
+        for fault in ('route_timeout', 'route_uncounted', 'route_wrong_out', 'route_refused'):
+            out, fake = self.run_probe(**{fault: True})
+            self.assertEqual(out['result'], 'FAIL', fault)
+            self.assertIn(name, out['failed_steps'], fault)
+            self.assertFalse(fake.route, fault)
+            self.assertEqual(fake.conversations, {})
+        # the no-route sweep still runs after a failed route step (history)
+        out, _ = self.run_probe(route_timeout=True)
+        self.assertTrue(next(s for s in out['steps'] if s['step'].startswith('egress sweep'))['ok'])
+        out, fake = self.run_probe(egress_connects=True)
+        self.assertEqual(out['stop_conditions'][0]['condition'],
+                         'a job connected out of the guest with the route present')
+        self.assertEqual(fake.route_calls, ['on', 'off'])      # removed at once
+        self.assertFalse(fake.route)
+
+    def test_route_cleanup_always_runs(self):
+        # an exception in the middle of the step still removes the route and verifies it
+        fake = FakeJobGuest()
+        real = fake.container_output
+
+        def boom(cid, command):
+            if guest.JOB_EGRESS_SWEEP in (_script_of(command)[0] or '') and fake.route:
+                raise guest.Refused('CONTAINER', 'the container went away')
+            return real(cid, command)
+        fake.container_output = boom
+        out = guest.job_access_probe(self.ctx(), 'job', channels=lambda rec: (fake.api, fake.facts),
+                                     ssh_fn=lambda rec: fake)
+        step = next(s for s in out['steps'] if s['step'].startswith('route-present'))
+        self.assertFalse(step['ok'])
+        self.assertEqual(fake.route_calls, ['on', 'off'])
+        self.assertFalse(fake.route)
+        # a route that stays is a stop condition
+        out, fake = self.run_probe(route_stuck=True)
+        self.assertIn('the temporary default route remains in the guest; destroy it',
+                      [s['condition'] for s in out['stop_conditions']])
+        step = next(s for s in out['steps'] if s['step'].startswith('route-present'))
+        self.assertFalse(step['detail']['route_gone'])
+
+    def test_route_step_needs_a_falsification_guest(self):
+        self.record['provisioning'] = {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG}
+        out, fake = self.run_probe()
+        step = next(s for s in out['steps'] if s['step'].startswith('route-present'))
+        self.assertFalse(step['ok'])
+        self.assertIn('--egress-falsification', step['detail']['error'])
+        self.assertEqual(getattr(fake, 'route_calls', []), [])
 
     def test_egress_decision_rule(self):
         name = 'egress sweep from inside each job (S-01.4)'
-        for fault in ('egress_topology', 'egress_timeout', 'egress_uncounted'):
+        for fault in ('egress_timeout', 'egress_uncounted'):
             out, fake = self.run_probe(**{fault: True})
             self.assertEqual(out['result'], 'FAIL', fault)
             self.assertEqual(out['failed_steps'], [name], fault)
             self.assertEqual(out['stop_conditions'], [], fault)
             self.assertEqual(fake.conversations, {})
-        out, _ = self.run_probe(egress_topology=True)
+        out, _ = self.run_probe(egress_timeout=True)
         step = next(s for s in out['steps'] if s['step'] == name)
         verdicts = {(r['host'], r['verdict']) for r in step['detail']['results']}
-        self.assertIn(('1.1.1.1', 'topology, not policy'), verdicts)
+        self.assertIn(('10.0.2.100', 'topology, not policy'), verdicts)
         self.assertIn(('10.0.2.2', 'refused (reset or ICMP reject)'), verdicts)
-        out, fake = self.run_probe(egress_connects=True)
-        self.assertEqual(out['stop_conditions'][0]['condition'], 'a job connected out of the guest')
         self.assertEqual(fake.conversations, {})
         ok, rows, stop, counters = guest.egress_verdict(
             [{'proto': 'tcp', 'outcome': 'ECONNREFUSED'}], None, [0, 0, 1, 0])

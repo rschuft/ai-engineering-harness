@@ -567,7 +567,17 @@ defaults them.
   before and after. Its decision rule is fixed: every target refused with the guard's
   reset or ICMP reject and the guard's counters incremented is a PASS; a timeout or an
   unreachable error alone is topology, not policy (FAIL); a connection is a stop
-  condition.
+  condition. After the Overseer's S-01.4 ruling, the no-route sweep records off-link
+  targets as topology and leaves them out of its verdict, and a route-present step decides
+  instead: on a guest created with `create --provision --egress-falsification` (a
+  validation-only manifest flag), a seeded root unit adds a temporary IPv4 default route via
+  SLIRP's `10.0.2.2` on agent's request file and always deletes it again; with the route
+  present, `1.1.1.1:443` and `8.8.8.8:53` (TCP and UDP) are swept from both jobs and once
+  from the guest's own namespace (a control). PASS: every job target refused by the guard,
+  its IPv4 REJECT counters up by exactly the attempts and its log lines showing `OUT=` the
+  uplink; a timeout or ENETUNREACH is a FAIL; a connection is a stop condition. The step
+  removes the route in a `finally` and verifies it is gone. On an ordinary provisioned guest
+  the step fails as not available.
 - The container egress guard (S-01.4) is seeded with the container guard: the same script
   and unit (which `docker.service` requires) create Moby's `DOCKER-USER` chain when it is
   absent and send every new forwarded connection from `docker0` or a `br-*` bridge to

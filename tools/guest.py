@@ -1524,11 +1524,16 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
 
 
 def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=None,
-           provision=False):
+           provision=False, egress_falsification=False):
     """The create binding. ``netprobe`` is set only by the netprobe operation (a
     NetprobeSession); the ordinary create takes no validation input. ``provision`` (F-04.1)
     writes the provisioning manifest of the verified host stage into the seed; the
-    provision operation then transfers the files and the seeded root step installs them."""
+    provision operation then transfers the files and the seeded root step installs them.
+    ``egress_falsification`` (S-01.4 fix-forward, with ``provision`` only) marks the manifest
+    so that the root step enables the route-present falsification request
+    (job-access-probe); an ordinary provisioned guest never has it."""
+    if egress_falsification and not provision:
+        raise Refused('REFUSED', '--egress-falsification needs --provision')
     if netprobe is not None and not isinstance(netprobe, NetprobeSession):
         raise Refused('REFUSED', 'create takes no validation overlay; only the netprobe '
                       'operation creates a validation instance')
@@ -1544,7 +1549,7 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         raise Refused('TIER_UNAVAILABLE', f'{ctx.profile["name"]}: strong provider unavailable',
                       [c for c in report['checks'] if c['status'] != 'ok'])
     revision = profile_revision(ctx.repo)
-    manifest = build_provision_manifest(ctx) if provision else None
+    manifest = build_provision_manifest(ctx, egress_falsification) if provision else None
     instances = idir.parent
     if not instances.is_dir():
         os.mkdir(instances)
@@ -5417,7 +5422,7 @@ def agent_server_manifest(profile, files):
                          'port': server['listener']['port']}}
 
 
-def build_provision_manifest(ctx):
+def build_provision_manifest(ctx, egress_falsification=False):
     """The seeded manifest of a provisioned instance, from the committed lock and the
     re-verified host stage (provision-fetch): every file to upload with its role, size
     and sha256, the packages, the image (locked config digest, the archive's tags, the
@@ -5470,6 +5475,10 @@ def build_provision_manifest(ctx):
                    'containerd_config': moby['containerd_config']['content']},
         'agent_server': agent_server,
     }
+    if egress_falsification:
+        # S-01.4 fix-forward: the root step enables the route-present request (validation only)
+        manifest['validation'] = {'egress_route': True, 'gateway': EGRESS_ROUTE_GATEWAY,
+                                  'ceiling_s': EGRESS_ROUTE_CEILING_S}
     data = (json.dumps(manifest, indent=1, sort_keys=True) + '\n').encode('ascii')
     digest = hashlib.sha256(data).hexdigest()
     return {'bytes': data, 'sha256': digest, 'manifest': manifest, 'sources': sources,
@@ -5480,7 +5489,8 @@ def build_provision_manifest(ctx):
                        'staged_dir': posix(staged_dir), 'stage_verify_seconds':
                        verified['seconds'],
                        'agent_server': {'version': conf['agent_server'].get('version'),
-                                        'binary_sha256': agent_server['binary']['sha256']}}}
+                                        'binary_sha256': agent_server['binary']['sha256']},
+                       'egress_falsification': bool(egress_falsification)}}
 
 
 def provisioning_probes(conf):
@@ -6587,7 +6597,7 @@ def provision(ctx, name):
                       'manifest and its root step is inert')
     conf = provisioning_config(ctx.profile)
     up, root = conf['upload'], conf['root_step']
-    manifest = build_provision_manifest(ctx)
+    manifest = build_provision_manifest(ctx, prov.get('egress_falsification') is True)
     if manifest['sha256'] != prov.get('manifest_sha256'):
         raise Refused('STAGED_MISMATCH', f'the stage now gives manifest {manifest["sha256"]}; '
                       f'{name} was seeded with {prov.get("manifest_sha256")}')
@@ -8287,14 +8297,23 @@ def egress_counters(report):
     return [r.get('packets') if isinstance(r, dict) else None for r in rows], log_
 
 
-def egress_verdict(results, before, after):
-    """(ok, rows, stop, counters) of the egress sweep under the S-01.4 decision rule."""
+EGRESS_NO_ROUTE_CLASS = 'topology (no route); the policy is proved by the route-present step'
+
+
+def egress_verdict(results, before, after, off_link_judged=True):
+    """(ok, rows, stop, counters) of the egress sweep under the S-01.4 decision rule. With
+    ``off_link_judged`` false (the Overseer's fix-forward ruling), a public-literal target that
+    the guest's routing answers (no route) is recorded as topology and left out of the
+    verdict; the route-present step judges the policy for it."""
     rows, stop, refused = [], [], {'tcp': 0, 'udp': 0}
     for r in results:
         outcome = str(r.get('outcome'))
+        off_link = str(r.get('what', '')).startswith('public literal')
         if outcome == EGRESS_REFUSED:
             klass = 'refused (reset or ICMP reject)'
             refused[r.get('proto')] = refused.get(r.get('proto'), 0) + 1
+        elif outcome in EGRESS_TOPOLOGY and off_link and not off_link_judged:
+            klass = EGRESS_NO_ROUTE_CLASS
         elif outcome in EGRESS_TOPOLOGY:
             klass = 'topology, not policy'
         elif outcome == 'connected' or outcome.startswith('answered'):
@@ -8316,8 +8335,82 @@ def egress_verdict(results, before, after):
         counters['exact'] = delta[2] == refused['tcp'] and delta[3] == refused['udp']
     else:
         counters['incremented'] = False
+    ok = bool(rows) and all(r['verdict'].startswith('refused') or r['verdict'] == EGRESS_NO_ROUTE_CLASS
+                            for r in rows) and counters['incremented'] and not stop
+    return ok, rows, stop, counters
+
+
+# The route-present falsification (S-01.4 fix-forward, the Overseer's ruling): a temporary
+# IPv4 default route via SLIRP's gateway, added and always removed by the seeded root unit
+# on agent's request files (create --provision --egress-falsification only).
+EGRESS_ROUTE_GATEWAY = '10.0.2.2'
+EGRESS_ROUTE_CEILING_S = 300
+EGRESS_ROUTE_REQUEST = '/var/lib/aieh/facts-request/egress-route'
+EGRESS_ROUTE_OFF = '/var/lib/aieh/facts-request/egress-route-off'
+EGRESS_ROUTE_REPORT = '/run/aieh/egress-route.json'
+EGRESS_ROUTE_WAIT_S = 60          # bounds a hang of the root unit (it answers in ~1 s)
+EGRESS_ROUTE_TARGETS = [['tcp', '1.1.1.1', 443, 'public literal'],
+                        ['tcp', '8.8.8.8', 53, 'public literal'],
+                        ['udp', '8.8.8.8', 53, 'public literal (the container resolver)']]
+EGRESS_ROUTE_CONTROL = [['tcp', '1.1.1.1', 443, 'guest namespace control (SLIRP alone)']]
+# Run as agent: wait until the root unit's report has a serial above argv[2] and a state in
+# argv[3] (comma-separated), or the ceiling argv[4]; print the report (or {}) as one line.
+EGRESS_ROUTE_WAIT = r'''import json, sys, time
+path, serial, states, ceiling = sys.argv[1], int(sys.argv[2]), sys.argv[3].split(','), float(sys.argv[4])
+t0, report = time.monotonic(), {}
+while True:
+    try:
+        report = json.load(open(path))
+    except (OSError, ValueError):
+        report = {}
+    if int(report.get('serial', 0) or 0) > serial and report.get('state') in states:
+        break
+    if time.monotonic() - t0 > ceiling:
+        report = dict(report, wait='ceiling reached')
+        break
+    time.sleep(0.2)
+print(json.dumps(report, sort_keys=True))
+'''
+
+
+def egress_route_verdict(results, before, after, log_lines, uplink):
+    """(ok, rows, stop, counters) of the route-present step under the decision rule fixed
+    before the run: every container target refused with the guard's reset or ICMP reject,
+    the guard's IPv4 REJECT counters up by exactly the attempts, and the LOG lines for the
+    targets show OUT=<the guest uplink>. A timeout or ENETUNREACH is a FAIL; a connection is a
+    stop condition."""
+    rows, stop, attempts = [], [], {'tcp': 0, 'udp': 0}
+    for r in results:
+        outcome = str(r.get('outcome'))
+        attempts[r.get('proto')] = attempts.get(r.get('proto'), 0) + 1
+        if outcome == EGRESS_REFUSED:
+            klass = 'refused (reset or ICMP reject)'
+        elif outcome == 'connected' or outcome.startswith('answered'):
+            klass = 'connection'
+            stop.append({'condition': 'a job connected out of the guest with the route present',
+                         'target': r})
+        else:
+            klass = 'not refused by the guard (FAIL)'
+        rows.append(dict(r, verdict=klass))
+    counters = {'before': before, 'after': after, 'attempts_tcp': attempts['tcp'],
+                'attempts_other': attempts['udp']}
+    counted = isinstance(before, list) and isinstance(after, list) and \
+        all(isinstance(x, int) for x in before + after)
+    if counted:
+        delta = [a - b for a, b in zip(after, before)]
+        counters['delta'] = {'RETURN': delta[0], 'LOG': delta[1], 'REJECT tcp-reset': delta[2],
+                             'REJECT': delta[3]}
+        counters['exact'] = delta[2] == attempts['tcp'] and delta[3] == attempts['udp']
+    else:
+        counters['exact'] = False
+    hosts = {r.get('host') for r in results}
+    logged = [line for line in log_lines or []
+              if any(f'DST={h} ' in line for h in hosts)]
+    counters['log_lines'] = logged
+    counters['log_out_uplink'] = bool(logged) and bool(uplink) and \
+        all(f' OUT={uplink} ' in line for line in logged)
     ok = bool(rows) and all(r['verdict'].startswith('refused') for r in rows) and \
-        counters['incremented'] and not stop
+        counters['exact'] and counters['log_out_uplink'] and not stop
     return ok, rows, stop, counters
 
 
@@ -8756,18 +8849,103 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
             data = _job_json(in_container(cid, container_python(JOB_EGRESS_SWEEP, arg), 300))
             results += [dict(r, conversation=cid) for r in data.get('results') or []]
         after, log_after = egress_counters(facts())
-        ok, rows, stop, counters = egress_verdict(results, before, after)
+        ok, rows, stop, counters = egress_verdict(results, before, after, off_link_judged=False)
         stop_conditions.extend(stop)
         complete = len(results) == len(targets) * len(conversations)
         return ok and complete, {
             'decision_rule': 'PASS: every target refused with the guard\'s reset or ICMP reject '
                              '(ECONNREFUSED) and the guard\'s REJECT counters incremented; FAIL: a '
                              'timeout or an unreachable error alone (topology, not policy); STOP: '
-                             'any connection',
+                             'any connection. Off-link public literals without a route are '
+                             'recorded as ' + EGRESS_NO_ROUTE_CLASS + ' and left out of the '
+                             'verdict (Overseer ruling, S-01.4 fix-forward)',
             'targets': targets, 'results': rows, 'counters': counters,
             'guard_log': {'count_before': log_before.get('count'),
                           'count_after': log_after.get('count'),
                           'tail': (log_after.get('tail') or [])[-16:]}}
+
+    def route_report(serial, states, ceiling=EGRESS_ROUTE_WAIT_S):
+        result = ssh.run(['python3', '-', EGRESS_ROUTE_REPORT, str(serial), ','.join(states),
+                          str(ceiling)], input_text=EGRESS_ROUTE_WAIT, timeout=ceiling + 60)
+        try:
+            return json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            return {'wait': f'no report (rc {result.returncode})'}
+
+    def ipv4_routes():
+        result = ssh.run(['ip', '-4', 'route', 'show'], timeout=60)
+        return result.stdout.strip().splitlines()
+
+    def route_step():
+        """S-01.4 fix-forward (the Overseer's ruling): with a temporary IPv4 default route via
+        SLIRP's gateway in the guest (added by the seeded root unit on agent's request), sweep
+        the off-link targets from both jobs and once from the guest's own namespace (a
+        control, recorded only), read the guard's counters and log around the container sweep,
+        then always remove the route and verify that it is gone."""
+        if (record.get('provisioning') or {}).get('egress_falsification') is not True:
+            return False, {'error': 'not available: the instance was not created with '
+                                    'create --provision --egress-falsification'}
+        detail = {'decision_rule': 'PASS: every container target refused with the guard\'s TCP '
+                                   'reset or ICMP reject, the guard\'s IPv4 REJECT counters up by '
+                                   'exactly the attempts, and the LOG lines show OUT= the guest '
+                                   'uplink; FAIL: any timeout or ENETUNREACH from a container with '
+                                   'the route present; STOP: any connection',
+                  'targets': EGRESS_ROUTE_TARGETS, 'routes_before': ipv4_routes()}
+        verdict = (False, [], [], {})
+        requested = False
+        serial = int(route_report(-1, ['present', 'removed', 'REMAINS', 'refused'], 0)
+                     .get('serial') or 0)
+        try:
+            touched = ssh.run(['touch', EGRESS_ROUTE_REQUEST], timeout=60)
+            requested = touched.returncode == 0
+            present = route_report(serial, ['present', 'removed', 'REMAINS', 'refused'])
+            detail['route_present_report'] = {k: present.get(k) for k in (
+                'serial', 'state', 'uplink', 'before', 'present', 'error', 'wait')}
+            detail['routes_with_route'] = ipv4_routes()
+            uplink = present.get('uplink')
+            want = f'default via {EGRESS_ROUTE_GATEWAY} dev {uplink}'
+            if present.get('state') != 'present' or \
+                    not any(line.startswith(want) for line in detail['routes_with_route']):
+                detail['error'] = 'the route was not present'
+            else:
+                spec = {'targets': EGRESS_ROUTE_TARGETS, 'timeout': JOB_CONNECT_S}
+                arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+                before, log_before = egress_counters(facts())
+                results = []
+                for cid in conversations:
+                    data = _job_json(in_container(cid, container_python(JOB_EGRESS_SWEEP, arg), 120))
+                    results += [dict(r, conversation=cid) for r in data.get('results') or []]
+                after, log_after = egress_counters(facts())
+                verdict = egress_route_verdict(results, before, after, log_after.get('tail'), uplink)
+                stop_conditions.extend(verdict[2])
+                detail['complete'] = len(results) == len(EGRESS_ROUTE_TARGETS) * len(conversations)
+                if not verdict[2]:
+                    control_spec = {'targets': EGRESS_ROUTE_CONTROL, 'timeout': JOB_CONNECT_S}
+                    control = ssh.run(['python3', '-', base64.b64encode(json.dumps(
+                        control_spec).encode('utf-8')).decode('ascii')],
+                        input_text=JOB_EGRESS_SWEEP, timeout=120)
+                    detail['guest_control'] = (_job_json(control.stdout).get('results')
+                                               if control.returncode == 0 else
+                                               {'rc': control.returncode})
+                detail.update(results=verdict[1], counters=verdict[3],
+                              guard_log={'count_before': log_before.get('count'),
+                                         'count_after': log_after.get('count')})
+        finally:
+            # always: ask the root unit to remove the route, and verify that it is gone
+            if requested:
+                ssh.run(['touch', EGRESS_ROUTE_OFF], timeout=60)
+                removed = route_report(serial, ['removed', 'REMAINS', 'refused'])
+                detail['route_removed_report'] = {k: removed.get(k) for k in (
+                    'serial', 'state', 'ended_by', 'after', 'error', 'wait')}
+            detail['routes_after'] = ipv4_routes()
+            detail['route_gone'] = not any(line.startswith('default')
+                                           for line in detail['routes_after'])
+            if not detail['route_gone']:
+                stop_conditions.append({'condition': 'the temporary default route remains in the '
+                                                     'guest; destroy it'})
+        ok = verdict[0] and detail.get('complete') is True and detail['route_gone'] and \
+            requested and (detail.get('route_removed_report') or {}).get('state') == 'removed'
+        return ok, detail
 
     def delete_step():
         out = {}
@@ -8792,7 +8970,10 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     run('privileged Agent Server routes from inside each job, every address', routes_step)
     run('credentials by name and fingerprint inside each job', token_step)
     run('hardening controls present (boot facts)', controls_step)
-    run('egress sweep from inside each job (S-01.4)', egress_step)
+    run('route-present egress falsification from inside each job (S-01.4)', route_step)
+    run('egress sweep from inside each job (S-01.4)', egress_step,
+        always=not stop_conditions and 'route-present egress falsification from inside each job '
+                                       '(S-01.4)' in failed)
     run('delete the conversations (positive control)', delete_step,
         always=bool(state['created']))
     out = {'schema': JOB_PROBE_SCHEMA, 'operation': 'job-access-probe',
@@ -8981,6 +9162,11 @@ def main(argv=None):
             p.add_argument('--bundle-name', help='file name in the guest exchange directory')
         if op == 'exchange-pull':
             p.add_argument('--file', required=True, help='file name in the guest exchange directory')
+        if op == 'create':
+            p.add_argument('--egress-falsification', action='store_true',
+                           help='S-01.4 fix-forward, with --provision: let job-access-probe add a '
+                                "temporary default route via SLIRP's gateway (always removed) to "
+                                'prove the egress guard with a route present')
         if op in ('create', 'recreate', 'smoke'):
             p.add_argument('--provision', action='store_true',
                            help='F-04.1: seed the provisioning manifest of the verified host '
@@ -9016,7 +9202,10 @@ def main(argv=None):
         elif op == 'provision-fetch':
             result = provision_fetch(ctx)
         elif op == 'create':
-            result = create(ctx, args.name, args.ready_timeout, canaries, provision=True) \
+            if args.egress_falsification and not args.provision:
+                raise Refused('REFUSED', '--egress-falsification needs --provision')
+            result = create(ctx, args.name, args.ready_timeout, canaries, provision=True,
+                            egress_falsification=args.egress_falsification) \
                 if args.provision else create(ctx, args.name, args.ready_timeout, canaries)
         elif op == 'provision':
             result = provision(ctx, args.name)

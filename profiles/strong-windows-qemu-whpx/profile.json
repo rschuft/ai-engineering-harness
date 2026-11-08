@@ -114,7 +114,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "2d157fd4d0e3a7d283a64681672b671248d0af739027e9bd4563f2bf6c711880"
+          "sha256": "dc8ca258c79cb0bcb0924fcab07a103742147c4344ca4ef032c36821770fd101"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -495,7 +495,19 @@
             "allowlist_rule": "The endpoint classes this profile enables for containers: network.endpoints of class inference or provision without a deferred status. None is enabled, so the allowlist is empty and every new forwarded connection from a container bridge is refused. Its first entry belongs to S-03.x (inference, after the broker's Owner authorization); an entry sits between the RETURN and the LOG rule.",
             "rule": "Guest-level, in Moby's DOCKER-USER chain of the filter table (FORWARD jumps to it first): a packet that enters from a container bridge (docker0, br-+), leaves by another interface and is not part of an established connection jumps to the chain, is logged (rate-limited, kernel log, this prefix) and is refused: TCP with a reset, anything else with an ICMP port-unreachable. A container therefore opens no connection out of the guest: not to SLIRP's 10.0.2.2 (the host's loopback) or 10.0.2.3, not to an unconfigured guestfwd address, not to an off-guest address, IPv4 or IPv6. Traffic between two containers of one bridge does not leave it and stays with icc false (the peer container); connections to the guest itself stay with the container guard (INPUT). Off-link destinations have no route in the guest (SLIRP restrict=on gives no default route), so the guest's routing answers them before FORWARD (network unreachable): that is topology, recorded beside the policy, not the guard.",
             "dockerd": "The guard runs before docker.service and creates DOCKER-USER when it is absent. It ends DOCKER-USER with the RETURN rule that Moby 26.1 adds when none exists, so Moby leaves the chain unchanged, and Moby re-inserts FORWARD's jump to DOCKER-USER at the top (IPv4). Moby 26.1 does not manage ip6tables (ip6tables off), so the guard's own FORWARD jump stands there. ip-forward is not set false (S-01.4 ruling R5).",
-            "fail_closed": "Installed by the same script and unit as the container guard: if any egress rule cannot be installed the unit fails and docker.service, which Requires it, does not start. The root step's admission step (after Moby's first start), the boot facts (after docker.service at every boot, with the rules the guard printed before Moby started) and inspect verify the chain, the hook rules and FORWARD's first jump in both families."
+            "fail_closed": "Installed by the same script and unit as the container guard: if any egress rule cannot be installed the unit fails and docker.service, which Requires it, does not start. The root step's admission step (after Moby's first start), the boot facts (after docker.service at every boot, with the rules the guard printed before Moby started) and inspect verify the chain, the hook rules and FORWARD's first jump in both families.",
+            "falsification": {
+              "plan_leaf": "S-01.4 (fix-forward, Overseer ruling)",
+              "create": "create --provision --egress-falsification only: the manifest carries validation.egress_route and the root step enables the path unit; an ordinary provisioned guest has neither",
+              "path_unit": "aieh-egress-route.path",
+              "service": "aieh-egress-route.service",
+              "request": "/var/lib/aieh/facts-request/egress-route",
+              "off_request": "/var/lib/aieh/facts-request/egress-route-off",
+              "report": "/run/aieh/egress-route.json",
+              "gateway": "10.0.2.2",
+              "ceiling_s": 300,
+              "rule": "Validation only. On agent's request file, root adds a temporary IPv4 default route via SLIRP's gateway on the uplink (refused if a default route exists), reports the routes before and with it, waits for the off request or the ceiling, then always deletes the route and reports the routes after (state removed, or REMAINS). SLIRP restrict=on still refuses every off-host packet, so containment stays double while the route exists. job-access-probe uses it to prove that the egress guard, not the missing route, refuses off-link egress the moment a route exists; it removes the route in a finally-style cleanup and verifies it is gone."
+            }
           },
           "icc": "provisioning.moby.daemon_json icc false (icc_rule)"
         },
