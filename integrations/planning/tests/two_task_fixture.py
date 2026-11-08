@@ -73,7 +73,11 @@ def rmtree(path):
 
 
 def git(repo, *args, env=None):
-    result = subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True,
+    # core.longpaths: a fixture path below a long TEMP can pass Windows' 260-character limit
+    # (the archived qual-02 spec is 114 characters below the repository); git for Windows then
+    # needs it to stat the file. Other platforms ignore the setting.
+    result = subprocess.run(['git', '-c', 'core.longpaths=true', '-C', str(repo), *args],
+                            capture_output=True, text=True,
                             encoding='utf-8', timeout=WAIT_CEILING_S, stdin=subprocess.DEVNULL,
                             env={**os.environ, **GIT_ENV, **(env or {})})
     if result.returncode != 0:
