@@ -104,6 +104,8 @@ unless adaptation is necessary.
   python -I -B -m unittest discover -s integrations/planning/tests -v
   python -I -B -m unittest discover -s integrations/lineage/tests -v
   python -I -B -m unittest discover -s integrations/paths/tests -v
+  python -I -B -m unittest discover -s integrations/gitea/tests -v
+  python -I -B -m unittest discover -s integrations/dispatch/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the
