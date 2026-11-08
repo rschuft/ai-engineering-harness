@@ -150,7 +150,7 @@ Only what is listed as verified has been exercised.
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch input resolution tests (stdlib `unittest`). |
+| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch resolution and admission tests (stdlib `unittest`). |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -176,7 +176,7 @@ Only what is listed as verified has been exercised.
 | `paths:doctor` | `python -I -B integrations/paths/aieh_paths.py doctor` | no | Reports the root, what exists, the marker and the legacy locations with their migration recipes. Moves and changes nothing. |
 | `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`), wheels only, under the managed data root; prints its interpreter. Not part of `setup`. |
 | `gitea:test` | `python -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login, role bots, fixture and rotation with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows); the guest profile declares no path to a token store. The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary; the live authorization tests only with `AIEH_GITEA_AUTHZ=1` (`gitea:authz`). |
-| `dispatch:test` | `python -I -B -m unittest discover -s integrations/dispatch/tests -v` | no | [Dispatch input resolution](#dispatch-input-resolution) tests: every refusal before any reservation, a resolved record reserving in a throwaway store, determinism and the pinned policy digest, the approved-input manifest's schema check and custody. Uses Backlog.md's recorded readiness output and a throwaway design repository; needs git. |
+| `dispatch:test` | `python -I -B -m unittest discover -s integrations/dispatch/tests -v` | no | [Dispatch input resolution and admission](#dispatch-input-resolution-and-admission) tests: every refusal before any reservation, a resolved record reserving in a throwaway store, determinism and the pinned policy digest, the approved-input manifest's schema check and custody; the create admission (workspace, mounts, caps, runtime, route and body bypasses never reach a fake transport; one admitted create reaches it once). Uses Backlog.md's recorded readiness output and a throwaway design repository; needs git. |
 | `dispatch:check-manifest MANIFEST=<file>` | `python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest <file>` | no | Schema-checks an approved-input manifest and prints a JSON report. Admits nothing. Exit 0 PASS, 1 FAIL, 2 could not read. |
 | `dispatch:manifest-path` | `python -I -B integrations/dispatch/dispatch_inputs.py manifest-path` | no | Prints where the live approved-input manifest is expected (`<state>/dispatch/approved-inputs.json` under the managed data root). Creates and reads nothing there. |
 | `gitea:install [-- --port N \| --from-file EXE]` | `python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]` | yes (GitHub, once) | Creates the managed data root (`init`), downloads the pinned Gitea Windows binary into `assets/`, verifies it against the lock and records it, and writes `app.ini` once with Gitea-generated secrets. Windows only. |
@@ -354,7 +354,7 @@ opened; their attempts stay valid and untyped. The contract is in the store's
 [README](../integrations/store/README.md#typed-attempt-identity). No live store
 has been migrated: **not yet verified** outside the tests' throwaway directories.
 
-## Dispatch input resolution
+## Dispatch input resolution and admission
 
 [`integrations/dispatch/`](../integrations/dispatch/README.md) is the trusted-side resolver of
 dispatch step 01 (plan leaf E-01.2.1, blueprint `#execution-qualification`). A dispatch
@@ -374,6 +374,21 @@ a synthetic example and test fixtures. Writing the live manifest belongs to gove
 for catalog pins, to A-01.1. Until A-01.1 promotes an approved catalog pin, every dispatch is
 refused: that is intended. No live manifest, Backlog.md or store has been used: **not yet
 verified** outside the tests' throwaway directories.
+
+The same package holds the create admission of dispatch step 03 (plan leaf E-01.2.2, slice
+(a)). After the reservation, `admit` builds the one OpenHands create of the attempt from
+trusted policy only. The route is `POST /api/conversations`, and the profile's pinned route
+allowlist must admit it. The body is the profile's sha256-pinned create template with the
+reserved conversation id: Docker runtime named explicitly, the server-provisioned `/workspace`,
+no cap but the declared one, no field outside the allowlist. The policy it enforces is read
+from the approved profile into the policy digest (policy-inputs/v2): Docker only and not
+selectable, the conversation caps times the concurrent runs within the guest ceilings, the
+declared mount set. The planned workspace is resolved under the `workspaces` category of the
+managed data root: device names, path tricks, another attempt's path and links or junctions on
+disk are refused. `send_create` runs every check again immediately before the injected
+transport and calls it exactly once; a refusal never reaches it. No live Agent Server or guest
+has been used: **not yet verified** beyond the tests' fake transport (the guest-side drills are
+E-01.2.2 slice (b)).
 
 ## Effects store
 

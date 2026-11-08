@@ -230,9 +230,10 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/paths/tools_install.py'
 
   # Trusted dispatch input resolution (plan leaf E-01.2.1; decisions 0009 and 0010): the resolver,
-  # the approved-input manifest's schema check and its managed location (integrations/dispatch/README.md).
+  # the approved-input manifest's schema check and its managed location; and the create admission
+  # (plan leaf E-01.2.2; decisions 0001 and 0003) (integrations/dispatch/README.md).
   dispatch:test:
-    desc: Run the dispatch input resolution tests (python -I -B -m unittest discover -s integrations/dispatch/tests -v)
+    desc: Run the dispatch input resolution and create admission tests (python -I -B -m unittest discover -s integrations/dispatch/tests -v)
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/dispatch/tests -v'
 

@@ -5,7 +5,8 @@ Run from the repository root:
     python -I -B -m unittest discover -s integrations/dispatch/tests -v
 
 Everything lives in throwaway directories under the default TEMP: the approved-input
-manifests, the profile declarations, the integration store and the OpenSpec design
+manifests, the profile declarations (with the admission declaration E-01.2.2 reads, and copies
+of the checked-in create template and route allowlist), the integration store and the OpenSpec design
 repository (built by the planning fixture, ``two_task_fixture.build_repo``). Backlog.md is
 its own recorded readiness output (``integrations/planning/tests/fixtures/readiness/``),
 replayed in process. No live store, Backlog.md, guest, Gitea or network is used.
@@ -62,9 +63,52 @@ def rmtree(path):
     shutil.rmtree(path, onexc=retry)
 
 
-def profile_bytes(name, operational=True, schema=di.PROFILE_SCHEMA):
-    return (json.dumps({'schema': schema, 'name': name, 'labels': {'tier': 'strong'},
-                        'status': {'operational': operational}}, indent=2) + '\n').encode('utf-8')
+# The checked-in create template and route allowlist of the strong Windows profile (byte-exact by
+# profiles/.gitattributes), copied beside every synthetic profile and pinned by its declaration.
+AGENT_SERVER = REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'agent-server'
+TEMPLATE_BYTES = (AGENT_SERVER / 'conversation-create.json').read_bytes()
+ROUTES_BYTES = (AGENT_SERVER / 'routes.json').read_bytes()
+
+
+def admission_declaration(name, template=TEMPLATE_BYTES, routes=ROUTES_BYTES):
+    """The parts of a profile declaration the E-01.2.2 admission reads, with the strong Windows
+    profile's values (ceilings, Agent Server configuration, conversation mounts, pinned artifacts)."""
+    base = f'profiles/{name}/agent-server'
+    hexed = '{conversation_hex}'
+    return {
+        'ceilings': {'vcpu': 8, 'memory_mib': 16384, 'root_disk_gib': 40, 'scratch_disk_gib': 120},
+        'provisioning': {'agent_server': {
+            'config': {'content': {
+                'conversation_runtime': 'docker', 'conversation_runtime_selectable': False,
+                'conversation_container_memory': '4g', 'conversation_container_cpus': 2.0,
+                'conversation_container_pids_limit': 512, 'max_concurrent_runs': 3}},
+            'fixture': {'path': f'{base}/conversation-create.json', 'sha256': hashlib.sha256(template).hexdigest()},
+            'conversations': {
+                'source_root': '/srv/scratch/openhands',
+                'mounts': [
+                    {'type': 'bind', 'source': f'/srv/scratch/openhands/conversations/{hexed}',
+                     'destination': f'/var/openhands/conversations/{hexed}', 'rw': True},
+                    {'type': 'bind', 'source': f'/srv/scratch/openhands/persistence/runtime-data/{hexed}/persistence',
+                     'destination': '/var/openhands/.openhands', 'rw': True},
+                    {'type': 'bind', 'source': f'/srv/scratch/openhands/persistence/runtime-data/{hexed}/workspace',
+                     'destination': '/workspace', 'rw': True}],
+                'forbidden_sources': ['/run/docker.sock', '/var/run/docker.sock', '/run/containerd', '/run/docker',
+                                      '/srv/scratch/docker', '/etc/aieh', '/var/lib/aieh', '/etc', '/root', '/home',
+                                      '/proc', '/sys', '/dev', '/run', '/var/run']},
+            'admission': {'routes': {'path': f'{base}/routes.json', 'sha256': hashlib.sha256(routes).hexdigest()}}}},
+    }
+
+
+def profile_bytes(name, operational=True, schema=di.PROFILE_SCHEMA, template=TEMPLATE_BYTES, routes=ROUTES_BYTES):
+    declared = {'schema': schema, 'name': name, 'labels': {'tier': 'strong'}, 'status': {'operational': operational}}
+    declared.update(admission_declaration(name, template, routes))
+    return (json.dumps(declared, indent=2) + '\n').encode('utf-8')
+
+
+def write_agent_server(profile_dir, template=TEMPLATE_BYTES, routes=ROUTES_BYTES):
+    (profile_dir / 'agent-server').mkdir(parents=True, exist_ok=True)
+    (profile_dir / 'agent-server' / 'conversation-create.json').write_bytes(template)
+    (profile_dir / 'agent-server' / 'routes.json').write_bytes(routes)
 
 
 class SnapshotBacklog:
@@ -129,6 +173,7 @@ class Fixture(unittest.TestCase):
                                   ('strong-unbound', True)):
             (cls.profiles / name).mkdir(parents=True)
             (cls.profiles / name / 'profile.json').write_bytes(profile_bytes(name, operational))
+            write_agent_server(cls.profiles / name)
 
     @classmethod
     def tearDownClass(cls):
@@ -487,7 +532,8 @@ class DeterminismTests(Fixture):
             'design': {'repository': 'demo-app', 'change': CHANGE, 'commit': self.commit},
             'profile': {'id': 'strong-test-profile', 'sha256': self.profile_sha('strong-test-profile')},
             'catalog_pin': {'id': 'builder-pin', 'repository': 'aieh-catalog', 'commit': PIN_COMMIT,
-                            'manifest_sha256': BUILDER_SHA}})
+                            'manifest_sha256': BUILDER_SHA},
+            'admission': expected_admission('strong-test-profile')})
         self.assertEqual(record.policy_digest,
                          hashlib.sha256(di._canonical(record.policy_inputs).encode('utf-8')).hexdigest())
         # The canonical serialization: sorted keys, no whitespace.
@@ -500,15 +546,21 @@ class DeterminismTests(Fixture):
         base = (dict(id='demo-app'), 'implement',
                 dict(repository='demo-app', change=CHANGE, commit=self.commit),
                 dict(id='strong-test-profile', sha256='a' * 64),
-                dict(id='builder-pin', repository='aieh-catalog', commit=PIN_COMMIT, manifest_sha256=BUILDER_SHA))
+                dict(id='builder-pin', repository='aieh-catalog', commit=PIN_COMMIT, manifest_sha256=BUILDER_SHA),
+                expected_admission('strong-test-profile'))
         digest = di._sha256(di._canonical(di.policy_inputs(*base)))
         variants = []
         for position, key, value in ((0, 'id', 'other-app'), (2, 'commit', 'b' * 40), (2, 'change', 'other'),
                                      (3, 'sha256', 'b' * 64), (3, 'id', 'strong-x'), (4, 'commit', 'd' * 40),
                                      (4, 'manifest_sha256', REVIEWER_SHA), (4, 'repository', 'x'),
-                                     (4, 'id', 'other-pin')):
+                                     (4, 'id', 'other-pin'), (5, 'caps', {'memory': '2g'}),
+                                     (5, 'ceilings', {'vcpu': 16}), (5, 'create_template', {'sha256': 'b' * 64}),
+                                     (5, 'routes', {'sha256': 'b' * 64}), (5, 'mounts', {'source_root': '/srv'})):
             changed = copy.deepcopy(list(base))
-            changed[position][key] = value
+            if isinstance(value, dict):
+                changed[position][key].update(value)
+            else:
+                changed[position][key] = value
             variants.append(di._sha256(di._canonical(di.policy_inputs(*changed))))
         changed = list(base)
         changed[1] = 'review'
@@ -541,10 +593,25 @@ class DeterminismTests(Fixture):
         self.assertEqual(record.policy_inputs['stage'], 'implement')
 
 
-# policy-inputs/v1 of the fixture (demo-app, implement, qual-02-search-freshness@8eacfa81...,
-# strong-test-profile, builder-pin). A change means the canonical form changed: NEVER update
-# it without a new POLICY_FORMAT.
-GOLDEN_POLICY_DIGEST = '45eeaeaf72747f96866551525bff0323efbd57e314ad374153597d7c3aace90b'
+def expected_admission(name):
+    """The admission policy (policy-inputs/v2) the synthetic declaration gives, spelled out."""
+    declared = admission_declaration(name)
+    server = declared['provisioning']['agent_server']
+    return {'runtime': {'conversation_runtime': 'docker', 'selectable': False},
+            'route': {'method': 'POST', 'path': '/api/conversations'},
+            'routes': server['admission']['routes'], 'create_template': server['fixture'],
+            'workspace': {'category': 'workspaces', 'working_dir': '/workspace'},
+            'caps': {'memory': '4g', 'cpus': 2.0, 'pids_limit': 512, 'max_concurrent_runs': 3},
+            'ceilings': {'vcpu': 8, 'memory_mib': 16384},
+            'mounts': {'source_root': '/srv/scratch/openhands', 'binds': server['conversations']['mounts'],
+                       'forbidden_sources': server['conversations']['forbidden_sources']}}
+
+
+# policy-inputs/v2 of the fixture (demo-app, implement, qual-02-search-freshness@8eacfa81...,
+# strong-test-profile, builder-pin, the admission policy of admission_declaration with the
+# checked-in template and route allowlist). A change means the canonical form changed: NEVER
+# update it without a new POLICY_FORMAT. (policy-inputs/v1, E-01.2.1, was 45eeaeaf...e90b.)
+GOLDEN_POLICY_DIGEST = '10ba1b157d89011ec93696be0dd8190697bc06244cfbeaeeb0623a984fb8a9d4'
 
 
 def valid_manifest():

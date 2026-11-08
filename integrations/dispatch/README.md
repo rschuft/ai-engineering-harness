@@ -1,18 +1,19 @@
-# Dispatch input resolution
+# Dispatch input resolution and create admission
 
-Plan leaf E-01.2.1, blueprint section
+Plan leaves E-01.2.1 (resolution) and E-01.2.2 (admission, slice (a)), blueprint section
 [`#execution-qualification`](../../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification),
 dispatch step 01: "Resolve the authoritative Work and profile. Check Backlog readiness,
 accepted OpenSpec revision and executable requirements; choose ... a qualified profile."
 [`dispatch_inputs.py`](dispatch_inputs.py) is that step's trusted-side resolver. It is
 Python standard library only and pure: it reads through injected sources and writes
 nothing. Its output feeds
-[`reserve_attempt`](../store/README.md#typed-attempt-identity) (step 02). E-01.2.2 adds the
-workspace, mount, resource and runtime ceilings to this resolver; it does not add a second
-one.
+[`reserve_attempt`](../store/README.md#typed-attempt-identity) (step 02). Its
+[admission](#admission-before-the-openhands-create) (E-01.2.2) then builds the one OpenHands
+create of the reserved attempt from trusted policy only, and validates it again immediately
+before the injected transport (step 03): workspace, mounts, caps, runtime, route and body.
 
-Nothing here has run against a live Backlog.md, a live store or a live manifest: **not yet
-verified** outside the tests' throwaway directories.
+Nothing here has run against a live Backlog.md, a live store, a live manifest or a live Agent
+Server: **not yet verified** outside the tests' throwaway directories.
 
 ## Contract
 
@@ -56,7 +57,8 @@ The checks run in this order, and the first failing one refuses:
    bound to that repository and stage;
 7. the profile file: `profiles/<id>/profile.json`, its sha256 equal to the approved one, its
    `schema` the profile/v1 schema, its `name` the id, and `status.operational` exactly
-   `true` (contract C6);
+   `true` (contract C6); then its admission policy (`admission_policy`, E-01.2.2: Docker
+   runtime only, caps within the ceilings, the declared mounts; below);
 8. the Work: the repository's Backlog.md lists it, and Backlog.md's own readiness
    (`planning_readiness.read_readiness`, P-02.2) reports it ready;
 9. the design: every OpenSpec source pointer of the task resolves in git, all of them pin
@@ -92,21 +94,99 @@ intent and its digest carry the approval provenance.
 | `approval` | the manifest's schema, `version` and the sha256 of its bytes |
 
 **`policy_digest`** is the sha256 of the canonical JSON (sorted keys, no whitespace, UTF-8)
-of `policy_inputs`, which holds exactly the approved entries the attempt was admitted under:
+of `policy_inputs`, which holds exactly the approved entries the attempt was admitted under
+and, since v2 (E-01.2.2), the admission policy read from the approved profile:
 
 ```json
-{"format": "ai-engineering-harness/dispatch/policy-inputs/v1",
+{"format": "ai-engineering-harness/dispatch/policy-inputs/v2",
  "repository": {"id": "..."}, "stage": "...",
  "design": {"repository": "...", "change": "...", "commit": "..."},
  "profile": {"id": "...", "sha256": "..."},
- "catalog_pin": {"id": "...", "repository": "...", "commit": "...", "manifest_sha256": "..."}}
+ "catalog_pin": {"id": "...", "repository": "...", "commit": "...", "manifest_sha256": "..."},
+ "admission": {
+   "runtime": {"conversation_runtime": "docker", "selectable": false},
+   "route": {"method": "POST", "path": "/api/conversations"},
+   "routes": {"path": "profiles/<id>/agent-server/routes.json", "sha256": "..."},
+   "create_template": {"path": "profiles/<id>/agent-server/conversation-create.json", "sha256": "..."},
+   "workspace": {"category": "workspaces", "working_dir": "/workspace"},
+   "caps": {"memory": "4g", "cpus": 2.0, "pids_limit": 512, "max_concurrent_runs": 3},
+   "ceilings": {"vcpu": 8, "memory_mib": 16384},
+   "mounts": {"source_root": "/srv/scratch/openhands", "binds": [...], "forbidden_sources": [...]}}}
 ```
 
 It does not cover the manifest's version or digest (they are provenance, beside it), the
 binding lists, the Work or the ordinal (the attempt identity). A manifest revision that does
 not change these entries leaves the policy digest unchanged; it still changes the intent
 digest, so retrying a reserved key under another approval is a `ConflictingReservation`.
-E-01.2.2 adds its ceilings to `policy_inputs` under a new format tag.
+policy-inputs/v1 (E-01.2.1) had no `admission`; the pinned test digest changed with the format.
+
+## Admission before the OpenHands create
+
+Plan leaf E-01.2.2, slice (a): the host-side admission validator, fixture-proven. Dispatch
+step 03 creates the Docker conversation; this is what stands between the reservation and that
+create. The order is the dispatcher's (E-01.3.x):
+
+```
+resolve -> reserve_attempt -> admit(resolved, manifest, workspaces)      -> AdmittedCreate
+                           -> send_create(admitted, resolved, workspaces, transport)
+                              (validates everything again, then transport(method, path, body) once)
+```
+
+`admit` and `send_create` take no caller-supplied value: there is no parameter for a path, a
+mount, a cap, a runtime, a working directory, a route or a body field. Every value comes from
+trusted policy:
+
+| What | Trusted source | Refused as |
+|---|---|---|
+| route | `POST /api/conversations` (the Docker runtime's `start_conversation`, F-04.2), and it must be the one entry of the profile's pinned route allowlist (`agent-server/routes.json`, S-01.3.1) with `dispatcher` `allowed` | `ROUTE_NOT_ALLOWLISTED` |
+| body | the profile's sha256-pinned create template (`agent-server/conversation-create.json`, the F-04.2 fixture) with only `conversation_id` replaced by the reserved one (`conversation_id_for(operation_key)`) | below |
+| runtime | `conversation_runtime` `docker` named explicitly in every body (decision 0001 s2), and the server configuration `conversation_runtime` `docker` with `conversation_runtime_selectable` `false`; any other value, an omitted selector or a selectable runtime is refused | `RUNTIME_NOT_DOCKER` |
+| working directory | `workspace` exactly `{"kind": "LocalWorkspace", "working_dir": "/workspace"}`: the server-provisioned workspace, which passes no host path (decision 0001 s3); the policy also requires a declared bind whose destination is `/workspace` | `WORKING_DIR_NOT_ALLOWED` |
+| caps | the server configuration's `conversation_container_memory`, `_cpus`, `_pids_limit` and `max_concurrent_runs`; `max_concurrent_runs` times each cap must stay within the profile's `ceilings` (`memory_mib`, `vcpu`). The body may carry `container.memory` or `container.cpus` only as exactly the declared value (the server applies a request's caps with no upper bound: F-04.2 deviation `request-caps-override`); any other cap field is refused | `CAPS_ABOVE_CEILING`, `CAPS_OVERRIDE_FORBIDDEN` |
+| mounts | the profile's `conversations.mounts` with the conversation's hex id: the effective mount set the container must have is exactly that list (decision 0003). Every source lies strictly under `source_root` and clear of every forbidden source (the list must name the Docker and containerd sockets); destinations are distinct. A body field that would add a mount is refused | `MOUNT_POLICY_INVALID`, `MOUNTS_NOT_DECLARED` |
+| host workspace | `planned_workspace` under the `workspaces` category of the `integrations/paths` resolution passed in; below | `WORKSPACE_*` |
+| other fields | an allowlist (the template's fields: `conversation_id`, `conversation_runtime`, `workspace`, `agent_settings`, `autotitle`, `container`, `tags`; in `container`, `browser` and the two caps). Every other field is refused; its name only picks the code (a mount, cap, runtime or path name gets that class's code). Each allowlisted field must equal the template's | `BODY_FIELD_UNKNOWN`, `BODY_NOT_TEMPLATE`, `CONVERSATION_ID_MISMATCH`, `BODY_MALFORMED` |
+
+**The host workspace.** The planned workspace must be exactly `<repository>/<WORK-ID>/<attempt
+uuid>` in the fixed rule's grammar (a lower-case repository id, the canonical upper-case Work
+id, a lower-case uuid; `/` only) and equal to the rule for this attempt. A part whose name
+before any extension is a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0` to `COM9`,
+`LPT0` to `LPT9`, their superscript-digit forms, `CONIN$`, `CONOUT$`, `CLOCK$`; any case, with
+or without an extension) is `WORKSPACE_RESERVED_NAME`. The identifier grammar admits `con` as a
+repository id, so an approved repository named `con` resolves, and is refused here. Absolute,
+drive, drive-relative, UNC and device paths, backslashes, `.` and `..`, `:` (streams), trailing
+dots and spaces, case variants, non-ASCII look-alikes and empty or extra parts are
+`WORKSPACE_PATH_INVALID`. Another attempt's workspace is `WORKSPACE_NOT_PLANNED`. The host path
+is the `workspaces` category joined with the three parts. From the category itself down, any
+existing part that is a symbolic link, a junction, another reparse point or not a directory is
+`WORKSPACE_PATH_UNSAFE`; the walk runs again at the send, so one planted after admission is
+refused too. The resolution must be this host's (`WORKSPACE_CATEGORY_UNAVAILABLE`). Admission
+only reads (`lstat`) and creates nothing.
+
+**Provenance.** `admit` refuses resolved inputs that another manifest approved, policy inputs
+whose sha256 is not the policy digest or whose admission policy is not the approved profile's
+(`ADMISSION_MISMATCH`), a profile whose bytes changed since resolution (`PROFILE_DRIFTED`), and
+a pinned template or allowlist whose bytes changed (`PROFILE_ARTIFACT_DRIFTED`), is missing
+(`PROFILE_ARTIFACT_MISSING`) or is not strict JSON of its shape (`PROFILE_ARTIFACT_INVALID`).
+A profile without a complete admission declaration is refused at resolution
+(`PROFILE_ADMISSION_INVALID`).
+
+**Defence in depth.** `send_create` takes the `ResolvedInputs` the attempt was reserved under
+(its policy digest is the reserved one), re-derives the admission policy from it, re-checks
+that policy's rules, and runs every admission check on the `AdmittedCreate` again: identity,
+workspace (with the on-disk walk), the template's sha256, route, body and mounts. Only then
+does it call `transport(method, path, body)` with the body it validated, exactly once. A
+refusal calls the transport zero times. A transport failure is raised, never retried and never
+re-routed to another runtime.
+
+**Not closed here.** Two recorded deviations are upstream registry behaviour that no create
+field controls: `host.docker.internal:host-gateway` and no `--network none` on every
+conversation container (F-04.2 section 7). Whether the running container matches the admitted
+mount set and caps is observed guest-side (`conversation-smoke`, and E-01.2.2 slice (b)).
+
+`AdmittedCreate.to_json()` is `ai-engineering-harness/dispatch/admitted-create/v1`: the
+operation key, conversation id, route, body, mount set, planned and host workspace, policy
+digest and the template's sha256.
 
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
@@ -185,6 +265,16 @@ accepted again.
 | `DESIGN_POINTER_ABSENT`, `DESIGN_UNRESOLVED`, `DESIGN_AMBIGUOUS` | the task has no source pointer, one does not resolve, or they pin several revisions |
 | `DESIGN_NOT_ACCEPTED`, `DESIGN_REVISION_MISMATCH` | no accepted revision of the change, or the task pins another one |
 | `IDENTITY_INVALID` | the resolved inputs do not form a valid attempt identity |
+| `PROFILE_ADMISSION_INVALID` | the profile declares no complete, well-formed admission policy |
+| `PROFILE_ARTIFACT_MISSING`, `PROFILE_ARTIFACT_DRIFTED`, `PROFILE_ARTIFACT_INVALID` | a pinned create template or route allowlist is absent, changed, or not strict JSON of its shape |
+| `ADMISSION_MISMATCH` | the resolved inputs or the admitted request do not match the approval they claim |
+| `RUNTIME_NOT_DOCKER` | a local, process, selectable or omitted runtime, in the server configuration or the body |
+| `CAPS_ABOVE_CEILING`, `CAPS_OVERRIDE_FORBIDDEN` | the declared caps times the concurrent runs exceed the guest ceilings; a body cap other than the declared one, or a cap field the policy does not establish |
+| `MOUNT_POLICY_INVALID`, `MOUNTS_NOT_DECLARED` | declared binds outside the rules; an effective mount set other than the declared one, or a body field that would add a mount |
+| `WORKING_DIR_NOT_ALLOWED` | the body's workspace is not the server-provisioned `/workspace` |
+| `ROUTE_NOT_ALLOWLISTED` | the create does not target `POST /api/conversations`, or the allowlist does not admit it |
+| `BODY_MALFORMED`, `BODY_FIELD_UNKNOWN`, `BODY_NOT_TEMPLATE`, `CONVERSATION_ID_MISMATCH` | the body is not an object, carries a field outside the allowlist, differs from the pinned template, or lacks the reserved conversation id |
+| `WORKSPACE_CATEGORY_UNAVAILABLE`, `WORKSPACE_PATH_INVALID`, `WORKSPACE_RESERVED_NAME`, `WORKSPACE_NOT_PLANNED`, `WORKSPACE_PATH_UNSAFE` | the host workspace: no usable category; outside the fixed rule's grammar; a Windows device name; not this attempt's; a link, junction, reparse point or non-directory on disk |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. Until
 A-01.1 promotes approved catalog pins into the manifest, every request is refused
@@ -214,7 +304,7 @@ it creates and reads nothing there (exit 2 on a managed-root refusal).
 |---|---|
 | `AcceptanceRefusalTests` | **the proof.** Each refusal with its code, and with nothing reserved and no ordinal asked for: an unapproved repository; a design revision other than the accepted one, a change with none accepted, unresolvable pointers (digest, revision, artifact), no pointer, several revisions; an unapproved, unbound, drifted (content, line endings, one byte), missing, invalid or non-operational profile; an unknown, unbound or missing catalog pin, and a manifest with no pins; an unknown or unbound stage; blocked, missing-dependency and finished Work, unknown and unreadable Work; extra fields; caller-supplied path, digest, runtime, resource, revision and ordinal fields; paths in identifier fields; malformed requests |
 | `SuccessTests` | the record's fields; it feeds `reserve_attempt`, which reserves (and is idempotent); the next resolution asks for ordinal 2 with its own workspace, which the store refuses as a live claim until the first attempt fails; the review binding; case-insensitive Work ids; the checked-in profiles are refused as not operational |
-| `DeterminismTests` | the same inputs give an identical record and intent digest; the policy inputs and a pinned golden policy digest; each policy input changes the digest; a manifest revision changes provenance and the intent digest but not the policy digest, so a retry under it conflicts; the record is immutable |
+| `DeterminismTests` | the same inputs give an identical record and intent digest; the policy inputs (v2, with the admission policy) and a pinned golden policy digest; each policy input changes the digest; a manifest revision changes provenance and the intent digest but not the policy digest, so a retry under it conflicts; the record is immutable |
 | `ManifestCheckerTests` | the example is valid; schema, version, identifiers, duplicates (also duplicate JSON keys), unknown references, non-full commits, digest format, unreadable bytes; type fuzzing never crashes |
 | `ManifestCustodyTests` | the checkout (inside or containing) is refused before reading; path shapes; a manifest outside the checkout loads; `manifest_path` is `<state>/dispatch/approved-inputs.json` and creates nothing |
 | `CliTests` | `check-manifest` exit codes and report; `manifest-path` with `AIEH_DATA_ROOT` in a throwaway directory creates nothing |
@@ -223,3 +313,15 @@ The design repository is built by the planning fixture (`two_task_fixture.build_
 reproducible commit), and Backlog.md is its own recorded readiness output
 (`integrations/planning/tests/fixtures/readiness/`), so the Work and design checks run
 against real Backlog.md JSON and real git objects.
+
+[`tests/test_dispatch_admission.py`](tests/test_dispatch_admission.py) (E-01.2.2), on the same
+fixture, with every create through a counting fake transport: each refusal asserts it was
+called **zero** times, each positive control **exactly once** with the exact expected body. The
+managed root is an `AIEH_DATA_ROOT` in the throwaway directory.
+
+| Class | What it shows |
+|---|---|
+| `PositiveControlTests` | resolve, reserve, admit, send: one call with the pinned template and the reserved conversation id, the declared mount set with the conversation's hex id, the host workspace under the `workspaces` category (nothing created); the checked-in strong Windows profile's declaration (only `operational` flipped, in a throwaway copy) admits; the ceiling boundary admits; the declared cap values may be sent; plain existing directories admit; determinism; no parameter takes a caller choice; a failed create is not retried or re-routed |
+| `WorkspaceDenialTests` | path shapes (`..`, absolute, drive, UNC, device, backslash, streams, trailing dot or space, case, look-alikes, empty or extra parts); Windows device names, from an approved repository named `con` (and `prn`, `aux`, `nul`, `com1`, `com0`, `lpt9`) through the real resolver and in any part and form; another attempt's workspace; an altered admitted host path; junctions at the category, repository, Work and attempt, and a file, at admission and planted after it; a symbolic link (skipped without the privilege); a missing or foreign-platform category |
+| `ProfilePolicyDenialTests` | an approved profile declaring a local, process, absent, case-variant or selectable runtime (refused at resolution, nothing reserved); caps times runs above the ceilings; malformed caps or ceilings, no Agent Server declaration; binds on the Docker socket, Moby's data root, outside or at the source root, around a forbidden source, with `..` or an unknown placeholder, a relative or duplicate destination, no `/workspace` bind, the socket no longer forbidden; a route allowlist marking the create `not-used` or `validation`, listing it twice or not at all; a drifted, missing, malformed or misplaced pinned artifact; a template with a local or omitted runtime, a host or remote working directory, a cap override, a pids field, volumes, an initial message or an image |
+| `TamperDenialTests` | an admitted request altered after construction and refused by `send_create`: 26 body alterations (runtime, working directory, caps, mounts, unknown fields, template fields, conversation id), non-object or non-strict JSON, the mount set (extra, missing, reordered, read-only, altered, none), the route, the template bytes, the identity and digest; resolved policy inputs altered with or without a matching digest, and forged consistent pairs breaking the ceilings, the runtime, the route, the working directory or the mount policy; provenance (another manifest, a drifted profile, a wrong profile digest, wrong types) |

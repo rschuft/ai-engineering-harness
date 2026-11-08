@@ -1,9 +1,13 @@
-"""Trusted dispatch input resolution (plan leaf E-01.2.1, blueprint #execution-qualification).
+"""Trusted dispatch input resolution and create admission (plan leaves E-01.2.1 and E-01.2.2,
+blueprint #execution-qualification).
 
 Dispatch step 01 resolves the authoritative Work and profile before anything is reserved
 or created: "Check Backlog readiness, accepted OpenSpec revision and executable
 requirements; choose ... a qualified profile". This module is that step's trusted-side
-resolver. It is pure: it reads, through injected sources, and changes nothing.
+resolver. It is pure: it reads, through injected sources, and changes nothing. Its
+admission (``admit``, then ``send_create``) builds the one OpenHands create of a reserved
+attempt from trusted policy only and validates it again immediately before the injected
+transport; a refusal never reaches the transport (section "Admission" below).
 
 * **Input:** a dispatch request (``ai-engineering-harness/dispatch/request/v1``) that names
   identifiers only: the Work (a Backlog.md task id), the repository, the stage, the
@@ -24,7 +28,8 @@ resolver. It is pure: it reads, through injected sources, and changes nothing.
 
 Check order (the first failing check refuses): the request; the repository; the stage;
 the stage's binding; the profile's approval and binding; the catalog pin (required); the
-profile file's digest and qualification; the Work's native readiness; the design
+profile file's digest and qualification, and its admission policy (``admission_policy``,
+E-01.2.2: runtime, caps within the ceilings, mounts); the Work's native readiness; the design
 pointers and the accepted design revision; the ordinal. Every manifest check runs before
 any file, Backlog.md or git read.
 
@@ -45,9 +50,11 @@ import dataclasses
 import hashlib
 import importlib.util
 import json
+import math
 import os
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PurePosixPath
 import re
+import stat
 import sys
 from typing import Callable, Mapping, Protocol, Sequence
 
@@ -74,10 +81,14 @@ paths = _load('aieh_paths', REPO / 'integrations' / 'paths' / 'aieh_paths.py')
 REQUEST_FORMAT = 'ai-engineering-harness/dispatch/request/v1'
 MANIFEST_SCHEMA = 'ai-engineering-harness/dispatch/approved-inputs/v1'
 RESOLVED_FORMAT = 'ai-engineering-harness/dispatch/resolved-inputs/v1'
-POLICY_FORMAT = 'ai-engineering-harness/dispatch/policy-inputs/v1'
+# v2 (E-01.2.2): v1 plus the admission policy (runtime, create route and template, working
+# directory, conversation caps, guest ceilings, declared mounts) under "admission".
+POLICY_FORMAT = 'ai-engineering-harness/dispatch/policy-inputs/v2'
+ADMITTED_FORMAT = 'ai-engineering-harness/dispatch/admitted-create/v1'
 REFUSAL_FORMAT = 'ai-engineering-harness/dispatch/refusal/v1'
 CHECK_FORMAT = 'ai-engineering-harness/dispatch/manifest-check/v1'
 PROFILE_SCHEMA = 'ai-engineering-harness/profiles/profile/v1'
+ROUTES_SCHEMA = 'ai-engineering-harness/profiles/agent-server-routes/v1'
 INTENT_KEY = 'dispatchInputs'
 MANIFEST_CATEGORY = 'state'           # aieh_paths category (persistent/, class B)
 MANIFEST_COMPONENT = 'dispatch'       # the <component>/ layout of the state category
@@ -136,6 +147,38 @@ REFUSALS = {
     'DESIGN_NOT_ACCEPTED': 'the manifest records no accepted revision of the task\'s OpenSpec change',
     'DESIGN_REVISION_MISMATCH': 'the task pins a revision other than the accepted one',
     'IDENTITY_INVALID': 'the resolved inputs do not form a valid attempt identity',
+    # E-01.2.2: admission before the OpenHands create
+    'PROFILE_ADMISSION_INVALID': 'the profile declares no complete, well-formed admission policy (Agent Server '
+                                 'configuration, create template, conversation mounts, route allowlist, ceilings)',
+    'PROFILE_ARTIFACT_MISSING': 'a profile artifact the admission policy pins (create template or route '
+                                'allowlist) cannot be read',
+    'PROFILE_ARTIFACT_DRIFTED': 'a pinned profile artifact no longer has the sha256 the approved profile declares',
+    'PROFILE_ARTIFACT_INVALID': 'a pinned profile artifact is not strict JSON of its expected shape',
+    'ADMISSION_MISMATCH': 'the resolved inputs or the admitted request do not match the approval they claim '
+                          '(manifest, profile digest or policy digest)',
+    'RUNTIME_NOT_DOCKER': 'the server configuration or the create body does not select the Docker runtime '
+                          'only (a local or process runtime, a selectable runtime, or no explicit selector)',
+    'CAPS_ABOVE_CEILING': 'the declared conversation caps, times the concurrent runs, exceed the guest ceilings',
+    'CAPS_OVERRIDE_FORBIDDEN': 'the create body carries a resource cap other than the declared one, or a cap '
+                               'field the policy does not establish',
+    'MOUNT_POLICY_INVALID': 'the declared conversation mounts leave the source root, touch a forbidden source, '
+                            'or do not provide the allowlisted working directory',
+    'MOUNTS_NOT_DECLARED': 'the effective mount set is not exactly the declared one (an extra, missing or '
+                           'altered mount, or a body field that would add one)',
+    'WORKING_DIR_NOT_ALLOWED': 'the create body\'s workspace is not the server-provisioned working directory',
+    'ROUTE_NOT_ALLOWLISTED': 'the create does not target the one create route the dispatcher allowlist admits',
+    'BODY_MALFORMED': 'the create body is not a JSON object',
+    'BODY_FIELD_UNKNOWN': 'the create body carries a field outside the allowlist',
+    'BODY_NOT_TEMPLATE': 'an allowlisted create body field differs from the profile\'s pinned create template',
+    'CONVERSATION_ID_MISMATCH': 'the create body does not carry the reserved conversation id',
+    'WORKSPACE_CATEGORY_UNAVAILABLE': 'no usable workspaces category from integrations/paths',
+    'WORKSPACE_PATH_INVALID': 'the planned workspace is not <repository>/<work_id>/<attempt_id> in canonical '
+                              'grammar (absolute, drive, UNC, .., stream, trailing dot or space, case or '
+                              'normalization variants are refused)',
+    'WORKSPACE_RESERVED_NAME': 'a planned workspace part is a Windows reserved device name',
+    'WORKSPACE_NOT_PLANNED': 'the planned workspace is not the fixed rule\'s workspace for this attempt',
+    'WORKSPACE_PATH_UNSAFE': 'an existing part of the workspace path is a link, junction, reparse point or '
+                             'not a directory',
 }
 
 
@@ -460,12 +503,15 @@ class ResolvedInputs:
         return {INTENT_KEY: self.to_json()}
 
 
-def policy_inputs(repository: dict, stage: str, design: dict, profile: dict, catalog_pin: dict) -> dict:
+def policy_inputs(repository: dict, stage: str, design: dict, profile: dict, catalog_pin: dict,
+                  admission: dict) -> dict:
     """What ``policy_digest`` covers: exactly the approved manifest entries this attempt was
     admitted under (the repository, the stage, the accepted design revision, the profile with its
-    approved sha256, the catalog pin), under a format tag. Not the manifest's version or digest
-    (provenance, carried beside it), not the binding lists, not the Work or the ordinal (the
-    attempt identity). E-01.2.2 adds its workspace, mount, resource and runtime ceilings here."""
+    approved sha256, the catalog pin) and, since v2 (E-01.2.2), the admission policy read from that
+    approved profile (``admission_policy``: runtime, create route, pinned create template and route
+    allowlist, working directory, conversation caps, guest ceilings, declared mounts), under a
+    format tag. Not the manifest's version or digest (provenance, carried beside it), not the
+    binding lists, not the Work or the ordinal (the attempt identity)."""
     return {'format': POLICY_FORMAT,
             'repository': {'id': repository['id']},
             'stage': stage,
@@ -473,7 +519,8 @@ def policy_inputs(repository: dict, stage: str, design: dict, profile: dict, cat
                        'commit': design['commit']},
             'profile': {'id': profile['id'], 'sha256': profile['sha256']},
             'catalog_pin': {'id': catalog_pin['id'], 'repository': catalog_pin['repository'],
-                            'commit': catalog_pin['commit'], 'manifest_sha256': catalog_pin['manifest_sha256']}}
+                            'commit': catalog_pin['commit'], 'manifest_sha256': catalog_pin['manifest_sha256']},
+            'admission': admission}
 
 
 def planned_workspace(repository: str, work_id: str, attempt_id: str) -> str:
@@ -515,7 +562,7 @@ def parse_request(request) -> tuple[str, str, str, str, str]:
     return work_id.upper(), request['repository'], request['stage'], request['profile'], request['catalog_pin']
 
 
-def _check_profile(profile_id: str, approved_sha256: str, read_profile: Callable[[str], bytes]) -> str:
+def _check_profile(profile_id: str, approved_sha256: str, read_profile: Callable[[str], bytes]) -> tuple[str, dict]:
     try:
         raw = read_profile(profile_id)
     except (OSError, ValueError) as exc:
@@ -539,7 +586,7 @@ def _check_profile(profile_id: str, approved_sha256: str, read_profile: Callable
         raise DispatchRefused('PROFILE_NOT_OPERATIONAL', f'{profile_id} declares status.operational '
                               f'{status.get("operational") if isinstance(status, dict) else None!r}',
                               profile=profile_id)
-    return digest
+    return digest, declared
 
 
 def _design_revision(work_id: str, entry: dict) -> tuple[str, str, str]:
@@ -606,7 +653,8 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
     if pin not in binding['catalog_pins']:
         raise DispatchRefused('CATALOG_PIN_NOT_BOUND', f'{pin!r} is not bound to {repository}/{stage}')
 
-    profile_digest = _check_profile(profile, profile_entry['sha256'], read_profile)
+    profile_digest, declared = _check_profile(profile, profile_entry['sha256'], read_profile)
+    admission = admission_policy(declared, profile)
 
     source = work_sources(repository)
     if source is None:
@@ -635,7 +683,7 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
                               f'revision is {change}@{design_entry["commit"]}',
                               pinned=commit, accepted=design_entry['commit'])
 
-    inputs = policy_inputs(repo_entry, stage, design_entry, profile_entry, pin_entry)
+    inputs = policy_inputs(repo_entry, stage, design_entry, profile_entry, pin_entry, admission)
     inputs_json = _canonical(inputs)
     policy_digest = _sha256(inputs_json)
     try:
@@ -654,6 +702,488 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
         agent_manifest_digest=identity.agent_manifest_digest, planned_workspace=identity.planned_workspace,
         policy_digest=policy_digest, policy_inputs_json=inputs_json, manifest_version=manifest.version,
         manifest_sha256=manifest.sha256)
+
+
+# ---------------------------------------------------------------------------
+# Admission before the OpenHands create (E-01.2.2)
+#
+# resolve -> reserve_attempt -> admit -> send_create(transport). ``admit`` builds the one create
+# request (route and body) from trusted policy only: the approved profile's admission policy (in
+# policy_inputs v2, so covered by the reserved policy digest), its sha256-pinned create template
+# and route allowlist, and the reserved conversation id. Nothing caller-supplied reaches it: it
+# has no parameter for a path, mount, cap, runtime, working directory, route or body field.
+# ``send_create`` validates the admitted request again against the same policy immediately before
+# it calls the injected transport, exactly once.
+
+CREATE_ROUTE = {'method': 'POST', 'path': '/api/conversations'}  # docker_runtime/routers.py start_conversation
+WORKSPACE_CATEGORY = 'workspaces'      # aieh_paths category (persistent/, class C, decision 0009)
+WORKING_DIR = '/workspace'             # the Docker runtime's server-provisioned workspace: no host path
+WORKSPACE_BODY_KIND = 'LocalWorkspace'
+DOCKER_RUNTIME = 'docker'
+HEX_PLACEHOLDER = '{conversation_hex}'
+BACKSLASH = chr(92)
+# The create body allowlist: the fields of the profile's pinned create template (the F-04.2
+# fixture's, as tools/check_profile.py FIXTURE_KEYS states them). Within "container": the browser
+# switch, and the two caps the locked server's container options take (F-04.2 section 7).
+BODY_FIELDS = ('conversation_id', 'conversation_runtime', 'workspace', 'agent_settings', 'autotitle',
+               'container', 'tags')
+CONTAINER_FIELDS = ('browser',)
+CONTAINER_CAPS = ('memory', 'cpus')
+# Never the source of a conversation bind, nor inside or around one (decision 0003: never the
+# Docker or containerd socket). The profile's forbidden list must name at least these.
+MANDATORY_FORBIDDEN = ('/run/docker.sock', '/var/run/docker.sock', '/run/containerd')
+# A field outside the allowlist is always refused; its name only picks the refusal code.
+OVERRIDE_CLASSES = (
+    (re.compile(r'mount|volume|bind', re.IGNORECASE), 'MOUNTS_NOT_DECLARED'),
+    (re.compile(r'mem|cpu|pid|ulimit|shm|resource|limit|quota|swap', re.IGNORECASE), 'CAPS_OVERRIDE_FORBIDDEN'),
+    (re.compile(r'runtime|docker|local|process|sandbox', re.IGNORECASE), 'RUNTIME_NOT_DOCKER'),
+    (re.compile(r'work_?dir|workspace|path|dir', re.IGNORECASE), 'WORKING_DIR_NOT_ALLOWED'),
+)
+ARTIFACT_PATH_RE = re.compile(r'profiles/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+')
+GUEST_PATH_RE = re.compile(r'(?:/[A-Za-z0-9._-]+)+')
+MEMORY_RE = re.compile(r'([1-9][0-9]{0,15})([bkmg]?)')
+MEMORY_UNITS = {'': 1, 'b': 1, 'k': 1 << 10, 'm': 1 << 20, 'g': 1 << 30}  # Docker's binary units
+UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+# Windows device names, reserved in any path part with or without an extension.
+RESERVED_NAMES = frozenset(['CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$', 'CLOCK$'] + [
+    f'{device}{n}' for device in ('COM', 'LPT') for n in list('0123456789') + [chr(0xB9), chr(0xB2), chr(0xB3)]])
+
+
+def _strict_loads(text):
+    return json.loads(text, object_pairs_hook=_strict_object, parse_constant=_no_constant)
+
+
+def _same(a, b) -> bool:
+    """Equal as canonical JSON: types matter (2 is not 2.0, true is not 1)."""
+    try:
+        return _canonical(a) == _canonical(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_guest_path(text) -> bool:
+    return (isinstance(text, str) and GUEST_PATH_RE.fullmatch(text) is not None
+            and not any(part in ('.', '..') for part in text.split('/')[1:]))
+
+
+def _overlap_posix(a: str, b: str) -> bool:
+    return _overlaps(PurePosixPath(a), PurePosixPath(b))
+
+
+def memory_bytes(value) -> int | None:
+    """Docker's memory notation (``4g``) in bytes, or None."""
+    match = MEMORY_RE.fullmatch(value) if isinstance(value, str) else None
+    return None if match is None else int(match.group(1)) * MEMORY_UNITS[match.group(2)]
+
+
+def _positive_int(value) -> bool:
+    return type(value) is int and value > 0
+
+
+def _positive_number(value) -> bool:
+    return type(value) in (int, float) and math.isfinite(value) and value > 0
+
+
+def _binds_for(binds: list, conversation_hex: str) -> list[dict]:
+    return [{'type': b['type'], 'source': b['source'].replace(HEX_PLACEHOLDER, conversation_hex),
+             'destination': b['destination'].replace(HEX_PLACEHOLDER, conversation_hex), 'rw': b['rw']}
+            for b in binds]
+
+
+def check_admission_policy(policy, profile: str) -> None:
+    """Refuse an admission policy (policy_inputs v2 ``admission``) that is malformed or outside
+    the rules: Docker only and not selectable; the one create route; profile-pinned template and
+    route allowlist; the server-provisioned working directory; caps that, times the concurrent
+    runs, stay within the guest ceilings; binds strictly under the source root, none inside or
+    around a forbidden source, one of them providing the working directory."""
+    def invalid(detail):
+        raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: {detail}', profile=profile)
+
+    keys = {'runtime', 'route', 'routes', 'create_template', 'workspace', 'caps', 'ceilings', 'mounts'}
+    if not isinstance(policy, dict) or set(policy) != keys or not all(isinstance(policy[k], dict) for k in keys):
+        invalid('the admission policy is not the policy-inputs/v2 shape')
+    runtime = policy['runtime']
+    if set(runtime) != {'conversation_runtime', 'selectable'} or type(runtime['conversation_runtime']) is not str \
+            or runtime['conversation_runtime'] != DOCKER_RUNTIME or runtime['selectable'] is not False:
+        raise DispatchRefused('RUNTIME_NOT_DOCKER', f'{profile}: the Agent Server configuration declares '
+                              f'{runtime!r}; required: docker, not selectable (decision 0001 s2)', profile=profile)
+    if not _same(policy['route'], CREATE_ROUTE):
+        raise DispatchRefused('ROUTE_NOT_ALLOWLISTED', f'{profile}: the create route must be {CREATE_ROUTE}',
+                              profile=profile)
+    for name in ('routes', 'create_template'):
+        pin = policy[name]
+        if set(pin) != {'path', 'sha256'} or not isinstance(pin['path'], str) \
+                or not ARTIFACT_PATH_RE.fullmatch(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
+                or not isinstance(pin['sha256'], str) or not SHA256_RE.fullmatch(pin['sha256']):
+            invalid(f'{name} must pin a file under profiles/{profile}/ by sha256')
+    if not _same(policy['workspace'], {'category': WORKSPACE_CATEGORY, 'working_dir': WORKING_DIR}):
+        raise DispatchRefused('WORKING_DIR_NOT_ALLOWED', f'{profile}: the workspace policy must be the '
+                              f'{WORKSPACE_CATEGORY} category and working_dir {WORKING_DIR}', profile=profile)
+    caps, ceilings = policy['caps'], policy['ceilings']
+    memory = memory_bytes(caps.get('memory'))
+    if set(caps) != {'memory', 'cpus', 'pids_limit', 'max_concurrent_runs'} or memory is None \
+            or not _positive_number(caps['cpus']) or not _positive_int(caps['pids_limit']) \
+            or not _positive_int(caps['max_concurrent_runs']) or set(ceilings) != {'vcpu', 'memory_mib'} \
+            or not _positive_int(ceilings['vcpu']) or not _positive_int(ceilings['memory_mib']):
+        invalid('explicit conversation caps (memory, cpus, pids_limit, max_concurrent_runs) and guest '
+                'ceilings (vcpu, memory_mib) are required')
+    runs = caps['max_concurrent_runs']
+    if runs * memory > ceilings['memory_mib'] << 20 or runs * caps['cpus'] > ceilings['vcpu']:
+        raise DispatchRefused('CAPS_ABOVE_CEILING', f'{profile}: {runs} x (memory {caps["memory"]}, cpus '
+                              f'{caps["cpus"]}) exceeds the ceilings {ceilings}', profile=profile)
+    mounts = policy['mounts']
+    root, binds, forbidden = mounts.get('source_root'), mounts.get('binds'), mounts.get('forbidden_sources')
+    if set(mounts) != {'source_root', 'binds', 'forbidden_sources'} or not _is_guest_path(root) \
+            or not isinstance(forbidden, list) or not all(_is_guest_path(f) for f in forbidden) \
+            or not isinstance(binds, list) or not binds or not all(
+                isinstance(b, dict) and set(b) == {'type', 'source', 'destination', 'rw'} and b['type'] == 'bind'
+                and type(b['rw']) is bool and isinstance(b['source'], str) and isinstance(b['destination'], str)
+                for b in binds):
+        invalid('conversations: source_root, forbidden_sources and a non-empty list of bind mounts '
+                '{type bind, source, destination, rw} are required')
+    if not set(MANDATORY_FORBIDDEN) <= set(forbidden):
+        raise DispatchRefused('MOUNT_POLICY_INVALID', f'{profile}: forbidden_sources must name '
+                              f'{list(MANDATORY_FORBIDDEN)}', profile=profile)
+    expanded = _binds_for(binds, '0' * 32)
+    for bind in expanded:
+        source = bind['source']
+        if not (_is_guest_path(source) and _is_guest_path(bind['destination'])) \
+                or not PurePosixPath(source).is_relative_to(root) or source == root \
+                or any(_overlap_posix(source, f) for f in forbidden):
+            raise DispatchRefused('MOUNT_POLICY_INVALID', f'{profile}: bind {bind} must lie strictly under '
+                                  f'{root} and clear of {forbidden}', profile=profile)
+    destinations = [bind['destination'] for bind in expanded]
+    if len(set(destinations)) != len(destinations) or WORKING_DIR not in destinations:
+        raise DispatchRefused('MOUNT_POLICY_INVALID', f'{profile}: bind destinations must be distinct and '
+                              f'include the working directory {WORKING_DIR}', profile=profile)
+
+
+def admission_policy(declared: dict, profile: str) -> dict:
+    """The admission policy an approved, operational profile declares, normalized for
+    policy_inputs v2: from ``provisioning.agent_server`` (``config.content``: runtime and caps;
+    ``fixture``: the pinned create template; ``conversations``: the mount policy;
+    ``admission.routes``: the pinned route allowlist) and ``ceilings``."""
+    def obj(value, where: str) -> dict:
+        if not isinstance(value, dict):
+            raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: {where} is not declared',
+                                  profile=profile)
+        return value
+
+    server = obj(obj(declared.get('provisioning'), 'provisioning').get('agent_server'), 'provisioning.agent_server')
+    config = obj(obj(server.get('config'), 'agent_server.config').get('content'), 'agent_server.config.content')
+    fixture = obj(server.get('fixture'), 'agent_server.fixture')
+    conversations = obj(server.get('conversations'), 'agent_server.conversations')
+    routes = obj(obj(server.get('admission'), 'agent_server.admission').get('routes'), 'agent_server.admission.routes')
+    ceilings = obj(declared.get('ceilings'), 'ceilings')
+    policy = {
+        'runtime': {'conversation_runtime': config.get('conversation_runtime'),
+                    'selectable': config.get('conversation_runtime_selectable')},
+        'route': dict(CREATE_ROUTE),
+        'routes': {'path': routes.get('path'), 'sha256': routes.get('sha256')},
+        'create_template': {'path': fixture.get('path'), 'sha256': fixture.get('sha256')},
+        'workspace': {'category': WORKSPACE_CATEGORY, 'working_dir': WORKING_DIR},
+        'caps': {'memory': config.get('conversation_container_memory'),
+                 'cpus': config.get('conversation_container_cpus'),
+                 'pids_limit': config.get('conversation_container_pids_limit'),
+                 'max_concurrent_runs': config.get('max_concurrent_runs')},
+        'ceilings': {'vcpu': ceilings.get('vcpu'), 'memory_mib': ceilings.get('memory_mib')},
+        'mounts': {'source_root': conversations.get('source_root'), 'binds': conversations.get('mounts'),
+                   'forbidden_sources': conversations.get('forbidden_sources')},
+    }
+    check_admission_policy(policy, profile)
+    return json.loads(_canonical(policy))
+
+
+def read_profile_artifact(path: str, *, repo_root=REPO) -> bytes:
+    """The bytes of a profile-pinned artifact, by its repository-relative ``profiles/<id>/...`` path."""
+    if not (isinstance(path, str) and ARTIFACT_PATH_RE.fullmatch(path)):
+        raise ValueError(f'not a profile artifact path: {path!r}')
+    return Path(repo_root).joinpath(*path.split('/')).read_bytes()
+
+
+def _read_pinned(read_artifact: Callable[[str], bytes], pin: dict, what: str) -> bytes:
+    try:
+        raw = read_artifact(pin['path'])
+    except (OSError, ValueError) as exc:
+        raise DispatchRefused('PROFILE_ARTIFACT_MISSING', f'{what} {pin["path"]}: {type(exc).__name__}',
+                              path=pin['path']) from None
+    if not isinstance(raw, bytes):
+        raise DispatchRefused('PROFILE_ARTIFACT_MISSING', f'{what} {pin["path"]}: the source returned no bytes')
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != pin['sha256']:
+        raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', f'{what} {pin["path"]} has sha256 {digest}, pinned '
+                              f'{pin["sha256"]}', path=pin['path'], actual=digest, pinned=pin['sha256'])
+    return raw
+
+
+def _artifact_object(raw: bytes, what: str) -> dict:
+    try:
+        data = _strict_loads(raw.decode('utf-8'))
+    except ValueError as exc:  # UnicodeDecodeError is a ValueError
+        raise DispatchRefused('PROFILE_ARTIFACT_INVALID', f'{what}: {type(exc).__name__}') from None
+    if not isinstance(data, dict):
+        raise DispatchRefused('PROFILE_ARTIFACT_INVALID', f'{what} is not a JSON object')
+    return data
+
+
+def _check_route_allowlist(raw: bytes, route: dict) -> None:
+    """The route allowlist (profiles/<id>/agent-server/routes.json, S-01.3.1) admits the create route:
+    exactly one entry for it, with dispatcher "allowed" (fd-session-key-not-fine-grained)."""
+    data = _artifact_object(raw, 'route allowlist')
+    if data.get('schema') != ROUTES_SCHEMA or not isinstance(data.get('routes'), list):
+        raise DispatchRefused('PROFILE_ARTIFACT_INVALID', f'the route allowlist is not {ROUTES_SCHEMA}')
+    entries = [r for r in data['routes'] if isinstance(r, dict)
+               and r.get('method') == route['method'] and r.get('path') == route['path']]
+    if len(entries) != 1 or entries[0].get('dispatcher') != 'allowed':
+        raise DispatchRefused('ROUTE_NOT_ALLOWLISTED', f'{route["method"]} {route["path"]} is not the one '
+                              'dispatcher-allowed entry of the route allowlist',
+                              dispatcher=[r.get('dispatcher') for r in entries])
+
+
+def _override_code(key) -> str:
+    for pattern, code in OVERRIDE_CLASSES:
+        if pattern.search(str(key)):
+            return code
+    return 'BODY_FIELD_UNKNOWN'
+
+
+def check_create_body(body, *, admission: dict, template: dict, conversation_id: str) -> None:
+    """Refuse a create body that is not exactly the pinned template with the reserved conversation
+    id: an allowlist of fields; the Docker runtime named explicitly (decision 0001 s2: every create
+    sends it); the server-provisioned working directory; within ``container`` no cap but the
+    declared one; every other field equal to the template's."""
+    if not isinstance(body, dict):
+        raise DispatchRefused('BODY_MALFORMED', 'the create body is not a JSON object')
+    for key in body:
+        if key not in BODY_FIELDS:
+            raise DispatchRefused(_override_code(key), f'the create body may not carry {key!r}', field=key)
+    if body.get('conversation_id') != conversation_id:
+        raise DispatchRefused('CONVERSATION_ID_MISMATCH', f'the create body must carry the reserved '
+                              f'conversation id {conversation_id}')
+    runtime = body.get('conversation_runtime')
+    if type(runtime) is not str or runtime != DOCKER_RUNTIME:
+        raise DispatchRefused('RUNTIME_NOT_DOCKER', f'conversation_runtime is {runtime!r}; every create '
+                              f'selects {DOCKER_RUNTIME!r} explicitly')
+    working = {'kind': WORKSPACE_BODY_KIND, 'working_dir': admission['workspace']['working_dir']}
+    if not _same(body.get('workspace'), working):
+        raise DispatchRefused('WORKING_DIR_NOT_ALLOWED', f'workspace must be {working}')
+    if 'container' in body:
+        container = body['container']
+        if not isinstance(container, dict):
+            raise DispatchRefused('BODY_MALFORMED', 'container is not an object')
+        for key, value in container.items():
+            if key in CONTAINER_CAPS:
+                if not _same(value, admission['caps'][key]):
+                    raise DispatchRefused('CAPS_OVERRIDE_FORBIDDEN', f'container.{key} is {value!r}; only the '
+                                          f'declared {admission["caps"][key]!r} may be sent', field=key)
+            elif key not in CONTAINER_FIELDS:
+                raise DispatchRefused(_override_code(key), f'the create body may not carry container.{key}',
+                                      field=f'container.{key}')
+    if set(body) != set(template):
+        raise DispatchRefused('BODY_NOT_TEMPLATE', f'the body fields {sorted(body)} are not the template\'s '
+                              f'{sorted(template)}')
+    for key in body:
+        mine, theirs = body[key], template[key]
+        if key == 'conversation_id':
+            continue
+        if key == 'container' and isinstance(theirs, dict):
+            mine = {k: v for k, v in mine.items() if k not in CONTAINER_CAPS}
+            theirs = {k: v for k, v in theirs.items() if k not in CONTAINER_CAPS}
+        if not _same(mine, theirs):
+            raise DispatchRefused('BODY_NOT_TEMPLATE', f'{key} differs from the pinned create template', field=key)
+
+
+def _workspace_parts(planned) -> list[str]:
+    """The three parts of a planned workspace. A part whose name before any extension (spaces
+    trimmed, any case) is a Windows device name is refused first; then the fixed rule's exact
+    grammar: a lower-case repository id, a canonical upper-case Work id, a lower-case uuid."""
+    parts = planned.replace(BACKSLASH, '/').split('/') if isinstance(planned, str) else []
+    for part in parts:
+        if part.split('.')[0].rstrip(' ').upper() in RESERVED_NAMES:
+            raise DispatchRefused('WORKSPACE_RESERVED_NAME', f'{part!r} is a Windows reserved device name',
+                                  part=part)
+    parts = planned.split('/') if isinstance(planned, str) else []
+    if len(parts) != 3 or not _is_id(parts[0]) or not store.valid_work_id(parts[1]) \
+            or UUID_RE.fullmatch(parts[2]) is None:
+        raise DispatchRefused('WORKSPACE_PATH_INVALID', f'not <repository>/<WORK-ID>/<attempt uuid>: {planned!r}')
+    return parts
+
+
+def _operation_key(resolved: ResolvedInputs) -> str:
+    try:
+        return store.AttemptIdentity(
+            work_id=resolved.work_id, design_revision=resolved.design_revision, stage=resolved.stage,
+            ordinal=resolved.ordinal, profile_digest=resolved.profile_digest, planned_workspace='pending',
+            policy_digest=resolved.policy_digest, agent_manifest_digest=resolved.agent_manifest_digest).operation_key
+    except store.InvalidIdentity as exc:
+        raise DispatchRefused('IDENTITY_INVALID', str(exc)) from None
+
+
+def workspace_host_path(resolved: ResolvedInputs, workspaces, operation_key: str) -> Path:
+    """The attempt's host workspace: ``planned_workspace`` under the ``workspaces`` category of
+    the integrations/paths resolution. Refuses a planned workspace outside the fixed rule's grammar
+    or not this attempt's, a reserved device name, and an existing link, junction, reparse point
+    or non-directory from the category down. Reads only (lstat); creates nothing."""
+    parts = _workspace_parts(resolved.planned_workspace)
+    expected = planned_workspace(resolved.repository, resolved.work_id, store.attempt_id_for(operation_key))
+    if resolved.planned_workspace != expected:
+        raise DispatchRefused('WORKSPACE_NOT_PLANNED', f'{resolved.planned_workspace!r} is not this attempt\'s '
+                              f'workspace {expected!r}')
+    if not isinstance(workspaces, paths.Resolution) or workspaces.platform != sys.platform \
+            or WORKSPACE_CATEGORY not in workspaces.paths or not workspaces.paths[WORKSPACE_CATEGORY].is_absolute():
+        raise DispatchRefused('WORKSPACE_CATEGORY_UNAVAILABLE', 'workspaces must be this host\'s integrations/paths '
+                              'resolution with an absolute workspaces category')
+    category = Path(str(workspaces.paths[WORKSPACE_CATEGORY]))
+    for depth in range(len(parts) + 1):
+        step = category.joinpath(*parts[:depth])
+        try:
+            info = os.lstat(step)
+        except FileNotFoundError:
+            break
+        except OSError as exc:
+            raise DispatchRefused('WORKSPACE_PATH_UNSAFE', f'{step}: {type(exc).__name__}') from None
+        if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT \
+                or not stat.S_ISDIR(info.st_mode):
+            raise DispatchRefused('WORKSPACE_PATH_UNSAFE', f'{step} is a link, junction, reparse point or not a '
+                                  'directory', path=str(step))
+    return category.joinpath(*parts)
+
+
+@dataclass(frozen=True)
+class AdmittedCreate:
+    """The one admitted OpenHands create of an attempt, built from trusted policy only."""
+    operation_key: str
+    conversation_id: str
+    method: str
+    path: str
+    body_json: str
+    mounts_json: str          # the effective mount set the conversation container must have
+    planned_workspace: str
+    host_workspace: str
+    policy_digest: str
+    template_bytes: bytes     # the pinned create template, re-checked against its sha256 on send
+
+    @property
+    def body(self) -> dict:
+        return json.loads(self.body_json)
+
+    @property
+    def mounts(self) -> list:
+        return json.loads(self.mounts_json)
+
+    def to_json(self) -> dict:
+        return {'format': ADMITTED_FORMAT, 'operation_key': self.operation_key,
+                'conversation_id': self.conversation_id, 'route': {'method': self.method, 'path': self.path},
+                'body': self.body, 'mounts': self.mounts,
+                'workspace': {'planned': self.planned_workspace, 'host': self.host_workspace},
+                'policy_digest': self.policy_digest,
+                'create_template_sha256': hashlib.sha256(self.template_bytes).hexdigest()}
+
+
+def _resolved_admission(resolved: ResolvedInputs) -> dict:
+    """The admission policy the attempt was reserved under, from its digest-bound policy inputs."""
+    if _sha256(resolved.policy_inputs_json) != resolved.policy_digest:
+        raise DispatchRefused('ADMISSION_MISMATCH', 'the policy inputs do not have the policy digest')
+    try:
+        inputs = _strict_loads(resolved.policy_inputs_json)
+    except ValueError:
+        raise DispatchRefused('ADMISSION_MISMATCH', 'the policy inputs are not strict JSON') from None
+    if not isinstance(inputs, dict) or inputs.get('format') != POLICY_FORMAT \
+            or not _same(inputs.get('profile'), {'id': resolved.profile, 'sha256': resolved.profile_digest}):
+        raise DispatchRefused('ADMISSION_MISMATCH', f'the policy inputs are not {POLICY_FORMAT} of profile '
+                              f'{resolved.profile} at {resolved.profile_digest}')
+    admission = inputs.get('admission')
+    check_admission_policy(admission, resolved.profile)
+    return admission
+
+
+def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admission: dict, workspaces) -> dict:
+    """Every admission check on a built request; returns the validated body (the one to send)."""
+    key = _operation_key(resolved)
+    conversation_id = store.conversation_id_for(key)
+    if (admitted.operation_key, admitted.conversation_id, admitted.policy_digest) != \
+            (key, conversation_id, resolved.policy_digest):
+        raise DispatchRefused('ADMISSION_MISMATCH', 'the admitted request is not this reserved attempt\'s')
+    host = workspace_host_path(resolved, workspaces, key)
+    if (admitted.planned_workspace, admitted.host_workspace) != (resolved.planned_workspace, str(host)):
+        raise DispatchRefused('WORKSPACE_NOT_PLANNED', f'the admitted workspace {admitted.host_workspace!r} is '
+                              f'not {str(host)!r}')
+    template_raw = admitted.template_bytes if isinstance(admitted.template_bytes, bytes) else b''
+    if hashlib.sha256(template_raw).hexdigest() != admission['create_template']['sha256']:
+        raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted create template is not the pinned one')
+    template = _artifact_object(template_raw, 'create template')
+    if not _same({'method': admitted.method, 'path': admitted.path}, admission['route']):
+        raise DispatchRefused('ROUTE_NOT_ALLOWLISTED', f'{admitted.method} {admitted.path} is not the admitted '
+                              f'create route {admission["route"]}')
+    try:
+        body = _strict_loads(admitted.body_json)
+    except (TypeError, ValueError):
+        raise DispatchRefused('BODY_MALFORMED', 'the create body is not strict JSON') from None
+    check_create_body(body, admission=admission, template=template, conversation_id=conversation_id)
+    expected = _binds_for(admission['mounts']['binds'], conversation_id.replace('-', ''))
+    try:
+        mounts = _strict_loads(admitted.mounts_json)
+    except (TypeError, ValueError):
+        mounts = None
+    if not _same(mounts, expected):
+        raise DispatchRefused('MOUNTS_NOT_DECLARED', 'the admitted mount set is not exactly the declared one',
+                              declared=expected)
+    return body
+
+
+def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
+          read_profile: Callable[[str], bytes] = read_profile_file,
+          read_artifact: Callable[[str], bytes] = read_profile_artifact) -> AdmittedCreate:
+    """Admit the OpenHands create of a resolved (and reserved) attempt, or raise DispatchRefused.
+
+    ``workspaces`` is the host's ``aieh_paths`` resolution (``aieh_paths.resolve()`` in live use);
+    ``read_profile`` and ``read_artifact`` read the approved profile and the artifacts it pins.
+    The request is built from trusted policy only; nothing is written and nothing is sent.
+    """
+    if not isinstance(resolved, ResolvedInputs):
+        raise TypeError('resolved must be ResolvedInputs (resolve)')
+    if not isinstance(manifest, ApprovedInputs):
+        raise TypeError('manifest must be ApprovedInputs (load_manifest or parse_manifest)')
+    entry = manifest._index()['profiles'].get(resolved.profile)
+    if (resolved.manifest_sha256, resolved.manifest_version) != (manifest.sha256, manifest.version) \
+            or entry is None or entry['sha256'] != resolved.profile_digest:
+        raise DispatchRefused('ADMISSION_MISMATCH', 'the resolved inputs were not approved by this manifest')
+    _, declared = _check_profile(resolved.profile, resolved.profile_digest, read_profile)
+    admission = _resolved_admission(resolved)
+    if not _same(admission, admission_policy(declared, resolved.profile)):
+        raise DispatchRefused('ADMISSION_MISMATCH', 'the policy inputs do not carry the approved profile\'s '
+                              'admission policy')
+    key = _operation_key(resolved)
+    host = workspace_host_path(resolved, workspaces, key)
+    template_raw = _read_pinned(read_artifact, admission['create_template'], 'create template')
+    template = _artifact_object(template_raw, 'create template')
+    _check_route_allowlist(_read_pinned(read_artifact, admission['routes'], 'route allowlist'), admission['route'])
+    conversation_id = store.conversation_id_for(key)
+    body = json.loads(_canonical(template))
+    body['conversation_id'] = conversation_id
+    admitted = AdmittedCreate(
+        operation_key=key, conversation_id=conversation_id, method=admission['route']['method'],
+        path=admission['route']['path'], body_json=_canonical(body),
+        mounts_json=_canonical(_binds_for(admission['mounts']['binds'], conversation_id.replace('-', ''))),
+        planned_workspace=resolved.planned_workspace, host_workspace=str(host),
+        policy_digest=resolved.policy_digest, template_bytes=template_raw)
+    _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces)
+    return admitted
+
+
+def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspaces,
+                transport: Callable[[str, str, dict], object]):
+    """Validate the admitted create again, against the policy the attempt was reserved under
+    (``resolved``, the record ``reserve_attempt`` stored), immediately before the transport; then
+    call ``transport(method, path, body)`` exactly once and return its result. A refusal calls it
+    zero times. Nothing is retried and no other runtime is ever tried."""
+    if not isinstance(admitted, AdmittedCreate):
+        raise TypeError('admitted must be AdmittedCreate (admit)')
+    if not isinstance(resolved, ResolvedInputs):
+        raise TypeError('resolved must be ResolvedInputs (resolve)')
+    admission = _resolved_admission(resolved)
+    body = _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces)
+    return transport(admitted.method, admitted.path, body)
 
 
 # ---------------------------------------------------------------------------
