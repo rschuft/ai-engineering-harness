@@ -70,6 +70,12 @@ class CommittedMatrix(unittest.TestCase):
         self.assertEqual(len(domains), 9)
         self.assertEqual({(a, b) for a in domains for b in domains} - pairs, set())
 
+    def test_every_planned_edge_names_the_leaf_that_observes_it(self):
+        """Read straight from the data: a planned edge without verify_at has no observer."""
+        missing = [r['id'] for r in MATRIX['edges'] + MATRIX['external_edges']
+                   if r['status'] == 'planned' and not r.get('verify_at')]
+        self.assertEqual(missing, [])
+
     def test_no_untrusted_allow_reaches_a_management_or_credential_asset(self):
         """The leaf's acceptance, read straight from the data, independently of the checker."""
         trust = {d['id']: d['trust'] for d in INVENTORY['trust_domains']}
@@ -237,6 +243,13 @@ class Acceptance(unittest.TestCase):
         r = edge(m, 'nm-verifier-gitea')
         r.pop('builds_at', None)
         r.pop('verify_at', None)
+        self.assert_code('STATUS_UNSUPPORTED', m, where='nm-verifier-gitea')
+        m = fresh()
+        # a planned edge names the leaf that will observe it: builds_at alone is not enough
+        r = edge(m, 'nm-verifier-gitea')
+        self.assertEqual(r['status'], 'planned')
+        self.assertTrue(r.get('builds_at'))
+        r.pop('verify_at')
         self.assert_code('STATUS_UNSUPPORTED', m, where='nm-verifier-gitea')
         m = fresh()
         edge(m, 'nm-dispatcher-bot-gitea')['sources'] = ['profiles/README.md']

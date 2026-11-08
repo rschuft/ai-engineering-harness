@@ -23,8 +23,9 @@ It fails when:
 - an id does not resolve: a domain, an asset, a credential, a finding, a plan leaf, a
   profile endpoint; or an inventory asset has no class, or a class contradicts the asset's
   kind or its privileged credentials;
-- an ``observed`` row has no evidence, a ``planned`` row no plan leaf, or a ``decided`` row
-  no decision source and no plan leaf;
+- an ``observed`` row has no evidence, a ``planned`` row no plan leaf that will observe it
+  (``verify_at``; ``builds_at`` alone is not enough), or a ``decided`` row no decision
+  source and no plan leaf;
 - an active profile's endpoint (``network.endpoints`` without a deferred status) or
   ``launch.argv`` forward does not appear as an ``allow`` row (a profile is active when its
   provider validation passed);
@@ -312,9 +313,9 @@ class Checker(csi.Checker):
                 self.add('STATUS_UNSUPPORTED', where, 'observed needs at least one evidence link')
             if not inspection:
                 self.add('STATUS_UNSUPPORTED', where, 'observed needs an inspection command')
-        elif status == 'planned' and not (row.get('builds_at') or row.get('verify_at')):
-            self.add('STATUS_UNSUPPORTED', where, 'planned needs a plan leaf (builds_at or '
-                     'verify_at)')
+        elif status == 'planned' and not row.get('verify_at'):
+            self.add('STATUS_UNSUPPORTED', where, 'planned needs the plan leaf that will observe '
+                     'it (verify_at)')
         elif status == 'decided':
             if not any(str(s).startswith('decisions/') for s in sources):
                 self.add('STATUS_UNSUPPORTED', where, 'decided needs a decision among its sources')

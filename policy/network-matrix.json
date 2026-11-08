@@ -15,7 +15,7 @@
   },
   "statuses": {
     "observed": "Shown today by committed evidence, with the inspection that shows it.",
-    "planned": "Defined by accepted authority and built or verified at a named plan leaf.",
+    "planned": "Defined by accepted authority and observed at a named plan leaf (verify_at), which may differ from the leaf that builds it (builds_at).",
     "decided": "Decided by a decision record and built at a named plan leaf."
   },
   "externals": {
@@ -643,6 +643,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -820,6 +821,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
       ],
       "builds_at": "G-04.3.1",
+      "verify_at": "G-04.3.2",
       "owner_act": false,
       "findings": [],
       "inspection": [
@@ -902,6 +904,7 @@
         "profiles/README.md"
       ],
       "builds_at": "D-01.1",
+      "verify_at": "D-01.1",
       "owner_act": false,
       "findings": [],
       "inspection": [
@@ -991,6 +994,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -1021,6 +1025,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -1270,6 +1275,7 @@
         "decisions/0010-effects-store-placement-and-governance-threat-model.md"
       ],
       "builds_at": "G-04.2.2",
+      "verify_at": "G-04.4.2",
       "owner_act": false,
       "findings": [],
       "inspection": [
@@ -1306,6 +1312,7 @@
         "decisions/0010-effects-store-placement-and-governance-threat-model.md"
       ],
       "builds_at": "G-04.4.2",
+      "verify_at": "G-04.4.2",
       "owner_act": false,
       "findings": [],
       "inspection": [
@@ -1371,6 +1378,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
       ],
       "builds_at": "G-04.3.1",
+      "verify_at": "G-04.3.2",
       "owner_act": false,
       "findings": [],
       "inspection": [
@@ -1399,6 +1407,7 @@
         "decisions/0010-effects-store-placement-and-governance-threat-model.md"
       ],
       "builds_at": "G-04.3.1",
+      "verify_at": "G-04.3.2",
       "owner_act": false,
       "findings": [],
       "inspection": [
@@ -1550,6 +1559,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -1580,6 +1590,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3253,6 +3264,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3284,6 +3296,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3315,6 +3328,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3346,6 +3360,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3377,6 +3392,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3408,6 +3424,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3439,6 +3456,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3659,6 +3677,7 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
       "owner_act": false,
       "findings": [
         "fd-ci-runner-unpinned"
@@ -3691,6 +3710,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
       ],
       "builds_at": "S-03.2",
+      "verify_at": "S-03.2",
       "owner_act": true,
       "findings": [
         "fd-acp-provider-auth"
@@ -3724,6 +3744,7 @@
         "decisions/0010-effects-store-placement-and-governance-threat-model.md"
       ],
       "builds_at": "G-04.4.2",
+      "verify_at": "G-04.4.2",
       "owner_act": false,
       "findings": [],
       "inspection": [
