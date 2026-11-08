@@ -1726,7 +1726,7 @@
         "evidence/F-06.1-gitea-loopback.md",
         "decisions/0009-managed-data-root-and-configuration-contract.md"
       ],
-      "carried_to": ["S-01.2.1", "S-01.2.2", "G-04.2.1"]
+      "carried_to": ["G-04.2.1"]
     },
     {
       "id": "fd-owner-authorization-record",
@@ -1754,7 +1754,7 @@
         "evidence/F-04.1c-agent-server.md",
         "evidence/S-01.3.2-job-daemon-and-management-access.md"
       ],
-      "carried_to": ["E-01.2.2", "E-01.3.1"]
+      "carried_to": ["E-01.3.3"]
     },
     {
       "id": "fd-session-key-not-fine-grained",
@@ -1768,7 +1768,7 @@
         "evidence/S-01.3.1-management-api-admission.md",
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
       ],
-      "carried_to": ["S-01.2.1", "E-01.2.2"]
+      "carried_to": ["E-01.2.2", "E-01.3.1"]
     },
     {
       "id": "fd-child-conversation-tool",
@@ -1781,7 +1781,7 @@
         "profiles/strong-windows-qemu-whpx/agent-server/routes.json",
         "evidence/F-04.1c-agent-server.md"
       ],
-      "carried_to": ["E-01.2.2"]
+      "carried_to": ["S-03.2"]
     },
     {
       "id": "fd-container-network-deviations",
@@ -1801,7 +1801,7 @@
         "security/containment-cases.json",
         "evidence/S-02.2-isolation-evidence.md"
       ],
-      "carried_to": ["E-01.2.2", "S-03.1"]
+      "carried_to": ["S-03.1", "E-01.5", "R-01.2"]
     },
     {
       "id": "fd-container-shares-service-uid",
@@ -1832,7 +1832,7 @@
         "security/containment-cases.json",
         "evidence/S-02.2-isolation-evidence.md"
       ],
-      "carried_to": ["E-01.2.2"]
+      "carried_to": ["R-01.2"]
     },
     {
       "id": "fd-host-loopback-exposure",
@@ -1860,7 +1860,7 @@
         "policy/role-tokens.json",
         "decisions/0007-role-token-matrix-and-revocation-contract.md"
       ],
-      "carried_to": ["S-01.2.1", "Q-02.4", "G-04.2.1"]
+      "carried_to": ["Q-02.4", "G-04.2.1"]
     },
     {
       "id": "fd-ci-runner-unpinned",
@@ -1872,7 +1872,7 @@
         "composition/candidates.json",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
       ],
-      "carried_to": ["S-01.2.1", "Q-02.1", "Q-02.2.1"]
+      "carried_to": ["Q-02.1", "Q-02.2.1"]
     },
     {
       "id": "fd-gitea-reader-opens-pr",
@@ -1895,7 +1895,7 @@
         "composition/compatibility-matrix.md",
         "evidence/S-01.2.2-segregated-credentials.md"
       ],
-      "carried_to": ["S-01.2.1", "S-01.2.2"]
+      "carried_to": ["G-03.1"]
     },
     {
       "id": "fd-owner-ui-access",
@@ -1910,7 +1910,7 @@
         "evidence/S-01.3.1-management-api-admission.md",
         "evidence/S-01.4-network-matrix.md"
       ],
-      "carried_to": ["U-01.2", "E-01.3.1"]
+      "carried_to": ["U-03.1"]
     },
     {
       "id": "fd-owner-ui-session-plan-silence",
@@ -1923,7 +1923,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
         "evidence/bootstrap-log.md"
       ],
-      "carried_to": ["U-01.2", "P-04.2"]
+      "carried_to": ["U-03.1"]
     },
     {
       "id": "fd-owner-credential-custody",
@@ -1932,7 +1932,7 @@
       "detail": "Credential stores are protected for this leaf, so the storage, scope and lifetime of the Owner's push credential and provider login are not established. Their existence is evident from the recorded pushes and headless runs.",
       "refs": ["cred-owner-github", "cred-owner-provider-login", "host-credential-stores"],
       "citations": ["evidence/bootstrap-log.md"],
-      "carried_to": ["S-01.2.2"]
+      "carried_to": ["P-04.2"]
     },
     {
       "id": "fd-acp-provider-auth",
@@ -1946,7 +1946,7 @@
         "profiles/README.md",
         "policy/role-tokens.json"
       ],
-      "carried_to": ["S-01.2.1", "S-02.x"]
+      "carried_to": ["S-03.1", "S-03.2"]
     }
   ]
 }

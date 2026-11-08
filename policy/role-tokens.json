@@ -177,12 +177,12 @@
         {
           "mechanism": "A separate Gitea Owner account, the only identity on the authorization branch's merge allowlist; interactive sign-in only, never a personal access token in any agent or CI context.",
           "verified": false,
-          "verify_at": "S-01.2.2",
+          "verify_at": "P-04.2",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md",
             "evidence/F-06.1-gitea-loopback.md"
           ],
-          "notes": "Partly shown at S-01.2.2: aieh-owner is the only merge-allowlist identity of every protected-branch rule of the fixture, and it holds no access token (finalize-credentials). The authorization branch does not exist yet (fd-owner-authorization-record). Under the Owner directive of 2026-11-07 the Owner never signs in: the credential is harness-held and how the Owner identity is used internally is to be decided, so \"interactive sign-in only\" is superseded pending that decision."
+          "notes": "Partly shown at S-01.2.2: aieh-owner is the only merge-allowlist identity of every protected-branch rule of the fixture, and it holds no access token (finalize-credentials). The authorization branch does not exist yet (fd-owner-authorization-record). Under the Owner directive of 2026-11-07 the Owner never signs in: the credential is harness-held and how the Owner identity is used internally is to be decided, so \"interactive sign-in only\" is superseded pending that decision. Re-pointed to P-04.2 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): the authorization recorder holds cred-gitea-owner-account, and P-04.2 inspects where the Owner credential exists."
         },
         {
           "mechanism": "Code merges into protected integration branches under the D-01.2 branch rules.",
@@ -432,11 +432,11 @@
         {
           "mechanism": "Issues Gitea identities, bot accounts and their tokens, protection rules and runner registration secrets; never exposed to agents or CI.",
           "verified": false,
-          "verify_at": "S-01.2.2",
+          "verify_at": "Q-02.2.1",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Partly shown at S-01.2.2: the protection rules, organization, repository and collaborators were issued by the site administrator through the API (basic authentication, password in memory, no token); the bot accounts and tokens through Gitea's CLI by the Owner's host account; the administrator can list and revoke another account's token (200, 204, then 401). No runner registration secret exists (fd-ci-runner-unpinned). The credential is read only by credential finalization and the fixture administration."
+          "notes": "Partly shown at S-01.2.2: the protection rules, organization, repository and collaborators were issued by the site administrator through the API (basic authentication, password in memory, no token); the bot accounts and tokens through Gitea's CLI by the Owner's host account; the administrator can list and revoke another account's token (200, 204, then 401). No runner registration secret exists (fd-ci-runner-unpinned). The credential is read only by credential finalization and the fixture administration. Re-pointed to Q-02.2.1 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): what remains unverified is the runner registration secret, which the runner provisioning creates."
         }
       ],
       "issuance": [
@@ -535,7 +535,7 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Unknown at S-01.2.2: Gitea 28.3.0 token scopes are categorical and no path-level scope exists; pending the planning-artefact layout (decision 0007, point 2)."
+          "notes": "Unknown at S-01.2.2: Gitea 28.3.0 token scopes are categorical and no path-level scope exists; pending the planning-artefact layout (decision 0007, point 2). Deferred by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md) (authority: the Overseer; no leaf dispatches a planner in a guest, the planner runs on the Owner's headless channel, P-01.2; reconsider when a planner role is dispatched in a guest, A-01.x or E-03.x). verify_at keeps S-01.2.2, the leaf that recorded it, because no plan leaf owns it."
         }
       ],
       "issuance": [
@@ -793,11 +793,11 @@
         {
           "mechanism": "A dedicated Gitea bot account and token with read and review permission only, on no merge allowlist.",
           "verified": false,
-          "verify_at": "S-01.2.2",
+          "verify_at": "D-01.2",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Failed in part at S-01.2.2. Shown: read permission on the fixture, on no merge allowlist; it submitted an approving review; its pushes were declined, its merges answered 405, its settings calls 403. Not realizable: Gitea 28.3.0 has no review-only scope (a review with read:repository answered 403, required=[write:repository]), and a read-permission collaborator can open a pull request from an existing branch (201; fd-gitea-reader-opens-pr). Neither reaches an Owner operation."
+          "notes": "Failed in part at S-01.2.2. Shown: read permission on the fixture, on no merge allowlist; it submitted an approving review; its pushes were declined, its merges answered 405, its settings calls 403. Not realizable: Gitea 28.3.0 has no review-only scope (a review with read:repository answered 403, required=[write:repository]), and a read-permission collaborator can open a pull request from an existing branch (201; fd-gitea-reader-opens-pr). Neither reaches an Owner operation. Re-pointed to D-01.2 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): D-01.2 shows that the reader identity cannot open a PR, or records the residual as a limit with its reason (fd-gitea-reader-opens-pr)."
         },
         {
           "mechanism": "The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no management, Owner, admin or bot credential in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs).",
@@ -900,14 +900,14 @@
         {
           "mechanism": "The Gitea Actions job token with restricted repository and workflow token maxima.",
           "verified": false,
-          "verify_at": "S-01.2.2",
-          "notes": "Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned)."
+          "verify_at": "Q-02.3.1",
+          "notes": "Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned). Re-pointed to Q-02.3.1, which sets the job-token maxima, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md)."
         },
         {
           "mechanism": "A disposable container or VM on a dedicated runner host: no host-mode execution, host Docker socket, user home, Owner credential or release, signing or deployment secret.",
           "verified": false,
-          "verify_at": "S-01.2.2",
-          "notes": "Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned)."
+          "verify_at": "Q-02.2.2",
+          "notes": "Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned). Re-pointed to Q-02.2.2, which provisions and inspects the disposable CI job, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md)."
         },
         {
           "mechanism": "The runner containment profile carries the job constraints of S-01.3.2: no engine socket or engine TCP endpoint reachable from a job; no management key, Owner, admin or bot token in its environment or readable filesystem; no privileged mode, added capability, device or host namespace; no host-path mount beyond the scoped workspace.",
@@ -978,8 +978,8 @@
         {
           "mechanism": "The runner's registration secret on the dedicated runner host, unreachable from the job filesystem.",
           "verified": false,
-          "verify_at": "S-01.2.2",
-          "notes": "Unknown at S-01.2.2: no CI runner is selected or pinned (fd-ci-runner-unpinned)."
+          "verify_at": "Q-02.3.2",
+          "notes": "Unknown at S-01.2.2: no CI runner is selected or pinned (fd-ci-runner-unpinned). Re-pointed to Q-02.3.2, whose hostile job attempts secret reads, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md)."
         }
       ],
       "issuance": [
@@ -1058,8 +1058,8 @@
         {
           "mechanism": "The sole holder of the Agent Server session key, on the trusted side; admission to the create and admin routes is limited to its identity and network (S-01.3.1).",
           "verified": false,
-          "verify_at": "E-01.2.2",
-          "notes": "Not realized at S-01.3.1: no dispatcher exists, and during bootstrap the Owner's account holds the key through the operator login. The admission half is verified (next row); sole custody of the key is decided with the dispatcher (E-01.2.x)."
+          "verify_at": "E-01.3.3",
+          "notes": "Not realized at S-01.3.1: no dispatcher exists, and during bootstrap the Owner's account holds the key through the operator login. The admission half is verified (next row); sole custody of the key is decided with the dispatcher (E-01.2.x). Re-pointed to E-01.3.3 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): the dispatcher identity becomes the sole reader of the management key there."
         },
         {
           "mechanism": "Admission to the Agent Server's management API by key and by network: every key-gated route refuses a missing or wrong key (HTTP 401, WebSocket close 4001 or handshake 403); the server does not start without a valid key; the listener is on the guest loopback only and no conversation container reaches it, the guest itself or another container (container guard, icc off). The per-route allowlist of the dispatcher (routes.json) is policy for the dispatcher, not a server control.",
@@ -1073,11 +1073,11 @@
         {
           "mechanism": "Custodian of the standing bot credentials; delivers each agent role token per attempt into the attempt environment only, with fingerprints only in records.",
           "verified": false,
-          "verify_at": "S-01.2.2",
+          "verify_at": "E-01.3.3",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2: no dispatcher exists. Bootstrap custody observed instead: the Credential Manager entries \"AIEH Gitea bot <role>\" of the Owner's account, written by owner-os-account; records carry fingerprints only. Refined by decision 0013, point 7 (S-01.4): the attempt environment is the dispatcher's attempt context, never the conversation container; untrusted code has no network path to Gitea, proposals leave by exchange and the dispatcher pushes as the bot identity it holds custody of."
+          "notes": "Not verified at S-01.2.2: no dispatcher exists. Bootstrap custody observed instead: the Credential Manager entries \"AIEH Gitea bot <role>\" of the Owner's account, written by owner-os-account; records carry fingerprints only. Refined by decision 0013, point 7 (S-01.4): the attempt environment is the dispatcher's attempt context, never the conversation container; untrusted code has no network path to Gitea, proposals leave by exchange and the dispatcher pushes as the bot identity it holds custody of. Re-pointed to E-01.3.3 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): per-attempt role-token delivery and rotation are built and proved there."
         },
         {
           "mechanism": "The sole network path to the management API: the dispatcher's management calls and the Owner UI's conversation connections ride the qualified management channel (the loopback-bound SSH forward with the per-instance key); no browser, UI process, Integration process or agent holds the management key, and no QEMU hostfwd of the management listener exists (decision 0013, points 1 and 3).",
@@ -1153,7 +1153,7 @@
           "mechanism": "Its own process identity with custody of the integration store and no access to the effects store.",
           "verified": false,
           "verify_at": "S-01.2.2",
-          "notes": "Unknown at S-01.2.2: not a Gitea principal and not built."
+          "notes": "Unknown at S-01.2.2: not a Gitea principal and not built. Deferred by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md) (authority: decision 0010; a governance-scoped threat model needs no separate identity solely against same-account attacks; reconsider when the threat model changes or the host has several users). verify_at keeps S-01.2.2, the leaf that recorded it, because no plan leaf owns it."
         }
       ],
       "issuance": [],
@@ -1355,8 +1355,8 @@
         {
           "mechanism": "The host-side broker behind the guest's inference endpoint class; it alone issues per-attempt inference access.",
           "verified": false,
-          "verify_at": "S-01.2.2",
-          "notes": "Realization unknown: no plan leaf builds the broker (a plan gap routed to the Owner). Unknown at S-01.2.2."
+          "verify_at": "S-03.2",
+          "notes": "Realization unknown: no plan leaf builds the broker (a plan gap routed to the Owner). Unknown at S-01.2.2. Re-pointed to S-03.2, which implements and qualifies the authorized inference broker (S-03.1 designs it), by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md)."
         }
       ],
       "issuance": [
@@ -1426,8 +1426,8 @@
         {
           "mechanism": "Not decided: Q-02.4 and G-04.2.1 decide the principal and its credential.",
           "verified": false,
-          "verify_at": "S-01.2.2",
-          "notes": "Unknown at S-01.2.2: undecided."
+          "verify_at": "Q-02.4",
+          "notes": "Unknown at S-01.2.2: undecided. Re-pointed to Q-02.4 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): a proposed decision names the release-job principal and its credential custody, for Owner acceptance."
         }
       ],
       "issuance": [],
@@ -1628,7 +1628,7 @@
             "op-as-conversation-delete",
             "op-as-management-read"
           ],
-          "at": "S-01.3.1"
+          "at": "E-01.3.3"
         },
         {
           "scope": "Privileged effects and effect-store custody",

@@ -32,6 +32,20 @@ POLICY = json.loads(POLICY_PATH.read_text(encoding='utf-8'))
 INVENTORY = json.loads(INVENTORY_PATH.read_text(encoding='utf-8'))
 README = README_PATH.read_text(encoding='utf-8')
 AGENT_ROLES = ('planner', 'builder', 'reviewer', 'ci-job')
+# (role, mechanism prefix) -> the open leaf an unverified realization was re-pointed to by the
+# plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md)
+REPOINTED = {
+    ('owner', 'A separate Gitea Owner account'): 'P-04.2',
+    ('gitea-site-admin', 'Issues Gitea identities'): 'Q-02.2.1',
+    ('reviewer', 'A dedicated Gitea bot account'): 'D-01.2',
+    ('ci-job', 'The Gitea Actions job token'): 'Q-02.3.1',
+    ('ci-job', 'A disposable container or VM'): 'Q-02.2.2',
+    ('ci-runner-service', "The runner's registration secret"): 'Q-02.3.2',
+    ('management-dispatcher', 'The sole holder'): 'E-01.3.3',
+    ('management-dispatcher', 'Custodian of the standing bot credentials'): 'E-01.3.3',
+    ('inference-broker', 'The host-side broker'): 'S-03.2',
+    ('release-job-environment', 'Not decided'): 'Q-02.4',
+}
 
 
 def fresh():
@@ -126,10 +140,14 @@ class CommittedMatrix(unittest.TestCase):
             carried = {'privileged-executor': 'G-04.2.1'}
             if rid == 'owner' and m['mechanism'].startswith('Code merges'):
                 carried['owner'] = 'D-01.2'
-            if rid == 'management-dispatcher' and m['mechanism'].startswith('The sole holder'):
-                carried[rid] = 'E-01.2.2'
             if rid == 'management-dispatcher' and m['mechanism'].startswith('The sole network path'):
                 carried[rid] = 'E-01.3.2'              # decision 0013 (S-01.4)
+            # unverified rows re-pointed to their decided owners by the plan reconciliation of
+            # 2026-11-08; the deferred planner and integration-service rows keep S-01.2.2
+            for (r_id, prefix), leaf in REPOINTED.items():
+                if rid == r_id and m['mechanism'].startswith(prefix):
+                    self.assertIs(m['verified'], False, m['mechanism'])
+                    carried[rid] = leaf
             if admission:
                 carried[rid] = 'S-01.3.1'
             if job:
@@ -159,8 +177,9 @@ class CommittedMatrix(unittest.TestCase):
     def test_sunset_map(self):
         (non_role,) = POLICY['non_roles']
         at = {op: s['at'] for s in non_role['sunset'] for op in s['operations']}
-        self.assertEqual(at['op-as-conversation-create'], 'S-01.3.1')
-        self.assertEqual(at['op-as-runtime-stop'], 'S-01.3.1')
+        # moved to the dispatcher at E-01.3.3 by the plan reconciliation of 2026-11-08
+        self.assertEqual(at['op-as-conversation-create'], 'E-01.3.3')
+        self.assertEqual(at['op-as-runtime-stop'], 'E-01.3.3')
         self.assertEqual(at['op-effect-apply'], 'G-04.2.1')
         self.assertEqual(at['op-effect-store-custody'], 'G-04.2.1')
         self.assertIsNone(at['op-gitea-administration'])
