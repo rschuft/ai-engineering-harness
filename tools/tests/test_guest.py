@@ -8,6 +8,7 @@ Owner's profile (where the temporary directory usually lives), the cases that bu
 Context point USERPROFILE and HOME at a directory that does not contain it.
 """
 from pathlib import Path
+import atexit
 import base64
 import copy
 import hashlib
@@ -1261,7 +1262,33 @@ GIT_TEST_ENV = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
                 'GIT_COMMITTER_NAME': 'fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
 
 
+_golden_root = None
+_golden = {}
+
+
 def fixture_repo(path, commits=2):
+    """A fixture repository at PATH (COMMITS commits on main, tag v1); return its HEAD.
+
+    Built with git once per process for each COMMITS and then copied with plain file copies
+    (plan leaf F-09.3): every copy is the same repository, with the same HEAD."""
+    global _golden_root
+    if commits not in _golden:
+        if _golden_root is None:
+            _golden_root = Path(tempfile.mkdtemp(prefix='aieh-guest-golden-'))
+            atexit.register(shutil.rmtree, _golden_root, onexc=_make_writable)
+        source = _golden_root / str(commits)
+        _golden[commits] = (source, _build_fixture_repo(source, commits))
+    source, head = _golden[commits]
+    shutil.copytree(source, path, symlinks=True)
+    return head
+
+
+def _make_writable(func, target, _exc):
+    os.chmod(target, stat.S_IWRITE)
+    func(target)
+
+
+def _build_fixture_repo(path, commits):
     env = dict(os.environ, **GIT_TEST_ENV)
     path.mkdir(parents=True)
     run = lambda *a: subprocess.run(['git', '-C', str(path), *a], check=True, env=env,  # noqa: E731
