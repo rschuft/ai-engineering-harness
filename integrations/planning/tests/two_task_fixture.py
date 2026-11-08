@@ -10,6 +10,12 @@ commit id is reproducible:
 - ``openspec/schemas/intent-driven/`` is copied from ``catalog/``;
 - ``design.md`` comes from ``fixtures/two-task/`` (written for this leaf).
 
+``build_repo`` builds the repository once per process for a given input digest (the
+design files, the commit message and the fixed identity and date) and copies that golden
+repository to each later caller with plain file copies (``golden``); a copy is the same
+repository, with the same commit id, as a fresh build. ``build_repo(..., golden_copy=False)``
+builds it with git every time.
+
 ``live_capture`` then initialises Backlog.md in that repository, runs the adapter on
 ``fixtures/two-task/plan.json`` and captures Backlog.md's own ``task list --json`` and
 ``task view <id> --json`` output, with the creation times replaced by a placeholder.
@@ -21,6 +27,8 @@ installed as described in ``integrations/planning/README.md``):
     python -I -B integrations/planning/tests/two_task_fixture.py --backlog CMD --openspec CMD --record
 """
 import argparse
+import atexit
+import hashlib
 import json
 import os
 import re
@@ -95,19 +103,83 @@ def write(repo, files):
         target.write_bytes(data)
 
 
+def head(repo):
+    """HEAD's commit id: read from the loose ref git just wrote (gitrepository-layout), or, when
+    HEAD is not a loose ref (packed, detached by a test), asked of git."""
+    gitdir = Path(repo) / '.git'
+    try:
+        value = (gitdir / 'HEAD').read_text(encoding='ascii').strip()
+        if value.startswith('ref: refs/heads/'):
+            value = (gitdir / value[len('ref: '):]).read_text(encoding='ascii').strip()
+    except (OSError, ValueError):
+        value = ''
+    if re.fullmatch(r'[0-9a-f]{40}', value):
+        return value
+    return git(repo, 'rev-parse', 'HEAD')
+
+
 def commit_all(repo, message, date=None):
     env = {'GIT_AUTHOR_DATE': date, 'GIT_COMMITTER_DATE': date} if date else None
     git(repo, 'add', '--all', env=env)
     git(repo, 'commit', '--quiet', '-m', message, env=env)
-    return git(repo, 'rev-parse', 'HEAD')
+    return head(repo)
 
 
-def build_repo(repo):
-    """Create the design repository; return its commit id."""
+DESIGN_MESSAGE = 'OpenSpec change qual-02-search-freshness: proposal, spec and design'
+
+# Golden repositories: built once per process per input digest, then copied. The digest
+# covers every input of the build (the files, the message, the identity and date); a change
+# to any of them builds a new golden repository.
+_golden_root = None
+_golden = {}
+
+
+def input_digest(*parts):
+    """A sha256 over PARTS: bytes, strings, and {name: bytes} dicts (sorted by name)."""
+    digest = hashlib.sha256()
+    for part in parts:
+        items = sorted(part.items()) if isinstance(part, dict) else [(None, part)]
+        for name, value in items:
+            for piece in (name, value):
+                if piece is None:
+                    continue
+                data = piece if isinstance(piece, bytes) else str(piece).encode('utf-8')
+                digest.update(len(data).to_bytes(8, 'big') + data)
+        digest.update(b'\x00part')
+    return digest.hexdigest()
+
+
+def golden(repo, key, build):
+    """Copy into REPO (which must not exist) the repository BUILD(directory) makes, and return
+    BUILD's result. BUILD runs once per process for each KEY, in a temporary directory removed at
+    exit; every call copies its result with plain file copies (git's object files stay
+    read-only, as git wrote them)."""
+    global _golden_root
+    if key not in _golden:
+        if _golden_root is None:
+            _golden_root = Path(tempfile.mkdtemp(prefix='aieh-golden-'))
+            atexit.register(rmtree, _golden_root)
+        source = _golden_root / key[:16]
+        _golden[key] = (source, build(source))
+    source, result = _golden[key]
+    shutil.copytree(source, repo, symlinks=True)
+    return result
+
+
+def _build_design_repo(repo, files):
     Path(repo).mkdir(parents=True)
     git(repo, 'init', '--quiet', '-b', 'main')
-    write(repo, design_files())
-    return commit_all(repo, 'OpenSpec change qual-02-search-freshness: proposal, spec and design')
+    write(repo, files)
+    return commit_all(repo, DESIGN_MESSAGE)
+
+
+def build_repo(repo, golden_copy=True):
+    """Create the design repository; return its commit id."""
+    files = design_files()
+    if not golden_copy:
+        return _build_design_repo(repo, files)
+    key = input_digest('build_repo/1', files, DESIGN_MESSAGE, GIT_ENV)
+    return golden(repo, key, lambda directory: _build_design_repo(directory, files))
 
 
 def isolated_env(home):

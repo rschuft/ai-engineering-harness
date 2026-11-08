@@ -47,6 +47,7 @@ L = R.lineage
 planning = R.planning
 sys.path.insert(0, str(PLANNING_TESTS))
 import two_task_fixture as fx  # noqa: E402
+import fake_backlog  # noqa: E402
 
 FAKE_BACKLOG = [sys.executable, '-I', '-B', str(PLANNING_TESTS / 'fake_backlog.py')]
 RECORDED = PLANNING_TESTS / 'fixtures'
@@ -422,6 +423,11 @@ class WorkResolution(TempDirCase):
         cls.resolver = R.WorkResolver(cls.repo, FAKE_BACKLOG)
 
     def setUp(self):
+        # The fake Backlog.md answers in this process (the Backlog runner seam); a missing
+        # command still fails to launch, and RegistryAndCommandLine launches the fake.
+        patch = mock.patch.object(planning.Backlog, 'runner', fake_backlog.InProcessRunner(FAKE_BACKLOG))
+        patch.start()
+        self.addCleanup(patch.stop)
         log = self.repo / '.fake-backlog-argv.jsonl'
         if log.exists():
             log.unlink()

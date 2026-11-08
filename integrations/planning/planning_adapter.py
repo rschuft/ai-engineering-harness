@@ -389,9 +389,15 @@ def load_plan(data):
 # Backlog.md
 
 class Backlog:
-    def __init__(self, argv_prefix, project):
+    # The process runner, a dependency-injection seam for tests: None (the default) runs
+    # Backlog.md with subprocess.run. A runner takes subprocess.run's arguments and returns
+    # its CompletedProcess; it is given to the constructor, or set on the class.
+    runner = None
+
+    def __init__(self, argv_prefix, project, runner=None):
         self.argv_prefix = list(argv_prefix)
         self.project = Path(project)
+        self.runner = type(self).runner if runner is None else runner
 
     def run(self, *args):
         if tuple(args[:2]) not in BACKLOG_COMMANDS:
@@ -400,8 +406,9 @@ class Backlog:
         if any(arg in STATUS_FLAGS or arg.startswith(tuple(f + '=' for f in STATUS_FLAGS))
                for arg in options):
             raise PlanningError('ADAPTER_REFUSED', 'the adapter never sets a Backlog.md status')
-        result = subprocess.run([*self.argv_prefix, *args], cwd=self.project, capture_output=True,
-                                stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_S, env=tool_env())
+        run = subprocess.run if self.runner is None else self.runner
+        result = run([*self.argv_prefix, *args], cwd=self.project, capture_output=True,
+                     stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_S, env=tool_env())
         if result.returncode != 0:
             raise PlanningError('BACKLOG_FAILED', f'backlog {" ".join(args[:2])} exited {result.returncode}: '
                                 + (result.stderr or result.stdout).decode('utf-8', 'replace').strip())

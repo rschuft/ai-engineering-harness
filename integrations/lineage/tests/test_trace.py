@@ -78,6 +78,9 @@ class Case(unittest.TestCase):
     """A fresh throwaway project, store and work directory per test."""
 
     def setUp(self):
+        patch = E.in_process_backlog()
+        patch.start()
+        self.addCleanup(patch.stop)
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-trace-'))
         self.addCleanup(fx.rmtree, self.tmp)
         self.repo = self.tmp / 'p'
@@ -122,7 +125,8 @@ class Example(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-trace-example-'))
-        cls.projections = E.example(cls.tmp)
+        with E.in_process_backlog():
+            cls.projections = E.example(cls.tmp)
 
     @classmethod
     def tearDownClass(cls):
@@ -225,7 +229,10 @@ class ReadOnly(Case):
             calls.append(list(argv))
             return real_run(argv, *args, **kwargs)
 
-        with mock.patch.object(subprocess, 'run', side_effect=recording):
+        # The real process interaction: the Backlog runner seam left at its default, so the
+        # fake Backlog.md is launched through subprocess.run, as Backlog.md is.
+        with mock.patch.object(R.planning.Backlog, 'runner', None), \
+                mock.patch.object(subprocess, 'run', side_effect=recording):
             projection = self.trace()
         self.assertEqual(projection['verdict'], 'incomplete')
         self.assertEqual((tree_state(self.repo), store_state(self.store)), before)
@@ -239,6 +246,8 @@ class ReadOnly(Case):
                     self.assertEqual(argv[:len(backlog_prefix)], backlog_prefix)
                     self.assertIn(tuple(argv[len(backlog_prefix):][:2]), {('task', 'list'), ('task', 'view')})
         self.assertFalse(any('openspec' in Path(str(a[0])).name.lower() for a in calls))
+        # The default runner is subprocess.run: Backlog.md's reads went through it.
+        self.assertTrue([argv for argv in calls if argv[:len(backlog_prefix)] == backlog_prefix])
         logged = self.backlog_argv()
         self.assertTrue(logged)
         for argv in logged:

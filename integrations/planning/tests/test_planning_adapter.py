@@ -29,6 +29,7 @@ CATEGORY = 'integration'
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import two_task_fixture as fx  # noqa: E402
+import fake_backlog  # noqa: E402
 
 adapter = fx.adapter
 PlanningError = adapter.PlanningError
@@ -72,7 +73,8 @@ class RepoCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, {'FAKE_BACKLOG_MODE': mode})
         env.start()
         self.addCleanup(env.stop)
-        return adapter.Backlog(FAKE_BACKLOG, self.repo)
+        # The fake runs in this process (the Backlog runner seam); CommandLine launches it.
+        return adapter.Backlog(FAKE_BACKLOG, self.repo, runner=fake_backlog.InProcessRunner(FAKE_BACKLOG))
 
     def backlog_argv(self):
         log = self.repo / '.fake-backlog-argv.jsonl'
@@ -293,6 +295,42 @@ class PlanInput(unittest.TestCase):
         self.expect('PLAN_INVALID', [])
 
 
+class BacklogRunnerSeam(unittest.TestCase):
+    """The Backlog runner seam (plan leaf F-09.3): subprocess.run by default, looked up when
+    Backlog.md runs; a runner given to the constructor or set on the class replaces it."""
+    category = 'unit'
+
+    LIST = json.dumps({'schemaVersion': 1, 'kind': 'task-list', 'tasks': []}).encode()
+
+    def completed(self, argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, self.LIST, b'')
+
+    def test_the_default_runner_is_subprocess_run(self):
+        self.assertIsNone(adapter.Backlog.runner)
+        backlog = adapter.Backlog(['backlog-cmd'], Path('project'))
+        self.assertIsNone(backlog.runner)
+        with mock.patch.object(adapter.subprocess, 'run', side_effect=self.completed) as run:
+            self.assertEqual(backlog.list_tasks(), [])
+        run.assert_called_once_with(['backlog-cmd', 'task', 'list', '--json'], cwd=Path('project'),
+                                    capture_output=True, stdin=subprocess.DEVNULL,
+                                    timeout=adapter.TOOL_TIMEOUT_S, env=mock.ANY)
+        self.assertEqual(run.call_args.kwargs['env'], adapter.tool_env())
+
+    def test_an_injected_runner_replaces_it(self):
+        calls = []
+
+        def runner(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return self.completed(argv)
+
+        with mock.patch.object(adapter.subprocess, 'run', side_effect=AssertionError('launched')):
+            self.assertEqual(adapter.Backlog(['backlog-cmd'], Path('p'), runner=runner).list_tasks(), [])
+            with mock.patch.object(adapter.Backlog, 'runner', runner):
+                self.assertEqual(adapter.Backlog(['backlog-cmd'], Path('p')).list_tasks(), [])
+        self.assertEqual([argv for argv, _ in calls], [['backlog-cmd', 'task', 'list', '--json']] * 2)
+        self.assertEqual(set(calls[0][1]), {'cwd', 'capture_output', 'stdin', 'timeout', 'env'})
+
+
 class CreateTasks(RepoCase):
     def test_two_tasks_with_pointers_and_a_dependency(self):
         result = adapter.create_tasks(self.git, self.backlog(), self.plan, 'main')
@@ -418,6 +456,33 @@ class CommandLine(RepoCase):
                                          '--revision', 'main', '--backlog', 'fake')
         self.assertEqual(code, 1)
         self.assertIn('FAIL BACKLOG_DUPLICATE', err)
+
+    def test_the_in_process_fake_answers_as_the_launched_one(self):
+        # The logic tests run fake_backlog.py in the test process (fake_backlog.InProcessRunner);
+        # the launched command must answer every call exactly as it does.
+        steps = [(['task', 'create', '--description=d', '--', 'First'], {}),
+                 (['task', 'create', '--dep=TASK-1', '--ref=r', '--', 'Second'], {}),
+                 (['task', 'create', '--dep=TASK-9', '--', 'Third'], {}),
+                 (['task', 'list', '--json'], {}),
+                 (['task', 'view', 'task-2', '--json'], {}),
+                 (['task', 'view', 'TASK-7', '--json'], {}),
+                 (['task', 'list', '--json'], {'FAKE_BACKLOG_MODE': 'bad-envelope'}),
+                 (['task', 'list', '--json'], {'FAKE_BACKLOG_SNAPSHOT': str(fx.RECORDED)}),
+                 (['task', 'edit', 'TASK-1'], {})]
+        runs = {}
+        for name, runner in (('launched', subprocess.run), ('in-process', fake_backlog.InProcessRunner(FAKE_BACKLOG))):
+            work = self.tmp / name
+            work.mkdir()
+            runs[name] = []
+            for args, env in steps:
+                result = runner([*FAKE_BACKLOG, *args], cwd=work, capture_output=True, stdin=subprocess.DEVNULL,
+                                timeout=fx.WAIT_CEILING_S, env={**adapter.tool_env(), **env})
+                runs[name].append((result.returncode, result.stdout.replace(b'\r\n', b'\n'),
+                                   result.stderr.replace(b'\r\n', b'\n')))
+            runs[name].append(sorted(p.name for p in work.iterdir()))
+            runs[name].append([(work / f).read_bytes() for f in fake_backlog.FILES])
+        self.assertEqual(runs['in-process'], runs['launched'])
+        self.assertEqual([code for code, *_ in runs['launched'][:len(steps)]], [0, 0, 1, 0, 0, 1, 0, 0, 1])
 
     def test_could_not_run(self):
         code, _, err = self.run_main('resolve', '--project', self.tmp, '--pointer', 'x')

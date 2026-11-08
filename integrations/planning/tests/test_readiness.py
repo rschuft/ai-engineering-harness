@@ -21,11 +21,18 @@ CATEGORY = 'contract'
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import readiness_fixture as rf  # noqa: E402
+import fake_backlog  # noqa: E402
 
 fx = rf.fx
 adapter = rf.adapter
 readiness = rf.readiness
 FAKE_BACKLOG = [sys.executable, '-I', '-B', str(HERE / 'fake_backlog.py')]
+
+
+def in_process():
+    """The fake Backlog.md in this process (the Backlog runner seam); the command-line tests
+    launch it."""
+    return fake_backlog.InProcessRunner(FAKE_BACKLOG)
 
 
 class StatusTrap(dict):
@@ -69,7 +76,7 @@ class Stages(unittest.TestCase):
         env = mock.patch.dict(os.environ, {'FAKE_BACKLOG_SNAPSHOT': str(rf.RECORDED / stage)})
         env.start()
         self.addCleanup(env.stop)
-        return adapter.Backlog(FAKE_BACKLOG, self.repo)
+        return adapter.Backlog(FAKE_BACKLOG, self.repo, runner=in_process())
 
     def view(self, stage, task_id):
         return copy.deepcopy(self.stages[stage][f'task-view-{task_id}.json']['task'])
@@ -212,7 +219,7 @@ class Stages(unittest.TestCase):
                             data['task']['references'] = refs
                         (Path(snap) / name).write_text(json.dumps(data), encoding='utf-8')
                     with mock.patch.dict(os.environ, {'FAKE_BACKLOG_SNAPSHOT': snap}):
-                        report = readiness.read_readiness(adapter.Backlog(FAKE_BACKLOG, self.repo), self.git)
+                        report = readiness.read_readiness(adapter.Backlog(FAKE_BACKLOG, self.repo, runner=in_process()), self.git)
                 entry = self.entry(report, 'TASK-2')
                 self.assertFalse(entry['eligible'])
                 self.assertIn(code, entry['reasons'])

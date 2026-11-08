@@ -52,6 +52,7 @@ R = T.resolve_mod
 L = T.L
 sys.path.insert(0, str(PLANNING_TESTS))
 import two_task_fixture as fx  # noqa: E402
+import fake_backlog  # noqa: E402
 
 FAKE_BACKLOG = [sys.executable, '-I', '-B', str(PLANNING_TESTS / 'fake_backlog.py')]
 RECORDED_TASKS = PLANNING_TESTS / 'fixtures' / 'two-task' / 'recorded'
@@ -87,16 +88,34 @@ def edit(repo, path, old, new):
     target.write_bytes(data.replace(old, new, 1))
 
 
-def build_project(repo):
-    """(design commit, declaring commit) of the example project repository."""
+DECLARE_MESSAGE = 'accept O1 of qual-02: declare its outcome id'
+
+
+def _build_project(repo):
     design = fx.build_repo(repo)
     declare(repo)
-    declared = fx.commit_all(repo, 'accept O1 of qual-02: declare its outcome id', date=DECLARED_DATE)
+    declared = fx.commit_all(repo, DECLARE_MESSAGE, date=DECLARED_DATE)
     return design, declared
+
+
+def build_project(repo):
+    """(design commit, declaring commit) of the example project repository: built once per
+    process per input digest and copied (``two_task_fixture.golden``)."""
+    key = fx.input_digest('build_project/1', fx.design_files(), fx.DESIGN_MESSAGE, fx.GIT_ENV,
+                          declaration(), DECLARE_MESSAGE, DECLARED_DATE)
+    return fx.golden(repo, key, _build_project)
 
 
 def store_module():
     return T._store_module()
+
+
+def in_process_backlog():
+    """A patch of the Backlog runner seam (``planning_adapter.Backlog.runner``) that answers the
+    fake Backlog.md in the test process: every Backlog.md read of the traversal and the
+    resolvers, ``ReadOnlyBacklog`` included, then launches no process. Tests of the real
+    process interaction leave it off."""
+    return mock.patch.object(R.planning.Backlog, 'runner', fake_backlog.InProcessRunner(FAKE_BACKLOG))
 
 
 def build_store(path, intents):
