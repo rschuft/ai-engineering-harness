@@ -68,7 +68,8 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
-| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0` and `pytest-xdist==3.8.0`, compiled universally for CPython 3.12. Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 2 direct, 8 pins |
+| `python/tools-requirements.txt` | The Python tools venv (`task tools:install`, F-07.1, [decision 0009](../../decisions/0009-managed-data-root-and-configuration-contract.md)): `pyyaml==6.0.3`, for the optional `config.yml`, with every hash copied unchanged from `windows-x86_64.txt`. Not part of the component resolution. See [`integrations/paths`](../../integrations/paths/README.md). | 1 pin |
+| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0`, `pytest-xdist==3.8.0` and `pyyaml==6.0.3`, compiled universally for CPython 3.12. Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 3 direct, 9 pins |
 | `python/windows-x86_64.txt` | The hash-locked closure for win_amd64, CPython 3.12. | 195 pins: 4 direct, 191 transitive |
 | `python/linux-x86_64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) x86_64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
 | `python/linux-aarch64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) aarch64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
@@ -175,7 +176,8 @@ After regenerating, update `components.lock.json`, which records pin and entry c
 
 `python/dev-requirements.txt` pins the parallel test runner of the development workflow
 (`docs/development.md`, Testing): pytest and pytest-xdist over the repository's unittest
-suites. It is not an upstream component of the harness and is not part of
+suites, and PyYAML, so that the tests of the optional `config.yml` run under that runner as
+they do under `task test`. It is not an upstream component of the harness and is not part of
 `components.lock.json` or the resolver's run. `task dev:install` installs it with
 `pip download --require-hashes --only-binary=:all:` into an asset directory, then `pip install
 --no-index` from there into the `python-dev-tools` venv under the managed data root, as
@@ -201,3 +203,13 @@ hashes equal both the lock and PyPI's JSON API.
 | colorama (win32 only) | 0.4.6 | BSD (classifier) | `py2.py3-none-any` |
 
 All eight wheels are pure Python (`Root-Is-Purelib: true`, no compiled member).
+
+**PyYAML (F-09.3 fix-forward of F-09.2).** `pyyaml==6.0.3` was added to
+`dev-requirements.in` on 2026-11-08 and the lock recompiled with the same pinned uv 0.13.7
+(archive sha256 checked first), environment and command. The eight existing pins and their
+hashes did not move (the recompiled file differs from the previous one only by the added
+block), and the PyYAML block carries exactly the 73 hashes, in the same order, that
+`tools-requirements.txt` admits (F-07.1, copied from `windows-x86_64.txt`); a contract test in
+`tools/tests/test_pytest_conftest.py` keeps the two equal. Unlike the eight above, PyYAML's
+wheels are platform wheels with a compiled extension (`cp312-cp312-win_amd64` on Windows), the
+same files the tools venv already installs; the licence is MIT.

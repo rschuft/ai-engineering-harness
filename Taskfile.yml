@@ -111,7 +111,7 @@ tasks:
   # workers do not inherit -B) keep bytecode out of the checkout; pyproject.toml disables pytest's
   # cache. The e2e (live) classes never run in parallel: they stay opt-in in their own targets.
   dev:install:
-    desc: "Network (PyPI): install the hash-locked dev tools venv (pytest, pytest-xdist) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py --set python-dev-tools)"
+    desc: "Network (PyPI): install the hash-locked dev tools venv (pytest, pytest-xdist, PyYAML) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py --set python-dev-tools)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools'
 

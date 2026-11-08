@@ -82,13 +82,26 @@ class Configuration(unittest.TestCase):
             self.assertGreaterEqual(len(hashes), 1, head)
             pins[match.group(1)] = (match.group(2), (match.group(3) or '').strip(' ;'))
         self.assertEqual(set(pins), {'pytest', 'pytest-xdist', 'execnet', 'pluggy', 'iniconfig', 'pygments',
-                                     'packaging', 'colorama'})
+                                     'packaging', 'colorama', 'pyyaml'})
         self.assertEqual(pins['pytest-xdist'][0], '3.8.0')
         self.assertGreaterEqual(int(pins['pytest'][0].split('.')[0]), 9)
         self.assertEqual(pins['colorama'][1], "sys_platform == 'win32'")
         self.assertEqual({marker for name, (_, marker) in pins.items() if name != 'colorama'}, {''})
         source = (REPO / 'composition' / 'lock' / 'python' / 'dev-requirements.in').read_text(encoding='utf-8')
-        self.assertEqual(source.split(), ['pytest>=9.0', 'pytest-xdist==3.8.0'])
+        self.assertEqual(source.split(), ['pytest>=9.0', 'pytest-xdist==3.8.0', 'pyyaml==6.0.3'])
+
+    def test_the_dev_lock_admits_exactly_the_tools_lock_pyyaml(self):
+        # PyYAML is in the dev set only so that the config.yml tests run under the parallel
+        # runner too; it admits the files the tools lock (F-07.1) admits, no other.
+        def pyyaml(name):
+            text = (REPO / 'composition' / 'lock' / 'python' / name).read_text(encoding='utf-8')
+            block = re.search(r'^pyyaml==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n?)+)', text, re.M)
+            self.assertIsNotNone(block, name)
+            return block.group(1), re.findall(r'sha256:([0-9a-f]{64})', block.group(2))
+        dev, tools = pyyaml('dev-requirements.txt'), pyyaml('tools-requirements.txt')
+        self.assertEqual(dev[0], '6.0.3')
+        self.assertGreater(len(dev[1]), 1)
+        self.assertEqual(dev, tools)
 
 
 GUARD_SUITE = '''

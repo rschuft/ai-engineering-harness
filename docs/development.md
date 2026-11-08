@@ -155,7 +155,7 @@ Only what is listed as verified has been exercised.
 | `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch resolution and admission tests (stdlib `unittest`). |
 | `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `python -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `test:categories [-- --list]` | `python -I -B tools/test_profile.py categories [--list]` | no | Checks that every test class declares a valid category. Imports the test modules; runs no test. |
-| `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
+| `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, and PyYAML for the `config.yml` tests, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
 | `test:unit [-- ARGS]` | `PYTHONDONTWRITEBYTECODE=1 <dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m unit [ARGS]` | no | [Testing](#testing): the inner loop, the `unit` tests in parallel under the unit guard. Needs `dev:install`. |
 | `test:fast [-- ARGS]` | the same with `-m "unit or contract"` | no | The inner loop: `unit` and `contract` tests in parallel. |
 | `test:component [-- ARGS]` | the same with `-m "contract or integration"` | no | The boundary: `contract` and `integration` tests in parallel. |
@@ -331,7 +331,8 @@ measurements.
 tier. `task dev:install` installs them, hash-locked and wheels only
 ([`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt):
 pytest, pytest-xdist 3.8.0, execnet, pluggy, iniconfig, Pygments, packaging, and colorama on
-Windows; all pure-Python wheels under MIT, BSD or Apache licences), into the `python-dev-tools`
+Windows, all pure-Python wheels under MIT, BSD or Apache licences; and PyYAML 6.0.3, MIT, with
+exactly the hashes of the tools lock, so that the `config.yml` tests run under both runners), into the `python-dev-tools`
 venv under the managed data root through the same mechanism as `task tools:install`.
 [`pyproject.toml`](../pyproject.toml) holds the pytest configuration only (the repository is
 not a Python package): the suites of `task test`, unittest's collection rules (only
@@ -367,9 +368,9 @@ worker, so its `setUpClass` runs once. Pass pytest options after `--`, for examp
   they equal those of a full stdlib profile (`tools/test_profile.py run --out PROFILE`) under
   the same interpreter (write both with `=`: pytest finds its root directory before it knows
   these options, and would take an existing file outside the checkout for a test path). Run the
-  stdlib side with the dev venv's interpreter too: it has no
-  PyYAML, so the four `config.yml` tests of the managed data root suite skip under it in both
-  runners.
+  stdlib side with the dev venv's interpreter too, so that both sides import the same packages:
+  the tests that run pytest itself skip where pytest is not importable, and the `config.yml`
+  tests where PyYAML is not.
 - **Live suites** (`e2e`) stay opt-in through their environment variables and never run in
   parallel: `test:all` deselects them, and their own targets (`gitea:authz` and the live
   planning and lineage tests) run them serially.

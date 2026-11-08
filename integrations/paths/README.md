@@ -18,10 +18,11 @@ publication gate and the guest tooling keep their current locations until F-07.2
 | Path | What |
 |---|---|
 | `aieh_paths.py` | The resolver, the configuration loader and the command line (`show`, `init`, `doctor`), the category table, the legacy table and the asset record format |
-| `tools_install.py` | `task tools:install`: the hash-locked Python tools venv, the first consumer of the contract |
-| `tests/test_aieh_paths.py` | The section 9 criteria 1 to 10 of the Owner directive, the adapters, the legacy table, `example_config.yml`, the asset records and `tools:install` |
+| `tools_install.py` | `task tools:install`: the hash-locked Python tools venv, the first consumer of the contract. `--set python-dev-tools` (`task dev:install`) installs the dev tools set (pytest, pytest-xdist and PyYAML) the same way, from its own lock, as `python-dev-tools` beside it; `--python` prints a set's venv interpreter for the current lock, creating nothing, and exits 1 when it is not installed |
+| `tests/test_aieh_paths.py` | The section 9 criteria 1 to 10 of the Owner directive, the adapters, the legacy table, `example_config.yml`, the asset records, `tools:install` and its `--set` and `--python` options |
 | `../../example_config.yml` | The tracked, commented configuration template |
 | `../../composition/lock/python/tools-requirements.txt` | The tools venv lock: `pyyaml==6.0.3` with the hashes of the F-01.2 lock |
+| `../../composition/lock/python/dev-requirements.txt` | The dev tools venv lock (F-09.2): pytest, pytest-xdist and their dependencies, and `pyyaml==6.0.3` with the same hashes as the tools lock |
 
 ## Commands
 
@@ -32,6 +33,8 @@ python -I -B integrations/paths/aieh_paths.py show [--format json|sh|ps1]   # ta
 python -I -B integrations/paths/aieh_paths.py init                          # task paths:init
 python -I -B integrations/paths/aieh_paths.py doctor                        # task paths:doctor
 python -I -B integrations/paths/tools_install.py                            # task tools:install (network: PyPI)
+python -I -B integrations/paths/tools_install.py --set python-dev-tools     # task dev:install (network: PyPI)
+python -I -B integrations/paths/tools_install.py --set python-dev-tools --python   # its interpreter, or exit 1
 python -I -B -m unittest discover -s integrations/paths/tests -v           # task paths:test
 ```
 
