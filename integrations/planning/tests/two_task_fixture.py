@@ -107,26 +107,61 @@ def write(repo, files):
         target.write_bytes(data)
 
 
-def head(repo):
-    """HEAD's commit id: read from the loose ref git just wrote (gitrepository-layout), or, when
-    HEAD is not a loose ref (packed, detached by a test), asked of git."""
+def loose_head(repo):
+    """HEAD's commit id read from the files git wrote (gitrepository-layout): HEAD and, when it
+    names a branch, that branch's loose ref; None when either is absent or not a commit id."""
     gitdir = Path(repo) / '.git'
     try:
         value = (gitdir / 'HEAD').read_text(encoding='ascii').strip()
         if value.startswith('ref: refs/heads/'):
             value = (gitdir / value[len('ref: '):]).read_text(encoding='ascii').strip()
     except (OSError, ValueError):
-        value = ''
-    if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value):
-        return value
-    return git(repo, 'rev-parse', 'HEAD')
+        return None
+    return value if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value) else None
+
+
+def head(repo):
+    """HEAD's commit id: read from the loose ref git just wrote, or, when HEAD is not a loose
+    ref (packed, for example), asked of git."""
+    return loose_head(repo) or git(repo, 'rev-parse', 'HEAD')
+
+
+# The working-tree files of each repository at its last commit_all (or golden copy). When a
+# later commit_all finds no file outside that set, every change is to a tracked path (an edit
+# or a deletion), so `git commit --all` commits exactly what `git add --all` then `git commit`
+# would, in one launch. Anything else (a new, moved or unknown file, a repository commit_all
+# has not seen) takes the two steps.
+_committed_files = {}
+
+
+def _key(repo):
+    return os.path.normcase(os.path.abspath(repo))
+
+
+def worktree_files(repo):
+    """Every file under REPO outside .git, as a relative POSIX path."""
+    out = set()
+    for directory, dirs, files in os.walk(repo):
+        if '.git' in dirs:
+            dirs.remove('.git')
+        rel = Path(directory).relative_to(repo)
+        out.update((rel / name).as_posix() for name in files)
+    return frozenset(out)
 
 
 def commit_all(repo, message, date=None):
     env = {'GIT_AUTHOR_DATE': date, 'GIT_COMMITTER_DATE': date} if date else None
-    git(repo, 'add', '--all', env=env)
-    git(repo, 'commit', '--quiet', '-m', message, env=env)
-    return head(repo)
+    files = worktree_files(repo)
+    known = _committed_files.get(_key(repo))
+    # The set is used only while HEAD is still the commit it was recorded at.
+    if known is not None and known[0] == loose_head(repo) and files <= known[1]:
+        git(repo, 'commit', '--all', '--quiet', '-m', message, env=env)
+    else:
+        git(repo, 'add', '--all', env=env)
+        git(repo, 'commit', '--quiet', '-m', message, env=env)
+    commit = head(repo)
+    _committed_files[_key(repo)] = (commit, files)
+    return commit
 
 
 DESIGN_MESSAGE = 'OpenSpec change qual-02-search-freshness: proposal, spec and design'
@@ -167,6 +202,8 @@ def golden(repo, key, build):
         _golden[key] = (source, build(source))
     source, result = _golden[key]
     shutil.copytree(source, repo, symlinks=True)
+    if _key(source) in _committed_files:
+        _committed_files[_key(repo)] = _committed_files[_key(source)]
     return result
 
 

@@ -328,6 +328,37 @@ class GoldenRepository(unittest.TestCase):
         self.assertEqual(fx.build_repo(tmp / 'c'), fresh)
         self.assertFalse((tmp / 'c' / 'extra.txt').exists())
 
+    def test_commit_all_in_one_step_commits_what_two_steps_commit(self):
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-golden-test-'))
+        self.addCleanup(fx.rmtree, tmp)
+        design = f'openspec/changes/{fx.CHANGE}/design.md'
+        proposal = f'openspec/changes/{fx.CHANGE}/proposal.md'
+
+        def change(repo, new_file=False):
+            (repo / design).write_bytes((repo / design).read_bytes() + b'\nEdited.\n')
+            (repo / proposal).unlink()
+            if new_file:
+                (repo / 'notes.md').write_text('new\n', encoding='utf-8')
+
+        for new_file in (False, True):
+            with self.subTest(new_file=new_file):
+                one, two = tmp / f'one-{new_file}', tmp / f'two-{new_file}'
+                fx.build_repo(one)
+                fx.build_repo(two)
+                fx._committed_files.pop(fx._key(two))  # unknown to commit_all: the two steps
+                commits, steps = [], []
+                for repo in (one, two):
+                    change(repo, new_file)
+                    with mock.patch.object(fx, 'git', wraps=fx.git) as git:
+                        commits.append(fx.commit_all(repo, 'change', date='2026-11-08T00:00:00Z'))
+                    steps.append([c.args[1] for c in git.call_args_list])
+                self.assertEqual(commits[0], commits[1])  # the same tree, parent, message and dates
+                self.assertEqual(steps, [['add', 'commit'] if new_file else ['commit'], ['add', 'commit']])
+                self.assertEqual(self.ask(one, 'status', '--porcelain', '--untracked-files=all'), '')
+                files = self.ask(one, 'ls-tree', '-r', '--name-only', 'HEAD').splitlines()
+                self.assertNotIn(proposal, files)
+                self.assertEqual('notes.md' in files, new_file)
+
     def test_the_digest_covers_every_input(self):
         files = fx.design_files()
         base = fx.input_digest('build_repo/1', files, fx.DESIGN_MESSAGE, fx.GIT_ENV)
