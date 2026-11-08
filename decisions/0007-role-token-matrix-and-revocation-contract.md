@@ -138,3 +138,24 @@ Pending. It is not needed before a Gitea instance exists.
   [0004](0004-privileged-effect-store-custody-and-restore-semantics.md) (Owner
   clarifications 5 and 7) and
   [0006](0006-guest-provisioning-channel-and-image-conformance.md).
+
+## Current facts (2026-11-08)
+Added with the Owner's approval of 2026-11-08 ("add a current-facts note reflecting my
+previously supplied confirmations; preserve the original decision history, provenance,
+and attribution"). The sections above are unchanged and remain the record of 2026-11-07.
+The three "Owner confirmation" items were answered by later Owner decisions, all recorded
+in [`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md):
+1. **Credential holding.** Superseded by the Owner's directive of 2026-11-07, "no manual
+   Gitea credential enrollment". The harness creates and finalizes both identities, the
+   site administrator and the non-administrator Owner account `aieh-owner`, and holds their
+   credentials in the OS credential provider. The Owner does not sign in to Gitea. The
+   Owner also decided on 2026-11-07 to keep `aieh-owner` as the Owner-authority identity,
+   used only by the Owner authorization recorder on a recorded Owner decision (P-04.2;
+   draft decision 0012).
+2. **Where Gitea runs.** Host loopback (127.0.0.1) from the pinned Gitea 28.3.0 Windows
+   binary, under the managed data root, without administrator rights and with no second
+   VM: the Owner's plan-gap decision and his "external-by-default" directive, both
+   2026-11-07. Built and verified by F-06.1.
+3. **Plan gaps.** Routed by the Owner on 2026-11-07 and added through the plan amendment
+   of that day: F-06.1 installs Gitea; S-03.1 and S-03.2 design and build the inference
+   broker (model access); P-04.1 builds the acceptance recorder.
