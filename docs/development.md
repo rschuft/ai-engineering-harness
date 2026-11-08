@@ -29,7 +29,7 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution and create admission tests. It is offline, runs serially and took about six minutes on the verification host ([Testing](#testing) has the measurement). Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution and create admission tests. It is offline, runs serially and took about four minutes on the verification host ([Testing](#testing) has the measurement). Before your first commit, also run
 `task hooks:install` once per clone
 (see [Publication-safety gate](#publication-safety-gate)). Without Task, run the eleven commands it wraps:
 
@@ -51,8 +51,10 @@ Use `python3` instead of `python` outside Windows.
 
 `task qualify` is the full qualification smoke run. It runs `setup`, then the
 component prerequisites, then a full component resolution into a new temporary
-directory outside the checkout. It needs the component tier and network access,
-and took about four minutes on the verification host. It modifies no tracked
+directory outside the checkout, then the release run of the tests (`dev:install`,
+`test:all` and `hooks:verify`; see [Testing](#testing)). It needs the component tier,
+network access and the installed publication-safety gate; its resolution took about four
+minutes on the verification host. It modifies no tracked
 file and no upstream project: upstream components are only downloaded,
 hash-checked and installed into that directory.
 
@@ -319,6 +321,10 @@ leaf's evidence. It never runs from a git hook: it takes three full serial runs.
 **Wall time.** At `07c7cd5` the serial `task test` set took a median of 355 s on the
 verification host (Windows 11, 32 logical processors, CPython 3.12.10); the per-suite
 medians and the measurement are in [`evidence/F-09.1-test-baseline.md`](../evidence/F-09.1-test-baseline.md).
+At `0c0412f`, with test 7's nested rerun moved to the gate tier (F-09.2), it took a median of
+243 s, and `test:all` took 50 to 53 s on 8 workers;
+[`evidence/F-09.2-parallel-runner.md`](../evidence/F-09.2-parallel-runner.md) has the
+measurements.
 
 **Parallel runner.** pytest and pytest-xdist run the same unittest suites as a second runner;
 `task test` and `task setup` stay the stdlib serial run, which needs nothing beyond the basic
