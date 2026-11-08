@@ -326,6 +326,31 @@ At `0c0412f`, with test 7's nested rerun moved to the gate tier (F-09.2), it too
 [`evidence/F-09.2-parallel-runner.md`](../evidence/F-09.2-parallel-runner.md) has the
 measurements.
 
+**Shared fixtures and process boundaries.** Expensive fixtures are built once and copied, and
+logic cases run in the test process; the tests that check a real process interaction still
+launch it (plan leaf F-09.3):
+
+- **Golden repositories.** A fixture repository is built with git once per test process for
+  each digest of its inputs (its files, commit messages, identity and dates) and copied per
+  test with plain file copies: the planning design repository
+  (`two_task_fixture.build_repo`), the lineage example project, the dispatch tests' revised
+  design, the gate tests' repository pair (with its bare `origin`) and the guest exchange
+  fixture. A copy is the same repository, with the same commits, as a fresh build (a test
+  checks it). The fixture's own git commands run with `core.longpaths`, and it commits edits
+  and deletions of tracked files in one `git commit --all`.
+- **The Backlog runner.** `planning_adapter.Backlog` takes a runner (by default `None`:
+  `subprocess.run`, as before). The logic tests answer the fake Backlog.md in the test process
+  (`fake_backlog.InProcessRunner`); the command-line contracts and the traversal's recorded-
+  process test launch it, and a contract test checks that both answer alike.
+- **In-process logic cases.** The verifier's logic cases call the copy's own
+  `verify_seed.py` `main()` in the test process; its command-line contract (exit status and
+  output, git missing from `PATH`, a directory that is not a repository, this checkout's own
+  baseline) is still a real run.
+- **Shared read-only copies.** The gate tests that run the real scanner share one copy of it
+  per class (the gate only reads its tool cache), and the profile checker's negative cases
+  share one copy of `profiles/`; a case that writes takes a private copy, and every case
+  checks that the shared copy is unchanged.
+
 **Parallel runner.** pytest and pytest-xdist run the same unittest suites as a second runner;
 `task test` and `task setup` stay the stdlib serial run, which needs nothing beyond the basic
 tier. `task dev:install` installs them, hash-locked and wheels only
