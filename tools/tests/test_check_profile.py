@@ -4,7 +4,8 @@ Run from the repository root:  python -I -B -m unittest discover -s tools/tests 
 
 The checked-in profiles are checked as they are. Every negative case works on a
 temporary copy of profiles/ (the checker reads pinned files relative to a root), so
-the checkout is only read.
+the checkout is only read: one copy shared by the cases that only read it, and a
+private copy for each case that writes into it.
 """
 from pathlib import Path
 import copy
@@ -64,24 +65,50 @@ class CheckedInProfiles(unittest.TestCase):
         self.assertEqual((report.errors, report.unresolved), ([], []))
 
 
+def tree_digest(root):
+    """Every file under ROOT, by relative path, with its bytes' sha256."""
+    return {path.relative_to(root).as_posix(): check_profile.sha256_file(path)
+            for path in sorted(root.rglob('*')) if path.is_file()}
+
+
 class Negative(unittest.TestCase):
-    """Each mutation must produce a FAIL that names the broken rule."""
+    """Each mutation must produce a FAIL that names the broken rule.
+
+    The copy of profiles/ (with the pinned lock and the cited evidence it reads) is made
+    once per class and shared by the tests that only read it; mutations are made to the
+    loaded profiles in memory. A test that writes into the tree first takes a private copy
+    (private_tree), and every test checks that the shared copy is unchanged (plan leaf
+    F-09.3)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.shared = Path(tempfile.mkdtemp(prefix='aieh-profile-test-'))
+        cls.addClassCleanup(shutil.rmtree, cls.shared, ignore_errors=True)
+        shutil.copytree(REPO / 'profiles', cls.shared / 'profiles')
+        lock = Path('composition') / 'lock' / 'components.lock.json'   # the openapi pin, read only
+        (cls.shared / lock.parent).mkdir(parents=True)
+        shutil.copy(REPO / lock, cls.shared / lock)
+        point = load(QEMU, cls.shared)['network']['enforcement_point']
+        if isinstance(point, dict) and point.get('evidence'):       # cited evidence, read only
+            (cls.shared / 'evidence').mkdir(exist_ok=True)
+            shutil.copy(REPO / point['evidence'], cls.shared / point['evidence'])
+        cls.shared_digest = tree_digest(cls.shared)
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-profile-test-'))
-        shutil.copytree(REPO / 'profiles', self.tmp / 'profiles')
-        lock = Path('composition') / 'lock' / 'components.lock.json'   # the openapi pin, read only
-        (self.tmp / lock.parent).mkdir(parents=True)
-        shutil.copy(REPO / lock, self.tmp / lock)
+        self.tmp = self.shared
         self.qemu = load(QEMU, self.tmp)
         self.incus = load(INCUS, self.tmp)
-        point = self.qemu['network']['enforcement_point']
-        if isinstance(point, dict) and point.get('evidence'):       # cited evidence, read only
-            (self.tmp / 'evidence').mkdir(exist_ok=True)
-            shutil.copy(REPO / point['evidence'], self.tmp / point['evidence'])
 
     def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
+        self.assertEqual(tree_digest(self.shared), self.shared_digest,
+                         'a test wrote into the shared copy: it must call private_tree() first')
+
+    def private_tree(self):
+        """A private copy of the tree, for a test that writes into it."""
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-profile-test-'))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        shutil.copytree(self.shared, self.tmp, dirs_exist_ok=True)
+        return self.tmp
 
     def errors(self, profile):
         return check_profile.check(profile, self.tmp).errors
@@ -109,23 +136,27 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, 'boot_inputs: seed missing')
 
     def test_tampered_seed_template(self):
+        self.private_tree()
         path = self.tmp / 'profiles' / 'seed' / 'user-data.tmpl'
         path.write_bytes(path.read_bytes() + b'# changed\n')
         self.assertFails(self.qemu, 'seed.templates.user-data')
         self.assertFails(self.incus, 'seed.templates.user-data')
 
     def test_tampered_provider_lock(self):
+        self.private_tree()
         path = self.tmp / 'profiles' / QEMU / 'qemu-msys2-ucrt64.lock.json'
         path.write_bytes(path.read_bytes().replace(b'11.1.3-1', b'11.1.2-1', 1))
         self.assertFails(self.qemu, 'provider.artifact_lock')
 
     def test_tampered_provision_lock(self):
+        self.private_tree()
         path = self.tmp / 'profiles' / QEMU / 'provision.lock.json'
         path.write_bytes(path.read_bytes().replace(b'"tini"', b'"tinj"', 1))
         self.assertFails(self.qemu, 'provider.provision_lock: profiles/')
 
     def repinned_provision_lock(self, mutate):
         """Mutate the provision lock, then re-pin it, so only its shape check can fail."""
+        self.private_tree()
         path = self.tmp / 'profiles' / QEMU / 'provision.lock.json'
         lock = json.loads(path.read_text(encoding='utf-8'))
         mutate(lock)
@@ -204,6 +235,7 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, '-device qemu-xhci is not allowed')
 
     def test_incus_host_path_disk(self):
+        self.private_tree()
         path = self.tmp / 'profiles' / INCUS / 'incus-profile.yaml'
         text = path.read_text(encoding='utf-8').replace(
             '"source": "agent:config"', '"source": "/home/owner", "path": "/mnt/home"')
@@ -277,6 +309,7 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, 'only user-mode NAT is allowed')
 
     def test_incus_proxy_on_all_interfaces(self):
+        self.private_tree()
         path = self.tmp / 'profiles' / INCUS / 'incus-profile.yaml'
         text = path.read_text(encoding='utf-8').replace(
             '"eth0": {', '"ssh": {"type": "proxy", "listen": "tcp:0.0.0.0:2222", '
@@ -340,6 +373,7 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, 'must turn vmx off')
 
     def test_incus_nesting_not_masked(self):
+        self.private_tree()
         path = self.tmp / 'profiles' / INCUS / 'incus-profile.yaml'
         text = path.read_text(encoding='utf-8').replace(
             '"security.nesting": "false"', '"security.nesting": "true"')
@@ -372,6 +406,7 @@ class Negative(unittest.TestCase):
 
     # enforcement point (profiles P7; F-03.3.2)
     def qualified(self):
+        self.private_tree()
         (self.tmp / 'evidence').mkdir(exist_ok=True)
         (self.tmp / 'evidence' / 'net.md').write_text('x', encoding='utf-8')
         net = self.qemu['network']
