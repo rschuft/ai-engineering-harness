@@ -65,6 +65,18 @@ def tree_digest(root):
     return out
 
 
+def remove_tree(path):
+    """Remove a temporary tree, git's read-only object files included (Windows refuses to delete
+    a read-only file; shutil.rmtree(path, True) left them, and their directories, in TEMP)."""
+    def writable(func, target, _exc):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            pass
+    shutil.rmtree(path, onexc=writable)
+
+
 class TempState(unittest.TestCase):
     """A temporary state directory with USERPROFILE/HOME pointed elsewhere."""
 
@@ -78,7 +90,7 @@ class TempState(unittest.TestCase):
                                                'HOME': str(elsewhere)})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(remove_tree, self.tmp)
 
     def ctx(self):
         return guest.Context(str(PROFILE_DIR), str(self.state))
@@ -148,7 +160,7 @@ class RenderArgv(unittest.TestCase):
 class LaunchRecord(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-guest-rec-'))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(remove_tree, self.tmp)
         self.inputs = {}
         for name in ('image', 'firmware', 'seed', 'provider_binary', 'qemu_img'):
             path = self.tmp / f'{name}.bin'
@@ -1108,7 +1120,7 @@ class P5Scan(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-p5-'))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(remove_tree, self.tmp)
 
     def test_positive_control_hits_every_class(self):
         text, account = guest.control_samples('0a0b0c')
@@ -1211,7 +1223,7 @@ def make_canaries_in(tmp):
 class Canaries(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-canary-'))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(remove_tree, self.tmp)
 
     def test_set_and_fake_home(self):
         out = make_canaries_in(self.tmp)
@@ -1764,7 +1776,7 @@ class NetprobeListener(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-netprobe-'))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(remove_tree, self.tmp)
         self.log = self.tmp / 'listener.jsonl'
         import sys
         self.proc = subprocess.Popen([sys.executable, '-I', '-B', str(REPO / 'tools' / 'guest.py'),
@@ -3849,7 +3861,7 @@ class ApiProbe(unittest.TestCase):
     def setUp(self):
         import http.server
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-api-probe-'))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(remove_tree, self.tmp)
         self.key_file = self.tmp / 'session.key'
         self.key_file.write_text(self.KEY + '\n', encoding='ascii')
         self.seen = []
