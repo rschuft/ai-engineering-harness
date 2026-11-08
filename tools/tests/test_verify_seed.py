@@ -2,13 +2,24 @@
 
 Run from the repository root:  python -I -B -m unittest discover -s tools/tests -v
 
-Every test runs the verifier as a subprocess on a temporary copy of the seeded
-files, or on a temporary git repository built here. The only use of the
-checkout itself is reading its files to copy them and one read-only baseline
-run against its own git history.
+Every test runs the verifier on a temporary copy of the seeded files, or on a
+temporary git repository built here. The only use of the checkout itself is
+reading its files to copy them and one read-only baseline run against its own
+git history.
+
+The command-line contract (the exit status and the PASS, FAIL and ERROR lines of a
+real run, git missing from PATH, a directory that is not a repository, and the
+checkout's own baseline) is checked by running the verifier as a subprocess
+(``run_verifier``). The logic cases (which edits fail, which pass) run the copy's
+own verify_seed.py in this process (``verify``, plan leaf F-09.3): its ``main`` is
+the command's, and its git reads in baseline mode are real git processes.
 """
 from pathlib import Path
+import contextlib
 import hashlib
+import importlib.util
+import io
+import itertools
 import json
 import os
 import shutil
@@ -41,6 +52,26 @@ def seed_paths():
 def run_verifier(root, *args, env=None):
     return subprocess.run([sys.executable, '-I', '-B', str(root / VERIFIER), *args],
                           capture_output=True, text=True, encoding='utf-8', env=env)
+
+
+_loaded = itertools.count()
+
+
+def verify(root, *args):
+    """The verifier's logic in this process: ROOT's own verify_seed.py, loaded afresh (so its
+    ROOT is the copy, as when it runs from there), its main() called with ARGS. Returns what
+    run_verifier returns: the exit status and the text of stdout and stderr."""
+    spec = importlib.util.spec_from_file_location(f'verify_seed_under_test_{next(_loaded)}',
+                                                  root / VERIFIER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = module.main(list(args))
+        except SystemExit as exc:  # argparse refusals, as the command would exit
+            code = exc.code if isinstance(exc.code, int) else 1
+    return subprocess.CompletedProcess([VERIFIER, *args], code, out.getvalue(), err.getvalue())
 
 
 def git(root, *args):
@@ -122,14 +153,14 @@ class DefaultMode(SeedCopy):
         for rel in ('README.md', 'CLAUDE.md', '.gitignore'):
             with self.subTest(rel=rel):
                 self.append(rel)
-                result = run_verifier(self.root)
+                result = verify(self.root)
                 self.assertPass(result)
                 self.assertIn(f'INFO: ordinary file changed since seed: {rel}', result.stdout)
         self.assertIn('3 changed since seed', result.stdout)
 
     def test_missing_ordinary_file_is_info(self):
         (self.root / 'README.md').unlink()
-        result = run_verifier(self.root)
+        result = verify(self.root)
         self.assertPass(result)
         self.assertIn('INFO: ordinary file missing: README.md', result.stdout)
 
@@ -143,13 +174,13 @@ class DefaultMode(SeedCopy):
                 original = (self.root / rel).read_bytes()
                 # Whitespace keeps JSON and Python parseable, so only the hash check trips.
                 self.append(rel, '\n')
-                self.assertFail(run_verifier(self.root), f'changed {cls} file: {rel}')
+                self.assertFail(verify(self.root), f'changed {cls} file: {rel}')
                 (self.root / rel).write_bytes(original)
-                self.assertPass(run_verifier(self.root))
+                self.assertPass(verify(self.root))
 
     def test_edited_prompt_also_fails_task_manifest_hash(self):
         self.append('task_prompts/F-02.md')
-        self.assertFail(run_verifier(self.root), 'prompt content mismatch: task_prompts/F-02.md')
+        self.assertFail(verify(self.root), 'prompt content mismatch: task_prompts/F-02.md')
 
     def test_missing_contract_file_fails(self):
         (self.root / CSV).unlink()
@@ -160,7 +191,7 @@ class DefaultMode(SeedCopy):
             with self.subTest(rel=rel):
                 self.append(rel)
                 self.rehash(rel)
-                result = run_verifier(self.root)
+                result = verify(self.root)
                 self.assertPass(result)
                 self.assertIn('2 authority intact', result.stdout)
 
@@ -170,14 +201,14 @@ class DefaultMode(SeedCopy):
         manifest['files'].append({'path': 'NEW_FILE.md', 'sha256': '0' * 64, 'size_bytes': 4})
         self.write_manifest(manifest)
         self.rehash('NEW_FILE.md')
-        self.assertFail(run_verifier(self.root), 'unclassified manifest path: NEW_FILE.md')
+        self.assertFail(verify(self.root), 'unclassified manifest path: NEW_FILE.md')
 
     def test_license_in_manifest_fails(self):
         (self.root / 'LICENSE').write_text('licence\n', encoding='utf-8')
         manifest = self.manifest()
         manifest['files'].append({'path': 'LICENSE', 'sha256': '0' * 64, 'size_bytes': 8})
         self.write_manifest(manifest)
-        self.assertFail(run_verifier(self.root), 'seed would overwrite repository LICENSE')
+        self.assertFail(verify(self.root), 'seed would overwrite repository LICENSE')
 
     def edit_plan(self, change):
         plan = json.loads((self.root / PLAN).read_text(encoding='utf-8'))
@@ -190,16 +221,16 @@ class DefaultMode(SeedCopy):
             child = next(t for t in tasks.values() if t['deps'])
             tasks[child['deps'][0]]['deps'].append(child['id'])
         self.edit_plan(make_cycle)
-        self.assertFail(run_verifier(self.root),
+        self.assertFail(verify(self.root),
                         'dependency graph contains a cycle or unresolved reference')
 
     def test_unknown_dependency_fails(self):
         self.edit_plan(lambda tasks: tasks['F-02']['deps'].append('Z-99.9'))
-        self.assertFail(run_verifier(self.root), "unknown dependency IDs: [('F-02', 'Z-99.9')]")
+        self.assertFail(verify(self.root), "unknown dependency IDs: [('F-02', 'Z-99.9')]")
 
     def test_non_small_task_fails(self):
         self.edit_plan(lambda tasks: tasks['F-02'].update(size='M'))
-        self.assertFail(run_verifier(self.root), 'a non-Small executable task is present')
+        self.assertFail(verify(self.root), 'a non-Small executable task is present')
 
     def test_works_without_git(self):
         # The copy is not a repository, and PATH holds only an empty directory
@@ -235,8 +266,8 @@ class BaselineMode(SeedCopy):
         clean = self.commit_all('seed')
         self.append(CSV)
         (self.root / 'README.md').unlink()
-        self.assertFail(run_verifier(self.root), f'changed contract file: {CSV}')
-        result = run_verifier(self.root, '--baseline', clean)
+        self.assertFail(verify(self.root), f'changed contract file: {CSV}')
+        result = verify(self.root, '--baseline', clean)
         self.assertPass(result)
         self.assertIn(f'PASS (baseline {clean})', result.stdout)
         self.assertIn('all strict', result.stdout)
@@ -250,8 +281,8 @@ class BaselineMode(SeedCopy):
                 self.append(rel)
                 tampered = self.commit_all(f'tamper {rel}')
                 (self.root / rel).write_bytes(original)  # working tree is clean again
-                self.assertPass(run_verifier(self.root))
-                self.assertFail(run_verifier(self.root, '--baseline', tampered),
+                self.assertPass(verify(self.root))
+                self.assertFail(verify(self.root, '--baseline', tampered),
                                 f'changed {cls} file: {rel}')
 
     def test_baseline_checks_task_manifest_consistency(self):
@@ -261,7 +292,7 @@ class BaselineMode(SeedCopy):
                                                       encoding='utf-8')
         self.rehash('task_manifest.json')
         rev = self.commit_all('inconsistent task manifest')
-        self.assertFail(run_verifier(self.root, '--baseline', rev),
+        self.assertFail(verify(self.root, '--baseline', rev),
                         f'prompt dependency mismatch: {manifest["tasks"][0]["id"]}')
 
     def test_unknown_revision_cannot_run(self):
