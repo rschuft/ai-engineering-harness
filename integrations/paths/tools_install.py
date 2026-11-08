@@ -1,15 +1,21 @@
-"""task tools:install: the hash-locked Python tools venv (plan leaf F-07.1, decision 0009).
+"""task tools:install: the hash-locked Python tools venv (plan leaf F-07.1, decision 0009), and
+task dev:install: the same mechanism for the developer test tools (plan leaf F-09.2).
 
 A consumer of the managed data root, like any component: the verified wheels are an asset,
 assets/python-wheels/python-tools/<version>/ with its aieh-asset/1 record, and the venv built
 from them is an install, persistent/installs/python-tools/<version>/. pip's cache is
 ephemeral/cache/pip. <version> is the interpreter tag and the lock digest, so versions sit side
 by side. Wheels only, with required hashes, from composition/lock/python/tools-requirements.txt.
+`--set python-dev-tools` installs the pytest and pytest-xdist set the same way, from
+composition/lock/python/dev-requirements.txt, as python-dev-tools beside it.
 
 It reads no config.yml: it installs the YAML loader that config.yml needs, so it follows
 AIEH_DATA_ROOT or the OS default only. Network: PyPI, once per lock. It deletes nothing.
 
-  python -I -B integrations/paths/tools_install.py
+  python -I -B integrations/paths/tools_install.py [--set python-tools|python-dev-tools] [--python]
+
+--python creates and installs nothing: it prints the set's venv interpreter for the current lock,
+or exits 1 when that venv is not installed (the test targets find the dev tools this way).
 """
 from __future__ import annotations
 
@@ -24,6 +30,11 @@ from typing import Callable
 
 HERE = Path(os.path.realpath(__file__)).parent
 TOOLS_LOCK = 'composition/lock/python/tools-requirements.txt'
+DEV_LOCK = 'composition/lock/python/dev-requirements.txt'
+# Each installable set: its name (the asset name and the install's tool directory), its lock and
+# the task that installs it.
+SETS = {'python-tools': (TOOLS_LOCK, 'task tools:install'),
+        'python-dev-tools': (DEV_LOCK, 'task dev:install')}
 PYPI = 'https://pypi.org/simple/'
 
 
@@ -51,40 +62,78 @@ def _call(run: Callable, command: list, env: dict) -> None:
         raise subprocess.CalledProcessError(result.returncode, command)
 
 
-def tools_install(res, run: Callable = subprocess.run, python: str = sys.executable) -> dict:
-    """Download the locked wheels into their asset directory once (recording their digests), verify
-    them against that record on every run, and install them into the venv from that directory only."""
-    lock = Path(str(res.repo_root)) / TOOLS_LOCK
+def _lock_version(res, lock_name: str) -> tuple[Path, str, str]:
+    """The lock's path, its digest and the version it gives: the interpreter tag and the digest's start."""
+    lock = Path(str(res.repo_root)) / lock_name
     digest = hashlib.sha256(lock.read_bytes().replace(b'\r\n', b'\n')).hexdigest()  # checkout-EOL neutral
-    version = f'cp{sys.version_info[0]}{sys.version_info[1]}-{digest[:12]}'
+    return lock, digest, f'cp{sys.version_info[0]}{sys.version_info[1]}-{digest[:12]}'
+
+
+def _interpreter(venv: Path) -> Path:
+    return venv / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+
+
+def installed_python(res, name: str = 'python-tools') -> Path | None:
+    """The venv interpreter of the set `name` for the current lock, or None when it is not installed.
+    Creates nothing."""
+    _, _, version = _lock_version(res, SETS[name][0])
+    python = _interpreter(Path(str(res.paths['installs'])) / name / version)
+    return python if os.path.isfile(python) else None
+
+
+def tools_install(res, run: Callable = subprocess.run, python: str = sys.executable,
+                  name: str = 'python-tools') -> dict:
+    """Download the locked wheels of the set `name` into their asset directory once (recording their
+    digests), verify them against that record on every run, and install them into the venv from that
+    directory only."""
+    lock_name, task = SETS[name]
+    lock, digest, version = _lock_version(res, lock_name)
     paths.init(res)
-    wheels = paths.ensure('assets', res, 'python-wheels', 'python-tools', version)
+    wheels = paths.ensure('assets', res, 'python-wheels', name, version)
     env = dict(os.environ, PIP_CACHE_DIR=str(paths.ensure('cache', res, 'pip')), PIP_DISABLE_PIP_VERSION_CHECK='1')
     hashed = ['--require-hashes', '--only-binary=:all:', '-r', str(lock)]
     if not os.path.lexists(wheels / paths.ASSET_RECORD_NAME):
         _call(run, [python, '-m', 'pip', 'download', '--dest', str(wheels), *hashed], env)
         files = {f.name: sha256_file(f) for f in sorted(wheels.iterdir()) if f.suffix == '.whl'}
         paths.write_asset_record(wheels, paths.asset_record(
-            'python-wheels', 'python-tools', version, source=PYPI, pin=f'{TOOLS_LOCK} sha256:{digest}',
-            sha256=files, consumers=['installs/python-tools'],
-            reacquire=f'task tools:install (pip download --require-hashes --only-binary=:all: -r {TOOLS_LOCK})'))
-    for name, expected in paths.read_asset_record(wheels)['integrity'].get('sha256', {}).items():
-        if not os.path.isfile(wheels / name) or sha256_file(wheels / name) != expected:
-            raise paths.PathsError('ASSET_RECORD_INVALID', f'{wheels / name} is missing or differs from its record')
-    venv = paths.ensure('installs', res, 'python-tools') / version
+            'python-wheels', name, version, source=PYPI, pin=f'{lock_name} sha256:{digest}',
+            sha256=files, consumers=[f'installs/{name}'],
+            reacquire=f'{task} (pip download --require-hashes --only-binary=:all: -r {lock_name})'))
+    for wheel, expected in paths.read_asset_record(wheels)['integrity'].get('sha256', {}).items():
+        if not os.path.isfile(wheels / wheel) or sha256_file(wheels / wheel) != expected:
+            raise paths.PathsError('ASSET_RECORD_INVALID', f'{wheels / wheel} is missing or differs from its record')
+    venv = paths.ensure('installs', res, name) / version
     if not os.path.isfile(venv / 'pyvenv.cfg'):
         _call(run, [python, '-m', 'venv', str(venv)], env)
-    venv_python = venv / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    venv_python = _interpreter(venv)
     _call(run, [str(venv_python), '-m', 'pip', 'install', '--no-index', '--find-links', str(wheels), *hashed], env)
     return {'python': str(venv_python), 'venv': str(venv), 'assets': str(wheels)}
 
 
 def main(argv=None) -> int:
-    if argv:
-        sys.stderr.write('usage: tools_install.py (no arguments)\n')
+    argv = list(argv or [])
+    show = argv.count('--python') == 1
+    if show:
+        argv = [arg for arg in argv if arg != '--python']
+    name = 'python-tools'
+    if argv[:1] == ['--set'] and len(argv) == 2 and argv[1] in SETS:
+        name = argv[1]
+    elif argv:
+        sys.stderr.write(f'usage: tools_install.py [--set {"|".join(SETS)}] [--python]\n')
         return 2
+    if show:
+        try:
+            python = installed_python(paths.resolve(config={}), name)
+        except paths.PathsError as exc:
+            sys.stderr.write(f'tools-install: {exc}\n')
+            return 2
+        if python is None:
+            sys.stderr.write(f'tools-install: {name} is not installed for the current lock; run {SETS[name][1]}\n')
+            return 1
+        sys.stdout.write(f'{python}\n')
+        return 0
     try:
-        result = tools_install(paths.resolve(config={}))
+        result = tools_install(paths.resolve(config={}), name=name)
     except paths.PathsError as exc:
         sys.stderr.write(f'tools-install: {exc}\n')
         return 2

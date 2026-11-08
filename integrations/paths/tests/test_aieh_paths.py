@@ -8,6 +8,7 @@ that need PyYAML skip, counted, when it is not importable: run them under the to
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
 import io
 import json
@@ -697,6 +698,41 @@ class ToolsInstall(Base):
         self.assertEqual([c[3] for c, _ in self.calls], ['install'], 'a recorded asset is reused, not refetched')
         (wheels / 'pyyaml-6.0.3-cp312-cp312-win_amd64.whl').write_bytes(b'tampered')
         self.assertRefused('ASSET_RECORD_INVALID', T.tools_install, self.res, run=self.fake_run)
+
+    def test_the_dev_tools_set_has_its_own_lock_asset_and_install(self):
+        lock = self.repo / T.DEV_LOCK
+        shutil.copyfile(REPO / T.DEV_LOCK, lock)
+        self.assertIsNone(T.installed_python(self.res, 'python-dev-tools'))
+        self.assertFalse(self.root.exists(), 'locating the interpreter creates nothing')
+        result = T.tools_install(self.res, run=self.fake_run, python='python-under-test', name='python-dev-tools')
+        self.assertIsNone(T.installed_python(self.res, 'python-dev-tools'), 'the fake run made no interpreter')
+        Path(result['python']).parent.mkdir()
+        Path(result['python']).write_bytes(b'')
+        self.assertEqual(T.installed_python(self.res, 'python-dev-tools'), Path(result['python']))
+        self.assertIsNone(T.installed_python(self.res), 'python-tools is another venv')
+        version = Path(result['venv']).name
+        wheels = self.root / 'assets' / 'python-wheels' / 'python-dev-tools' / version
+        self.assertEqual(Path(result['assets']), wheels)
+        self.assertEqual(Path(result['venv']), self.root / 'persistent' / 'installs' / 'python-dev-tools' / version)
+        download, _, install = (command for command, _ in self.calls)
+        hashed = ['--require-hashes', '--only-binary=:all:', '-r', str(lock)]
+        self.assertEqual(download[-4:], hashed)
+        self.assertEqual(install[-4:], hashed)
+        record = P.read_asset_record(wheels)
+        self.assertEqual(record['name'], 'python-dev-tools')
+        self.assertEqual(record['consumers'], ['installs/python-dev-tools'])
+        self.assertTrue(record['integrity']['pin'].startswith(T.DEV_LOCK + ' sha256:'))
+        self.assertTrue(record['reacquire'].startswith('task dev:install ('))
+        tools_version = T.tools_install(self.res, run=self.fake_run, python='python-under-test')['venv']
+        self.assertNotEqual(Path(tools_version).name, version, 'each lock has its own version')
+
+    def test_the_command_line_names_only_a_known_set(self):
+        for argv in (['--set'], ['--set', 'python'], ['python-dev-tools'], ['--set', 'python-tools', 'x'],
+                     ['--python', '--python'], ['--python', '--set']):
+            with self.subTest(argv=argv):
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(T.main(argv), 2)
+                self.assertIn('--set python-tools|python-dev-tools] [--python]', err.getvalue())
 
     def test_a_failed_step_stops(self):
         def failing(command, env):

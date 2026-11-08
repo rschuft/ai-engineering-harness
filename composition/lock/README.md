@@ -68,6 +68,7 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
+| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0` and `pytest-xdist==3.8.0`, compiled universally for CPython 3.12. Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 2 direct, 8 pins |
 | `python/windows-x86_64.txt` | The hash-locked closure for win_amd64, CPython 3.12. | 195 pins: 4 direct, 191 transitive |
 | `python/linux-x86_64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) x86_64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
 | `python/linux-aarch64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) aarch64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
@@ -162,4 +163,41 @@ The build backend is regenerated the same way, with `--universal` in place of `-
 uv pip compile python/build-requirements.in --python-version 3.12 --universal --no-build --generate-hashes --no-header --no-annotate -o python/build-requirements.txt
 ```
 
+So is the dev tools lock:
+
+```
+uv pip compile python/dev-requirements.in --python-version 3.12 --universal --no-build --generate-hashes --no-header --no-annotate -o python/dev-requirements.txt
+```
+
 After regenerating, update `components.lock.json`, which records pin and entry counts and the direct integrities, and run the resolver.
+
+## Dev tools lock (F-09.2)
+
+`python/dev-requirements.txt` pins the parallel test runner of the development workflow
+(`docs/development.md`, Testing): pytest and pytest-xdist over the repository's unittest
+suites. It is not an upstream component of the harness and is not part of
+`components.lock.json` or the resolver's run. `task dev:install` installs it with
+`pip download --require-hashes --only-binary=:all:` into an asset directory, then `pip install
+--no-index` from there into the `python-dev-tools` venv under the managed data root, as
+`task tools:install` does for `tools-requirements.txt`.
+
+It was compiled on 2026-11-08 with the pinned uv 0.13.7 (archive sha256 checked against
+`components.lock.json` `tools` first), with `UV_NO_CONFIG=1`, `UV_PYTHON_DOWNLOADS=never` and an
+empty cache, by the command above. `--universal` keeps colorama behind its
+`sys_platform == 'win32'` marker. Each pin lists the hashes of the wheel and the sdist PyPI
+publishes; installation uses the wheel only. Every digest was verified independently of uv:
+each of the 16 files was downloaded from files.pythonhosted.org and hashed locally, and the
+hashes equal both the lock and PyPI's JSON API.
+
+| Package | Version | Licence (wheel metadata) | Wheel |
+|---|---|---|---|
+| pytest | 9.2.0 | MIT | `py3-none-any` |
+| pytest-xdist | 3.8.0 | MIT | `py3-none-any` |
+| execnet | 2.1.2 | MIT | `py3-none-any` |
+| pluggy | 1.7.0 | MIT | `py3-none-any` |
+| iniconfig | 2.3.1 | MIT | `py3-none-any` |
+| Pygments | 2.21.0 | BSD-2-Clause | `py3-none-any` |
+| packaging | 26.3 | Apache-2.0 OR BSD-2-Clause | `py3-none-any` |
+| colorama (win32 only) | 0.4.6 | BSD (classifier) | `py2.py3-none-any` |
+
+All eight wheels are pure Python (`Root-Is-Purelib: true`, no compiled member).
