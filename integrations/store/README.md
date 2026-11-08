@@ -18,8 +18,9 @@ separate store (F-05.2), never here.
 | `migrations/NNNN_<name>.sql` | Ordered, versioned schema migrations |
 | `tests/test_integration_store.py` | Transaction, restart, crash, contention, migration and projection tests |
 | `tests/test_attempt_identity.py` | Typed attempt identity, key, claim rule, lifecycle flag, SQL/Python grammar agreement and migration 0003 (E-01.1.1) |
+| `tests/test_reservation_crash_concurrency.py` | Typed reservations under real process crashes at each statement boundary of a reservation and a transition, restart in a new process, and concurrent admission races (E-01.1.2) |
 | `tests/test_backup_restore.py` | Backup, restore, restore epochs, manifest checks and the projection rebuild from a synthetic repository (F-05.2) |
-| `tests/store_worker.py` | The subprocess the tests run against one database file |
+| `tests/store_worker.py` | The subprocess the tests run against one database file; its `scripted` command runs real library calls and stops at a chosen SQL statement (`os._exit`, or blocks until the test kills it) |
 | `../planning/planning_adapter.py` | Read only: the identifier grammars (task id, change id, commit, path) and `Pointer.parse` that typed identities reuse |
 | `../storecore/storecore.py` | The SQLite mechanics shared with the effects store: connection policy, migration ledger, write transactions, the projection authorizer, backup and restore |
 
@@ -208,6 +209,27 @@ Otherwise the identity row, the attempt row and its seq-0 event are written.
 `attempt_identity(key)` reads an identity (`None` for an untyped attempt),
 `identity_form(key)` says `typed` or `legacy-untyped`, and
 `claims(work_id, design_revision, stage)` lists a triple's attempts by ordinal.
+
+### Crashes, restarts and races
+
+Plan leaf E-01.1.2 tests these with real processes (`tests/test_reservation_crash_concurrency.py`).
+
+- **Crashes.** A process that dies anywhere inside a reservation or a transition leaves
+  the store as it was before that call: the identity, attempt and event rows of one call
+  commit together or not at all. Once `COMMIT` has run, the result survives even if the
+  process dies before it returns and nothing checkpointed the WAL. A process killed while
+  it holds the write lock releases it.
+- **Restarts.** After any crash or restart, an identical request returns the same
+  `operation_key`, `attempt_id`, `conversation_id` and `design_revision`, with
+  `created=False` once the row exists.
+- **Races.** Concurrent requests get typed outcomes only, never a raw `sqlite3` error such
+  as `SQLITE_BUSY`:
+  - identical requests: one `created`, the rest `existing`;
+  - competing ordinals on one triple: one live claim, the rest `LiveClaim` or
+    `OrdinalOutOfSequence`;
+  - one key with different intents: one `created`, the rest `ConflictingReservation`;
+  - different triples: all `created`;
+  - competing transitions: one wins, the rest `IllegalTransition`.
 
 ### Claim rule
 

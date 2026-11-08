@@ -150,7 +150,7 @@ Only what is listed as verified has been exercised.
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
 | `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test` and `gitea:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests and host Gitea tests (stdlib `unittest`). |
-| `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file; about two seconds. |
+| `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
 | `store:backup DB=<path> ACTOR=<name>` | `python -I -B integrations/store/integration_store.py backup --db <path> --actor <name>` | no | Backs the integration store up with the SQLite backup API into `<db dir>/backups/`, checks the copy and prints its manifest. |
