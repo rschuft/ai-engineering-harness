@@ -66,6 +66,8 @@ POINTER_RE = re.compile(
 CHANGE_ID_RE = re.compile(rf'^{CHANGE_ID}$')
 ARTIFACT_RE = re.compile(rf'^{ARTIFACT_PATH}$')
 TASK_ID_RE = re.compile(r'^[A-Za-z]+-[0-9]+(?:\.[0-9]+)*$')
+# These grammars are checked with fullmatch: Python's $ also matches before a final newline,
+# so .match would accept a task id or a pointer followed by a newline.
 
 PLAN_KEYS = {'format', 'change', 'tasks'}
 TASK_KEYS = {'key', 'title', 'description', 'artifacts', 'depends_on'}
@@ -109,7 +111,7 @@ class Pointer:
 
     @classmethod
     def parse(cls, text):
-        match = POINTER_RE.match(text) if isinstance(text, str) else None
+        match = POINTER_RE.fullmatch(text) if isinstance(text, str) else None
         if not match:
             raise PlanningError('POINTER_MALFORMED', f'not an OpenSpec source pointer: {text!r}',
                                 pointer=text)
@@ -190,9 +192,9 @@ class Git:
 # Pointers
 
 def make_pointer(git, change, artifact, commit):
-    if not CHANGE_ID_RE.match(change or ''):
+    if not CHANGE_ID_RE.fullmatch(change or ''):
         raise PlanningError('POINTER_MALFORMED', f'not an OpenSpec change id: {change!r}')
-    if not isinstance(artifact, str) or not ARTIFACT_RE.match(artifact):
+    if not isinstance(artifact, str) or not ARTIFACT_RE.fullmatch(artifact):
         raise PlanningError('POINTER_MALFORMED', f'not a relative artifact path: {artifact!r}')
     path = f'{CHANGES_DIR}/{change}/{artifact}'
     kind = git.object_type(commit, path)
@@ -281,7 +283,7 @@ def check_change(git, change, commit, openspec=None):
     if schema is None and git.object_type(commit, 'openspec/config.yaml') == 'blob':
         schema = _scalar(git.blob(commit, 'openspec/config.yaml').decode('utf-8', 'replace'), 'schema')
     result = {'schema': schema}
-    schema_path = f'openspec/schemas/{schema}/schema.yaml' if schema and CHANGE_ID_RE.match(schema) else None
+    schema_path = f'openspec/schemas/{schema}/schema.yaml' if schema and CHANGE_ID_RE.fullmatch(schema) else None
     in_repository = bool(schema_path) and git.object_type(commit, schema_path) == 'blob'
     static = schema_tracking(git.blob(commit, schema_path).decode('utf-8', 'replace')) \
         if in_repository else 'unknown'
@@ -340,7 +342,7 @@ def load_plan(data):
         raise PlanningError('PLAN_INVALID', f'expected keys {sorted(PLAN_KEYS)} and format '
                             f'{PLAN_FORMAT!r}; unknown: {sorted(unknown)}')
     change = data.get('change')
-    if not isinstance(change, str) or not CHANGE_ID_RE.match(change):
+    if not isinstance(change, str) or not CHANGE_ID_RE.fullmatch(change):
         raise PlanningError('PLAN_INVALID', f'not an OpenSpec change id: {change!r}')
     tasks = data.get('tasks')
     if not isinstance(tasks, list) or not tasks:
@@ -358,7 +360,7 @@ def load_plan(data):
         if unknown:
             raise PlanningError('PLAN_INVALID', f'{where} has unknown keys {sorted(unknown)}')
         key, title = task.get('key'), task.get('title')
-        if not isinstance(key, str) or not CHANGE_ID_RE.match(key) or key in seen:
+        if not isinstance(key, str) or not CHANGE_ID_RE.fullmatch(key) or key in seen:
             raise PlanningError('PLAN_INVALID', f'{where}: key must be a new kebab-case id: {key!r}')
         if not isinstance(title, str) or not title.strip() or title != title.strip() or '\n' in title:
             raise PlanningError('PLAN_INVALID', f'{where}: title must be one non-empty trimmed line')
@@ -422,7 +424,7 @@ class Backlog:
         return tasks
 
     def view(self, task_id):
-        if not TASK_ID_RE.match(task_id or ''):
+        if not TASK_ID_RE.fullmatch(task_id or ''):
             raise PlanningError('TASK_ID_INVALID', f'not a Backlog.md task id: {task_id!r}')
         task = self._json('task-view', 'task', 'view', task_id, '--json').get('task')
         if not isinstance(task, dict) or not isinstance(task.get('id'), str) \

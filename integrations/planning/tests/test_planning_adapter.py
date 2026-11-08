@@ -112,6 +112,28 @@ class PointerFormat(unittest.TestCase):
                     adapter.Pointer.parse(text)
                 self.assertEqual(ctx.exception.code, 'POINTER_MALFORMED')
 
+    def test_a_trailing_newline_is_refused(self):
+        # Python's $ also matches before a final newline: each grammar is checked whole.
+        for text in (self.GOOD + '\n', self.GOOD + '\r\n', '\n' + self.GOOD):
+            with self.subTest(text=text):
+                with self.assertRaises(PlanningError) as ctx:
+                    adapter.Pointer.parse(text)
+                self.assertEqual(ctx.exception.code, 'POINTER_MALFORMED')
+        for change, artifact in (('qual-02\n', 'design.md'), ('qual-02', 'design.md\n')):
+            with self.subTest(change=change, artifact=artifact):
+                with self.assertRaises(PlanningError) as ctx:
+                    adapter.make_pointer(None, change, artifact, 'a' * 40)  # refused before git
+                self.assertEqual(ctx.exception.code, 'POINTER_MALFORMED')
+
+    def test_a_task_id_with_a_trailing_newline_is_refused_before_backlog_runs(self):
+        backlog = adapter.Backlog(['backlog'], Path('.'))
+        with mock.patch.object(backlog, '_json', side_effect=AssertionError('backlog was run')):
+            for task_id in ('TASK-1\n', 'TASK-1\r\n', '\nTASK-1'):
+                with self.subTest(task_id=task_id):
+                    with self.assertRaises(PlanningError) as ctx:
+                        backlog.view(task_id)
+                    self.assertEqual(ctx.exception.code, 'TASK_ID_INVALID')
+
 
 class PointerResolution(RepoCase):
     def test_pointer_names_the_commit_and_the_blob_digest(self):
