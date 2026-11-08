@@ -324,7 +324,11 @@ medians and the measurement are in [`evidence/F-09.1-test-baseline.md`](../evide
 At `0c0412f`, with test 7's nested rerun moved to the gate tier (F-09.2), it took a median of
 243 s, and `test:all` took 50 to 53 s on 8 workers;
 [`evidence/F-09.2-parallel-runner.md`](../evidence/F-09.2-parallel-runner.md) has the
-measurements.
+measurements. At `a18e8cf`, with the shared fixtures below (F-09.3), three serial runs took a
+median of 219 s (195 to 215 s in a later set whose interleaved runs of the earlier tree took
+260 s), and `test:all` 41 to 42 s; the 150 s target is not met yet, and
+[`evidence/F-09.3-shared-fixtures.md`](../evidence/F-09.3-shared-fixtures.md) has the
+measurements and what F-09.4 is projected to remove.
 
 **Shared fixtures and process boundaries.** Expensive fixtures are built once and copied, and
 logic cases run in the test process; the tests that check a real process interaction still
@@ -350,6 +354,14 @@ launch it (plan leaf F-09.3):
   per class (the gate only reads its tool cache), and the profile checker's negative cases
   share one copy of `profiles/`; a case that writes takes a private copy, and every case
   checks that the shared copy is unchanged.
+- **Long temporary paths.** The test processes create paths up to 176 characters below
+  TEMP (measured; the provision tests), which Python on Windows opens past 260 characters only
+  where long paths are enabled. Git for Windows needs `core.longpaths` past 260 characters:
+  the fixtures' own git commands set it. Under a TEMP of 123 characters every suite passes
+  except two guest exchange tests, whose pull verification (`tools/guest.py`, without
+  `core.longpaths`) creates a bare repository about 138 characters below the state directory;
+  they need a TEMP of at most about 90 characters. This is **not yet fixed**: it is a decision
+  for the guest tooling.
 
 **Parallel runner.** pytest and pytest-xdist run the same unittest suites as a second runner;
 `task test` and `task setup` stay the stdlib serial run, which needs nothing beyond the basic

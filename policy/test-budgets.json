@@ -2,7 +2,7 @@
  "schema": "ai-engineering-harness/policy/test-budgets/v1",
  "description": "Enforceable test budgets (plan leaf F-09.1). Counters are exact: tests at least, launches and mkdtemp at most. wall_s is a median over wall.runs serial runs on the baseline host; a median passes up to wall_s x (1 + wall.tolerance), and never below wall_s + wall.min_slack_s. Checked by tools/check_test_budget.py (task test:budget) at every leaf acceptance and release, never in a hook.",
  "baseline": {
-  "revision": "0c0412f0256c2575efa4d7bb7cc256d081600b48",
+  "revision": "a18e8cfa9eb569ed3e1c2c70e97328be3c70effd",
   "measured": "2026-11-08",
   "runs": 3,
   "host": {
@@ -21,41 +21,41 @@
   "min_slack_s": 0.5
  },
  "total": {
-  "tests": 1493,
-  "launches": 6876,
-  "mkdtemp": 1005,
-  "wall_s": 261.5
+  "tests": 1500,
+  "launches": 5475,
+  "mkdtemp": 933,
+  "wall_s": 201.7
  },
  "suites": {
   "tools": {
-   "tests": 976,
-   "launches": 712,
-   "mkdtemp": 590,
-   "wall_s": 116.5
+   "tests": 977,
+   "launches": 497,
+   "mkdtemp": 512,
+   "wall_s": 100.1
   },
   "store": {
    "tests": 84,
    "launches": 205,
    "mkdtemp": 108,
-   "wall_s": 15.6
+   "wall_s": 14.7
   },
   "effects": {
    "tests": 34,
    "launches": 12,
    "mkdtemp": 31,
-   "wall_s": 2.7
+   "wall_s": 2.6
   },
   "planning": {
-   "tests": 58,
-   "launches": 679,
-   "mkdtemp": 36,
-   "wall_s": 16.0
+   "tests": 64,
+   "launches": 497,
+   "mkdtemp": 40,
+   "wall_s": 11.1
   },
   "lineage": {
    "tests": 135,
-   "launches": 4346,
-   "mkdtemp": 74,
-   "wall_s": 86.5
+   "launches": 3387,
+   "mkdtemp": 75,
+   "wall_s": 56.0
   },
   "paths": {
    "tests": 38,
@@ -71,29 +71,29 @@
   },
   "dispatch": {
    "tests": 78,
-   "launches": 908,
-   "mkdtemp": 76,
-   "wall_s": 17.9
+   "launches": 863,
+   "mkdtemp": 77,
+   "wall_s": 15.5
   }
  },
  "categories": {
   "unit": {
-   "tests": 926,
+   "tests": 928,
    "launches": 0,
-   "mkdtemp": 575,
-   "wall_s": 48.7
+   "mkdtemp": 494,
+   "wall_s": 44.1
   },
   "contract": {
-   "tests": 213,
-   "launches": 574,
-   "mkdtemp": 83,
-   "wall_s": 28.2
+   "tests": 215,
+   "launches": 465,
+   "mkdtemp": 85,
+   "wall_s": 22.8
   },
   "integration": {
-   "tests": 339,
-   "launches": 6302,
-   "mkdtemp": 347,
-   "wall_s": 173.8
+   "tests": 342,
+   "launches": 5010,
+   "mkdtemp": 354,
+   "wall_s": 132.3
   },
   "e2e": {
    "tests": 15,
