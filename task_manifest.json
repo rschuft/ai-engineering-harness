@@ -435,28 +435,6 @@
       "sha256": "a9fee2557e52716b5c86a235656b4e546490ff683a02aac8f24c96f5e1f19709"
     },
     {
-      "id": "U-03.1",
-      "title": "Embed upstream Agent Canvas in the host",
-      "phase": 1,
-      "deps": [
-        "U-01.2",
-        "F-04.2",
-        "S-01.4"
-      ],
-      "path": "task_prompts/U-03.1.md",
-      "sha256": "271fcaf34de6914a277fae45cd900f460bf6faf8c2a3592971c4c9adc57d62e8"
-    },
-    {
-      "id": "U-03.2",
-      "title": "Select and reconnect native engineering conversations",
-      "phase": 1,
-      "deps": [
-        "U-03.1"
-      ],
-      "path": "task_prompts/U-03.2.md",
-      "sha256": "a18f49a29653d55be1a23f53d0e318776a405535e6846affa068a98e89f013eb"
-    },
-    {
       "id": "P-01.1",
       "title": "Define intent distinction schema and normalization Skill",
       "phase": 1,
@@ -622,10 +600,11 @@
       "title": "Realize dispatcher credential custody and per-attempt role tokens",
       "phase": 1,
       "deps": [
-        "E-01.3.1"
+        "E-01.3.1",
+        "F-06.3"
       ],
       "path": "task_prompts/E-01.3.3.md",
-      "sha256": "4323e0c439cd5c0aac5a7f71bf1f82ae6221b1e2dabe95cfefddd2b8e9d88a8f"
+      "sha256": "8211a2a893eef29e07348778796489e192aa2a2b16ab493cd4c79008ef31b1f5"
     },
     {
       "id": "E-01.3.2",
@@ -638,6 +617,30 @@
       ],
       "path": "task_prompts/E-01.3.2.md",
       "sha256": "d64b9d3a63dfb24ddbac56273d8af8173edee1d1a1010b28ca65137bbe371b84"
+    },
+    {
+      "id": "U-03.1",
+      "title": "Embed upstream Agent Canvas in the host",
+      "phase": 1,
+      "deps": [
+        "U-01.2",
+        "F-04.2",
+        "S-01.4",
+        "E-01.3.3",
+        "F-06.3"
+      ],
+      "path": "task_prompts/U-03.1.md",
+      "sha256": "e4c5640f70c13da50d959ac0633079dfbce154452f0086d9886d33580ec94e81"
+    },
+    {
+      "id": "U-03.2",
+      "title": "Select and reconnect native engineering conversations",
+      "phase": 1,
+      "deps": [
+        "U-03.1"
+      ],
+      "path": "task_prompts/U-03.2.md",
+      "sha256": "a18f49a29653d55be1a23f53d0e318776a405535e6846affa068a98e89f013eb"
     },
     {
       "id": "E-01.4.1",
@@ -667,7 +670,7 @@
         "E-01.4.2"
       ],
       "path": "task_prompts/E-01.5.md",
-      "sha256": "8bbbabdbb95fbc3f85d4f362570c9dbffc20e80c85248f9f3c3ca04535c67b3d"
+      "sha256": "66f2d5e90332bbc3e950c4f98e16ae8ded1039041330a4aee5f9282f77a22c14"
     },
     {
       "id": "E-02.1",
@@ -742,7 +745,7 @@
         "E-02.2"
       ],
       "path": "task_prompts/E-03.1.md",
-      "sha256": "b8eb2f7a9ecdcc903a8717985d40757827a0e3d4c29f176be33ed2e2d9230045"
+      "sha256": "81382e6ee3565884b44fb41144770324cc03178f0796040c6f366c0689d74225"
     },
     {
       "id": "E-03.2.1",
