@@ -113,7 +113,7 @@ def head(repo):
             value = (gitdir / value[len('ref: '):]).read_text(encoding='ascii').strip()
     except (OSError, ValueError):
         value = ''
-    if re.fullmatch(r'[0-9a-f]{40}', value):
+    if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value):
         return value
     return git(repo, 'rev-parse', 'HEAD')
 

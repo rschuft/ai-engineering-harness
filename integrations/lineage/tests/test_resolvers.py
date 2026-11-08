@@ -65,7 +65,7 @@ def git(repo, *args):
 def tree_state(repo):
     """What a read-only resolver must leave unchanged in a repository."""
     return (git(repo, 'status', '--porcelain', '--untracked-files=all', '--ignored'),
-            git(repo, 'for-each-ref'), git(repo, 'rev-parse', 'HEAD'),
+            git(repo, 'for-each-ref'), fx.head(repo),  # HEAD's commit, read from its ref
             git(repo, 'count-objects', '-v'))
 
 

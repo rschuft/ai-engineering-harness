@@ -58,6 +58,26 @@ BUILDER_SHA = hashlib.sha256(b'synthetic builder agent/Skill manifest').hexdiges
 REVIEWER_SHA = hashlib.sha256(b'synthetic reviewer agent/Skill manifest').hexdigest()
 
 
+REVISION = b'\nRevised after review.\n'
+REVISION_MESSAGE, REVISION_DATE = 'Revise the design', '2026-11-07T01:00:00Z'
+
+
+def _build_revised_design(repo):
+    commit = fx.build_repo(repo)
+    design_md = repo / 'openspec' / 'changes' / CHANGE / 'design.md'
+    design_md.write_bytes(design_md.read_bytes() + REVISION)
+    return commit, fx.commit_all(repo, REVISION_MESSAGE, date=REVISION_DATE)
+
+
+def build_revised_design(repo):
+    """(first, second) commits of the design repository with a later design revision (design.md
+    changed in a second commit): built once per process per input digest and copied
+    (two_task_fixture.golden, plan leaf F-09.3)."""
+    key = fx.input_digest('dispatch-revised-design/1', fx.design_files(), fx.DESIGN_MESSAGE, fx.GIT_ENV,
+                          REVISION, REVISION_MESSAGE, REVISION_DATE)
+    return fx.golden(repo, key, _build_revised_design)
+
+
 def rmtree(path):
     def retry(func, target, _exc):
         os.chmod(target, stat.S_IWRITE)
@@ -163,12 +183,8 @@ class Fixture(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-dispatch-'))
         cls.design_repo = cls.tmp / 'design'
-        cls.commit = fx.build_repo(cls.design_repo)
+        cls.commit, cls.commit2 = build_revised_design(cls.design_repo)
         cls.git = planning.Git(cls.design_repo)
-        # A later design revision: design.md changed in a second commit.
-        design_md = cls.design_repo / 'openspec' / 'changes' / CHANGE / 'design.md'
-        design_md.write_bytes(design_md.read_bytes() + b'\nRevised after review.\n')
-        cls.commit2 = fx.commit_all(cls.design_repo, 'Revise the design', date='2026-11-07T01:00:00Z')
         cls.pointer2 = planning.make_pointer(cls.git, CHANGE, 'design.md', cls.commit2).text
         cls.profiles = cls.tmp / 'profiles'
         for name, operational in (('strong-test-profile', True), ('strong-dormant', False),

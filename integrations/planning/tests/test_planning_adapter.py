@@ -295,6 +295,53 @@ class PlanInput(unittest.TestCase):
         self.expect('PLAN_INVALID', [])
 
 
+class GoldenRepository(unittest.TestCase):
+    """A golden copy (two_task_fixture.golden, plan leaf F-09.3) is the repository a fresh build
+    makes: the same commit, a clean working tree, and HEAD read from its ref as git reports it.
+    The checks ask git directly, not through the fixture's own helper."""
+
+    @staticmethod
+    def ask(repo, *args):
+        return subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True, encoding='utf-8',
+                              stdin=subprocess.DEVNULL, timeout=fx.WAIT_CEILING_S, check=True,
+                              env={**os.environ, **fx.GIT_ENV}).stdout.strip()
+
+    def test_a_copy_equals_a_fresh_build(self):
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-golden-test-'))
+        self.addCleanup(fx.rmtree, tmp)
+        fresh = fx.build_repo(tmp / 'fresh', golden_copy=False)
+        first, second = fx.build_repo(tmp / 'a'), fx.build_repo(tmp / 'b')
+        self.assertEqual((first, second), (fresh, fresh))
+        for name in ('fresh', 'a', 'b'):
+            with self.subTest(repo=name):
+                repo = tmp / name
+                self.assertEqual(self.ask(repo, 'status', '--porcelain', '--untracked-files=all'), '')
+                self.assertEqual(self.ask(repo, 'rev-parse', 'HEAD'), fresh)
+                self.assertEqual(fx.head(repo), fresh)
+                self.assertEqual(self.ask(repo, 'ls-tree', '-r', '--name-only', 'HEAD').splitlines(),
+                                 sorted(fx.design_files()))
+        # A copy is independent: a commit in one leaves the other and the golden source alone.
+        (tmp / 'a' / 'extra.txt').write_text('x\n', encoding='utf-8')
+        changed = fx.commit_all(tmp / 'a', 'extra')
+        self.assertNotEqual(changed, fresh)
+        self.assertEqual(fx.head(tmp / 'b'), fresh)
+        self.assertEqual(fx.build_repo(tmp / 'c'), fresh)
+        self.assertFalse((tmp / 'c' / 'extra.txt').exists())
+
+    def test_the_digest_covers_every_input(self):
+        files = fx.design_files()
+        base = fx.input_digest('build_repo/1', files, fx.DESIGN_MESSAGE, fx.GIT_ENV)
+        self.assertEqual(base, fx.input_digest('build_repo/1', dict(files), fx.DESIGN_MESSAGE, dict(fx.GIT_ENV)))
+        changed = dict(files, **{'README.md': files['README.md'] + b'x'})
+        renamed = {('x' + k if k == 'README.md' else k): v for k, v in files.items()}
+        for other in (fx.input_digest('build_repo/1', changed, fx.DESIGN_MESSAGE, fx.GIT_ENV),
+                      fx.input_digest('build_repo/1', renamed, fx.DESIGN_MESSAGE, fx.GIT_ENV),
+                      fx.input_digest('build_repo/1', files, fx.DESIGN_MESSAGE + '.', fx.GIT_ENV),
+                      fx.input_digest('build_repo/1', files, fx.DESIGN_MESSAGE, dict(fx.GIT_ENV, GIT_AUTHOR_NAME='x')),
+                      fx.input_digest('build_repo/2', files, fx.DESIGN_MESSAGE, fx.GIT_ENV)):
+            self.assertNotEqual(other, base)
+
+
 class BacklogRunnerSeam(unittest.TestCase):
     """The Backlog runner seam (plan leaf F-09.3): subprocess.run by default, looked up when
     Backlog.md runs; a runner given to the constructor or set on the class replaces it."""

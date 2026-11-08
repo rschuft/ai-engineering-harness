@@ -41,7 +41,7 @@ def tree_state(repo):
     """What a read-only traversal must leave unchanged (the fake Backlog.md's own files aside)."""
     excluded = [f':(exclude){name}' for name in FAKE_FILES]
     return (fx.git(repo, 'status', '--porcelain', '--untracked-files=all', '--ignored', '--', '.', *excluded),
-            fx.git(repo, 'for-each-ref'), fx.git(repo, 'rev-parse', 'HEAD'), fx.git(repo, 'count-objects', '-v'))
+            fx.git(repo, 'for-each-ref'), fx.head(repo), fx.git(repo, 'count-objects', '-v'))
 
 
 def store_state(path):
