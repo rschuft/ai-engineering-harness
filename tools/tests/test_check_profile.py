@@ -839,6 +839,51 @@ class AdmissionBlock(unittest.TestCase):
         daemon['icc'] = False
         self.assertEqual(self.errors(), [])
 
+    def test_egress_guard(self):
+        """S-01.4: the DOCKER-USER egress guard; each loosening FAILs naming the rule."""
+        net = self.server['admission']['network']
+        egress = net['egress_guard']
+        self.assertEqual(egress['allowlist'], [])
+        rules = list(egress['rules'])
+        for changed in (rules[1:], rules[:2] + ['-p tcp -j ACCEPT', rules[3]],
+                        [r.replace('egress', 'container') for r in rules]):
+            egress['rules'] = changed
+            self.assertFails('network.egress_guard.rules')
+        egress['rules'] = rules
+        for key, value, fragment in (
+                ('chain', net['guard']['chain'], 'egress_guard.chain'),
+                ('chain', 'DOCKER-USER', 'egress_guard.chain'),
+                ('hook', 'FORWARD', 'egress_guard.hook'),
+                ('interfaces', ['br-+'], 'egress_guard.interfaces'),
+                ('hook_rules', ['-i docker0 -j AIEH-EGRESS-GUARD', '-i br-+ -j AIEH-EGRESS-GUARD',
+                                '-j RETURN'], 'egress_guard.hook_rules'),
+                ('hook_rules', egress['hook_rules'][:2], 'egress_guard.hook_rules'),
+                ('families', ['iptables'], 'egress_guard.families'),
+                ('log_prefix', 'aieh-container-guard: ', 'egress_guard.log_prefix'),
+                ('unit', 'aieh-egress.service', 'installed by the container guard'),
+                ('script', '/usr/local/sbin/other', 'installed by the container guard'),
+                ('allowlist', [{'class': 'inference', 'rule': '-d 10.0.2.100 -j RETURN'}],
+                 'egress_guard.allowlist[0]'),
+                ('allowlist', None, 'egress_guard.allowlist: must be a list'),
+                ('rule', '', 'egress_guard.rule: required')):
+            saved = copy.deepcopy(egress[key])
+            egress[key] = value
+            self.assertFails(fragment)
+            egress[key] = saved
+        self.assertEqual(self.errors(), [])
+        # an allowlist entry is accepted only for a class the profile enables for containers
+        inference = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'inference')
+        inference['status'] = 'enabled for the test'
+        egress['allowlist'] = [{'class': 'inference', 'rule': '-d 10.0.2.100 -p tcp -j RETURN'}]
+        self.assertNotIn('egress_guard.allowlist', ' '.join(self.errors()))
+        daemon = self.qemu['provisioning']['moby']['daemon_json']
+        for key in ('iptables', 'ip-forward'):
+            daemon[key] = False
+            self.assertFails('must not turn off iptables or ip-forward')
+            del daemon[key]
+        del net['egress_guard']
+        self.assertFails('egress_guard: must be declared')
+
     def test_session_key_and_dispatcher(self):
         adm = self.server['admission']
         adm['session_key']['header'] = 'Authorization'

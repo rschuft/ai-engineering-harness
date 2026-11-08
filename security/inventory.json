@@ -803,20 +803,45 @@
       "findings": ["fd-acp-provider-auth"]
     },
     {
-      "id": "cred-owner-ui-access",
-      "name": "Owner UI access to the Agent Server and Integration Service",
-      "authority": "management",
+      "id": "cred-owner-ui-session",
+      "name": "The Owner's UI session credential to the Owner host and Integration process",
+      "authority": "owner",
       "issuer": "external:undefined",
       "holder": "owner",
       "manager": "owner",
       "readable_by": [],
-      "storage": "Not defined.",
-      "scope": "Agent Canvas reaches only the backend needed for an Owner-authorized engineering session.",
-      "lifetime": "Not defined.",
+      "storage": "Not defined: a separate Owner session credential, not shaped like an Agent Server key (decision 0013, point 5). Never in an agent workspace, CI runner, record, log or repository.",
+      "scope": "The Owner UI's session to the Owner-host/Integration process on host loopback.",
+      "lifetime": "The Owner's session (not defined further).",
       "rotation_revocation_owner": "owner",
-      "status": "unknown",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"],
-      "findings": ["fd-owner-ui-access"]
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "findings": ["fd-owner-ui-session-plan-silence"],
+      "notes": "No plan leaf names the Integration process's Owner login or this credential (plan silence, carried to U-01.2 and P-04.2)."
+    },
+    {
+      "id": "cred-conversation-runtime-access",
+      "name": "A conversation's runtime credential, held by the Owner UI for that session",
+      "authority": "scoped",
+      "issuer": "management-dispatcher",
+      "holder": "owner",
+      "manager": "management-dispatcher",
+      "readable_by": ["engineering-agent"],
+      "storage": "Not stored: issued per Owner session by the dispatcher from the outer server's runtime-credentials route (POST /api/conversations/{id}/runtime/credentials, key-gated) and held only in the Owner UI's session; never in a record, log or repository (decision 0013, point 2). The conversation's agent can already read the conversation-bounded credential in its own container.",
+      "scope": "That one conversation's inner server, over a dispatcher-owned local forward bound to host 127.0.0.1 (decision 0013, point 3); never the management API.",
+      "lifetime": "The Owner's session, and no longer than the conversation's container.",
+      "rotation_revocation_owner": "management-dispatcher",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "findings": ["fd-owner-ui-access"],
+      "notes": "The response shape of the runtime-credentials route and Canvas 1.36.0's registration of a conversation are verified at U-01.2. Every forward it rides is a new host port and needs a recorded Owner approval (op-guest-boundary-change)."
     }
   ],
   "assets": [
@@ -1127,6 +1152,29 @@
       "status": "observed",
       "evidence": ["evidence/bootstrap-log.md"],
       "findings": ["fd-owner-credential-custody"]
+    },
+    {
+      "id": "app-owner-host",
+      "name": "Owner host (the Owner UI shell)",
+      "kind": "service",
+      "custodian": "owner-os-account",
+      "location": "apps/owner-host (U-01.1): the React shell with assistant-ui and Agent Canvas, built to static files; its Vite dev and preview servers bind 127.0.0.1 only with strictPort (5173 and 4173). It holds no credential and connects to no backend yet; it is the Owner UI of decision 0013, in td-owner.",
+      "status": "observed",
+      "evidence": ["evidence/bootstrap-log.md", "apps/owner-host/vite.config.ts"],
+      "findings": ["fd-owner-ui-access", "fd-owner-ui-session-plan-silence"]
+    },
+    {
+      "id": "api-integration-service",
+      "name": "The Integration process's host-loopback API for the Owner UI",
+      "kind": "api",
+      "custodian": "integration-service",
+      "location": "Planned: the Owner-host/Integration process (td-management) on host loopback, reached by the Owner UI with cred-owner-ui-session (decision 0013, point 5). Not built; no plan leaf names its Owner login.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "findings": ["fd-owner-ui-session-plan-silence"]
     },
     {
       "id": "gitea-server",
@@ -1696,7 +1744,7 @@
       "id": "fd-guest-login-name-and-key",
       "kind": "limit",
       "title": "The operator login `agent` reads the management key; no agent workload has that login",
-      "detail": "Custody as of S-01.3.1. No dispatcher exists. During bootstrap the dispatcher's role is performed by the Owner's account through tools/guest.py, over the instance's host-loopback SSH forward with the per-instance key, as the operator login agent, which reads the session key from its root:agent 0440 file inside the guest (never on a command line). No agent workload ever has that login: an engineering agent runs in a conversation container as 999:989 in its own namespaces, holds no SSH key, cannot reach the guest's sshd (the container guard refuses it at every guest address), cannot reach the management listener, and its readable process environments hold only its own conversation keys (the outer key's fingerprint was absent from both containers, S-01.3.1). The name still collides with the engineering-agent role, and anyone given the login would hold the full management key. Moving the key to a separate guest identity (a dispatch group that agent is not in) is proposed to the Overseer, not done; whether the login keeps the key once a dispatcher exists is decided with the dispatcher (E-01.2.x). S-01.3.2: no job holds the login, its SSH key or the management key: the outer key's fingerprints are absent from every readable file and process environment of two conversation containers, and sshd, the management listener and the instance's host forwards refuse from them. Custody beyond bootstrap stays with E-01.2.2.",
+      "detail": "Custody as of S-01.3.1. No dispatcher exists. During bootstrap the dispatcher's role is performed by the Owner's account through tools/guest.py, over the instance's host-loopback SSH forward with the per-instance key, as the operator login agent, which reads the session key from its root:agent 0440 file inside the guest (never on a command line). No agent workload ever has that login: an engineering agent runs in a conversation container as 999:989 in its own namespaces, holds no SSH key, cannot reach the guest's sshd (the container guard refuses it at every guest address), cannot reach the management listener, and its readable process environments hold only its own conversation keys (the outer key's fingerprint was absent from both containers, S-01.3.1). The name still collides with the engineering-agent role, and anyone given the login would hold the full management key. Moving the key to a separate guest identity (a dispatch group that agent is not in) is proposed to the Overseer, not done; whether the login keeps the key once a dispatcher exists is decided with the dispatcher (E-01.2.x). S-01.3.2: no job holds the login, its SSH key or the management key: the outer key's fingerprints are absent from every readable file and process environment of two conversation containers, and sshd, the management listener and the instance's host forwards refuse from them. Custody beyond bootstrap stays with E-01.2.2. S-01.4 (ruling R9): the session-key file stays where it is; the finding is carried to E-01.2.2 and E-01.3.1.",
       "refs": ["guest-login-agent", "cred-agent-server-session-key", "guest-session-key-file", "op-as-conversation-create"],
       "citations": [
         "evidence/S-01.3.1-management-api-admission.md",
@@ -1705,18 +1753,19 @@
         "evidence/F-04.1c-agent-server.md",
         "evidence/S-01.3.2-job-daemon-and-management-access.md"
       ],
-      "carried_to": ["E-01.2.2"]
+      "carried_to": ["E-01.2.2", "E-01.3.1"]
     },
     {
       "id": "fd-session-key-not-fine-grained",
       "kind": "open-risk",
       "title": "One session key grants the whole management API",
-      "detail": "The outer Agent Server accepts one X-Session-API-Key for every key-gated route; there is no per-route or per-role scope, and the only rotation is recreate and provision. S-01.3.1 enumerated the routes (193; the key admits 166 HTTP routes directly and mints the workspace and app-backend sessions) and marks in the route inventory which ones the trusted dispatcher may call: that allowlist is the dispatcher's policy, not a server control. What the server and the guest enforce is admission by key and by network: the listener is on the guest's loopback only, the unit drops non-loopback packets, and the container guard refuses every new connection from a container bridge to the guest. The blueprint warns not to assume a session API key is a fine-grained permission token.",
+      "detail": "The outer Agent Server accepts one X-Session-API-Key for every key-gated route; there is no per-route or per-role scope, and the only rotation is recreate and provision. S-01.3.1 enumerated the routes (193; the key admits 166 HTTP routes directly and mints the workspace and app-backend sessions) and marks in the route inventory which ones the trusted dispatcher may call: that allowlist is the dispatcher's policy, not a server control. What the server and the guest enforce is admission by key and by network: the listener is on the guest's loopback only, the unit drops non-loopback packets, and the container guard refuses every new connection from a container bridge to the guest. The blueprint warns not to assume a session API key is a fine-grained permission token. S-01.4 narrows its reach without changing the mechanism: by decision 0013 no browser, UI process, Integration process or agent ever holds the key; the Owner UI reaches a session only with that conversation's runtime credential.",
       "refs": ["cred-agent-server-session-key", "api-agent-server-management"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
         "evidence/F-04.1c-agent-server.md",
-        "evidence/S-01.3.1-management-api-admission.md"
+        "evidence/S-01.3.1-management-api-admission.md",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
       ],
       "carried_to": ["S-01.2.1", "E-01.2.2"]
     },
@@ -1735,9 +1784,9 @@
     },
     {
       "id": "fd-container-network-deviations",
-      "kind": "open-risk",
+      "kind": "limit",
       "title": "Conversation containers keep upstream network defaults",
-      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Observed at S-01.3.1 before the admission controls: from a conversation container the guest's sshd (172.17.0.1:22 and 10.0.2.15:22, banner) and systemd-resolved's LLMNR (TCP 5355) were reachable, and the other container's inner server (8000, /server_info 200) and VSCode (8001, 403) too; the management listener and the published ports refused. After them (container guard, icc false): every guest address and port refuses (TCP reset, logged) and the peer container times out, in both containers and after a guest restart. Remaining: host.docker.internal still names the guest (refused), the container keeps a NAT path out through the guest (no route out, SLIRP restrict=on; the deny-by-default matrix is S-01.4), and the request caps override (E-01.2.2). S-01.3.2: the locked server adds host.docker.internal unconditionally and its Config has no option to remove it (Moby's host-gateway-ip would retarget, not remove, the name), so the mapping stays, refused at every port. Through the NAT path, SLIRP's 10.0.2.2 (the host's loopback: the SSH forward, QMP and the host Gitea's 13300) and 10.0.2.3 refuse every probed port; the deny-by-default matrix stays with S-01.4.",
+      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Observed at S-01.3.1 before the admission controls: from a conversation container the guest's sshd (172.17.0.1:22 and 10.0.2.15:22, banner) and systemd-resolved's LLMNR (TCP 5355) were reachable, and the other container's inner server (8000, /server_info 200) and VSCode (8001, 403) too; the management listener and the published ports refused. After them (container guard, icc false): every guest address and port refuses (TCP reset, logged) and the peer container times out, in both containers and after a guest restart. Remaining: host.docker.internal still names the guest (refused), the container keeps a NAT path out through the guest (no route out, SLIRP restrict=on; the deny-by-default matrix is S-01.4), and the request caps override (E-01.2.2). S-01.3.2: the locked server adds host.docker.internal unconditionally and its Config has no option to remove it (Moby's host-gateway-ip would retarget, not remove, the name), so the mapping stays, refused at every port. Through the NAT path, SLIRP's 10.0.2.2 (the host's loopback: the SSH forward, QMP and the host Gitea's 13300) and 10.0.2.3 refuse every probed port; the deny-by-default matrix stays with S-01.4. S-01.4: the NAT path out through the guest is closed by policy: the egress guard in Moby's DOCKER-USER chain (provisioning.agent_server.admission.network.egress_guard, empty allowlist; S-03.x adds the first entry for inference) refuses every new forwarded connection from a container bridge to another interface, logged, TCP with a reset; off-link addresses have no route in the guest (topology, beside the policy). Remaining, recorded limits: host.docker.internal still names the guest (refused at every port by the container guard), the request caps that override the server's (E-01.2.2), and the absence of --network none, re-tested by S-02.1 and S-02.2.",
       "refs": ["conversation-container", "guest-sshd", "guest-conversation-listeners"],
       "citations": [
         "decisions/0001-agent-server-dispatch-precondition-and-version-line.md",
@@ -1747,7 +1796,7 @@
         "evidence/S-01.3.1-management-api-admission.md",
         "evidence/S-01.3.2-job-daemon-and-management-access.md"
       ],
-      "carried_to": ["S-01.4", "E-01.2.2", "S-02.1"]
+      "carried_to": ["E-01.2.2", "S-02.1", "S-03.1"]
     },
     {
       "id": "fd-container-shares-service-uid",
@@ -1769,12 +1818,17 @@
     },
     {
       "id": "fd-host-loopback-exposure",
-      "kind": "open-risk",
+      "kind": "limit",
       "title": "Host loopback control surfaces are open to every local process",
-      "detail": "QMP is an unauthenticated loopback TCP socket with full VM control, and the SSH forward is a loopback port protected by the per-instance key. Both are reachable by any local process of any user on the host: disclosed, not prevented (the standard library has no AF_UNIX on Windows).",
+      "detail": "QMP is an unauthenticated loopback TCP socket with full VM control, and the SSH forward is a loopback port protected by the per-instance key. Both are reachable by any local process of any user on the host: disclosed, not prevented (the standard library has no AF_UNIX on Windows). S-01.4 (decision 0013, point 6): same-account host processes are outside the threat model on the host network plane too (blueprint #security and #containment-architecture, read with decision 0010, point 1; 0010 is not amended), so this exposure is a disclosed limit. What is enforced is that every harness host listener binds 127.0.0.1 only (the LAN reaches none of them; guest.py host-census), and that the guest reaches neither listener (SLIRP restrict=on).",
       "refs": ["listener-host-qmp", "listener-host-ssh-forward", "op-guest-lifecycle"],
-      "citations": ["profiles/strong-windows-qemu-whpx/profile.json", "evidence/F-03.3.2-guest-network.md"],
-      "carried_to": ["S-01.4"]
+      "citations": [
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "evidence/F-03.3.2-guest-network.md",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "carried_to": []
     },
     {
       "id": "fd-release-job-principal",
@@ -1793,10 +1847,13 @@
       "id": "fd-ci-runner-unpinned",
       "kind": "unknown",
       "title": "No CI runner is selected or pinned",
-      "detail": "composition/ pins Gitea but no runner. The runner's identity, its dedicated host, its isolation of jobs and the job-token maxima are planned only.",
+      "detail": "composition/ pins Gitea but no runner. The runner's identity, its dedicated host, its isolation of jobs and the job-token maxima are planned only. S-01.4 records the CI edges as planned in the network matrix (policy/network-matrix.json): the runner host to Gitea and Gitea's job token are not reachable today (no runner exists; Gitea binds host 127.0.0.1 only). Constraint carried: Gitea is loopback-only, a guestfwd chardev is one stream, and P7 enumerates no endpoint class for a runner, so the runner's reachability to Gitea needs a decided class and an Owner act (Q-02.1, Q-02.2.1). Untrusted code has no network class to Gitea (decision 0013, point 7), so a CI job's use of its job token against Gitea (checkout, statuses) is to be reconciled there too.",
       "refs": ["ci-job", "ci-runner-service", "ci-runner-host", "cred-ci-job-token", "cred-runner-registration"],
-      "citations": ["composition/candidates.json", "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
-      "carried_to": ["S-01.2.1", "S-01.4"]
+      "citations": [
+        "composition/candidates.json",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "carried_to": ["S-01.2.1", "Q-02.1", "Q-02.2.1"]
     },
     {
       "id": "fd-gitea-reader-opens-pr",
@@ -1823,16 +1880,30 @@
     },
     {
       "id": "fd-owner-ui-access",
-      "kind": "unknown",
-      "title": "The Owner UI's access to the Agent Server is not defined",
-      "detail": "Agent Canvas is to reach only the backend needed for an Owner-authorized engineering session, but no accepted record says which credential it uses or whether it would hold the management key. The Agent Server host forward is deferred (decision 0006). S-01.3.1 records the Owner UI's path to management as planned and undecided (provisioning.agent_server.admission.dispatcher.owner_ui); no route or credential is assigned to it.",
-      "refs": ["cred-owner-ui-access", "api-agent-server-management"],
+      "kind": "limit",
+      "title": "The Owner UI reaches a session only with its conversation-bounded runtime credential",
+      "detail": "Decided by decision 0013 (Proposed at S-01.4): no browser, UI process, Integration process or agent ever holds the management key; the Owner UI reaches an engineering session only with that conversation's runtime credential (cred-conversation-runtime-access), issued per session by the dispatcher, over a dispatcher-owned local forward bound to host 127.0.0.1; its credential to the Owner-host/Integration process is a separate Owner session credential (cred-owner-ui-session). Both are planned: no forward, credential or registration exists (U-01.2, E-01.3.x; every forward is a new host port and needs a recorded Owner approval). Disclosed residual: the UI and the conversation's agent share that conversation-bounded credential, which the agent can already read in its own container, so a UI compromise is bounded to that attempt. Until S-01.4 the access was undefined (unknown).",
+      "refs": ["cred-conversation-runtime-access", "cred-owner-ui-session", "api-agent-server-management", "app-owner-host"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
         "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
         "evidence/S-01.3.1-management-api-admission.md"
       ],
-      "carried_to": ["S-01.4"]
+      "carried_to": ["U-01.2", "E-01.3.1"]
+    },
+    {
+      "id": "fd-owner-ui-session-plan-silence",
+      "kind": "unknown",
+      "title": "No plan leaf names the Integration process's Owner login or the UI session credential",
+      "detail": "Decision 0013 (point 5) makes the Owner UI's credential to the Owner-host/Integration process a separate Owner session credential, not shaped like an Agent Server key. No plan leaf names that login or builds the credential: U-01.1 built the shell with no backend and no credential, U-01.2 wires navigation to engineering detail, and P-04.2 builds the Owner authorization recorder. Recorded as plan silence (S-01.4 ruling R8), not settled here.",
+      "refs": ["cred-owner-ui-session", "api-integration-service", "integration-service", "app-owner-host"],
+      "citations": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+        "evidence/bootstrap-log.md"
+      ],
+      "carried_to": ["U-01.2", "P-04.2"]
     },
     {
       "id": "fd-owner-credential-custody",

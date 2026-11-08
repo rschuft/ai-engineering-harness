@@ -186,6 +186,7 @@ Only what is listed as verified has been exercised.
 | `gitea:authz` | `AIEH_GITEA_AUTHZ=1`, then `python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v` | no | Live allowed and forbidden calls of each bot token against the running Gitea. Opt-in; skips with its reason when Gitea is down, an entry is missing, or (per class) the fixture is absent. `AIEH_GITEA_AUTHZ_REPORT=<file>` records every probe. |
 | `security:check [-- --list]` | `python -I -B tools/check_security_inventory.py [--list]` | no | Checks the [security inventory](#security-inventory): every privileged operation names exactly one existing principal, no agent principal holds, manages or may read an Owner, admin, executor or management credential, every reference resolves, and every entry is planned, observed (with evidence) or unknown (with a finding). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `policy:check [-- --list\|--render]` | `python -I -B tools/check_role_tokens.py [--list] [--render]` | no | Checks the [role-token matrix](#role-token-matrix): no agent, reviewer or CI role is granted an Owner, executor, administration or management operation, a privileged capability or credential; every grant names an existing id of the role's own principal; every credential has its issuance and revocation rows; the sunset map is complete; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `policy:network-check [-- --list\|--render]` | `python -I -B tools/check_network_matrix.py [--list] [--render]` | no | Checks the [network matrix](#network-matrix) (S-01.4): every ordered pair of trust domains has a classified row; no allow from an untrusted or contained domain into a trusted one names anything but a profiles P7 endpoint class or reaches a management or credential asset; every allow names a prevention mechanism and every disclosed path a finding; every id, plan leaf and profile endpoint resolves; every active profile endpoint and forward is an allow row; an observed Owner act cites its approval; the README's tables equal `--render`. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:check PROPOSAL=<file> -- --source REF=FILE` | `python -I -B tools/check_intent_record.py <file> --source REF=FILE [--source ...]` | no | Checks a proposal's [intent record](#intent-records): byte-identical quotes, Owner methods kept as hypotheses, acceptances, required fields. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `intent:qualify -- <run\|check\|prompt\|system-prompt> [options]` | `python -I -B tools/qualify_intent_skill.py <subcommand> [options]` | `run`: the model command's own (a live model) | Runs the intent-normalization Skill's [behavioural qualification](#intent-records): one corpus item and turn through a JSON model-command template in an empty working directory, then the checker, then a ledger entry; refuses past `--max-invocations` (default 25). `check` scores a saved proposal against an item's messages. |
 | `profile:check [-- --strict]` | `python -I -B tools/check_profile.py [--strict] [--openapi <file>]` | no | Schema check of every `profiles/*/profile.json`: pinned boot inputs, labels, no host share, loopback-only forwards, ceilings, no TCG fallback. Runs no provider. `--strict` also fails on inputs declared with an unknown pin. `--openapi` validates the Agent Server conversation fixture against the locked `openapi.json` (F-04.1). |
@@ -204,7 +205,8 @@ Only what is listed as verified has been exercised.
 | `guest:provision PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py provision --profile <dir> --state-dir <dir> --name <name>` | no | Guest side of provisioning (F-04.1b): transfers the stage over SFTP, triggers the seeded single-use root step and checks its `RESULT.json`. See [Execution guests](#execution-guests). |
 | `guest:conversation-smoke PROFILE=… STATE_DIR=… NAME=<name> [-- --restart --openapi <file> --canaries <dir> --out <file>]` | `python -I -B tools/guest.py conversation-smoke --profile <dir> --state-dir <dir> --name <name> [--restart] [--openapi <file>] [--canaries <dir>] [--out <file>]` | no | The contained conversation lifecycle (F-04.2) on a running provisioned guest: create the disposable Docker conversation of the pinned fixture, inspect it and its container, create it again (idempotent), read its events, stop its runtime, reopen it, optionally restart the guest and reopen again, delete it. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:admission-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --out <file>]` | `python -I -B tools/guest.py admission-probe --profile <dir> --state-dir <dir> --name <name> [--out <file>]` | no | The management API admission (S-01.3.1) on a running provisioned guest: the pinned route inventory against the running server, every route without the key and with a wrong one, the agent network's reach from inside two disposable conversation containers, the key check and the logged refusals. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
-| `guest:job-access-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --token-fingerprint LABEL=sha256:<hex16> --out <file>]` | `python -I -B tools/guest.py job-access-probe --profile <dir> --state-dir <dir> --name <name> [--token-fingerprint LABEL=sha256:<hex16>] [--out <file>]` | no | The job environment (S-01.3.2) on a running provisioned guest: from inside two disposable conversation containers, their effective hardening, every engine socket, the engine API and the host aliases over TCP, every privileged Agent Server route at every address, and the management, Owner, admin and bot credentials by name and fingerprint. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:job-access-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --token-fingerprint LABEL=sha256:<hex16> --out <file>]` | `python -I -B tools/guest.py job-access-probe --profile <dir> --state-dir <dir> --name <name> [--token-fingerprint LABEL=sha256:<hex16>] [--out <file>]` | no | The job environment (S-01.3.2) on a running provisioned guest: from inside two disposable conversation containers, their effective hardening, every engine socket, the engine API and the host aliases over TCP, every privileged Agent Server route at every address, the management, Owner, admin and bot credentials by name and fingerprint, and the S-01.4 egress sweep (public literals, SLIRP's aliases, an unconfigured guestfwd-class address) against the egress guard's counters. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:host-census [-- --exclude-pid <pid> --out <file>]` | `python -I -B tools/guest.py host-census [--exclude-pid <pid>] [--out <file>]` | no | S-01.4, read only and unelevated: the harness's host listeners by PID (QEMU, the host Gitea and its proxy, the Owner host's Vite servers), each of which must be on 127.0.0.1, and the Windows Firewall profiles and rule count, recorded as disclosure (UNKNOWN when a cmdlet is refused). No profile or state directory; it changes no rule. Exit 0 only on PASS. |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
 | `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
@@ -558,7 +560,26 @@ defaults them.
   never by value. An engine socket or API, a management route or a host service that
   answers is a stop condition. `inspect`'s `conversation containers` entry applies the
   same declared values to every container. The CI side of the job constraints is
-  recorded as planned (no CI runner exists yet).
+  recorded as planned (no CI runner exists yet). Since S-01.4 it also runs the
+  predeclared egress sweep from inside each job (`1.1.1.1:443`, `8.8.8.8:53` over TCP and
+  UDP, SLIRP's `10.0.2.2` host ports and `10.0.2.3:53`, and the unconfigured
+  guestfwd-class address `10.0.2.100:7000`), reading the egress guard's per-rule counters
+  before and after. Its decision rule is fixed: every target refused with the guard's
+  reset or ICMP reject and the guard's counters incremented is a PASS; a timeout or an
+  unreachable error alone is topology, not policy (FAIL); a connection is a stop
+  condition.
+- The container egress guard (S-01.4) is seeded with the container guard: the same script
+  and unit (which `docker.service` requires) create Moby's `DOCKER-USER` chain when it is
+  absent and send every new forwarded connection from `docker0` or a `br-*` bridge to
+  another interface to `AIEH-EGRESS-GUARD`, which logs (prefix `aieh-egress-guard: `) and
+  refuses it, IPv4 and IPv6, with an empty allowlist
+  (`provisioning.agent_server.admission.network.egress_guard`). The root step's admission
+  step, the boot facts (with the rules the guard printed before Moby started) and
+  `inspect`'s `container egress guard (S-01.4)` check verify it.
+- `host-census` (S-01.4) is a read-only, unelevated census of the harness's host
+  listeners by PID, each of which must be on `127.0.0.1`, with the Windows Firewall
+  profiles and rule count recorded as disclosure. It reads no file and changes no rule;
+  `--exclude-pid` keeps a process out of every lookup.
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);
@@ -801,6 +822,27 @@ README's generated tables equal `--render`. Its tests
 matrix and fail its mutations. When the matrix changes, edit the JSON, replace the
 README's generated block with the output of `--render`, and run both checkers.
 
+## Network matrix
+
+Plan leaf S-01.4 classifies every communication between the inventory's trust domains in
+[`policy/network-matrix.json`](../policy/network-matrix.json), rendered in
+[`policy/README.md`](../policy/README.md#network-matrix-s-014), under decision
+[0013](../decisions/0013-owner-ui-session-access-and-management-key-custody.md)
+(Proposed). Each row of an ordered domain pair has a verdict (allow, deny, disclosed), a
+protocol, an endpoint (an inventory asset or a profiles P7 endpoint class), its
+credentials, its enforcement points (prevention, detection or disclosure, at the host, the
+guest, the container or Gitea), a status (observed, planned, decided) with its evidence or
+plan leaf, whether it needs an Owner act, and its inspection command. It opens nothing: no
+forward, firewall rule or Gitea change.
+
+[`tools/check_network_matrix.py`](../tools/check_network_matrix.py) (`task
+policy:network-check`) enforces the leaf's acceptance with the standard library only,
+reusing the inventory checker's link and machine-path rules (see the policy README for the
+full list). Its tests (`tools/tests/test_check_network_matrix.py`, part of `task test`)
+pass the committed matrix and fail its mutations. When the matrix changes, edit the JSON,
+replace the README's generated block with the output of `--render`, and run the checker;
+when the inventory gains an asset, classify it in `asset_classes`.
+
 ## Task
 
 The Taskfile targets Task **3.54.0** (release `v3.54.0`, published 2026-10-01,
@@ -830,7 +872,7 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list, the profile declarations, and per-OS packaging when added | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py`, `check_network_matrix.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1, S-01.4 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`) | S-01.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |

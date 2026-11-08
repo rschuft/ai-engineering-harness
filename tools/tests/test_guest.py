@@ -2817,23 +2817,40 @@ def agent_server_files():
 
 ADM = PCONF['agent_server']['admission']
 GUARD = ADM['network']['guard']
+EGRESS = ADM['network']['egress_guard']
 
 
 def admission_facts():
     """What the seeded admission_facts reports for a guard in place (iptables -S prints the
-    default --reject-with of the last rule)."""
-    def family(tool):
+    default --reject-with of the last rule), with the egress guard (S-01.4) after Moby's start
+    and as the guard printed it before Moby started."""
+    def family(tool, moby=True):
         suffix = ' --reject-with ' + ('icmp-port-unreachable' if tool == 'iptables'
                                       else 'icmp6-port-unreachable')
         lines = [f"-A {GUARD['chain']} {r}" for r in GUARD['rules']]
         lines[-1] += suffix
+        egress = [f"-A {EGRESS['chain']} {r}" for r in EGRESS['rules']]
+        egress[-1] += suffix
+        forward = ['-A FORWARD -j DOCKER-USER']
+        if moby and tool == 'iptables':
+            forward += ['-A FORWARD -j DOCKER-ISOLATION-STAGE-1',
+                        '-A FORWARD -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT',
+                        '-A FORWARD -o docker0 -j DOCKER']
         return {'chain': lines, 'ok': True, 'error': None,
                 'input_jumps': [f"-A INPUT -i {i} -j {GUARD['chain']}"
-                                for i in reversed(GUARD['interfaces'])]}
+                                for i in reversed(GUARD['interfaces'])],
+                'egress': {'chain': egress,
+                           'hook': [f"-A {EGRESS['hook']} {r}" for r in EGRESS['hook_rules']],
+                           'forward_head': forward, 'forward_jumps': 1,
+                           'forward_policy': '-P FORWARD DROP' if moby and tool == 'iptables'
+                           else '-P FORWARD ACCEPT', 'ok': True, 'error': None}}
     return {'guard_unit': {'LoadState': 'loaded', 'ActiveState': 'active', 'SubState': 'exited',
                            'Result': 'success', 'UnitFileState': 'enabled'},
-            'rules': {'mode': 'check', 'ok': True,
+            'rules': {'mode': 'check', 'ok': True, 'egress_ok': True,
                       'families': {t: family(t) for t in GUARD['families']}},
+            'guard_install': {'mode': 'install', 'ok': True, 'egress_ok': True,
+                              'families': {t: family(t, moby=False) for t in GUARD['families']}},
+            'order': {'guard_exit_monotonic': '6100000', 'docker_start_monotonic': '6200000'},
             'dropin': {'path': GUARD['docker_dropin'], 'state': 'file', 'owner': 'root',
                        'group': 'root', 'mode': '644'},
             'docker_requires_guard': True, 'docker_after_guard': True,
@@ -3066,7 +3083,9 @@ class ProvisionedInspect(LaunchRecord):
         props = self.props()
         self.assertEqual(self.failing(), [])
         self.assertEqual(props[guest.PROVISIONING_PROPERTY]['verdict'], 'PASS')
-        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 22)
+        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 23)
+        self.assertIn(guest.EGRESS_CHECK, {c['check'] for c in
+                                           props[guest.PROVISIONING_PROPERTY]['checks']})
         names = {c['check'] for c in props['profiles P6']['checks']}
         self.assertTrue({'guest Moby sockets', 'agent cannot reach Moby'} <= names)
 
@@ -4185,6 +4204,59 @@ class AdmissionInspect(LaunchRecord):
         self.assertEqual(guest.admission_check(PROFILE, {'guest': {}})[0]['verdict'], 'FAIL')
 
 
+class EgressInspect(AdmissionInspect):
+    """The inspect check of the egress guard (S-01.4), from the boot facts."""
+
+    def verdict(self, **admission):
+        checks = guest.admission_check(PROFILE, self.obs(**admission))
+        egress = [c for c in checks if c['check'] == guest.EGRESS_CHECK]
+        self.assertEqual(len(egress), 1)
+        return egress[0]['verdict']
+
+    def test_guard_in_place_passes(self):
+        self.assertEqual(self.verdict(), 'PASS')
+        self.assertEqual(guest.CHECK_CLASSES[(guest.PROVISIONING_PROPERTY, guest.EGRESS_CHECK)][0],
+                         guest.STABLE)
+        chain, hook, jump = guest.egress_declared(PROFILE)
+        self.assertEqual(jump, '-A FORWARD -j DOCKER-USER')
+        self.assertEqual(hook[-1], '-A DOCKER-USER -j RETURN')
+        self.assertEqual(len(chain), 4)
+
+    def test_each_missing_part_fails(self):
+        good = admission_facts()
+
+        def changed(path, value, key='rules'):
+            facts = copy.deepcopy(good[key])
+            fam = facts['families']['ip6tables' if 'v6' in path else 'iptables']['egress']
+            fam[path.replace('v6', '')] = value
+            return {key: facts}
+        chain = good['rules']['families']['iptables']['egress']['chain']
+        hook = good['rules']['families']['iptables']['egress']['hook']
+        for change in (changed('chain', chain[:3]),
+                       changed('v6chain', None),
+                       changed('chain', chain[:1] + ['-A AIEH-EGRESS-GUARD -j RETURN'] + chain[1:]),
+                       changed('hook', hook[1:]),
+                       changed('forward_head', ['-A FORWARD -j ACCEPT', '-A FORWARD -j DOCKER-USER']),
+                       changed('forward_jumps', 2),
+                       changed('hook', hook[:1], key='guard_install'),
+                       {'guard_install': None},
+                       {'guard_install': dict(good['guard_install'], egress_ok=False)},
+                       {'order': {'guard_exit_monotonic': '7000000',
+                                  'docker_start_monotonic': '6200000'}},
+                       {'order': {}},
+                       {'guard_unit': dict(good['guard_unit'], ActiveState='failed')}):
+            self.assertEqual(self.verdict(**change), 'FAIL', change)
+        # the INPUT guard's check is unaffected by an egress loss, and the reverse
+        self.assertEqual(guest.admission_check(PROFILE, self.obs(**changed('chain', [])))[0]
+                         ['verdict'], 'PASS')
+
+    def test_no_declaration_no_check(self):
+        profile = copy.deepcopy(PROFILE)
+        del profile['provisioning']['agent_server']['admission']['network']['egress_guard']
+        checks = guest.admission_check(profile, self.obs())
+        self.assertEqual([c['check'] for c in checks], [guest.ADMISSION_CHECK])
+
+
 JOBS = AS['jobs']
 
 
@@ -4213,8 +4285,18 @@ class FakeJobGuest(FakeAdmissionGuest):
             return subprocess.CompletedProcess(argv, 0, json.dumps(facts) + '\n', '')
         return super().run(argv, input_text, timeout, user)
 
+    egress_counts = None
+
     def facts(self):
         report = super().facts()
+        counts = self.egress_counts or [3, 0, 0, 0]       # RETURN, LOG, REJECT tcp, REJECT
+        rows = [{'packets': n, 'bytes': 60 * n, 'target': target, 'line': target}
+                for n, target in zip(counts, ('RETURN', 'LOG', 'REJECT', 'REJECT'))]
+        report['admission']['egress'] = {
+            'iptables': rows,
+            'ip6tables': [dict(r, packets=0, bytes=0) for r in rows],
+            'log': {'count': counts[1], 'tail': ['aieh-egress-guard: IN=docker0 OUT=enp0s4 '
+                                                 'DST=10.0.2.2 PROTO=TCP DPT=13300 SYN']}}
         if self.faults.get('privileged'):
             for c in report['containers']:
                 c['HostConfig'] = dict(c['HostConfig'], Privileged=True)
@@ -4272,8 +4354,31 @@ class FakeJobGuest(FakeAdmissionGuest):
                 'credential_files': ['/workspace/.git-credentials']
                 if self.faults.get('cred_file') else [], 'seconds': 30.0}
 
+    def egress_output(self, spec):
+        self.egress_specs = getattr(self, 'egress_specs', []) + [spec]
+        counts = list(self.egress_counts or [3, 0, 0, 0])
+        results = []
+        for proto, host, port, what in spec['targets']:
+            outcome = 'ECONNREFUSED'
+            if self.faults.get('egress_topology') and not host.startswith('10.0.2.'):
+                outcome = 'ENETUNREACH'
+            if self.faults.get('egress_timeout') and host == '10.0.2.100':
+                outcome = 'timeout'
+            if self.faults.get('egress_connects') and host == '1.1.1.1':
+                outcome = 'connected'
+            if outcome == 'ECONNREFUSED' and not self.faults.get('egress_uncounted'):
+                counts[2 if proto == 'tcp' else 3] += 1
+                counts[1] += 1
+            results.append({'proto': proto, 'host': host, 'port': port, 'what': what,
+                            'outcome': outcome, 'seconds': 0.01})
+        self.egress_counts = counts
+        return {'results': results}
+
     def container_output(self, cid, command):
         script, arg = _script_of(command)
+        if script == guest.JOB_EGRESS_SWEEP:
+            spec = json.loads(base64.b64decode(arg).decode('utf-8'))
+            return guest.JOB_MARKER + json.dumps(self.egress_output(spec)) + '\n'
         if script == guest.JOB_ENV_PROBE:
             spec = json.loads(base64.b64decode(arg).decode('utf-8'))
             return 'noise\n' + guest.JOB_MARKER + json.dumps(self.env_output(spec)) + '\n'
@@ -4334,7 +4439,7 @@ class JobAccessProbe(TempState):
     def test_probe_passes(self):
         out, fake = self.run_probe()
         self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
-        self.assertEqual(len(out['steps']), 10)
+        self.assertEqual(len(out['steps']), 11)
         self.assertEqual(fake.conversations, {})                # both deleted
         self.assertEqual(out['ci']['status'], 'not applicable yet: no CI runner exists')
         self.assertEqual(out['ci']['carried_to'], JOBS['ci']['carried_to'])
@@ -4354,6 +4459,42 @@ class JobAccessProbe(TempState):
         self.assertEqual(fake.scan_specs[0]['aieh'], sorted(OUTER_FP.values()))
         self.assertEqual(fake.scan_specs[0]['gitea'], ['sha256:2edcc7070632f15d'])
         self.assertTrue(Path(out['record']).is_file())
+
+    def test_egress_sweep_targets_and_counters(self):
+        out, fake = self.run_probe()
+        step = next(s for s in out['steps'] if s['step'].startswith('egress sweep'))
+        self.assertTrue(step['ok'])
+        targets = {f'{p}:{h}:{n}' for p, h, n, _ in fake.egress_specs[0]['targets']}
+        for want in ('tcp:1.1.1.1:443', 'tcp:8.8.8.8:53', 'udp:8.8.8.8:53', 'tcp:10.0.2.2:40001',
+                     'tcp:10.0.2.2:40002', 'tcp:10.0.2.2:13300', 'tcp:10.0.2.3:53',
+                     'udp:10.0.2.3:53', 'tcp:10.0.2.100:7000'):
+            self.assertIn(want, targets)
+        counters = step['detail']['counters']
+        self.assertEqual(counters['delta']['REJECT tcp-reset'], counters['refused_tcp'])
+        self.assertEqual(counters['delta']['REJECT'], counters['refused_other'])
+        self.assertTrue(counters['incremented'] and counters['exact'])
+        self.assertEqual(len(step['detail']['results']), 2 * len(fake.egress_specs[0]['targets']))
+
+    def test_egress_decision_rule(self):
+        name = 'egress sweep from inside each job (S-01.4)'
+        for fault in ('egress_topology', 'egress_timeout', 'egress_uncounted'):
+            out, fake = self.run_probe(**{fault: True})
+            self.assertEqual(out['result'], 'FAIL', fault)
+            self.assertEqual(out['failed_steps'], [name], fault)
+            self.assertEqual(out['stop_conditions'], [], fault)
+            self.assertEqual(fake.conversations, {})
+        out, _ = self.run_probe(egress_topology=True)
+        step = next(s for s in out['steps'] if s['step'] == name)
+        verdicts = {(r['host'], r['verdict']) for r in step['detail']['results']}
+        self.assertIn(('1.1.1.1', 'topology, not policy'), verdicts)
+        self.assertIn(('10.0.2.2', 'refused (reset or ICMP reject)'), verdicts)
+        out, fake = self.run_probe(egress_connects=True)
+        self.assertEqual(out['stop_conditions'][0]['condition'], 'a job connected out of the guest')
+        self.assertEqual(fake.conversations, {})
+        ok, rows, stop, counters = guest.egress_verdict(
+            [{'proto': 'tcp', 'outcome': 'ECONNREFUSED'}], None, [0, 0, 1, 0])
+        self.assertFalse(ok)
+        self.assertFalse(counters['incremented'])
 
     def test_container_scripts_carry_no_secret_or_key_on_the_command_line(self):
         fake = FakeJobGuest()
@@ -4457,6 +4598,79 @@ class JobAccessProbe(TempState):
         self.assertEqual(script, guest.JOB_TOKEN_SCAN)
         self.assertEqual(arg, 'QUJD')
         self.assertTrue(command.endswith('exit $rc'))
+
+
+class HostCensus(unittest.TestCase):
+    """host-census (S-01.4): read-only, unelevated; every harness listener on 127.0.0.1; the
+    firewall recorded, UNKNOWN when a cmdlet is refused; an excluded PID never recorded."""
+
+    def census(self, data, exclude=(21140,)):
+        with mock.patch.object(guest, 'powershell_json', return_value=data) as ps:
+            out = guest.host_census(exclude)
+        return out, ps.call_args[0][0]
+
+    def answer(self, **override):
+        data = {'processes': [{'Id': 4100, 'Name': 'qemu-system-x86_64'}],
+                'tcp_by_process': [
+                    {'LocalAddress': '127.0.0.1', 'LocalPort': 40001, 'OwningProcess': 4100,
+                     'Process': 'qemu-system-x86_64'},
+                    {'LocalAddress': '127.0.0.1', 'LocalPort': 40002, 'OwningProcess': 4100,
+                     'Process': 'qemu-system-x86_64'}],
+                'tcp_by_port': {'LocalAddress': '127.0.0.1', 'LocalPort': 13300,
+                                'OwningProcess': 5200, 'Process': 'gitea'},
+                'udp_by_process': [],
+                'firewall_profiles': [{'Name': 'Domain', 'Enabled': 'True',
+                                       'DefaultInboundAction': 'NotConfigured',
+                                       'DefaultOutboundAction': 'NotConfigured'}],
+                'firewall_rule_count': 512}
+        data.update(override)
+        return data
+
+    def test_loopback_listeners_pass(self):
+        out, script = self.census(self.answer())
+        self.assertEqual(out['result'], 'PASS')
+        self.assertEqual([(l['port'], l['found_by']) for l in out['listeners']],
+                         [(40001, 'process'), (40002, 'process'), (13300, 'port')])
+        self.assertEqual(out['firewall']['rule_count'], 512)
+        self.assertEqual(out['excluded_pids'], [21140])
+        # read only: no rule, setting or elevation; the excluded PID is filtered before lookup
+        for word in ('New-NetFirewallRule', 'Set-Net', 'Remove-Net', 'RunAs', 'Start-Process',
+                     'Path', 'CommandLine'):
+            self.assertNotIn(word, script)
+        self.assertIn('$ex=@(21140)', script)
+        self.assertLess(script.index('Where-Object { $ex -notcontains $_.Id }'),
+                        script.index('foreach($p in $named)'))
+        self.assertLess(script.index('Where-Object { $ex -notcontains $_.OwningProcess }'),
+                        script.index('Get-Process -Id'))
+
+    def test_non_loopback_listener_fails(self):
+        out, _ = self.census(self.answer(tcp_by_port=[
+            {'LocalAddress': '0.0.0.0', 'LocalPort': 4173, 'OwningProcess': 6000,
+             'Process': 'node'}]))
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['problems'][0]['problem'], 'not bound to 127.0.0.1')
+        out, _ = self.census(self.answer(udp_by_process=[
+            {'LocalAddress': '0.0.0.0', 'LocalPort': 5353, 'OwningProcess': 4100,
+             'Process': 'qemu-system-x86_64'}]))
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_refused_cmdlets_are_unknown(self):
+        out, _ = self.census(self.answer(firewall_profiles=None, firewall_rule_count=None,
+                                         firewall_profiles_error='Access is denied.',
+                                         firewall_rule_count_error='Access is denied.'))
+        self.assertEqual(out['result'], 'PASS')
+        self.assertEqual(out['firewall']['profiles'], 'UNKNOWN: Access is denied.')
+        self.assertTrue(out['firewall']['rule_count'].startswith('UNKNOWN'))
+        out, _ = self.census({'error': 'powershell failed'})
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_excluded_pid_recorded_fails_and_out_refusals(self):
+        out, _ = self.census(self.answer(tcp_by_port=[
+            {'LocalAddress': '127.0.0.1', 'LocalPort': 13300, 'OwningProcess': 21140,
+             'Process': ''}]))
+        self.assertIn('an excluded PID was recorded', [p['problem'] for p in out['problems']])
+        with self.assertRaises(guest.Refused):
+            guest.host_census((), out_path=str(REPO / 'census.json'))
 
 
 class JobContainerShape(unittest.TestCase):

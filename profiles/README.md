@@ -166,6 +166,9 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     `openhands` has no login shell and is in group `docker`. It is the guest's own
     service principal and reaches only the guest's own daemon socket. `agent` stays
     outside `docker`.
+  - **Never inside a conversation container (amended 2026-11-07, S-01.4).** The guest's
+    own Moby is reachable only from the guest itself, and never inside a conversation
+    container: no engine socket, no engine TCP endpoint (S-01.3.2).
   - A provider agent channel (incus-agent, QEMU guest agent) is declared, and is
     host→guest only.
 - **trusted-workload (WSL):**
@@ -185,7 +188,14 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     from root's boot-time report, no socket under `/run/docker` or `/run/containerd`
     writable by others; as `agent`, `connect()` to each declared socket fails with `EACCES` and
     `docker info` is refused; `agent` is not in group `docker`; and no TCP listener
-    belongs to dockerd, containerd or docker-proxy.
+    belongs to dockerd, containerd or docker-proxy;
+  - for a provisioned guest's conversation containers (amended 2026-11-07, S-01.4, from
+    S-01.3.2): from inside each container as its default user, every declared engine
+    socket path is absent (Docker, containerd, Podman, BuildKit, CRI-O) and every socket
+    found refuses; the engine ports 2375 and 2376 refuse at `host.docker.internal`, every
+    guest address, the container's own loopback and SLIRP's `10.0.2.2` and `10.0.2.3`;
+    and no engine variable is set (`job-access-probe`, and `inspect`'s conversation
+    containers entry).
 
 ### P7 Network posture
 - **Shape:** NAT or a managed bridge, never bridged onto the Owner's LAN. Inbound
@@ -211,6 +221,15 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
 - **Containers inside the guest.** Denial must hold **from inside a container in the
   guest**. Decision 0001's `host.docker.internal:host-gateway` resolves to the guest,
   not to the host, so a container must not reach the host through the guest either.
+  (Amended 2026-11-07, S-01.4.)
+  - **The guest's own listeners and the peer container are denied.** Their enforcement
+    points are the container guard (every new connection from a container bridge to any
+    address of the guest is refused) and `icc` off on Moby's bridge (no connection
+    between two containers).
+  - **Container egress** is enforced at the egress guard: every new connection that a
+    container bridge forwards out of the guest is refused, except to the allowlist, which
+    is exactly the endpoint classes the profile enables for containers (`inference`, and
+    `provision` while it is open). None is enabled today, so the allowlist is empty.
 - **IPv6** is off unless the profile lists it.
 - **Guest-internal listeners (amended 2026-11-07, F-04.1).** A provisioned guest's Agent
   Server listens on the guest's own `127.0.0.1` only, at the port the profile declares
@@ -234,6 +253,12 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
 - **Inspect:**
   - connection attempts to the host gateway and the host's other addresses fail, both
     from the guest and from a container inside it;
+  - for a provisioned guest (amended 2026-11-07, S-01.4): the container guard's and the
+    egress guard's chains in both IP families, verified by the root step, the boot facts
+    and `inspect`; from inside a container, the guest's listeners and the peer container
+    refuse or do not answer, and the egress sweep (public addresses, SLIRP's aliases, an
+    unconfigured guestfwd-class address) is refused by the egress guard, whose counters
+    rise;
   - a positive control to one allowlisted endpoint succeeds;
   - `ip route`, `ip addr` and `ip -6 addr` are recorded;
   - for a provisioned guest: root's boot-time `ss -ltnp` shows no Moby listener. Root's
@@ -309,8 +334,9 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
 |---|---|
 | P1 | F-03.2.2 (observed state), F-03.4 |
 | P2, P8, P9, P12 | F-03.2.1 (declared), F-03.2.2 (observed) |
-| P3, P4, P5, P6 | F-03.3.1; S-02.1, S-02.2 |
-| P7 | F-03.3.2; S-02.1, S-02.2 |
+| P3, P4, P5 | F-03.3.1; S-02.1, S-02.2 |
+| P6 | F-03.3.1; S-01.3.1, S-01.3.2, S-01.4; S-02.1, S-02.2 |
+| P7 | F-03.3.2; S-01.3.1, S-01.3.2, S-01.4; S-02.1, S-02.2 |
 | P10 | F-03.4 |
 | P11 | every leaf that produces an artifact |
 

@@ -26,7 +26,10 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
   with the local image and explicit caps inside the ceilings, keeps every data path on
   declared scratch directories and the secrets in a root-only file, and pins the
   disposable conversation fixture; with ``--openapi FILE`` the fixture is also validated
-  against the locked openapi.json (a standard-library JSON Schema subset);
+  against the locked openapi.json (a standard-library JSON Schema subset); its admission
+  block declares the container guard (S-01.3.1) and the container egress guard in Moby's
+  DOCKER-USER chain (S-01.4: the declared rules, both families, the container bridges, the
+  same seeded unit, and an allowlist of the classes the profile enables for containers);
 - ceilings are declared and match the provider configuration (profiles P2);
 - exactly one accelerator and no TCG fallback (contract section 4);
 - the lifecycle is the contract's closed set (contract section 3).
@@ -1107,6 +1110,18 @@ GUARD_RULES = ['-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
                '"aieh-container-guard: "',
                '-p tcp -j REJECT --reject-with tcp-reset',
                '-j REJECT']
+# S-01.4: the egress guard in Moby's DOCKER-USER chain (same script and unit as the guard):
+# its own chain with the same four rules under its own log prefix, entered for a packet from
+# a container bridge that leaves by another interface; DOCKER-USER ends with RETURN.
+EGRESS_HOOK = 'DOCKER-USER'
+EGRESS_LOG_PREFIX = 'aieh-egress-guard: '
+EGRESS_RULES = ['-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+                '-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix '
+                '"aieh-egress-guard: "',
+                '-p tcp -j REJECT --reject-with tcp-reset',
+                '-j REJECT']
+# the endpoint classes a container may be allowed to reach (profiles P7)
+CONTAINER_CLASSES = ('inference', 'provision')
 
 
 def route_problems(data):
@@ -1208,11 +1223,69 @@ def check_admission(report, profile, root, conf, server):
     if daemon.get('icc') is not False:
         report.fail(f'{label}: provisioning.moby.daemon_json must set icc false (no '
                     'container-to-container connection on the default bridge)')
+    check_egress_guard(report, profile, guard, (adm.get('network') or {}).get('egress_guard'),
+                       daemon, f'{label}.network.egress_guard')
     dispatcher = adm.get('dispatcher') or {}
     if not dispatcher.get('principal') or not dispatcher.get('bootstrap') or \
             not dispatcher.get('owner_ui'):
         report.fail(f'{label}.dispatcher: name the principal, the bootstrap performer and the '
                     'Owner UI path (planned or unknown)')
+
+
+def enabled_container_classes(profile):
+    """The endpoint classes the profile enables for containers: network.endpoints of class
+    inference or provision whose status is not deferred."""
+    return sorted({str(e.get('class')) for e in (profile.get('network') or {}).get('endpoints') or []
+                   if isinstance(e, dict) and e.get('class') in CONTAINER_CLASSES and
+                   not str(e.get('status', '')).startswith('deferred')})
+
+
+def check_egress_guard(report, profile, guard, egress, daemon, label):
+    """provisioning.agent_server.admission.network.egress_guard (S-01.4): Moby's DOCKER-USER
+    chain sends a packet from a container bridge that leaves by another interface to the
+    guard's own chain (the declared four rules, its own log prefix), DOCKER-USER ends with
+    RETURN, both families, the same seeded script and unit as the container guard (so Moby
+    requires it), and an allowlist that names only classes the profile enables for
+    containers (empty while none is). Moby keeps managing iptables and IP forwarding."""
+    if not isinstance(egress, dict):
+        report.fail(f'{label}: must be declared (S-01.4: container egress, fail closed)')
+        return
+    chain = str(egress.get('chain', ''))
+    interfaces = egress.get('interfaces') if isinstance(egress.get('interfaces'), list) else []
+    if egress.get('rules') != EGRESS_RULES:
+        report.fail(f'{label}.rules: must be {EGRESS_RULES}')
+    if not re.match(r'^[A-Z][A-Z0-9-]{2,28}$', chain) or chain in (guard.get('chain'), EGRESS_HOOK):
+        report.fail(f'{label}.chain: its own chain, not the container guard\'s or {EGRESS_HOOK}')
+    if egress.get('hook') != EGRESS_HOOK:
+        report.fail(f'{label}.hook: must be {EGRESS_HOOK} (FORWARD jumps to it first)')
+    if 'docker0' not in interfaces or interfaces != (guard.get('interfaces') or []):
+        report.fail(f'{label}.interfaces: the container guard\'s bridges, docker0 included')
+    want_hooks = [f'-i {i} ! -o {i} -j {chain}' for i in interfaces] + ['-j RETURN']
+    if egress.get('hook_rules') != want_hooks:
+        report.fail(f'{label}.hook_rules: must be {want_hooks}')
+    if egress.get('families') != ['iptables', 'ip6tables']:
+        report.fail(f'{label}.families: iptables and ip6tables')
+    if egress.get('log_prefix') != EGRESS_LOG_PREFIX:
+        report.fail(f'{label}.log_prefix: must be {EGRESS_LOG_PREFIX!r}')
+    if egress.get('script') != guard.get('script') or egress.get('unit') != guard.get('unit'):
+        report.fail(f'{label}: installed by the container guard\'s script and unit, which '
+                    'docker.service requires (fail closed)')
+    allow = egress.get('allowlist')
+    enabled = enabled_container_classes(profile)
+    if not isinstance(allow, list):
+        report.fail(f'{label}.allowlist: must be a list')
+    else:
+        for n, entry in enumerate(allow):
+            if not isinstance(entry, dict) or entry.get('class') not in enabled or \
+                    not str(entry.get('rule', '')).endswith('-j RETURN'):
+                report.fail(f'{label}.allowlist[{n}]: an entry names a class the profile enables '
+                            f'for containers ({enabled or "none"}) and a rule ending -j RETURN')
+    for key in ('allowlist_rule', 'rule', 'dockerd', 'fail_closed'):
+        if not egress.get(key):
+            report.fail(f'{label}.{key}: required')
+    if daemon.get('iptables') is False or daemon.get('ip-forward') is False:
+        report.fail(f'{label}: provisioning.moby.daemon_json must not turn off iptables or '
+                    'ip-forward (S-01.4 ruling R5)')
 
 
 # The job environment (S-01.3.2): what every conversation container must show, and the CI

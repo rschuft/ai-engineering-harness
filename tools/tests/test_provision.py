@@ -14,6 +14,7 @@ Run from the repository root:  python -I -B -m unittest discover -s tools/tests 
 from pathlib import Path
 import ast
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
@@ -377,6 +378,7 @@ class AdmissionSeed(unittest.TestCase):
     against provisioning.agent_server.admission."""
     ADM = PCONF['agent_server']['admission']
     GUARD = ADM['network']['guard']
+    EGRESS = ADM['network']['egress_guard']
 
     def guard_module(self):
         """The guard script's definitions, executed (not its main) in a fresh namespace."""
@@ -396,6 +398,17 @@ class AdmissionSeed(unittest.TestCase):
         self.assertEqual(g['LOG_PREFIX'], self.GUARD['log_prefix'])
         self.assertEqual(list(g['TOOLS']), self.GUARD['families'])
         self.assertEqual(list(g['RULES']), self.GUARD['rules'])
+        # S-01.4: the egress guard of the same script
+        self.assertEqual(g['EGRESS_CHAIN'], self.EGRESS['chain'])
+        self.assertEqual(g['EGRESS_HOOK'], self.EGRESS['hook'])
+        self.assertEqual(g['EGRESS_LOG_PREFIX'], self.EGRESS['log_prefix'])
+        self.assertEqual(list(g['EGRESS_RULES']), self.EGRESS['rules'])
+        self.assertEqual(list(g['EGRESS_ALLOWLIST']), self.EGRESS['allowlist'])
+        self.assertEqual(list(g['INTERFACES']), self.EGRESS['interfaces'])
+        self.assertEqual(g['egress_hook_rules'](),
+                         [f"-A {self.EGRESS['hook']} {r}" for r in self.EGRESS['hook_rules']])
+        self.assertEqual(self.EGRESS['script'], self.GUARD['script'])
+        self.assertEqual(self.EGRESS['unit'], self.GUARD['unit'])
         c = script_constants()
         self.assertEqual(c['GUARD'], self.GUARD['script'])
         self.assertEqual(c['GUARD_UNIT'], self.GUARD['unit'])
@@ -404,6 +417,9 @@ class AdmissionSeed(unittest.TestCase):
         self.assertEqual(list(c['GUARD_TOOLS']), self.GUARD['families'])
         self.assertEqual(c['GUARD_DROPIN'], self.GUARD['docker_dropin'])
         self.assertEqual(c['KEYCHECK'], self.ADM['session_key']['start_check'])
+        self.assertEqual(c['EGRESS_CHAIN'], self.EGRESS['chain'])
+        self.assertEqual(c['EGRESS_HOOK'], self.EGRESS['hook'])
+        self.assertEqual(c['EGRESS_LOG_PREFIX'], self.EGRESS['log_prefix'])
 
     def test_guard_units(self):
         lines = unit(self.GUARD['unit'])
@@ -418,42 +434,107 @@ class AdmissionSeed(unittest.TestCase):
         self.assertIn(f"  - path: {self.GUARD['script']}\n    owner: root:root\n"
                       "    permissions: '0755'\n", TEMPLATE)
 
+    class FakeTables:
+        """A per-family iptables of the filter table (-L, -N, -F, -A, -I, -D, -C, -S), enough
+        for the guard script and for what Moby 26.1 does to DOCKER-USER and FORWARD at its
+        start (create the chain if absent, add -j RETURN unless present, re-insert FORWARD's
+        jump at the top)."""
+        BUILTIN = ('INPUT', 'FORWARD', 'OUTPUT')
+
+        def __init__(self):
+            self.chains = {}                   # tool -> {chain: [rule text]}
+            self.calls = []
+
+        def table(self, tool):
+            return self.chains.setdefault(tool, {c: [] for c in self.BUILTIN})
+
+        @staticmethod
+        def text(args):
+            return ' '.join(f'"{x}"' if ' ' in x else x for x in args)
+
+        def run(self, argv):
+            self.calls.append(argv)
+            tool = argv[0]
+            args = [a for a in argv[1:] if a not in ('-w', '-n')]
+            op, name, rest = args[0], (args[1] if len(args) > 1 else None), args[2:]
+            chains = self.table(tool)
+            if op == '-L':
+                return (0 if name in chains else 1), '', ''
+            if op == '-N':
+                if name in chains:
+                    return 1, '', 'Chain already exists.'
+                chains[name] = []
+                return 0, '', ''
+            if name not in chains:
+                return 1, '', f'No chain/target/match by that name ({name})'
+            if op == '-F':
+                chains[name] = []
+            elif op == '-A':
+                chains[name].append(self.text(rest))
+            elif op == '-I':
+                chains[name].insert(int(rest[0]) - 1, self.text(rest[1:]))
+            elif op in ('-D', '-C'):
+                rule = self.text(rest)
+                if rule not in chains[name]:
+                    return 1, '', 'Bad rule (does a matching rule exist in that chain?).'
+                if op == '-D':
+                    chains[name].remove(rule)
+            elif op == '-S':
+                head = f'-P {name} ACCEPT' if name in self.BUILTIN else f'-N {name}'
+                return 0, head + '\n' + ''.join(f'-A {name} {r}\n' for r in chains[name]), ''
+            return 0, '', ''
+
+        def dockerd_starts(self, tool='iptables'):
+            """Moby 26.1's DOCKER-USER handling at start (libnetwork, iptables on)."""
+            chains = self.table(tool)
+            chains.setdefault('DOCKER-USER', [])
+            if '-j RETURN' not in chains['DOCKER-USER']:
+                chains['DOCKER-USER'].append('-j RETURN')
+            if '-j DOCKER-USER' in chains['FORWARD']:
+                chains['FORWARD'].remove('-j DOCKER-USER')
+            chains['FORWARD'].insert(0, '-j DOCKER-USER')
+            chains.setdefault('DOCKER', [])
+            chains['FORWARD'][1:1] = ['-j DOCKER-ISOLATION-STAGE-1',
+                                      '-o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT',
+                                      '-i docker0 -o docker0 -j DROP']
+
     def test_guard_installs_and_verifies_both_families(self):
         g = self.guard_module()
-        calls, state = [], {}
-
-        def fake_run(argv):
-            calls.append(argv)
-            tool, op = argv[0], argv[2]
-            chain, inputs = state.setdefault(tool, ([], []))
-            if op == '-L':
-                return (0 if tool + '-chain' in state else 1), '', ''
-            if op == '-N':
-                state[tool + '-chain'] = True
-            elif op == '-A':
-                chain.append(' '.join(f'"{x}"' if ' ' in x else x for x in argv[3:]))
-            elif op == '-D':
-                return 1, '', 'not found'
-            elif op == '-I':
-                inputs.insert(0, ' '.join(argv[5:]))
-            elif op == '-S':
-                if argv[3] == g['CHAIN']:
-                    return 0, '-N ' + g['CHAIN'] + '\n' + ''.join(
-                        f'-A {line}\n' for line in chain), ''
-                return 0, '-P INPUT ACCEPT\n' + ''.join(
-                    f'-A INPUT {line}\n' for line in inputs), ''
-            return 0, '', ''
-        g['run'] = fake_run
+        tables = self.FakeTables()
+        g['run'] = tables.run
         with mock.patch('builtins.print') as printed:
             self.assertEqual(g['main']([]), 0)
         out = json.loads(printed.call_args[0][0])
         self.assertTrue(out['ok'])
+        self.assertTrue(out['egress_ok'])
         self.assertEqual(set(out['families']), {'iptables', 'ip6tables'})
-        added = [c for c in calls if c[2] == '-A']
+        added = [c for c in tables.calls if c[2] == '-A' and c[3] == g['CHAIN']]
         self.assertEqual(len(added), 2 * len(self.GUARD['rules']))
         self.assertIn(['iptables', '-w', '-A', g['CHAIN'], '-m', 'limit', '--limit', '10/min',
                        '--limit-burst', '20', '-j', 'LOG', '--log-prefix',
                        'aieh-container-guard: '], added)
+        # the egress guard: DOCKER-USER created (no Moby yet), its hooks and RETURN, its chain
+        # with the declared rules, and FORWARD's first rule the jump to DOCKER-USER
+        for tool in ('iptables', 'ip6tables'):
+            chains = tables.table(tool)
+            self.assertEqual([f"-A {self.EGRESS['hook']} {r}" for r in self.EGRESS['hook_rules']],
+                             [f"-A DOCKER-USER {r}" for r in chains['DOCKER-USER']])
+            self.assertEqual(chains['FORWARD'], ['-j DOCKER-USER'])
+            self.assertEqual(len(chains[self.EGRESS['chain']]), len(self.EGRESS['rules']))
+        self.assertIn(['ip6tables', '-w', '-A', self.EGRESS['chain'], '-m', 'limit', '--limit',
+                       '10/min', '--limit-burst', '20', '-j', 'LOG', '--log-prefix',
+                       'aieh-egress-guard: '], tables.calls)
+        self.assertIn(['iptables', '-w', '-N', 'DOCKER-USER'], tables.calls)
+        # Moby's start changes nothing the check looks at: the rules survive it
+        before = copy.deepcopy(tables.chains['iptables']['DOCKER-USER'])
+        tables.dockerd_starts()
+        self.assertEqual(tables.chains['iptables']['DOCKER-USER'], before)
+        self.assertTrue(g['observe_egress']('iptables')['ok'])
+        # a rerun (the unit restarted) leaves exactly one jump and the same chains
+        with mock.patch('builtins.print') as printed:
+            self.assertEqual(g['main']([]), 0)
+        self.assertEqual(tables.chains['iptables']['FORWARD'].count('-j DOCKER-USER'), 1)
+        self.assertEqual(tables.chains['iptables']['DOCKER-USER'], before)
         # a missing rule, an extra INPUT jump or a jump below another rule is not ok
         lines = {'iptables': [f"-A {g['CHAIN']} {r}" for r in self.GUARD['rules']]}
 
@@ -467,6 +548,31 @@ class AdmissionSeed(unittest.TestCase):
         self.assertFalse(observed(want[:3], ['-P INPUT ACCEPT'] + jumps))
         self.assertFalse(observed(want, ['-P INPUT ACCEPT', '-A INPUT -j ACCEPT'] + jumps))
         self.assertFalse(observed(want, ['-P INPUT ACCEPT'] + jumps[:1]))
+
+    def test_egress_check_refuses_each_loosening(self):
+        g = self.guard_module()
+        chain = [f"-A {self.EGRESS['chain']} {r}" for r in self.EGRESS['rules']]
+        chain[-1] += ' --reject-with icmp-port-unreachable'      # as iptables -S prints it
+        hook = [f"-A DOCKER-USER {r}" for r in self.EGRESS['hook_rules']]
+        forward = ['-P FORWARD DROP', '-A FORWARD -j DOCKER-USER',
+                   '-A FORWARD -j DOCKER-ISOLATION-STAGE-1']
+
+        def observed(chain_lines, hook_lines, forward_lines):
+            listing = {self.EGRESS['chain']: chain_lines, 'DOCKER-USER': hook_lines,
+                       'FORWARD': forward_lines}
+            g['run'] = lambda argv: (0, '\n'.join(listing[argv[3]]) + '\n', '')
+            return g['observe_egress']('iptables')['ok']
+        self.assertTrue(observed(chain, hook, forward))
+        self.assertFalse(observed(chain[:3], hook, forward))                    # a rule missing
+        self.assertFalse(observed(chain[:1] + ['-A AIEH-EGRESS-GUARD -j RETURN'] + chain[1:],
+                                  hook, forward))                               # an allow added
+        self.assertFalse(observed(chain, hook[:1] + hook[2:], forward))        # a bridge unhooked
+        self.assertFalse(observed(chain, ['-A DOCKER-USER -j RETURN'] + hook, forward))
+        self.assertFalse(observed(chain, hook, ['-P FORWARD DROP', '-A FORWARD -j ACCEPT',
+                                                '-A FORWARD -j DOCKER-USER']))  # not first
+        self.assertFalse(observed(chain, hook, forward + ['-A FORWARD -j DOCKER-USER']))
+        g['run'] = lambda argv: (1, '', 'iptables: No chain/target/match by that name.')
+        self.assertFalse(g['observe_egress']('ip6tables')['ok'])
 
     def test_guard_failure_is_reported_and_nonzero(self):
         g = self.guard_module()
@@ -503,15 +609,19 @@ class AdmissionSeed(unittest.TestCase):
     def test_root_step_admission_checks_everything_declared(self):
         fn = ast.unparse(script_function('check_admission'))
         for word in ("'active'", "'ok'", 'docker_requires_guard', 'docker_after_guard',
-                     "bridge_enable_icc'] != 'false'", "'enable', GUARD_UNIT"):
+                     "bridge_enable_icc'] != 'false'", "'enable', GUARD_UNIT",
+                     "get('egress_ok') is not True"):
             self.assertIn(word, fn)
         facts = ast.unparse(script_function('admission_facts'))
         for word in ("'check'", "'network', 'inspect', 'bridge'", 'com.docker.network.bridge.enable_icc',
-                     "('Requires', 'After')", 'ExecStartPre'):
+                     "('Requires', 'After')", 'ExecStartPre', "'-u', GUARD_UNIT",
+                     "'guard_install'", 'ExecMainExitTimestampMonotonic',
+                     'ExecMainStartTimestampMonotonic'):
             self.assertIn(word, facts)
         counters = ast.unparse(script_function('admission_counters'))
         for word in ("'-v', '-x', '-L', GUARD_CHAIN", "'journalctl', '-k', '-b'",
-                     "'HTTPException 401 on '"):
+                     "'HTTPException 401 on '", "'-v', '-x', '-L', EGRESS_CHAIN",
+                     "'-g', EGRESS_LOG_PREFIX", "out['egress'] = egress"):
             self.assertIn(word, counters)
         self.assertIn("data['admission'] = admission_facts()", SCRIPT)
         self.assertIn("'admission': admission_counters(),", SCRIPT)

@@ -1,0 +1,3788 @@
+{
+  "schema": "ai-engineering-harness/policy/network-matrix/v1",
+  "plan_leaf": "S-01.4",
+  "title": "Deny-by-default communications between the trust domains",
+  "as_of": "2026-11-07",
+  "baseline_commit": "ea10669",
+  "inventory": "security/inventory.json",
+  "readme": "policy/README.md",
+  "checker": "tools/check_network_matrix.py",
+  "decision": "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+  "verdicts": {
+    "allow": "A required path, named with its protocol, endpoint, credentials and at least one prevention mechanism.",
+    "deny": "Refused; the enforcement that refuses it is named.",
+    "disclosed": "Not prevented and not required: reachable under an accepted scope, recorded with a finding."
+  },
+  "statuses": {
+    "observed": "Shown today by committed evidence, with the inspection that shows it.",
+    "planned": "Defined by accepted authority and built or verified at a named plan leaf.",
+    "decided": "Decided by a decision record and built at a named plan leaf."
+  },
+  "externals": {
+    "external:off-host": "Anything outside the Owner host and the execution guest: public IPv4 and IPv6 addresses, the LAN and unconfigured guestfwd addresses.",
+    "external:lan": "The Owner's local network, reaching the Owner host from outside.",
+    "external:model-provider": "The model provider behind the inference broker.",
+    "external:effect-targets": "The targets of the executor's allowlisted operation kinds (G-04.x).",
+    "external:github": "The public GitHub origin of this repository."
+  },
+  "asset_classes": {
+    "host-owner-windows": "host",
+    "host-credential-stores": "credential",
+    "host-guest-state-root": "credential",
+    "host-instance-directory": "credential",
+    "host-qemu-process": "management",
+    "listener-host-ssh-forward": "management",
+    "listener-host-qmp": "management",
+    "guest-execution-vm": "host",
+    "guest-exchange": "store",
+    "guest-sshd": "management",
+    "guest-agent-server-listener": "management",
+    "guest-conversation-listeners": "workload",
+    "guest-moby-socket": "management",
+    "guest-containerd-socket": "management",
+    "guest-secrets-env-file": "credential",
+    "guest-session-key-file": "credential",
+    "guest-provision-root-step": "management",
+    "guest-facts-reporters": "management",
+    "guest-container-guard": "management",
+    "conversation-container": "workload",
+    "api-agent-server-management": "management",
+    "api-agent-server-public": "management",
+    "api-agent-server-unenumerated": "management",
+    "api-moby": "management",
+    "store-agent-server-scratch": "credential",
+    "store-moby-data-root": "management",
+    "store-effects": "management",
+    "store-integration": "management",
+    "repo-owner-local": "repository",
+    "repo-github-public": "credential",
+    "app-owner-host": "service",
+    "api-integration-service": "management",
+    "gitea-server": "credential",
+    "repo-gitea-authorization": "management",
+    "repo-gitea-policy": "management",
+    "ci-runner-host": "credential",
+    "endpoint-inference": "endpoint",
+    "endpoint-provision": "endpoint"
+  },
+  "edges": [
+    {
+      "id": "nm-owner-same-account",
+      "name": "Same-account host processes to every host listener and store",
+      "from": "td-owner",
+      "to": "td-owner",
+      "verdict": "disclosed",
+      "protocol": "any (host loopback TCP, files)",
+      "endpoint": "host-owner-windows",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "none between processes of the Owner's account: disclosed under the same-account scope (decision 0013, point 6; decision 0010, point 1)",
+          "kind": "disclosure",
+          "where": "host"
+        },
+        {
+          "mechanism": "every harness host listener binds 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/bootstrap-log.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-bootstrap-shared-identity",
+        "fd-host-loopback-exposure"
+      ],
+      "inspection": [
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ],
+      "notes": "Host-internal edges are separated by credential entry and code path, not prevented: QMP, the SSH forward, Gitea, the Owner host and the stores are reachable by every process of the Owner's account (decision 0013, point 6). This does not amend decision 0010."
+    },
+    {
+      "id": "nm-owner-ui-shell",
+      "name": "The Owner's browser to the Owner host's Vite dev or preview server",
+      "from": "td-owner",
+      "to": "td-owner",
+      "verdict": "allow",
+      "protocol": "http on host 127.0.0.1 (strictPort 5173, 4173)",
+      "endpoint": "app-owner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "Vite server and preview bound to host 127.0.0.1 with strictPort (apps/owner-host/vite.config.ts)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/bootstrap-log.md",
+        "apps/owner-host/vite.config.ts"
+      ],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ],
+      "notes": "The shell holds no credential and connects to no backend yet (U-01.1)."
+    },
+    {
+      "id": "nm-owner-ui-integration",
+      "name": "Owner UI to the Owner-host/Integration process",
+      "from": "td-owner",
+      "to": "td-management",
+      "verdict": "allow",
+      "protocol": "http on host loopback",
+      "endpoint": "api-integration-service",
+      "credentials": [
+        "cred-owner-ui-session"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "every harness host listener binds 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "the Owner UI session credential (cred-owner-ui-session), never shaped like an Agent Server key",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"
+      ],
+      "verify_at": "U-01.2",
+      "owner_act": false,
+      "findings": [
+        "fd-owner-ui-session-plan-silence"
+      ],
+      "inspection": [
+        "planned: U-01.2 (plan silence on its login)"
+      ],
+      "notes": "Decision 0013, point 5. Which leaf builds the credential is unsettled (S-01.4 ruling R8)."
+    },
+    {
+      "id": "nm-owner-management-same-account",
+      "name": "The Owner's account to the trusted management processes (dispatcher, Integration, verifier, broker)",
+      "from": "td-owner",
+      "to": "td-management",
+      "verdict": "disclosed",
+      "protocol": "host loopback, files",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "none between processes of the Owner's account: disclosed under the same-account scope (decision 0013, point 6; decision 0010, point 1)",
+          "kind": "disclosure",
+          "where": "host"
+        }
+      ],
+      "status": "decided",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "E-01.3.1",
+      "owner_act": false,
+      "findings": [
+        "fd-bootstrap-shared-identity"
+      ],
+      "inspection": [
+        "planned: E-01.3.1 (the dispatcher process)"
+      ],
+      "notes": "During bootstrap they run as, or beside, the Owner's account; separated by credential entry and code path."
+    },
+    {
+      "id": "nm-owner-executor",
+      "name": "The Owner's account to the executor and the effects store",
+      "from": "td-owner",
+      "to": "td-privileged-effect",
+      "verdict": "disclosed",
+      "protocol": "files and the authorized effects interface",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "integrity checks of the effects store: hash-chained journal, restore epochs, custody verification on open (decision 0010, point 2)",
+          "kind": "detection",
+          "where": "host"
+        },
+        {
+          "mechanism": "none between processes of the Owner's account: disclosed under the same-account scope (decision 0013, point 6; decision 0010, point 1)",
+          "kind": "disclosure",
+          "where": "host"
+        }
+      ],
+      "status": "decided",
+      "evidence": [],
+      "sources": [
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-bootstrap-shared-identity"
+      ],
+      "inspection": [
+        "planned: G-04.2.1, G-04.2.2"
+      ],
+      "notes": "Decision 0010: location is not custody; the Owner's account can read and relocate the store (a recorded limit), changes are detected."
+    },
+    {
+      "id": "nm-owner-gitea",
+      "name": "The Owner's account (and the bootstrap administration) to the host-loopback Gitea",
+      "from": "td-owner",
+      "to": "td-git-hosting",
+      "verdict": "allow",
+      "protocol": "http on host 127.0.0.1:13300; Gitea CLI",
+      "endpoint": "gitea-server",
+      "credentials": [
+        "cred-gitea-admin",
+        "cred-gitea-owner-account"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "Gitea HTTP bound to host 127.0.0.1:13300 only, offline, no SSH server, registration off",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "Gitea accounts, token scopes, collaborator permissions and branch protection with the admin merge override blocked",
+          "kind": "prevention",
+          "where": "gitea"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md",
+        "evidence/S-01.2.2-segregated-credentials.md"
+      ],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "Gitea on host loopback"
+      },
+      "findings": [
+        "fd-bootstrap-shared-identity",
+        "fd-gitea-version-docs"
+      ],
+      "inspection": [
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)",
+        "task gitea:verify; task gitea:authz (S-01.2.2 fixture)"
+      ]
+    },
+    {
+      "id": "nm-owner-guest-ssh",
+      "name": "Host tooling to the guest's sshd over the loopback forward (management)",
+      "from": "td-owner",
+      "to": "td-guest-control",
+      "verdict": "allow",
+      "protocol": "tcp (SSH) host 127.0.0.1:{ssh_port} to guest :22",
+      "endpoint": "listener-host-ssh-forward",
+      "credentials": [
+        "cred-guest-ssh-key",
+        "cred-guest-host-keys"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "QEMU hostfwd bound to host 127.0.0.1 only; the LAN address and ::1 refuse the port",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "per-instance ed25519 key, IdentitiesOnly, StrictHostKeyChecking with the host keys from the serial log",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "sshd: AllowUsers agent, PermitRootLogin no, no TCP or agent forwarding, no tunnel",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.2.2b-guest-lifecycle.md",
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "Owner authorized F-03.2.2 guest validation"
+      },
+      "findings": [
+        "fd-host-loopback-exposure"
+      ],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ],
+      "profile_endpoints": [
+        "strong-windows-qemu-whpx:management:{ssh_port}",
+        "strong-windows-qemu-whpx:argv:hostfwd=tcp:127.0.0.1:{ssh_port}-:22"
+      ]
+    },
+    {
+      "id": "nm-owner-guest-exchange",
+      "name": "Exchange push and pull: git bundles by SFTP over the management forward",
+      "from": "td-owner",
+      "to": "td-guest-control",
+      "verdict": "allow",
+      "protocol": "SFTP over the SSH forward",
+      "endpoint": "guest-exchange",
+      "credentials": [
+        "cred-guest-ssh-key"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "SFTP as agent with the per-instance key over the loopback forward",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "one bounded branch bundle in; pull lands in harness staging and never writes an Owner repository",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.1-guest-surfaces.md",
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "profiles/README.md",
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md"
+      ],
+      "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "Owner authorized F-03.2.2 guest validation"
+      },
+      "findings": [],
+      "inspection": [
+        "guest.py exchange-push; guest.py exchange-pull",
+        "guest.py check-surfaces (profiles P3-P6)"
+      ],
+      "profile_endpoints": [
+        "strong-windows-qemu-whpx:exchange:{ssh_port}"
+      ],
+      "notes": "The dispatcher takes this path over at E-01.x/D-01.1 (nm-dispatcher-exchange)."
+    },
+    {
+      "id": "nm-owner-guest-qmp",
+      "name": "Host tooling to the QMP monitor (lifecycle, inspect)",
+      "from": "td-owner",
+      "to": "td-guest-control",
+      "verdict": "allow",
+      "protocol": "tcp (QMP) on host 127.0.0.1:{qmp_port}",
+      "endpoint": "listener-host-qmp",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QMP chardev bound to host 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "refused from the guest at 10.0.2.2 (SLIRP restrict=on)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "unauthenticated: every same-account process reaches it",
+          "kind": "disclosure",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.2.2b-guest-lifecycle.md",
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": true,
+      "owner_approval": {
+        "link": "evidence/bootstrap-log.md",
+        "quote": "Owner authorized F-03.2.2 guest validation"
+      },
+      "findings": [
+        "fd-host-loopback-exposure"
+      ],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ],
+      "profile_endpoints": [
+        "strong-windows-qemu-whpx:management:{qmp_port}"
+      ]
+    },
+    {
+      "id": "nm-owner-guest-other",
+      "name": "Any other host-to-guest path (shares, channels, forwards)",
+      "from": "td-owner",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "guest-execution-vm",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "launch.argv carries exactly one hostfwd and no guestfwd, host share, virtio-serial, vsock transport or guest agent (check_profile)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.1-guest-surfaces.md",
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py check-surfaces (profiles P3-P6)"
+      ]
+    },
+    {
+      "id": "nm-owner-ui-conversation",
+      "name": "Owner UI to a conversation's inner server through a dispatcher-owned local forward",
+      "from": "td-owner",
+      "to": "td-untrusted-engineering",
+      "verdict": "allow",
+      "protocol": "http and WebSocket over an SSH -L forward bound to host 127.0.0.1",
+      "endpoint": "guest-conversation-listeners",
+      "credentials": [
+        "cred-conversation-runtime-access"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "dispatcher-owned local forward bound to host 127.0.0.1, to the conversation's published guest-loopback port, living no longer than the Owner's session",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "that conversation's runtime credential only; never the management key",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "builds_at": "U-01.2",
+      "verify_at": "E-01.3.2",
+      "owner_act": true,
+      "findings": [
+        "fd-owner-ui-access"
+      ],
+      "inspection": [
+        "planned: U-01.2, E-01.3.x"
+      ],
+      "notes": "Decision 0013, points 2 to 4: every such forward is a new host port, opened only after a recorded Owner approval (op-guest-boundary-change)."
+    },
+    {
+      "id": "nm-owner-conversation-direct",
+      "name": "Any direct host path into a conversation container",
+      "from": "td-owner",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no host forward to a container or to the Agent Server: conversation listeners and the management listener are on the guest's 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/S-01.3.1-management-api-admission.md"
+      ],
+      "sources": [
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ]
+    },
+    {
+      "id": "nm-owner-review-direct",
+      "name": "Any direct host path into a reviewer's job container",
+      "from": "td-owner",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no host forward to a container or to the Agent Server: conversation listeners and the management listener are on the guest's 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/README.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-owner-ci",
+      "name": "The Owner's host to CI jobs",
+      "from": "td-owner",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "jobs run only on the dedicated runner host, never on the Owner host",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2"
+      ]
+    },
+    {
+      "id": "nm-owner-runner",
+      "name": "The Owner's host to the CI runner host",
+      "from": "td-owner",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no path today (no runner host exists); its administration channel is designed with the runner",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-management-owner",
+      "name": "Trusted management processes to the Owner's account and stores",
+      "from": "td-management",
+      "to": "td-owner",
+      "verdict": "disclosed",
+      "protocol": "host loopback, files",
+      "endpoint": "host-owner-windows",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "none between processes of the Owner's account: disclosed under the same-account scope (decision 0013, point 6; decision 0010, point 1)",
+          "kind": "disclosure",
+          "where": "host"
+        }
+      ],
+      "status": "decided",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "E-01.3.1",
+      "owner_act": false,
+      "findings": [
+        "fd-bootstrap-shared-identity"
+      ],
+      "inspection": [
+        "planned: E-01.3.1"
+      ]
+    },
+    {
+      "id": "nm-management-internal",
+      "name": "Between the dispatcher, the Integration process, the verifier and the broker",
+      "from": "td-management",
+      "to": "td-management",
+      "verdict": "disclosed",
+      "protocol": "host loopback",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "none between processes of the Owner's account: disclosed under the same-account scope (decision 0013, point 6; decision 0010, point 1)",
+          "kind": "disclosure",
+          "where": "host"
+        },
+        {
+          "mechanism": "separated by credential entry and code path",
+          "kind": "disclosure",
+          "where": "host"
+        }
+      ],
+      "status": "decided",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "builds_at": "E-01.3.1",
+      "owner_act": false,
+      "findings": [
+        "fd-bootstrap-shared-identity"
+      ],
+      "inspection": [
+        "planned: E-01.3.1"
+      ]
+    },
+    {
+      "id": "nm-management-executor",
+      "name": "Management processes into the executor's custody beyond the authorized effects interface",
+      "from": "td-management",
+      "to": "td-privileged-effect",
+      "verdict": "deny",
+      "protocol": "files, local IPC",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "only the authorized effects interface: typed, allowlisted operations with a verified Owner authorization (decision 0010, point 4)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "the Integration Service cannot write effect receipts",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security"
+      ],
+      "builds_at": "G-04.4.1",
+      "verify_at": "G-04.2.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.2.2"
+      ]
+    },
+    {
+      "id": "nm-dispatcher-bot-gitea",
+      "name": "The dispatcher, as the bot identity it holds custody of, pushes proposals and opens PRs",
+      "from": "td-management",
+      "to": "td-git-hosting",
+      "verdict": "allow",
+      "protocol": "http (Gitea API, git over HTTP) on host 127.0.0.1:13300",
+      "endpoint": "gitea-server",
+      "credentials": [
+        "cred-gitea-bot-builder",
+        "cred-gitea-bot-planner",
+        "cred-gitea-bot-reviewer"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "Gitea HTTP bound to host 127.0.0.1:13300 only",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "Bot accounts, token scope write:repository, collaborator permissions and branch protection (S-01.2.2)",
+          "kind": "prevention",
+          "where": "gitea"
+        }
+      ],
+      "status": "decided",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0007-role-token-matrix-and-revocation-contract.md"
+      ],
+      "builds_at": "D-01.1",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: D-01.1"
+      ],
+      "notes": "Decision 0013, point 7: proposals leave by exchange; the bot token never enters a conversation container."
+    },
+    {
+      "id": "nm-verifier-gitea",
+      "name": "The authorization verifier reads the protected ref, the PR and the blob",
+      "from": "td-management",
+      "to": "td-git-hosting",
+      "verdict": "allow",
+      "protocol": "http (Gitea API) on host 127.0.0.1:13300",
+      "endpoint": "gitea-server",
+      "credentials": [
+        "cred-verifier-read"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "Gitea HTTP bound to host 127.0.0.1:13300 only",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "token scope read:repository only (S-01.2.2)",
+          "kind": "prevention",
+          "where": "gitea"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "builds_at": "G-04.3.1",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.3.1"
+      ]
+    },
+    {
+      "id": "nm-dispatcher-agent-server",
+      "name": "The dispatcher to the outer Agent Server over the management channel",
+      "from": "td-management",
+      "to": "td-guest-control",
+      "verdict": "allow",
+      "protocol": "http over the management SSH channel to guest 127.0.0.1:8000",
+      "endpoint": "api-agent-server-management",
+      "credentials": [
+        "cred-guest-ssh-key",
+        "cred-agent-server-session-key"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "the management SSH channel: loopback-bound forward, per-instance key",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "listener on guest 127.0.0.1:8000 only; the unit drops non-loopback packets (IPAddressDeny=any)",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "session key on every key-gated route; the server does not start without one",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts"
+      ],
+      "builds_at": "E-01.3.1",
+      "verify_at": "E-01.3.2",
+      "owner_act": true,
+      "findings": [
+        "fd-session-key-not-fine-grained"
+      ],
+      "inspection": [
+        "planned: E-01.3.2"
+      ],
+      "notes": "Decision 0013, points 1 and 3: the sole network path to the management API; any host listener it needs is an Owner act. During bootstrap the Owner's account performs it (nm-owner-guest-ssh, nm-guest-login-agent-server)."
+    },
+    {
+      "id": "nm-dispatcher-exchange",
+      "name": "The dispatcher's exchange of bundles with the guest",
+      "from": "td-management",
+      "to": "td-guest-control",
+      "verdict": "allow",
+      "protocol": "SFTP over the management SSH channel",
+      "endpoint": "guest-exchange",
+      "credentials": [
+        "cred-guest-ssh-key"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "SFTP as agent with the per-instance key over the loopback forward",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "bounded bundles only; pull never writes an Owner repository",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "profiles/README.md"
+      ],
+      "builds_at": "D-01.1",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: D-01.1"
+      ]
+    },
+    {
+      "id": "nm-management-conversation",
+      "name": "Management processes into a conversation container (other than the Owner UI's forward)",
+      "from": "td-management",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no host forward to a container or to the Agent Server: conversation listeners and the management listener are on the guest's 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "management acts through the outer server's routes over the management channel",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "decided",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "builds_at": "E-01.3.1",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: E-01.3.2"
+      ]
+    },
+    {
+      "id": "nm-management-review",
+      "name": "Management processes into a reviewer's job container",
+      "from": "td-management",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no host forward to a container or to the Agent Server: conversation listeners and the management listener are on the guest's 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "decided",
+      "evidence": [],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "builds_at": "E-01.3.1",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: E-01.3.2"
+      ]
+    },
+    {
+      "id": "nm-management-ci",
+      "name": "Management processes to CI jobs",
+      "from": "td-management",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "jobs run on the dedicated runner host only",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2"
+      ]
+    },
+    {
+      "id": "nm-management-runner",
+      "name": "Management processes to the CI runner host",
+      "from": "td-management",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "not the trusted management host; no management credential on it",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-executor-owner",
+      "name": "The executor to the Owner's account and stores",
+      "from": "td-privileged-effect",
+      "to": "td-owner",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "host-owner-windows",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor applies only typed, allowlisted operation kinds to their declared targets; none targets this domain",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "verify_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-executor-management",
+      "name": "The executor to the management processes",
+      "from": "td-privileged-effect",
+      "to": "td-management",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor applies only typed, allowlisted operation kinds to their declared targets; none targets this domain",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "verify_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-executor-guest-control",
+      "name": "The executor to the execution guest",
+      "from": "td-privileged-effect",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "guest-execution-vm",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor applies only typed, allowlisted operation kinds to their declared targets; none targets this domain",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "verify_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-executor-untrusted-engineering",
+      "name": "The executor to conversation containers",
+      "from": "td-privileged-effect",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor applies only typed, allowlisted operation kinds to their declared targets; none targets this domain",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "verify_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-executor-review",
+      "name": "The executor to reviewer job containers",
+      "from": "td-privileged-effect",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor applies only typed, allowlisted operation kinds to their declared targets; none targets this domain",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "verify_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-executor-untrusted-ci",
+      "name": "The executor to CI jobs",
+      "from": "td-privileged-effect",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor applies only typed, allowlisted operation kinds to their declared targets; none targets this domain",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "verify_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [
+        "fd-release-job-principal"
+      ],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-executor-ci-runner-host",
+      "name": "The executor to the CI runner host",
+      "from": "td-privileged-effect",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor applies only typed, allowlisted operation kinds to their declared targets; none targets this domain",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.1",
+      "verify_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [
+        "fd-release-job-principal"
+      ],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-executor-receipts",
+      "name": "The executor writes its effect receipts",
+      "from": "td-privileged-effect",
+      "to": "td-privileged-effect",
+      "verdict": "allow",
+      "protocol": "files (SQLite)",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor's own custody of effects.sqlite under the managed data root (decision 0010, point 3)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "hash-chained journal, restore epochs and custody verification on open",
+          "kind": "detection",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.2.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.2.2"
+      ]
+    },
+    {
+      "id": "nm-executor-gitea",
+      "name": "The executor applies authorized Gitea effects",
+      "from": "td-privileged-effect",
+      "to": "td-git-hosting",
+      "verdict": "allow",
+      "protocol": "http (Gitea API) on host 127.0.0.1:13300",
+      "endpoint": "gitea-server",
+      "credentials": [
+        "cred-executor-target-secrets"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "typed, allowlisted operation with a one-time effect key after the authorization check",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "Gitea's permission model for the executor's own target credential",
+          "kind": "prevention",
+          "where": "gitea"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-gitea-owner",
+      "name": "Gitea (a host process of the Owner's account) to the Owner's account and stores",
+      "from": "td-git-hosting",
+      "to": "td-owner",
+      "verdict": "disclosed",
+      "protocol": "host loopback, files",
+      "endpoint": "host-owner-windows",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "none between processes of the Owner's account: disclosed under the same-account scope (decision 0013, point 6; decision 0010, point 1)",
+          "kind": "disclosure",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-bootstrap-shared-identity"
+      ],
+      "inspection": [
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ]
+    },
+    {
+      "id": "nm-gitea-webhooks",
+      "name": "Gitea signed webhooks wake the verifier and the Integration process",
+      "from": "td-git-hosting",
+      "to": "td-management",
+      "verdict": "allow",
+      "protocol": "http on host loopback",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "webhook signature checked by the receiver; a webhook only wakes it, and it re-reads the protected state",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "every harness host listener binds 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "builds_at": "G-04.3.1",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.3.1"
+      ]
+    },
+    {
+      "id": "nm-gitea-executor",
+      "name": "Gitea to the executor",
+      "from": "td-git-hosting",
+      "to": "td-privileged-effect",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the executor is invoked only through the authorized effects interface, never by a Gitea call",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.3.1",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.3.1"
+      ]
+    },
+    {
+      "id": "nm-gitea-internal",
+      "name": "Gitea to its own egress-policy proxy",
+      "from": "td-git-hosting",
+      "to": "td-git-hosting",
+      "verdict": "allow",
+      "protocol": "http on host 127.0.0.1 (kernel-assigned port)",
+      "endpoint": "gitea-server",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the proxy binds host 127.0.0.1 only; Gitea runs offline",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md"
+      ],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ]
+    },
+    {
+      "id": "nm-gitea-guest",
+      "name": "Gitea to the execution guest",
+      "from": "td-git-hosting",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "tcp",
+      "endpoint": "listener-host-ssh-forward",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the only host-to-guest path is the SSH forward, which needs the per-instance key Gitea does not hold",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md",
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-host-loopback-exposure"
+      ],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ]
+    },
+    {
+      "id": "nm-gitea-conversation",
+      "name": "Gitea to conversation containers",
+      "from": "td-git-hosting",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no host forward to a container or to the Agent Server: conversation listeners and the management listener are on the guest's 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md",
+        "evidence/F-04.2-conversation-lifecycle.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ]
+    },
+    {
+      "id": "nm-gitea-review",
+      "name": "Gitea to reviewer job containers",
+      "from": "td-git-hosting",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no host forward to a container or to the Agent Server: conversation listeners and the management listener are on the guest's 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ]
+    },
+    {
+      "id": "nm-gitea-ci",
+      "name": "Gitea to CI jobs",
+      "from": "td-git-hosting",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "Gitea never connects to a job; the runner fetches its jobs",
+          "kind": "prevention",
+          "where": "gitea"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2"
+      ]
+    },
+    {
+      "id": "nm-gitea-runner",
+      "name": "Gitea to the CI runner host",
+      "from": "td-git-hosting",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "Gitea never connects to the runner; the runner polls Gitea",
+          "kind": "prevention",
+          "where": "gitea"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-guest-owner",
+      "name": "The guest's own processes to the host's loopback (QMP, the SSH forward, the Owner host)",
+      "from": "td-guest-control",
+      "to": "td-owner",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "listener-host-qmp",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py netprobe (F-03.3.2, test only)"
+      ]
+    },
+    {
+      "id": "nm-guest-management",
+      "name": "The guest's own processes to the host-side management processes",
+      "from": "td-guest-control",
+      "to": "td-management",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "endpoint-inference",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py netprobe (F-03.3.2, test only)"
+      ]
+    },
+    {
+      "id": "nm-guest-privileged-effect",
+      "name": "The guest's own processes to the executor",
+      "from": "td-guest-control",
+      "to": "td-privileged-effect",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py netprobe (F-03.3.2, test only)"
+      ]
+    },
+    {
+      "id": "nm-guest-git-hosting",
+      "name": "The guest's own processes to the host-loopback Gitea (through 10.0.2.2:13300)",
+      "from": "td-guest-control",
+      "to": "td-git-hosting",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "gitea-server",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.2-guest-network.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py netprobe (F-03.3.2, test only)"
+      ]
+    },
+    {
+      "id": "nm-guest-untrusted-ci",
+      "name": "The guest's own processes to CI jobs",
+      "from": "td-guest-control",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py netprobe (F-03.3.2, test only)"
+      ]
+    },
+    {
+      "id": "nm-guest-ci-runner-host",
+      "name": "The guest's own processes to the CI runner host",
+      "from": "td-guest-control",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py netprobe (F-03.3.2, test only)"
+      ]
+    },
+    {
+      "id": "nm-guest-openhands-moby",
+      "name": "The outer Agent Server (openhands) to the guest's Moby",
+      "from": "td-guest-control",
+      "to": "td-guest-control",
+      "verdict": "allow",
+      "protocol": "unix socket /run/docker.sock",
+      "endpoint": "guest-moby-socket",
+      "credentials": [
+        "cred-moby-docker-group"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "/run/docker.sock root:docker 0660; agent is not in docker (EACCES); no TCP listener of dockerd, containerd or docker-proxy",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-04.1b-provision-moby.md",
+        "evidence/F-04.1c-agent-server.md",
+        "evidence/S-01.3.1-management-api-admission.md"
+      ],
+      "sources": [
+        "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ]
+    },
+    {
+      "id": "nm-guest-login-agent-server",
+      "name": "The operator login (the dispatcher's stand-in) to the outer Agent Server",
+      "from": "td-guest-control",
+      "to": "td-guest-control",
+      "verdict": "allow",
+      "protocol": "http on guest 127.0.0.1:8000",
+      "endpoint": "api-agent-server-management",
+      "credentials": [
+        "cred-agent-server-session-key"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "listener on guest 127.0.0.1:8000 only; IPAddressDeny=any except localhost",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "the session key, read from its root:agent 0440 file in the guest, never on a command line",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.1-management-api-admission.md"
+      ],
+      "sources": [
+        "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-guest-login-name-and-key",
+        "fd-session-key-not-fine-grained"
+      ],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ],
+      "notes": "Reached only over the management forward (nm-owner-guest-ssh); no agent workload has the login."
+    },
+    {
+      "id": "nm-guest-proxy-conversation",
+      "name": "docker-proxy (the outer server's published port) to a conversation's inner server",
+      "from": "td-guest-control",
+      "to": "td-untrusted-engineering",
+      "verdict": "allow",
+      "protocol": "tcp on guest 127.0.0.1:<ephemeral> to container :8000",
+      "endpoint": "conversation-container",
+      "credentials": [
+        "cred-conversation-keys"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "published on the guest's 127.0.0.1 only, never forwarded to the host",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "each inner server's own session key",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/S-01.3.1-management-api-admission.md"
+      ],
+      "sources": [
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py conversation-smoke"
+      ]
+    },
+    {
+      "id": "nm-guest-proxy-review",
+      "name": "docker-proxy to a reviewer job container's inner server",
+      "from": "td-guest-control",
+      "to": "td-review",
+      "verdict": "allow",
+      "protocol": "tcp on guest 127.0.0.1:<ephemeral> to container :8000",
+      "endpoint": "conversation-container",
+      "credentials": [
+        "cred-conversation-keys"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "published on the guest's 127.0.0.1 only, never forwarded to the host",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "each inner server's own session key",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-04.2-conversation-lifecycle.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/README.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ],
+      "notes": "The reviewer's job environment is the conversation container (S-01.3.2 ruling)."
+    },
+    {
+      "id": "nm-job-host",
+      "name": "A job to the host's loopback (10.0.2.2: QMP, the SSH forward, the Owner host) and LAN",
+      "from": "td-untrusted-engineering",
+      "to": "td-owner",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "listener-host-qmp",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-container-network-deviations"
+      ],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-inference",
+      "name": "A job to the inference broker (the only permitted container egress)",
+      "from": "td-untrusted-engineering",
+      "to": "td-management",
+      "verdict": "allow",
+      "protocol": "tcp to a guestfwd address, then the host-side broker",
+      "endpoint": "inference",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard allowlist entry for the inference class only",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "guestfwd to the broker on host 127.0.0.1, the only path to provider credentials",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "profiles/README.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
+      ],
+      "builds_at": "S-03.2",
+      "verify_at": "S-03.2",
+      "owner_act": true,
+      "findings": [
+        "fd-acp-provider-auth"
+      ],
+      "inspection": [
+        "planned: S-03.2"
+      ],
+      "notes": "Designed at S-03.1; a guestfwd needs the Owner's authorization; the egress guard's first allowlist entry (S-01.4 ruling R5)."
+    },
+    {
+      "id": "nm-job-management",
+      "name": "A job to any other management process on the host",
+      "from": "td-untrusted-engineering",
+      "to": "td-management",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-executor",
+      "name": "A job to the executor or the effects store",
+      "from": "td-untrusted-engineering",
+      "to": "td-privileged-effect",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "no executor, effects-store or Owner credential in a job (searched by fingerprint)",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-gitea",
+      "name": "A job to Gitea (no network class for untrusted code)",
+      "from": "td-untrusted-engineering",
+      "to": "td-git-hosting",
+      "verdict": "deny",
+      "protocol": "tcp (10.0.2.2:13300)",
+      "endpoint": "gitea-server",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "no Gitea bot token in a job (searched by fingerprint); proposals leave by exchange",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Decision 0013, point 7."
+    },
+    {
+      "id": "nm-job-guest-listeners",
+      "name": "A job to the guest's own listeners (sshd, LLMNR, published ports)",
+      "from": "td-untrusted-engineering",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "guest-sshd",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "container guard: INPUT from docker0 or br-* to any guest address is logged and refused (TCP reset, else ICMP reject)",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-management-api",
+      "name": "A job to the outer Agent Server's management API, at every address",
+      "from": "td-untrusted-engineering",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "http",
+      "endpoint": "api-agent-server-management",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "container guard: INPUT from docker0 or br-* to any guest address is logged and refused (TCP reset, else ICMP reject)",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "listener on guest 127.0.0.1:8000 only; IPAddressDeny=any except localhost",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "no management key in a job (searched by fingerprint)",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-session-key-not-fine-grained"
+      ],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-engine",
+      "name": "A job to the guest's Docker or containerd engine",
+      "from": "td-untrusted-engineering",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "unix socket, tcp 2375/2376",
+      "endpoint": "api-moby",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no engine socket in a job (exactly three binds); no engine TCP listener",
+          "kind": "prevention",
+          "where": "container"
+        },
+        {
+          "mechanism": "container guard: INPUT from docker0 or br-* to any guest address is logged and refused (TCP reset, else ICMP reject)",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-own-server",
+      "name": "A job to its own inner server",
+      "from": "td-untrusted-engineering",
+      "to": "td-untrusted-engineering",
+      "verdict": "allow",
+      "protocol": "http on the container's 127.0.0.1:8000",
+      "endpoint": "conversation-container",
+      "credentials": [
+        "cred-conversation-keys"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "the container's own network namespace and its own session key",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-peer",
+      "name": "A job to another job container on the same bridge",
+      "from": "td-untrusted-engineering",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "icc false on Moby's default bridge: no connection between two containers",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-review",
+      "name": "A job to a reviewer job container",
+      "from": "td-untrusted-engineering",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "icc false on Moby's default bridge: no connection between two containers",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ]
+    },
+    {
+      "id": "nm-job-untrusted-ci",
+      "name": "A job to CI jobs",
+      "from": "td-untrusted-engineering",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "No path off the guest."
+    },
+    {
+      "id": "nm-job-ci-runner-host",
+      "name": "A job to the CI runner host",
+      "from": "td-untrusted-engineering",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "No path off the guest."
+    },
+    {
+      "id": "nm-review-host",
+      "name": "A job to the host's loopback (10.0.2.2: QMP, the SSH forward, the Owner host) and LAN",
+      "from": "td-review",
+      "to": "td-owner",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "listener-host-qmp",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-container-network-deviations"
+      ],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-inference",
+      "name": "A job to the inference broker (the only permitted container egress)",
+      "from": "td-review",
+      "to": "td-management",
+      "verdict": "allow",
+      "protocol": "tcp to a guestfwd address, then the host-side broker",
+      "endpoint": "inference",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard allowlist entry for the inference class only",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "guestfwd to the broker on host 127.0.0.1, the only path to provider credentials",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "profiles/README.md",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
+      ],
+      "builds_at": "S-03.2",
+      "verify_at": "S-03.2",
+      "owner_act": true,
+      "findings": [
+        "fd-acp-provider-auth"
+      ],
+      "inspection": [
+        "planned: S-03.2"
+      ],
+      "notes": "Designed at S-03.1; a guestfwd needs the Owner's authorization; the egress guard's first allowlist entry (S-01.4 ruling R5)."
+    },
+    {
+      "id": "nm-review-management",
+      "name": "A job to any other management process on the host",
+      "from": "td-review",
+      "to": "td-management",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-executor",
+      "name": "A job to the executor or the effects store",
+      "from": "td-review",
+      "to": "td-privileged-effect",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "no executor, effects-store or Owner credential in a job (searched by fingerprint)",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-gitea",
+      "name": "A job to Gitea (no network class for untrusted code)",
+      "from": "td-review",
+      "to": "td-git-hosting",
+      "verdict": "deny",
+      "protocol": "tcp (10.0.2.2:13300)",
+      "endpoint": "gitea-server",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "no Gitea bot token in a job (searched by fingerprint); proposals leave by exchange",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Decision 0013, point 7. Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-guest-listeners",
+      "name": "A job to the guest's own listeners (sshd, LLMNR, published ports)",
+      "from": "td-review",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "guest-sshd",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "container guard: INPUT from docker0 or br-* to any guest address is logged and refused (TCP reset, else ICMP reject)",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-management-api",
+      "name": "A job to the outer Agent Server's management API, at every address",
+      "from": "td-review",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "http",
+      "endpoint": "api-agent-server-management",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "container guard: INPUT from docker0 or br-* to any guest address is logged and refused (TCP reset, else ICMP reject)",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "listener on guest 127.0.0.1:8000 only; IPAddressDeny=any except localhost",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "no management key in a job (searched by fingerprint)",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [
+        "fd-session-key-not-fine-grained"
+      ],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-engine",
+      "name": "A job to the guest's Docker or containerd engine",
+      "from": "td-review",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "unix socket, tcp 2375/2376",
+      "endpoint": "api-moby",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no engine socket in a job (exactly three binds); no engine TCP listener",
+          "kind": "prevention",
+          "where": "container"
+        },
+        {
+          "mechanism": "container guard: INPUT from docker0 or br-* to any guest address is logged and refused (TCP reset, else ICMP reject)",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-own-server",
+      "name": "A job to its own inner server",
+      "from": "td-review",
+      "to": "td-review",
+      "verdict": "allow",
+      "protocol": "http on the container's 127.0.0.1:8000",
+      "endpoint": "conversation-container",
+      "credentials": [
+        "cred-conversation-keys"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "the container's own network namespace and its own session key",
+          "kind": "prevention",
+          "where": "container"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-peer",
+      "name": "A job to another job container on the same bridge",
+      "from": "td-review",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "icc false on Moby's default bridge: no connection between two containers",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-untrusted-engineering",
+      "name": "A job to a builder or planner job container",
+      "from": "td-review",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "icc false on Moby's default bridge: no connection between two containers",
+          "kind": "prevention",
+          "where": "guest"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py admission-probe (from inside two conversation containers)",
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-untrusted-ci",
+      "name": "A job to CI jobs",
+      "from": "td-review",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "No path off the guest. Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-review-ci-runner-host",
+      "name": "A job to the CI runner host",
+      "from": "td-review",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "No path off the guest. Reviewer runs use the conversation container as their job environment (S-01.3.2 ruling), proved without a reviewer session."
+    },
+    {
+      "id": "nm-ci-owner",
+      "name": "A CI job to the Owner host",
+      "from": "td-untrusted-ci",
+      "to": "td-owner",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "host-owner-windows",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ci-management",
+      "name": "A CI job to management processes",
+      "from": "td-untrusted-ci",
+      "to": "td-management",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ci-privileged-effect",
+      "name": "A CI job to the executor or the effects store",
+      "from": "td-untrusted-ci",
+      "to": "td-privileged-effect",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.3.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ci-git-hosting",
+      "name": "A CI job to Gitea (no network class for untrusted code)",
+      "from": "td-untrusted-ci",
+      "to": "td-git-hosting",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "gitea-server",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.3.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ],
+      "notes": "Gitea's job token (cred-ci-job-token) and a job's checkout must be reconciled with decision 0013, point 7, at Q-02.1."
+    },
+    {
+      "id": "nm-ci-guest-control",
+      "name": "A CI job to the execution guest",
+      "from": "td-untrusted-ci",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "guest-execution-vm",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ci-untrusted-engineering",
+      "name": "A CI job to conversation containers",
+      "from": "td-untrusted-ci",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ci-review",
+      "name": "A CI job to reviewer job containers",
+      "from": "td-untrusted-ci",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ci-untrusted-ci",
+      "name": "A CI job to another CI job",
+      "from": "td-untrusted-ci",
+      "to": "td-untrusted-ci",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ci-ci-runner-host",
+      "name": "A CI job to the runner service, its registration secret and its engine",
+      "from": "td-untrusted-ci",
+      "to": "td-ci-runner-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile: disposable job environment, no engine socket or engine TCP endpoint, no management, Owner, admin or bot credential, no host-path mount beyond the workspace",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.3.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2, Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-runner-gitea",
+      "name": "The CI runner to Gitea (registration, job fetch)",
+      "from": "td-ci-runner-host",
+      "to": "td-git-hosting",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "gitea-server",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "no runner exists; Gitea binds host 127.0.0.1:13300 only",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md"
+      ],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "composition/candidates.json"
+      ],
+      "verify_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ],
+      "notes": "Planned to become an allow at Q-02.1/Q-02.2.1 with an Owner act: Gitea is loopback-only, a guestfwd chardev is one stream, and profiles P7 enumerates no endpoint class for a runner yet, so the allow cannot be classified until that class is decided (decision 0013, Consequences)."
+    },
+    {
+      "id": "nm-runner-jobs",
+      "name": "The runner service launches disposable job environments",
+      "from": "td-ci-runner-host",
+      "to": "td-untrusted-ci",
+      "verdict": "allow",
+      "protocol": "local engine or hypervisor",
+      "endpoint": "ci-runner-host",
+      "credentials": [
+        "cred-ci-job-token"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "one disposable container or VM per job; no host-mode execution; no engine socket in a job",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.2.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.2"
+      ]
+    },
+    {
+      "id": "nm-runner-internal",
+      "name": "The runner service to its own engine",
+      "from": "td-ci-runner-host",
+      "to": "td-ci-runner-host",
+      "verdict": "allow",
+      "protocol": "local socket",
+      "endpoint": "ci-runner-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the engine socket stays with the runner service, never mounted into a job",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-runner-owner",
+      "name": "The CI runner host to the Owner host",
+      "from": "td-ci-runner-host",
+      "to": "td-owner",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "host-owner-windows",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "a dedicated runner host, not the trusted management host; no path into the Owner host or the execution guest",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-runner-management",
+      "name": "The CI runner host to the management processes",
+      "from": "td-ci-runner-host",
+      "to": "td-management",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "api-integration-service",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "a dedicated runner host, not the trusted management host; no path into the Owner host or the execution guest",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-runner-privileged-effect",
+      "name": "The CI runner host to the executor",
+      "from": "td-ci-runner-host",
+      "to": "td-privileged-effect",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "store-effects",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "a dedicated runner host, not the trusted management host; no path into the Owner host or the execution guest",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-runner-guest-control",
+      "name": "The CI runner host to the execution guest",
+      "from": "td-ci-runner-host",
+      "to": "td-guest-control",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "guest-execution-vm",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "a dedicated runner host, not the trusted management host; no path into the Owner host or the execution guest",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-runner-untrusted-engineering",
+      "name": "The CI runner host to conversation containers",
+      "from": "td-ci-runner-host",
+      "to": "td-untrusted-engineering",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "a dedicated runner host, not the trusted management host; no path into the Owner host or the execution guest",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-runner-review",
+      "name": "The CI runner host to reviewer job containers",
+      "from": "td-ci-runner-host",
+      "to": "td-review",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "conversation-container",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "a dedicated runner host, not the trusted management host; no path into the Owner host or the execution guest",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    }
+  ],
+  "external_edges": [
+    {
+      "id": "nm-ext-job-egress",
+      "name": "A job to anything off the guest: public addresses, the LAN, IPv6, unconfigured guestfwd addresses",
+      "from": "td-untrusted-engineering",
+      "to": "external:off-host",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "external:off-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "no default route in the guest (SLIRP restrict=on gives none): off-link destinations are answered by the guest's routing (network unreachable); topology, not policy",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "decided",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "S-01.4",
+      "verify_at": "S-01.4",
+      "owner_act": false,
+      "findings": [
+        "fd-container-network-deviations"
+      ],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)",
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
+      ],
+      "notes": "The egress sweep's decision rule was fixed before observation (evidence/S-01.4-network-matrix.md)."
+    },
+    {
+      "id": "nm-ext-review-egress",
+      "name": "A reviewer job to anything off the guest",
+      "from": "td-review",
+      "to": "external:off-host",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "external:off-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "egress guard: Moby DOCKER-USER sends every new forwarded connection from a container bridge to AIEH-EGRESS-GUARD, which logs and refuses it (TCP reset, else ICMP reject); empty allowlist",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "no default route in the guest (SLIRP restrict=on gives none): off-link destinations are answered by the guest's routing (network unreachable); topology, not policy",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "decided",
+      "evidence": [
+        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "S-01.4",
+      "verify_at": "S-01.4",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
+      ],
+      "notes": "The reviewer's job environment is the conversation container (S-01.3.2 ruling)."
+    },
+    {
+      "id": "nm-ext-guest-egress",
+      "name": "The guest's own processes to anything off the guest",
+      "from": "td-guest-control",
+      "to": "external:off-host",
+      "verdict": "deny",
+      "protocol": "tcp, udp, icmp, IPv6",
+      "endpoint": "external:off-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "QEMU SLIRP restrict=on and ipv6=off: no guest connection reaches the host or beyond except through an explicit guestfwd (none is configured)",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.3.2-guest-network.md"
+      ],
+      "sources": [
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)",
+        "guest.py netprobe (F-03.3.2, test only)"
+      ]
+    },
+    {
+      "id": "nm-ext-lan-host",
+      "name": "The LAN to the harness's host listeners",
+      "from": "external:lan",
+      "to": "td-owner",
+      "verdict": "deny",
+      "protocol": "tcp, udp",
+      "endpoint": "external:lan",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "every harness host listener binds 127.0.0.1 only",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-03.2.2b-guest-lifecycle.md",
+        "evidence/F-06.1-gitea-loopback.md"
+      ],
+      "sources": [
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "profiles/README.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "guest.py host-census (every harness host listener on 127.0.0.1, by PID)"
+      ],
+      "notes": "Windows Firewall profiles and the rule count are recorded as disclosure only (S-01.4 ruling R4: no firewall rule)."
+    },
+    {
+      "id": "nm-ext-ci-egress",
+      "name": "A CI job to the internet",
+      "from": "td-untrusted-ci",
+      "to": "external:off-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "external:off-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner containment profile's network policy",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "verify_at": "Q-02.3.2",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.3.2"
+      ]
+    },
+    {
+      "id": "nm-ext-runner-egress",
+      "name": "The CI runner host to the internet",
+      "from": "td-ci-runner-host",
+      "to": "external:off-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "external:off-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "the runner host's network policy, decided with the runner",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "Q-02.2.1",
+      "owner_act": false,
+      "findings": [
+        "fd-ci-runner-unpinned"
+      ],
+      "inspection": [
+        "planned: Q-02.2.1"
+      ]
+    },
+    {
+      "id": "nm-ext-broker-provider",
+      "name": "The inference broker to the model provider",
+      "from": "td-management",
+      "to": "external:model-provider",
+      "verdict": "allow",
+      "protocol": "https",
+      "endpoint": "external:model-provider",
+      "credentials": [
+        "cred-llm-provider-key"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "the provider credential stays with the broker; it never enters the guest",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
+      ],
+      "builds_at": "S-03.2",
+      "owner_act": true,
+      "findings": [
+        "fd-acp-provider-auth"
+      ],
+      "inspection": [
+        "planned: S-03.2"
+      ]
+    },
+    {
+      "id": "nm-ext-executor-targets",
+      "name": "The executor to its allowlisted external targets",
+      "from": "td-privileged-effect",
+      "to": "external:effect-targets",
+      "verdict": "allow",
+      "protocol": "per operation kind",
+      "endpoint": "external:effect-targets",
+      "credentials": [
+        "cred-executor-target-secrets"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "typed, allowlisted operation kinds; target and precondition recheck; one-time effect key",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "builds_at": "G-04.4.2",
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "planned: G-04.4.2"
+      ]
+    },
+    {
+      "id": "nm-ext-gitea-offline",
+      "name": "Gitea to the internet",
+      "from": "td-git-hosting",
+      "to": "external:off-host",
+      "verdict": "deny",
+      "protocol": "any",
+      "endpoint": "external:off-host",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "Gitea runs offline through its own egress-policy proxy",
+          "kind": "prevention",
+          "where": "gitea"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/F-06.1-gitea-loopback.md"
+      ],
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "task gitea:verify; task gitea:authz (S-01.2.2 fixture)"
+      ]
+    },
+    {
+      "id": "nm-ext-owner-github",
+      "name": "The Owner's push to the public repository",
+      "from": "td-owner",
+      "to": "external:github",
+      "verdict": "allow",
+      "protocol": "https",
+      "endpoint": "external:github",
+      "credentials": [
+        "cred-owner-github"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "the publication-safety gate (pinned Gitleaks) before every commit and push",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "observed",
+      "evidence": [
+        "evidence/bootstrap-log.md"
+      ],
+      "sources": [
+        "docs/development.md"
+      ],
+      "owner_act": false,
+      "findings": [],
+      "inspection": [
+        "python -I -B tools/publication_gate.py verify"
+      ]
+    }
+  ],
+  "sources": [
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#integration-contracts",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
+    "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+    "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+    "decisions/0007-role-token-matrix-and-revocation-contract.md",
+    "decisions/0010-effects-store-placement-and-governance-threat-model.md",
+    "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+    "profiles/README.md",
+    "profiles/strong-windows-qemu-whpx/profile.json",
+    "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.4"
+  ],
+  "notes": "Rows are keyed by ordered pairs of the inventory's trust domains (td-*), a domain with itself included; several rows may share a pair. Endpoints are inventory assets or profiles P7 endpoint classes; asset_classes classifies every inventory asset, so that no allow from an untrusted or contained domain into a trusted one targets a management or credential asset. Host-internal edges between processes of the Owner's account are disclosed under decision 0013, point 6."
+}

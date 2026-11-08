@@ -327,6 +327,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_role_tokens.py {{.CLI_ARGS}}'
 
+  policy:network-check:
+    desc: "Check the deny-by-default network matrix (S-01.4): python -I -B tools/check_network_matrix.py; pass -- --list to print each edge's verdict and status, or -- --render for the README tables"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_network_matrix.py {{.CLI_ARGS}}'
+
   intent:check:
     desc: "Check a proposal's intent record (P-01.1): python -I -B tools/check_intent_record.py PROPOSAL --source REF=FILE (pass each quote's source after --)"
     requires:
@@ -482,11 +487,16 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py admission-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
 
   guest:job-access-probe:
-    desc: "Job daemon and management access (S-01.3.2) on a running provisioned guest: two disposable conversations; each container's docker inspect against the declared job environment; from inside each job its identity, capabilities, no_new_privs, seccomp, AppArmor, credential-like variable names, sockets and root; every engine socket; the engine API, the management listener, the published ports and the SLIRP host aliases over TCP; every privileged route at every address; the outer key and Gitea tokens by fingerprint; exit 0 only on PASS (python -I -B tools/guest.py job-access-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --token-fingerprint LABEL=sha256:HEX16 --out FILE])"
+    desc: "Job daemon and management access (S-01.3.2) on a running provisioned guest: two disposable conversations; each container's docker inspect against the declared job environment; from inside each job its identity, capabilities, no_new_privs, seccomp, AppArmor, credential-like variable names, sockets and root; every engine socket; the engine API, the management listener, the published ports and the SLIRP host aliases over TCP; every privileged route at every address; the outer key and Gitea tokens by fingerprint; the S-01.4 egress sweep against the egress guard's counters; exit 0 only on PASS (python -I -B tools/guest.py job-access-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --token-fingerprint LABEL=sha256:HEX16 --out FILE])"
     requires:
       vars: [PROFILE, STATE_DIR, NAME]
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py job-access-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
+
+  guest:host-census:
+    desc: "Read-only, unelevated census (S-01.4) of the harness's host listeners by PID (QEMU, the host Gitea, the Owner host's Vite servers; each must be on 127.0.0.1) and the Windows Firewall profiles and rule count, recorded as disclosure; changes no rule; exit 0 only on PASS (python -I -B tools/guest.py host-census [-- --exclude-pid PID --out FILE])"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py host-census {{.CLI_ARGS}}'
 
   hooks:install:
     desc: Install the publication-safety gate (python -I -B tools/publication_gate.py install); downloads and verifies the pinned Gitleaks into the per-user cache, sets core.hooksPath

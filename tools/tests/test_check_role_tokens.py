@@ -124,6 +124,8 @@ class CommittedMatrix(unittest.TestCase):
                 carried['owner'] = 'D-01.2'
             if rid == 'management-dispatcher' and m['mechanism'].startswith('The sole holder'):
                 carried[rid] = 'E-01.2.2'
+            if rid == 'management-dispatcher' and m['mechanism'].startswith('The sole network path'):
+                carried[rid] = 'E-01.3.2'              # decision 0013 (S-01.4)
             if admission:
                 carried[rid] = 'S-01.3.1'
             if job:
@@ -180,6 +182,14 @@ class CommittedMatrix(unittest.TestCase):
     def test_inventory_edits(self):
         creds = {c['id']: c for c in INVENTORY['credentials']}
         self.assertIn('cred-gitea-bot-planner', creds)
+        # S-01.4 (decision 0013): the Owner UI's access splits into two planned credentials
+        self.assertNotIn('cred-owner-ui-access', creds)
+        owner = role(POLICY, 'owner')['grants']['credentials']
+        self.assertIn('cred-owner-ui-session', owner)
+        self.assertIn('cred-conversation-runtime-access', owner)
+        self.assertEqual(creds['cred-conversation-runtime-access']['issuer'], 'management-dispatcher')
+        self.assertNotIn(creds['cred-conversation-runtime-access']['authority'],
+                         ('owner', 'admin', 'executor', 'management'))
         self.assertEqual(creds['cred-gitea-bot-planner']['holder'], 'engineering-agent')
         self.assertTrue(all(c['rotation_revocation_owner'] for c in creds.values()))
         findings = {f['id']: f for f in INVENTORY['findings']}

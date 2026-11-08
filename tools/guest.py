@@ -75,6 +75,15 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                reopen (same id, state, events and mounts), with --restart a guest stop and
                start and a second reopen, then delete. API calls run as agent on the guest
                loopback with the session key read from its file; no LLM, no message.
+    admission-probe, job-access-probe  the management API admission (S-01.3.1) and the
+               job environment (S-01.3.2) from inside two disposable conversation
+               containers; job-access-probe also runs the predeclared egress sweep of S-01.4
+               (public literals, SLIRP's aliases, an unconfigured guestfwd-class address)
+               against the egress guard's counters.
+    host-census  S-01.4: a read-only, unelevated census of the harness's host listeners by
+               PID (QEMU, Gitea, the Owner host's Vite servers; each must be on 127.0.0.1)
+               and the Windows Firewall profiles and rule count, recorded as disclosure.
+               It needs no profile or state directory and changes nothing.
 
 Usage (from the repository root; the profile and state directory are always named,
 never defaulted, contract sections 4 and 11):
@@ -87,6 +96,7 @@ never defaulted, contract sections 4 and 11):
     python -I -B tools/guest.py exchange-pull --profile PROFILE --state-dir STATE --name NAME
                                           --file FILE
     python -I -B tools/guest.py canaries  --out DIR
+    python -I -B tools/guest.py host-census [--exclude-pid PID ...] [--out FILE]
     python -I -B tools/guest.py check-surfaces --profile PROFILE --state-dir STATE --name NAME
                                           --canaries DIR
     python -I -B tools/guest.py netprobe  --profile PROFILE --state-dir STATE --name NAME
@@ -7331,10 +7341,85 @@ def admission_check(profile, obs):
         'families': guard.get('families'), 'docker.service': f"Requires and After {guard.get('unit')}",
         'bridge_enable_icc': 'false', 'keycheck': f"ExecStartPre {conf.get('session_key', {}).get('start_check')}"},
         observed, 'facts: aieh-container-guard check, systemctl show, docker network inspect '
-        'bridge (root, at boot)', ok)]
+        'bridge (root, at boot)', ok)] + egress_check(profile, adm, unit)
 
 
 CHECK_CLASSES[(PROVISIONING_PROPERTY, ADMISSION_CHECK)] = (STABLE, None)
+
+EGRESS_CHECK = 'container egress guard (S-01.4)'
+
+
+def egress_declared(profile):
+    """(chain lines, hook lines, FORWARD's first rule) that the egress guard of
+    provisioning.agent_server.admission.network.egress_guard installs, as iptables -S
+    prints them (its allowlist between the RETURN and the LOG rule)."""
+    egress = (admission_config(profile).get('network') or {}).get('egress_guard') or {}
+    if not egress:
+        return None
+    chain, hook, rules = egress.get('chain'), egress.get('hook'), egress.get('rules') or []
+    allow = [str(e.get('rule')) for e in egress.get('allowlist') or [] if isinstance(e, dict)]
+    return ([f'-A {chain} {r}' for r in rules[:1] + allow + rules[1:]],
+            [f'-A {hook} {r}' for r in egress.get('hook_rules') or []],
+            f'-A FORWARD -j {hook}')
+
+
+def egress_check(profile, adm, unit):
+    """S-01.4: the egress guard of a provisioned instance from the boot-time facts (root,
+    after docker.service): in both families its chain, DOCKER-USER's hook rules and FORWARD's
+    first jump are the declared ones; they equal what the guard printed when it installed them
+    at this boot, before Moby started (they survived Moby's start); and the guard's unit exited
+    before docker.service started."""
+    declared = egress_declared(profile)
+    if declared is None:
+        return []
+    want_chain, want_hook, want_jump = declared
+    egress = (admission_config(profile).get('network') or {}).get('egress_guard') or {}
+    rules = adm.get('rules') if isinstance(adm.get('rules'), dict) else {}
+    families = rules.get('families') if isinstance(rules.get('families'), dict) else {}
+    install = adm.get('guard_install') if isinstance(adm.get('guard_install'), dict) else {}
+    installed = install.get('families') if isinstance(install.get('families'), dict) else {}
+    order = adm.get('order') if isinstance(adm.get('order'), dict) else {}
+
+    def view(fam):
+        e = (fam or {}).get('egress') if isinstance((fam or {}).get('egress'), dict) else {}
+        return {k: e.get(k) for k in ('chain', 'hook', 'forward_head', 'forward_jumps',
+                                      'forward_policy')}
+    observed = {'families': {t: view(families.get(t)) for t in egress.get('families') or []},
+                'installed_before_docker': {t: view(installed.get(t))
+                                            for t in egress.get('families') or []},
+                'guard_exit_monotonic': order.get('guard_exit_monotonic'),
+                'docker_start_monotonic': order.get('docker_start_monotonic'),
+                'guard_unit': unit.get('ActiveState')}
+
+    def family_ok(f):
+        lines, hook, head = f.get('chain'), f.get('hook'), f.get('forward_head')
+        return isinstance(lines, list) and len(lines) == len(want_chain) and \
+            all(_guard_line_ok(line, w) for line, w in zip(lines, want_chain)) and \
+            hook == want_hook and isinstance(head, list) and head[:1] == [want_jump] and \
+            f.get('forward_jumps') == 1
+
+    def survived(t):
+        before, after = observed['installed_before_docker'][t], observed['families'][t]
+        return before.get('chain') == after.get('chain') and before.get('hook') == after.get('hook')
+    try:
+        ordered = 0 < int(order.get('guard_exit_monotonic')) < int(order.get('docker_start_monotonic'))
+    except (TypeError, ValueError):
+        ordered = False
+    tools = egress.get('families') or []
+    ok = bool(tools) and unit.get('ActiveState') == 'active' and \
+        all(family_ok(observed['families'][t]) for t in tools) and \
+        install.get('ok') is True and install.get('egress_ok') is True and \
+        all(survived(t) for t in tools) and ordered
+    return [check(EGRESS_CHECK, {
+        'chain': want_chain, 'hook': want_hook, 'forward_first_rule': want_jump,
+        'forward_jumps': 1, 'families': tools, 'allowlist': egress.get('allowlist'),
+        'installed_before_docker': 'the same chain and hook rules, printed by the guard unit '
+                                   'at this boot before docker.service started'},
+        observed, 'facts: aieh-container-guard check after docker.service, the guard unit\'s '
+        'install line in the journal, systemctl show (root, at boot)', ok)]
+
+
+CHECK_CLASSES[(PROVISIONING_PROPERTY, EGRESS_CHECK)] = (STABLE, None)
 
 # Run as agent: the unauthenticated sweep of every route of the inventory (HTTP: without a
 # key and with a wrong one; WebSocket: four refusals), and the running server's own
@@ -8125,6 +8210,117 @@ print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
 '''
 
 
+# Run inside a conversation container (S-01.4 egress sweep): one TCP connect or one UDP
+# datagram per target, as the container's default user, with errno named. spec: base64 JSON
+# {targets: [[proto, host, port, what]], timeout}. A UDP target gets a minimal DNS query; an
+# ICMP port-unreachable surfaces as ECONNREFUSED on the connected socket.
+JOB_EGRESS_SWEEP = r'''import base64, errno, json, socket, sys, time
+spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+QUERY = bytes([0x41, 0x49, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 4]) + b'aieh' + bytes([7]) + \
+    b'invalid' + bytes([0, 0, 1, 0, 1])
+def name(exc):
+    return errno.errorcode.get(exc.errno, str(exc.errno)) if exc.errno else type(exc).__name__
+def attempt(proto, host, port):
+    t0 = time.monotonic()
+    kind = socket.SOCK_STREAM if proto == 'tcp' else socket.SOCK_DGRAM
+    s = socket.socket(socket.AF_INET, kind)
+    s.settimeout(spec['timeout'])
+    try:
+        s.connect((host, port))
+        if proto == 'tcp':
+            outcome = 'connected'
+        else:
+            s.send(QUERY)
+            data = s.recv(512)
+            outcome = 'answered %d bytes' % len(data)
+    except socket.timeout:
+        outcome = 'timeout'
+    except OSError as exc:
+        outcome = name(exc)
+    finally:
+        s.close()
+    return {'outcome': outcome, 'seconds': round(time.monotonic() - t0, 2)}
+out = {'results': []}
+for proto, host, port, what in spec['targets']:
+    out['results'].append(dict(attempt(proto, host, port), proto=proto, host=host, port=port,
+                               what=what))
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+# The S-01.4 decision rule, fixed before observation: the guard's reset or ICMP reject
+# (ECONNREFUSED) is the only passing outcome; a timeout or an unreachable error alone is
+# topology, not policy (FAIL); a connection or an answer is a stop condition.
+EGRESS_REFUSED = 'ECONNREFUSED'
+EGRESS_TOPOLOGY = frozenset({'timeout', 'ENETUNREACH', 'EHOSTUNREACH'})
+EGRESS_GUARD_FAMILY = 'iptables'
+
+
+def egress_targets(record, jobs):
+    """The predeclared egress sweep of a job (S-01.4): public literals, SLIRP's aliases (the
+    host's loopback services and the resolver) and an unconfigured guestfwd-class address."""
+    ports = record.get('ports') or {}
+    host_ports = []
+    for p in (jobs.get('host_alias') or {}).get('host_ports') or []:
+        p = {'{ssh_port}': ports.get('ssh'), '{qmp_port}': ports.get('qmp')}.get(p, p)
+        if isinstance(p, int):
+            host_ports.append(p)
+    targets = [['tcp', '1.1.1.1', 443, 'public literal'],
+               ['tcp', '8.8.8.8', 53, 'public literal'],
+               ['udp', '8.8.8.8', 53, 'public literal (the container resolver)']]
+    targets += [['tcp', '10.0.2.2', p, 'SLIRP host-loopback alias (host service)']
+                for p in host_ports]
+    targets += [['tcp', '10.0.2.3', 53, 'SLIRP resolver alias'],
+                ['udp', '10.0.2.3', 53, 'SLIRP resolver alias'],
+                ['tcp', NETPROBE_GUESTFWD['addr'], NETPROBE_GUESTFWD['port'],
+                 'unconfigured guestfwd-class address']]
+    return targets
+
+
+def egress_counters(report):
+    """The egress guard's per-rule packet counters of one family (chain order: RETURN, LOG,
+    REJECT tcp-reset, REJECT) and its log, from the on-demand facts."""
+    adm = report.get('admission') if isinstance(report.get('admission'), dict) else {}
+    egress = adm.get('egress') if isinstance(adm.get('egress'), dict) else {}
+    rows = egress.get(EGRESS_GUARD_FAMILY)
+    log_ = egress.get('log') if isinstance(egress.get('log'), dict) else {}
+    if not isinstance(rows, list) or len(rows) != 4:
+        return None, log_
+    return [r.get('packets') if isinstance(r, dict) else None for r in rows], log_
+
+
+def egress_verdict(results, before, after):
+    """(ok, rows, stop, counters) of the egress sweep under the S-01.4 decision rule."""
+    rows, stop, refused = [], [], {'tcp': 0, 'udp': 0}
+    for r in results:
+        outcome = str(r.get('outcome'))
+        if outcome == EGRESS_REFUSED:
+            klass = 'refused (reset or ICMP reject)'
+            refused[r.get('proto')] = refused.get(r.get('proto'), 0) + 1
+        elif outcome in EGRESS_TOPOLOGY:
+            klass = 'topology, not policy'
+        elif outcome == 'connected' or outcome.startswith('answered'):
+            klass = 'connection'
+            stop.append({'condition': 'a job connected out of the guest', 'target': r})
+        else:
+            klass = 'other'
+        rows.append(dict(r, verdict=klass))
+    counters = {'before': before, 'after': after, 'refused_tcp': refused['tcp'],
+                'refused_other': refused['udp']}
+    counted = isinstance(before, list) and isinstance(after, list) and \
+        all(isinstance(x, int) for x in before + after)
+    if counted:
+        delta = [a - b for a, b in zip(after, before)]
+        counters['delta'] = {'RETURN': delta[0], 'LOG': delta[1], 'REJECT tcp-reset': delta[2],
+                             'REJECT': delta[3]}
+        counters['incremented'] = delta[2] >= refused['tcp'] and delta[3] >= refused['udp'] and \
+            delta[2] + delta[3] > 0
+        counters['exact'] = delta[2] == refused['tcp'] and delta[3] == refused['udp']
+    else:
+        counters['incremented'] = False
+    ok = bool(rows) and all(r['verdict'].startswith('refused') for r in rows) and \
+        counters['incremented'] and not stop
+    return ok, rows, stop, counters
+
+
 def _job_json(stdout):
     """The last AIEH-JOB-JSON line of a container script's output."""
     lines = [line for line in (stdout or '').splitlines() if line.startswith(JOB_MARKER)]
@@ -8547,6 +8743,32 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                                  'key check ExecStartPre': True},
                     'observed': observed}
 
+    def egress_step():
+        """S-01.4: the predeclared egress sweep from inside each job, the egress guard's
+        counters read before and after (on-demand root facts), judged by the decision rule
+        fixed before observation."""
+        targets = egress_targets(record, jobs)
+        spec = {'targets': targets, 'timeout': JOB_CONNECT_S}
+        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        before, log_before = egress_counters(facts())
+        results = []
+        for cid in conversations:
+            data = _job_json(in_container(cid, container_python(JOB_EGRESS_SWEEP, arg), 300))
+            results += [dict(r, conversation=cid) for r in data.get('results') or []]
+        after, log_after = egress_counters(facts())
+        ok, rows, stop, counters = egress_verdict(results, before, after)
+        stop_conditions.extend(stop)
+        complete = len(results) == len(targets) * len(conversations)
+        return ok and complete, {
+            'decision_rule': 'PASS: every target refused with the guard\'s reset or ICMP reject '
+                             '(ECONNREFUSED) and the guard\'s REJECT counters incremented; FAIL: a '
+                             'timeout or an unreachable error alone (topology, not policy); STOP: '
+                             'any connection',
+            'targets': targets, 'results': rows, 'counters': counters,
+            'guard_log': {'count_before': log_before.get('count'),
+                          'count_after': log_after.get('count'),
+                          'tail': (log_after.get('tail') or [])[-16:]}}
+
     def delete_step():
         out = {}
         for cid in list(state['created']):
@@ -8570,6 +8792,7 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     run('privileged Agent Server routes from inside each job, every address', routes_step)
     run('credentials by name and fingerprint inside each job', token_step)
     run('hardening controls present (boot facts)', controls_step)
+    run('egress sweep from inside each job (S-01.4)', egress_step)
     run('delete the conversations (positive control)', delete_step,
         always=bool(state['created']))
     out = {'schema': JOB_PROBE_SCHEMA, 'operation': 'job-access-probe',
@@ -8584,6 +8807,115 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     out['record'] = write_record(idir, 'job-access-probe', out)
     if out_file is not None:
         write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
+# ---------------------------------------------------------------- host census (S-01.4)
+
+HOST_CENSUS_SCHEMA = 'ai-engineering-harness/profiles/host-census-record/v1'
+# The harness's host listeners: QEMU (SSH forward, QMP), the host-loopback Gitea (13300 and
+# its egress-policy proxy; the pinned binary's process is named gitea-<version>-windows-amd64)
+# and the Owner host's Vite dev and preview servers (strictPort).
+HOST_CENSUS_PROCESSES = ('qemu-system-x86_64', 'gitea*')
+HOST_CENSUS_PORTS = (13300, 5173, 4173)
+HOST_CENSUS_LOOPBACK = '127.0.0.1'
+
+
+def host_census_script(exclude_pids):
+    """Read-only, unelevated: the TCP listeners and UDP endpoints of the named harness
+    processes and of the harness ports, by PID (excluded PIDs are dropped before any process
+    lookup), and the Windows Firewall profiles and rule count. Every failing cmdlet becomes a
+    recorded error, never an elevation prompt."""
+    ex = ','.join(str(int(p)) for p in exclude_pids) or '-1'
+    names = ','.join(f"'{n}'" for n in HOST_CENSUS_PROCESSES)
+    ports = ','.join(str(p) for p in HOST_CENSUS_PORTS)
+    sel = ("Select-Object LocalAddress,LocalPort,OwningProcess,"
+           "@{n='Process';e={$pn[[string]$_.OwningProcess]}}")
+    return (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$ex=@({ex});$pn=@{{}};"
+        f"$named=@(Get-Process -Name {names} | Where-Object {{ $ex -notcontains $_.Id }});"
+        "foreach($p in $named){$pn[[string]$p.Id]=$p.ProcessName};"
+        "$t=@(foreach($p in $named){Get-NetTCPConnection -State Listen -OwningProcess $p.Id});"
+        f"$q=@(Get-NetTCPConnection -State Listen -LocalPort {ports} | "
+        "Where-Object { $ex -notcontains $_.OwningProcess });"
+        "foreach($c in $q){$k=[string]$c.OwningProcess;if(-not $pn.ContainsKey($k)){"
+        "$g=Get-Process -Id $c.OwningProcess;if($g){$pn[$k]=$g.ProcessName}else{$pn[$k]=''}}};"
+        "$u=@(foreach($p in $named){Get-NetUDPEndpoint -OwningProcess $p.Id});"
+        f"$t=@($t | {sel});$q=@($q | {sel});$u=@($u | {sel});"
+        "$fw=$null;$fwe=$null;try{$fw=@(Get-NetFirewallProfile -ErrorAction Stop | "
+        "Select-Object Name,@{n='Enabled';e={[string]$_.Enabled}},"
+        "@{n='DefaultInboundAction';e={[string]$_.DefaultInboundAction}},"
+        "@{n='DefaultOutboundAction';e={[string]$_.DefaultOutboundAction}})}"
+        "catch{$fwe=$_.Exception.Message};"
+        "$rc=$null;$rce=$null;try{$rc=@(Get-NetFirewallRule -ErrorAction Stop).Count}"
+        "catch{$rce=$_.Exception.Message};"
+        "ConvertTo-Json -Depth 4 -InputObject @{processes=@($named | Select-Object "
+        "@{n='Id';e={$_.Id}},@{n='Name';e={$_.ProcessName}});tcp_by_process=$t;"
+        "tcp_by_port=$q;udp_by_process=$u;firewall_profiles=$fw;firewall_profiles_error=$fwe;"
+        "firewall_rule_count=$rc;firewall_rule_count_error=$rce}")
+
+
+def host_census_verdict(data, exclude_pids=()):
+    """(result, listeners, problems) of one census: every harness listener and UDP endpoint
+    is on 127.0.0.1; an excluded PID never appears."""
+    seen, listeners = set(), []
+    for why, key in (('process', 'tcp_by_process'), ('port', 'tcp_by_port'),
+                     ('process (udp)', 'udp_by_process')):
+        for row in as_list(data.get(key)):
+            ident = (key.startswith('udp'), row.get('LocalAddress'), row.get('LocalPort'),
+                     row.get('OwningProcess'))
+            if ident in seen:
+                continue
+            seen.add(ident)
+            listeners.append({'protocol': 'udp' if key.startswith('udp') else 'tcp',
+                              'address': row.get('LocalAddress'), 'port': row.get('LocalPort'),
+                              'pid': row.get('OwningProcess'), 'process': row.get('Process'),
+                              'found_by': why})
+    problems = [dict(row, problem='not bound to 127.0.0.1') for row in listeners
+                if row['address'] != HOST_CENSUS_LOOPBACK]
+    problems += [dict(row, problem='an excluded PID was recorded') for row in listeners
+                 if row['pid'] in set(exclude_pids)]
+    if data.get('error'):
+        problems.append({'problem': 'the census did not run', 'error': str(data['error'])[:300]})
+    return ('PASS' if not problems else 'FAIL'), listeners, problems
+
+
+def host_census(exclude_pids=(), out_path=None, repo=None):
+    """host-census (S-01.4): a read-only, unelevated census of the harness's host listeners
+    by PID (QEMU, Gitea, the Owner host's Vite servers), each of which must be on 127.0.0.1,
+    and the Windows Firewall profiles and rule count, recorded as disclosure (UNKNOWN when a
+    cmdlet is refused). It changes no rule and reads no file."""
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, repo or REPO):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout')
+    started = utc_now()
+    data = powershell_json(host_census_script(exclude_pids))
+    if not isinstance(data, dict):
+        data = {'error': 'no JSON object'}
+    result, listeners, problems = host_census_verdict(data, exclude_pids)
+    profiles = as_list(data.get('firewall_profiles'))
+    out = {'schema': HOST_CENSUS_SCHEMA, 'operation': 'host-census', 'started_at': started,
+           'ended_at': utc_now(), 'excluded_pids': sorted(int(p) for p in exclude_pids),
+           'processes': as_list(data.get('processes')), 'listeners': listeners,
+           'problems': problems,
+           'firewall': {
+               'profiles': [{k: p.get(k) for k in ('Name', 'Enabled', 'DefaultInboundAction',
+                                                   'DefaultOutboundAction')} for p in profiles]
+               if profiles else f"UNKNOWN: {data.get('firewall_profiles_error') or 'no answer'}",
+               'rule_count': data.get('firewall_rule_count')
+               if isinstance(data.get('firewall_rule_count'), int)
+               else f"UNKNOWN: {data.get('firewall_rule_count_error') or 'no answer'}",
+               'disclosure': 'read only, unelevated; no rule is created or changed (S-01.4 '
+                             'ruling R4)'},
+           'result': result}
+    if out_file is not None:
+        write_json_exclusive(out_file, out)
         out['out'] = str(out_file)
     return out
 
@@ -8608,6 +8940,11 @@ def main(argv=None):
     p.add_argument('--out', required=True, help='a new directory outside the checkout')
     p = sub.add_parser('netprobe-listen', help=argparse.SUPPRESS)
     p.add_argument('--log', required=True)
+    p = sub.add_parser('host-census', help='S-01.4: read-only, unelevated census of the '
+                       "harness's host listeners by PID and the Windows Firewall disclosure")
+    p.add_argument('--exclude-pid', action='append', type=int, default=[],
+                   help='a process id the census must not look up or record (repeatable)')
+    p.add_argument('--out', help='also write the record to this new file')
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
@@ -8664,6 +9001,10 @@ def main(argv=None):
             return 0
         if op == 'netprobe-listen':
             return netprobe_listen(args.log)
+        if op == 'host-census':
+            result = host_census(args.exclude_pid, args.out)
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+            return 0 if result.get('result') == 'PASS' else 1
         ctx = Context(args.profile, args.state_dir)
         canaries = load_canaries(args.canaries) \
             if op in ('create', 'inspect', 'recreate') and args.canaries else None

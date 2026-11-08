@@ -114,7 +114,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "dc6c160da8fcd5b58f77f41d586e54ffc1a6671e349ac888e8cf624afb28e9f1"
+          "sha256": "2d157fd4d0e3a7d283a64681672b671248d0af739027e9bd4563f2bf6c711880"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -468,8 +468,34 @@
               "-j REJECT"
             ],
             "families": ["iptables", "ip6tables"],
-            "rule": "Guest-level, because the Agent Server cannot express it: in the filter table's INPUT chain, a packet that arrives from a container bridge (docker0, br-+) and is not part of a connection the guest opened jumps to the chain, is logged (rate-limited, kernel log) and is refused: TCP with a reset, anything else with an ICMP port-unreachable. A container therefore reaches no listener of the guest itself at any of its addresses (host.docker.internal is docker0): not sshd, not systemd-resolved's LLMNR, not the management listener. Replies to the guest's own connections (docker-proxy to a container's port 8000) are RELATED,ESTABLISHED and pass. Forwarded traffic is not touched (S-01.4).",
+            "rule": "Guest-level, because the Agent Server cannot express it: in the filter table's INPUT chain, a packet that arrives from a container bridge (docker0, br-+) and is not part of a connection the guest opened jumps to the chain, is logged (rate-limited, kernel log) and is refused: TCP with a reset, anything else with an ICMP port-unreachable. A container therefore reaches no listener of the guest itself at any of its addresses (host.docker.internal is docker0): not sshd, not systemd-resolved's LLMNR, not the management listener. Replies to the guest's own connections (docker-proxy to a container's port 8000) are RELATED,ESTABLISHED and pass. Forwarded traffic is the egress guard's (egress_guard, S-01.4).",
             "fail_closed": "The drop-in makes docker.service Require and start After the guard: if the rules cannot be installed, Moby does not start and no conversation container can be created. The root step's admission step verifies the unit, the rules of both families and the bridge's enable_icc before the Agent Server is installed."
+          },
+          "egress_guard": {
+            "plan_leaf": "S-01.4",
+            "script": "/usr/local/sbin/aieh-container-guard",
+            "unit": "aieh-container-guard.service",
+            "hook": "DOCKER-USER",
+            "chain": "AIEH-EGRESS-GUARD",
+            "interfaces": ["docker0", "br-+"],
+            "hook_rules": [
+              "-i docker0 ! -o docker0 -j AIEH-EGRESS-GUARD",
+              "-i br-+ ! -o br-+ -j AIEH-EGRESS-GUARD",
+              "-j RETURN"
+            ],
+            "log_prefix": "aieh-egress-guard: ",
+            "rules": [
+              "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
+              "-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix \"aieh-egress-guard: \"",
+              "-p tcp -j REJECT --reject-with tcp-reset",
+              "-j REJECT"
+            ],
+            "families": ["iptables", "ip6tables"],
+            "allowlist": [],
+            "allowlist_rule": "The endpoint classes this profile enables for containers: network.endpoints of class inference or provision without a deferred status. None is enabled, so the allowlist is empty and every new forwarded connection from a container bridge is refused. Its first entry belongs to S-03.x (inference, after the broker's Owner authorization); an entry sits between the RETURN and the LOG rule.",
+            "rule": "Guest-level, in Moby's DOCKER-USER chain of the filter table (FORWARD jumps to it first): a packet that enters from a container bridge (docker0, br-+), leaves by another interface and is not part of an established connection jumps to the chain, is logged (rate-limited, kernel log, this prefix) and is refused: TCP with a reset, anything else with an ICMP port-unreachable. A container therefore opens no connection out of the guest: not to SLIRP's 10.0.2.2 (the host's loopback) or 10.0.2.3, not to an unconfigured guestfwd address, not to an off-guest address, IPv4 or IPv6. Traffic between two containers of one bridge does not leave it and stays with icc false (the peer container); connections to the guest itself stay with the container guard (INPUT). Off-link destinations have no route in the guest (SLIRP restrict=on gives no default route), so the guest's routing answers them before FORWARD (network unreachable): that is topology, recorded beside the policy, not the guard.",
+            "dockerd": "The guard runs before docker.service and creates DOCKER-USER when it is absent. It ends DOCKER-USER with the RETURN rule that Moby 26.1 adds when none exists, so Moby leaves the chain unchanged, and Moby re-inserts FORWARD's jump to DOCKER-USER at the top (IPv4). Moby 26.1 does not manage ip6tables (ip6tables off), so the guard's own FORWARD jump stands there. ip-forward is not set false (S-01.4 ruling R5).",
+            "fail_closed": "Installed by the same script and unit as the container guard: if any egress rule cannot be installed the unit fails and docker.service, which Requires it, does not start. The root step's admission step (after Moby's first start), the boot facts (after docker.service at every boot, with the rules the guard printed before Moby started) and inspect verify the chain, the hook rules and FORWARD's first jump in both families."
           },
           "icc": "provisioning.moby.daemon_json icc false (icc_rule)"
         },
@@ -483,7 +509,7 @@
         "dispatcher": {
           "principal": "management-dispatcher (security/inventory.json; planned, E-01.2.x)",
           "bootstrap": "No dispatcher exists. During bootstrap its role is performed by the Owner's account through tools/guest.py over the instance's SSH forward as the operator login agent, which reads the session key from its file inside the guest; no agent workload ever has that login or its SSH key.",
-          "owner_ui": "planned, not defined: the Owner UI's path to management is undecided (security finding fd-owner-ui-access); no host forward of the Agent Server exists (decision 0006)."
+          "owner_ui": "planned (decision 0013, Proposed): the Owner UI never holds the management key; it reaches an engineering session only with that conversation's runtime credential, issued by the dispatcher, over a dispatcher-owned local forward bound to host 127.0.0.1 (U-01.2, E-01.3.x). Each such forward is a new host port and needs a recorded Owner approval. No host forward of the Agent Server exists (decision 0006)."
         },
         "probe": "tools/guest.py admission-probe on a running provisioned instance (Task target guest:admission-probe)"
       },
@@ -552,7 +578,7 @@
         "token_rule": "No management, Owner, admin or bot credential in a job, searched by name and fingerprint, never by value: no credential file name (credential_files) and no .docker/config.json; the fingerprints of the outer session key and OH_SECRET_KEY (aieh-secret-fingerprint/v1 over every 43-character token of every readable file up to 8 MiB and of every readable process environment and command line) and every Gitea token fingerprint given to the probe (sha256: and 16 hex digits over every 40-hex token) are absent. Control: the scan finds the conversation's own key fingerprint in its process environment.",
         "deviations": {
           "host-gateway": "Carried: registry.py adds --add-host host.docker.internal:host-gateway unconditionally and Config has no option to remove it. Moby's host-gateway-ip would retarget the name, not remove it. The name resolves to the guest's docker0, where the container guard refuses every port.",
-          "no-network-none": "Carried to S-01.4: the NAT path out through the guest (no route out; SLIRP restrict=on resets the host aliases)."
+          "no-network-none": "Narrowed by S-01.4: the NAT path out through the guest is refused by the egress guard (admission.network.egress_guard), with no route out for off-link addresses and SLIRP restrict=on behind it. The absence of --network none is re-tested by S-02.1 and S-02.2."
         },
         "fail_closed": "No job control depends on a boot step to keep a socket or route closed: the engine sockets are absent from a job because the locked server mounts exactly three binds (a different binary is refused by its sha256 at provisioning); no_new_privs is set twice (the server's flag and daemon.json); without the container guard Moby does not start (S-01.3.1); without a valid key the server does not start (S-01.3.1); Moby has no TCP listener (no hosts in daemon.json, CRI off) and the host aliases are closed by SLIRP restrict=on in launch. A missing or loosened control is reported by inspect (Moby daemon, management API admission, conversation containers) and by this probe.",
         "ci": {

@@ -168,7 +168,8 @@
         "credentials": [
           "cred-uac-consent",
           "cred-gitea-owner-account",
-          "cred-owner-ui-access"
+          "cred-owner-ui-session",
+          "cred-conversation-runtime-access"
         ]
       },
       "denied": [],
@@ -207,10 +208,16 @@
           "delivery": "Created on the Gitea instance as an Owner act (Owner-class credentials are issued only by Owner acts); the Owner signs in independently."
         },
         {
-          "credential": "cred-owner-ui-access",
+          "credential": "cred-owner-ui-session",
           "issuer": "external:undefined",
           "delivered_by": null,
-          "delivery": "Not defined (fd-owner-ui-access); issued only by an Owner act."
+          "delivery": "A separate Owner session credential to the Owner-host/Integration process, not shaped like an Agent Server key (decision 0013, point 5); issued only by an Owner act. Which leaf builds it is unsettled (fd-owner-ui-session-plan-silence)."
+        },
+        {
+          "credential": "cred-conversation-runtime-access",
+          "issuer": "management-dispatcher",
+          "delivered_by": "management-dispatcher",
+          "delivery": "Issued per Owner session by the dispatcher from the outer server's runtime-credentials route, bounded to that conversation and the Owner's session, and handed to the Owner UI with a dispatcher-owned local forward bound to host 127.0.0.1 (decision 0013, points 2 and 3); never stored in a record, log or repository. The Owner UI never holds the management key."
         }
       ],
       "revocation": [
@@ -236,15 +243,32 @@
           "rotation_owner": "owner"
         },
         {
-          "credential": "cred-owner-ui-access",
+          "credential": "cred-owner-ui-session",
           "triggers": [
             "suspected-exposure",
             "expiry",
             "owner-direction"
           ],
           "revoker": "owner",
-          "method": "Not defined until the Owner UI's access is decided (S-01.3.1).",
+          "method": "Not defined until a leaf builds the Owner's UI session to the Integration process (plan silence); the Owner ends the session.",
           "rotation_owner": "owner",
+          "findings": [
+            "fd-owner-ui-session-plan-silence"
+          ]
+        },
+        {
+          "credential": "cred-conversation-runtime-access",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "management-dispatcher",
+          "method": "It ends with the Owner's session or the conversation's container, whichever ends first: the dispatcher closes the local forward, and stopping the runtime or deleting the conversation ends the credential (op-as-runtime-stop). On suspected exposure the dispatcher stops the conversation's runtime.",
+          "rotation_owner": "management-dispatcher",
           "findings": [
             "fd-owner-ui-access"
           ]
@@ -519,7 +543,7 @@
           "credential": "cred-gitea-bot-planner",
           "issuer": "gitea-site-admin",
           "delivered_by": "management-dispatcher",
-          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
         },
         {
           "credential": "cred-conversation-keys",
@@ -659,7 +683,7 @@
           "credential": "cred-gitea-bot-builder",
           "issuer": "gitea-site-admin",
           "delivered_by": "management-dispatcher",
-          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
         },
         {
           "credential": "cred-conversation-keys",
@@ -790,7 +814,7 @@
           "credential": "cred-gitea-bot-reviewer",
           "issuer": "gitea-site-admin",
           "delivered_by": "management-dispatcher",
-          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
         }
       ],
       "revocation": [
@@ -1053,7 +1077,13 @@
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md"
           ],
-          "notes": "Not verified at S-01.2.2: no dispatcher exists. Bootstrap custody observed instead: the Credential Manager entries \"AIEH Gitea bot <role>\" of the Owner's account, written by owner-os-account; records carry fingerprints only."
+          "notes": "Not verified at S-01.2.2: no dispatcher exists. Bootstrap custody observed instead: the Credential Manager entries \"AIEH Gitea bot <role>\" of the Owner's account, written by owner-os-account; records carry fingerprints only. Refined by decision 0013, point 7 (S-01.4): the attempt environment is the dispatcher's attempt context, never the conversation container; untrusted code has no network path to Gitea, proposals leave by exchange and the dispatcher pushes as the bot identity it holds custody of."
+        },
+        {
+          "mechanism": "The sole network path to the management API: the dispatcher's management calls and the Owner UI's conversation connections ride the qualified management channel (the loopback-bound SSH forward with the per-instance key); no browser, UI process, Integration process or agent holds the management key, and no QEMU hostfwd of the management listener exists (decision 0013, points 1 and 3).",
+          "verified": false,
+          "verify_at": "E-01.3.2",
+          "notes": "Decided at S-01.4 (decision 0013, Proposed); not realized: no dispatcher exists. The network half that exists today is in the matrix (policy/network-matrix.json): the listener is on the guest's loopback only, no host forward of it exists and no container reaches it."
         }
       ],
       "issuance": [

@@ -163,6 +163,11 @@ write_files:
       GUARD_LOG_PREFIX = 'aieh-container-guard: '
       GUARD_TOOLS = ('iptables', 'ip6tables')
       GUARD_DROPIN = '/etc/systemd/system/docker.service.d/10-aieh-container-guard.conf'
+      # S-01.4: the egress guard of the same script (provisioning.agent_server.admission.network
+      # .egress_guard)
+      EGRESS_CHAIN = 'AIEH-EGRESS-GUARD'
+      EGRESS_HOOK = 'DOCKER-USER'
+      EGRESS_LOG_PREFIX = 'aieh-egress-guard: '
       KEYCHECK = '/usr/local/sbin/aieh-agent-server-keycheck'
       UNIT_STATE = ('LoadState', 'ActiveState', 'SubState', 'Result', 'UnitFileState')
       INVENTORY_MAX = 400
@@ -530,7 +535,23 @@ write_files:
           options = bridge.get('Options') if isinstance(bridge, dict) else None
           pre = unit_show(AS_UNIT, ('ExecStartPre',)).get('ExecStartPre') or ''
           keycheck = {'script': stat_entry(KEYCHECK), 'exec_start_pre': KEYCHECK in pre}
+          # S-01.4: the rules as the guard installed them at this boot, before docker.service
+          # started (its own JSON line in the journal), and the order of the two units
+          rc, text, err = run(['journalctl', '-b', '-u', GUARD_UNIT, '-o', 'cat', '--no-pager'], 60)
+          install = None
+          for line in text.splitlines() if rc == 0 else []:
+              try:
+                  value = json.loads(line)
+              except ValueError:
+                  continue
+              if isinstance(value, dict) and value.get('mode') == 'install':
+                  install = value
+          order = {'guard_exit_monotonic': unit_show(GUARD_UNIT, (
+                       'ExecMainExitTimestampMonotonic',)).get('ExecMainExitTimestampMonotonic'),
+                   'docker_start_monotonic': unit_show('docker.service', (
+                       'ExecMainStartTimestampMonotonic',)).get('ExecMainStartTimestampMonotonic')}
           return {'guard_unit': unit_show(GUARD_UNIT, UNIT_STATE), 'rules': rules,
+                  'guard_install': install, 'order': order,
                   'dropin': stat_entry(GUARD_DROPIN),
                   'docker_requires_guard': GUARD_UNIT in str(deps.get('Requires', '')).split(),
                   'docker_after_guard': GUARD_UNIT in str(deps.get('After', '')).split(),
@@ -555,6 +576,24 @@ write_files:
                                '-g', GUARD_LOG_PREFIX], 60)
           lines = [line for line in text.splitlines() if GUARD_LOG_PREFIX in line]
           out['log'] = {'count': len(lines), 'tail': lines[-20:]}
+          # S-01.4: the egress guard's per-rule counters and kernel log lines (rate-limited)
+          egress = {}
+          for tool in GUARD_TOOLS:
+              rc, text, err = run([tool, '-w', '-n', '-v', '-x', '-L', EGRESS_CHAIN], 60)
+              rows = []
+              for line in text.splitlines()[2:] if rc == 0 else []:
+                  f = line.split()
+                  if len(f) >= 3 and f[0].isdigit():
+                      # in chain order (RETURN, LOG, REJECT tcp-reset, REJECT); the line as
+                      # iptables -L prints it
+                      rows.append({'packets': int(f[0]), 'bytes': int(f[1]), 'target': f[2],
+                                   'line': ' '.join(f[2:])[:200]})
+              egress[tool] = rows if rc == 0 else {'rc': rc, 'error': tail(err, 300)}
+          rc, text, err = run(['journalctl', '-k', '-b', '--no-pager', '-o', 'short-iso',
+                               '-g', EGRESS_LOG_PREFIX], 60)
+          lines = [line for line in text.splitlines() if EGRESS_LOG_PREFIX in line]
+          egress['log'] = {'count': len(lines), 'tail': lines[-20:]}
+          out['egress'] = egress
           rc, text, err = run(['journalctl', '-b', '-u', AS_UNIT, '-o', 'short-iso', '--no-pager'], 120)
           lines = text.splitlines() if rc == 0 else []
           http = [line for line in lines if 'HTTPException 401 on ' in line]
@@ -1017,12 +1056,14 @@ write_files:
       def check_admission(manifest):
           """S-01.3.1, right after Moby's first start and before the Agent Server exists: the
           container guard is active with the declared rules in both families, docker.service
-          requires it, and the default bridge has icc off."""
+          requires it, and the default bridge has icc off. S-01.4: the egress guard's chain,
+          its DOCKER-USER hooks and FORWARD's first jump survived Moby's start in both families."""
           step = 'admission'
           must(step, ['systemctl', 'enable', GUARD_UNIT], 60)
           found = admission_facts()
           if (found['guard_unit'].get('ActiveState') != 'active' or
-                  not found['rules'].get('ok') or not found['docker_requires_guard'] or
+                  not found['rules'].get('ok') or found['rules'].get('egress_ok') is not True or
+                  not found['docker_requires_guard'] or
                   not found['docker_after_guard'] or found['bridge_enable_icc'] != 'false'):
               raise Failed(step + ': ' + json.dumps(found, sort_keys=True)[:1500])
           return found
@@ -1452,7 +1493,15 @@ write_files:
       # does not belong to a connection the guest opened jumps to AIEH-CONTAINER-GUARD: it is
       # logged (rate-limited, kernel log at the LOG target's default level warning, this
       # prefix) and refused, TCP with a reset, anything
-      # else with an ICMP port-unreachable. IPv4 and IPv6 alike. Forwarded traffic is untouched.
+      # else with an ICMP port-unreachable. IPv4 and IPv6 alike.
+      # Egress guard (S-01.4): no new forwarded connection from a container bridge to any other
+      # interface. Moby's DOCKER-USER chain (created here when absent: this unit runs before
+      # docker.service) sends a packet that enters from docker0 or a br-* bridge and leaves by
+      # another interface to AIEH-EGRESS-GUARD, which has the same four rules with its own log
+      # prefix; the allowlist is empty (its first entry belongs to S-03.x, inference). Traffic
+      # between two containers on one bridge stays with icc false (S-01.3.1). DOCKER-USER ends
+      # with the RETURN that Moby would add, so Moby finds it and changes nothing, and FORWARD
+      # jumps to DOCKER-USER first (Moby re-inserts that jump at the top for IPv4).
       # Run by aieh-container-guard.service, which docker.service requires (fail closed: no
       # rules, no Moby). Modes: (none) install and verify; check: verify only. Prints one JSON
       # line: the rules as iptables -S prints them, and whether they are the declared ones.
@@ -1469,6 +1518,15 @@ write_files:
                '-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "' + LOG_PREFIX + '"',
                '-p tcp -j REJECT --reject-with tcp-reset',
                '-j REJECT')
+      EGRESS_CHAIN = 'AIEH-EGRESS-GUARD'
+      EGRESS_HOOK = 'DOCKER-USER'
+      EGRESS_LOG_PREFIX = 'aieh-egress-guard: '
+      EGRESS_ALLOWLIST = ()
+      EGRESS_RULES = ('-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+                      '-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "' +
+                      EGRESS_LOG_PREFIX + '"',
+                      '-p tcp -j REJECT --reject-with tcp-reset',
+                      '-j REJECT')
       ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
 
 
@@ -1496,6 +1554,51 @@ write_files:
               must([tool, '-w', '-I', 'INPUT', '1', '-i', iface, '-j', CHAIN])
 
 
+      def egress_rules():
+          # the allowlist (empty in S-01.4) would sit between the RETURN and the LOG
+          return EGRESS_RULES[:1] + tuple(EGRESS_ALLOWLIST) + EGRESS_RULES[1:]
+
+
+      def egress_hook_rules():
+          return ['-A ' + EGRESS_HOOK + ' -i ' + i + ' ! -o ' + i + ' -j ' + EGRESS_CHAIN
+                  for i in INTERFACES] + ['-A ' + EGRESS_HOOK + ' -j RETURN']
+
+
+      def install_egress(tool):
+          for chain in (EGRESS_HOOK, EGRESS_CHAIN):
+              if run([tool, '-w', '-n', '-L', chain])[0] != 0:
+                  must([tool, '-w', '-N', chain])
+          must([tool, '-w', '-F', EGRESS_CHAIN])
+          for rule in egress_rules():
+              must([tool, '-w', '-A', EGRESS_CHAIN] + shlex.split(rule))
+          must([tool, '-w', '-F', EGRESS_HOOK])
+          for line in egress_hook_rules():
+              must([tool, '-w'] + shlex.split(line))
+          while run([tool, '-w', '-D', 'FORWARD', '-j', EGRESS_HOOK])[0] == 0:
+              pass
+          must([tool, '-w', '-I', 'FORWARD', '1', '-j', EGRESS_HOOK])
+
+
+      def observe_egress(tool):
+          rc, out, err = run([tool, '-w', '-S', EGRESS_CHAIN])
+          chain = [line for line in out.splitlines() if line.startswith('-A ')] if rc == 0 else None
+          rc2, out2, _ = run([tool, '-w', '-S', EGRESS_HOOK])
+          hook = [line for line in out2.splitlines() if line.startswith('-A ')] if rc2 == 0 else None
+          rc3, out3, _ = run([tool, '-w', '-S', 'FORWARD'])
+          forward = out3.splitlines() if rc3 == 0 else []
+          rules = [line for line in forward if line.startswith('-A ')]
+          jumps = [line for line in rules if line.endswith(' -j ' + EGRESS_HOOK)]
+          want = ['-A ' + EGRESS_CHAIN + ' ' + rule for rule in egress_rules()]
+          ok = chain is not None and len(chain) == len(want) and \
+              all(line == w or line.startswith(w + ' ') for line, w in zip(chain, want)) and \
+              hook == egress_hook_rules() and rules[:1] == ['-A FORWARD -j ' + EGRESS_HOOK] and \
+              len(jumps) == 1
+          return {'chain': chain, 'hook': hook, 'forward_head': rules[:4],
+                  'forward_jumps': len(jumps) if rc3 == 0 else None,
+                  'forward_policy': next((line for line in forward if line.startswith('-P ')), None),
+                  'ok': ok, 'error': None if rc == 0 else err.strip()[-300:]}
+
+
       def observe(tool):
           rc, out, err = run([tool, '-w', '-S', CHAIN])
           chain = [line for line in out.splitlines() if line.startswith('-A ')] if rc == 0 else None
@@ -1521,8 +1624,11 @@ write_files:
               if not argv:
                   for tool in TOOLS:
                       install(tool)
-              out['families'] = {tool: observe(tool) for tool in TOOLS}
-              out['ok'] = all(f['ok'] for f in out['families'].values())
+                      install_egress(tool)
+              out['families'] = {tool: dict(observe(tool), egress=observe_egress(tool))
+                                 for tool in TOOLS}
+              out['egress_ok'] = all(f['egress']['ok'] for f in out['families'].values())
+              out['ok'] = all(f['ok'] for f in out['families'].values()) and out['egress_ok']
           except Exception as exc:
               out['ok'], out['error'] = False, (type(exc).__name__ + ': ' + str(exc))[:600]
           print(json.dumps(out, sort_keys=True), flush=True)
@@ -1536,7 +1642,7 @@ write_files:
     permissions: '0644'
     content: |
       [Unit]
-      Description=AIEH container guard: no new connection from a container bridge to the guest (S-01.3.1)
+      Description=AIEH container guard: no new connection from a container bridge to the guest (S-01.3.1) or out of it (S-01.4)
       ConditionFileNotEmpty=/etc/aieh/provision.json
       DefaultDependencies=no
       After=local-fs.target
@@ -1555,7 +1661,8 @@ write_files:
     owner: root:root
     permissions: '0644'
     content: |
-      # S-01.3.1: Moby starts only after the container guard's rules are in place (fail closed).
+      # S-01.3.1, S-01.4: Moby starts only after the container guard's and the egress guard's rules
+      # are in place (fail closed).
       [Unit]
       Requires=aieh-container-guard.service
       After=aieh-container-guard.service
