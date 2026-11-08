@@ -229,8 +229,12 @@ class Outcomes:
         self.rows = {}       # (suite, id) -> outcome
         self.counted = {}    # nodeid -> suite, for tests the stdlib runner counts as run
         self.deselected = 0
+        self.worker_ids = set()  # the xdist workers that sent a report
 
     def add(self, report):
+        gateway = getattr(getattr(report, 'node', None), 'gateway', None)
+        if gateway is not None:
+            self.worker_ids.add(gateway.id)
         row = getattr(report, 'aieh_row', None)
         if not row or row['outcome'] is None:
             return
@@ -245,7 +249,7 @@ class Outcomes:
         ran = {}
         for suite in self.counted.values():
             ran[suite] = ran.get(suite, 0) + 1
-        return {'schema': OUTCOMES_SCHEMA, 'workers': workers,
+        return {'schema': OUTCOMES_SCHEMA, 'workers': workers, 'worker_ids': sorted(self.worker_ids),
                 'suites': [{'name': name, 'tests': ran[name]} for name in sorted(ran, key=str)],
                 'tests': [{'suite': s, 'id': i, 'outcome': o} for (s, i), o in sorted(self.rows.items(), key=str)]}
 
@@ -294,7 +298,7 @@ def pytest_sessionfinish(session, exitstatus):
     out, conformance = config.getoption('aieh_outcomes'), config.getoption('aieh_conformance')
     if not out and not conformance:
         return
-    workers = getattr(config.option, 'numprocesses', None) or 0
+    workers = len(getattr(config.option, 'tx', None) or ())  # xdist's started workers, 0 without -n
     document = record.document(workers)
     if out:
         Path(out).write_text(json.dumps(document, indent=1) + '\n', encoding='utf-8')

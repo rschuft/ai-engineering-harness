@@ -248,6 +248,10 @@ class GeneratedProject(unittest.TestCase):
                 code, out = self.pytest(root, '-n', workers, f'--aieh-outcomes={out_file}')
                 self.assertEqual(code, 1, out)
                 self.assertEqual(self.outcomes(out_file), expected, out)
+                document = json.loads(out_file.read_text(encoding='utf-8'))
+                self.assertEqual(document['workers'], int(workers))
+                self.assertLessEqual(set(document['worker_ids']), {f'gw{n}' for n in range(int(workers))})
+                self.assertEqual(bool(document['worker_ids']), workers != '0')
                 for event in ('subprocess.Popen', 'socket.__new__', 'os.chdir'):
                     self.assertIn(f'unit guard: {event} in the unit test tools/tests/test_injected.py::', out)
                 self.assertIn('unit guard: the unit test tools/tests/test_injected.py::SwallowsTheRefusal::'
