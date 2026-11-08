@@ -582,12 +582,22 @@ class ExistingCommands(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, out)
         return out
 
-    def test_7_verify_seed_check_profile_and_the_whole_tool_suite(self):
+    def test_7_verify_seed_and_check_profile(self):
         if NESTED:
             self.skipTest('already running inside the whole-suite run')
         self.assertIn('PASS', self.run_here('-I', 'tools/verify_seed.py'))
         self.assertIn('PASS', self.run_here('-I', 'tools/verify_seed.py', '--baseline', 'seed'))
         self.run_here('-I', '-B', 'tools/check_profile.py')
+
+    def test_7_the_whole_tool_suite(self):
+        # The nested whole-suite rerun (about two minutes) runs in the gate tier only: task
+        # hooks:verify sets AIEH_GATE_REQUIRE_SCANNER=1, and task qualify runs hooks:verify at a
+        # release (plan leaf F-09.2). Every other run reports it skipped, with this reason.
+        if NESTED:
+            self.skipTest('already running inside the whole-suite run')
+        if not REQUIRE_SCANNER:
+            self.skipTest('the nested whole-suite rerun runs under AIEH_GATE_REQUIRE_SCANNER=1 '
+                          '(task hooks:verify, and task qualify at a release)')
         env = dict(clean_environ(), AIEH_GATE_NESTED_SUITE='1')
         out = self.run_here('-I', '-B', '-m', 'unittest', 'discover', '-s', 'tools/tests', env=env)
         self.assertIn('OK', out)

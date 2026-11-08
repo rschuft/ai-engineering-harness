@@ -144,7 +144,7 @@ Only what is listed as verified has been exercised.
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
 | `setup` | the eleven commands in [Quick start](#quick-start) | no | Supported setup command. |
-| `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK` | yes | Full qualification smoke run. |
+| `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK`, then `dev:install`, `test:all` and `hooks:verify` | yes | Full qualification smoke run, and the release run of the tests: the parallel runner, the Owner host's Vitest tests when Node.js 24 or later is present, and the gate's nested whole-tool-suite rerun. Needs the [publication-safety gate](#publication-safety-gate) installed. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
@@ -153,6 +153,11 @@ Only what is listed as verified has been exercised.
 | `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch resolution and admission tests (stdlib `unittest`). |
 | `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `python -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `test:categories [-- --list]` | `python -I -B tools/test_profile.py categories [--list]` | no | Checks that every test class declares a valid category. Imports the test modules; runs no test. |
+| `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
+| `test:unit [-- ARGS]` | `PYTHONDONTWRITEBYTECODE=1 <dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m unit [ARGS]` | no | [Testing](#testing): the inner loop, the `unit` tests in parallel under the unit guard. Needs `dev:install`. |
+| `test:fast [-- ARGS]` | the same with `-m "unit or contract"` | no | The inner loop: `unit` and `contract` tests in parallel. |
+| `test:component [-- ARGS]` | the same with `-m "contract or integration"` | no | The boundary: `contract` and `integration` tests in parallel. |
+| `test:all [-- ARGS]` | the same with `-m "not e2e"`, then `owner-host:test:if-node` | no | Every suite of `test` but the live `e2e` classes, in parallel on at most 8 processes, then the Owner host's Vitest tests when Node.js 24 or later is present. Needs `dev:install` (and `owner-host:install` with Node.js 24). |
 | `test:budget [-- --counters-only]` | `python -I -B tools/check_test_budget.py check --run [--counters-only]` | no | **Acceptance obligation** at every leaf acceptance and release, never in a hook: profiles three serial runs and checks them against [`policy/test-budgets.json`](../policy/test-budgets.json). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
@@ -218,7 +223,7 @@ Only what is listed as verified has been exercised.
 | `guest:host-census [-- --exclude-pid <pid> --out <file>]` | `python -I -B tools/guest.py host-census [--exclude-pid <pid>] [--out <file>]` | no | S-01.4, read only and unelevated: the harness's host listeners by PID (QEMU, the host Gitea and its proxy, the Owner host's Vite servers), each of which must be on 127.0.0.1, and the Windows Firewall profiles and rule count, recorded as disclosure (UNKNOWN when a cmdlet is refused). No profile or state directory; it changes no rule. Exit 0 only on PASS. |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
-| `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests. |
+| `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests, and test 7's nested rerun of the whole tool suite (which runs nowhere else but `qualify`). |
 | `scan:history [-- REVS]` | `python -I -B tools/publication_gate.py history [REVS]` | no | Read-only, redacted scan of every commit (default `--all`); exit 1 on findings. |
 | `resolve WORK=<dir>` | `python -I composition/resolve.py --work <dir>` | yes | Component lock resolution and host install; see [`composition/lock/README.md`](../composition/lock/README.md). `<dir>` must be empty or absent and outside the checkout. |
 | `inventory RESOLVED=<work> OUT=<file>` | `python -I composition/inventory/metadata_inventory.py --resolved <work> --out <file>` | yes | Component metadata inventory (declared licences). |
@@ -314,6 +319,60 @@ leaf's evidence. It never runs from a git hook: it takes three full serial runs.
 **Wall time.** At `07c7cd5` the serial `task test` set took a median of 355 s on the
 verification host (Windows 11, 32 logical processors, CPython 3.12.10); the per-suite
 medians and the measurement are in [`evidence/F-09.1-test-baseline.md`](../evidence/F-09.1-test-baseline.md).
+
+**Parallel runner.** pytest and pytest-xdist run the same unittest suites as a second runner;
+`task test` and `task setup` stay the stdlib serial run, which needs nothing beyond the basic
+tier. `task dev:install` installs them, hash-locked and wheels only
+([`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt):
+pytest, pytest-xdist 3.8.0, execnet, pluggy, iniconfig, Pygments, packaging, and colorama on
+Windows; all pure-Python wheels under MIT, BSD or Apache licences), into the `python-dev-tools`
+venv under the managed data root through the same mechanism as `task tools:install`.
+[`pyproject.toml`](../pyproject.toml) holds the pytest configuration only (the repository is
+not a Python package): the suites of `task test`, unittest's collection rules (only
+`unittest.TestCase` classes in `test*.py` files, no subdirectory of a suite), one marker per
+category under `--strict-markers`, no cache directory and no assertion rewriting. The root
+[`conftest.py`](../conftest.py) gives each test its class's category as a marker, refuses a
+class without a valid category, and holds the unit guard.
+
+| Target | Runs | For |
+|---|---|---|
+| `test:unit` | `-m unit` | the inner loop |
+| `test:fast` | `-m "unit or contract"` | the inner loop |
+| `test:component` | `-m "contract or integration"` | the boundary |
+| `test:all` | `-m "not e2e"`, then the Owner host's Vitest tests when Node.js 24 or later is present | everything but the live classes |
+
+Each runs `<dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m <tier>`
+with `PYTHONDONTWRITEBYTECODE=1`: at most 8 worker processes, and each test class stays in one
+worker, so its `setUpClass` runs once. Pass pytest options after `--`, for example
+`task test:unit -- -k paths` or `-- -n 0` for one process.
+
+- **The unit guard.** While a `unit` test runs (its setup with `setUpClass` and `setUpModule`,
+  its body and its teardown), an audit hook refuses a process launch, a socket and an
+  `os.chdir`, the same audit events the profile counts, and the test fails, naming each event.
+  The refused launch never starts. Tests in the other categories may do all three.
+- **Nothing is written inside the checkout.** No `.pytest_cache` (`-p no:cacheprovider`), no
+  `__pycache__` (`-B` and `PYTHONDONTWRITEBYTECODE=1`, because xdist workers do not inherit
+  `-B`; `conftest.py` refuses to run otherwise), and pytest's base temporary directory stays
+  under the system temporary directory. The Owner host's tests run with Vitest's result and
+  module caches off.
+- **The same results.** `--aieh-outcomes FILE` writes every test id and outcome as the stdlib
+  runner reports them (a class that skips or fails in `setUpClass` is one `setUpClass
+  (module.Class)` row, as unittest reports it), and `--aieh-conformance PROFILE` fails unless
+  they equal those of a full stdlib profile (`tools/test_profile.py run --out PROFILE`) under
+  the same interpreter. Run the stdlib side with the dev venv's interpreter too: it has no
+  PyYAML, so the four `config.yml` tests of the managed data root suite skip under it in both
+  runners.
+- **Live suites** (`e2e`) stay opt-in through their environment variables and never run in
+  parallel: `test:all` deselects them, and their own targets (`gitea:authz` and the live
+  planning and lineage tests) run them serially.
+- **Test 7's nested rerun.** The publication gate's test 7 checks the existing commands in
+  every run (`verify_seed.py` in both modes and `check_profile.py`). Its nested rerun of the
+  whole tool suite, about two minutes, runs only under `AIEH_GATE_REQUIRE_SCANNER=1`:
+  `task hooks:verify`, and `task qualify` at a release. Elsewhere it is reported skipped, with
+  that reason.
+- **Required tiers.** `task test` (every suite, serially) and `task test:all` run every
+  fail-closed security proof that runs by default; only the `e2e` classes are outside
+  `test:all`.
 
 ## Managed data root
 
@@ -919,6 +978,7 @@ the component lock's versions for every package they share. Install it with
 | `owner-host:install` | `npm ci --ignore-scripts --no-audit --no-fund` | yes | Installs the locked dependencies; npm checks each tarball's integrity. |
 | `owner-host:typecheck` | `npm run typecheck` (`tsc --noEmit -p tsconfig.json`) | no | TypeScript 7.0.2 check of the app, its tests and the build plugin. |
 | `owner-host:test` | `npm test` (`vitest run`) | no | Component, routing, identity, responsive-logic, no-network and Canvas compatibility tests in jsdom. |
+| `owner-host:test:if-node` | when `node` is 24 or later, `npm test -- --no-cache --no-fsModuleCache`; otherwise a skip message | no | The same tests, without Vitest's result and module caches (nothing written under `node_modules/`); part of `test:all`. Fails when `node_modules/` is missing (`owner-host:install` first). |
 | `owner-host:build` | `npm run build` (`vite build`) | no | Production build into `apps/owner-host/dist/`. Canvas is a lazy chunk. |
 
 `npm run dev` and `npm run preview` serve the app on 127.0.0.1 only. Neither has a

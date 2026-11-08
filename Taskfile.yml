@@ -29,8 +29,12 @@ tasks:
       - task: verify:baseline
       - task: test
 
+  # qualify is the release run (F-09.2): after the resolution it installs the dev tools venv, runs
+  # test:all (with the Owner host's Vitest tests when Node.js 24 or later is present), and
+  # hooks:verify, whose AIEH_GATE_REQUIRE_SCANNER=1 also runs the publication gate's nested
+  # whole-tool-suite rerun (test 7).
   qualify:
-    desc: setup, then component prerequisites and a full resolution into a new temporary directory
+    desc: setup, then component prerequisites, a full resolution into a new temporary directory, dev:install, test:all and hooks:verify
     vars:
       WORK:
         sh: '{{.PYTHON}} -I -c "import pathlib, tempfile; print(pathlib.Path(tempfile.mkdtemp(prefix=''aieh-resolve-'')).as_posix())"'
@@ -40,6 +44,9 @@ tasks:
       - task: resolve
         vars:
           WORK: '{{.WORK}}'
+      - task: dev:install
+      - task: test:all
+      - task: hooks:verify
 
   prereqs:
     desc: Check basic prerequisites (python -I -B tools/check_prereqs.py)
@@ -95,6 +102,59 @@ tasks:
     desc: "Acceptance obligation at every leaf acceptance and release, never in a hook: profile three serial runs and check them against policy/test-budgets.json (python -I -B tools/check_test_budget.py check --run); -- --counters-only checks the counters from one run"
     cmds:
       - '{{.PYTHON}} -I -B tools/check_test_budget.py check --run {{.CLI_ARGS}}'
+
+  # Parallel runner (plan leaf F-09.2; docs/development.md#testing): pytest and pytest-xdist from the
+  # hash-locked dev tools venv (dev:install) over the unchanged unittest suites, configured by
+  # pyproject.toml and conftest.py (category markers, the unit guard). test and setup stay the stdlib
+  # serial run. DEV_PYTHON is the venv's interpreter for the current lock; locating it creates
+  # nothing and fails when dev:install has not run. -B and PYTHONDONTWRITEBYTECODE=1 (the xdist
+  # workers do not inherit -B) keep bytecode out of the checkout; pyproject.toml disables pytest's
+  # cache. The e2e (live) classes never run in parallel: they stay opt-in in their own targets.
+  dev:install:
+    desc: "Network (PyPI): install the hash-locked dev tools venv (pytest, pytest-xdist) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py --set python-dev-tools)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools'
+
+  test:unit:
+    desc: "Inner loop: the unit tests in parallel under the unit guard (<dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m unit); needs dev:install"
+    vars:
+      DEV_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools --python'
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '"{{.DEV_PYTHON}}" -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m unit {{.CLI_ARGS}}'
+
+  test:fast:
+    desc: "Inner loop: the unit and contract tests in parallel (<dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m \"unit or contract\"); needs dev:install"
+    vars:
+      DEV_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools --python'
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '"{{.DEV_PYTHON}}" -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m "unit or contract" {{.CLI_ARGS}}'
+
+  test:component:
+    desc: "Boundary: the contract and integration tests in parallel (<dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m \"contract or integration\"); needs dev:install"
+    vars:
+      DEV_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools --python'
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '"{{.DEV_PYTHON}}" -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m "contract or integration" {{.CLI_ARGS}}'
+
+  test:all:
+    desc: "Every suite but the live e2e classes, in parallel on at most 8 processes (<dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m \"not e2e\"), then the Owner host's Vitest tests when Node.js 24 or later is present (owner-host:test:if-node); needs dev:install"
+    vars:
+      DEV_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools --python'
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '"{{.DEV_PYTHON}}" -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m "not e2e" {{.CLI_ARGS}}'
+      - task: owner-host:test:if-node
 
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
@@ -345,6 +405,24 @@ tasks:
     cmds:
       - npm test
 
+  # Part of test:all (and of qualify through it), F-09.2: only when Node.js 24 or later is present,
+  # over the locked install of owner-host:install, with Vitest's result and module caches off so
+  # that nothing is written inside the checkout.
+  owner-host:test:if-node:
+    desc: "When Node.js 24 or later is present: the Owner host's Vitest tests, the canvas-compat contract file among them, without Vitest caches (npm test -- --no-cache --no-fsModuleCache, in apps/owner-host); otherwise says they were skipped"
+    dir: apps/owner-host
+    cmds:
+      - |
+        if node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
+          if [ ! -d node_modules ]; then
+            echo "apps/owner-host has no node_modules: run task owner-host:install (npm ci --ignore-scripts) first"
+            exit 1
+          fi
+          npm test -- --no-cache --no-fsModuleCache
+        else
+          echo "Node.js 24 or later not found: the Owner host Vitest tests were skipped"
+        fi
+
   owner-host:build:
     desc: Build the Owner host into apps/owner-host/dist (npm run build, in apps/owner-host)
     dir: apps/owner-host
@@ -555,7 +633,7 @@ tasks:
       - '{{.PYTHON}} -I -B tools/publication_gate.py install'
 
   hooks:verify:
-    desc: Verify the gate (python -I -B tools/publication_gate.py verify, then its synthetic test suite with AIEH_GATE_REQUIRE_SCANNER=1)
+    desc: Verify the gate (python -I -B tools/publication_gate.py verify, then its synthetic test suite with AIEH_GATE_REQUIRE_SCANNER=1, which also runs test 7's nested whole-tool-suite rerun)
     env:
       AIEH_GATE_REQUIRE_SCANNER: '1'
     cmds:

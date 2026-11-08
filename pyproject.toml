@@ -1,0 +1,42 @@
+# pytest configuration only (plan leaf F-09.2; docs/development.md#testing). The repository is
+# not a Python package: there is no [project] or [build-system] table.
+#
+# pytest and pytest-xdist are a second runner over the unchanged standard-library unittest
+# suites; `task test` stays the stdlib serial run. They come from the hash-locked dev tools venv
+# (composition/lock/python/dev-requirements.txt, `task dev:install`). Run them through the
+# test:unit, test:fast, test:component and test:all targets, which use that venv with -I -B and
+# PYTHONDONTWRITEBYTECODE=1, so that nothing is written inside the checkout.
+#
+# The root conftest.py maps each test class's declared category (F-09.1) to its marker, refuses
+# an uncategorized class, and holds the unit guard.
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+# The suites of `task test`, in its order; tools/tests/test_pytest_conftest.py checks that this
+# list equals the Taskfile's.
+testpaths = [
+    "tools/tests",
+    "integrations/store/tests",
+    "integrations/effects/tests",
+    "integrations/planning/tests",
+    "integrations/lineage/tests",
+    "integrations/paths/tests",
+    "integrations/gitea/tests",
+    "integrations/dispatch/tests",
+]
+# What `python -m unittest discover` collects: unittest.TestCase classes in test*.py modules,
+# nothing else (no plain test functions or classes).
+python_files = ["test*.py"]
+python_classes = []
+python_functions = []
+# No cache directory (-p no:cacheprovider), no assertion rewriting (plain imports, as under
+# unittest), test modules imported as unittest's discovery imports them (each suite directory on
+# sys.path), and every marker declared.
+addopts = ["-p", "no:cacheprovider", "--assert=plain", "--import-mode=prepend", "--strict-markers", "-ra"]
+markers = [
+    "unit: exercises code in the test process only; no process launch, socket or os.chdir (the unit guard)",
+    "contract: checks a boundary against its specification",
+    "integration: drives real components together",
+    "e2e: needs a live installed tool or running service; opt-in, never in test:all",
+    "performance: measures a time or a launch count as its result",
+]
