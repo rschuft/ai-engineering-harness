@@ -516,6 +516,18 @@ Each cell lists the verdicts of the rows from the row domain to the column domai
 | `nm-ext-owner-github` The Owner's push to the public repository | `td-owner` | `external:github` | allow | https | `external:github` | `cred-owner-github` | the publication-safety gate (pinned Gitleaks) before every commit and push (prevention, host) | observed | - | no | python -I -B tools/publication_gate.py verify |
 <!-- END GENERATED -->
 
+## Test budgets (F-09.1)
+
+[`test-budgets.json`](test-budgets.json) holds the enforceable test budgets, per category,
+per suite and in total, derived from the measured baseline in
+[`evidence/test-profile/`](../evidence/test-profile/): exact counters (at least the
+baseline's tests, at most its launches and `mkdtemp` calls) and median wall times with a
+tolerance. `task test:budget` (`python -I -B tools/check_test_budget.py check --run`)
+checks them; it is an acceptance obligation at every leaf acceptance and at release, never a
+hook. Changing the file is a reviewed change with the profile that justifies it
+(`check_test_budget.py propose`). The full description is in
+[docs/development.md, Testing](../docs/development.md#testing).
+
 ## Sources
 
 - Blueprint: `#security`, `#authorization-qualification`, `#governance-architecture`,
