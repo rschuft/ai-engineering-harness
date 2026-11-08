@@ -13,6 +13,14 @@ waits on the worker's own output (and its exit), never on a fixed sleep.
   contend KEY INTENT            open, print {"ready": true}, wait for a "go" line
                                 on stdin, reserve, print the outcome
   conversation-id KEY           print the deterministic conversation ID
+  reserve-attempt IDENTITY INTENT
+                                reserve a typed attempt (IDENTITY is the JSON of an
+                                AttemptIdentity's fields), print the outcome, close
+  reserve-attempt-and-exit IDENTITY INTENT
+                                the same, then os._exit(0) with the connection open
+  contend-attempt IDENTITY INTENT
+                                open, print {"ready": true}, wait for "go", reserve the
+                                typed attempt, print the outcome (or the refusal's type)
 """
 from pathlib import Path
 import dataclasses
@@ -46,7 +54,9 @@ def main(argv):
         os._exit(0)
     if command == 'get':
         reservation = store.get(rest[0])
+        attempt = store.attempt_identity(rest[0])
         emit({'reservation': reservation and dataclasses.asdict(reservation),
+              'attempt': attempt and dataclasses.asdict(attempt),
               'events': [dataclasses.asdict(e) for e in store.events(rest[0])]})
         store.close()
         return 0
@@ -68,6 +78,24 @@ def main(argv):
                   'conversation_id': result.reservation.conversation_id})
         except store_mod.ConflictingReservation:
             emit({'outcome': 'conflict'})
+        store.close()
+        return 0
+    if command in ('reserve-attempt', 'reserve-attempt-and-exit', 'contend-attempt'):
+        identity = store_mod.AttemptIdentity(**json.loads(rest[0]))
+        intent = json.loads(rest[1])
+        if command == 'contend-attempt':
+            emit({'ready': True})
+            if sys.stdin.readline().strip() != 'go':
+                return 2
+        try:
+            result = store.reserve_attempt(identity, intent, actor=f'worker-{os.getpid()}')
+            emit({'outcome': 'created' if result.created else 'existing',
+                  'reservation': dataclasses.asdict(result.reservation),
+                  'attempt': dataclasses.asdict(result.attempt)})
+        except store_mod.StoreError as exc:
+            emit({'outcome': type(exc).__name__})
+        if command == 'reserve-attempt-and-exit':
+            os._exit(0)
         store.close()
         return 0
     raise SystemExit(f'unknown command {command}')

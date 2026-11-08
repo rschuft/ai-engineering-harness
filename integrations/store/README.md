@@ -1,6 +1,6 @@
 # Integration store (`integration.sqlite`)
 
-Plan leaf F-05.1, blueprint section
+Plan leaves F-05.1, F-05.2 and E-01.1.1, blueprint section
 [`#infrastructure-state`](../../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#infrastructure-state).
 This is the trusted host's local transactional state for the Integration Service:
 **operational coordination receipts** (attempt reservations and their transitions)
@@ -17,8 +17,10 @@ separate store (F-05.2), never here.
 | `integration_store.py` | The library and its command line (`init`, `default-path`, `backup`, `restore`) |
 | `migrations/NNNN_<name>.sql` | Ordered, versioned schema migrations |
 | `tests/test_integration_store.py` | Transaction, restart, crash, contention, migration and projection tests |
+| `tests/test_attempt_identity.py` | Typed attempt identity, key, claim rule, lifecycle flag, SQL/Python grammar agreement and migration 0003 (E-01.1.1) |
 | `tests/test_backup_restore.py` | Backup, restore, restore epochs, manifest checks and the projection rebuild from a synthetic repository (F-05.2) |
 | `tests/store_worker.py` | The subprocess the tests run against one database file |
+| `../planning/planning_adapter.py` | Read only: the identifier grammars (task id, change id, commit, path) and `Pointer.parse` that typed identities reuse |
 | `../storecore/storecore.py` | The SQLite mechanics shared with the effects store: connection policy, migration ledger, write transactions, the projection authorizer, backup and restore |
 
 ## Commands
@@ -85,6 +87,10 @@ result = store.reserve(operation_key, intent, actor='dispatcher')
 result.reservation.conversation_id   # send this conversation_id on the create
 ```
 
+A Work attempt is reserved with `reserve_attempt` under a typed identity instead
+(see [Typed attempt identity](#typed-attempt-identity)). `reserve` keeps working
+for opaque keys outside the `attempt/` namespace; those attempts are untyped.
+
 - `operation_key` is the durable attempt key (text, 1 to 512 characters,
   unique).
 - `intent` is a JSON object holding the intended scoped resources and the rest of
@@ -118,6 +124,163 @@ Every reservation and transition appends a row to `attempt_event`: the sequence
 number, from and to states, reconciliation status, actor, reason, optional JSON
 detail and time.
 
+## Typed attempt identity
+
+Plan leaf E-01.1.1, migration 0003, blueprint
+[`#execution-qualification`](../../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification),
+dispatch step 02: "Persist Work ID, immutable design revision, attempt UUID,
+preselected conversation UUID, planned workspace and policy digest. Prevent
+concurrent claims of the same Work revision/stage."
+
+A Work attempt is reserved under a typed identity, before any external call:
+
+```python
+identity = integration_store.AttemptIdentity(
+    work_id='TASK-12', design_revision=integration_store.design_revision_from_pointers(task_pointers),
+    stage='implement', ordinal=1, profile_digest=..., planned_workspace='work/TASK-12/attempt-1',
+    policy_digest=..., agent_manifest_digest=None)
+result = store.reserve_attempt(identity, intent, actor='dispatcher')
+result.reservation.conversation_id   # send this conversation_id on the create
+result.attempt.attempt_id            # this receipt's own identity
+```
+
+### Identity
+
+| Field | Contract | Source |
+|---|---|---|
+| `work_id` | the Backlog.md task id, `planning_adapter.TASK_ID_RE`, stored upper case (Backlog.md and the planning adapter compare ids without case), at most 64 characters | Backlog.md (P-02.2) |
+| `design_revision` | `openspec:changes/<change>@<commit>`: the blueprint's change-level design notation, built from the planning adapter's `CHANGE_ID` (at most 128 characters) and a full `COMMIT` (40 or 64 hex digits). `design_revision_from_pointers` derives it from a task's OpenSpec source pointers with `Pointer.parse`; they must all pin one change at one commit | OpenSpec in git (P-02.1) |
+| `stage` | a row of `attempt_stage`: `implement` or `review` | blueprint, "One Work item" steps 2 and 3 |
+| `ordinal` | 1, 2, 3 ... per (`work_id`, `design_revision`, `stage`), no gaps, at most 999999 | this store |
+| `profile_digest` | sha256 (64 lower-case hex digits) of the execution profile's `profile.json` bytes, as `tools/guest.py` records `profile.sha256` | `profiles/` |
+| `agent_manifest_digest` | sha256 of the approved agent and Skill manifest; `None` (JSON `null`) while no approved catalog exists. E-01.2.1 makes it required | the catalog (not yet built) |
+| `planned_workspace` | a relative identifier under the managed root's `persistent/workspaces` category (decision 0009), the planning adapter's `ARTIFACT_PATH` grammar, at most 255 characters. Never a host path: `/`, a drive, `..`, a hidden part or a backslash is refused. E-01.2.2 resolves it through `integrations/paths` | decision 0009 |
+| `policy_digest` | sha256 of the applicable policy | the dispatcher's policy input |
+
+Every digest is CHECK-constrained to 64 lower-case hex digits. The SQLite CHECKs
+and the Python validators accept exactly the same values; a differential test
+compares them.
+
+### Key, attempt ID and conversation ID
+
+- `operation_key` is `attempt/v1/<work_id>/<change>@<commit>/<stage>/<ordinal>`,
+  for example `attempt/v1/TASK-1/qual-02-search-freshness@8eacfa8...4fb7/implement/1`.
+  No part's grammar contains `/`, so the encoding is unambiguous without escaping;
+  the longest identity is under 300 characters, within the 512-character limit.
+  A trigger refuses an identity whose key is not this encoding of its columns.
+- The `attempt/` key namespace belongs to typed attempts. `reserve` refuses it, and
+  a trigger refuses an `attempt` row in it that has no identity.
+- `conversation_id` stays `uuid5(CONVERSATION_NAMESPACE, operation_key)`: the
+  identity sent to the external system.
+- `attempt_id` is `uuid5(ATTEMPT_NAMESPACE, operation_key)`, under its own fixed
+  namespace: this receipt's identity. It is unique and immutable, and a restart
+  re-derives it. Neither namespace may ever change; tests pin a known pair for each.
+- The other fields (profile, manifest, workspace, policy) are not in the key. They
+  are in the intent, so the same key with another profile or policy is a
+  `ConflictingReservation` (also named `IntentConflict`), never a second attempt.
+
+### Intent
+
+The stored intent is the caller's intent plus two keys:
+
+- `workRef`: `backlog:<work_id>`. `integrations/lineage` follows it from the
+  reservation to the task. A caller may supply it only with that value.
+- `attemptIdentity`: the identity's fields with `format: attempt-identity/v1`.
+  Reserved; a caller may not supply it.
+
+A trigger checks both against the typed columns when the attempt row is written.
+`intent_digest` covers the whole of it.
+
+### reserve_attempt
+
+One `BEGIN IMMEDIATE` transaction. In order, with nothing changed on a refusal:
+
+1. the key exists with the same digest: the existing reservation, `created=False`;
+2. the key exists with another digest: `ConflictingReservation`;
+3. a restore epoch is open: `RestoreEpochOpen`;
+4. an attempt on the same (`work_id`, `design_revision`, `stage`) is `reserved`,
+   `dispatched` or `unknown`: `LiveClaim`;
+5. the ordinal is not the next one on that triple: `OrdinalOutOfSequence` (a gap;
+   reusing an ordinal is its existing key, so 1 or 2 applies).
+
+An invalid field raises `InvalidIdentity` when the `AttemptIdentity` is built.
+Otherwise the identity row, the attempt row and its seq-0 event are written.
+`attempt_identity(key)` reads an identity (`None` for an untyped attempt),
+`identity_form(key)` says `typed` or `legacy-untyped`, and
+`claims(work_id, design_revision, stage)` lists a triple's attempts by ordinal.
+
+### Claim rule
+
+At most one live attempt per (`work_id`, `design_revision`, `stage`). A new
+ordinal is reserved only when every earlier ordinal on the triple is terminal
+(`confirmed` or `failed`) and the ordinals have no gap. Never while one is
+`reserved`, `dispatched` or `unknown`: an unknown outcome is reconciled first. A
+rework after review is another `implement` ordinal, and a fresh review another
+`review` ordinal. Whether one is warranted, and how many, is policy and the stage
+reconciler's decision; the schema encodes no cap.
+
+Mechanism, all in SQLite so any writer is held to it:
+
+- `attempt_identity.live` is 1 while the attempt is reserved, dispatched or
+  unknown, and 0 once it is confirmed or failed. It is written only by triggers:
+  an identity is inserted live, an `AFTER UPDATE OF state` trigger on `attempt` sets
+  it from `attempt_state.terminal`, and a `BEFORE UPDATE OF live` trigger refuses any
+  value that disagrees with the attempt's state. So it cannot drift.
+- A partial unique index on (`work_id`, `design_revision`, `stage`) `WHERE live = 1`
+  is the structural rule: two live rows on a triple cannot exist.
+- A `BEFORE INSERT` trigger on `attempt_identity` (`attempt_identity_admission`)
+  refuses a non-canonical key, a row not inserted live, a row attached to an
+  existing attempt, a live claim and an ordinal that is not the next one, with a
+  clear message.
+- The identity is written before its attempt; its reference to `attempt` is
+  deferred to `COMMIT`, so an identity without its attempt never commits. A
+  trigger on `attempt` (`attempt_typed_admission`) requires a typed attempt to start
+  `reserved` and its intent to carry the same identity.
+
+Why: the blueprint asks to prevent concurrent claims, and the index holds the rule
+even if the trigger were bypassed. The trigger gives the ordinal rule and a named
+refusal; the flag lets a partial index express "live". The tests show a raw SQL
+insert refused under each rule, the index refusing a second live row with the
+trigger dropped, and every direct write of `live` that disagrees refused.
+
+### Lifecycle contract
+
+The states and transitions are those of migration 0001, unchanged. The store
+records the actor of each change; it does not authenticate it. Callers keep to
+this contract:
+
+| State | Entered by (who, when) | What it permits |
+|---|---|---|
+| `reserved` | the dispatcher, through `reserve_attempt`, before any external call | dispatching with the reserved `conversation_id`; after a restart, dispatching it again (the ID is deterministic, decision 0001); no other ordinal on the triple |
+| `dispatched` | the dispatcher, immediately before it sends the create (E-01.3.x) | waiting for and recording the outcome; a create retry only with the same `conversation_id` and only when the pinned server advertises `idempotent_conversation_create_v1` (decision 0001); no other ordinal |
+| `unknown` | the dispatcher on a lost acknowledgement or an interrupted create, or `reconcile` while a restore epoch is open | reconciliation only: query the reserved `conversation_id` (E-01.4.x); "a lost HTTP reply is not permission to start a new conversation"; no other ordinal |
+| `confirmed` | the dispatcher on an observed successful create, or the reconciler when the conversation is found | terminal; the next ordinal on the triple (rework, a fresh review) if policy calls for one |
+| `failed` | the dispatcher on a refusal before any external call or an observed failed create, or the reconciler when the conversation is not found | terminal; the next ordinal (a retry) if policy calls for one |
+
+`confirmed` is about the conversation create, not about the Work: whether the
+Work is done stays with Backlog.md and the evidence.
+
+## Migration 0003
+
+`0003_typed_attempt_identity.sql` adds `attempt_stage`, `attempt_identity`, the
+partial unique index, the triggers above and the `attempt_typing` view. It
+changes no existing table, state or transition.
+
+- Attempts reserved before it (opaque keys) stay valid, unchanged and untyped:
+  `identity_form` is `legacy-untyped`, they have no identity, they keep their
+  lifecycle, and they are outside the claim rule. Receipts are never rewritten or
+  deleted. `reserve` keeps working for opaque keys outside `attempt/`; those rows
+  are untyped as well.
+- If an untyped attempt already uses a key in the `attempt/` namespace, the
+  migration refuses (`MigrationError: migration 0003 refused ...`) and the store
+  stays at version 2, unchanged.
+- The canonical dump of an older store is unchanged: a table that 0003 adds and
+  the store does not have writes no line. So a backup manifest written before 0003
+  still verifies.
+- The backup verification also checks every typed row: its `attempt_id` and
+  `conversation_id` are the uuid5 of its key, its `live` flag matches the state,
+  and no `attempt/` key lacks an identity.
+
 ## Schema
 
 | Table | Kind | Holds |
@@ -126,6 +289,9 @@ detail and time.
 | `attempt_state`, `attempt_transition`, `reconciliation_status` | canonical | the closed vocabularies; changed only by a migration |
 | `attempt` | canonical | one row per attempt key; identity columns immutable |
 | `attempt_event` | canonical | append-only history |
+| `attempt_stage` | canonical | the closed stage vocabulary; changed only by a migration (0003) |
+| `attempt_identity` | canonical | one row per typed attempt: its typed identity, `attempt_id` and `live` flag; identity immutable (0003) |
+| `attempt_typing` (view) | derived | each attempt's `identity_form`: `typed` or `legacy-untyped` (0003) |
 | `restore_epoch`, `restore_epoch_closure` | canonical | one row per restore and its closure; append-only (migration 0002) |
 | `proj_cursor` | projection | per projection: source, source cursor, coverage, rebuild time |
 | `proj_<name>`, `proj_<name>_*` | projection | rebuildable views; no authority |

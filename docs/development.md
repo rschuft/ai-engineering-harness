@@ -340,6 +340,16 @@ the projections and opens a restore epoch. New attempts are refused until
 reconciliation closes the epoch. Details are in the store's
 [README](../integrations/store/README.md#backup-and-restore).
 
+Typed attempt identity (E-01.1.1, migration 0003): `reserve_attempt` reserves a
+Work attempt under its Backlog.md task id, design revision
+(`openspec:changes/<change>@<commit>`), stage (`implement` or `review`), ordinal
+and its profile, agent-manifest, planned-workspace and policy digests. SQLite
+enforces the canonical key, the immutable identity and at most one live attempt
+per work, design revision and stage. Stores created before 0003 migrate when
+opened; their attempts stay valid and untyped. The contract is in the store's
+[README](../integrations/store/README.md#typed-attempt-identity). No live store
+has been migrated: **not yet verified** outside the tests' throwaway directories.
+
 ## Effects store
 
 [`integrations/effects/`](../integrations/effects/README.md) holds the privileged

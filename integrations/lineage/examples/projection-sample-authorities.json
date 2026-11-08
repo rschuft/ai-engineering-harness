@@ -5,7 +5,7 @@
   "sources": {
     "project_head": "baed27667818a70aa5770c2576973d5e8be5847d",
     "backlog": "task list --json (working tree)",
-    "store_schema_version": 2
+    "store_schema_version": 3
   },
   "authority_modes": {
     "authoritative": 9,

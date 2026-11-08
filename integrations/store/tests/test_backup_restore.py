@@ -185,7 +185,8 @@ class BackupRestoreTests(IntegrationBackupTestCase):
             manifest = storecore.backup_store(old.conn, store_mod.KIND, self._backups(), actor='owner')
         self.assertEqual((manifest['schema_version'], manifest['application_id']), (1, 0))
         report = store_mod.restore_store(self.db, manifest_path_for(self.db, manifest), actor='owner')
-        self.assertEqual(report.migrated, ['0002_store_identity_and_restore_epochs.sql'])
+        self.assertEqual(report.migrated, [m.name for m in store_mod.load_migrations()[1:]])
+        self.assertEqual(report.migrated[0], '0002_store_identity_and_restore_epochs.sql')
         with self.open() as restored:
             self.assertEqual(restored.schema_version(), len(store_mod.load_migrations()))
             self.assertEqual(restored.conn.execute('PRAGMA application_id').fetchone()[0], store_mod.APPLICATION_ID)

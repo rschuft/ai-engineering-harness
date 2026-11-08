@@ -38,6 +38,20 @@ resolve it. The mechanics are shared with the effects store through
 ``integrations/storecore/storecore.py``; the two stores are never backed up or
 restored together.
 
+Typed attempt identity (plan leaf E-01.1.1, migration 0003)
+-----------------------------------------------------------
+``reserve_attempt(identity, intent, actor=...)`` reserves a Work attempt under a typed
+``AttemptIdentity``: the Backlog.md task id, the design revision
+(``openspec:changes/<change>@<commit>``), the stage, the ordinal, and the profile,
+agent-manifest, planned-workspace and policy inputs. The operation key is the
+canonical ``attempt/v1/<work_id>/<change>@<commit>/<stage>/<ordinal>``; the
+conversation ID stays ``uuid5(CONVERSATION_NAMESPACE, key)`` and the receipt's own
+``attempt_id`` is ``uuid5(ATTEMPT_NAMESPACE, key)``. SQLite enforces the key's match
+with the typed columns, their immutability, and at most one live (reserved,
+dispatched or unknown) attempt per (work, design revision, stage), whatever writes
+the rows. ``reserve`` keeps working for opaque keys outside the ``attempt/``
+namespace; such rows are untyped.
+
 Migrations are the ordered files ``migrations/NNNN_<name>.sql``. Each runs in the
 same transaction as its ``schema_migration`` row (with the sha256 of its
 LF-normalised text) and ``PRAGMA user_version``. Opening refuses a database whose
@@ -90,6 +104,21 @@ def _load_storecore():
 
 storecore = _load_storecore()
 
+
+def _load_planning():
+    """The planning adapter (P-02.1), loaded by path for its identifier grammars only."""
+    name = 'aieh_store_planning_adapter'
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, HERE.parent / 'planning' / 'planning_adapter.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
+planning = _load_planning()
+
 MIN_SQLITE_VERSION = storecore.MIN_SQLITE_VERSION
 DEFAULT_BUSY_TIMEOUT_MS = storecore.DEFAULT_BUSY_TIMEOUT_MS
 
@@ -113,11 +142,40 @@ TRANSITIONS = frozenset({
     ('unknown', 'failed'),
 })
 RECONCILIATION_STATUSES = ('none', 'required', 'reconciled')
+TERMINAL_STATES = frozenset({'confirmed', 'failed'})
+LIVE_STATES = frozenset(STATES) - TERMINAL_STATES
+
+# Fixed namespace for the attempt receipt's own identity, attempt_id (E-01.1.1).
+# Distinct from CONVERSATION_NAMESPACE: the conversation ID is what is sent to the
+# external system; attempt_id identifies our receipt. NEVER change it either; a test
+# pins a known (operation_key, attempt_id) pair.
+ATTEMPT_NAMESPACE = uuid.UUID('078cbf65-575e-463b-9e56-93efe59ba38c')
+
+# Typed attempt identity (migration 0003). STAGES mirrors the attempt_stage table.
+STAGES = ('implement', 'review')
+KEY_PREFIX = 'attempt/v1/'
+IDENTITY_FORMAT = 'attempt-identity/v1'
+IDENTITY_INTENT_KEY = 'attemptIdentity'
+WORK_REF_KEY = 'workRef'      # the key integrations/lineage reads (lineage_trace.WORK_KEY)
+WORK_REF_PREFIX = 'backlog:'
+DESIGN_REVISION_PREFIX = 'openspec:changes/'
+MAX_WORK_ID = 64
+MAX_CHANGE_ID = 128
+MAX_WORKSPACE = 255
+MAX_ORDINAL = 999999
+# agent_manifest_digest is None while no approved agent/Skill catalog exists;
+# E-01.2.1 makes it required.
+NO_APPROVED_CATALOG = None
 
 # Canonical tables: never dropped, rebuilt or deleted from.
 CANONICAL_TABLES = ('schema_migration', 'attempt_state', 'attempt_transition',
                     'reconciliation_status', 'attempt', 'attempt_event',
-                    'restore_epoch', 'restore_epoch_closure')
+                    'restore_epoch', 'restore_epoch_closure',
+                    'attempt_stage', 'attempt_identity')
+# Tables added after the dump format was fixed (F-05.2). An older store has no such
+# table and its dump writes no line for it, so a manifest written before migration
+# 0003 still verifies (storecore recomputes the canonical digest of a backup).
+_CANONICAL_TABLES_SINCE_0003 = frozenset({'attempt_stage', 'attempt_identity'})
 PROJECTION_PREFIX = 'proj_'
 PROJECTION_CURSOR_TABLE = 'proj_cursor'
 
@@ -155,6 +213,156 @@ class EpochNotReconciled(StoreError):
     """A restore epoch cannot close while an attempt's outcome is still uncertain."""
 
 
+# The brief's name for a reservation whose key exists with another intent digest.
+IntentConflict = ConflictingReservation
+
+
+class InvalidIdentity(StoreError):
+    """A typed attempt identity field, or its intent, does not meet the contract."""
+
+
+class LiveClaim(StoreError):
+    """An attempt on the same work, design revision and stage is still reserved,
+    dispatched or unknown; it must reach confirmed or failed (an unknown outcome is
+    reconciled first) before another ordinal is reserved."""
+
+
+class OrdinalOutOfSequence(StoreError):
+    """The ordinal is not the next one on its (work, design revision, stage): a gap."""
+
+
+def _is_sha256_hex(value) -> bool:
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+
+def valid_work_id(value) -> bool:
+    """A canonical (upper-case) Backlog.md task id, by the planning adapter's grammar."""
+    return (isinstance(value, str) and 3 <= len(value) <= MAX_WORK_ID and value == value.upper()
+            and planning.TASK_ID_RE.fullmatch(value) is not None)
+
+
+def valid_design_revision(value) -> bool:
+    """``openspec:changes/<change>@<commit>``: planning's CHANGE_ID and a full COMMIT."""
+    if not isinstance(value, str) or not value.startswith(DESIGN_REVISION_PREFIX):
+        return False
+    change, sep, commit = value[len(DESIGN_REVISION_PREFIX):].partition('@')
+    return (bool(sep) and 1 <= len(change) <= MAX_CHANGE_ID
+            and re.fullmatch(planning.CHANGE_ID, change) is not None
+            and re.fullmatch(planning.COMMIT, commit) is not None)
+
+
+def valid_planned_workspace(value) -> bool:
+    """A relative identifier by the planning adapter's ARTIFACT_PATH grammar; never a host path."""
+    return (isinstance(value, str) and 1 <= len(value) <= MAX_WORKSPACE
+            and re.fullmatch(planning.ARTIFACT_PATH, value) is not None)
+
+
+def design_revision(change: str, commit: str) -> str:
+    """The design revision of an OpenSpec change at a full commit."""
+    text = f'{DESIGN_REVISION_PREFIX}{change}@{commit}'
+    if not valid_design_revision(text):
+        raise InvalidIdentity(f'not an OpenSpec change at a full commit: change {change!r}, commit {commit!r}')
+    return text
+
+
+def design_revision_from_pointers(pointers: Sequence[str]) -> str:
+    """The design revision a Backlog.md task's OpenSpec source pointers pin.
+
+    Each pointer is parsed by the planning adapter (``Pointer.parse``) and must be in
+    its canonical text form; all of them must name the same change at the same commit.
+    """
+    if isinstance(pointers, str) or not pointers:
+        raise InvalidIdentity('a design revision needs at least one OpenSpec source pointer')
+    pinned = set()
+    for text in pointers:
+        try:
+            pointer = planning.Pointer.parse(text)
+        except planning.PlanningError as exc:
+            raise InvalidIdentity(f'{exc.code}: {exc.message}') from None
+        if pointer.text != text:
+            raise InvalidIdentity(f'not a canonical OpenSpec source pointer: {text!r}')
+        pinned.add((pointer.change, pointer.revision))
+    if len(pinned) != 1:
+        raise InvalidIdentity(f'the pointers pin more than one change or commit: {sorted(pinned)}')
+    (change, commit), = pinned
+    return design_revision(change, commit)
+
+
+def attempt_id_for(operation_key: str) -> str:
+    """The deterministic attempt ID of a typed attempt's operation key (uuid5)."""
+    return str(uuid.uuid5(ATTEMPT_NAMESPACE, operation_key))
+
+
+@dataclass(frozen=True)
+class AttemptIdentity:
+    """The typed identity of a Work attempt (blueprint #execution-qualification, step 02).
+
+    The key fields are ``work_id``, ``design_revision``, ``stage`` and ``ordinal``; the
+    other fields belong to the intent, so the same key with another profile, manifest,
+    workspace or policy is a ConflictingReservation, never a second attempt. A
+    ``work_id`` is stored upper case: Backlog.md ids compare without case.
+    """
+    work_id: str
+    design_revision: str
+    stage: str
+    ordinal: int
+    profile_digest: str
+    planned_workspace: str
+    policy_digest: str
+    agent_manifest_digest: str | None = NO_APPROVED_CATALOG
+
+    def __post_init__(self):
+        work_id = self.work_id.upper() if isinstance(self.work_id, str) else self.work_id
+        if not valid_work_id(work_id):
+            raise InvalidIdentity(f'work_id is not a Backlog.md task id (at most {MAX_WORK_ID} characters): '
+                                  f'{self.work_id!r}')
+        object.__setattr__(self, 'work_id', work_id)
+        if not valid_design_revision(self.design_revision):
+            raise InvalidIdentity('design_revision must be openspec:changes/<change>@<full commit>: '
+                                  f'{self.design_revision!r}')
+        if self.stage not in STAGES:
+            raise InvalidIdentity(f'stage must be one of {STAGES}: {self.stage!r}')
+        if type(self.ordinal) is not int or not 1 <= self.ordinal <= MAX_ORDINAL:
+            raise InvalidIdentity(f'ordinal must be an integer from 1 to {MAX_ORDINAL}: {self.ordinal!r}')
+        for name in ('profile_digest', 'policy_digest'):
+            if not _is_sha256_hex(getattr(self, name)):
+                raise InvalidIdentity(f'{name} must be 64 lower-case hex digits (sha256): '
+                                      f'{getattr(self, name)!r}')
+        if self.agent_manifest_digest is not None and not _is_sha256_hex(self.agent_manifest_digest):
+            raise InvalidIdentity('agent_manifest_digest must be 64 lower-case hex digits, or None while no '
+                                  f'approved catalog exists: {self.agent_manifest_digest!r}')
+        if not valid_planned_workspace(self.planned_workspace):
+            raise InvalidIdentity('planned_workspace must be a relative identifier under persistent/workspaces '
+                                  f'(path parts [A-Za-z0-9_][A-Za-z0-9._-]*), never a host path: '
+                                  f'{self.planned_workspace!r}')
+
+    @property
+    def operation_key(self) -> str:
+        """``attempt/v1/<work_id>/<change>@<commit>/<stage>/<ordinal>``."""
+        return (f'{KEY_PREFIX}{self.work_id}/{self.design_revision[len(DESIGN_REVISION_PREFIX):]}'
+                f'/{self.stage}/{self.ordinal}')
+
+    @property
+    def work_ref(self) -> str:
+        return f'{WORK_REF_PREFIX}{self.work_id}'
+
+    def as_intent(self) -> dict:
+        """The identity as it is carried in the reservation's intent."""
+        return {'format': IDENTITY_FORMAT, 'work_id': self.work_id, 'design_revision': self.design_revision,
+                'stage': self.stage, 'ordinal': self.ordinal, 'profile_digest': self.profile_digest,
+                'agent_manifest_digest': self.agent_manifest_digest,
+                'planned_workspace': self.planned_workspace, 'policy_digest': self.policy_digest}
+
+
+@dataclass(frozen=True)
+class AttemptRecord:
+    """A typed attempt's identity row: the identity, its attempt ID and whether it is live."""
+    operation_key: str
+    attempt_id: str
+    identity: AttemptIdentity
+    live: bool
+
+
 @dataclass(frozen=True)
 class Reservation:
     operation_key: str
@@ -171,6 +379,13 @@ class Reservation:
 @dataclass(frozen=True)
 class ReserveResult:
     reservation: Reservation
+    created: bool  # False: an identical reservation already existed (idempotent)
+
+
+@dataclass(frozen=True)
+class AttemptReservation:
+    reservation: Reservation
+    attempt: AttemptRecord
     created: bool  # False: an identical reservation already existed (idempotent)
 
 
@@ -281,6 +496,20 @@ def _verify_kind_invariants(conn: sqlite3.Connection) -> None:
     ).fetchall()
     if bad:
         raise StoreError(f'attempts whose event history does not match their state: {bad[:5]}')
+    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'attempt_identity'"
+                    ).fetchone() is None:
+        return
+    # The uuid5 derivations are computed here, not in SQL: check every typed row.
+    for key, attempt_id, conversation_id, live, state in conn.execute(
+            'SELECT i.operation_key, i.attempt_id, a.conversation_id, i.live, a.state '
+            'FROM attempt_identity i LEFT JOIN attempt a ON a.operation_key = i.operation_key'):
+        if (state is None or attempt_id != attempt_id_for(key) or conversation_id != conversation_id_for(key)
+                or live != int(state in LIVE_STATES)):
+            raise StoreError(f'typed attempt {key!r} does not match its derived identity or state')
+    untyped = conn.execute("SELECT count(*) FROM attempt a WHERE a.operation_key GLOB 'attempt/*' AND NOT EXISTS "
+                           '(SELECT 1 FROM attempt_identity i WHERE i.operation_key = a.operation_key)').fetchone()[0]
+    if untyped:
+        raise StoreError(f'{untyped} attempt(s) in the attempt/ namespace have no typed identity')
 
 
 def _drop_projections(conn: sqlite3.Connection) -> list[str]:
@@ -338,7 +567,15 @@ def _connect(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
 
 def migrate(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
     """Apply pending migrations in one transaction; return the names applied."""
-    return storecore.migrate(conn, KIND, migrations_dir)
+    try:
+        return storecore.migrate(conn, KIND, migrations_dir)
+    except sqlite3.IntegrityError as exc:
+        if 'legacy_attempt_keys_in_reserved_attempt_namespace' in str(exc):
+            raise MigrationError(
+                'migration 0003 refused: untyped attempts already use operation keys in the reserved attempt/ '
+                'namespace, so they could not be given a typed identity; nothing was changed. Inspect them with '
+                "SELECT operation_key FROM attempt WHERE operation_key GLOB 'attempt/*'") from None
+        raise
 
 
 def open_store(path: os.PathLike | str, *, migrations_dir: Path = MIGRATIONS_DIR,
@@ -449,6 +686,8 @@ class IntegrationStore:
         """
         if not isinstance(operation_key, str) or not 1 <= len(operation_key) <= 512:
             raise StoreError('operation_key must be a string of 1 to 512 characters')
+        if operation_key.startswith('attempt/'):
+            raise InvalidIdentity('the attempt/ key namespace is reserved for typed attempts: use reserve_attempt')
         canonical = canonical_intent(intent)
         digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
         with write_transaction(self.conn):
@@ -466,6 +705,100 @@ class IntegrationStore:
                     'refused until reconciliation closes it')
             self._insert_reservation(operation_key, canonical, digest, actor)
             return ReserveResult(self.get(operation_key), created=True)
+
+    def reserve_attempt(self, identity: AttemptIdentity, intent: Mapping, *, actor: str) -> AttemptReservation:
+        """Reserve a typed Work attempt before any external call; one transaction.
+
+        The stored intent is ``intent`` plus ``workRef`` (``backlog:<work_id>``, the key
+        the lineage reader follows) and ``attemptIdentity`` (the identity's fields); its
+        digest therefore covers the profile, manifest, workspace and policy as well as
+        the request. In order, with nothing changed on any refusal:
+
+        * the key exists with the same digest: the existing reservation, ``created=False``;
+        * the key exists with another digest: ConflictingReservation (IntentConflict);
+        * a restore epoch is open: RestoreEpochOpen;
+        * an attempt on the same (work, design revision, stage) is reserved, dispatched
+          or unknown: LiveClaim;
+        * the ordinal is not the next one on that triple: OrdinalOutOfSequence.
+
+        Every earlier ordinal is then confirmed or failed. Whether a further attempt
+        (rework, a fresh review) is warranted, and how many, is the caller's policy.
+        SQLite enforces the same rules (migration 0003) for any writer.
+        """
+        if not isinstance(identity, AttemptIdentity):
+            raise InvalidIdentity('identity must be an AttemptIdentity')
+        if not isinstance(intent, Mapping):
+            raise StoreError('intent must be a JSON object')
+        if IDENTITY_INTENT_KEY in intent:
+            raise InvalidIdentity(f'the intent key {IDENTITY_INTENT_KEY!r} is reserved for the typed identity')
+        if WORK_REF_KEY in intent and intent[WORK_REF_KEY] != identity.work_ref:
+            raise InvalidIdentity(f'intent {WORK_REF_KEY} {intent[WORK_REF_KEY]!r} does not name the attempt\'s '
+                                  f'work {identity.work_ref!r}')
+        storecore._check_actor(actor)
+        key = identity.operation_key
+        canonical = canonical_intent({**intent, WORK_REF_KEY: identity.work_ref,
+                                      IDENTITY_INTENT_KEY: identity.as_intent()})
+        digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        with write_transaction(self.conn):
+            existing = self.get(key)
+            if existing is not None:
+                if existing.intent_digest != digest:
+                    raise ConflictingReservation(
+                        f'operation key {key!r} is already reserved with intent digest '
+                        f'{existing.intent_digest}, not {digest}')
+                return AttemptReservation(existing, self.attempt_identity(key), created=False)
+            open_epochs = self.open_epochs()
+            if open_epochs:
+                raise RestoreEpochOpen(
+                    f'restore epoch {open_epochs[0]["epoch_id"]} is open: new attempt reservations are '
+                    'refused until reconciliation closes it')
+            triple = (identity.work_id, identity.design_revision, identity.stage)
+            live = self.conn.execute(
+                'SELECT i.operation_key, a.state FROM attempt_identity i JOIN attempt a USING (operation_key) '
+                'WHERE i.work_id = ? AND i.design_revision = ? AND i.stage = ? AND i.live = 1', triple).fetchone()
+            if live is not None:
+                raise LiveClaim(f'{live[0]!r} is {live[1]}: no other attempt on this work, design revision and '
+                                'stage is reserved until it is confirmed or failed (reconcile an unknown outcome '
+                                'first)')
+            highest = self.conn.execute(
+                'SELECT coalesce(max(ordinal), 0) FROM attempt_identity '
+                'WHERE work_id = ? AND design_revision = ? AND stage = ?', triple).fetchone()[0]
+            if identity.ordinal != highest + 1:
+                raise OrdinalOutOfSequence(f'ordinal {identity.ordinal} on this work, design revision and stage: '
+                                           f'the next ordinal is {highest + 1}')
+            self.conn.execute(
+                'INSERT INTO attempt_identity (operation_key, attempt_id, work_id, design_revision, stage, '
+                'ordinal, profile_digest, agent_manifest_digest, planned_workspace, policy_digest, live) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+                (key, attempt_id_for(key), identity.work_id, identity.design_revision, identity.stage,
+                 identity.ordinal, identity.profile_digest, identity.agent_manifest_digest,
+                 identity.planned_workspace, identity.policy_digest))
+            self._insert_reservation(key, canonical, digest, actor)
+            return AttemptReservation(self.get(key), self.attempt_identity(key), created=True)
+
+    def attempt_identity(self, operation_key: str) -> AttemptRecord | None:
+        """The typed identity of an attempt, or None for an untyped (legacy) one."""
+        row = self.conn.execute(
+            'SELECT operation_key, attempt_id, work_id, design_revision, stage, ordinal, profile_digest, '
+            'planned_workspace, policy_digest, agent_manifest_digest, live FROM attempt_identity '
+            'WHERE operation_key = ?', (operation_key,)).fetchone()
+        if row is None:
+            return None
+        return AttemptRecord(row[0], row[1], AttemptIdentity(*row[2:10]), bool(row[10]))
+
+    def identity_form(self, operation_key: str) -> str | None:
+        """'typed' or 'legacy-untyped' (the attempt_typing view); None when no such attempt."""
+        row = self.conn.execute('SELECT identity_form FROM attempt_typing WHERE operation_key = ?',
+                                (operation_key,)).fetchone()
+        return row and row[0]
+
+    def claims(self, work_id: str, design_revision_text: str, stage: str) -> list[AttemptRecord]:
+        """Every typed attempt on one (work, design revision, stage), by ordinal."""
+        keys = self.conn.execute(
+            'SELECT operation_key FROM attempt_identity WHERE work_id = ? AND design_revision = ? AND stage = ? '
+            'ORDER BY ordinal', (work_id.upper() if isinstance(work_id, str) else work_id,
+                                 design_revision_text, stage)).fetchall()
+        return [self.attempt_identity(k) for (k,) in keys]
 
     def _insert_reservation(self, operation_key: str, canonical: str, digest: str, actor: str) -> None:
         """Insert the reservation row and its seq-0 event. Caller owns the transaction."""
@@ -678,6 +1011,8 @@ class IntegrationStore:
             'canonical_tables': [t for t in tables if t in CANONICAL_TABLES],
             'projection_tables': [t for t in tables if t.startswith(PROJECTION_PREFIX)],
             'attempts': self.conn.execute('SELECT count(*) FROM attempt').fetchone()[0],
+            'typed_attempts': (self.conn.execute('SELECT count(*) FROM attempt_identity').fetchone()[0]
+                               if 'attempt_identity' in tables else 0),
             'high_water_mark': self.high_water_mark(),
             'open_restore_epochs': [e['epoch_id'] for e in self.open_epochs()],
         }
@@ -689,6 +1024,8 @@ def _canonical_dump(conn: sqlite3.Connection) -> bytes:
     for table in CANONICAL_TABLES:
         sql = conn.execute("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
                            (table,)).fetchone()
+        if sql is None and table in _CANONICAL_TABLES_SINCE_0003:
+            continue  # keeps the dump, and so the digest, of an older store unchanged
         lines.append(f'-- {table}: {sql[0] if sql else None}')
         if sql is None:
             continue
