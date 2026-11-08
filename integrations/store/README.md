@@ -282,6 +282,16 @@ this contract:
 `confirmed` is about the conversation create, not about the Work: whether the
 Work is done stays with Backlog.md and the evidence.
 
+`confirmed` is not execution completion either: the conversation it records may
+still be running. The store's claim rule covers reservation and creation only;
+it permits the next ordinal once the earlier one is terminal, and nothing in the
+store knows whether that conversation has finished. Execution-level
+non-overlap is the coordinator's duty: it must not reserve the next ordinal of a
+(`work_id`, `design_revision`, `stage`) triple while the earlier attempt's
+conversation is still executing, as the Agent Server reports it. That rule is
+required, with acceptance tests, at E-01.5 and E-04.2.x; until then no component
+enforces it. The reservation schema stays as it is.
+
 ## Migration 0003
 
 `0003_typed_attempt_identity.sql` adds `attempt_stage`, `attempt_identity`, the

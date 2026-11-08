@@ -951,11 +951,20 @@ def create_identities(res, lay: Layout, pinned: dict, provider: CredentialProvid
             'password_handling': 'gitea --random-password output captured in memory; credential provider; never shown'}
 
 
-def contains_secret(root: Path, needles: list[bytes], skip: Iterable[Path] = ()) -> list[str]:
-    """Files below root holding any needle (as given, or as UTF-16LE); names only, never content."""
+def contains_secret(root: Path, needles: list[bytes], skip: Iterable[Path] = ()) -> dict:
+    """Search every file below root for any needle (as given, or as UTF-16LE). Returns 'found' (files holding
+    one) and 'unreadable' (what the search could not cover: a directory the walk could not list, the root
+    included, and a non-empty file that could not be read). A scan with anything unreadable is incomplete
+    and never a clean result. An unreadable EMPTY file holds nothing and is not reported (e.g. LevelDB's
+    LOCK, held open by the running Gitea). Names only, never content."""
     forms = [form for n in needles for form in (n, n.decode('utf-8').encode('utf-16-le'))]
-    longest, hits, skipped = max(map(len, forms)), [], {Path(s) for s in skip}
-    for directory, _dirs, files in os.walk(root):
+    longest, skipped = max(map(len, forms)), {Path(s) for s in skip}
+    found, unreadable = [], []
+
+    def directory_error(exc: OSError) -> None:
+        unreadable.append(f'{exc.filename} (directory not listed: {type(exc).__name__})')
+
+    for directory, _dirs, files in os.walk(root, onerror=directory_error):
         for name in files:
             path = Path(directory) / name
             if path in skipped:
@@ -966,17 +975,17 @@ def contains_secret(root: Path, needles: list[bytes], skip: Iterable[Path] = ())
                     for block in iter(lambda: handle.read(1 << 20), b''):
                         window = tail + block
                         if any(form in window for form in forms):
-                            hits.append(str(path))
+                            found.append(str(path))
                             break
                         tail = window[-longest:]
-            except OSError:
+            except OSError as exc:
                 try:
-                    empty = os.stat(path).st_size == 0  # e.g. LevelDB's LOCK, held open by the running Gitea
+                    empty = os.stat(path).st_size == 0
                 except OSError:
                     empty = False
                 if not empty:
-                    hits.append(f'{path} (unreadable; counted as a hit)')
-    return hits
+                    unreadable.append(f'{path} (file not read: {type(exc).__name__})')
+    return {'found': found, 'unreadable': unreadable}
 
 
 def checkout_files(repo: Path) -> list[Path]:
@@ -986,17 +995,26 @@ def checkout_files(repo: Path) -> list[Path]:
     return [repo / name for name in result.stdout.decode('utf-8').split('\0') if name]
 
 
-def files_containing(files: Iterable[Path], needles: list[bytes]) -> list[str]:
+def files_containing(files: Iterable[Path], needles: list[bytes]) -> dict:
+    """Search each listed file for any needle (as given, or as UTF-16LE). Returns 'found' (files holding one),
+    'unreadable' (files that could not be read: any OSError but FileNotFoundError) and 'absent' (listed but
+    not in the working tree, e.g. a tracked file deleted from it: it holds no content, so it is reported
+    and is not a failure). A scan with anything unreadable is incomplete and never a clean result. Names
+    only, never content."""
     forms = [form for n in needles for form in (n, n.decode('utf-8').encode('utf-16-le'))]
-    hits = []
+    found, unreadable, absent = [], [], []
     for path in files:
         try:
             data = path.read_bytes()
-        except OSError:
+        except FileNotFoundError:
+            absent.append(str(path))
+            continue
+        except OSError as exc:
+            unreadable.append(f'{path} (file not read: {type(exc).__name__})')
             continue
         if any(form in data for form in forms):
-            hits.append(str(path))
-    return hits
+            found.append(str(path))
+    return {'found': found, 'unreadable': unreadable, 'absent': absent}
 
 
 # ---------------------------------------------------------------- credential finalization
@@ -1110,7 +1128,11 @@ def change_password_by_web(port: int, user: str, current: str, new: str, connect
 
 def revoke_all_tokens(port: int, user: str, password: str, http: Callable = None) -> dict:
     """Delete every access token of the account with its own credentials, then list again: a finalized
-    human account holds no token. Token names only; never a value or its last characters."""
+    human account holds no token, and this is enforced, not only reported. It fails closed:
+    TOKEN_REVOCATION_UNVERIFIED when the listing after the deletions is not 200 with a JSON list (the
+    postcondition is unknown; distinct from TOKEN_LIST_FAILED, which happens before anything was deleted),
+    and TOKENS_REMAIN when any token is still listed, including one whose deletion answered 204. On success
+    'remaining' is always []. Token names only; never a value or its last characters."""
     status, tokens = basic_call(port, user, password, 'GET', f'/users/{user}/tokens', http)
     if status != 200 or not isinstance(tokens, list):
         raise GiteaError('TOKEN_LIST_FAILED', f'{user}: listing its tokens answered {status}', refusal=False)
@@ -1122,15 +1144,26 @@ def revoke_all_tokens(port: int, user: str, password: str, http: Callable = None
                              refusal=False)
         deleted.append(token.get('name'))
     status, after = basic_call(port, user, password, 'GET', f'/users/{user}/tokens', http)
-    return {'found': [t.get('name') for t in tokens], 'deleted': deleted,
-            'remaining': [t.get('name') for t in after] if status == 200 and isinstance(after, list) else f'HTTP {status}'}
+    if status != 200 or not isinstance(after, list):
+        raise GiteaError('TOKEN_REVOCATION_UNVERIFIED', f'{user}: deleted {deleted!r}, but listing its tokens '
+                                                        f'afterwards answered {status} without a token list',
+                         refusal=False)
+    remaining = [t.get('name') if isinstance(t, dict) else None for t in after]
+    if remaining:
+        raise GiteaError('TOKENS_REMAIN', f'{user}: still listed after revocation: {remaining!r} '
+                                          f'(deleted with 204: {deleted!r})', refusal=False)
+    return {'found': [t.get('name') for t in tokens], 'deleted': deleted, 'remaining': remaining}
 
 
 def finalize_account(port: int, user: str, provider: CredentialProvider, http: Callable = None,
                      connection: Callable = None, secrets_seen: list | None = None) -> dict:
     """One account: a new random password, stored in its provider entry BEFORE Gitea is changed (so a crash
     never loses it), set through Gitea's forced change, then every token of the account revoked with the new
-    credentials, then verified, then the temporary entry deleted. Reruns resume from any intermediate state."""
+    credentials, then verified, then the temporary entry deleted. Reruns resume from any intermediate state.
+    The token revocation fails closed on both paths (TOKENS_REMAIN, TOKEN_REVOCATION_UNVERIFIED) and no
+    report is returned. A raise after the password change and before the temporary entry is deleted leaves
+    both entries in place and the final password set in Gitea: a rerun finds the final entry, sees the
+    change already applied and revokes again, so it resumes there."""
     final_name, temp_name = FINAL_TARGETS[user], CRED_TARGETS[user]
     final_entry, temp_entry = provider.get(final_name), provider.get(temp_name)
     report = {'user': user, 'entry': final_name}
@@ -1185,7 +1218,8 @@ def finalize_credentials(res, lay: Layout, pinned: dict, provider: CredentialPro
                          http: Callable = None, connection: Callable = None, repo: Path | None = None) -> dict:
     """Owner directive of 2026-11-07: the harness finishes the two human accounts' credential lifecycle itself.
     The site administrator first, then the Owner account; then no temporary or final password may appear in
-    the managed root (its logs included), the checkout or this report."""
+    the managed root (its logs included), the checkout or this report: PASSWORD_FOUND on a hit, and
+    SECRET_SCAN_INCOMPLETE when a file or directory could not be searched (names only)."""
     provider = provider or credential_provider()
     port = read_host_record(lay)['port']
     if not healthy(port):
@@ -1196,15 +1230,22 @@ def finalize_credentials(res, lay: Layout, pinned: dict, provider: CredentialPro
                                for user in (SITE_ADMIN, OWNER)]}
         report['entries'] = {name: provider.exists(name) for name in (*FINAL_TARGETS.values(), *CRED_TARGETS.values())}
         needles = [s.encode('utf-8') for s in seen]
-        report['found_in_managed_root'] = contains_secret(lay.root, needles)
-        report['found_in_checkout'] = files_containing(checkout_files(repo or lay.repo), needles)
+        root_scan = contains_secret(lay.root, needles)
+        checkout_scan = files_containing(checkout_files(repo or lay.repo), needles)
+        report['found_in_managed_root'] = root_scan['found']
+        report['found_in_checkout'] = checkout_scan['found']
+        report['scan_incomplete'] = {'managed_root': root_scan['unreadable'], 'checkout': checkout_scan['unreadable']}
+        report['absent_from_checkout'] = checkout_scan['absent']
         text = json.dumps(report)
         report['found_in_report'] = any(s in text for s in seen)
     finally:
         seen.clear()
     if report['found_in_managed_root'] or report['found_in_checkout'] or report['found_in_report']:
-        raise GiteaError('PASSWORD_FOUND', json.dumps({k: report[k] for k in ('found_in_managed_root',
-                                                                               'found_in_checkout')}), refusal=False)
+        found = ('found_in_managed_root', 'found_in_checkout', 'scan_incomplete')
+        raise GiteaError('PASSWORD_FOUND', json.dumps({k: report[k] for k in found}), refusal=False)
+    if any(report['scan_incomplete'].values()):
+        # Not PASSWORD_FOUND: nothing was found; what could not be read was not searched.
+        raise GiteaError('SECRET_SCAN_INCOMPLETE', json.dumps(report['scan_incomplete']), refusal=False)
     report['password_handling'] = ('generated with secrets, stored by the credential provider before use, sent only in '
                                    'loopback HTTP request bodies and basic-auth headers; never on a command line, in '
                                    'an environment, in a log or in output')
@@ -1264,9 +1305,12 @@ def verify(res, lay: Layout, pinned: dict) -> dict:
     checks['anonymous_web_redirected_to_login'] = probes['explore_users'] in (302, 303)
     secret_values = [ini['security']['SECRET_KEY'].encode(), ini['security']['INTERNAL_TOKEN'].encode(),
                      ini['oauth2']['JWT_SECRET'].encode()]
-    checks['no_gitea_secret_in_checkout'] = not files_containing(checkout_files(lay.repo), secret_values)
+    checkout_scan = files_containing(checkout_files(lay.repo), secret_values)
     del secret_values
-    return {'checks': checks, 'probes': probes, 'accounts': users, 'paths': used, 'pid': g.get('pid'),
+    # An incomplete scan is a failure, never a clean result; the unreadable paths are in 'checkout_scan'.
+    checks['no_gitea_secret_in_checkout'] = not checkout_scan['found'] and not checkout_scan['unreadable']
+    return {'checks': checks, 'checkout_scan': checkout_scan, 'probes': probes, 'accounts': users, 'paths': used,
+            'pid': g.get('pid'),
             'listeners': listeners, 'egress_proxy_ports': sorted(egress),
             'token': g.get('token'), 'job': st.get('job'), 'passed': all(checks.values())}
 

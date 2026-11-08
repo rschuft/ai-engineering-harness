@@ -654,8 +654,295 @@ class TestFinalizeCredentials(Root):
     def test_checkout_search(self):
         (self.repo / 'tracked.txt').write_bytes(b'a ' + self.TEMP[G.SITE_ADMIN].encode() + b' b')
         self.assertEqual(G.files_containing([self.repo / 'tracked.txt'], [self.TEMP[G.SITE_ADMIN].encode()]),
-                         [str(self.repo / 'tracked.txt')])
-        self.assertEqual(G.files_containing([self.repo / 'tracked.txt'], [self.TEMP[G.OWNER].encode()]), [])
+                         {'found': [str(self.repo / 'tracked.txt')], 'unreadable': [], 'absent': []})
+        self.assertEqual(G.files_containing([self.repo / 'tracked.txt'], [self.TEMP[G.OWNER].encode()]),
+                         {'found': [], 'unreadable': [], 'absent': []})
+
+    # Review finding 2 (2026-11-07): the revocation postcondition is enforced on both paths.
+
+    def test_a_token_still_listed_after_a_204_delete_fails_the_change_path_and_a_rerun_resumes(self):
+        gitea = RevocationFake(self.TEMP, tokens={G.SITE_ADMIN: [(7, 'aieh-s0122-fixture-20261107T175000Z')]},
+                               sticky={7})
+        with self.assertRaises(G.GiteaError) as caught:
+            self.finalize(gitea)
+        self.assertEqual(caught.exception.code, 'TOKENS_REMAIN')
+        self.assertIn('aieh-s0122-fixture-20261107T175000Z', caught.exception.detail)
+        stored = self.provider.get(G.FINAL_TARGETS[G.SITE_ADMIN])
+        # Raised after the password change and before the temporary entry is deleted: both entries remain.
+        self.assertEqual(gitea.accounts[G.SITE_ADMIN]['password'], stored[1])
+        self.assertIsNotNone(self.provider.get(G.CRED_TARGETS[G.SITE_ADMIN]))
+        self.assertNotIn(('delete', G.CRED_TARGETS[G.SITE_ADMIN]), self.events)
+        for secret in (*self.TEMP.values(), stored[1]):
+            self.assertNotIn(secret, str(caught.exception))
+        gitea.sticky.clear()
+        report = self.finalize(gitea)
+        admin = report['accounts'][0]
+        self.assertEqual(admin['stored_before_change'], 'by an earlier run')
+        self.assertEqual(admin['change'], 'already applied by an earlier run')
+        self.assertEqual(admin['tokens']['remaining'], [])
+        self.assertIsNone(self.provider.get(G.CRED_TARGETS[G.SITE_ADMIN]))
+        self.assertEqual(self.provider.get(G.FINAL_TARGETS[G.SITE_ADMIN]), stored)
+
+    def test_an_unverifiable_listing_fails_the_change_path_and_a_rerun_resumes(self):
+        for relist in ((500, b'{"message":"boom"}'), (200, b'{"not":"a list"}')):
+            with self.subTest(relist=relist):
+                gitea = RevocationFake(self.TEMP, relist=relist)
+                provider = self.provider = MemoryProvider(
+                    {G.CRED_TARGETS[u]: (u, p) for u, p in self.TEMP.items()})
+                with self.assertRaises(G.GiteaError) as caught:
+                    self.finalize(gitea)
+                self.assertEqual(caught.exception.code, 'TOKEN_REVOCATION_UNVERIFIED')
+                self.assertIsNotNone(provider.get(G.CRED_TARGETS[G.SITE_ADMIN]))
+                self.assertFalse(gitea.accounts[G.SITE_ADMIN]['must_change'])
+                gitea.relist = None
+                report = self.finalize(gitea)
+                self.assertEqual(report['accounts'][0]['change'], 'already applied by an earlier run')
+                self.assertIsNone(provider.get(G.CRED_TARGETS[G.SITE_ADMIN]))
+
+    def test_the_already_final_path_also_fails_closed(self):
+        gitea = RevocationFake(self.TEMP)
+        self.finalize(gitea)
+        gitea.tokens[G.OWNER] = [(9, 'minted-after-finalization')]
+        gitea.sticky = {9}
+        with self.assertRaises(G.GiteaError) as caught:
+            self.finalize(gitea)
+        self.assertEqual(caught.exception.code, 'TOKENS_REMAIN')
+        self.assertIn('minted-after-finalization', caught.exception.detail)
+        gitea.sticky.clear()
+        gitea.relist = (403, b'{"message":"forbidden"}')
+        with self.assertRaises(G.GiteaError) as caught:
+            self.finalize(gitea)
+        self.assertEqual(caught.exception.code, 'TOKEN_REVOCATION_UNVERIFIED')
+        gitea.relist = None
+        report = self.finalize(gitea)
+        self.assertEqual([a['state'] for a in report['accounts']], ['already final'] * 2)
+        self.assertEqual([a['tokens']['remaining'] for a in report['accounts']], [[], []])
+
+    # Review finding 3 (2026-11-07): an incomplete secret scan is never a clean result.
+
+    def test_an_unreadable_checkout_file_refuses_as_an_incomplete_scan(self):
+        G.checkout_files.return_value = [UnreadablePath(self.repo / 'locked.bin'), self.repo / 'deleted.txt']
+        with self.assertRaises(G.GiteaError) as caught:
+            self.finalize()
+        self.assertEqual(caught.exception.code, 'SECRET_SCAN_INCOMPLETE')
+        detail = json.loads(caught.exception.detail)
+        self.assertEqual(detail, {'managed_root': [],
+                                  'checkout': [f'{self.repo / "locked.bin"} (file not read: PermissionError)']})
+        self.assertNotIn('deleted.txt', caught.exception.detail)
+
+    def test_an_unlisted_managed_root_directory_refuses_as_an_incomplete_scan(self):
+        with mock.patch.object(os, 'scandir', denying_scandir(self.lay.logs)):
+            with self.assertRaises(G.GiteaError) as caught:
+                self.finalize()
+        self.assertEqual(caught.exception.code, 'SECRET_SCAN_INCOMPLETE')
+        detail = json.loads(caught.exception.detail)
+        self.assertEqual(detail['checkout'], [])
+        self.assertEqual(detail['managed_root'], [f'{self.lay.logs} (directory not listed: PermissionError)'])
+
+    def test_a_missing_tracked_file_is_reported_as_absent_not_as_a_failure(self):
+        G.checkout_files.return_value = [self.repo / 'deleted.txt']
+        report = self.finalize()
+        self.assertEqual(report['absent_from_checkout'], [str(self.repo / 'deleted.txt')])
+        self.assertEqual(report['scan_incomplete'], {'managed_root': [], 'checkout': []})
+
+
+class RevocationFake(FakeAccounts):
+    """FakeAccounts whose token deletion can answer 204 without deleting (sticky ids), and whose listing
+    after the deletions (the second listing of one revocation) can answer `relist` (status, body)."""
+
+    def __init__(self, passwords, tokens=None, sticky=(), relist=None):
+        super().__init__(passwords, tokens)
+        self.sticky, self.relist, self.listings = set(sticky), relist, {}
+
+    def __call__(self, port, path, method='GET', body=None, headers=None, timeout=5.0):
+        user, state = self.who(headers)
+        route = path.removeprefix('/api/v1')
+        if state == 'ok' and method == 'DELETE' and route.startswith(f'/users/{user}/tokens/'):
+            if int(route.rsplit('/', 1)[1]) in self.sticky:
+                self.log.append((method, path))
+                return 204, {}, b''
+        if state == 'ok' and method == 'GET' and route == f'/users/{user}/tokens':
+            self.listings[user] = self.listings.get(user, 0) + 1
+            if self.relist is not None and self.listings[user] % 2 == 0:
+                self.log.append((method, path))
+                return self.relist[0], {}, self.relist[1]
+        return super().__call__(port, path, method, body, headers, timeout)
+
+
+class UnreadablePath:
+    """A listed checkout path whose read fails like a file held open without sharing (no Windows ACL needed)."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def read_bytes(self):
+        raise PermissionError(13, 'Permission denied', str(self.path))
+
+    def __str__(self):
+        return str(self.path)
+
+
+def denying_scandir(denied):
+    """os.scandir that refuses to list one directory, as an ACL would; os.walk reaches it through scandir."""
+    real = os.scandir
+
+    def scandir(path='.'):
+        if os.path.normcase(os.fspath(path)) == os.path.normcase(os.fspath(denied)):
+            raise PermissionError(13, 'Permission denied', os.fspath(path))
+        return real(path)
+    return scandir
+
+
+class TestRevokeAllTokens(unittest.TestCase):
+    """Review finding 2: revoke_all_tokens enforces 'no token remains' instead of only reporting it."""
+    PASSWORDS = {G.SITE_ADMIN: 'Final-site-admin-Pw-0123456789'}
+
+    def gitea(self, tokens=(), **kwargs):
+        fake = RevocationFake(self.PASSWORDS, tokens={G.SITE_ADMIN: list(tokens)}, **kwargs)
+        fake.accounts[G.SITE_ADMIN]['must_change'] = False
+        return fake
+
+    def revoke(self, fake):
+        return G.revoke_all_tokens(13300, G.SITE_ADMIN, self.PASSWORDS[G.SITE_ADMIN], fake)
+
+    def test_an_empty_listing_after_revocation_passes(self):
+        fake = self.gitea([(1, 'one'), (2, 'two')])
+        self.assertEqual(self.revoke(fake), {'found': ['one', 'two'], 'deleted': ['one', 'two'], 'remaining': []})
+        self.assertEqual(fake.tokens[G.SITE_ADMIN], [])
+
+    def test_a_remaining_token_raises_with_its_name_only(self):
+        fake = self.gitea([(1, 'one')])
+        real = fake.__call__
+
+        def mint_during_revocation(port, path, method='GET', **kwargs):
+            answer = real(port, path, method, **kwargs)
+            if method == 'DELETE':
+                fake.tokens[G.SITE_ADMIN].append((3, 'minted-meanwhile'))
+            return answer
+        with self.assertRaises(G.GiteaError) as caught:
+            self.revoke(mint_during_revocation)
+        self.assertEqual(caught.exception.code, 'TOKENS_REMAIN')
+        self.assertFalse(caught.exception.refusal)
+        self.assertIn("'minted-meanwhile'", caught.exception.detail)
+        self.assertNotIn(self.PASSWORDS[G.SITE_ADMIN], str(caught.exception))
+
+    def test_a_204_delete_whose_token_is_still_listed_raises(self):
+        fake = self.gitea([(1, 'one'), (2, 'sticky')], sticky={2})
+        with self.assertRaises(G.GiteaError) as caught:
+            self.revoke(fake)
+        self.assertEqual(caught.exception.code, 'TOKENS_REMAIN')
+        self.assertIn("still listed after revocation: ['sticky']", caught.exception.detail)
+        self.assertIn(('DELETE', f'/api/v1/users/{G.SITE_ADMIN}/tokens/2'), fake.log)
+
+    def test_an_unverifiable_listing_after_revocation_raises(self):
+        for relist in ((500, b'{"message":"boom"}'), (401, b''), (200, b'{"tokens":[]}'), (200, b'not json')):
+            with self.subTest(relist=relist):
+                fake = self.gitea([(1, 'one')], relist=relist)
+                with self.assertRaises(G.GiteaError) as caught:
+                    self.revoke(fake)
+                self.assertEqual(caught.exception.code, 'TOKEN_REVOCATION_UNVERIFIED')
+                self.assertIn(f'answered {relist[0]}', caught.exception.detail)
+
+    def test_the_first_listing_failing_is_still_token_list_failed(self):
+        fake = self.gitea([(1, 'one')], relist=(500, b''))
+        fake.listings[G.SITE_ADMIN] = 1  # the next listing is the "after" one
+        with self.assertRaises(G.GiteaError) as caught:
+            self.revoke(fake)
+        self.assertEqual(caught.exception.code, 'TOKEN_LIST_FAILED')
+        self.assertNotIn(('DELETE', f'/api/v1/users/{G.SITE_ADMIN}/tokens/1'), fake.log)
+
+
+class TestSecretScans(unittest.TestCase):
+    """Review finding 3: what the scans cannot read is reported as incomplete, never skipped."""
+    NEEDLE = b'needle-value-0123456789'
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='gh-scan-'))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_files_containing_reports_an_unreadable_file(self):
+        readable = self.tmp / 'readable.txt'
+        readable.write_bytes(b'clean')
+        result = G.files_containing([readable, UnreadablePath(self.tmp / 'held.bin')], [self.NEEDLE])
+        self.assertEqual(result, {'found': [], 'unreadable': [f'{self.tmp / "held.bin"} (file not read: '
+                                                              'PermissionError)'], 'absent': []})
+
+    def test_files_containing_through_a_patched_read(self):
+        held = self.tmp / 'held.bin'
+        held.write_bytes(self.NEEDLE)
+        with mock.patch.object(Path, 'read_bytes', side_effect=PermissionError(13, 'Permission denied')):
+            result = G.files_containing([held], [self.NEEDLE])
+        self.assertEqual((result['found'], len(result['unreadable'])), ([], 1))
+
+    def test_files_containing_reports_a_missing_tracked_file_as_absent(self):
+        result = G.files_containing([self.tmp / 'deleted.txt'], [self.NEEDLE])
+        self.assertEqual(result, {'found': [], 'unreadable': [], 'absent': [str(self.tmp / 'deleted.txt')]})
+
+    def test_contains_secret_reports_an_unlisted_directory(self):
+        (self.tmp / 'open').mkdir()
+        (self.tmp / 'open' / 'a.log').write_bytes(b'clean')
+        (self.tmp / 'denied').mkdir()
+        (self.tmp / 'denied' / 'b.log').write_bytes(self.NEEDLE)
+        with mock.patch.object(os, 'scandir', denying_scandir(self.tmp / 'denied')):
+            result = G.contains_secret(self.tmp, [self.NEEDLE])
+        self.assertEqual(result, {'found': [],
+                                  'unreadable': [f'{self.tmp / "denied"} (directory not listed: PermissionError)']})
+
+    def test_contains_secret_reports_an_unreadable_file_but_not_an_unreadable_empty_one(self):
+        (self.tmp / 'LOCK').write_bytes(b'')
+        (self.tmp / 'held.bin').write_bytes(b'x' * 64)
+        (self.tmp / 'leak.log').write_bytes(b'a ' + self.NEEDLE.decode().encode('utf-16-le'))
+        real = open
+
+        def held_open(path, *args, **kwargs):
+            if Path(path).name in ('LOCK', 'held.bin'):
+                raise PermissionError(13, 'The process cannot access the file', str(path))
+            return real(path, *args, **kwargs)
+        with mock.patch('builtins.open', held_open):
+            result = G.contains_secret(self.tmp, [self.NEEDLE])
+        self.assertEqual(result, {'found': [str(self.tmp / 'leak.log')],
+                                  'unreadable': [f'{self.tmp / "held.bin"} (file not read: PermissionError)']})
+
+
+class TestVerifyCheckoutScan(Root):
+    """Review finding 3: verify's checkout check fails on an incomplete scan, with the paths visible."""
+
+    def setUp(self):
+        super().setUp()
+        self.acquire_fake()
+        G.configure(self.res, self.lay, FAKE_PIN, 13300, run=FakeRun())
+        gitea = {'pid': 41, 'image': str(self.lay.binary), 'in_supervisor_job_at_start': True,
+                 'listeners': [{'proto': 'tcp', 'address': G.LOOPBACK, 'port': 13300, 'pid': 41}],
+                 'token': {'elevated': False}}
+        probes = {'sign_up_post': 403, 'sign_up_page_says_disabled': True, 'login_post_control_reached_handler': True,
+                  'api /api/v1/user': 401, 'explore_users': 303}
+        for name, value in (('status', {'running': True, 'gitea': gitea, 'job': {'kill_on_job_close': True}}),
+                            ('sockets', []), ('anonymous_probes', probes), ('gitea_users', {}),
+                            ('checkout_files', [])):
+            patcher = mock.patch.object(G, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.repo = self.tmp / 'repo'
+        self.repo.mkdir()
+        (self.repo / 'clean.txt').write_bytes(b'clean')
+
+    def test_a_complete_clean_scan_passes(self):
+        G.checkout_files.return_value = [self.repo / 'clean.txt', self.repo / 'deleted.txt']
+        result = G.verify(self.res, self.lay, FAKE_PIN)
+        self.assertTrue(result['passed'], [k for k, v in result['checks'].items() if not v])
+        self.assertEqual(result['checkout_scan'], {'found': [], 'unreadable': [],
+                                                   'absent': [str(self.repo / 'deleted.txt')]})
+
+    def test_an_unreadable_checkout_file_fails_the_check_with_its_path(self):
+        G.checkout_files.return_value = [self.repo / 'clean.txt', UnreadablePath(self.repo / 'held.bin')]
+        result = G.verify(self.res, self.lay, FAKE_PIN)
+        self.assertFalse(result['checks']['no_gitea_secret_in_checkout'])
+        self.assertFalse(result['passed'])
+        self.assertEqual([k for k, v in result['checks'].items() if not v], ['no_gitea_secret_in_checkout'])
+        self.assertEqual(result['checkout_scan']['unreadable'],
+                         [f'{self.repo / "held.bin"} (file not read: PermissionError)'])
+        secret = G.read_ini(self.lay.config)['security']['SECRET_KEY']
+        self.assertNotIn(secret, json.dumps(result, default=str))
 
 
 class TestCheckoutFiles(unittest.TestCase):

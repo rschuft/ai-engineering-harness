@@ -112,13 +112,24 @@ password is on any command line.
    200 with the sign-in form and stops the run. The passwords travel only in loopback form-post bodies;
 3. with the new password (HTTP basic authentication), list and delete **every** access token of the
    account, then list again: a finalized human account holds no token (this revokes the
-   site-administrator token that S-01.2.2's first fixture attempt could not revoke);
+   site-administrator token that S-01.2.2's first fixture attempt could not revoke). This is enforced
+   on the first run and on every rerun of a finalized account: a token still listed, even one whose
+   deletion answered 204, fails with `TOKENS_REMAIN` (names only), and a listing afterwards that is not
+   200 with a token list fails with `TOKEN_REVOCATION_UNVERIFIED` (`TOKEN_LIST_FAILED` is the listing
+   before anything is deleted). Both entries stay, so a rerun resumes;
 4. verify: the final password authenticates and Gitea no longer demands a change; the temporary
    password is rejected; the account's administrator flag is as expected;
 5. delete the temporary entry;
 6. search every file of the managed root (logs included) and of the checkout (tracked and untracked,
    not ignored; UTF-8 and UTF-16) and its own report for every temporary and final password, and fail,
-   naming files only, on any hit.
+   naming files only, on any hit (`PASSWORD_FOUND`). A search that could not cover everything fails too
+   (`SECRET_SCAN_INCOMPLETE`, naming the paths): a directory of the managed root that cannot be listed
+   or a non-empty file that cannot be read. An unreadable empty file (LevelDB's `LOCK`, held by the
+   running Gitea) holds nothing and is not reported; a tracked file absent from the working tree holds
+   no content and is listed in `absent_from_checkout`, not as a failure.
+
+`verify`'s `no_gitea_secret_in_checkout` check fails in the same way on a file it could not read; its
+`checkout_scan` output names the unreadable and absent paths.
 
 **Why this mechanism.** `gitea admin user change-password --password` would put a password on a
 command line, so it is not used. The web flow is Gitea's own supported forced change. It needs no
