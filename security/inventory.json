@@ -1798,24 +1798,26 @@
         "evidence/S-01.3.2-job-daemon-and-management-access.md",
         "evidence/S-01.4-network-matrix.md",
         "evidence/S-02.1-containment-probes.md",
-        "security/containment-cases.json"
+        "security/containment-cases.json",
+        "evidence/S-02.2-isolation-evidence.md"
       ],
-      "carried_to": ["E-01.2.2", "S-02.2", "S-03.1"]
+      "carried_to": ["E-01.2.2", "S-03.1"]
     },
     {
       "id": "fd-container-shares-service-uid",
       "kind": "open-risk",
       "title": "Conversation containers run as the Agent Server's service uid",
-      "detail": "The Docker runtime starts each container with --user of the server's uid:gid (openhands, 999:989), the principal that is in group docker. The separation of the untrusted workload from the server rests on the container's namespaces, cap-drop ALL, no-new-privileges and the absent socket mount, with no user-namespace remap. Each conversation's keys are environment values visible to openhands and root through docker inspect. S-01.3.2 narrowed it: the container gets the uid and primary gid only (no supplementary group, so not docker), every capability set is empty, no_new_privs and seccomp are set, and no engine socket or engine endpoint exists in it. A user-namespace remap or another runtime would be a structural change (not made; an architecture question for S-02.1). S-02.1 narrowed it further (the containment probes, two runs on one fresh guest around a restart; probe validation, not the S-02.2 acceptance run): through every mount a job has, uid 999 can write only its own three binds (its workspace, its runtime home and its own conversation store); the only other disk-backed mounts are Moby's resolv.conf, hostname and hosts, which it cannot write; no other conversation's workspace or store is reachable (ENOENT by the guest path, by the bind-mount source and through /proc/*/root; no disk-backed mount is shared between two jobs), and no process of another uid is visible. Remaining: the job can write its own conversation's stored state, which the outer server persists and reads (base_state.json, meta.json, bash_events, the owner lease); whether a tampered file can steer the outer server is not tested. A user-namespace remap or another runtime stays a structural question that no observation here calls for.",
+      "detail": "The Docker runtime starts each container with --user of the server's uid:gid (openhands, 999:989), the principal that is in group docker. The separation of the untrusted workload from the server rests on the container's namespaces, cap-drop ALL, no-new-privileges and the absent socket mount, with no user-namespace remap. Each conversation's keys are environment values visible to openhands and root through docker inspect. S-01.3.2 narrowed it: the container gets the uid and primary gid only (no supplementary group, so not docker), every capability set is empty, no_new_privs and seccomp are set, and no engine socket or engine endpoint exists in it. A user-namespace remap or another runtime would be a structural change (not made; an architecture question for S-02.1). S-02.1 narrowed it further (the containment probes, two runs on one fresh guest around a restart; probe validation, not the S-02.2 acceptance run): through every mount a job has, uid 999 can write only its own three binds (its workspace, its runtime home and its own conversation store); the only other disk-backed mounts are Moby's resolv.conf, hostname and hosts, which it cannot write; no other conversation's workspace or store is reachable (ENOENT by the guest path, by the bind-mount source and through /proc/*/root; no disk-backed mount is shared between two jobs), and no process of another uid is visible. Remaining: the job can write its own conversation's stored state, which the outer server persists and reads (base_state.json, meta.json, bash_events, the owner lease); whether a tampered file can steer the outer server is not tested. A user-namespace remap or another runtime stays a structural question that no observation here calls for. S-02.2's acceptance run (111/111 PASS before and after a guest restart) re-observed the narrowed reach and did not test the residual. By the Owner's ruling of 2026-11-07 the stored-state question stays untested and open, and is carried to E-01.2.2 together with an observed drill that a missing guard or key blocks activation (so far declared in S-01.3.1, S-01.3.2 and S-01.4).",
       "refs": ["conversation-container", "guest-service-openhands", "engineering-agent", "cred-conversation-keys"],
       "citations": [
         "evidence/F-04.1c-agent-server.md",
         "evidence/F-04.2-conversation-lifecycle.md",
         "evidence/S-01.3.2-job-daemon-and-management-access.md",
         "evidence/S-02.1-containment-probes.md",
-        "security/containment-cases.json"
+        "security/containment-cases.json",
+        "evidence/S-02.2-isolation-evidence.md"
       ],
-      "carried_to": ["S-02.2", "E-01.2.2"]
+      "carried_to": ["E-01.2.2"]
     },
     {
       "id": "fd-job-image-engine-clients",
@@ -1827,9 +1829,10 @@
         "evidence/S-01.3.2-job-daemon-and-management-access.md",
         "profiles/strong-windows-qemu-whpx/profile.json",
         "evidence/S-02.1-containment-probes.md",
-        "security/containment-cases.json"
+        "security/containment-cases.json",
+        "evidence/S-02.2-isolation-evidence.md"
       ],
-      "carried_to": ["S-02.2", "E-01.2.2"]
+      "carried_to": ["E-01.2.2"]
     },
     {
       "id": "fd-host-loopback-exposure",
