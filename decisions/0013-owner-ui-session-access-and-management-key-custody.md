@@ -1,6 +1,6 @@
 # 0013 - Owner UI access to engineering sessions and the sole custody of the Agent Server management key
 
-Status: Proposed (Architect draft 2026-11-07, accepted for drafting by the Overseer at S-01.4). The Overseer accepts it at S-01.4 completion.
+Status: Accepted (Overseer) - 2026-11-07, at the completion of S-01.4 (`d084b8d`, `8cea7fb`, fix-forward `bb72b8b`, `ecd3bf5`). It names no host-to-guest path as open; each one still needs a recorded Owner approval at the leaf that first needs it. Point 6 applies the blueprint's `#security` and `#containment-architecture` text read with decision 0010 s1, and does not amend 0010. Proposed (Architect draft, 2026-11-07).
 
 It refines [decision 0007](0007-role-token-matrix-and-revocation-contract.md), points 4 and 5, within blueprint `#architecture` ("Selected boundary"), `#integration-contracts` ("API admission is mandatory") and `#execution-qualification` ("Must be reachable only from the dispatcher and trusted Owner UI, never arbitrary code or tools"). 0007 stays Accepted, and its text is unchanged.
 
