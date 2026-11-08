@@ -30,6 +30,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+CATEGORY = 'unit'
+
 HERE = Path(__file__).resolve().parent
 EFFECTS_DIR = HERE.parent
 REPO = EFFECTS_DIR.parents[1]
@@ -293,6 +295,8 @@ class SchemaAndReceiptTests(EffectsTestCase):
 
 
 class CrashTests(EffectsTestCase):
+    category = 'integration'
+
     def setUp(self):
         super().setUp()
         store_mod.init_effects_store(self.root, principal=ME, policy=FIXTURE)
@@ -354,6 +358,8 @@ class FixtureOracle:
 
 
 class BackupRestoreTests(EffectsTestCase):
+    category = 'integration'
+
     def test_backup_more_receipts_restore_epoch_reconcile_and_close(self):
         store = self.open()
         a, b, c, d = (request(n) for n in ('a-done', 'b-reserved', 'c-applying', 'd-unknown'))
@@ -612,6 +618,8 @@ class ManifestCheckTests(EffectsTestCase):
 
 
 class LocationTests(EffectsTestCase):
+    category = 'contract'
+
     def assert_refused(self, root, code, policy=FIXTURE, **kwargs):
         with self.assertRaises(store_mod.LocationRefused) as caught:
             store_mod.open_effects_store(root, principal=ME, policy=policy, create=True, **kwargs)
@@ -685,6 +693,8 @@ class LocationTests(EffectsTestCase):
 
 @unittest.skipUnless(WINDOWS, 'the custody fixtures use the Windows security API')
 class CustodyTests(EffectsTestCase):
+    category = 'integration'
+
     def assert_custody_refused(self, root, expected_codes, principal=ME, exact=False):
         with self.assertRaises(custody.CustodyRefused) as caught:
             store_mod.open_effects_store(root, principal=principal, policy=FIXTURE, create=True)
@@ -799,6 +809,7 @@ class IsolationTests(EffectsTestCase):
 
 class SurfaceTests(unittest.TestCase):
     """Library and command line only: no network endpoint, no MCP tool, no agent surface."""
+    category = 'contract'
 
     FORBIDDEN = {'socket', 'socketserver', 'http', 'urllib', 'asyncio', 'ssl', 'xmlrpc', 'selectors', 'ftplib',
                  'smtplib', 'wsgiref', 'multiprocessing', 'mcp', 'requests', 'aiohttp', 'flask', 'fastapi'}

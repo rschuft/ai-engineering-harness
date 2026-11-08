@@ -29,6 +29,8 @@ import unittest
 import zlib
 from unittest import mock
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 PROFILE_DIR = REPO / 'profiles' / 'strong-windows-qemu-whpx'
 
@@ -196,6 +198,8 @@ class LaunchRecord(unittest.TestCase):
 
 
 class Refusals(TempState):
+    category = 'integration'
+
     def test_instance_names(self):
         for bad in ('A', 'x', '../x', 'a/b', 'a\\b', 'a' * 42, '-ab', 'ab_c', ''):
             with self.assertRaises(guest.Refused, msg=bad):
@@ -276,6 +280,8 @@ class Refusals(TempState):
 
 
 class Destroy(TempState):
+    category = 'integration'
+
     def populate(self):
         for name in ('aa', 'bb'):
             idir = self.state / 'instances' / name
@@ -442,6 +448,8 @@ class HostKeys(unittest.TestCase):
 
 
 class Ports(unittest.TestCase):
+    category = 'integration'
+
     def test_allocate_distinct_free_loopback_ports(self):
         for _ in range(5):
             ports = guest.allocate_ports(2)
@@ -492,6 +500,8 @@ class FakeQmp(threading.Thread):
 
 
 class QmpClient(unittest.TestCase):
+    category = 'integration'
+
     def test_events_skipped_and_errors_raised(self):
         server = FakeQmp()
         server.start()
@@ -1091,6 +1101,8 @@ def keygen(directory):
 
 
 class P5Scan(unittest.TestCase):
+    category = 'integration'
+
     ENV = {'USERNAME': 'user', 'USERPROFILE': 'C:\\Users\\user'}
 
     def setUp(self):
@@ -1267,6 +1279,7 @@ def fixture_repo(path, commits=2):
 class Exchange(TempState):
     """exchange push and pull against a fixture repository; the guest side (ssh, sftp) is
     replaced by fakes, so bounds, refusals and verification are exercised offline."""
+    category = 'integration'
 
     def setUp(self):
         super().setUp()
@@ -1564,6 +1577,8 @@ class NetprobeOverlay(unittest.TestCase):
 
 
 class NetprobeSeed(TempState):
+    category = 'integration'
+
     def test_seed_wraps_only_the_user_data(self):
         idir = self.tmp / 'inst'
         (idir / 'ssh').mkdir(parents=True)
@@ -1718,6 +1733,7 @@ class OrdinaryPathRefusesValidation(TempState):
 class NetprobeListener(unittest.TestCase):
     """The real listener process on 127.0.0.1, driven by the guest program's own client
     functions (no QEMU, no guest, nothing beyond loopback)."""
+    category = 'integration'
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-netprobe-'))
@@ -2103,6 +2119,7 @@ class OrdinaryP7(Evaluate):
 class NetprobeSessionSockets(TempState):
     """NetprobeSession with the real listener process; the PowerShell binding queries are
     replaced by fabricated observations (the binding verdict is binding_problems)."""
+    category = 'integration'
 
     def bindings(self, pid, ports):
         return {'tcp_by_pid': [{'LocalAddress': '127.0.0.1', 'LocalPort': ports['listener'],
@@ -2483,6 +2500,8 @@ def clear_read_only(root):
 
 
 class Inventory(TempState):
+    category = 'integration'
+
     def setUp(self):
         super().setUp()
         fake_state_shared(self.state)
@@ -2579,6 +2598,7 @@ class Inventory(TempState):
 class Smoke(TempState):
     """The smoke sequence with the guest operations faked and destroy, recreate and the
     inventories real (they act on the temporary state directory only)."""
+    category = 'integration'
 
     def setUp(self):
         super().setUp()
@@ -3795,6 +3815,7 @@ class ConversationLifecycle(TempState):
 class ApiProbe(unittest.TestCase):
     """The guest-side API probe (API_PROBE) against a local HTTP server: the key comes
     from its file, is sent as X-Session-API-Key, is redacted from responses and counted."""
+    category = 'integration'
 
     KEY = 'k' * 43
 

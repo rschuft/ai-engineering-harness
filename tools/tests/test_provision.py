@@ -26,6 +26,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 PROFILE_NAME = 'strong-windows-qemu-whpx'
 PROFILE_DIR = REPO / 'profiles' / PROFILE_NAME

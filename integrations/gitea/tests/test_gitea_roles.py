@@ -18,6 +18,8 @@ import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 
+CATEGORY = 'unit'
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 
@@ -328,6 +330,8 @@ class TestRotate(Base):
 
 
 class TestPolicy(unittest.TestCase):
+    category = 'contract'
+
     POLICY = json.loads((REPO / 'policy' / 'role-tokens.json').read_text(encoding='utf-8'))
 
     def test_roles_match_the_matrix_credentials(self):
@@ -379,6 +383,7 @@ class TestHostAccounts(unittest.TestCase):
 class TestNoTokenStoreReachesTheGuest(unittest.TestCase):
     """The declared guest surfaces (profiles P3-P5; F-03.3.1 observed them): no host share at all, and
     every host file the launch names is a pinned input or lives in the per-instance directory."""
+    category = 'contract'
     PROFILE = json.loads((REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'profile.json').read_text(encoding='utf-8'))
 
     def test_no_host_share_device(self):

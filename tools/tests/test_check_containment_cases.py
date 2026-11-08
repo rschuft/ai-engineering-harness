@@ -16,6 +16,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 CHECKER = REPO / 'tools' / 'check_containment_cases.py'
 CATALOGUE_PATH = REPO / 'security' / 'containment-cases.json'
@@ -44,6 +46,8 @@ def codes(c, readme=README, inventory=None):
 
 
 class Committed(unittest.TestCase):
+    category = 'contract'
+
     def test_catalogue_passes(self):
         problems = ccc.check(CATALOGUE, INVENTORY, REPO, README)
         self.assertEqual([str(p) for p in problems], [])
@@ -348,6 +352,8 @@ class Rules(unittest.TestCase):
 
 
 class CommandLine(unittest.TestCase):
+    category = 'contract'
+
     def run_cli(self, *args):
         return subprocess.run([sys.executable, '-I', '-B', str(CHECKER), *args], cwd=REPO,
                               capture_output=True, text=True)

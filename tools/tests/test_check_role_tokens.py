@@ -16,6 +16,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 CHECKER = REPO / 'tools' / 'check_role_tokens.py'
 POLICY_PATH = REPO / 'policy' / 'role-tokens.json'
@@ -72,6 +74,8 @@ def run_cli(*args):
 
 
 class CommittedMatrix(unittest.TestCase):
+    category = 'contract'
+
     def test_matrix_passes(self):
         found, problems = codes(fresh())
         self.assertEqual(problems, [], '\n'.join(map(str, problems)))

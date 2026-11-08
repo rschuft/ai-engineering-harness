@@ -20,6 +20,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+CATEGORY = 'integration'
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import lineage_example as E  # noqa: E402
@@ -115,6 +117,8 @@ class Case(unittest.TestCase):
 # The example
 
 class Example(unittest.TestCase):
+    category = 'contract'
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-trace-example-'))
@@ -840,6 +844,8 @@ class Contract(Case):
 
 
 class CommandLine(Case):
+    category = 'contract'
+
     def cli(self, *args, env=None):
         return subprocess.run([*CLI, *args], cwd=E.REPO, capture_output=True, text=True, encoding='utf-8',
                               stdin=subprocess.DEVNULL, timeout=fx.WAIT_CEILING_S,

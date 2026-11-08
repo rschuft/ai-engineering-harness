@@ -24,6 +24,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+CATEGORY = 'integration'
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import two_task_fixture as fx  # noqa: E402
@@ -78,6 +80,8 @@ class RepoCase(unittest.TestCase):
 
 
 class PointerFormat(unittest.TestCase):
+    category = 'unit'
+
     GOOD = ('openspec:changes/qual-02-search-freshness/specs/a/spec.md@' + 'a' * 40 + '#sha256=' + 'b' * 64)
 
     def test_round_trip(self):
@@ -214,6 +218,8 @@ class OpenSpecChecklist(RepoCase):
 
 
 class PlanInput(unittest.TestCase):
+    category = 'unit'
+
     def setUp(self):
         self.plan = json.loads(fx.PLAN.read_text(encoding='utf-8'))
 
@@ -355,6 +361,8 @@ class ResolveTasks(RepoCase):
 
 
 class CommandLine(RepoCase):
+    category = 'contract'
+
     def run_main(self, *argv):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -402,6 +410,7 @@ class CommandLine(RepoCase):
 
 class RecordedCapture(RepoCase):
     """The committed Backlog.md capture still resolves against a freshly built design repository."""
+    category = 'contract'
 
     def setUp(self):
         super().setUp()

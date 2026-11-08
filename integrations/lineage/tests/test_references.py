@@ -14,6 +14,8 @@ import sys
 import unittest
 from pathlib import Path
 
+CATEGORY = 'unit'
+
 HERE = Path(__file__).resolve().parent
 LINEAGE_DIR = HERE.parent
 REPO = LINEAGE_DIR.parents[1]
@@ -219,6 +221,8 @@ class Malformed(unittest.TestCase):
 
 
 class Schema(unittest.TestCase):
+    category = 'contract'
+
     @classmethod
     def setUpClass(cls):
         cls.schema = L.load_schema()

@@ -24,6 +24,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'integration'
+
 HERE = Path(__file__).resolve().parent
 DISPATCH = HERE.parent
 REPO = DISPATCH.parents[1]
@@ -619,6 +621,8 @@ def valid_manifest():
 
 
 class ManifestCheckerTests(unittest.TestCase):
+    category = 'unit'
+
     def codes(self, data):
         return [code for code, _ in di.check_manifest(data)]
 
@@ -747,6 +751,8 @@ class ManifestCheckerTests(unittest.TestCase):
 
 
 class ManifestCustodyTests(unittest.TestCase):
+    category = 'unit'
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-dispatch-custody-'))
         self.addCleanup(rmtree, self.tmp)
@@ -784,6 +790,8 @@ class ManifestCustodyTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    category = 'contract'
+
     def run_cli(self, *args, env=None):
         return subprocess.run([sys.executable, '-I', '-B', str(MODULE), *args], capture_output=True, text=True,
                               encoding='utf-8', timeout=WAIT_CEILING_S, stdin=subprocess.DEVNULL, cwd=REPO,

@@ -16,6 +16,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 CHECKER = REPO / 'tools' / 'check_network_matrix.py'
 MATRIX_PATH = REPO / 'policy' / 'network-matrix.json'
@@ -56,6 +58,8 @@ def run_cli(*args):
 
 
 class CommittedMatrix(unittest.TestCase):
+    category = 'contract'
+
     def test_matrix_passes(self):
         found, problems = codes(fresh())
         self.assertEqual(problems, [], '\n'.join(map(str, problems)))

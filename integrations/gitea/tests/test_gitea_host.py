@@ -26,6 +26,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+CATEGORY = 'unit'
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 WINDOWS = sys.platform == 'win32'
@@ -114,6 +116,8 @@ class MemoryStore:
 
 
 class TestPin(unittest.TestCase):
+    category = 'contract'
+
     def test_lock_entry(self):
         self.assertEqual(PIN['name'], G.ASSET_NAME)
         self.assertRegex(PIN['sha256'], '^[0-9a-f]{64}$')
@@ -946,6 +950,8 @@ class TestVerifyCheckoutScan(Root):
 
 
 class TestCheckoutFiles(unittest.TestCase):
+    category = 'integration'
+
     def test_lists_tracked_files_of_this_checkout(self):
         names = {p.relative_to(REPO).as_posix() for p in G.checkout_files(REPO)}
         self.assertIn('integrations/gitea/gitea_host.py', names)
@@ -969,6 +975,7 @@ SUPERVISOR = textwrap.dedent('''
 @windows_only
 class TestJobObject(unittest.TestCase):
     """The mechanism: a kill-on-close job held by the supervisor ends its child when the supervisor ends."""
+    category = 'integration'
 
     def start(self, mode):
         script = Path(tempfile.mkdtemp(prefix='gh-')) / 'supervisor.py'
@@ -1010,6 +1017,8 @@ class TestJobObject(unittest.TestCase):
 
 @windows_only
 class TestSocketsAndToken(unittest.TestCase):
+    category = 'integration'
+
     def test_own_listener_and_udp_endpoint_are_seen(self):
         tcp = socket.socket()
         tcp.bind(('127.0.0.1', 0))
@@ -1074,6 +1083,7 @@ class TestCommandLine(unittest.TestCase):
 class TestLive(Root):
     """The pinned Gitea end to end in a temporary root on a free port: install, up, verify, a clean down,
     up again, and a hard kill of the supervisor."""
+    category = 'e2e'
 
     def test_lifecycle(self):
         port = next(p for p in range(23300, 23400) if not G.port_in_use(p))

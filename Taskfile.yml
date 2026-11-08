@@ -78,6 +78,24 @@ tasks:
       - task: gitea:test
       - task: dispatch:test
 
+  # Test profile and budgets (plan leaf F-09.1; docs/development.md#testing). test:budget is an
+  # acceptance obligation: run it at the acceptance of every plan leaf and at every release,
+  # and record its result with the leaf's evidence. Never run it from a git hook.
+  test:profile:
+    desc: "Profile the suites of test serially, counting process launches, mkdtemp, sockets and chdir per test, class, category and suite (python -I -B tools/test_profile.py run); writes the profile to a new temporary directory; pass -- --runs 3 for wall-time medians"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/test_profile.py run {{.CLI_ARGS}}'
+
+  test:categories:
+    desc: Check that every test class declares a valid category; imports the test modules, runs no test (python -I -B tools/test_profile.py categories)
+    cmds:
+      - '{{.PYTHON}} -I -B tools/test_profile.py categories {{.CLI_ARGS}}'
+
+  test:budget:
+    desc: "Acceptance obligation at every leaf acceptance and release, never in a hook: profile three serial runs and check them against policy/test-budgets.json (python -I -B tools/check_test_budget.py check --run); -- --counters-only checks the counters from one run"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_test_budget.py check --run {{.CLI_ARGS}}'
+
   store:test:
     desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
     cmds:

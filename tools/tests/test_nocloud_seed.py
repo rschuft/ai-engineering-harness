@@ -22,6 +22,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 GENERATOR = REPO / 'tools' / 'nocloud_seed.py'
 PROFILE = REPO / 'profiles' / 'strong-windows-qemu-whpx'
@@ -202,6 +204,8 @@ class SeedTestCase(unittest.TestCase):
 
 
 class Determinism(SeedTestCase):
+    category = 'contract'
+
     def test_same_inputs_same_bytes(self):
         a, ra = self.generate('a')
         b, rb = self.generate('b')
@@ -348,6 +352,8 @@ class RoundTrip(SeedTestCase):
 
 
 class Refusals(SeedTestCase):
+    category = 'contract'
+
     def test_tampered_template(self):
         profile = self.copied_profile()
         self.tamper(profile, 'network-config.yaml', 'network:\n  version: 1\n', repin=False)
@@ -469,6 +475,7 @@ MANIFEST = (json.dumps({'schema': nocloud_seed.MANIFEST_SCHEMA, 'files': [
 
 class ProvisionManifest(SeedTestCase):
     """F-04.1b: the third user-data placeholder carries the provisioning manifest."""
+    category = 'contract'
 
     def user_data(self, inst):
         return read_iso((inst / 'seed.iso').read_bytes())['joliet']['files']['user-data'][1]

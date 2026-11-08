@@ -20,6 +20,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+CATEGORY = 'e2e'
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import two_task_fixture as fx  # noqa: E402

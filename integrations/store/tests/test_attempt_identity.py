@@ -22,6 +22,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+CATEGORY = 'unit'
+
 HERE = Path(__file__).resolve().parent
 STORE_DIR = HERE.parent
 MODULE = STORE_DIR / 'integration_store.py'
@@ -134,6 +136,7 @@ class StoreTestCase(unittest.TestCase):
 
 class AcceptanceTests(StoreTestCase):
     """E-01.1.1: two identical reservations resolve to one persisted intended conversation UUID."""
+    category = 'integration'
 
     def assert_one_persisted(self, conversation_ids):
         self.assertEqual(set(conversation_ids), {store_mod.conversation_id_for(GOLDEN_KEY)})

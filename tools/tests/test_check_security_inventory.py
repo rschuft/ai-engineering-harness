@@ -15,6 +15,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 CHECKER = REPO / 'tools' / 'check_security_inventory.py'
 INVENTORY_PATH = REPO / 'security' / 'inventory.json'
@@ -50,6 +52,8 @@ def run_cli(*args):
 
 
 class CommittedInventory(unittest.TestCase):
+    category = 'contract'
+
     def test_inventory_passes(self):
         found, problems = codes(fresh())
         self.assertEqual(problems, [], '\n'.join(map(str, problems)))

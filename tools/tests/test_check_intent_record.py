@@ -14,6 +14,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 CHECKER = REPO / 'tools' / 'check_intent_record.py'
 FIXTURES = Path(__file__).resolve().parent / 'fixtures' / 'intent_record'
@@ -56,6 +58,8 @@ M1 = '''#### M1
 
 
 class FixturePasses(unittest.TestCase):
+    category = 'contract'
+
     def test_fixture_passes(self):
         found, problems = codes(PROPOSAL)
         self.assertEqual(problems, [])
@@ -201,6 +205,8 @@ class MethodMutations(unittest.TestCase):
 
 
 class StructureMutations(unittest.TestCase):
+    category = 'contract'
+
     def assertFailsWith(self, proposal, *expected):
         found, problems = codes(proposal)
         for code in expected:
@@ -303,6 +309,8 @@ def frontmatter(text):
 
 
 class Catalog(unittest.TestCase):
+    category = 'contract'
+
     def test_skill_frontmatter_follows_agent_skills_spec(self):
         # https://agentskills.io/specification: name 1-64 chars of a-z, 0-9 and single
         # inner hyphens, equal to the directory name; description 1-1024 characters;

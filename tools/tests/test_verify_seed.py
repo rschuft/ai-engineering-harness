@@ -17,6 +17,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'contract'
+
 REPO = Path(__file__).resolve().parents[2]
 VERIFIER = 'tools/verify_seed.py'
 PLAN = 'AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json'

@@ -16,6 +16,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 CHECKER = REPO / 'tools' / 'check_profile.py'
 QEMU = 'strong-windows-qemu-whpx'
@@ -41,6 +43,8 @@ def replace_arg(profile, old, new):
 
 
 class CheckedInProfiles(unittest.TestCase):
+    category = 'contract'
+
     def test_both_profiles_pass(self):
         result = run_checker()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -987,6 +991,7 @@ class JobsBlock(unittest.TestCase):
 class OpenApiSubset(unittest.TestCase):
     """The standard-library JSON Schema subset that validates the fixture (synthetic
     documents; the locked openapi.json itself is downloaded, never committed)."""
+    category = 'contract'
 
     DOC = {'components': {'schemas': {
         'Req': {'type': 'object', 'required': ['id', 'ws'], 'properties': {
@@ -1033,6 +1038,8 @@ class OpenApiSubset(unittest.TestCase):
 
 
 class CommandLine(unittest.TestCase):
+    category = 'contract'
+
     def test_unpinned_input_fails_the_command(self):
         tmp = Path(tempfile.mkdtemp(prefix='aieh-profile-cli-'))
         try:

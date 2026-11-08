@@ -20,6 +20,8 @@ import tempfile
 import unittest
 import unittest.mock
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / 'tools' / 'msys2_lock.py'
 _spec = importlib.util.spec_from_file_location('msys2_lock', TOOL)
@@ -314,6 +316,8 @@ class InstallTests(unittest.TestCase):
 
 @unittest.skipUnless(m.TAR.is_file(), 'Windows built-in tar.exe not present')
 class TarExeStreamTests(unittest.TestCase):
+    category = 'integration'
+
     def test_pax_stream_reads_through_tar_exe(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)

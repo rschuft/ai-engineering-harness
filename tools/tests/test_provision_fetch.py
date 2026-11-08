@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 PROFILE_NAME = 'strong-windows-qemu-whpx'
 PROFILE_DIR = REPO / 'profiles' / PROFILE_NAME
@@ -391,6 +393,7 @@ class ProvisionFetch(unittest.TestCase):
 
 class CommittedLock(unittest.TestCase):
     """The committed provision lock, read only: shape, consistency, no fetch."""
+    category = 'contract'
 
     def setUp(self):
         self.profile = json.loads((PROFILE_DIR / 'profile.json').read_text(encoding='utf-8'))

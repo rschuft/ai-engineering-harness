@@ -30,6 +30,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'integration'
+
 REPO = Path(__file__).resolve().parents[2]
 GATE = REPO / 'tools' / 'publication_gate.py'
 HOOK_FILES = ('pre-commit', 'pre-push', 'gate-common.sh')
@@ -454,6 +456,7 @@ class WithRealScanner(GateTestCase):
 
 class ScanWindows(unittest.TestCase):
     """The window split itself; no scanner needed."""
+    category = 'unit'
 
     def check(self, content):
         windows = gate.scan_windows(content)

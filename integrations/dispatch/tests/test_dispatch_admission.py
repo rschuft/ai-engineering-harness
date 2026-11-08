@@ -26,6 +26,8 @@ import os
 import sys
 import unittest
 
+CATEGORY = 'integration'
+
 HERE = Path(__file__).resolve().parent
 
 

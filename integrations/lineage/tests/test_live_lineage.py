@@ -20,6 +20,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+CATEGORY = 'e2e'
+
 HERE = Path(__file__).resolve().parent
 LINEAGE_DIR = HERE.parent
 REPO = LINEAGE_DIR.parents[1]

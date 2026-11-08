@@ -29,7 +29,7 @@ task setup
 
 `task setup` is the supported setup command. It checks the basic prerequisites,
 verifies the seed in both modes and runs the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution and create admission tests. It is offline and takes seconds. Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution and create admission tests. It is offline, runs serially and took about six minutes on the verification host ([Testing](#testing) has the measurement). Before your first commit, also run
 `task hooks:install` once per clone
 (see [Publication-safety gate](#publication-safety-gate)). Without Task, run the eleven commands it wraps:
 
@@ -151,6 +151,9 @@ Only what is listed as verified has been exercised.
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
 | `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch resolution and admission tests (stdlib `unittest`). |
+| `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `python -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `test:categories [-- --list]` | `python -I -B tools/test_profile.py categories [--list]` | no | Checks that every test class declares a valid category. Imports the test modules; runs no test. |
+| `test:budget [-- --counters-only]` | `python -I -B tools/check_test_budget.py check --run [--counters-only]` | no | **Acceptance obligation** at every leaf acceptance and release, never in a hook: profiles three serial runs and checks them against [`policy/test-budgets.json`](../policy/test-budgets.json). Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -237,6 +240,80 @@ compliance is not verified**; see
 items.
 
 **Formatting and linting.** No formatter or linter is configured yet.
+
+## Testing
+
+The tests are standard-library `unittest` suites. Each lives beside the code it tests:
+`tools/tests/` for the tools and `integrations/<component>/tests/` for each integration.
+`task test` runs them serially, one `python -I -B -m unittest discover -s <suite> -v` per
+suite, in the order of the `test` target in `Taskfile.yml`. Live suites against installed
+tools or services are opt-in through their environment variables and are skipped, counted,
+otherwise.
+
+**Categories.** Every test class declares one category, `unit`, `contract`, `integration`,
+`e2e` or `performance`: a class attribute `category = '...'`, or a module-level
+`CATEGORY = '...'` that covers every class of the module without its own. Both are plain
+attributes that unittest ignores. The categories mean:
+
+| Category | A class is in it when | Process launches, sockets, `os.chdir` |
+|---|---|---|
+| `unit` | it exercises code in the test process only: logic, parsing, refusals, with in-memory or temporary-file fixtures | none, in its tests and class fixtures (the profile and `test:budget` check this) |
+| `contract` | it checks a boundary against its specification: a committed artifact (policy, inventory, profile, lock, README block) against its checker or schema, a pinned upstream interface, or a command's exit-code and output contract | allowed |
+| `integration` | it drives real components together: git repositories, several processes on one store, child processes and their Windows job, file-system custody | allowed |
+| `e2e` | it needs a live installed tool or running service and runs only when its environment variables name them | allowed; skipped without them |
+| `performance` | it measures a time or a launch count as its result | allowed |
+
+A class is classified from what the profile measured, not from its name: anything that
+launches a process, opens a socket or changes directory, in a test or a class fixture, is not
+`unit`. `task test:categories` checks mechanically that every class has a valid category; it
+imports the test modules and runs no test.
+
+**Profile.** `task test:profile` (`python -I -B tools/test_profile.py run`) runs exactly the
+suites of `task test`, serially, each in a child process that calls `unittest.main` with the
+same arguments as `python -I -B -m unittest discover -s <suite> -v`, from the repository
+root. An audit hook (`sys.addaudithook`), which patches nothing, counts per test and per
+class fixture:
+
+- `launches`: process launches by the test process itself (the `subprocess.Popen`,
+  `os.system`, `os.spawn`, `os.posix_spawn`, `os.exec`, `os.fork`, `os.startfile` and direct
+  `_winapi.CreateProcess` audit events), failed attempts included; processes those children
+  start are not counted;
+- `mkdtemp`: `tempfile.mkdtemp` calls, `TemporaryDirectory` included;
+- `sockets` and `chdir`: sockets created and `os.chdir` calls;
+- tests run, and each test's outcome and wall time.
+
+Events are attributed to the running test (with its `setUp`, `tearDown` and cleanups), else
+to the class or module fixture unittest is running, else to the module being imported. Each
+launch is also named by its program (`git <subcommand>`, `python <script>`, an executable's
+name) and by the repository file that made it, which ranks the costs to remove. The full
+profile, every test's id, outcome, counters and wall time, goes to a new temporary directory
+outside the checkout (`--out` to choose); `--runs N` repeats the whole set and reports wall
+medians, and fails when a counter or an outcome differs between runs. `python -I -B
+tools/test_profile.py compare --profile <full profile>` runs the plain unittest commands
+without the profiler and fails unless they give the same test ids and outcomes.
+
+**Budgets.** [`policy/test-budgets.json`](../policy/test-budgets.json) holds the enforceable
+budgets, per category, per suite and in total, from the measured baseline in
+[`evidence/test-profile/`](../evidence/test-profile/): exact counters (at least the
+baseline's tests; at most its launches and `mkdtemp` calls) and the median wall time of
+three serial runs with a 30% tolerance (never less than half a second of slack, for
+sub-second scopes). `task test:budget` (`python -I -B tools/check_test_budget.py check
+--run`) profiles three runs and checks them; it fails on a failing or uncategorized test, a
+`unit` class that launches, opens a socket or changes directory, a counter above its budget,
+fewer tests, a median above its tolerance, or a suite or category the budgets do not name.
+Counts below budget pass and are reported. `python -I -B tools/check_test_budget.py propose
+--profile <file>` prints the budgets a profile implies; changing the budget file is a
+reviewed change with the profile that justifies it, never automatic. The wall budgets
+belong to the baseline host (recorded in the file); on another host, check the counters
+with `-- --counters-only`, which needs one run and says that the wall time was not checked.
+
+**When the budget check runs.** `task test:budget` is an acceptance obligation: it runs at
+the acceptance of every plan leaf and at every release, and its result is recorded with the
+leaf's evidence. It never runs from a git hook: it takes three full serial runs.
+
+**Wall time.** At `07c7cd5` the serial `task test` set took a median of 355 s on the
+verification host (Windows 11, 32 logical processors, CPython 3.12.10); the per-suite
+medians and the measurement are in [`evidence/F-09.1-test-baseline.md`](../evidence/F-09.1-test-baseline.md).
 
 ## Managed data root
 
@@ -969,10 +1046,10 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list, the profile declarations, and per-OS packaging when added | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py`, `check_network_matrix.py`, `check_containment_cases.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1, S-01.4, S-02.1 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py`, `check_network_matrix.py`, `check_containment_cases.py`, `test_profile.py`, `check_test_budget.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1, S-01.4, S-02.1, F-09.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`); the [containment cases](#containment-cases) (`containment-cases.json`) | S-01.1, S-02.1 |
-| `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`) | S-01.2.1, G-01.1 |
+| `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`); the [test budgets](#testing) (`test-budgets.json`) | S-01.2.1, G-01.1, F-09.1 |
 | `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/`; `dispatch/`: the trusted dispatch input resolver, the approved-input manifest's schema check, the create admission before the OpenHands create, its synthetic `examples/` and `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1, E-01.2.1, E-01.2.2 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
@@ -992,7 +1069,7 @@ sources stay external (pinned in `composition/`) unless adaptation is necessary.
 | Integrations (Integration Service adapters and schemas) | `integrations/` (created by F-05.1: `integrations/store/`) | F-05.1, then P-02.1 and E-01.x |
 | Policy (permissions, controls) | `policy/` (created by S-01.2.1: the role-token matrix) | S-01.2.1, G-01.1 |
 | Agent and Skill catalog | `catalog/` (created by P-01.1: the `intent-driven` OpenSpec schema and the `intent-normalization` Skill) | P-01.1, then A-01.1 and E-03.1 |
-| Contract tests | `tests/` | F-03.3.1, S-02.1, E-01.3.2 |
+| Tests, contract tests included | Beside the code they test: `tools/tests/` and `integrations/<component>/tests/`. A contract test is a declared [category](#testing), not a directory; there is no top-level `tests/` | each leaf with code; categories F-09.1 |
 | Owner-facing applications | `apps/` (created by U-01.1: `apps/owner-host/`). A separate home because it is a Node application with its own npm toolchain and lock, unlike the Python tools and integrations | U-01.1, then U-01.2 and U-02.x |
 
 ## Changing integrity-tracked files

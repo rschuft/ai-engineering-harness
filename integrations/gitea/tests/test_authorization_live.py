@@ -28,6 +28,8 @@ import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 
+CATEGORY = 'e2e'
+
 HERE = Path(__file__).resolve().parent
 
 

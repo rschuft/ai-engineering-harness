@@ -20,6 +20,8 @@ import unittest
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest import mock
 
+CATEGORY = 'unit'
+
 HERE = Path(__file__).resolve().parent
 PATHS_DIR = HERE.parent
 REPO = PATHS_DIR.parents[1]
@@ -106,6 +108,8 @@ class Base(unittest.TestCase):
 
 
 class SectionNineCriteria(Base):
+    category = 'integration'
+
     def test_c1_fresh_clone_without_config_or_env_resolves_and_creates_nothing(self):
         before = self.tree()
         for fmt in ('json', 'sh', 'ps1'):
@@ -308,6 +312,7 @@ class SectionNineCriteria(Base):
 
 class InvalidConfiguration(Base):
     """Criterion 9: each refusal has a stable code and names its remedy."""
+    category = 'integration'
 
     def cases(self):
         env, repo, base = self.env, self.repo, self.base
@@ -460,6 +465,8 @@ class InvalidConfiguration(Base):
 
 
 class Adapters(Base):
+    category = 'integration'
+
     TRICKY = "it's $HOME `x` & (dir)"
 
     def resolution(self):
@@ -565,6 +572,8 @@ class LegacyAndDoctor(Base):
 
 
 class ExampleConfiguration(Base):
+    category = 'contract'
+
     TEXT = EXAMPLE.read_text(encoding='utf-8')
 
     @staticmethod

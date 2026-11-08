@@ -24,6 +24,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'integration'
+
 HERE = Path(__file__).resolve().parent
 STORE_DIR = HERE.parent
 MODULE = STORE_DIR / 'integration_store.py'
@@ -214,6 +216,8 @@ class BackupRestoreTests(IntegrationBackupTestCase):
 
 
 class ManifestCheckTests(IntegrationBackupTestCase):
+    category = 'contract'
+
     def setUp(self):
         super().setUp()
         with self.open() as store:

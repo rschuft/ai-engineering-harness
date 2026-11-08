@@ -20,6 +20,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+CATEGORY = 'integration'
+
 HERE = Path(__file__).resolve().parent
 LINEAGE_DIR = HERE.parent
 REPO = LINEAGE_DIR.parents[1]
@@ -595,6 +597,8 @@ def request(name):
 
 
 class EffectReceiptResolution(unittest.TestCase):
+    category = 'unit'
+
     def setUp(self):
         self.assertIs(effects_tests.store_mod, effects, 'fixtures and resolver share one effects module')
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-lineage-effects-'))
@@ -720,6 +724,8 @@ class EffectReceiptResolution(unittest.TestCase):
 # registry and command line
 
 class RegistryAndCommandLine(TempDirCase):
+    category = 'contract'
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()

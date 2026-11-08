@@ -23,6 +23,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+CATEGORY = 'unit'
+
 HERE = Path(__file__).resolve().parent
 STORE_DIR = HERE.parent
 REPO = STORE_DIR.parents[1]
@@ -109,6 +111,8 @@ class PragmaAndVersionTests(StoreTestCase):
 
 
 class LocationTests(StoreTestCase):
+    category = 'contract'
+
     def test_refuses_a_path_inside_the_repository(self):
         inside = STORE_DIR / 'tests' / 'refused-integration.sqlite'
         with self.assertRaises(store_mod.UnsafeLocation):
@@ -240,6 +244,8 @@ class MigrationTests(StoreTestCase):
 
 
 class ReservationTests(StoreTestCase):
+    category = 'integration'
+
     def test_reserve_commits_key_intent_digest_and_conversation_id(self):
         store = self.open()
         result = store.reserve('op-1', INTENT, actor='test')
@@ -300,6 +306,8 @@ class ReservationTests(StoreTestCase):
 
 
 class RestartAndCrashTests(StoreTestCase):
+    category = 'integration'
+
     def test_restart_retains_a_reserved_receipt(self):
         store_mod.open_store(self.db).close()  # initialise; the worker then reserves
         code, [reserved], err = run_worker('reserve-and-exit', str(self.db), 'op-restart', json.dumps(INTENT))
@@ -337,6 +345,8 @@ class RestartAndCrashTests(StoreTestCase):
 
 
 class ContentionTests(StoreTestCase):
+    category = 'integration'
+
     def contend(self, intents):
         store_mod.open_store(self.db).close()
         procs = [start_worker('contend', str(self.db), 'op-contended', json.dumps(intent)) for intent in intents]

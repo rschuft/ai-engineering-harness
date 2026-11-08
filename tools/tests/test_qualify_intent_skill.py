@@ -15,6 +15,8 @@ import sys
 import tempfile
 import unittest
 
+CATEGORY = 'unit'
+
 REPO = Path(__file__).resolve().parents[2]
 RUNNER = REPO / 'tools' / 'qualify_intent_skill.py'
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
@@ -70,6 +72,8 @@ def _between_markers(prompt, begin_prefix):
 
 
 class Prompts(unittest.TestCase):
+    category = 'contract'
+
     def test_system_prompt_carries_the_skill_files_verbatim(self):
         system = qis.system_prompt(SKILL)
         for name in qis.SKILL_FILES:
@@ -122,6 +126,8 @@ class Prompts(unittest.TestCase):
 
 
 class RunWithFakeModel(unittest.TestCase):
+    category = 'integration'
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
@@ -247,6 +253,8 @@ class RunWithFakeModel(unittest.TestCase):
 
 
 class Corpus(unittest.TestCase):
+    category = 'contract'
+
     def test_items_are_complete_and_references_stable(self):
         ids = sorted(p.name for p in CORPUS.iterdir())
         self.assertGreaterEqual(len(ids), 10)
@@ -311,6 +319,7 @@ def _change(name):
 
 class CommittedRuns(unittest.TestCase):
     """The ledger and outputs of the P-01.2 live runs, re-scored without a model."""
+    category = 'contract'
 
     @classmethod
     def setUpClass(cls):
@@ -388,6 +397,7 @@ class CommittedRuns(unittest.TestCase):
 
 class OpenSpecArtifacts(unittest.TestCase):
     """The changes recorded in OpenSpec from model outputs, and the acceptance demonstration."""
+    category = 'contract'
 
     @classmethod
     def setUpClass(cls):
