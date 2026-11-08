@@ -10,8 +10,8 @@ pytest and pytest-xdist run the unchanged standard-library suites as a second, p
 - holds the **unit guard**: while a ``unit`` test runs (its setup, with ``setUpClass`` and
   ``setUpModule``, its call and its teardown), an audit hook refuses a process launch, a socket
   or an ``os.chdir`` (the profile's own audit events) and the test fails, naming each event;
-- records each test's outcome as the stdlib runner reports it (``--aieh-outcomes FILE``), and
-  compares them with a stdlib profile (``--aieh-conformance PROFILE``, from
+- records each test's outcome as the stdlib runner reports it (``--aieh-outcomes=FILE``), and
+  compares them with a stdlib profile (``--aieh-conformance=PROFILE``, from
   ``tools/test_profile.py run``): the dual-runner conformance check;
 - collects only what ``python -m unittest discover -s <suite>`` collects: no subdirectory of a
   suite directory (unittest descends only into packages, and no suite has one).
@@ -105,7 +105,9 @@ def pytest_addoption(parser):
                     help='write each test id and outcome, as the stdlib runner reports them, to FILE')
     group.addoption('--aieh-conformance', metavar='PROFILE',
                     help='fail unless the ids and outcomes equal those of a full stdlib profile '
-                         '(tools/test_profile.py run --out PROFILE); needs the whole collection')
+                         '(tools/test_profile.py run --out PROFILE); needs the whole collection. Write '
+                         '--aieh-conformance=PROFILE: pytest finds its rootdir before it knows this option, '
+                         'and would take a separate existing PROFILE outside the checkout for a test path')
 
 
 def suites(repo=REPO):

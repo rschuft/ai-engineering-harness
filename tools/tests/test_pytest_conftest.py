@@ -245,7 +245,7 @@ class GeneratedProject(unittest.TestCase):
         for workers in ('0', '2'):
             with self.subTest(workers=workers):
                 out_file = root / f'outcomes-{workers}.json'
-                code, out = self.pytest(root, '-n', workers, '--aieh-outcomes', str(out_file))
+                code, out = self.pytest(root, '-n', workers, f'--aieh-outcomes={out_file}')
                 self.assertEqual(code, 1, out)
                 self.assertEqual(self.outcomes(out_file), expected, out)
                 for event in ('subprocess.Popen', 'socket.__new__', 'os.chdir'):
@@ -285,7 +285,7 @@ class GeneratedProject(unittest.TestCase):
         self.assertIn('setUpClass (test_conformance.SkipsInSetUpClass)', {t['id'] for t in stdlib['tests']})
         for workers in ('0', '2'):
             with self.subTest(workers=workers):
-                code, out = self.pytest(root, '-n', workers, '--aieh-conformance', str(profile))
+                code, out = self.pytest(root, '-n', workers, f'--aieh-conformance={profile}')
                 self.assertEqual(code, 0, out)
                 self.assertIn('CONFORMANCE PASS: 6 ids, 5 tests run', out)
         for test in stdlib['tests']:
@@ -293,11 +293,11 @@ class GeneratedProject(unittest.TestCase):
                 test['outcome'] = 'ok'
         changed = root / 'changed-profile.json'
         changed.write_text(json.dumps(stdlib), encoding='utf-8')
-        code, out = self.pytest(root, '-n', '0', '--aieh-conformance', str(changed))
+        code, out = self.pytest(root, '-n', '0', f'--aieh-conformance={changed}')
         self.assertEqual(code, 1, out)
         self.assertIn('CONFORMANCE DIFF: tools: test_conformance.Plain.test_expected_failure: stdlib ok, '
                       'pytest xfail', out)
-        code, out = self.pytest(root, '-n', '0', '-m', 'not e2e', '--aieh-conformance', str(profile))
+        code, out = self.pytest(root, '-n', '0', '-m', 'not e2e', f'--aieh-conformance={profile}')
         self.assertEqual(code, 1, out)
         self.assertIn('2 tests deselected; conformance needs the whole collection', out)
 

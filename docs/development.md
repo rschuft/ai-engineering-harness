@@ -355,11 +355,13 @@ worker, so its `setUpClass` runs once. Pass pytest options after `--`, for examp
   `-B`; `conftest.py` refuses to run otherwise), and pytest's base temporary directory stays
   under the system temporary directory. The Owner host's tests run with Vitest's result and
   module caches off.
-- **The same results.** `--aieh-outcomes FILE` writes every test id and outcome as the stdlib
+- **The same results.** `--aieh-outcomes=FILE` writes every test id and outcome as the stdlib
   runner reports them (a class that skips or fails in `setUpClass` is one `setUpClass
-  (module.Class)` row, as unittest reports it), and `--aieh-conformance PROFILE` fails unless
+  (module.Class)` row, as unittest reports it), and `--aieh-conformance=PROFILE` fails unless
   they equal those of a full stdlib profile (`tools/test_profile.py run --out PROFILE`) under
-  the same interpreter. Run the stdlib side with the dev venv's interpreter too: it has no
+  the same interpreter (write both with `=`: pytest finds its root directory before it knows
+  these options, and would take an existing file outside the checkout for a test path). Run the
+  stdlib side with the dev venv's interpreter too: it has no
   PyYAML, so the four `config.yml` tests of the managed data root suite skip under it in both
   runners.
 - **Live suites** (`e2e`) stay opt-in through their environment variables and never run in
