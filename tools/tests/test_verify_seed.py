@@ -5,7 +5,9 @@ Run from the repository root:  python -I -B -m unittest discover -s tools/tests 
 Every test runs the verifier on a temporary copy of the seeded files, or on a
 temporary git repository built here. The only use of the checkout itself is
 reading its files to copy them and one read-only baseline run against its own
-git history.
+git history. Each class copies the seeded files once; a test that writes gets a
+private copy of that copy, and the tests that only read use the class's copy
+itself and check that it is unchanged afterwards (``SeedCopy.READS_ONLY``).
 
 The command-line contract (the exit status and the PASS, FAIL and ERROR lines of a
 real run, git missing from PATH, a directory that is not a repository, and the
@@ -74,6 +76,18 @@ def verify(root, *args):
     return subprocess.CompletedProcess([VERIFIER, *args], code, out.getvalue(), err.getvalue())
 
 
+def rehash(root, rel):
+    """The versioned update process: record REL's new sha256 in ROOT's manifest."""
+    path = root / 'SEED_MANIFEST.json'
+    manifest = json.loads(path.read_text(encoding='utf-8'))
+    data = (root / rel).read_bytes()
+    for item in manifest['files']:
+        if item['path'] == rel:
+            item['sha256'] = hashlib.sha256(data).hexdigest()
+            item['size_bytes'] = len(data)
+    path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+
+
 def git(root, *args):
     return subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True,
                           env=GIT_ENV, check=True).stdout.strip()
@@ -87,23 +101,51 @@ def git_available():
         return False
 
 
-class SeedCopy(unittest.TestCase):
-    """Each test gets a fresh temporary copy of the seeded files."""
+def tree_digest(root):
+    """sha256 over every file's relative path and bytes under ROOT."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in root.rglob('*') if p.is_file()):
+        digest.update(path.relative_to(root).as_posix().encode('utf-8') + b'\0')
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
 
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(prefix='verify_seed_')
-        self.root = Path(self._tmp.name) / 'seed'
+
+class SeedCopy(unittest.TestCase):
+    """A temporary copy of the seeded files: copied once per class, then copied again for
+    each test that writes. The tests named in READS_ONLY only read, so they use the class's
+    copy itself, and each of them checks afterwards that it is unchanged."""
+    READS_ONLY = frozenset()
+
+    @classmethod
+    def setUpClass(cls):
+        shared = tempfile.TemporaryDirectory(prefix='verify_seed_')
+        cls.addClassCleanup(shared.cleanup)
+        cls.shared = Path(shared.name) / 'seed'
         for rel in seed_paths():
-            dst = self.root / rel
+            dst = cls.shared / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / rel, dst)
         # Ordinary files evolve after the seed; record the checkout's current
         # bytes in the copy's manifest so the copy starts out fully consistent.
         for rel in ORDINARY:
-            self.rehash(rel)
+            rehash(cls.shared, rel)
+        cls.shared_digest = tree_digest(cls.shared)
+
+    def setUp(self):
+        self._tmp = None
+        if self._testMethodName in self.READS_ONLY:
+            self.root = self.shared
+            return
+        self._tmp = tempfile.TemporaryDirectory(prefix='verify_seed_')
+        self.root = Path(self._tmp.name) / 'seed'
+        shutil.copytree(self.shared, self.root, copy_function=shutil.copyfile)
 
     def tearDown(self):
-        self._tmp.cleanup()
+        if self._tmp is not None:
+            self._tmp.cleanup()
+        else:
+            self.assertEqual(tree_digest(self.shared), self.shared_digest,
+                             'a test that writes is listed in READS_ONLY: the shared copy changed')
 
     def append(self, rel, text='\nlocal edit\n'):
         with open(self.root / rel, 'ab') as fh:
@@ -118,13 +160,7 @@ class SeedCopy(unittest.TestCase):
 
     def rehash(self, rel):
         """The versioned update process: record REL's new sha256 in the manifest."""
-        manifest = self.manifest()
-        data = (self.root / rel).read_bytes()
-        for item in manifest['files']:
-            if item['path'] == rel:
-                item['sha256'] = hashlib.sha256(data).hexdigest()
-                item['size_bytes'] = len(data)
-        self.write_manifest(manifest)
+        rehash(self.root, rel)
 
     def assertPass(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -136,6 +172,7 @@ class SeedCopy(unittest.TestCase):
 
 
 class DefaultMode(SeedCopy):
+    READS_ONLY = frozenset({'test_unchanged_tree_passes', 'test_works_without_git'})
 
     def test_unchanged_tree_passes(self):
         result = run_verifier(self.root)
