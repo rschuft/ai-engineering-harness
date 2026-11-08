@@ -125,7 +125,8 @@
       "status": "observed",
       "evidence": [
         "evidence/bootstrap-log.md",
-        "apps/owner-host/vite.config.ts"
+        "apps/owner-host/vite.config.ts",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture"
@@ -271,7 +272,8 @@
       "status": "observed",
       "evidence": [
         "evidence/F-06.1-gitea-loopback.md",
-        "evidence/S-01.2.2-segregated-credentials.md"
+        "evidence/S-01.2.2-segregated-credentials.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
@@ -322,7 +324,8 @@
       "status": "observed",
       "evidence": [
         "evidence/F-03.2.2b-guest-lifecycle.md",
-        "evidence/F-03.3.2-guest-network.md"
+        "evidence/F-03.3.2-guest-network.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0003-execution-guest-providers-and-isolation-contract.md",
@@ -421,7 +424,8 @@
       "status": "observed",
       "evidence": [
         "evidence/F-03.2.2b-guest-lifecycle.md",
-        "evidence/F-03.3.2-guest-network.md"
+        "evidence/F-03.3.2-guest-network.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0003-execution-guest-providers-and-isolation-contract.md",
@@ -1419,7 +1423,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/F-06.1-gitea-loopback.md"
+        "evidence/F-06.1-gitea-loopback.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
@@ -1946,7 +1951,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
@@ -2022,7 +2028,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -2061,7 +2068,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
@@ -2101,7 +2109,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -2340,7 +2349,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -2375,7 +2385,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -2410,7 +2421,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
@@ -2487,7 +2499,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -2527,7 +2540,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
@@ -2568,7 +2582,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -2808,7 +2823,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -2843,7 +2859,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md"
@@ -3162,7 +3179,8 @@
       ],
       "status": "observed",
       "evidence": [
-        "evidence/F-06.1-gitea-loopback.md"
+        "evidence/F-06.1-gitea-loopback.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
@@ -3457,9 +3475,10 @@
           "where": "host"
         }
       ],
-      "status": "decided",
+      "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
@@ -3475,7 +3494,7 @@
         "guest.py job-access-probe (job environment; S-01.4 egress sweep)",
         "guest.py inspect (profiles P7; provisioning: management API admission, container egress guard)"
       ],
-      "notes": "The egress sweep's decision rule was fixed before observation (evidence/S-01.4-network-matrix.md)."
+      "notes": "The egress sweep's decision rule was fixed before observation (evidence/S-01.4-network-matrix.md). Observed at S-01.4, before and after a guest restart: SLIRP's aliases and the unconfigured guestfwd-class address were refused by the egress guard, whose counters rose by exactly the refused attempts; the public literals were answered by the guest's routing (ENETUNREACH, and a UDP timeout), so the guard did not engage there: FAIL under the fixed decision rule (topology, not policy), recorded and carried."
     },
     {
       "id": "nm-ext-review-egress",
@@ -3503,9 +3522,10 @@
           "where": "host"
         }
       ],
-      "status": "decided",
+      "status": "observed",
       "evidence": [
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
@@ -3518,7 +3538,7 @@
       "inspection": [
         "guest.py job-access-probe (job environment; S-01.4 egress sweep)"
       ],
-      "notes": "The reviewer's job environment is the conversation container (S-01.3.2 ruling)."
+      "notes": "The reviewer's job environment is the conversation container (S-01.3.2 ruling), proved without a reviewer session. Observed at S-01.4, before and after a guest restart: SLIRP's aliases and the unconfigured guestfwd-class address were refused by the egress guard, whose counters rose by exactly the refused attempts; the public literals were answered by the guest's routing (ENETUNREACH, and a UDP timeout), so the guard did not engage there: FAIL under the fixed decision rule (topology, not policy), recorded and carried."
     },
     {
       "id": "nm-ext-guest-egress",
@@ -3570,7 +3590,8 @@
       "status": "observed",
       "evidence": [
         "evidence/F-03.2.2b-guest-lifecycle.md",
-        "evidence/F-06.1-gitea-loopback.md"
+        "evidence/F-06.1-gitea-loopback.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "sources": [
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",

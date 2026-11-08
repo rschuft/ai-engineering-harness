@@ -54,5 +54,5 @@ Supersedes: none.
 ## Evidence
 - The Architect's S-01.4 consultation (gates C and G), as accepted by the Overseer on 2026-11-07 with rulings R1 to R9.
 - [`policy/network-matrix.json`](../policy/network-matrix.json) and `python -I -B tools/check_network_matrix.py` (`task policy:network-check`).
-- [`evidence/S-01.3.1-management-api-admission.md`](../evidence/S-01.3.1-management-api-admission.md), [`evidence/S-01.3.2-job-daemon-and-management-access.md`](../evidence/S-01.3.2-job-daemon-and-management-access.md) and the S-01.4 evidence record.
+- [`evidence/S-01.3.1-management-api-admission.md`](../evidence/S-01.3.1-management-api-admission.md), [`evidence/S-01.3.2-job-daemon-and-management-access.md`](../evidence/S-01.3.2-job-daemon-and-management-access.md) and [`evidence/S-01.4-network-matrix.md`](../evidence/S-01.4-network-matrix.md) (S-01.4).
 - Decisions [0003](0003-execution-guest-providers-and-isolation-contract.md), [0006](0006-guest-provisioning-channel-and-image-conformance.md), [0007](0007-role-token-matrix-and-revocation-contract.md) and [0010](0010-effects-store-placement-and-governance-threat-model.md).

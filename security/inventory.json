@@ -1031,25 +1031,26 @@
     },
     {
       "id": "guest-container-guard",
-      "name": "Container guard and key check (management API admission)",
+      "name": "Container guard, egress guard and key check (management API admission, container egress)",
       "kind": "privileged-unit",
       "custodian": "guest-root",
-      "location": "aieh-container-guard.service (seeded; docker.service Requires and starts After it): an INPUT chain for IPv4 and IPv6 that logs (rate-limited, kernel log) and refuses every new connection from docker0 or br-* to the guest itself, TCP with a reset; icc false in daemon.json; and the Agent Server unit's ExecStartPre key check, which refuses to start the server without a valid session key. Verified by the root step's admission step, reported by the boot facts and checked by inspect.",
+      "location": "aieh-container-guard.service (seeded; docker.service Requires and starts After it): an INPUT chain for IPv4 and IPv6 that logs (rate-limited, kernel log) and refuses every new connection from docker0 or br-* to the guest itself, TCP with a reset; icc false in daemon.json; and the Agent Server unit's ExecStartPre key check, which refuses to start the server without a valid session key. Verified by the root step's admission step, reported by the boot facts and checked by inspect. S-01.4: the same script and unit also install the egress guard: Moby's DOCKER-USER chain (created by the guard when absent) sends every new forwarded connection from docker0 or br-* to another interface to AIEH-EGRESS-GUARD, which logs (rate-limited, prefix aieh-egress-guard: ) and refuses it, TCP with a reset, IPv4 and IPv6, with an empty allowlist. Observed on a fresh guest: the rules survived Moby's first start and a guest restart unchanged; SLIRP's 10.0.2.2 and 10.0.2.3 and an unconfigured guestfwd-class address were refused from both jobs with the guard's counters rising by exactly the refused attempts; off-link addresses are answered by the guest's routing before the guard (no default route).",
       "status": "observed",
-      "evidence": ["evidence/S-01.3.1-management-api-admission.md"]
+      "evidence": ["evidence/S-01.3.1-management-api-admission.md", "evidence/S-01.4-network-matrix.md"]
     },
     {
       "id": "conversation-container",
       "name": "Conversation container",
       "kind": "container",
       "custodian": "guest-service-openhands",
-      "location": "One per Docker conversation: the locked image ID, three binds under the server's scratch, cap-drop ALL, no-new-privileges, the server's uid:gid, Moby's default bridge with host.docker.internal mapped to the guest's docker0. Its inner server also starts VSCode on port 8001 inside its network namespace. icc is off on the default bridge (no connection between containers), and the container guard refuses its new connections to any address of the guest (S-01.3.1). It is the job environment of builder and reviewer runs (S-01.3.2, declared in provisioning.agent_server.jobs): not privileged, no added capability, device or host namespace, SecurityOpt exactly no-new-privileges with Moby's builtin seccomp profile and AppArmor docker-default; inside it uid 999 gid 989 with no supplementary group, every capability set empty, NoNewPrivs 1, Seccomp 2. No engine socket exists in it (every Docker, containerd, Podman, BuildKit and CRI-O path ENOENT; no socket file, no bound unix name), the engine ports 2375 and 2376 refuse at every address it can see, and no management, Owner, admin or bot credential is in its files or process environments (searched by fingerprint). The image ships docker, ctr, containerd and runc binaries and setuid-root sudo and su, inert there (fd-job-image-engine-clients).",
+      "location": "One per Docker conversation: the locked image ID, three binds under the server's scratch, cap-drop ALL, no-new-privileges, the server's uid:gid, Moby's default bridge with host.docker.internal mapped to the guest's docker0. Its inner server also starts VSCode on port 8001 inside its network namespace. icc is off on the default bridge (no connection between containers), and the container guard refuses its new connections to any address of the guest (S-01.3.1). It is the job environment of builder and reviewer runs (S-01.3.2, declared in provisioning.agent_server.jobs): not privileged, no added capability, device or host namespace, SecurityOpt exactly no-new-privileges with Moby's builtin seccomp profile and AppArmor docker-default; inside it uid 999 gid 989 with no supplementary group, every capability set empty, NoNewPrivs 1, Seccomp 2. No engine socket exists in it (every Docker, containerd, Podman, BuildKit and CRI-O path ENOENT; no socket file, no bound unix name), the engine ports 2375 and 2376 refuse at every address it can see, and no management, Owner, admin or bot credential is in its files or process environments (searched by fingerprint). The image ships docker, ctr, containerd and runc binaries and setuid-root sudo and su, inert there (fd-job-image-engine-clients). Since S-01.4 the egress guard refuses its new connections out of the guest (SLIRP's aliases, unconfigured guestfwd addresses); off-link addresses have no route in the guest.",
       "credentials": ["cred-conversation-keys"],
       "status": "observed",
       "evidence": [
         "evidence/F-04.2-conversation-lifecycle.md",
         "evidence/S-01.3.1-management-api-admission.md",
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "findings": ["fd-container-network-deviations", "fd-container-shares-service-uid", "fd-job-image-engine-clients"]
     },
@@ -1160,7 +1161,7 @@
       "custodian": "owner-os-account",
       "location": "apps/owner-host (U-01.1): the React shell with assistant-ui and Agent Canvas, built to static files; its Vite dev and preview servers bind 127.0.0.1 only with strictPort (5173 and 4173). It holds no credential and connects to no backend yet; it is the Owner UI of decision 0013, in td-owner.",
       "status": "observed",
-      "evidence": ["evidence/bootstrap-log.md", "apps/owner-host/vite.config.ts"],
+      "evidence": ["evidence/bootstrap-log.md", "apps/owner-host/vite.config.ts", "evidence/S-01.4-network-matrix.md"],
       "findings": ["fd-owner-ui-access", "fd-owner-ui-session-plan-silence"]
     },
     {
@@ -1786,7 +1787,7 @@
       "id": "fd-container-network-deviations",
       "kind": "limit",
       "title": "Conversation containers keep upstream network defaults",
-      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Observed at S-01.3.1 before the admission controls: from a conversation container the guest's sshd (172.17.0.1:22 and 10.0.2.15:22, banner) and systemd-resolved's LLMNR (TCP 5355) were reachable, and the other container's inner server (8000, /server_info 200) and VSCode (8001, 403) too; the management listener and the published ports refused. After them (container guard, icc false): every guest address and port refuses (TCP reset, logged) and the peer container times out, in both containers and after a guest restart. Remaining: host.docker.internal still names the guest (refused), the container keeps a NAT path out through the guest (no route out, SLIRP restrict=on; the deny-by-default matrix is S-01.4), and the request caps override (E-01.2.2). S-01.3.2: the locked server adds host.docker.internal unconditionally and its Config has no option to remove it (Moby's host-gateway-ip would retarget, not remove, the name), so the mapping stays, refused at every port. Through the NAT path, SLIRP's 10.0.2.2 (the host's loopback: the SSH forward, QMP and the host Gitea's 13300) and 10.0.2.3 refuse every probed port; the deny-by-default matrix stays with S-01.4. S-01.4: the NAT path out through the guest is closed by policy: the egress guard in Moby's DOCKER-USER chain (provisioning.agent_server.admission.network.egress_guard, empty allowlist; S-03.x adds the first entry for inference) refuses every new forwarded connection from a container bridge to another interface, logged, TCP with a reset; off-link addresses have no route in the guest (topology, beside the policy). Remaining, recorded limits: host.docker.internal still names the guest (refused at every port by the container guard), the request caps that override the server's (E-01.2.2), and the absence of --network none, re-tested by S-02.1 and S-02.2.",
+      "detail": "Recorded deviations: --add-host host.docker.internal:host-gateway (the guest's docker0), Moby's default bridge instead of --network none, and create-request caps that replace the server's without an upper bound. Observed at S-01.3.1 before the admission controls: from a conversation container the guest's sshd (172.17.0.1:22 and 10.0.2.15:22, banner) and systemd-resolved's LLMNR (TCP 5355) were reachable, and the other container's inner server (8000, /server_info 200) and VSCode (8001, 403) too; the management listener and the published ports refused. After them (container guard, icc false): every guest address and port refuses (TCP reset, logged) and the peer container times out, in both containers and after a guest restart. Remaining: host.docker.internal still names the guest (refused), the container keeps a NAT path out through the guest (no route out, SLIRP restrict=on; the deny-by-default matrix is S-01.4), and the request caps override (E-01.2.2). S-01.3.2: the locked server adds host.docker.internal unconditionally and its Config has no option to remove it (Moby's host-gateway-ip would retarget, not remove, the name), so the mapping stays, refused at every port. Through the NAT path, SLIRP's 10.0.2.2 (the host's loopback: the SSH forward, QMP and the host Gitea's 13300) and 10.0.2.3 refuse every probed port; the deny-by-default matrix stays with S-01.4. S-01.4: the NAT path out through the guest is closed by policy: the egress guard in Moby's DOCKER-USER chain (provisioning.agent_server.admission.network.egress_guard, empty allowlist; S-03.x adds the first entry for inference) refuses every new forwarded connection from a container bridge to another interface, logged, TCP with a reset; off-link addresses have no route in the guest (topology, beside the policy). Remaining, recorded limits: host.docker.internal still names the guest (refused at every port by the container guard), the request caps that override the server's (E-01.2.2), and the absence of --network none, re-tested by S-02.1 and S-02.2. Observed at S-01.4 on a fresh guest, before and after a restart: from both jobs, TCP to 10.0.2.2 (the SSH forward, QMP, 13300) and 10.0.2.3:53, UDP to 10.0.2.3:53 and TCP to 10.0.2.100:7000 were refused by the egress guard (counters +10 tcp-reset and +2 REJECT, exactly the refused attempts; logged); 1.1.1.1:443 and 8.8.8.8:53 got ENETUNREACH and UDP 8.8.8.8:53 a timeout from the guest's routing, so the guard does not engage for off-link destinations: under the dispatch's fixed decision rule that part is a FAIL (topology, not policy), recorded, with no connection.",
       "refs": ["conversation-container", "guest-sshd", "guest-conversation-listeners"],
       "citations": [
         "decisions/0001-agent-server-dispatch-precondition-and-version-line.md",
@@ -1794,7 +1795,8 @@
         "evidence/F-04.1b-provision-moby.md",
         "profiles/strong-windows-qemu-whpx/profile.json",
         "evidence/S-01.3.1-management-api-admission.md",
-        "evidence/S-01.3.2-job-daemon-and-management-access.md"
+        "evidence/S-01.3.2-job-daemon-and-management-access.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "carried_to": ["E-01.2.2", "S-02.1", "S-03.1"]
     },
@@ -1826,7 +1828,8 @@
         "profiles/strong-windows-qemu-whpx/profile.json",
         "evidence/F-03.3.2-guest-network.md",
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
-        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "carried_to": []
     },
@@ -1888,7 +1891,8 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#architecture",
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
         "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
-        "evidence/S-01.3.1-management-api-admission.md"
+        "evidence/S-01.3.1-management-api-admission.md",
+        "evidence/S-01.4-network-matrix.md"
       ],
       "carried_to": ["U-01.2", "E-01.3.1"]
     },
