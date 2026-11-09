@@ -6,7 +6,7 @@ assets/python-wheels/python-tools/<version>/ with its aieh-asset/1 record, and t
 from them is an install, persistent/installs/python-tools/<version>/. pip's cache is
 ephemeral/cache/pip. <version> is the interpreter tag and the lock digest, so versions sit side
 by side. Wheels only, with required hashes, from composition/lock/python/tools-requirements.txt.
-`--set python-dev-tools` installs the pytest and pytest-xdist set the same way, from
+`--set python-dev-tools` installs the dev set (pytest, pytest-xdist and PyYAML) the same way, from
 composition/lock/python/dev-requirements.txt, as python-dev-tools beside it.
 
 It reads no config.yml: it installs the YAML loader that config.yml needs, so it follows
