@@ -1566,7 +1566,7 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
 
 
 def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=None,
-           provision=False, egress_falsification=False, drill=False):
+           provision=False, egress_falsification=False, drill=False, drill_leaf=None):
     """The create binding. ``netprobe`` is set only by the netprobe operation (a
     NetprobeSession); the ordinary create takes no validation input. ``provision`` (F-04.1)
     writes the provisioning manifest of the verified host stage into the seed; the
@@ -1575,11 +1575,17 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
     so that the root step enables the route-present falsification request
     (job-access-probe); an ordinary provisioned guest never has it. ``drill`` (E-01.2.2
     slice (b), with ``provision`` only) seeds the TEST-ONLY drill helper as a second
-    user-data part and records a drill validation block; an ordinary create never does."""
+    user-data part and records a drill validation block naming ``drill_leaf``, the plan
+    leaf the guest is created for (one of DRILL_LEAVES); an ordinary create never does."""
     if egress_falsification and not provision:
         raise Refused('REFUSED', '--egress-falsification needs --provision')
     if drill and (not provision or netprobe is not None):
         raise Refused('REFUSED', '--drill needs --provision and is never a netprobe instance')
+    if drill and drill_leaf not in DRILL_LEAVES:
+        raise Refused('REFUSED', f'--drill needs --drill-leaf, one of {", ".join(DRILL_LEAVES)}: '
+                      'the plan leaf whose drills the guest is for')
+    if drill_leaf is not None and not drill:
+        raise Refused('REFUSED', '--drill-leaf needs --drill')
     if netprobe is not None and not isinstance(netprobe, NetprobeSession):
         raise Refused('REFUSED', 'create takes no validation overlay; only the netprobe '
                       'operation creates a validation instance')
@@ -1677,7 +1683,7 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
             argv, listener_ports, netprobe.pid, posix(script_path.relative_to(ctx.repo)),
             script, seed['validation'], params)
     elif drill:
-        validation = drill_validation(script, seed['validation'])
+        validation = drill_validation(script, seed['validation'], drill_leaf)
     provisioning = None
     if manifest is not None:
         if seed.get('provision_manifest_sha256') != manifest['sha256']:
@@ -10470,6 +10476,14 @@ DRILL_SETTLE_S = 300             # units settling after a boot or a restart (a c
 DRILL_SCHEMA = 'ai-engineering-harness/profiles/drill-record/v1'
 DRILL_KINDS = ('fail-closed', 'stored-state', 'root-scan', 'f2-closed', 'restart-series',
                'admitted-create')
+# The plan leaf each drill kind belongs to. A drill guest's launch record names the leaf it
+# was created for (create --drill --drill-leaf); a drill of another leaf's kind is refused
+# on it, and each drill record names its kind's leaf. Launch records written before
+# --drill-leaf say 'E-01.2.2 slice (b)': drill_record_leaf reads them as E-01.2.2.
+DRILL_KIND_LEAVES = {'fail-closed': 'E-01.2.2', 'stored-state': 'E-01.2.2',
+                     'root-scan': 'E-01.2.2', 'f2-closed': 'E-01.2.2',
+                     'admitted-create': 'E-01.2.2', 'restart-series': 'E-01.4.3'}
+DRILL_LEAVES = tuple(sorted(set(DRILL_KIND_LEAVES.values())))
 DRILL_AUTHORITY = ("the Owner's extended guest-run authorization of 2026-11-07 "
                    '(evidence/bootstrap-log.md)')
 DRILL_GUARD_VARIANTS = ('fail-pre', 'check-only')
@@ -10566,13 +10580,22 @@ def drill_script(repo=REPO):
     return raw
 
 
-def drill_validation(script, seed_validation, repo=REPO):
-    """The launch record's validation block of a drill instance."""
-    return {'mode': 'drill', 'test_only': True, 'plan_leaf': 'E-01.2.2 slice (b)',
+def drill_validation(script, seed_validation, leaf, repo=REPO):
+    """The launch record's validation block of a drill instance created for ``leaf``."""
+    if leaf not in DRILL_LEAVES:
+        raise Refused('REFUSED', f'drill plan leaf {leaf!r} is not one of {list(DRILL_LEAVES)}')
+    return {'mode': 'drill', 'test_only': True, 'plan_leaf': leaf,
             'authority': DRILL_AUTHORITY, 'single_boot': False, 'argv_changes': [],
             'guestfwd': None,
             'script': {'path': '/'.join(DRILL_SCRIPT), 'sha256': hashlib.sha256(script).hexdigest()},
             'seed': seed_validation}
+
+
+def drill_record_leaf(record):
+    """The plan leaf a drill guest's launch record names, as a leaf id ('E-01.2.2 slice (b)'
+    of the records written before --drill-leaf reads as 'E-01.2.2'); None without one."""
+    text = str(((record or {}).get('validation') or {}).get('plan_leaf') or '').split()
+    return text[0] if text else None
 
 
 def drill_instance(ctx, name):
@@ -12242,6 +12265,10 @@ def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None
     if kind not in DRILL_KINDS:
         raise Refused('REFUSED', f'--kind must be one of {", ".join(DRILL_KINDS)}')
     idir, record = drill_instance(ctx, name)
+    leaf = DRILL_KIND_LEAVES[kind]
+    if drill_record_leaf(record) != leaf:
+        raise Refused('REFUSED', f'{name} is a drill guest for {drill_record_leaf(record)}; '
+                      f'--kind {kind} is a drill of {leaf} (create one with --drill-leaf {leaf})')
     out_file = None
     if out_path:
         out_file = Path(out_path).resolve()
@@ -12316,7 +12343,8 @@ def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None
     result = 'PASS' if not steps.failed else 'FAIL'
     if kind == 'root-scan' and memo.get('verdict') == 'UNKNOWN':
         result = 'UNKNOWN'
-    out = {'schema': DRILL_SCHEMA, 'operation': 'drill', 'kind': kind, 'labels': labels(profile),
+    out = {'schema': DRILL_SCHEMA, 'operation': 'drill', 'kind': kind, 'plan_leaf': leaf,
+           'labels': labels(profile),
            'profile': profile['name'], 'instance': name,
            'validation': {k: (record.get('validation') or {}).get(k) for k in ('mode', 'plan_leaf',
                                                                                'authority', 'script')},
@@ -12547,6 +12575,9 @@ def main(argv=None):
             p.add_argument('--drill', action='store_true',
                            help='E-01.2.2 slice (b), TEST ONLY, with --provision: seed the drill '
                                 'helper (tools/guest_drill.py) as a second user-data part')
+            p.add_argument('--drill-leaf', choices=DRILL_LEAVES,
+                           help='with --drill (required): the plan leaf whose drills the guest '
+                                'is for, recorded in its launch record')
         if op in ('create', 'recreate', 'smoke'):
             p.add_argument('--provision', action='store_true',
                            help='F-04.1: seed the provisioning manifest of the verified host '
@@ -12586,8 +12617,11 @@ def main(argv=None):
                 raise Refused('REFUSED', '--egress-falsification needs --provision')
             if args.drill and not args.provision:
                 raise Refused('REFUSED', '--drill needs --provision')
+            if args.drill_leaf and not args.drill:
+                raise Refused('REFUSED', '--drill-leaf needs --drill')
             result = create(ctx, args.name, args.ready_timeout, canaries, provision=True,
-                            egress_falsification=args.egress_falsification, drill=args.drill) \
+                            egress_falsification=args.egress_falsification, drill=args.drill,
+                            drill_leaf=args.drill_leaf) \
                 if args.provision else create(ctx, args.name, args.ready_timeout, canaries)
         elif op == 'provision':
             result = provision(ctx, args.name)

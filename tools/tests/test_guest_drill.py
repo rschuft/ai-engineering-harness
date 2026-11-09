@@ -10,9 +10,11 @@ closed and one that does not. The guest helper is loaded with a stand-in pwd mod
 host has none (Windows).
 """
 from pathlib import Path
+import contextlib
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -1077,6 +1079,102 @@ class RestartSeries(unittest.TestCase):
                 mock.patch('sys.stdout'):
             self.assertEqual(guest.main(['drill', '--profile', 'p', '--state-dir', 's', '--name', 'n',
                                          '--kind', 'restart-series', '--limit', '3']), 1)
+class DrillPlanLeaf(unittest.TestCase):
+    """E-01.4.3 fix forward (F-5): a drill guest's launch record names the plan leaf it was
+    created for (create --drill --drill-leaf), never a fixed one; a drill of another leaf's
+    kind is refused on it; each drill record names its kind's leaf; records written before
+    --drill-leaf ('E-01.2.2 slice (b)') stay readable as E-01.2.2."""
+    STATE = Path('aieh-test-not-created')
+
+    def ctx(self):
+        # every refusal below comes before a state directory is used: none is created
+        return types.SimpleNamespace(profile=PROFILE, profile_path=PROFILE_DIR / 'profile.json',
+                                     repo=REPO, state_dir=self.STATE)
+
+    def test_every_kind_has_a_leaf(self):
+        self.assertEqual(set(guest.DRILL_KIND_LEAVES), set(guest.DRILL_KINDS))
+        self.assertEqual(guest.DRILL_LEAVES, ('E-01.2.2', 'E-01.4.3'))
+        self.assertEqual(guest.DRILL_KIND_LEAVES['restart-series'], 'E-01.4.3')
+        self.assertEqual({guest.DRILL_KIND_LEAVES[k] for k in guest.DRILL_KINDS
+                          if k != 'restart-series'}, {'E-01.2.2'})
+
+    def test_the_validation_block_names_the_given_leaf(self):
+        for leaf in guest.DRILL_LEAVES:
+            block = guest.drill_validation(b'#!/usr/bin/python3', {'seed': 1}, leaf)
+            self.assertEqual((block['mode'], block['plan_leaf']), ('drill', leaf))
+        for leaf in (None, 'E-01.2.2 slice (b)', 'F-03.3.2', ''):
+            with self.assertRaisesRegex(guest.Refused, 'drill plan leaf'):
+                guest.drill_validation(b'x', {}, leaf)
+
+    def test_create_needs_a_known_leaf_with_drill_and_only_with_drill(self):
+        with mock.patch.object(guest, 'preflight', side_effect=AssertionError('reached')):
+            for kwargs in ({'drill': True, 'provision': True},
+                           {'drill': True, 'provision': True, 'drill_leaf': 'E-01.9.9'},
+                           {'provision': True, 'drill_leaf': 'E-01.4.3'},
+                           {'drill_leaf': 'E-01.2.2'}):
+                with self.assertRaisesRegex(guest.Refused, '--drill', msg=kwargs):
+                    guest.create(self.ctx(), 'abc', **kwargs)
+        self.assertFalse(self.STATE.exists())
+
+    def test_the_command_line(self):
+        base = ['create', '--profile', str(PROFILE_DIR), '--state-dir', str(self.STATE),
+                '--name', 'abc']
+        with mock.patch.object(guest, 'Context', return_value=self.ctx()), \
+                mock.patch.object(guest, 'preflight', side_effect=AssertionError('reached')):
+            for argv, word in ((['--provision', '--drill'], '--drill needs --drill-leaf'),
+                               (['--drill-leaf', 'E-01.4.3'], '--drill-leaf needs --drill'),
+                               (['--provision', '--drill-leaf', 'E-01.2.2'],
+                                '--drill-leaf needs --drill')):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    self.assertEqual(guest.main(base + argv), 1, argv)
+                self.assertIn(word, out.getvalue(), argv)
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                guest.main(base + ['--provision', '--drill', '--drill-leaf', 'E-01.9.9'])
+        self.assertFalse(self.STATE.exists())
+
+    def test_old_and_new_records_read_as_a_leaf(self):
+        read = guest.drill_record_leaf
+        self.assertEqual(read(DRILL_RECORD), 'E-01.2.2')                # written before
+        self.assertEqual(read({'validation': {'plan_leaf': 'E-01.4.3'}}), 'E-01.4.3')
+        self.assertIsNone(read({'validation': {}}))
+        self.assertIsNone(read(None))
+
+    def run_drill(self, record, kind, fake=None):
+        written = {}
+
+        def write_record(idir, op, out):
+            written[op] = out
+            return 'record-path'
+        with mock.patch.object(guest, 'running_instance', return_value=(self.STATE, record)), \
+                mock.patch.object(guest, 'write_record', side_effect=write_record), \
+                mock.patch.object(guest.time, 'sleep', lambda s: None):
+            out = guest.drill(self.ctx(), 'abc', kind, limit=2,
+                              channels=lambda rec: (None, None, fake))
+        return out, written
+
+    def test_a_kind_of_another_leaf_is_refused(self):
+        new = dict(DRILL_RECORD, validation={'mode': 'drill', 'plan_leaf': 'E-01.4.3'})
+        for record, kind, leaf in ((DRILL_RECORD, 'restart-series', 'E-01.2.2'),
+                                   (new, 'fail-closed', 'E-01.4.3'),
+                                   (new, 'f2-closed', 'E-01.4.3'),
+                                   (dict(DRILL_RECORD, validation={'mode': 'drill'}),
+                                    'restart-series', 'None')):
+            with self.assertRaisesRegex(guest.Refused, f'drill guest for {leaf}'):
+                self.run_drill(record, kind)
+
+    def test_the_drill_record_names_its_kinds_leaf(self):
+        new = dict(DRILL_RECORD, validation={'mode': 'drill', 'plan_leaf': 'E-01.4.3'})
+        out, written = self.run_drill(new, 'restart-series', FakeRestarts())
+        self.assertEqual((out['result'], out['plan_leaf'], out['validation']['plan_leaf']),
+                         ('PASS', 'E-01.4.3', 'E-01.4.3'))
+        self.assertEqual(written['drill-restart-series']['plan_leaf'], 'E-01.4.3')
+        # an old E-01.2.2 record still runs its own kinds (refused later, by the kind's own rule)
+        with self.assertRaisesRegex(guest.Refused, 'live_admitted_create'):
+            self.run_drill(DRILL_RECORD, 'admitted-create')
+
+
 class DrillRuns(tg.TempState):
     def run_drill(self, fake, kind, **kwargs):
         idir = self.state / 'instances' / 'abc'

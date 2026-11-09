@@ -871,6 +871,23 @@ defaults them.
   [`security/inventory.json`](../security/inventory.json)). The profile declares it in
   `provisioning.agent_server.quiesce` and `service.dependencies`; `check_profile` checks
   the declaration against the seed template and `inspect` against the boot facts.
+- The server's start-up and its readiness wait (E-01.4.3). The unit sets
+  `LITELLM_LOCAL_MODEL_COST_MAP=True`, litellm's own switch, so that the bundled cost map
+  is used and the start-up fetch, its retry thread and the import race they caused
+  (E-01.2.2c finding F-15) do not happen; it reaches the outer server only, not
+  conversation containers. The readiness wait (`ExecStartPost`,
+  `/usr/local/sbin/aieh-agent-server-ready 127.0.0.1 8000 280 30 ${MAINPID}`) polls
+  `GET /ready`, stops at once when the main process has exited (instead of waiting out
+  its 280 s ceiling), and prints one outcome line per start: `ready start=<class>` with
+  `<class>` `clean` only when the server was ready within 30 s and the unit's `NRestarts`
+  is 0, otherwise `retried`, `slow` or `unverified` (comma-joined); or `not ready
+  start=main-exited|timeout`. `Restart=on-failure` then starts a failed server again
+  after 5 s. The profile declares it in `provisioning.agent_server.start_race` and
+  `service.readiness`; `inspect`'s check "Agent Server start (E-01.4.3)" requires the
+  control in the unit's and the server processes' environment, `NRestarts` 0 and this
+  boot's last outcome line `start=clean`, from the boot facts. Observed on the qualified
+  host only ([`evidence/E-01.4.3-start-race.md`](../evidence/E-01.4.3-start-race.md));
+  the `slow`, `unverified` and `timeout` outcomes are covered by unit tests only.
 - `job-access-probe` (S-01.3.2) proves the job environment declared in
   `provisioning.agent_server.jobs`: each conversation container, where builder and
   reviewer runs execute. It creates two disposable conversations; compares each
@@ -939,18 +956,24 @@ defaults them.
   listeners by PID, each of which must be on `127.0.0.1`, with the Windows Firewall
   profiles and rule count recorded as disclosure. It reads no file and changes no rule;
   `--exclude-pid` keeps a process out of every lookup.
-- `drill` (E-01.2.2 slices (b) and (c)) is a **test-only mode** for the fail-closed drills, under
-  the Owner's extended guest-run authorization of 2026-11-07. `create --provision --drill`
-  (with `--egress-falsification` and `--canaries` if wanted) seeds
+- `drill` (E-01.2.2 slices (b) and (c); E-01.4.3) is a **test-only mode** for the
+  fail-closed drills and the restart series, under the Owner's extended guest-run
+  authorization of 2026-11-07. `create --provision --drill --drill-leaf <leaf>` (with
+  `--egress-falsification` and `--canaries` if wanted) seeds
   [`tools/guest_drill.py`](../tools/guest_drill.py) as a second user-data part, which
   cloud-init runs once as root: it installs a root helper behind a `root:agent` `0730`
   request directory (`/var/lib/aieh-drill`), so that `agent` can ask it to break or restore
   a control, alter or roll back a stored conversation, restart the Agent Server, observe
   units, listeners and the server's journal, or scan the guest as root. The profile's
   templates, `launch.argv` and every ordinary `create` are unchanged; the launch record
-  marks the instance as a drill instance (`validation.mode` `drill`, the helper's sha256),
-  it has no `guestfwd`, share or new host port, and `start` may boot it again. `drill
-  --kind` and `containment-probe --drill-defective-control` refuse any other instance.
+  marks the instance as a drill instance (`validation.mode` `drill`, the helper's sha256)
+  and names the plan leaf it was created for (`validation.plan_leaf`: `--drill-leaf`
+  `E-01.2.2` or `E-01.4.3`, required with `--drill`); it has no `guestfwd`, share or new
+  host port, and `start` may boot it again. `drill --kind` and `containment-probe
+  --drill-defective-control` refuse any other instance, and `drill --kind` refuses a kind
+  of another leaf (`restart-series` is E-01.4.3's, every other kind E-01.2.2's); each
+  drill record names its kind's leaf (`plan_leaf`). Launch records written before
+  `--drill-leaf` name `E-01.2.2 slice (b)` and are read as E-01.2.2.
   - `--kind fail-closed`: the key check (the environment file rewritten without the
     session key, then with a second one) and the guard (a drop-in that makes
     `aieh-container-guard.service` fail before it installs a rule, then one that only
@@ -993,6 +1016,18 @@ defaults them.
     and Owner-class patterns, with a planted positive control; `--raw` also counts the
     secrets and canaries on the raw block devices. A secret is allowed only in its declared
     store.
+  - `--kind restart-series [--limit N]` (E-01.4.3; on a guest created with `--drill-leaf
+    E-01.4.3`): N consecutive restarts of the Agent Server (default 500) through the
+    helper (`systemctl restart`, which also re-runs the quiesce step and the key check).
+    Each is recorded with its rc, its in-guest time, the unit and the readiness wait's
+    outcome line; the journal of that start is kept in full only when it was not clean. A
+    failed start is followed until systemd's `Restart=on-failure` start is active, with
+    its own outcome line and time. The record gives the main-process exits during start,
+    the failed starts and their retries to readiness, the outcome classes and the
+    distributions (min, p50, p90, p99, max, 1-second buckets) of the ready wait and the
+    restart. Then the server is SIGKILLed: its `Restart=on-failure` start must report
+    `start=retried`, and one manual restart is recorded. PASS only when all N ran with no
+    main-process exit during start and no failed start (the leaf's decision rule).
   - `containment-probe --drill-defective-control <id>` replaces a positive control with an
     attempt that cannot succeed: its cases must become UNKNOWN and the run must not PASS.
 
@@ -1000,7 +1035,9 @@ defaults them.
   [`integrations/dispatch/tests/live_admitted_create.py`](../integrations/dispatch/tests/live_admitted_create.py)
   (see [Dispatch input resolution and admission](#dispatch-input-resolution-and-admission)).
   There is no Task target. Destroy every drill instance afterwards. The observed runs are in
-  [`evidence/E-01.2.2b-live-drills.md`](../evidence/E-01.2.2b-live-drills.md).
+  [`evidence/E-01.2.2b-live-drills.md`](../evidence/E-01.2.2b-live-drills.md) and, for the
+  restart series (on the qualified host only),
+  [`evidence/E-01.4.3-start-race.md`](../evidence/E-01.4.3-start-race.md).
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);

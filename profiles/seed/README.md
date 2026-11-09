@@ -103,7 +103,7 @@ manifest, and without one nothing runs:
 | `/etc/systemd/system/aieh-provision.service` | oneshot, output to the journal and the console |
 | `/etc/systemd/system/aieh-docker-facts.service` | oneshot at every boot after `docker.service` and `aieh-agent-server.service`; enabled only by a successful root step |
 | `/etc/systemd/system/aieh-agent-server.service` | the Agent Server as `openhands`: `--host 127.0.0.1 --port 8000`, `EnvironmentFile=` the root-only secrets file, `OPENHANDS_AGENT_SERVER_CONFIG_PATH`, data on scratch, hardened (`provisioning.agent_server.service.hardening` in the profile); conditional on the installed binary; enabled only by a successful root step |
-| `/usr/local/sbin/aieh-agent-server-ready` (root, `0755`) | the unit's `ExecStartPost`: polls `GET /ready` on the loopback listener until 200, under a ceiling; sends no credential |
+| `/usr/local/sbin/aieh-agent-server-ready` (root, `0755`) | the unit's `ExecStartPost` (argv `127.0.0.1 8000 280 30 ${MAINPID}`: listener, ceiling, slow threshold, main PID): polls `GET /ready` on the loopback listener every 0.5 s until 200, under the 280 s ceiling; sends no credential. It stops at once when the main process has exited (gone, a zombie, or another process). One outcome line per start: `ready start=<class> seconds=<s> restarts=<n>`, `<class>` `clean` only when ready within 30 s and the unit's `NRestarts` is 0, else the comma-joined `retried`, `slow`, `unverified`; or `not ready start=main-exited` or `start=timeout` (exit 1). E-01.4.3 (`provisioning.agent_server.service.readiness`) |
 
 **Ordinary guests are unaffected.** The manifest is empty, both provisioning units carry
 `ConditionFileNotEmpty=/etc/aieh/provision.json`, and `runcmd` enables the trigger only
