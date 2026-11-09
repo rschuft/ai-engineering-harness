@@ -981,7 +981,10 @@ conversation lifecycle (F-04.2) is in
 teardown test and the provider-profile qualification (F-03.4) are in
 [`evidence/F-03.4-teardown-qualification.md`](../evidence/F-03.4-teardown-qualification.md)
 and [`QUALIFICATION.md`](../profiles/strong-windows-qemu-whpx/QUALIFICATION.md).
-The tier stays **not operational** until S-02.x also passes (C6).
+The profile is **operational on the qualified host only**, since 2026-11-09, by the
+Overseer's C6 decision; a new host, a changed pin or a guest-changing leaf requalifies it.
+Dispatch still needs an approved catalog pin, and no dispatcher exists yet (E-01.3.x).
+Other providers, Linux and macOS are **not yet verified**.
 
 ## Intent records
 

@@ -11,8 +11,15 @@ launch input, and its limits and adaptation points can be stated in prose. The
 profile's `status.qualification` points here. Nothing in it is machine-checked:
 `tools/check_profile.py` does not read it.
 
-**Not operational.** `status.operational` stays `false`. Condition C6 still needs
-S-02.x (S-02.1, S-02.2) for P3 to P7, cited by property id.
+**Operational on the qualified host only, since 2026-11-09.** `status.operational` is
+`true` by the Overseer's C6 decision
+([bootstrap log](../../evidence/bootstrap-log.md), the E-01.2.2 row;
+[decision 0006](../../decisions/0006-guest-provisioning-channel-and-image-conformance.md),
+Current facts 2026-11-09). The C6 citations by property id are in
+`status.operational_evidence`. A new host, a changed pin or a guest-changing leaf
+requalifies the profile before the flag holds again. Dispatch still needs an approved
+catalog pin, and no dispatcher exists yet (E-01.3.x). Other hosts, providers, Linux and
+macOS are not yet verified (see Platform adaptation points).
 
 ## Host it was qualified on
 
@@ -31,11 +38,11 @@ S-02.x (S-02.1, S-02.2) for P3 to P7, cited by property id.
 |---|---|---|---|
 | P1 Separate kernel | PASS | F-03.2.2b (observed); F-03.4 (formal) | [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md); [F-03.4](../../evidence/F-03.4-teardown-qualification.md): enabled `whpx` and a Linux guest kernel in every inspect, stable across start and recreate |
 | P2 Provider-enforced ceilings | PASS | F-03.2.1 (declared); F-03.2.2b (observed); F-03.4 (stable) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md) |
-| P3 No automatic host shares | PASS | F-03.3.1; S-02.1, S-02.2 remain | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md); re-run in every F-03.4 inspect |
-| P4 Repository exchange and scratch only | PASS | F-03.3.1; S-02.1, S-02.2 remain | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md); re-run in every F-03.4 inspect |
-| P5 No Owner secrets | PASS (as `agent`) | F-03.3.1; S-02.1, S-02.2 remain | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md); with a canary set in every F-03.4 smoke inspect |
-| P6 No host-management sockets or interop | PASS | F-03.3.1; S-02.1, S-02.2 remain | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md); re-run in every F-03.4 inspect |
-| P7 Network posture | PASS: enforcement point qualified | F-03.3.2; S-02.1, S-02.2 remain | [F-03.3.2](../../evidence/F-03.3.2-guest-network.md) |
+| P3 No automatic host shares | PASS | F-03.3.1; S-02.1, S-02.2 | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md), [S-02.1](../../evidence/S-02.1-containment-probes.md), [S-02.2](../../evidence/S-02.2-isolation-evidence.md); re-run in every F-03.4 inspect |
+| P4 Repository exchange and scratch only | PASS | F-03.3.1; S-02.1, S-02.2 | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md), [S-02.1](../../evidence/S-02.1-containment-probes.md), [S-02.2](../../evidence/S-02.2-isolation-evidence.md); re-run in every F-03.4 inspect |
+| P5 No Owner secrets | PASS (as `agent`) | F-03.3.1; S-02.1, S-02.2 | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md), [S-02.1](../../evidence/S-02.1-containment-probes.md), [S-02.2](../../evidence/S-02.2-isolation-evidence.md); with a canary set in every F-03.4 smoke inspect |
+| P6 No host-management sockets or interop | PASS | F-03.3.1; S-02.1, S-02.2 | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md), [S-02.1](../../evidence/S-02.1-containment-probes.md), [S-02.2](../../evidence/S-02.2-isolation-evidence.md); re-run in every F-03.4 inspect |
+| P7 Network posture | PASS: enforcement point qualified | F-03.3.2; S-01.4, S-02.2 | [F-03.3.2](../../evidence/F-03.3.2-guest-network.md), [S-01.4](../../evidence/S-01.4-network-matrix.md), [S-02.2](../../evidence/S-02.2-isolation-evidence.md) |
 | P8 Identity | PASS | F-03.2.2b; F-03.4 (fresh across recreate, kept across start) | [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md) |
 | P9 Pinned boot inputs | PASS | F-03.2.1 (declared); F-03.2.2b; F-03.4 (`start` re-hashes every input); E-01.2.2c (re-declared: the seed template's new pin) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md), [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): every `inspect` of seven guests PASS with the new pin |
 | P10 Disposability | PASS | F-03.4; E-01.2.2c (re-observed) | [F-03.4](../../evidence/F-03.4-teardown-qualification.md): two `smoke` runs PASS end to end (one with a running sibling, one with a stopped sibling); no durable source changed. [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): `smoke --provision` PASS end to end after the seed change |

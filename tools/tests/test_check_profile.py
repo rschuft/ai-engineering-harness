@@ -398,6 +398,7 @@ class Negative(unittest.TestCase):
 
     def test_operational_without_evidence(self):
         self.qemu['status']['operational'] = True
+        self.qemu['status'].pop('operational_evidence', None)
         self.assertFails(self.qemu, 'operational must be false until C6')
 
     def test_mutations_do_not_leak_between_tests(self):

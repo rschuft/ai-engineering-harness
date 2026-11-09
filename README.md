@@ -55,7 +55,7 @@ flowchart TB
 
 ## Current status
 
-The project is in its bootstrap phase. It is building the foundation the harness will run on and verifying each part with recorded evidence. No part of it is ready for production use, and the strong isolation tier for agent execution is not yet declared operational.
+The project is in its bootstrap phase. It is building the foundation the harness will run on and verifying each part with recorded evidence. No part of it is ready for production use. The strong isolation tier for agent execution is operational for one execution profile, QEMU with WHPX on Windows, and only on the host it was qualified on: the Overseer declared it operational on 2026-11-09 under the profile contract's isolation condition (C6). A new host, a changed pin or a change to the guest requalifies the profile. No agent run is dispatched to it yet: dispatch still needs an approved catalog pin, and the dispatcher does not exist yet. The other execution profiles and providers, including Linux and macOS, are not yet verified.
 
 This README does not track progress. The authoritative records are:
 

@@ -522,21 +522,54 @@ class SuccessTests(Fixture):
     def test_work_id_case_is_canonical(self):
         self.assertEqual(self.resolve(self.request(work_id='task-2')), self.resolve())
 
-    def test_today_s_real_profiles_are_refused(self):
-        """The checked-in profiles declare operational false (C6): approving their exact bytes
-        still does not admit them."""
-        for name in ('strong-windows-qemu-whpx', 'strong-incus-vm'):
-            with self.subTest(name):
-                raw = di.read_profile_file(name)
-                data = self.manifest_data()
-                data['profiles'].append({'id': name, 'sha256': hashlib.sha256(raw).hexdigest()})
-                data['bindings'][0]['profiles'].append(name)
-                with self.assertRaises(di.DispatchRefused) as caught:
-                    di.resolve(self.request(profile=name), manifest=self.write_manifest(data, f'{name}.json'),
-                               work_sources=self.sources.get, next_ordinal=self.next_ordinal)
-                self.assertEqual(caught.exception.code, 'PROFILE_NOT_OPERATIONAL')
+    def real_profile_manifest(self, name, catalog=True):
+        """The fixture manifest with the checked-in profile ``name`` approved by its exact bytes
+        and bound to demo-app/implement; ``catalog=False`` approves no catalog pin at all."""
+        raw = di.read_profile_file(name)
+        data = self.manifest_data()
+        data['profiles'].append({'id': name, 'sha256': hashlib.sha256(raw).hexdigest()})
+        data['bindings'][0]['profiles'].append(name)
+        if not catalog:
+            data['catalog_pins'] = []
+            for binding in data['bindings']:
+                binding['catalog_pins'] = []
+        return raw, self.write_manifest(data, f'{name}-{"catalog" if catalog else "no-catalog"}.json')
+
+    def resolve_real(self, name, manifest):
+        return di.resolve(self.request(profile=name), manifest=manifest,
+                          work_sources=self.sources.get, next_ordinal=self.next_ordinal)
+
+    def test_the_real_incus_profile_with_approved_bytes_is_refused_as_not_operational(self):
+        """strong-incus-vm declares operational false (C6): approving its exact bytes still does
+        not admit it."""
+        _, manifest = self.real_profile_manifest('strong-incus-vm')
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.resolve_real('strong-incus-vm', manifest)
+        self.assertEqual(caught.exception.code, 'PROFILE_NOT_OPERATIONAL')
+        self.assertEqual(self.store.attempts(), [])
+        self.assertEqual(self.ordinal_calls, [])
         with self.assertRaises(ValueError):
             di.read_profile_file('../strong-incus-vm')
+
+    def test_the_real_qemu_whpx_profile_resolves_with_approved_bytes_and_catalog_pin(self):
+        """strong-windows-qemu-whpx declares operational true (C6, Overseer decision 2026-11-09):
+        with its exact bytes and a catalog pin approved and bound, it resolves."""
+        raw, manifest = self.real_profile_manifest('strong-windows-qemu-whpx')
+        record = self.resolve_real('strong-windows-qemu-whpx', manifest)
+        self.assertEqual((record.profile, record.profile_digest),
+                         ('strong-windows-qemu-whpx', hashlib.sha256(raw).hexdigest()))
+        self.assertEqual((record.catalog_pin, record.agent_manifest_digest), ('builder-pin', BUILDER_SHA))
+        self.assertEqual(self.ordinal_calls, [('TASK-2', record.design_revision, 'implement')])
+
+    def test_the_real_qemu_whpx_profile_without_an_approved_catalog_pin_is_refused(self):
+        """The operational flag admits nothing on its own: with the profile's exact bytes
+        approved but no approved catalog pin, the request is refused before any reservation."""
+        _, manifest = self.real_profile_manifest('strong-windows-qemu-whpx', catalog=False)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.resolve_real('strong-windows-qemu-whpx', manifest)
+        self.assertEqual(caught.exception.code, 'NO_APPROVED_CATALOG')
+        self.assertEqual(self.store.attempts(), [])
+        self.assertEqual(self.ordinal_calls, [])
 
 
 class DeterminismTests(Fixture):

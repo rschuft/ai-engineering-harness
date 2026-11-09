@@ -444,7 +444,12 @@ Each requirement cites the Owner conditions in section 9.
   (`profiles P6`).
 - **Accelerator:** `whpx`. The profile never relies on `/dev/kvm` inside the guest
   (C7). F-03.2.1 records whether the extensions are masked (`profiles P12`).
-- **Not operational** until F-03.3.1, F-03.3.2, F-03.4 and S-02.x pass (C6).
+- **Operational on the qualified host only**, since 2026-11-09, by the Overseer's C6
+  decision: F-03.3.1, F-03.3.2, F-03.4 and S-02.x passed, cited by property id in the
+  profile's `status.operational_evidence`
+  ([`QUALIFICATION.md`](strong-windows-qemu-whpx/QUALIFICATION.md)). A new host, a
+  changed pin or a guest-changing leaf requalifies it. Dispatch still needs an approved
+  catalog pin, and no dispatcher exists yet (E-01.3.x). Other hosts are not yet verified.
 
 ### Windows: dedicated hardened WSL2 distribution (trusted-workload only)
 - **Separate distribution.** A separate distribution is imported from a pinned tar under

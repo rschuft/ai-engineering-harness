@@ -33,7 +33,10 @@ sibling instance and once beside a stopped one. No durable source changed, and r
 reproduced the observed state except identity:
 [`evidence/F-03.4-teardown-qualification.md`](../../evidence/F-03.4-teardown-qualification.md);
 qualification record: [`QUALIFICATION.md`](QUALIFICATION.md).
-Not operational until S-02.x also passes (C6).
+S-02.x has passed too. The profile is **operational on the qualified host only**, since
+2026-11-09, by the Overseer's C6 decision; `status.operational_evidence` cites each
+property's evidence. A new host, a changed pin or a guest-changing leaf requalifies it.
+Dispatch still needs an approved catalog pin, and no dispatcher exists yet (E-01.3.x).
 
 ## Open items for F-03.2.2
 
@@ -55,8 +58,8 @@ Not operational until S-02.x also passes (C6).
 
 ## Open items after F-03.2.2b
 
-The tier stays not operational (C6). The
-[F-03.2.2b evidence](../../evidence/F-03.2.2b-guest-lifecycle.md) has the detail.
+At F-03.2.2b the tier was not operational (C6); it is operational since 2026-11-09
+(above). The [F-03.2.2b evidence](../../evidence/F-03.2.2b-guest-lifecycle.md) has the detail.
 
 3. **Provider compatibility limitation: XSAVE under WHPX with `-cpu max`.** Recorded
    only. `-cpu` and `launch.argv` are unchanged (Overseer decision, 2026-11-06;
@@ -142,8 +145,8 @@ The tier stays not operational (C6). The
 ## Open items after F-03.3.1
 
 The [F-03.3.1 evidence](../../evidence/F-03.3.1-guest-surfaces.md) has the detail.
-P3 to P6 passed on two fresh guests; P7 (F-03.3.2) and P10 (F-03.4) have since passed;
-S-02.x remains (C6).
+P3 to P6 passed on two fresh guests; P7 (F-03.3.2), P10 (F-03.4) and S-02.x have since
+passed, and C6 was met on 2026-11-09 (above).
 
 7. **Exchange staging is inside the instance directory.** Pushed bundles, pulled files
    and their verification repositories live in `<instance>\exchange\`, under the state
