@@ -935,6 +935,8 @@ class DrillRuns(tg.TempState):
         self.assertIn('quiesce step fails closed (fail-pre)', names)
         quiesce = out['steps'][4]['detail']
         self.assertEqual(quiesce['verdict'], 'PASS')
+        # restored by a boot, so that inspect's boot-time facts are those of the restored chain
+        self.assertEqual(quiesce['reboot_after_restore']['start']['result'], 'ready')
         self.assertTrue(any(r['check'] == 'after a guest boot: Agent Server start refused with '
                             'result dependency (journal)' and r['ok'] for r in quiesce['checks']))
         self.assertTrue(Path(out['record']).is_file())

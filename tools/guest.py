@@ -10799,9 +10799,13 @@ def drill_fail_closed(ctx, name, steps, chan, reboot):
                    for r in quiesce_drill_checks(boot, ready_b, create_b)]
         checks.append(check_row('units settled', settled and settled2, None))
         restored = _detail(req('quiesce-restore'))
-        again = restart_summary(_detail(req('server-restart')))
+        # restored by a boot, as the guard is: the boot-time facts that inspect reads are then
+        # those of a boot with the step in place (a server restart would leave the broken
+        # boot's facts behind)
+        again = reboot()
         post, _ = wait_until(observe, lambda o: _settled(o) and
                              _unit(o, DRILL_SERVER_UNIT).get('ActiveState') == 'active', DRILL_SETTLE_S)
+        api, _, req = chan()
         ready2, = _call(api, ready_req)
         restore = restored_checks(post, ready2) + [
             check_row('quiesce drop-in absent', post.get('quiesce_dropin_sha256') is None,
@@ -10813,7 +10817,7 @@ def drill_fail_closed(ctx, name, steps, chan, reboot):
         return ok and all(c['ok'] for c in restore), {
             'variant': variant, 'verdict': 'PASS' if ok else 'FAIL', 'break': broken,
             'restart': restart, 'reboot': boots, 'checks': checks, 'restore': restored,
-            'restart_after_restore': again, 'restore_checks': restore,
+            'reboot_after_restore': again, 'restore_checks': restore,
             'observed': {'after_restart': after_restart, 'boot': boot, 'restored': post}}
 
     for variant in DRILL_GUARD_VARIANTS:
