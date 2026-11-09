@@ -353,15 +353,26 @@ launch it (plan leaf F-09.3):
 - **Shared read-only copies.** The gate tests that run the real scanner share one copy of it
   per class (the gate only reads its tool cache), and the profile checker's negative cases
   share one copy of `profiles/`; a case that writes takes a private copy, and every case
-  checks that the shared copy is unchanged.
+  checks that the shared copy is unchanged. The verifier's tests copy the seeded files once
+  per class: the cases that only read use that copy, each writing case takes a private copy
+  of it.
+- **Batched git reads (plan leaf F-09.4).** The planning adapter reads git objects through
+  one `git cat-file --batch` process per read session (a command, a readiness read, a
+  resolver call), and a lineage traversal shares one session for all its reads; memos last
+  only as long as the session. One traversal of the lineage example launches 4 processes
+  instead of 70 (with Backlog.md answered in the test process). The benchmark is the
+  `performance` class `OneTraversal` in `integrations/lineage/tests/test_traversal_git.py`:
+  its result is that launch count, at most 10.
 - **Long temporary paths.** The test processes create paths up to 176 characters below
   TEMP (measured; the provision tests), which Python on Windows opens past 260 characters only
   where long paths are enabled. Git for Windows needs `core.longpaths` past 260 characters:
-  the fixtures' own git commands set it. Under a TEMP of 123 characters every suite passes
-  except two guest exchange tests, whose pull verification (`tools/guest.py`, without
-  `core.longpaths`) creates a bare repository about 138 characters below the state directory;
-  they need a TEMP of at most about 90 characters. This is **not yet fixed**: it is a decision
-  for the guest tooling.
+  the fixtures' own git commands set it, and so does the guest exchange's host git
+  (`tools/guest.py` `run_git`), whose pull verification creates a bare repository about 138
+  characters below the state directory. Every suite passes under a TEMP of 123 characters
+  (F-09.4). At 131 characters the publication-gate tests' fixture push fails: the bare
+  `origin`'s receive quarantine (`objects/tmp_objdir-incoming-*/<xx>/<38 hex>`) passes 260
+  characters about 133 characters below TEMP, and that fixture's git runs without
+  `core.longpaths` (**not yet fixed**).
 
 **Parallel runner.** pytest and pytest-xdist run the same unittest suites as a second runner;
 `task test` and `task setup` stay the stdlib serial run, which needs nothing beyond the basic
