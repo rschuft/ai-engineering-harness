@@ -143,9 +143,16 @@ def taskfile_targets():
     return targets
 
 
+TOOLS_VARS = ['TOOLS_PYTHON:', "sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'",
+              'PYTHON: \'"{{.TOOLS_PYTHON}}"\'']
+DISCOVERY = r"^- '\{\{\.PYTHON\}\} -I -B -m unittest discover -s \S+ -v'$"
+
+
 class RequiredTargets(unittest.TestCase):
-    """setup and test run the suites under the python-tools interpreter; the basic-tier checks keep
-    the plain interpreter (plan leaf F-10.1, decision 0014 section 9). Reads Taskfile.yml only."""
+    """setup, test, every suite target run alone, test:profile, test:budget and the gate's test
+    suite in hooks:verify run under the python-tools interpreter, so that a Dulwich-dependent test
+    never meets an interpreter without Dulwich; the basic-tier checks keep the plain interpreter
+    (plan leaves F-10.1 and F-10.2, decision 0014 section 9). Reads Taskfile.yml only."""
 
     category = 'contract'
 
@@ -156,30 +163,50 @@ class RequiredTargets(unittest.TestCase):
         body = self.targets[name]
         return body[body.index('cmds:') + 1:]
 
+    def variables(self, name):
+        body = self.targets[name]
+        return body[body.index('vars:') + 1:body.index(next(k for k in ('env:', 'cmds:') if k in body))]
+
     def test_setup_runs_the_basic_tier_checks_then_installs_the_tools_set_then_test(self):
         self.assertEqual(self.commands('setup'), ['- task: prereqs', '- task: verify', '- task: verify:baseline',
                                                   '- task: tools:install', '- task: test'])
         self.assertEqual(self.commands('tools:install'), ["- '{{.PYTHON}} -I -B integrations/paths/tools_install.py'"])
 
     def test_test_runs_every_suite_under_the_tools_interpreter(self):
-        body = self.targets['test']
-        self.assertEqual(body[body.index('vars:') + 1:body.index('cmds:')], [
-            'TOOLS_PYTHON:', "sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'",
-            'PYTHON: \'"{{.TOOLS_PYTHON}}"\''])
+        self.assertEqual(self.variables('test'), TOOLS_VARS)
         commands = self.commands('test')
         self.assertEqual(commands[0], "- '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'")
-        calls = commands[1::2]
+        calls = commands[1:]
         self.assertEqual(len(calls), len(tp.select_suites([])) - 1)
         self.assertTrue(all(call.startswith('- task: ') for call in calls), calls)
-        self.assertEqual(commands[2::2], ["vars: {PYTHON: '{{.PYTHON}}'}"] * len(calls))
-        for call in calls:  # each called suite target runs one discovery with the PYTHON it is given
-            self.assertRegex(self.commands(call.removeprefix('- task: '))[0],
-                             r"^- '\{\{\.PYTHON\}\} -I -B -m unittest discover -s \S+ -v'$")
+        self.assertIn('- task: repository:test', calls)
+
+    def test_every_suite_target_resolves_the_tools_interpreter_when_run_alone(self):
+        suites = [name for name in self.targets if name.endswith(':test') and name != 'owner-host:test']
+        self.assertEqual(sorted(suites), sorted(call.removeprefix('- task: ') for call in self.commands('test')[1:]))
+        for name in suites:
+            with self.subTest(target=name):
+                self.assertEqual(self.variables(name), TOOLS_VARS)
+                self.assertEqual(len(self.commands(name)), 1)
+                self.assertRegex(self.commands(name)[0], DISCOVERY)
+
+    def test_the_profile_and_budget_targets_run_under_the_tools_interpreter(self):
+        for name, script in (('test:profile', 'tools/test_profile.py run'),
+                             ('test:budget', 'tools/check_test_budget.py check --run')):
+            with self.subTest(target=name):
+                self.assertEqual(self.variables(name), TOOLS_VARS)
+                self.assertEqual(self.commands(name), [f"- '{{{{.PYTHON}}}} -I -B {script} {{{{.CLI_ARGS}}}}'"])
+
+    def test_hooks_verify_runs_the_gate_plain_and_its_tests_under_the_tools_interpreter(self):
+        self.assertEqual(self.variables('hooks:verify'), TOOLS_VARS[:2])
+        self.assertEqual(self.commands('hooks:verify'), [
+            "- '{{.PYTHON}} -I -B tools/publication_gate.py verify'",
+            "- '\"{{.TOOLS_PYTHON}}\" -I -B -m unittest discover -s tools/tests -p test_publication_gate.py -v'"])
 
     def test_the_basic_tier_checks_keep_the_plain_interpreter(self):
         # check_prereqs, verify_seed and the publication gate stay standard-library only and offline:
         # they run under the PYTHON the Taskfile is given, never a managed venv's.
-        for name in ('prereqs', 'verify', 'verify:baseline', 'hooks:install', 'hooks:verify', 'scan:history'):
+        for name in ('prereqs', 'verify', 'verify:baseline', 'hooks:install', 'scan:history'):
             commands = self.commands(name)
             self.assertTrue(commands, name)
             for command in commands:

@@ -97,7 +97,10 @@ unless adaptation is necessary.
   wheels only, under the managed data root; network to PyPI once per lock).
   The tests then run under that set's interpreter, `<tools python>`, which
   `python -I -B integrations/paths/tools_install.py --python` prints (`task
-  test` finds it the same way):
+  test`, each per-suite target such as `task repository:test`, `task
+  test:profile`, `task test:budget` and the gate's tests in `task
+  hooks:verify` find it the same way). A suite that needs Dulwich fails
+  without it, naming `task tools:install`; it never skips:
 
   ```
   python -I -B tools/check_prereqs.py --tier basic
@@ -112,6 +115,7 @@ unless adaptation is necessary.
   <tools python> -I -B -m unittest discover -s integrations/paths/tests -v
   <tools python> -I -B -m unittest discover -s integrations/gitea/tests -v
   <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/repository/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the

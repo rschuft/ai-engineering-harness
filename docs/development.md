@@ -32,9 +32,9 @@ verifies the seed in both modes, with the standard library only and offline. It 
 the hash-locked Python tools set (`task tools:install`: PyYAML, Dulwich and urllib3, wheels only,
 under the [managed data root](#managed-data-root); it downloads from PyPI once per lock and
 reuses the verified wheels afterwards), and runs, under that set's interpreter, the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution and create admission tests. The tests run serially; the whole of `setup` took 156 s from PowerShell on the verification host at F-10.1, with the tools set already downloaded ([Testing](#testing) has the measurements). Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests, the dispatch input resolution and create admission tests and the repository-access contract tests. The tests run serially; the whole of `setup` took 156 s from PowerShell on the verification host at F-10.1, with the tools set already downloaded ([Testing](#testing) has the measurements). Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the twelve commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the thirteen commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -49,6 +49,7 @@ python -I -B integrations/paths/tools_install.py
 <tools python> -I -B -m unittest discover -s integrations/paths/tests -v
 <tools python> -I -B -m unittest discover -s integrations/gitea/tests -v
 <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
+<tools python> -I -B -m unittest discover -s integrations/repository/tests -v
 ```
 
 `<tools python>` is the interpreter that `python -I -B integrations/paths/tools_install.py
@@ -76,7 +77,8 @@ hash-checked and installed into that directory.
 Later milestones need more tools and environments than these tiers cover, such
 as managed execution guests and the services that run in them, Gitea, scanner
 tooling such as Grype. Dulwich, for the Python components' Git operations, is pinned in the
-Python tools set (plan leaf F-10.1); the components do not use it yet (F-10.2 onwards). The
+Python tools set (plan leaf F-10.1); the shared [repository-access module](#repository-access) is
+built over it (F-10.2), and no component uses that module yet (F-10.3 onwards). The
 Windows reference guest profile has its own provider prerequisites in
 [`profiles/strong-windows-qemu-whpx/PREREQUISITES.md`](../profiles/strong-windows-qemu-whpx/PREREQUISITES.md).
 This guide does not record whether any of them is verified. That is recorded in
@@ -161,50 +163,51 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the twelve commands in [Quick start](#quick-start) | yes (PyPI, once per lock: `tools:install`) | Supported setup command: the basic-tier checks (offline), then `tools:install` and `test` under the tools interpreter. |
+| `setup` | the thirteen commands in [Quick start](#quick-start) | yes (PyPI, once per lock: `tools:install`) | Supported setup command: the basic-tier checks (offline), then `tools:install` and `test` under the tools interpreter. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK`, then `dev:install`, `test:all` and `hooks:verify` | yes | Full qualification smoke run, and the release run of the tests: the parallel runner, the Owner host's Vitest tests when Node.js 24 or later is present, and the gate's nested whole-tool-suite rerun. Needs the [publication-safety gate](#publication-safety-gate) installed. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test`, each with `PYTHON=<tools python>` (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch resolution and admission tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
-| `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `python -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `test` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test`, `dispatch:test` and `repository:test`, each of which runs under `<tools python>` too (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests, dispatch resolution and admission tests and repository-access contract tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
+| `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `<tools python> -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially, under the tools interpreter, and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `test:categories [-- --list]` | `python -I -B tools/test_profile.py categories [--list]` | no | Checks that every test class declares a valid category. Imports the test modules; runs no test. |
 | `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, and the Python tools set: PyYAML, Dulwich and urllib3, with the tools lock's hashes, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
 | `test:unit [-- ARGS]` | `PYTHONDONTWRITEBYTECODE=1 <dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m unit [ARGS]` | no | [Testing](#testing): the inner loop, the `unit` tests in parallel under the unit guard. Needs `dev:install`. |
 | `test:fast [-- ARGS]` | the same with `-m "unit or contract"` | no | The inner loop: `unit` and `contract` tests in parallel. |
 | `test:component [-- ARGS]` | the same with `-m "contract or integration"` | no | The boundary: `contract` and `integration` tests in parallel. |
 | `test:all [-- ARGS]` | the same with `-m "not e2e"`, then `owner-host:test:if-node` | no | Every suite of `test` but the live `e2e` classes, in parallel on at most 8 processes, then the Owner host's Vitest tests when Node.js 24 or later is present. Needs `dev:install` (and `owner-host:install` with Node.js 24). |
-| `test:budget [-- --counters-only]` | `python -I -B tools/check_test_budget.py check --run [--counters-only]` | no | **Acceptance obligation** at every leaf acceptance and release, never in a hook: profiles three serial runs and checks them against [`policy/test-budgets.json`](../policy/test-budgets.json). Exit 0 PASS, 1 FAIL, 2 could not run. |
-| `store:test` | `python -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
+| `test:budget [-- --counters-only]` | `<tools python> -I -B tools/check_test_budget.py check --run [--counters-only]` | no | **Acceptance obligation** at every leaf acceptance and release, never in a hook: profiles three serial runs under the tools interpreter and checks them against [`policy/test-budgets.json`](../policy/test-budgets.json). Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `store:test` | `<tools python> -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
 | `store:backup DB=<path> ACTOR=<name>` | `python -I -B integrations/store/integration_store.py backup --db <path> --actor <name>` | no | Backs the integration store up with the SQLite backup API into `<db dir>/backups/`, checks the copy and prints its manifest. |
 | `store:restore DB=<path> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/store/integration_store.py restore --db <path> --manifest <file> --actor <name> [--accept-rollback]` | no | Restores a verified backup and opens a restore epoch. Refuses a rollback unless accepted; keeps the superseded store in `backups/superseded/`. |
-| `effects:test` | `python -I -B -m unittest discover -s integrations/effects/tests -v` | no | [Effects store](#effects-store) tests: crash, backup and restore, custody and location refusals on fixtures; a few seconds. |
+| `effects:test` | `<tools python> -I -B -m unittest discover -s integrations/effects/tests -v` | no | [Effects store](#effects-store) tests: crash, backup and restore, custody and location refusals on fixtures; a few seconds. |
 | `effects:init ROOT=<dir> [-- --principal SID]` | `python -I -B integrations/effects/effects_store.py init --root <dir> [--principal SID]` | no | Creates or migrates `effects.sqlite` inside an existing, Owner-created root after the location and custody checks. Never creates the root. |
 | `effects:backup ROOT=<dir> ACTOR=<name>` | `python -I -B integrations/effects/effects_store.py backup --root <dir> --actor <name>` | no | Backs the effects store up into `<root>/backups/` and prints the manifest. |
 | `effects:restore ROOT=<dir> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/effects/effects_store.py restore --root <dir> --manifest <file> --actor <name> [--accept-rollback]` | no | The Owner's elevated act, with the executor stopped: restores a verified backup and opens a restore epoch. |
 | `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
-| `planning:test` | `python -I -B -m unittest discover -s integrations/planning/tests -v` | no | [Planning adapter](#planning-adapter) tests: offline with a fake Backlog.md and git. The live tests against the pinned Backlog.md and OpenSpec run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name their entry points, and are skipped otherwise. |
+| `planning:test` | `<tools python> -I -B -m unittest discover -s integrations/planning/tests -v` | no | [Planning adapter](#planning-adapter) tests: offline with a fake Backlog.md and git. The live tests against the pinned Backlog.md and OpenSpec run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name their entry points, and are skipped otherwise. |
 | `planning:create PROJECT=<repo> PLAN=<file> REVISION=<rev> BACKLOG=<cmd> [-- --openspec <cmd>]` | `python -I -B integrations/planning/planning_adapter.py create --project <repo> --plan <file> --revision <rev> --backlog <cmd> [--openspec <cmd>]` | no | Creates a plan's Backlog.md tasks and their dependencies through `backlog task create`; each task carries OpenSpec source pointers at the exact design revision. Refuses a change with a `tasks.md` or a tracked schema, and any status. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `planning:readiness PROJECT=<repo> BACKLOG=<cmd> [-- --task ID --no-pointers]` | `python -I -B integrations/planning/planning_readiness.py --project <repo> --backlog <cmd> [--task ID ...] [--no-pointers]` | no | Reports Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; blocking and missing dependency ids from Backlog.md's `readiness`. Exit 1 on a missing dependency, a failing pointer or unknown readiness; blocked tasks alone exit 0. |
 | `planning:resolve PROJECT=<repo> -- --backlog <cmd> [--task ID]` (or `-- --pointer <p>`) | `python -I -B integrations/planning/planning_adapter.py resolve --project <repo> (--backlog <cmd> [--task ID ...] \| --pointer <p> ...)` | no | Re-resolves source pointers; exit 1 on a missing revision, a missing artifact, a digest mismatch or a task without a pointer. |
-| `lineage:test` | `python -I -B -m unittest discover -s integrations/lineage/tests -v` | no | [Lineage references](#lineage-references) tests: parsing and formatting of every kind, the schema, the span anchor, every outcome of each implemented resolver against throwaway git repositories, the fake Backlog.md and its recorded fixtures, and effects-store fixtures, and the P-03.2 traversal with its example and negative resolution fixtures. The live tests run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name the pinned tools. |
+| `lineage:test` | `<tools python> -I -B -m unittest discover -s integrations/lineage/tests -v` | no | [Lineage references](#lineage-references) tests: parsing and formatting of every kind, the schema, the span anchor, every outcome of each implemented resolver against throwaway git repositories, the fake Backlog.md and its recorded fixtures, and effects-store fixtures, and the P-03.2 traversal with its example and negative resolution fixtures. The live tests run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name the pinned tools. |
 | `lineage:schema` | `python -I -B integrations/lineage/lineage_resolve.py schema` | no | Checks `integrations/lineage/lineage_schema.json` against the typed references and lists each kind's authority and status. Exit 0 PASS, 1 FAIL. |
 | `lineage:resolve -- REF ... [--current] [--project <repo>] [--backlog <cmd>] [--repo NAME=<dir>] [--effects-root <dir>]` | `python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [options]` | no | Resolves references read-only and prints one JSON resolution each. Exit 0 when all resolved, 1 on any other outcome or a malformed reference, 2 could not run. |
 | `lineage:trace -- OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | `python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | no | Projects the lineage of one outcome id read-only (statement, objective, design, task, attempt), with the real authorities only, and prints the `lineage-projection/v1` JSON. Exit 0 complete, 1 the projection carries uncertainty, 2 could not run. |
 | `lineage:example [-- --record]` | `python -I -B integrations/lineage/tests/lineage_example.py [--record]` | no | Rebuilds the lineage projection example offline (sample authorities and real registry) and prints each verdict; `--record` rewrites `integrations/lineage/examples/`. |
-| `paths:test` | `python -I -B -m unittest discover -s integrations/paths/tests -v` | no | [Managed data root](#managed-data-root) tests: every refusal code, the platform defaults by injection, both adapters, the legacy table, `example_config.yml`, asset records. The `config.yml` tests skip, counted, when PyYAML is not importable. |
+| `paths:test` | `<tools python> -I -B -m unittest discover -s integrations/paths/tests -v` | no | [Managed data root](#managed-data-root) tests: every refusal code, the platform defaults by injection, both adapters, the legacy table, `example_config.yml`, asset records. The `config.yml` tests skip, counted, when PyYAML is not importable. |
 | `paths:show [-- --format sh\|ps1]` | `python -I -B integrations/paths/aieh_paths.py show [--format json\|sh\|ps1]` | no | Prints the managed data root and its categories (`aieh-paths/v1` JSON, or shell assignments). Creates nothing. Exit 2 on a refusal, with its code and remedy. |
 | `paths:init` | `python -I -B integrations/paths/aieh_paths.py init` | no | Creates the managed data root, its `persistent/`, `ephemeral/` and `assets/` directories and its `aieh-root.json` marker. Idempotent. |
 | `paths:doctor` | `python -I -B integrations/paths/aieh_paths.py doctor` | no | Reports the root, what exists, the marker and the legacy locations with their migration recipes. Moves and changes nothing. |
 | `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI, once per lock) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`; Dulwich 1.2.21 and urllib3 2.8.0, for the Python components' repository operations; [`composition/lock/python/tools-requirements.txt`](../composition/lock/python/tools-requirements.txt)), wheels only, under the managed data root; prints its interpreter. Part of `setup`; `test` runs under its interpreter. `python -I -B integrations/paths/tools_install.py --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. |
-| `gitea:test` | `python -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login, role bots, fixture and rotation with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows); the guest profile declares no path to a token store. The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary; the live authorization tests only with `AIEH_GITEA_AUTHZ=1` (`gitea:authz`). |
-| `dispatch:test` | `python -I -B -m unittest discover -s integrations/dispatch/tests -v` | no | [Dispatch input resolution and admission](#dispatch-input-resolution-and-admission) tests: every refusal before any reservation, a resolved record reserving in a throwaway store, determinism and the pinned policy digest, the approved-input manifest's schema check and custody; the create admission (workspace, mounts, caps, runtime, route and body bypasses never reach a fake transport; one admitted create reaches it once). Uses Backlog.md's recorded readiness output and a throwaway design repository; needs git. |
+| `gitea:test` | `<tools python> -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login, role bots, fixture and rotation with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows); the guest profile declares no path to a token store. The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary; the live authorization tests only with `AIEH_GITEA_AUTHZ=1` (`gitea:authz`). |
+| `dispatch:test` | `<tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v` | no | [Dispatch input resolution and admission](#dispatch-input-resolution-and-admission) tests: every refusal before any reservation, a resolved record reserving in a throwaway store, determinism and the pinned policy digest, the approved-input manifest's schema check and custody; the create admission (workspace, mounts, caps, runtime, route and body bypasses never reach a fake transport; one admitted create reaches it once). Uses Backlog.md's recorded readiness output and a throwaway design repository; needs git. |
 | `dispatch:check-manifest MANIFEST=<file>` | `python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest <file>` | no | Schema-checks an approved-input manifest and prints a JSON report. Admits nothing. Exit 0 PASS, 1 FAIL, 2 could not read. |
 | `dispatch:manifest-path` | `python -I -B integrations/dispatch/dispatch_inputs.py manifest-path` | no | Prints where the live approved-input manifest is expected (`<state>/dispatch/approved-inputs.json` under the managed data root). Creates and reads nothing there. |
+| `repository:test` | `<tools python> -I -B -m unittest discover -s integrations/repository/tests -v` | no | [Repository access](#repository-access) contract tests: the module's answers over a git-built golden corpus equal git's recorded answers (revision grammar, object names, file lists, exports, HEAD, status, index, listings, the work-tree check), the gap forms are refused before any access, damaged objects fail visibly, the configuration policies, bundles, no process launched; then the git-oracle comparison, which skips, naming why, where git is not on `PATH`. Fails with `REPOSITORY_NEEDS_DULWICH` without Dulwich, never skips. |
 | `gitea:install [-- --port N \| --from-file EXE]` | `python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]` | yes (GitHub, once) | Creates the managed data root (`init`), downloads the pinned Gitea Windows binary into `assets/`, verifies it against the lock and records it, and writes `app.ini` once with Gitea-generated secrets. Windows only. |
 | `gitea:up` | `python -I -B integrations/gitea/gitea_host.py up` | no | Starts the managed environment (a supervisor holding a kill-on-close Job Object) with Gitea inside it on `127.0.0.1:13300`; waits for `/api/healthz`. |
 | `gitea:down` | `python -I -B integrations/gitea/gitea_host.py down` | no | Stops Gitea with its own `manager shutdown`, then the supervisor. |
@@ -241,7 +244,7 @@ Only what is listed as verified has been exercised.
 | `guest:host-census [-- --exclude-pid <pid> --out <file>]` | `python -I -B tools/guest.py host-census [--exclude-pid <pid>] [--out <file>]` | no | S-01.4, read only and unelevated: the harness's host listeners by PID (QEMU, the host Gitea and its proxy, the Owner host's Vite servers), each of which must be on 127.0.0.1, and the Windows Firewall profiles and rule count, recorded as disclosure (UNKNOWN when a cmdlet is refused). No profile or state directory; it changes no rule. Exit 0 only on PASS. |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
 | `hooks:install` | `python -I -B tools/publication_gate.py install` | yes (once) | Installs the [publication-safety gate](#publication-safety-gate): pinned Gitleaks into the per-user cache, `core.hooksPath`. |
-| `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests with `AIEH_GATE_REQUIRE_SCANNER=1` | no | Scanner hash and version, hook wiring, configuration, synthetic tests, and test 7's nested rerun of the whole tool suite (which runs nowhere else but `qualify`). |
+| `hooks:verify` | `python -I -B tools/publication_gate.py verify`, then the gate's tests under `<tools python>` with `AIEH_GATE_REQUIRE_SCANNER=1` (`<tools python> -I -B -m unittest discover -s tools/tests -p test_publication_gate.py -v`) | no | Scanner hash and version, hook wiring, configuration, synthetic tests, and test 7's nested rerun of the whole tool suite (which runs nowhere else but `qualify`). |
 | `scan:history [-- REVS]` | `python -I -B tools/publication_gate.py history [REVS]` | no | Read-only, redacted scan of every commit (default `--all`); exit 1 on findings. |
 | `resolve WORK=<dir>` | `python -I composition/resolve.py --work <dir>` | yes | Component lock resolution and host install; see [`composition/lock/README.md`](../composition/lock/README.md). `<dir>` must be empty or absent and outside the checkout. |
 | `inventory RESOLVED=<work> OUT=<file>` | `python -I composition/inventory/metadata_inventory.py --resolved <work> --out <file>` | yes | Component metadata inventory (declared licences). |
@@ -292,8 +295,9 @@ launches a process, opens a socket or changes directory, in a test or a class fi
 `unit`. `task test:categories` checks mechanically that every class has a valid category; it
 imports the test modules and runs no test.
 
-**Profile.** `task test:profile` (`python -I -B tools/test_profile.py run`) runs exactly the
-suites of `task test`, serially, each in a child process that calls `unittest.main` with the
+**Profile.** `task test:profile` (`<tools python> -I -B tools/test_profile.py run`) runs exactly the
+suites of `task test`, serially, under the interpreter that runs it (the tools interpreter, as
+`task test` runs them), each in a child process that calls `unittest.main` with the
 same arguments as `python -I -B -m unittest discover -s <suite> -v`, from the repository
 root. An audit hook (`sys.addaudithook`), which patches nothing, counts per test and per
 class fixture:
@@ -321,8 +325,8 @@ budgets, per category, per suite and in total, from the measured baseline in
 [`evidence/test-profile/`](../evidence/test-profile/): exact counters (at least the
 baseline's tests; at most its launches and `mkdtemp` calls) and the median wall time of
 three serial runs with a 30% tolerance (never less than half a second of slack, for
-sub-second scopes). `task test:budget` (`python -I -B tools/check_test_budget.py check
---run`) profiles three runs and checks them; it fails on a failing or uncategorized test, a
+sub-second scopes). `task test:budget` (`<tools python> -I -B tools/check_test_budget.py check
+--run`) profiles three runs under the tools interpreter and checks them; it fails on a failing or uncategorized test, a
 `unit` class that launches, opens a socket or changes directory, a counter above its budget,
 fewer tests, a median above its tolerance, or a suite or category the budgets do not name.
 Counts below budget pass and are reported. `python -I -B tools/check_test_budget.py propose
@@ -378,6 +382,10 @@ launch it (plan leaf F-09.3):
   fixture. A copy is the same repository, with the same commits, as a fresh build (a test
   checks it). The fixture's own git commands run with `core.longpaths`, and it commits edits
   and deletions of tracked files in one `git commit --all`.
+- **The repository-access corpus** (plan leaf F-10.2) is built by git once, when it is
+  recorded, and committed as an archive with git's answers beside it, so that its recorded half
+  runs without git; the suite extracts it once per test process and only reads it
+  ([Repository access](#repository-access)).
 - **The Backlog runner.** `planning_adapter.Backlog` takes a runner (by default `None`:
   `subprocess.run`, as before). The logic tests answer the fake Backlog.md in the test process
   (`fake_backlog.InProcessRunner`); the command-line contracts and the traversal's recorded-
@@ -470,7 +478,8 @@ worker, so its `setUpClass` runs once. Pass pytest options after `--`, for examp
 - **Test 7's nested rerun.** The publication gate's test 7 checks the existing commands in
   every run (`verify_seed.py` in both modes and `check_profile.py`). Its nested rerun of the
   whole tool suite, about two minutes, runs only under `AIEH_GATE_REQUIRE_SCANNER=1`:
-  `task hooks:verify`, and `task qualify` at a release. Elsewhere it is reported skipped, with
+  `task hooks:verify` (whose test run uses the tools interpreter, as `task test` does; the gate
+  itself keeps the plain one), and `task qualify` at a release. Elsewhere it is reported skipped, with
   that reason.
 - **Required tiers.** `task test` (every suite, serially) and `task test:all` run every
   fail-closed security proof that runs by default; only the `e2e` classes are outside
@@ -1044,6 +1053,27 @@ OpenSpec 1.16.0 checks the schema (`openspec schema validate intent-driven`) and
 readiness of a change's artifacts (`openspec status`), and `openspec validate` checks
 delta specs. It does not check the content of a proposal; that is this checker's job.
 
+## Repository access
+
+Plan leaf F-10.2 adds [`integrations/repository/`](../integrations/repository/README.md), the
+shared repository-access module of
+[decision 0014](../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
+(Proposed): read-only access to git repositories over Dulwich 1.2.21, from the Python tools set,
+in the calling process. It launches no process. It holds the work-tree check, the preserved
+revision grammar (every form git resolves, refusing only 0014's gap forms with
+`REVISION_INVALID` before any access), object reads, file lists, `export_tree` (blob bytes),
+HEAD, status, the index, listings, bundles, and an explicit configuration policy per call
+(`host`, `repository` or `none`, with `config_sources`). No component uses it yet: the planning
+adapter moves onto it in F-10.3, the guest exchange push, the snapshots and the listing in
+F-10.4.
+
+`task repository:test` runs its differential contract suite under the tools interpreter: the
+recorded half compares the module with git's answers recorded over a committed, git-built
+golden corpus and needs no git; the git-oracle half asks git again where git is on `PATH` and
+skips, naming why, elsewhere. Without Dulwich the suite fails with `REPOSITORY_NEEDS_DULWICH`;
+it never skips. The module's README lists the grammar, the local mechanics, the error codes, the
+policies, the export contract and what is not yet verified.
+
 ## Planning adapter
 
 Plan leaf P-02.1 adds [`integrations/planning/`](../integrations/planning/README.md),
@@ -1303,7 +1333,7 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`); the [containment cases](#containment-cases) (`containment-cases.json`) | S-01.1, S-02.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`); the [test budgets](#testing) (`test-budgets.json`) | S-01.2.1, G-01.1, F-09.1 |
-| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/`; `dispatch/`: the trusted dispatch input resolver, the approved-input manifest's schema check, the create admission before the OpenHands create, its synthetic `examples/` and `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1, E-01.2.1, E-01.2.2 |
+| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/`; `dispatch/`: the trusted dispatch input resolver, the approved-input manifest's schema check, the create admission before the OpenHands create, its synthetic `examples/` and `tests/`; `repository/`: the shared [repository-access](#repository-access) module over Dulwich and its differential contract suite with its golden corpus in `tests/fixtures/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1, E-01.2.1, E-01.2.2, F-10.2 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |

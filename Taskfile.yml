@@ -79,11 +79,12 @@ tasks:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
   # test runs every suite under the python-tools venv's interpreter, so that Dulwich and PyYAML are
-  # present (plan leaf F-10.1, decision 0014 section 9). TOOLS_PYTHON is that interpreter for the
-  # current lock: locating it creates nothing and fails, naming tools:install, when the set is not
-  # installed. PYTHON is overridden with it for this target and passed to each suite target it calls.
+  # present (plan leaves F-10.1 and F-10.2, decision 0014 section 9). TOOLS_PYTHON is that interpreter
+  # for the current lock: locating it creates nothing and fails, naming tools:install, when the set
+  # is not installed. PYTHON is overridden with it for this target; each suite target it calls
+  # resolves it the same way, so that it also runs under the tools interpreter when run alone.
   test:
-    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the host Gitea tests (gitea:test) and the dispatch input resolution and create admission tests (dispatch:test)"
+    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test) and the repository-access contract tests (repository:test)"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
@@ -91,25 +92,24 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
-        vars: {PYTHON: '{{.PYTHON}}'}
       - task: effects:test
-        vars: {PYTHON: '{{.PYTHON}}'}
       - task: planning:test
-        vars: {PYTHON: '{{.PYTHON}}'}
       - task: lineage:test
-        vars: {PYTHON: '{{.PYTHON}}'}
       - task: paths:test
-        vars: {PYTHON: '{{.PYTHON}}'}
       - task: gitea:test
-        vars: {PYTHON: '{{.PYTHON}}'}
       - task: dispatch:test
-        vars: {PYTHON: '{{.PYTHON}}'}
+      - task: repository:test
 
-  # Test profile and budgets (plan leaf F-09.1; docs/development.md#testing). test:budget is an
+  # Test profile and budgets (plan leaf F-09.1; docs/development.md#testing), under the python-tools
+  # interpreter, as test runs the suites (plan leaf F-10.2). test:budget is an
   # acceptance obligation: run it at the acceptance of every plan leaf and at every release,
   # and record its result with the leaf's evidence. Never run it from a git hook.
   test:profile:
-    desc: "Profile the suites of test serially, counting process launches, mkdtemp, sockets and chdir per test, class, category and suite (python -I -B tools/test_profile.py run); writes the profile to a new temporary directory; pass -- --runs 3 for wall-time medians"
+    desc: "Profile the suites of test serially under the python-tools interpreter, counting process launches, mkdtemp, sockets and chdir per test, class, category and suite (<tools python> -I -B tools/test_profile.py run); writes the profile to a new temporary directory; pass -- --runs 3 for wall-time medians"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/test_profile.py run {{.CLI_ARGS}}'
 
@@ -119,7 +119,11 @@ tasks:
       - '{{.PYTHON}} -I -B tools/test_profile.py categories {{.CLI_ARGS}}'
 
   test:budget:
-    desc: "Acceptance obligation at every leaf acceptance and release, never in a hook: profile three serial runs and check them against policy/test-budgets.json (python -I -B tools/check_test_budget.py check --run); -- --counters-only checks the counters from one run"
+    desc: "Acceptance obligation at every leaf acceptance and release, never in a hook: profile three serial runs under the python-tools interpreter and check them against policy/test-budgets.json (<tools python> -I -B tools/check_test_budget.py check --run); -- --counters-only checks the counters from one run"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/check_test_budget.py check --run {{.CLI_ARGS}}'
 
@@ -177,7 +181,11 @@ tasks:
       - task: owner-host:test:if-node
 
   store:test:
-    desc: Run the integration store tests (python -I -B -m unittest discover -s integrations/store/tests -v)
+    desc: Run the integration store tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/store/tests -v)
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/store/tests -v'
 
@@ -211,7 +219,11 @@ tasks:
   # must already exist (Owner act A4); there is no default path. Pass -- --principal SID
   # once the executor principal is part of the custody template.
   effects:test:
-    desc: Run the effects store tests (python -I -B -m unittest discover -s integrations/effects/tests -v)
+    desc: Run the effects store tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/effects/tests -v)
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/effects/tests -v'
 
@@ -247,7 +259,11 @@ tasks:
   # BACKLOG and OPENSPEC name the pinned tools' entry points, installed outside the
   # checkout (integrations/planning/README.md); PROJECT is the managed project's repository.
   planning:test:
-    desc: "Run the planning adapter tests (python -I -B -m unittest discover -s integrations/planning/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
+    desc: "Run the planning adapter tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/planning/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/planning/tests -v'
 
@@ -275,7 +291,11 @@ tasks:
   # Lineage references (plan leaf P-03.1): typed source references, their schema and the
   # read-only resolvers (integrations/lineage/README.md).
   lineage:test:
-    desc: "Run the lineage reference, resolver and traversal tests (python -I -B -m unittest discover -s integrations/lineage/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
+    desc: "Run the lineage reference, resolver and traversal tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/lineage/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/lineage/tests -v'
 
@@ -303,7 +323,11 @@ tasks:
   # Managed data root (plan leaf F-07.1, decision 0009): the shared path resolver, its
   # configuration and the Python tools venv (integrations/paths/README.md).
   paths:test:
-    desc: "Run the managed data root resolver tests (python -I -B -m unittest discover -s integrations/paths/tests -v); the config.yml tests skip when PyYAML is not importable"
+    desc: "Run the managed data root resolver tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/paths/tests -v); the config.yml tests skip when PyYAML is not importable"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/paths/tests -v'
 
@@ -331,9 +355,27 @@ tasks:
   # the approved-input manifest's schema check and its managed location; and the create admission
   # (plan leaf E-01.2.2; decisions 0001 and 0003) (integrations/dispatch/README.md).
   dispatch:test:
-    desc: Run the dispatch input resolution and create admission tests (python -I -B -m unittest discover -s integrations/dispatch/tests -v)
+    desc: Run the dispatch input resolution and create admission tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v)
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/dispatch/tests -v'
+
+  # Repository access (plan leaf F-10.2, decision 0014): the shared module over Dulwich and its
+  # differential contract suite, recorded expectations over git-built golden repositories and a
+  # git-oracle comparison that skips, naming why, where git is not on PATH
+  # (integrations/repository/README.md). Without Dulwich the suite fails with
+  # REPOSITORY_NEEDS_DULWICH, never skips.
+  repository:test:
+    desc: "Run the repository-access contract tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/repository/tests -v); the git-oracle half skips, naming why, where git is not on PATH"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/repository/tests -v'
 
   dispatch:check-manifest:
     desc: Schema-check an approved-input manifest file; admits nothing (python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest MANIFEST)
@@ -351,7 +393,11 @@ tasks:
   # as an asset, its state under the managed data root, run inside a supervising managed
   # environment whose kill-on-close Job Object ends Gitea with it (integrations/gitea/README.md).
   gitea:test:
-    desc: "Run the host Gitea tests (python -I -B -m unittest discover -s integrations/gitea/tests -v); the live lifecycle test runs only when AIEH_GITEA_BINARY names a copy of the pinned binary, and the live authorization tests only with AIEH_GITEA_AUTHZ=1 (gitea:authz)"
+    desc: "Run the host Gitea tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/gitea/tests -v); the live lifecycle test runs only when AIEH_GITEA_BINARY names a copy of the pinned binary, and the live authorization tests only with AIEH_GITEA_AUTHZ=1 (gitea:authz)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/gitea/tests -v'
 
@@ -652,13 +698,18 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/publication_gate.py install'
 
+  # The gate itself stays on the plain PYTHON (standard library, offline); its test suite, whose
+  # test 7 reruns the whole tool suite, runs under the python-tools interpreter (plan leaf F-10.2).
   hooks:verify:
-    desc: Verify the gate (python -I -B tools/publication_gate.py verify, then its synthetic test suite with AIEH_GATE_REQUIRE_SCANNER=1, which also runs test 7's nested whole-tool-suite rerun)
+    desc: "Verify the gate (python -I -B tools/publication_gate.py verify), then run its synthetic test suite under the python-tools interpreter with AIEH_GATE_REQUIRE_SCANNER=1, which also runs test 7's nested whole-tool-suite rerun (<tools python> -I -B -m unittest discover -s tools/tests -p test_publication_gate.py -v)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
     env:
       AIEH_GATE_REQUIRE_SCANNER: '1'
     cmds:
       - '{{.PYTHON}} -I -B tools/publication_gate.py verify'
-      - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -p test_publication_gate.py -v'
+      - '"{{.TOOLS_PYTHON}}" -I -B -m unittest discover -s tools/tests -p test_publication_gate.py -v'
 
   scan:history:
     desc: Read-only, redacted scan of every commit (python -I -B tools/publication_gate.py history); pass -- REVS to narrow it

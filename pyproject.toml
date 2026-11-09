@@ -23,6 +23,7 @@ testpaths = [
     "integrations/paths/tests",
     "integrations/gitea/tests",
     "integrations/dispatch/tests",
+    "integrations/repository/tests",
 ]
 # What `python -m unittest discover` collects: unittest.TestCase classes in test*.py modules,
 # nothing else (no plain test functions or classes).
