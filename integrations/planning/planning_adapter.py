@@ -35,6 +35,7 @@ Standard library only.
 """
 import argparse
 import contextlib
+import contextvars
 import hashlib
 import io
 import json
@@ -81,6 +82,7 @@ STATUS_KEYS = {'status', 'state', 'done', 'completed', 'complete', 'checked', 'p
 
 # The only Backlog.md commands the adapter issues. None of them sets a status.
 BACKLOG_COMMANDS = {('task', 'create'), ('task', 'list'), ('task', 'view')}
+BACKLOG_READS = {('task', 'list'), ('task', 'view')}
 STATUS_FLAGS = ('-s', '--status')
 
 
@@ -148,16 +150,18 @@ def tool_env():
     return env
 
 
-# Object names and revisions reach git's batch protocol one per line on standard input, so a
-# name holding whitespace or a control character (it could end, split or extend a line) is
-# refused before it reaches the process.
-UNSAFE_NAME_RE = re.compile(r'[\s\x00-\x1f\x7f]')
+# Object names and revisions reach git's batch protocol one per line on standard input. The
+# reader uses git's default output format (no %(rest)), so git takes the whole line as the
+# object name and a space is part of it; only a line terminator or a NUL could end or split a
+# request. A name holding a control character (C0 or DEL: LF, CR and NUL among them, and
+# TAB) is refused before it reaches the process. Revisions refuse any whitespace as well.
+UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f\x7f]')
 OBJECT_TYPES = (b'blob', b'tree', b'commit', b'tag')
 
 
 def batch_line(name):
     """NAME as one request line of the batch protocol; refused (OBJECT_NAME_INVALID) when it is
-    not text, is empty, starts with '-' or holds whitespace or a control character."""
+    not text, is empty, starts with '-' or holds a control character (C0 or DEL)."""
     if not isinstance(name, str) or not name or name.startswith('-') or UNSAFE_NAME_RE.search(name):
         raise PlanningError('OBJECT_NAME_INVALID', f'not an object name the batch reader takes: {name!r}')
     try:
@@ -254,9 +258,11 @@ class BatchReader:
             header = self._take(lambda out: (out.find(b'\n') + 1) or None, deadline)
             if header is None:
                 self._fail_exited()
-            fields = header[:-1].split(b' ')
-            if len(fields) == 2 and fields[0] == line and fields[1] in (b'missing', b'ambiguous'):
+            # "<name> missing" or "<name> ambiguous" echoes the whole request line (spaces and
+            # all); anything else must be "<object id> <type> <size>".
+            if header[:-1] in (line + b' missing', line + b' ambiguous'):
                 return None
+            fields = header[:-1].split(b' ')
             if len(fields) != 3 or not OBJECT_ID_RE.fullmatch(fields[0].decode('ascii', 'replace')) \
                     or fields[1] not in OBJECT_TYPES or not fields[2].isdigit():
                 self._fail(f'unexpected answer {header[:200]!r} for {name!r}')
@@ -350,6 +356,66 @@ class _Session:
     def close(self):
         if self.reader is not None:
             self.reader.close()
+
+
+# One top-level adapter operation (plan leaf F-09.4, the Overseer's ruling R3): one lineage
+# traversal, one readiness evaluation, or one resolution from the command line or a lineage
+# resolver entry point. Within it, each project's git access is one Git (one work-tree check)
+# with one read session (one batch reader), and Backlog.md's reads are a snapshot: the same
+# command is run once. Everything is dropped when the operation ends, normally or by an
+# exception: no module-level cache, nothing kept for the next operation.
+_OPERATION = contextvars.ContextVar('planning_operation', default=None)
+
+
+class Operation:
+    """What one operation shares (``operation()``)."""
+
+    def __init__(self, stack):
+        self.stack = stack
+        self.projects = {}       # str(project) -> (Git with its session open, None) or (None, why)
+        self.backlog_reads = {}  # (argv prefix, directory, args) -> (stdout, None) or (None, failure)
+
+
+@contextlib.contextmanager
+def operation():
+    """Run the block as one operation; inside another operation it is that operation."""
+    current = _OPERATION.get()
+    if current is not None:
+        yield current
+        return
+    with contextlib.ExitStack() as stack:
+        op = Operation(stack)
+        token = _OPERATION.set(op)
+        try:
+            yield op
+        finally:
+            _OPERATION.reset(token)
+
+
+def current_operation():
+    return _OPERATION.get()
+
+
+def project_git(project):
+    """(Git, None) for PROJECT, or (None, why) when git cannot read it. Within an operation the
+    same Git, with its read session open, for every call; otherwise a new Git each call."""
+    op = _OPERATION.get()
+    if op is None:
+        return _open_git(project)
+    key = str(Path(project))
+    if key not in op.projects:
+        git, why = _open_git(project)
+        if git is not None:
+            op.stack.enter_context(git.session())
+        op.projects[key] = (git, why)
+    return op.projects[key]
+
+
+def _open_git(project):
+    try:
+        return Git(project), None
+    except (CannotRun, OSError, subprocess.TimeoutExpired) as exc:
+        return None, str(exc)
 
 
 class Git:
@@ -670,13 +736,32 @@ class Backlog:
         if any(arg in STATUS_FLAGS or arg.startswith(tuple(f + '=' for f in STATUS_FLAGS))
                for arg in options):
             raise PlanningError('ADAPTER_REFUSED', 'the adapter never sets a Backlog.md status')
+        # Within one operation (operation()) each read is made once, a snapshot: the same
+        # command in the same directory answers as it did; a create ends that snapshot.
+        op = _OPERATION.get()
+        read = tuple(args[:2]) in BACKLOG_READS
+        key = (tuple(self.argv_prefix), str(self.project), tuple(args))
+        if op is not None and not read:
+            for stale in [k for k in op.backlog_reads if k[:2] == key[:2]]:
+                del op.backlog_reads[stale]
+        if op is not None and read and key in op.backlog_reads:
+            out, failure = op.backlog_reads[key]
+            if failure is not None:
+                raise PlanningError('BACKLOG_FAILED', failure)
+            return out
         run = subprocess.run if self.runner is None else self.runner
         result = run([*self.argv_prefix, *args], cwd=self.project, capture_output=True,
                      stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_S, env=tool_env())
         if result.returncode != 0:
-            raise PlanningError('BACKLOG_FAILED', f'backlog {" ".join(args[:2])} exited {result.returncode}: '
-                                + (result.stderr or result.stdout).decode('utf-8', 'replace').strip())
-        return result.stdout.decode('utf-8')
+            failure = (f'backlog {" ".join(args[:2])} exited {result.returncode}: '
+                       + (result.stderr or result.stdout).decode('utf-8', 'replace').strip())
+            if op is not None and read:
+                op.backlog_reads[key] = (None, failure)
+            raise PlanningError('BACKLOG_FAILED', failure)
+        out = result.stdout.decode('utf-8')
+        if op is not None and read:
+            op.backlog_reads[key] = (out, None)
+        return out
 
     def _json(self, kind, *args):
         try:
@@ -830,7 +915,7 @@ def main(argv=None):
             print(json.dumps(create_tasks(git, backlog, plan, args.revision, openspec), indent=2))
             return 0
         if args.command == 'pointer':
-            with git.session():
+            with operation(), git.session():
                 commit = git.commit(args.revision)
                 if commit is None:
                     raise PlanningError('POINTER_REVISION_MISSING',
@@ -840,11 +925,12 @@ def main(argv=None):
             return 0
         if bool(args.pointer) == bool(args.backlog) or (args.task and not args.backlog):
             raise CannotRun('resolve takes either --pointer ... or --backlog CMD [--task ID ...]')
-        if args.pointer:
-            with git.session():
-                report = [{'id': None, 'pointers': [_resolve_entry(git, p) for p in args.pointer]}]
-        else:
-            report = resolve_tasks(git, Backlog(tool_argv(args.backlog), args.project), args.task)
+        with operation():  # one resolution from the command line is one operation (F-09.4)
+            if args.pointer:
+                with git.session():
+                    report = [{'id': None, 'pointers': [_resolve_entry(git, p) for p in args.pointer]}]
+            else:
+                report = resolve_tasks(git, Backlog(tool_argv(args.backlog), args.project), args.task)
         failures = list(_failures(report))
         print(json.dumps({'format': RESOLVE_FORMAT, 'tasks': report}, indent=2))
         for task_id, text, code, message in failures:

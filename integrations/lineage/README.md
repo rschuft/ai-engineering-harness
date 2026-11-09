@@ -29,7 +29,7 @@ status.
 | `tests/test_references.py` | Round trip of every kind, malformed references, the schema check (and the defects it catches), the span anchor, `Resolution` and `Registry` contracts |
 | `tests/test_resolvers.py` | Every outcome of each resolver, against throwaway git repositories, the P-02 fake Backlog.md and its recorded fixtures, and F-05.2 effects-store fixtures; read-only checks; the command line |
 | `tests/test_trace.py` | The traversal: the example (regenerated and compared), read-only proof, every negative resolution fixture, the sample authorities and the command line |
-| `tests/test_traversal_git.py` | The traversal's git access (F-09.4): one batch reader per traversal, ended on a normal end, an exception and a timeout (failing closed), nothing kept between traversals, only git's read commands; and the `performance` benchmark `OneTraversal`, whose result is the launch count of one traversal of the example (at most 10) with projections equal to `examples/` byte for byte |
+| `tests/test_traversal_git.py` | The traversal's git access (F-09.4): one batch reader per traversal, ended on a normal end, an exception and a timeout (failing closed), nothing kept between traversals, only git's read commands; a resolver call as its own operation; OpenSpec change folders whose names hold a space, resolved as before the batch reader; and the `performance` benchmark `OneTraversal`, whose result is the launch count of one traversal of the example (at most 10, with Backlog.md answered in the test process and launched) with projections equal to `examples/` byte for byte |
 | `tests/lineage_example.py` | Builds the example's throwaway sources, traces them and (with `--record`) writes `examples/` |
 | `tests/fixtures/sample-attempts.json` | The sample attempt records (`lineage-sample-attempts/v1`, `"sample": true`) |
 | `tests/test_live_lineage.py` | Live, against the pinned Backlog.md 1.55.3 and OpenSpec 1.16.0 (including the traversal over live tasks and after a real `openspec archive`); skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` are set |
@@ -292,15 +292,17 @@ uncertainty, so a projection that uses a sample is never `complete`.
 
 - Git: `rev-parse`, `cat-file --batch`, `ls-tree` and `archive` only (the P-02.1 reader),
   never the working tree; OpenSpec is never run.
-- One git access per traversal (plan leaf F-09.4): `Traversal.run` opens a git scope
-  (`lineage_resolve.git_scope`) in which every resolver and the enumeration share one
-  `planning_adapter.Git` per project, with one read session: one `git cat-file --batch`
-  process, objects memoized by full commit id and each revision resolved once (a snapshot
-  for the traversal). The scope closes every session when the traversal ends, normally or
-  by an exception; nothing is kept for the next traversal. One traversal of the example
-  launches 4 processes (the work-tree check, the batch reader and two `ls-tree`), against 70
-  before, with Backlog.md answered in the test process (with the fake Backlog.md launched,
-  its 9 reads come on top). A resolver called outside a traversal opens its own session.
+- One operation per traversal (plan leaf F-09.4): `Traversal.run` is one adapter operation
+  (`planning_adapter.operation`) in which every resolver and the enumeration share one
+  `planning_adapter.Git` per project (one work-tree check) with one read session: one `git
+  cat-file --batch` process, objects memoized by full commit id and each revision resolved
+  once (a snapshot for the traversal); Backlog.md's reads are made once each. The operation
+  closes every session when the traversal ends, normally or by an exception; nothing is kept
+  for the next traversal. One traversal of the example launches 4 processes with Backlog.md
+  answered in the test process (the work-tree check, the batch reader and two `ls-tree`),
+  and 7 with the fake Backlog.md launched (its `task list` once and `task view` once per
+  task), against 70 and 79 before. A resolver called outside a traversal is its own
+  operation.
 - Backlog.md: `task list --json` and `task view --json` only (`ReadOnlyBacklog`).
 - Integration store: `ReadOnlyIntegrationStore`. The store's own `open_store` migrates in a
   write transaction and creates an absent file, so it is not used. Instead the existing

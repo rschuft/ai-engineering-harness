@@ -314,6 +314,11 @@ reproducible commit), and Backlog.md is its own recorded readiness output
 (`integrations/planning/tests/fixtures/readiness/`), so the Work and design checks run
 against real Backlog.md JSON and real git objects.
 
+[`tests/test_work_source_operation.py`](tests/test_work_source_operation.py) (F-09.4), on the
+same fixture: one `PlanningWorkSource.read` is one adapter operation, so Backlog.md's `task
+list` is run once (the read and the readiness evaluation both ask for it), every pointer is
+resolved through one git batch reader, and the reader ends with the read, also when it raises.
+
 [`tests/test_dispatch_admission.py`](tests/test_dispatch_admission.py) (E-01.2.2), on the same
 fixture, with every create through a counting fake transport: each refusal asserts it was
 called **zero** times, each positive control **exactly once** with the exact expected body. The

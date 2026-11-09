@@ -28,8 +28,7 @@ reference, a schema problem, or any outcome other than resolved), 2 could not ru
 Standard library only, plus git and the tools named.
 """
 import argparse
-import contextlib
-import contextvars
+import functools
 import hashlib
 import io
 import json
@@ -67,49 +66,21 @@ def _effects_module():
     return _load('effects_store', REPO / 'integrations' / 'effects' / 'effects_store.py')
 
 
-def _open_git(project):
-    try:
-        return planning.Git(project), None
-    except (planning.CannotRun, OSError, subprocess.TimeoutExpired) as exc:
-        return None, str(exc)
-
-
-# The git access of the running traversal (git_scope), or None.
-_SCOPE = contextvars.ContextVar('lineage_git_scope', default=None)
-
-
-@contextlib.contextmanager
-def git_scope():
-    """One traversal's git access (plan leaf F-09.4). Inside it, ``_git(project)`` gives every
-    resolver the same ``planning_adapter.Git`` per project, with one read session open: one
-    ``git cat-file --batch`` reader, and memos of immutable objects and of the revisions it
-    resolved (a snapshot for this traversal). When the block ends, normally or by an
-    exception, every session is closed and its reader process ended; nothing is kept for the
-    next traversal. A scope inside a scope is the outer one."""
-    if _SCOPE.get() is not None:
-        yield
-        return
-    with contextlib.ExitStack() as stack:
-        token = _SCOPE.set({'stack': stack, 'projects': {}})
-        try:
-            yield
-        finally:
-            _SCOPE.reset(token)
-
-
 def _git(project):
-    """The P-02.1 read-only git access, or the reason it is unavailable: within a traversal
-    (git_scope), the traversal's own, opened once per project."""
-    scope = _SCOPE.get()
-    if scope is None:
-        return _open_git(project)
-    key = str(Path(project))
-    if key not in scope['projects']:
-        git, why = _open_git(project)
-        if git is not None:
-            scope['stack'].enter_context(git.session())
-        scope['projects'][key] = (git, why)
-    return scope['projects'][key]
+    """The P-02.1 read-only git access, or the reason it is unavailable: within an operation
+    (``planning_adapter.operation``) the operation's own, one per project (plan leaf F-09.4)."""
+    return planning.project_git(project)
+
+
+def _operation(method):
+    """A resolver entry point is one adapter operation (F-09.4): its git reads share one work-tree
+    check and one batch reader, and Backlog.md's reads are made once each; inside a traversal it
+    is the traversal's operation."""
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        with planning.operation():
+            return method(*args, **kwargs)
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +98,7 @@ class DesignResolver:
         self.project = Path(project)
         self.current_revision = current_revision
 
+    @_operation
     def resolve(self, reference):
         git, why = _git(self.project)
         if git is None:
@@ -142,6 +114,7 @@ class DesignResolver:
         return L.answer(reference, L.RESOLVED, self.authority, observed_revision=reference.revision,
                         observed_digest=reference.digest)
 
+    @_operation
     def current(self, reference):
         git, why = _git(self.project)
         if git is None:
@@ -269,6 +242,7 @@ class ObjectiveResolver:
     def current(self, reference):
         return self._ask(reference, 'current')
 
+    @_operation
     def _ask(self, reference, query):
         def say(outcome, code=None, detail='', **extra):
             return L.answer(reference, outcome, self.authority, code, detail, query=query, **extra)
@@ -372,6 +346,7 @@ class WorkResolver:
         self.project = Path(project)
         self.backlog_argv = list(backlog_argv)
 
+    @_operation
     def resolve(self, reference):
         if reference.revision is None:
             return self._read(self.project, reference, None, 'reference')
@@ -393,6 +368,7 @@ class WorkResolver:
         except (subprocess.TimeoutExpired, OSError, tarfile.TarError) as exc:
             return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'PROJECT_UNAVAILABLE', str(exc))
 
+    @_operation
     def current(self, reference):
         return self._read(self.project, reference, None, 'current')
 
@@ -443,6 +419,7 @@ class CommitResolver:
     def __init__(self, repositories):
         self.repositories = {name: Path(path) for name, path in dict(repositories).items()}
 
+    @_operation
     def resolve(self, reference, query='reference'):
         path = self.repositories.get(reference.repository)
         if path is None:

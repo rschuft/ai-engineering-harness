@@ -63,15 +63,27 @@ different digest. Revalidation is therefore visible, never silent.
 per read session (`Git.session()`), which one command, one `create`, one `resolve` or one
 readiness read opens and closes. Within a session, objects named by a full commit id
 (`<id>` or `<id>:<path>`) and file lists of a full commit id are read once, and each
-revision is resolved once (a snapshot for the session); nothing is kept after it. A name or
-revision holding whitespace or a control character, or starting with `-`, is refused
-(`OBJECT_NAME_INVALID`, `REVISION_INVALID`) before it reaches the process. Each request has
+revision is resolved once (a snapshot for the session); nothing is kept after it. The reader
+uses git's default output format, so git takes the whole request line as the name: a space is
+part of it. A name holding a control character (C0 or DEL: line feed, carriage return, NUL and
+tab among them) or starting with `-` is refused (`OBJECT_NAME_INVALID`) before it reaches the
+process; a revision is also refused for any whitespace (`REVISION_INVALID`), as before. Each
+request has
 the `TOOL_TIMEOUT_S` ceiling: past it the process is killed, `subprocess.TimeoutExpired` is
 raised as before, and every later read of the session fails closed (`GIT_FAILED`). The
 reader answers as the one-shot commands it replaces (`rev-parse --verify --quiet
 <rev>^{commit}`, `cat-file -t`, `cat-file blob`; tested), with the same git and the same
 environment; the work-tree check (`rev-parse --show-toplevel`), `ls-tree` and `archive`
 still run as single commands.
+
+**Operations.** One top-level adapter operation (`operation()`) is one lineage traversal, one
+readiness evaluation (`planning_readiness.read_readiness`, and so one dispatch read), or one
+resolution from the command line (`resolve`, `pointer`) or a lineage resolver entry point.
+Within it, each project's git access is one `Git` (`project_git`: one work-tree check) with
+one read session (one batch reader), and Backlog.md's reads are a snapshot: the same `task
+list` or `task view` in the same directory is run once, and a `task create` ends that
+snapshot. Everything is dropped when the operation ends, normally or by an exception; nothing
+is kept at module level or for the next operation.
 
 ## Plan
 
@@ -209,7 +221,7 @@ OPENSPEC=<dir>/node_modules/@fission-ai/openspec/bin/openspec.js
 | Path | What |
 |---|---|
 | `tests/test_planning_adapter.py` | Offline: pointer format and resolution, the visible failures, plan refusals, the checklist and tracking refusals, no status in any Backlog.md command or result, partial failure, the command line. Backlog.md is `tests/fake_backlog.py`, OpenSpec `tests/fake_openspec.py`. It also re-resolves the committed capture against a freshly built design repository. Needs git only. |
-| `tests/test_git_batch.py` | Offline, git only: the batch reader's answers equal the one-shot commands' (revisions, object types, blobs, file lists, an ambiguous prefix), names that could break the line protocol are refused and never written, the reader process ends on a normal exit, an exception and a timeout (killed, then failing closed), an out-of-protocol answer or an exited reader fails closed, and no memo outlives its session. Stand-in processes play a git that hangs or answers out of protocol. |
+| `tests/test_git_batch.py` | Offline, git only: the batch reader's answers equal the one-shot commands' (revisions, object types, blobs, file lists, an ambiguous prefix), names that could break the line protocol are refused and never written, the reader process ends on a normal exit, an exception and a timeout (killed, then failing closed), an out-of-protocol answer or an exited reader fails closed, and no memo outlives its session; names with spaces answer as the one-shot commands do; one operation shares one `Git` and one reader, its Backlog.md reads are made once, and all of it ends with the operation (normally, by an exception, after a timeout). Stand-in processes play a git that hangs or answers out of protocol. |
 | `tests/test_live_backlog.py` | Live, against the pinned tools; skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` name their entry points. Checks the versions, regenerates the capture and compares it with the committed one, changes a status through Backlog.md and a design revision through git and shows that neither the adapter nor OpenSpec touches the status, refuses a change with a `tasks.md`, and shows each broken pointer edited in through Backlog.md failing visibly. |
 | `tests/two_task_fixture.py` | Builds the throwaway design repository and records the capture (`--record`). |
 | `tests/test_readiness.py` | Offline: Backlog.md's recorded readiness JSON replayed by the fake (`FAKE_BACKLOG_SNAPSHOT`). The report equals the recorded one, and the eligible tasks equal Backlog.md's own `task list --ready`. A blocked chain stays ineligible and a missing dependency is visible. Absent or malformed fields are unknown, and disagreeing fields are inconsistent. A failing or absent pointer is never eligible. Backlog.md's verdict wins over contrary statuses, and a trap fails the test if any `status` or `completed` field is read. The read issues only `task list` and `task view`. |

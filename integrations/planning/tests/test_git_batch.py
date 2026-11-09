@@ -14,6 +14,9 @@ memo outliving its session. Stand-in processes play a git that hangs or answers 
 protocol; every other process is the real git.
 """
 import hashlib
+import importlib.util
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -27,14 +30,26 @@ CATEGORY = 'integration'
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import two_task_fixture as fx  # noqa: E402
+import fake_backlog  # noqa: E402
 
 adapter = fx.adapter
 PlanningError = adapter.PlanningError
 DESIGN = f'openspec/changes/{fx.CHANGE}/design.md'
+FAKE_BACKLOG = [sys.executable, '-I', '-B', str(HERE / 'fake_backlog.py')]
+readiness = sys.modules.get('planning_readiness')
+if readiness is None:
+    _spec = importlib.util.spec_from_file_location('planning_readiness', HERE.parent / 'planning_readiness.py')
+    readiness = importlib.util.module_from_spec(_spec)
+    sys.modules['planning_readiness'] = readiness
+    _spec.loader.exec_module(readiness)
+assert readiness.adapter is adapter, 'the readiness module and the fixture must share one adapter'
 
-# Every character the batch protocol cannot carry inside one name: whitespace (ASCII and
-# Unicode) and the control characters.
-UNSAFE_CHARACTERS = [chr(c) for c in (0, 1, 9, 10, 11, 12, 13, 0x1b, 0x1f, 0x20, 0x7f, 0x85, 0xa0, 0x2028, 0x3000)]
+# Every character the batch protocol cannot carry inside one name: the control characters
+# (C0, LF, CR and NUL among them, and DEL).
+CONTROL_CHARACTERS = [chr(c) for c in (0, 1, 9, 10, 11, 12, 13, 0x1b, 0x1f, 0x7f)]
+# Without a %(rest) format git takes the whole request line as the name: a space (or other
+# whitespace that is not a control character) is part of an object name, never of a revision.
+WHITESPACE = [chr(c) for c in (0x20, 0x85, 0xa0, 0x2028, 0x3000)]
 # A stand-in that reads a request and never answers, and one that answers out of protocol.
 HANGS = [sys.executable, '-I', '-c', 'import sys, time; sys.stdin.readline(); time.sleep(300)']
 GARBLES = [sys.executable, '-I', '-c',
@@ -82,14 +97,14 @@ class BatchLine(unittest.TestCase):
 
     def test_object_names_and_revisions_are_accepted(self):
         for name in ('HEAD', 'main', 'a' * 40, 'a' * 40 + ':openspec/changes/x/design.md', 'HEAD^{commit}',
-                     'HEAD~2:README.md', 'v1.0^{}', 'é:ü/ö.md'):
+                     'HEAD~2:README.md', 'v1.0^{}', 'é:ü/ö.md', 'a' * 40 + ':docs/a b.md', 'HEAD: lead',
+                     'HEAD:trail ') + tuple(f'HEAD:x{ch}y' for ch in WHITESPACE):
             with self.subTest(name=name):
                 self.assertEqual(adapter.batch_line(name), name.encode('utf-8'))
 
     def test_names_that_could_break_a_line_are_refused(self):
-        bad = [f'HEAD{ch}' for ch in UNSAFE_CHARACTERS] + [f'{ch}HEAD' for ch in UNSAFE_CHARACTERS]
-        bad += ['', '-', '--batch-all-objects', 'a' * 40 + ':docs/a b.md', 'HEAD:x' + chr(0xd800),
-                None, b'HEAD', 7]
+        bad = [f'HEAD{ch}' for ch in CONTROL_CHARACTERS] + [f'{ch}HEAD' for ch in CONTROL_CHARACTERS]
+        bad += ['', '-', '--batch-all-objects', 'HEAD:x' + chr(0xd800), None, b'HEAD', 7]
         for name in bad:
             with self.subTest(name=name):
                 with self.assertRaises(PlanningError) as ctx:
@@ -100,12 +115,12 @@ class BatchLine(unittest.TestCase):
         git = bare_git()
         with mock.patch.object(adapter, 'BatchReader', side_effect=AssertionError('a reader was started')), \
                 mock.patch.object(adapter.subprocess, 'Popen', side_effect=AssertionError('launched')):
-            for revision in [f'HEAD{ch}' for ch in UNSAFE_CHARACTERS] + ['', '-x', '--all', None]:
+            for revision in [f'HEAD{ch}' for ch in CONTROL_CHARACTERS + WHITESPACE] + ['', '-x', '--all', None]:
                 with self.subTest(revision=revision):
                     with self.assertRaises(PlanningError) as ctx:
                         git.commit(revision)
                     self.assertEqual(ctx.exception.code, 'REVISION_INVALID')
-            for path in [f'a{ch}b' for ch in UNSAFE_CHARACTERS]:
+            for path in [f'a{ch}b' for ch in CONTROL_CHARACTERS]:
                 for read in (git.object_type, git.blob):
                     with self.subTest(read=read.__name__, path=path):
                         with self.assertRaises(PlanningError) as ctx:
@@ -212,6 +227,39 @@ class Equivalence(RepoCase):
                     self.assertEqual(self.git.object_kind(name), kind.decode().strip() if kind else None)
         self.assertEnded(Recorded.made)
 
+    def test_names_with_spaces(self):
+        # A tree made with git's plumbing (Windows cannot hold some of these names in a working
+        # tree): leading, inner and trailing spaces, other whitespace, a directory with a space.
+        names = ['a b.md', ' lead.md', 'trail .md', 'x' + chr(0xa0) + 'y.md', 'x' + chr(0x2028) + 'y.md']
+        blob = self.plumbing(['hash-object', '-w', '--stdin'], b'spaced').strip()
+        inner = self.plumbing(['mktree'], f'100644 blob {blob}{chr(9)}inner file.md{chr(10)}'.encode()).strip()
+        listing = ''.join(f'100644 blob {blob}{chr(9)}{n}{chr(10)}' for n in names)
+        listing += f'040000 tree {inner}{chr(9)}dir with space{chr(10)}'
+        tree = self.plumbing(['mktree'], listing.encode('utf-8')).strip()
+        commit = self.plumbing(['commit-tree', tree, '-m', 'spaced'], b'').strip()
+        paths = names + ['dir with space', 'dir with space/inner file.md', 'no such file.md', 'a  b.md',
+                         'dir with space/']
+        with self.git.session():
+            for path in paths:
+                with self.subTest(path=path):
+                    name = f'{commit}:{path}'
+                    kind = self.one_shot('cat-file', '-t', name)
+                    self.assertEqual(self.git.object_type(commit, path), kind.decode().strip() if kind else None)
+                    data = self.one_shot('cat-file', 'blob', name)
+                    if data is None:
+                        self.expect('GIT_FAILED', self.git.blob, commit, path)
+                    else:
+                        self.assertEqual(self.git.blob(commit, path), data)
+            out = self.one_shot('ls-tree', '-r', '-z', '--name-only', commit, '--', 'dir with space/')
+            self.assertEqual(self.git.files(commit, 'dir with space'),
+                             [n.decode() for n in out.split(bytes([0])) if n])
+        self.assertEqual(len(Recorded.made), 1)  # a missing spaced name kept the protocol in step
+        self.assertEnded(Recorded.made)
+
+    def plumbing(self, args, data):
+        return subprocess.run(['git', '-C', str(self.repo), *args], input=data, capture_output=True, check=True,
+                              timeout=adapter.TOOL_TIMEOUT_S, env={**adapter.tool_env(), **fx.GIT_ENV}).stdout.decode()
+
     def test_file_lists(self):
         with self.git.session():
             for directory in ('openspec/changes', f'openspec/changes/{fx.CHANGE}', 'no/such', DESIGN):
@@ -229,7 +277,10 @@ class InputSafety(RepoCase):
             reader = self.git._session.reader
             recorder = WriteRecorder(reader.process.stdin)
             reader.process.stdin = recorder
-            for ch in UNSAFE_CHARACTERS:
+            for ch in WHITESPACE:
+                with self.subTest(ch=ord(ch)):
+                    self.expect('REVISION_INVALID', self.git.commit, f'main{ch}HEAD')
+            for ch in CONTROL_CHARACTERS:
                 with self.subTest(ch=ord(ch)):
                     self.expect('REVISION_INVALID', self.git.commit, f'main{ch}HEAD')
                     self.expect('OBJECT_NAME_INVALID', self.git.object_type, self.commit, f'README.md{ch}x')
@@ -245,10 +296,13 @@ class InputSafety(RepoCase):
 
     def test_a_refused_name_starts_no_process(self):
         with mock.patch.object(adapter.subprocess, 'Popen', side_effect=AssertionError('launched')):
-            for ch in UNSAFE_CHARACTERS:
+            for ch in CONTROL_CHARACTERS:
                 with self.subTest(ch=ord(ch)):
                     self.expect('REVISION_INVALID', self.git.commit, f'HEAD{ch}')
                     self.expect('OBJECT_NAME_INVALID', self.git.object_type, self.commit, f'a{ch}')
+            for ch in WHITESPACE:
+                with self.subTest(ch=ord(ch)):
+                    self.expect('REVISION_INVALID', self.git.commit, f'HEAD{ch}')
         self.assertEqual(Recorded.made, [])
 
 
@@ -373,6 +427,136 @@ class Memo(RepoCase):
                         self.assertIn(DESIGN, self.git.files(self.commit, 'openspec'))
                         self.assertIn(DESIGN, self.git.files('HEAD', 'openspec'))
         self.assertEqual(runs, ['ls-tree'] * 8)
+
+
+class BacklogSnapshot(unittest.TestCase):
+    """Within one operation Backlog.md's reads are a snapshot: each command once (ruling R3)."""
+    category = 'unit'
+
+    LIST = json.dumps({'schemaVersion': 1, 'kind': 'task-list', 'tasks': [{'id': 'TASK-1'}]}).encode()
+    VIEW = json.dumps({'schemaVersion': 1, 'kind': 'task-view', 'task': {'id': 'TASK-1'}}).encode()
+
+    def setUp(self):
+        self.calls = []
+
+    def runner(self, argv, **kwargs):
+        self.calls.append(argv[1:])
+        if argv[1:3] == ['task', 'create']:
+            return subprocess.CompletedProcess(argv, 0, b'Created TASK-2', b'')
+        if argv[1:4] == ['task', 'view', 'TASK-9']:
+            return subprocess.CompletedProcess(argv, 1, b'', b'no such task')
+        return subprocess.CompletedProcess(argv, 0, self.LIST if argv[2] == 'list' else self.VIEW, b'')
+
+    def test_each_read_once_per_operation_and_nothing_after(self):
+        backlog = adapter.Backlog(['backlog'], Path('p'), runner=self.runner)
+        with adapter.operation():
+            for _ in range(3):
+                self.assertEqual(backlog.list_tasks(), [{'id': 'TASK-1'}])
+                self.assertEqual(backlog.view('TASK-1')['id'], 'TASK-1')
+                with self.assertRaises(PlanningError) as ctx:
+                    backlog.view('TASK-9')
+                self.assertEqual((ctx.exception.code, ctx.exception.message),
+                                 ('BACKLOG_FAILED', 'backlog task view exited 1: no such task'))
+            # another directory is another read
+            adapter.Backlog(['backlog'], Path('q'), runner=self.runner).list_tasks()
+        self.assertEqual(len(self.calls), 4)
+        self.assertIsNone(adapter.current_operation())
+        backlog.list_tasks()  # outside any operation: read again
+        self.assertEqual(len(self.calls), 5)
+
+    def test_a_create_ends_the_snapshot(self):
+        backlog = adapter.Backlog(['backlog'], Path('p'), runner=self.runner)
+        with adapter.operation():
+            backlog.list_tasks()
+            backlog.run('task', 'create', '--plain', '--', 'A title')
+            backlog.list_tasks()
+        self.assertEqual([c[:2] for c in self.calls], [['task', 'list'], ['task', 'create'], ['task', 'list']])
+
+    def test_outside_an_operation_every_read_runs(self):
+        backlog = adapter.Backlog(['backlog'], Path('p'), runner=self.runner)
+        backlog.list_tasks()
+        backlog.list_tasks()
+        self.assertEqual(len(self.calls), 2)
+
+    def test_an_exception_ends_the_operation(self):
+        with self.assertRaises(RuntimeError):
+            with adapter.operation():
+                adapter.Backlog(['backlog'], Path('p'), runner=self.runner).list_tasks()
+                raise RuntimeError('boom')
+        self.assertIsNone(adapter.current_operation())
+        adapter.Backlog(['backlog'], Path('p'), runner=self.runner).list_tasks()
+        self.assertEqual(len(self.calls), 2)
+
+
+class OperationScope(RepoCase):
+    """One operation: one Git per project (one work-tree check), one batch reader, all ended
+    when it ends, normally, by an exception or after a timeout (ruling R3)."""
+
+    def test_one_git_and_one_reader_per_operation(self):
+        with mock.patch.object(adapter.Git, '_run', autospec=True, side_effect=adapter.Git._run) as runs:
+            for _ in range(2):
+                with adapter.operation():
+                    first, why = adapter.project_git(self.repo)
+                    second, _ = adapter.project_git(self.repo)
+                    self.assertIs(first, second)
+                    self.assertIsNone(why)
+                    self.assertEqual(first.commit('HEAD'), self.commit)
+                    pointer = adapter.make_pointer(second, fx.CHANGE, 'design.md', self.commit)
+                    self.assertEqual(adapter.resolve_pointer(second, pointer.text), pointer)
+                self.assertIsNone(adapter.current_operation())
+        self.assertEqual([c.args[1] for c in runs.call_args_list], ['rev-parse'] * 2)  # one check each
+        self.assertEqual(len(Recorded.made), 2)  # one reader each, none shared between them
+        self.assertEnded(Recorded.made)
+
+    def test_an_unreadable_project_is_answered_once(self):
+        empty = self.tmp / 'not-a-repo'
+        empty.mkdir(exist_ok=True)
+        with mock.patch.object(adapter.Git, '_run', autospec=True, side_effect=adapter.Git._run) as runs:
+            with adapter.operation():
+                answers = [adapter.project_git(empty) for _ in range(3)]
+        self.assertEqual({(git, bool(why)) for git, why in answers}, {(None, True)})
+        self.assertEqual(len(runs.call_args_list), 1)
+
+    def test_an_exception_ends_the_operation_s_reader(self):
+        with self.assertRaises(RuntimeError):
+            with adapter.operation():
+                git, _ = adapter.project_git(self.repo)
+                git.commit('HEAD')
+                raise RuntimeError('boom')
+        self.assertEnded(Recorded.made)
+        self.assertIsNone(adapter.current_operation())
+
+    def test_a_timeout_in_an_operation_fails_closed_and_ends_the_reader(self):
+        with mock.patch.object(adapter.Git, 'batch_argv', return_value=HANGS), \
+                mock.patch.object(adapter, 'TOOL_TIMEOUT_S', 0.2):
+            with adapter.operation():
+                git, _ = adapter.project_git(self.repo)
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    git.commit('HEAD')
+                self.assertEnded(Recorded.made)
+                self.expect('GIT_FAILED', adapter.project_git(self.repo)[0].commit, 'main')
+        self.assertEqual(len(Recorded.made), 1)
+        self.assertEnded(Recorded.made)
+
+    def test_a_readiness_evaluation_is_one_operation(self):
+        calls = []
+        inner = fake_backlog.InProcessRunner(FAKE_BACKLOG)
+
+        def counting(argv, **kwargs):
+            calls.append(argv[len(FAKE_BACKLOG):])
+            return inner(argv, **kwargs)
+
+        backlog = adapter.Backlog(FAKE_BACKLOG, self.repo, runner=counting)
+        snapshot = HERE / 'fixtures' / 'readiness' / 'unblocked'
+        with mock.patch.dict(os.environ, {'FAKE_BACKLOG_SNAPSHOT': str(snapshot)}):
+            report = readiness.read_readiness(backlog, self.git, ['TASK-2', 'TASK-2', 'TASK-1'])
+        self.assertEqual([e['id'] for e in report['tasks']], ['TASK-2', 'TASK-2', 'TASK-1'])
+        self.assertTrue(all(p['resolved'] for e in report['tasks'] for p in e['pointers']))
+        self.assertEqual(calls, [['task', 'list', '--json'], ['task', 'view', 'TASK-2', '--json'],
+                                 ['task', 'view', 'TASK-1', '--json']])
+        self.assertEqual(len(Recorded.made), 1)
+        self.assertEnded(Recorded.made)
+        self.assertIsNone(adapter.current_operation())
 
 
 if __name__ == '__main__':

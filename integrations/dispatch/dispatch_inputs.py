@@ -433,11 +433,14 @@ class PlanningWorkSource:
         self.backlog, self.git = backlog, git
 
     def read(self, work_id: str) -> dict | None:
-        listed = [t['id'] for t in self.backlog.list_tasks() if t['id'].upper() == work_id.upper()]
-        if not listed:
-            return None
-        report = readiness.read_readiness(self.backlog, self.git, [listed[0]])
-        return report['tasks'][0]
+        # One readiness evaluation is one adapter operation (F-09.4): one git batch reader, and
+        # Backlog.md's reads made once each.
+        with planning.operation():
+            listed = [t['id'] for t in self.backlog.list_tasks() if t['id'].upper() == work_id.upper()]
+            if not listed:
+                return None
+            report = readiness.read_readiness(self.backlog, self.git, [listed[0]])
+            return report['tasks'][0]
 
 
 def read_profile_file(profile_id: str, *, profiles_root=REPO / 'profiles') -> bytes:
