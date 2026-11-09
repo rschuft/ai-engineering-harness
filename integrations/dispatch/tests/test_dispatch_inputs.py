@@ -203,6 +203,10 @@ class Fixture(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.ordinal_calls = []
         self.sources = {'demo-app': CountingSource(di.PlanningWorkSource(SnapshotBacklog('unblocked'), self.git))}
+        # One git read session per test (plan leaf F-09.4): the test's dispatch reads share one
+        # batch reader. The design repository never changes during a test, and the session (with
+        # its memo) ends with the test, so nothing is kept for the next one.
+        self.enterContext(self.git.session())
 
     # -- builders -------------------------------------------------------
 
