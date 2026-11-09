@@ -2,7 +2,7 @@
  "schema": "ai-engineering-harness/policy/test-budgets/v1",
  "description": "Enforceable test budgets (plan leaf F-09.1). Counters are exact: tests at least, launches and mkdtemp at most. wall_s is a median over wall.runs serial runs on the baseline host; a median passes up to wall_s x (1 + wall.tolerance), and never below wall_s + wall.min_slack_s. Checked by tools/check_test_budget.py (task test:budget) at every leaf acceptance and release, never in a hook.",
  "baseline": {
-  "revision": "799f6dd4698d4af22a8905e21f7efb1545299396",
+  "revision": "e17ac2b89644e175a4b5a6c9ab0a681fc3e30e66",
   "measured": "2026-11-09",
   "runs": 3,
   "host": {
@@ -21,17 +21,17 @@
   "min_slack_s": 0.5
  },
  "total": {
-  "tests": 1599,
+  "tests": 1619,
   "launches": 1778,
-  "mkdtemp": 968,
-  "wall_s": 132.6
+  "mkdtemp": 976,
+  "wall_s": 134.2
  },
  "suites": {
   "tools": {
-   "tests": 1023,
+   "tests": 1043,
    "launches": 514,
-   "mkdtemp": 533,
-   "wall_s": 76.6
+   "mkdtemp": 541,
+   "wall_s": 77.5
   },
   "store": {
    "tests": 84,
@@ -55,7 +55,7 @@
    "tests": 146,
    "launches": 572,
    "mkdtemp": 79,
-   "wall_s": 17.8
+   "wall_s": 18.1
   },
   "paths": {
    "tests": 38,
@@ -73,27 +73,27 @@
    "tests": 80,
    "launches": 68,
    "mkdtemp": 78,
-   "wall_s": 5.1
+   "wall_s": 5.0
   }
  },
  "categories": {
   "unit": {
-   "tests": 981,
+   "tests": 1001,
    "launches": 0,
-   "mkdtemp": 514,
-   "wall_s": 23.3
+   "mkdtemp": 522,
+   "wall_s": 23.8
   },
   "contract": {
    "tests": 215,
    "launches": 199,
    "mkdtemp": 85,
-   "wall_s": 17.0
+   "wall_s": 16.9
   },
   "integration": {
    "tests": 387,
    "launches": 1557,
    "mkdtemp": 368,
-   "wall_s": 88.4
+   "wall_s": 88.9
   },
   "e2e": {
    "tests": 15,
