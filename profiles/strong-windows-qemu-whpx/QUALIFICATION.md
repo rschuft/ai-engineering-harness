@@ -37,13 +37,23 @@ S-02.x (S-02.1, S-02.2) for P3 to P7, cited by property id.
 | P6 No host-management sockets or interop | PASS | F-03.3.1; S-02.1, S-02.2 remain | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md); re-run in every F-03.4 inspect |
 | P7 Network posture | PASS: enforcement point qualified | F-03.3.2; S-02.1, S-02.2 remain | [F-03.3.2](../../evidence/F-03.3.2-guest-network.md) |
 | P8 Identity | PASS | F-03.2.2b; F-03.4 (fresh across recreate, kept across start) | [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md) |
-| P9 Pinned boot inputs | PASS | F-03.2.1 (declared); F-03.2.2b; F-03.4 (`start` re-hashes every input) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md) |
-| P10 Disposability | PASS | F-03.4 | [F-03.4](../../evidence/F-03.4-teardown-qualification.md): two `smoke` runs PASS end to end (one with a running sibling, one with a stopped sibling); no durable source changed |
+| P9 Pinned boot inputs | PASS | F-03.2.1 (declared); F-03.2.2b; F-03.4 (`start` re-hashes every input); E-01.2.2c (re-declared: the seed template's new pin) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md), [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): every `inspect` of seven guests PASS with the new pin |
+| P10 Disposability | PASS | F-03.4; E-01.2.2c (re-observed) | [F-03.4](../../evidence/F-03.4-teardown-qualification.md): two `smoke` runs PASS end to end (one with a running sibling, one with a stopped sibling); no durable source changed. [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): `smoke --provision` PASS end to end after the seed change |
 | P11 Tier label | PASS | every leaf; F-03.4 (schema check of every record and log header) | [F-03.4](../../evidence/F-03.4-teardown-qualification.md) |
 | P12 Virtualization extensions | PASS: masked | F-03.2.1b (configuration); F-03.2.2b (guest) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md) |
 
 The repeatable check is `tools/guest.py smoke` (Task `guest:smoke`). It gives one
 machine verdict: PASS, with P10, only when every step passes.
+
+**Requalified after the E-01.2.2 seed change (2026-11-09).** The seed template now starts
+the Agent Server only behind `Requires=` on `docker.service` and on the root quiesce step
+`aieh-agent-server-quiesce.service`, which runs before every server start
+(`provisioning.agent_server.quiesce`). The new template pin was re-observed on fresh guests:
+`smoke --provision` PASS (start and recreate compared), `conversation-smoke --restart`,
+`admission-probe` and `job-access-probe` PASS, and every `inspect` PASS with the quiesce check
+([E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md)). The first provisioned smoke
+after S-01.4 exposed a comparison defect in `inspect`'s egress check (per-boot times in a
+stable view), fixed forward before the passing run.
 
 ## Limitations
 
