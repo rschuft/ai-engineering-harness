@@ -326,9 +326,13 @@ At `0c0412f`, with test 7's nested rerun moved to the gate tier (F-09.2), it too
 [`evidence/F-09.2-parallel-runner.md`](../evidence/F-09.2-parallel-runner.md) has the
 measurements. At `a18e8cf`, with the shared fixtures below (F-09.3), three serial runs took a
 median of 219 s (195 to 215 s in a later set whose interleaved runs of the earlier tree took
-260 s), and `test:all` 41 to 42 s; the 150 s target is not met yet, and
+260 s), and `test:all` 41 to 42 s;
 [`evidence/F-09.3-shared-fixtures.md`](../evidence/F-09.3-shared-fixtures.md) has the
-measurements and what F-09.4 is projected to remove.
+measurements. At `7bb7254`, with the batched git reads below (F-09.4), three serial runs
+interleaved with runs of the F-09.3 tree took a median of 154 s against 203 s, and `test:all`
+34 to 36 s; the 150 s target is not met yet, and
+[`evidence/F-09.4-batched-git.md`](../evidence/F-09.4-batched-git.md) has the measurements
+and the remaining costs, ranked.
 
 **Shared fixtures and process boundaries.** Expensive fixtures are built once and copied, and
 logic cases run in the test process; the tests that check a real process interaction still
