@@ -308,6 +308,20 @@ Detail and raw outputs: [`evidence/F-04.2-conversation-lifecycle.md`](../evidenc
   - the inner server's own VSCode and tool preload inside the container, unpublished.
 - The strong tier stays not operational (C6).
 
+## Current facts (2026-11-09, E-01.2.2 slices (b) and (c))
+Recorded by the Overseer as contract owner. This entry is appended; the entries above stay as written.
+- **Observed (slice (b), `evidence/E-01.2.2b-live-drills.md`):** two defects in the guest composition.
+  - F-1: the Agent Server unit wanted Moby but did not require it, so a failing guard left the server serving.
+  - F-2: the pinned 1.60.1 Agent Server resumes, in its own process and at every start, each stored conversation whose `base_state.json` says `running`. A job can write that file through its conversation-store bind. No upstream configuration turns this off.
+- **Composition now (slice (c), `752ff74`, `dbe2096`; the template pin moved in `profile.json`):**
+  - `aieh-agent-server.service` has `Requires=` and `After=docker.service`.
+  - It also requires, and starts after, the new root oneshot `aieh-agent-server-quiesce.service`, declared as `provisioning.agent_server.quiesce`. That step runs before every server start. It removes every container and verifies that none remains. Then, through directory-relative opens that never follow a link, it rewrites a stored `running` record to `error`. It moves aside, never deletes, any record that is not a regular, singly linked file of the conversation uid, or whose `meta.json` id differs from its directory name. The move is a rename into the root-only quarantine `/srv/scratch/aieh-quarantine` on the same file system.
+  - A failure of the step fails the server's start with result `dependency`. The invariant is zero containers before the server's `ExecStart`.
+  - `check_profile` validates the declaration and `inspect` compares it with the running guest.
+- **Requalified on fresh guests** (`evidence/E-01.2.2c-fix-requalification.md`): F-04.1, F-04.2, S-01.3.1 and F-03.4 re-observed PASS. E-01.2.2's proof items (1) to (3) PASS. The "F-2 closed" drill passes every variant, including the job's own write, a forced kill and links planted in the record.
+- **Recorded limit:** `fd-outer-server-local-recovery` (the upstream behaviour of the pinned 1.60.1, compensated by the step). An upstream report is to be filed. The limit is carried to decision 0001's version line: when a pinned release no longer recovers Docker-backed conversations in-process, a recorded decision retires or keeps the step.
+- **C6:** met on 2026-11-09 by the Overseer's recorded decision (the bootstrap log, E-01.2.2 row). `strong-windows-qemu-whpx` is operational on the qualified host only. A new host, pin or guest-changing leaf requalifies the profile.
+
 ## Evidence
 - [`evidence/F-04.2-conversation-lifecycle.md`](../evidence/F-04.2-conversation-lifecycle.md):
   the F-04.2 lifecycle run, the conversation containers' facts, the declared-versus-observed
