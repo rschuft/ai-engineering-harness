@@ -18,11 +18,11 @@ publication gate and the guest tooling keep their current locations until F-07.2
 | Path | What |
 |---|---|
 | `aieh_paths.py` | The resolver, the configuration loader and the command line (`show`, `init`, `doctor`), the category table, the legacy table and the asset record format |
-| `tools_install.py` | `task tools:install`: the hash-locked Python tools venv, the first consumer of the contract. `--set python-dev-tools` (`task dev:install`) installs the dev tools set (pytest, pytest-xdist and PyYAML) the same way, from its own lock, as `python-dev-tools` beside it; `--python` prints a set's venv interpreter for the current lock, creating nothing, and exits 1 when it is not installed |
+| `tools_install.py` | `task tools:install`: the hash-locked Python tools venv, the first consumer of the contract. `--set python-dev-tools` (`task dev:install`) installs the dev tools set (pytest, pytest-xdist, PyYAML, Dulwich and urllib3) the same way, from its own lock, as `python-dev-tools` beside it; `--python` prints a set's venv interpreter for the current lock, creating nothing, and exits 1 when it is not installed |
 | `tests/test_aieh_paths.py` | The section 9 criteria 1 to 10 of the Owner directive, the adapters, the legacy table, `example_config.yml`, the asset records, `tools:install` and its `--set` and `--python` options |
 | `../../example_config.yml` | The tracked, commented configuration template |
-| `../../composition/lock/python/tools-requirements.txt` | The tools venv lock: `pyyaml==6.0.3` with the hashes of the F-01.2 lock |
-| `../../composition/lock/python/dev-requirements.txt` | The dev tools venv lock (F-09.2): pytest, pytest-xdist and their dependencies, and `pyyaml==6.0.3` with the same hashes as the tools lock |
+| `../../composition/lock/python/tools-requirements.txt` | The tools venv lock: `pyyaml==6.0.3` with the hashes of the F-01.2 lock, `dulwich==1.2.21` and `urllib3==2.8.0` (F-10.1) |
+| `../../composition/lock/python/dev-requirements.txt` | The dev tools venv lock (F-09.2): pytest, pytest-xdist and their dependencies, and `pyyaml==6.0.3`, `dulwich==1.2.21` and `urllib3==2.8.0` with the same hashes as the tools lock |
 
 ## Commands
 
@@ -101,11 +101,15 @@ built from them an install.
   "format": "aieh-asset/1",
   "kind": "python-wheels",
   "name": "python-tools",
-  "version": "cp312-f1d89e7da0e8",
+  "version": "cp312-442f4405a6dc",
   "provenance": {"source": "https://pypi.org/simple/"},
   "integrity": {
-    "sha256": {"pyyaml-6.0.3-cp312-cp312-win_amd64.whl": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b"},
-    "pin": "composition/lock/python/tools-requirements.txt sha256:f1d89e7da0e8fdf68b3b84288082a1e4515ce5f5b7a8c75ccfef83db5f6e9729"
+    "sha256": {
+      "dulwich-1.2.21-cp312-cp312-win_amd64.whl": "b3d30d40384cee2e8aa3722f87cef2f3d71717a0b45ac88eba457d62acf65dda",
+      "pyyaml-6.0.3-cp312-cp312-win_amd64.whl": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
+      "urllib3-2.8.0-py3-none-any.whl": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3"
+    },
+    "pin": "composition/lock/python/tools-requirements.txt sha256:442f4405a6dc3d583beb8fffd81762a796b20ed4e465bcabd5f57ec4bb6de8bd"
   },
   "reacquire": "task tools:install (pip download --require-hashes --only-binary=:all: -r composition/lock/python/tools-requirements.txt)",
   "acquired_at": "2026-11-07T16:29:10Z",
