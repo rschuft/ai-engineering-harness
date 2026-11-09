@@ -1,0 +1,4 @@
+# tools/guest_drill.py is copied byte for byte into a drill guest as a cloud-init part and
+# must carry no CR (tools/guest.py drill_script refuses one). Store and check it out
+# verbatim, independent of a host's core.autocrlf.
+/guest_drill.py -text

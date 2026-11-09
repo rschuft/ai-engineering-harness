@@ -87,6 +87,13 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                attempt, principal, observations, control result and verdict (PASS, FAIL,
                UNKNOWN) with the runtime-configuration snapshot; --sensitivity also runs
                the catalogue's mutations, which must classify as FAIL.
+    drill      E-01.2.2 slice (b), TEST ONLY, on an instance made with create --provision
+               --drill (whose seed also carries tools/guest_drill.py, a root helper that acts
+               on agent's requests): fail-closed (a bad key check and a failing guard each
+               stop the chain, then are restored), stored-state (every field of the
+               job-writable stored conversation state altered alone, then a server restart
+               and a reopen; the container must not change), root-scan (the guest-root P5
+               scan). containment-probe --drill-defective-control runs there only.
     host-census  S-01.4: a read-only, unelevated census of the harness's host listeners by
                PID (QEMU, Gitea, the Owner host's Vite servers; each must be on 127.0.0.1)
                and the Windows Firewall profiles and rule count, recorded as disclosure.
@@ -117,6 +124,10 @@ never defaulted, contract sections 4 and 11):
                                           [--restart] [--openapi FILE] [--canaries DIR] [--out FILE]
     python -I -B tools/guest.py containment-probe --profile PROFILE --state-dir STATE --name NAME
                                           [--sensitivity] [--token-fingerprint L=sha256:H] [--out FILE]
+    python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision --drill
+    python -I -B tools/guest.py drill     --profile PROFILE --state-dir STATE --name NAME
+                                          --kind fail-closed|stored-state|root-scan
+                                          [--canaries DIR] [--raw] [--limit N] [--out FILE]
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
     before it launches anything, inspect searches the guest for it; create, recreate
@@ -1553,16 +1564,20 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
 
 
 def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=None,
-           provision=False, egress_falsification=False):
+           provision=False, egress_falsification=False, drill=False):
     """The create binding. ``netprobe`` is set only by the netprobe operation (a
     NetprobeSession); the ordinary create takes no validation input. ``provision`` (F-04.1)
     writes the provisioning manifest of the verified host stage into the seed; the
     provision operation then transfers the files and the seeded root step installs them.
     ``egress_falsification`` (S-01.4 fix-forward, with ``provision`` only) marks the manifest
     so that the root step enables the route-present falsification request
-    (job-access-probe); an ordinary provisioned guest never has it."""
+    (job-access-probe); an ordinary provisioned guest never has it. ``drill`` (E-01.2.2
+    slice (b), with ``provision`` only) seeds the TEST-ONLY drill helper as a second
+    user-data part and records a drill validation block; an ordinary create never does."""
     if egress_falsification and not provision:
         raise Refused('REFUSED', '--egress-falsification needs --provision')
+    if drill and (not provision or netprobe is not None):
+        raise Refused('REFUSED', '--drill needs --provision and is never a netprobe instance')
     if netprobe is not None and not isinstance(netprobe, NetprobeSession):
         raise Refused('REFUSED', 'create takes no validation overlay; only the netprobe '
                       'operation creates a validation instance')
@@ -1606,7 +1621,12 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
                        'stderr': result.stderr.strip()}
         if result.returncode != 0:
             raise Refused('REFUSED', f'qemu-img for {disk} failed: {result.stderr.strip()}')
-    if netprobe is None:
+    if drill:
+        script = drill_script(ctx.repo)
+        seed = drill_seed(ctx.profile_path, idir, name, idir / 'ssh' / 'id_ed25519.pub', script,
+                          manifest['bytes'])
+        ssh_port, qmp_port = allocate_ports(2)
+    elif netprobe is None:
         gen = load_seed_generator()
         try:
             seed = gen.generate(str(ctx.profile_path.parent), str(idir), name,
@@ -1654,6 +1674,8 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         argv, validation = netprobe_validation(
             argv, listener_ports, netprobe.pid, posix(script_path.relative_to(ctx.repo)),
             script, seed['validation'], params)
+    elif drill:
+        validation = drill_validation(script, seed['validation'])
     provisioning = None
     if manifest is not None:
         if seed.get('provision_manifest_sha256') != manifest['sha256']:
@@ -1676,8 +1698,8 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         result['canaries'] = {'planted_in_environment': planted,
                               'needles': canary_summary(canaries['needles'])}
     if validation is not None:
-        result['validation'] = {k: validation[k] for k in ('mode', 'argv_changes', 'guestfwd',
-                                                           'listener', 'script', 'seed')}
+        result['validation'] = {k: validation.get(k) for k in ('mode', 'argv_changes', 'guestfwd',
+                                                               'listener', 'script', 'seed')}
     try:
         result['ready'] = wait_ready(ctx, idir, record, ready_timeout, need_host_keys=True)
         result['result'] = 'ready'
@@ -1695,7 +1717,7 @@ def start(ctx, name, ready_timeout=READY_TIMEOUT_S):
         raise Refused('REFUSED', f'{name}: no such instance')
     t0 = time.time()
     record = read_launch_record(idir)
-    if record.get('validation'):
+    if record.get('validation') and record['validation'].get('mode') != 'drill':
         raise Refused('REFUSED', f'{name} is a {record["validation"].get("mode")} validation '
                       'instance: single boot only; destroy it')
     launched = launch(ctx, idir, record, 'start')
@@ -4146,39 +4168,58 @@ def render_netprobe_script(raw, params):
                         '# rendered by tools/guest.py netprobe', 1).encode('ascii')
 
 
-def netprobe_user_data(cloud_config, script):
+def multipart_user_data(cloud_config, script, filename, boundary, what):
     """cloud-init multipart user-data: the ordinary cloud-config part, unchanged, then the
     test-only script part (cloud-init runs a text/x-shellscript part once, as root)."""
-    boundary = NETPROBE_BOUNDARY.encode('ascii')
-    for what, body in (('cloud-config', cloud_config), ('script', script)):
-        if boundary in body or b'\r' in body:
-            raise Refused('REFUSED', f'netprobe user-data: the {what} part holds the boundary '
+    mark = boundary.encode('ascii')
+    for part_name, body in (('cloud-config', cloud_config), ('script', script)):
+        if mark in body or b'\r' in body:
+            raise Refused('REFUSED', f'{what} user-data: the {part_name} part holds the boundary '
                           'or a CR')
         try:
             body.decode('ascii')
         except UnicodeDecodeError as exc:
-            raise Refused('REFUSED', f'netprobe user-data: the {what} part is not ASCII') from exc
+            raise Refused('REFUSED', f'{what} user-data: the {part_name} part is not ASCII') from exc
 
-    def part(content_type, filename, body):
-        head = (f'--{NETPROBE_BOUNDARY}\n'
+    def part(content_type, name, body):
+        head = (f'--{boundary}\n'
                 f'Content-Type: {content_type}; charset="us-ascii"\n'
                 'MIME-Version: 1.0\n'
                 'Content-Transfer-Encoding: 7bit\n'
-                f'Content-Disposition: attachment; filename="{filename}"\n\n')
+                f'Content-Disposition: attachment; filename="{name}"\n\n')
         # the newline before the next delimiter belongs to the delimiter (RFC 2046)
         return head.encode('ascii') + body + b'\n'
 
-    return (f'Content-Type: multipart/mixed; boundary="{NETPROBE_BOUNDARY}"\n'
+    return (f'Content-Type: multipart/mixed; boundary="{boundary}"\n'
             'MIME-Version: 1.0\n\n').encode('ascii') + \
         part('text/cloud-config', 'cloud-config.yaml', cloud_config) + \
-        part('text/x-shellscript', 'aieh-netprobe.py', script) + \
-        f'--{NETPROBE_BOUNDARY}--\n'.encode('ascii')
+        part('text/x-shellscript', filename, script) + \
+        f'--{boundary}--\n'.encode('ascii')
+
+
+def netprobe_user_data(cloud_config, script):
+    return multipart_user_data(cloud_config, script, 'aieh-netprobe.py', NETPROBE_BOUNDARY,
+                               'netprobe')
 
 
 def netprobe_seed(profile_path, instance_dir, name, public_key, script):
     """seed.iso for a validation instance: the generator's own steps (tools/nocloud_seed.py:
     pinned templates, the same substitutions), with user-data wrapped by netprobe_user_data.
     meta-data and network-config are the ordinary ones."""
+    return wrapped_seed(profile_path, instance_dir, name, public_key, script, 'aieh-netprobe.py',
+                        NETPROBE_BOUNDARY, 'netprobe')
+
+
+def drill_seed(profile_path, instance_dir, name, public_key, script, provision_manifest):
+    """seed.iso for a drill instance (E-01.2.2 slice (b)): the ordinary provisioned seed (the
+    pinned templates, the same substitutions, the manifest) with the drill helper as a second
+    user-data part."""
+    return wrapped_seed(profile_path, instance_dir, name, public_key, script, 'aieh-drill.py',
+                        DRILL_BOUNDARY, 'drill', provision_manifest)
+
+
+def wrapped_seed(profile_path, instance_dir, name, public_key, script, filename, boundary, what,
+                 provision_manifest=None):
     gen = load_seed_generator()
     try:
         profile, root = gen.load_profile(str(Path(profile_path).parent))
@@ -4187,13 +4228,13 @@ def netprobe_seed(profile_path, instance_dir, name, public_key, script):
         templates = gen.read_templates(profile, root)
         values = {'agent_ssh_public_key': gen.read_public_key(str(public_key)),
                   'scratch_device': gen.scratch_device(profile),
-                  'provision_manifest': gen.provision_manifest_value(None),
+                  'provision_manifest': gen.provision_manifest_value(provision_manifest),
                   'instance_id': instance_id, 'instance_name': name}
         rendered = gen.render(templates, values)
     except gen.Refused as exc:
         raise Refused('REFUSED', f'seed: {exc}') from exc
     ordinary = rendered['user-data']
-    rendered['user-data'] = netprobe_user_data(ordinary, script)
+    rendered['user-data'] = multipart_user_data(ordinary, script, filename, boundary, what)
     image = gen.build_iso(rendered)
     target = Path(instance_dir) / gen.SEED_NAME
     with open(target, 'xb') as handle:
@@ -4207,10 +4248,12 @@ def netprobe_seed(profile_path, instance_dir, name, public_key, script):
             'templates': {n: profile['boot_inputs']['seed']['templates'][n]['sha256']
                           for n in gen.FILES},
             'rendered_sha256': {n: hashlib.sha256(rendered[n]).hexdigest() for n in gen.FILES},
+            'provision_manifest_sha256': None if provision_manifest is None
+            else hashlib.sha256(provision_manifest).hexdigest(),
             'validation': {'ordinary_user_data_sha256': hashlib.sha256(ordinary).hexdigest(),
                            'script_part_sha256': hashlib.sha256(script).hexdigest(),
                            'user_data': 'multipart/mixed: text/cloud-config (the ordinary '
-                                        'user-data), text/x-shellscript (aieh-netprobe.py)'}}
+                                        f'user-data), text/x-shellscript ({filename})'}}
 
 
 def netprobe_guestfwd_rule(listener_port):
@@ -4283,6 +4326,10 @@ def check_forwarding(record):
         if rules:
             raise Refused('REFUSED', f'the launch record carries guestfwd {rules} without a '
                           'validation mode; no profile endpoint enables guest forwarding')
+        return rules
+    if validation.get('mode') == 'drill':
+        if rules:
+            raise Refused('REFUSED', f'drill record: guestfwd {rules}; a drill instance has none')
         return rules
     want = [(validation.get('guestfwd') or {}).get('rule')]
     if validation.get('mode') != 'netprobe' or rules != want:
@@ -9774,7 +9821,8 @@ def profile_block_digests(profile):
 
 
 def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensitivity=False,
-                      channels=None, ssh_fn=None, admission_fn=None, job_fn=None):
+                      channels=None, ssh_fn=None, admission_fn=None, job_fn=None,
+                      defective_controls=()):
     """containment-probe (S-02.1) on a running provisioned instance: the versioned catalogue
     (security/containment-cases.json, refused unless its checker passes) run in one pass.
     admission-probe and job-access-probe run unchanged for the cases they cover; the rest
@@ -9785,9 +9833,14 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
     catalogue's mutations, each of which must be classified a success (FAIL). A denial that
     succeeds is a stop condition: later primitives are not started. One machine verdict:
     PASS only when every case passed. ``channels``, ``ssh_fn``, ``admission_fn`` and
-    ``job_fn`` stand in for the guest in tests."""
+    ``job_fn`` stand in for the guest in tests. ``defective_controls`` (E-01.2.2 slice (b),
+    TEST ONLY, drill instances only) replaces the named positive controls with an attempt that
+    cannot succeed: their cases must become UNKNOWN and the run must not PASS."""
     idir = ctx.instance_dir(name)
     _, record = running_instance(ctx, name)
+    if defective_controls and (record.get('validation') or {}).get('mode') != 'drill':
+        raise Refused('REFUSED', '--drill-defective-control runs on a drill instance only '
+                      '(create --provision --drill); an acceptance run never takes it')
     if not record.get('provisioning'):
         raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
     if not jobs_config(ctx.profile) or not admission_config(ctx.profile):
@@ -9800,6 +9853,8 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
             raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
                           'directory, outside the checkout and the instance directory')
     catalogue, catalogue_sha, checker = load_containment_catalogue(ctx)
+    catalogue, injected = defective_catalogue(catalogue, defective_controls) \
+        if defective_controls else (catalogue, [])
     gitea = dict((catalogue.get('fingerprints') or {}).get('gitea') or {})
     extra = parse_token_fingerprints(token_fingerprints)
     for label, fp in extra.items():
@@ -10221,11 +10276,1211 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
            'cases': case_records,
            'sensitivity': {'ran': bool(sensitivity), 'ok': sensitivity_ok, 'rows': sensitivity_rows},
            'steps': steps, 'primitives': memo['primitives']}
+    if injected:
+        out['drill'] = {'defective_controls': injected, 'test_only': True,
+                        'dependent_verdicts': {c: verdicts.get(c) for i in injected
+                                               for c in i['dependent_cases']},
+                        'control_verdicts': {i['control']: verdicts.get(i['control'])
+                                             for i in injected}}
     out['record'] = write_record(idir, 'containment-probe', out)
     if out_file is not None:
         write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
         out['out'] = str(out_file)
     return out
+
+
+# ---------------------------------------------------------------- drills (E-01.2.2 slice (b))
+
+# TEST-ONLY drill guests (plan leaf E-01.2.2 slice (b), under the Owner's extended guest-run
+# authorization of 2026-11-07, evidence/bootstrap-log.md). `create --provision --drill` seeds
+# tools/guest_drill.py as a second user-data part (cloud-init runs it once, as root, at first
+# boot); it installs a root helper that acts on requests agent writes into a root:agent 0730
+# directory. The profile's templates, its launch.argv and every ordinary create are
+# unchanged; an ordinary instance never has the helper, and `drill` and `containment-probe
+# --drill-defective-control` refuse any instance whose launch record is not a drill record.
+# A drill instance has no guestfwd, host share or new host port, and it may be stopped and
+# started (the guard drill boots it with a failing guard).
+DRILL_SCRIPT = ('tools', 'guest_drill.py')
+DRILL_BOUNDARY = '==AIEH-DRILL-USER-DATA=='
+DRILL_REQUEST_DIR = '/var/lib/aieh-drill/request'
+DRILL_RESULTS = '/var/lib/aieh-drill/results'
+DRILL_CEILING_S = 600            # bounds a hang of one root request (most take 1-30 s)
+DRILL_SCAN_CEILING_S = 2400      # the guest-root P5 scan (every file, optionally raw devices)
+DRILL_SETTLE_S = 300             # units settling after a boot or a restart (a ceiling)
+DRILL_SCHEMA = 'ai-engineering-harness/profiles/drill-record/v1'
+DRILL_KINDS = ('fail-closed', 'stored-state', 'root-scan', 'admitted-create')
+DRILL_AUTHORITY = ("the Owner's extended guest-run authorization of 2026-11-07 "
+                   '(evidence/bootstrap-log.md)')
+DRILL_GUARD_VARIANTS = ('fail-pre', 'check-only')
+DRILL_KEY_VARIANTS = ('missing-session-key', 'second-session-key')
+DRILL_SERVER_UNIT = 'aieh-agent-server.service'
+DRILL_GUARD_UNIT = 'aieh-container-guard.service'
+DRILL_LISTENER = '127.0.0.1:8000'
+# the conversations the drills create (the pinned fixture with these ids; never the fixture's)
+DRILL_IDS = {
+    'key-missing-session-key': 'e0122b00-0000-4000-8000-00000000c001',
+    'key-second-session-key': 'e0122b00-0000-4000-8000-00000000c002',
+    'guard-fail-pre': 'e0122b00-0000-4000-8000-00000000c011',
+    'guard-check-only': 'e0122b00-0000-4000-8000-00000000c012',
+    'control': 'e0122b00-0000-4000-8000-00000000c0ff',
+    'state': 'e0122b00-0000-4000-8000-00000000d001',
+    'state-sensitivity': 'e0122b00-0000-4000-8000-00000000d0ff',
+}
+# where a path-like stored field is pointed: a directory the outer server could create
+# (its ReadWritePaths) but no container mount reaches; its appearance is steering
+DRILL_MARKER_ROOT = '/srv/scratch/openhands/home/aieh-drill'
+DRILL_FOREIGN_UUID = 'e0122b00-0000-4000-8000-0000000000ff'
+DRILL_CONTAINER_OPTIONS = {'memory': '8g', 'cpus': 4.0}
+# a stored-state alteration must leave these container facts unchanged (the leaf's proof:
+# runtime, image, mounts, caps, working_dir, key handling)
+DRILL_SHAPE_HOST = ('Binds', 'Mounts', 'NetworkMode', 'CapAdd', 'CapDrop', 'SecurityOpt',
+                    'Privileged', 'ReadonlyRootfs', 'Memory', 'MemorySwap', 'NanoCpus',
+                    'CpuShares', 'CpuQuota', 'PidsLimit', 'Ulimits', 'UsernsMode', 'PidMode',
+                    'IpcMode', 'UTSMode', 'CgroupnsMode', 'Devices', 'DeviceCgroupRules',
+                    'Runtime', 'Init', 'Sysctls', 'GroupAdd', 'VolumesFrom', 'Tmpfs',
+                    'ShmSize', 'CgroupParent', 'ExtraHosts', 'PortBindings', 'PublishAllPorts')
+DRILL_DEFECTIVE_PROBE = {'source': 'containment-probe', 'op': 'read',
+                         'args': {'path': '/aieh-drill-defective-control/absent'}}
+DRILL_SERVER_SECRETS = ('OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0', 'session.key')
+
+# Run as agent: write the request (a temporary name, then renamed, so the path unit sees a
+# complete file), then wait on inotify in the results directory for the result named by the
+# request id, under a ceiling. Prints the result, or an error object, as one JSON line.
+DRILL_REQUEST_PROBE = r'''import base64, ctypes, json, os, select, sys, time
+req_dir, results, spec, ceiling = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+req = json.loads(base64.b64decode(spec).decode('utf-8'))
+target = os.path.join(results, req['id'] + '.json')
+libc = ctypes.CDLL(None, use_errno=True)
+fd = libc.inotify_init1(os.O_CLOEXEC)
+if fd < 0 or libc.inotify_add_watch(fd, results.encode(), 0x80 | 0x8) < 0:
+    print(json.dumps({'error': 'inotify', 'errno': ctypes.get_errno()})); sys.exit(3)
+tmp = os.path.join(req_dir, '.request-' + req['id'] + '.tmp')
+try:
+    handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    os.write(handle, json.dumps(req).encode('utf-8'))
+    os.close(handle)
+    os.rename(tmp, os.path.join(req_dir, 'request.json'))
+except OSError as exc:
+    print(json.dumps({'error': 'request', 'errno': exc.errno})); sys.exit(3)
+deadline = time.monotonic() + ceiling
+while True:
+    try:
+        with open(target, encoding='utf-8') as h:
+            print(json.dumps(json.load(h), sort_keys=True)); sys.exit(0)
+    except (FileNotFoundError, ValueError):
+        pass
+    left = deadline - time.monotonic()
+    if left <= 0:
+        print(json.dumps({'error': 'ceiling', 'id': req['id']})); sys.exit(5)
+    ready, _, _ = select.select([fd], [], [], min(5.0, left))
+    if ready:
+        os.read(fd, 65536)
+'''
+
+
+def drill_script(repo=REPO):
+    """The guest-side root helper (tools/guest_drill.py): ASCII, LF, a python3 shebang."""
+    path = Path(repo).joinpath(*DRILL_SCRIPT)
+    raw = path.read_bytes()
+    if b'\r' in raw or not raw.startswith(b'#!/usr/bin/python3\n'):
+        raise Refused('REFUSED', f'{path}: the drill helper must start with #!/usr/bin/python3 '
+                      'and carry no CR')
+    try:
+        raw.decode('ascii')
+    except UnicodeDecodeError as exc:
+        raise Refused('REFUSED', f'{path}: the drill helper is not ASCII ({exc})') from exc
+    return raw
+
+
+def drill_validation(script, seed_validation, repo=REPO):
+    """The launch record's validation block of a drill instance."""
+    return {'mode': 'drill', 'test_only': True, 'plan_leaf': 'E-01.2.2 slice (b)',
+            'authority': DRILL_AUTHORITY, 'single_boot': False, 'argv_changes': [],
+            'guestfwd': None,
+            'script': {'path': '/'.join(DRILL_SCRIPT), 'sha256': hashlib.sha256(script).hexdigest()},
+            'seed': seed_validation}
+
+
+def drill_instance(ctx, name):
+    """(instance dir, launch record) of a running drill instance; anything else is refused."""
+    idir, record = running_instance(ctx, name)
+    if (record.get('validation') or {}).get('mode') != 'drill':
+        raise Refused('REFUSED', f'{name} is not a drill instance (create --provision --drill); '
+                      'a drill never runs on an ordinary instance')
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision')
+    return idir, record
+
+
+class DrillChannel:
+    """One root request of the drill helper, as agent over SSH; returns its result."""
+
+    def __init__(self, ssh):
+        self.ssh = ssh
+
+    def __call__(self, action, params=None, ceiling=DRILL_CEILING_S):
+        req = {'id': f'{action}-{secrets.token_hex(6)}', 'action': action, 'params': params or {}}
+        spec = base64.b64encode(json.dumps(req).encode('utf-8')).decode('ascii')
+        result = self.ssh.run(['python3', '-', DRILL_REQUEST_DIR, DRILL_RESULTS, spec, str(ceiling)],
+                              input_text=DRILL_REQUEST_PROBE, timeout=ceiling + 60)
+        try:
+            data = json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            data = None
+        if not isinstance(data, dict) or data.get('id') != req['id'] or 'error' in data and \
+                'action' not in data:
+            raise Refused('DRILL', f'drill {action}: no result (rc {result.returncode}): '
+                          f'{(result.stdout or "")[-300:]} {result.stderr.strip()[-300:]}')
+        if data.get('secret_occurrences_redacted'):
+            log(f'drill {action}: {data["secret_occurrences_redacted"]} secret occurrence(s) '
+                'redacted by the helper')
+        return data
+
+
+def _detail(result):
+    if not result.get('ok'):
+        raise Refused('DRILL', f'drill {result.get("action")}: {result.get("error")}')
+    return result.get('detail') or {}
+
+
+def _unit(obs, unit):
+    return ((obs or {}).get('units') or {}).get(unit) or {}
+
+
+def _listening(obs, address=DRILL_LISTENER):
+    return any(str(line).split()[0] == address for line in (obs or {}).get('listeners') or []
+               if str(line).split())
+
+
+def _server_processes(obs):
+    return [p for p in ((obs or {}).get('agent_server') or {}).get('processes') or []
+            if p.get('comm') == 'agent-server']
+
+
+def _moby_running(obs):
+    return sorted({p.get('comm') for p in (obs or {}).get('moby_processes') or []})
+
+
+def _settled(obs):
+    """No unit of the chain is still starting."""
+    return all(_unit(obs, u).get('ActiveState') not in ('activating', 'deactivating', 'reloading')
+               for u in (DRILL_GUARD_UNIT, 'docker.service', DRILL_SERVER_UNIT))
+
+
+def wait_until(fetch, done, ceiling_s):
+    """(last value, met) of a condition that exposes no completion signal: fetch, test,
+    and fetch again after POLL_S, under the ceiling."""
+    deadline = time.monotonic() + ceiling_s
+    while True:
+        value = fetch()
+        if done(value):
+            return value, True
+        if time.monotonic() >= deadline:
+            return value, False
+        time.sleep(POLL_S)
+
+
+def _call(api, *requests):
+    data = api(list(requests))
+    if data.get('session_key_occurrences'):
+        raise Refused('SECRET', 'a response carried the session key '
+                      f'({data["session_key_occurrences"]} occurrence(s), redacted)')
+    return data['responses']
+
+
+def _reached(response):
+    """True when an HTTP status came back (the server answered at all)."""
+    return isinstance((response or {}).get('status'), int)
+
+
+def check_row(name, ok, observed):
+    return {'check': name, 'ok': bool(ok), 'observed': observed}
+
+
+def key_drill_checks(during, ready, create, settled):
+    """The failing key check (proof item 1): the server never runs and nothing answers."""
+    unit = _unit(during, DRILL_SERVER_UNIT)
+    lines = (during.get('journal') or {}).get(DRILL_SERVER_UNIT) or []
+    return [
+        check_row('Agent Server unit not active', unit.get('ActiveState') != 'active',
+                  {k: unit.get(k) for k in ('ActiveState', 'SubState', 'Result', 'NRestarts')}),
+        check_row('every start refused again (restarts observed)', settled, unit.get('NRestarts')),
+        check_row('no agent-server process in its unit', not _server_processes(during),
+                  _server_processes(during)),
+        check_row(f'no listener on {DRILL_LISTENER}', not _listening(during),
+                  during.get('listeners')),
+        check_row('the key check refused (journal)',
+                  any('aieh-agent-server-keycheck: refused' in str(line) for line in lines),
+                  [line for line in lines if 'keycheck' in str(line)][-3:]),
+        check_row('GET /ready gets no HTTP answer', not _reached(ready),
+                  {k: ready.get(k) for k in ('status', 'error')}),
+        check_row('POST /api/conversations gets no HTTP answer (no conversation)',
+                  not _reached(create), {k: create.get(k) for k in ('status', 'error')}),
+    ]
+
+
+def guard_drill_checks(boot, after, ready, create):
+    """The failing guard (proof item 1): Moby and the Agent Server stopped, no conversation."""
+    guard, docker = _unit(boot, DRILL_GUARD_UNIT), _unit(boot, 'docker.service')
+    server = _unit(boot, DRILL_SERVER_UNIT)
+    shims = [c for c in _moby_running(after) if c.startswith('containerd-shim')]
+    return [
+        check_row('guard unit failed', guard.get('ActiveState') == 'failed',
+                  {k: guard.get(k) for k in ('ActiveState', 'SubState', 'Result')}),
+        check_row('docker.service not active (after boot and after the create attempt)',
+                  docker.get('ActiveState') != 'active' and
+                  _unit(after, 'docker.service').get('ActiveState') != 'active',
+                  [{k: _unit(o, 'docker.service').get(k) for k in ('ActiveState', 'Result')}
+                   for o in (boot, after)]),
+        check_row('no dockerd process', 'dockerd' not in _moby_running(boot) + _moby_running(after),
+                  {'boot': _moby_running(boot), 'after': _moby_running(after)}),
+        check_row('Agent Server stopped', server.get('ActiveState') != 'active' and
+                  not _server_processes(boot) and not _listening(boot),
+                  {'unit': {k: server.get(k) for k in ('ActiveState', 'SubState', 'Result')},
+                   'processes': _server_processes(boot), 'listening': _listening(boot)}),
+        check_row('no conversation created (no 2xx, no container)',
+                  not _status_ok(create) and not shims,
+                  {'create': {k: create.get(k) for k in ('status', 'error', 'body')},
+                   'container_shims': shims}),
+        check_row('GET /ready', True, {k: ready.get(k) for k in ('status', 'error')}),
+    ]
+
+
+def restored_checks(obs, ready):
+    return [check_row(f'{u} active', _unit(obs, u).get('ActiveState') == 'active',
+                      _unit(obs, u).get('ActiveState'))
+            for u in (DRILL_GUARD_UNIT, 'docker.service', DRILL_SERVER_UNIT)] + \
+        [check_row('guard drop-in absent', obs.get('guard_dropin_sha256') is None,
+                   obs.get('guard_dropin_sha256')),
+         check_row('GET /ready 200', (ready or {}).get('status') == 200, (ready or {}).get('status'))]
+
+
+def drill_body(ctx, conversation_id):
+    body, problems, _ = _fixture(ctx)
+    if problems:
+        raise Refused('REFUSED', f'the pinned fixture has problems: {problems}')
+    out = copy.deepcopy(body)
+    out['conversation_id'] = conversation_id
+    out['tags'] = {'aieh': 'e-01.2.2-drill'}
+    return out
+
+
+def drill_fail_closed(ctx, name, steps, chan, reboot):
+    """Proof item 1, the key check and the guard. ``chan()`` gives (api, facts, req) for the
+    current boot; ``reboot()`` stops and starts the guest and returns its two records."""
+    ready_req = {'method': 'GET', 'path': '/ready', 'auth': False, 'timeout': 15}
+
+    def observe(paths=()):
+        return _detail(chan()[2]('observe', {'paths': list(paths)}))
+
+    def create_req(key):
+        return {'method': 'POST', 'path': '/api/conversations', 'json': drill_body(ctx, DRILL_IDS[key]),
+                'timeout': 300}
+
+    def key_drill(variant):
+        api, _, req = chan()
+        pre = observe()
+        n0 = int(_unit(pre, DRILL_SERVER_UNIT).get('NRestarts') or 0)
+        broken = _detail(req('key-break', {'variant': variant}))
+        during, settled = wait_until(
+            observe, lambda o: int(_unit(o, DRILL_SERVER_UNIT).get('NRestarts') or 0) >= n0 + 2,
+            DRILL_SETTLE_S)
+        ready, create = _call(api, ready_req, create_req(f'key-{variant}'))
+        after = observe()
+        checks = key_drill_checks(during, ready, create, settled)
+        checks.append(check_row('still stopped after the create attempt',
+                                not _listening(after) and not _server_processes(after),
+                                _unit(after, DRILL_SERVER_UNIT).get('ActiveState')))
+        restored = _detail(req('key-restore'))
+        post = observe()
+        ready2, search = _call(api, ready_req, {'method': 'GET', 'path': '/api/conversations/search?limit=5'})
+        restore = restored_checks(post, ready2) + [
+            check_row('authenticated search 200', search.get('status') == 200, search.get('status')),
+            check_row('the kept copy removed', restored.get('copy_removed') is True,
+                      restored.get('copy_removed'))]
+        ok = all(c['ok'] for c in checks)
+        return ok and all(c['ok'] for c in restore), {
+            'variant': variant, 'verdict': 'PASS' if ok else 'FAIL', 'break': broken,
+            'checks': checks, 'restore_checks': restore, 'restore': restored,
+            'observed': {'before': pre, 'during': during, 'after': after, 'restored': post}}
+
+    def guard_drill(variant):
+        _, _, req = chan()
+        broken = _detail(req('guard-break', {'variant': variant}))
+        boots = reboot()
+        boot, settled = wait_until(observe, _settled, DRILL_SETTLE_S)
+        api, _, req = chan()
+        ready, create = _call(api, ready_req, create_req(f'guard-{variant}'))
+        after = observe([f'/srv/scratch/openhands/conversations/'
+                         f'{DRILL_IDS["guard-" + variant].replace("-", "")}'])
+        checks = guard_drill_checks(boot, after, ready, create)
+        checks.append(check_row('units settled after boot', settled,
+                                {u: _unit(boot, u).get('ActiveState') for u in
+                                 (DRILL_GUARD_UNIT, 'docker.service', DRILL_SERVER_UNIT)}))
+        restored = _detail(req('guard-restore'))
+        boots2 = reboot()
+        post, settled2 = wait_until(observe, lambda o: _settled(o) and
+                                    _unit(o, DRILL_SERVER_UNIT).get('ActiveState') == 'active',
+                                    DRILL_SETTLE_S)
+        api, facts, _ = chan()
+        ready2, = _call(api, ready_req)
+        ok = all(c['ok'] for c in checks)
+        return ok and all(c['ok'] for c in restored_checks(post, ready2)), {
+            'variant': variant, 'verdict': 'PASS' if ok else 'FAIL', 'break': broken,
+            'reboot': boots, 'checks': checks, 'restore': restored, 'reboot_after_restore': boots2,
+            'restore_checks': restored_checks(post, ready2),
+            'observed': {'boot': boot, 'after_create': after, 'restored': post}}
+
+    def control_create():
+        """Positive control: with every control in place, a conversation is created (a
+        container), then deleted; the drills' refused ids are deleted where they exist."""
+        api, facts, _ = chan()
+        created, = _call(api, create_req('control'))
+        report = facts()
+        hexes = [conversation_hex(c) for c in report.get('containers') or []]
+        cleanup = {}
+        for key in ['control'] + [k for k in DRILL_IDS if k.startswith(('key-', 'guard-'))]:
+            got, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{DRILL_IDS[key]}',
+                               'timeout': 300})
+            cleanup[key] = got.get('status')
+        ok = _status_ok(created) and DRILL_IDS['control'].replace('-', '') in hexes and \
+            cleanup['control'] == 200
+        return ok, {'create': {k: created.get(k) for k in ('status', 'seconds')},
+                    'containers': hexes, 'delete_status': cleanup}
+
+    for variant in DRILL_KEY_VARIANTS:
+        steps.run(f'key check fails closed ({variant})', lambda v=variant: key_drill(v))
+    for variant in DRILL_GUARD_VARIANTS:
+        steps.run(f'guard fails closed ({variant})', lambda v=variant: guard_drill(v))
+    steps.run('positive control: create with every control in place', control_create, always=True)
+
+
+class DrillSteps:
+    """Named steps with their outcome; a failed restore stops every later step."""
+    CAUGHT = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, QmpError,
+              subprocess.SubprocessError)
+
+    def __init__(self, label):
+        self.label, self.steps, self.failed, self.broken = label, [], [], None
+
+    def run(self, step, func, always=False):
+        if self.broken and not always:
+            self.steps.append({'step': step, 'skipped': f'the guest state is unknown ({self.broken})'})
+            return None
+        s = time.time()
+        entry = {'step': step, 'started_at': utc_now()}
+        try:
+            ok, detail = func()
+        except self.CAUGHT as exc:
+            ok, detail = False, {'error': getattr(exc, 'code', type(exc).__name__),
+                                 'message': str(exc), 'detail': getattr(exc, 'detail', None)}
+            self.broken = self.broken or step
+        entry.update(seconds=round(time.time() - s, 1), ok=bool(ok), detail=detail)
+        self.steps.append(entry)
+        log(f'{self.label}: {step}: {"ok" if ok else "FAILED"} ({entry["seconds"]} s)')
+        if not ok:
+            self.failed.append(step)
+        return detail
+
+
+# ---------------------------------------------------------------- stored state (proof item 2)
+
+UUID_TEXT = re.compile(r'^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$')
+ISO_TIME = re.compile(r'^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}')
+STEERING_KEY = re.compile(r'(?i)(dir|path|workspace|cwd|home|root|mount|volume)')
+
+
+def mutate_value(key, value, marker):
+    """One altered value for a stored field: type-preserving where the type is known, and
+    aimed at steering where the field's name suggests a path, a runtime or an image."""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 7
+    if isinstance(value, float):
+        return value + 1000.0
+    if value is None:
+        if STEERING_KEY.search(key):
+            return marker
+        if key == 'container':
+            return dict(DRILL_CONTAINER_OPTIONS)
+        if 'runtime' in key:
+            return 'local'
+        if 'image' in key:
+            return 'busybox:latest'
+        return 'aieh-drill'
+    if isinstance(value, str):
+        if key == 'execution_status':
+            return 'running' if value != 'running' else 'idle'
+        if value.startswith('/') or (STEERING_KEY.search(key) and not UUID_TEXT.match(value)):
+            return marker
+        if UUID_TEXT.match(value):
+            return DRILL_FOREIGN_UUID if '-' in value else DRILL_FOREIGN_UUID.replace('-', '')
+        if ISO_TIME.match(value):
+            return '2001' + value[4:]
+        if 'runtime' in key:
+            return 'local'
+        if 'image' in key:
+            return 'busybox:latest'
+        return value + '-aieh-drill'
+    if isinstance(value, dict):
+        return {'aieh-drill': 'x'}
+    if isinstance(value, list):
+        return value + ['aieh-drill']
+    return 'aieh-drill'
+
+
+def state_alterations(content, marker_root=DRILL_MARKER_ROOT):
+    """Every field of every stored file, one alteration each (a field is a scalar, an empty
+    object, or a list without objects; objects and lists of objects are walked), then the
+    targeted additions: container options and a runtime in meta.json, and the startup
+    hydration pair (execution_status running with a writable working_dir) together."""
+    alts = []
+
+    def add(file, pointer, old, new, marker=None, op='set'):
+        alts.append({'n': len(alts), 'file': file, 'op': op, 'pointer': pointer, 'old': old,
+                     'value': new, 'marker': marker})
+
+    def walk(file, node, pointer):
+        if isinstance(node, dict) and node:
+            for k in sorted(node):
+                walk(file, node[k], pointer + [k])
+        elif isinstance(node, list) and node and all(isinstance(x, (dict, list)) for x in node):
+            for i, x in enumerate(node):
+                walk(file, x, pointer + [i])
+        elif pointer:
+            key = next((p for p in reversed(pointer) if isinstance(p, str)), '')
+            marker = f'{marker_root}-{len(alts):03d}'
+            new = mutate_value(key, node, marker)
+            add(file, pointer, node, new, marker if new == marker else None)
+
+    for file in ('meta.json', 'base_state.json', 'owner_lease.json'):
+        if isinstance(content.get(file), (dict, list)):
+            walk(file, content[file], [])
+    meta = content.get('meta.json') if isinstance(content.get('meta.json'), dict) else {}
+    if 'container' not in meta:
+        add('meta.json', ['container'], '<absent>', dict(DRILL_CONTAINER_OPTIONS))
+    if 'conversation_runtime' not in meta:
+        add('meta.json', ['conversation_runtime'], '<absent>', 'local')
+    if 'owner_lease.json' not in content:
+        add('owner_lease.json', [], '<absent>',
+            {'owner_instance_id': 'aieh-drill-foreign-owner', 'generation': 99,
+             'expires_at': 4102444800.0}, op='plant')
+    marker = f'{marker_root}-{len(alts):03d}'
+    combo = [{'file': 'base_state.json', 'op': 'set', 'pointer': ['execution_status'],
+              'value': 'running'}]
+    if isinstance(meta.get('workspace'), dict):
+        combo.append({'file': 'meta.json', 'op': 'set', 'pointer': ['workspace', 'working_dir'],
+                      'value': marker})
+    alts.append({'n': len(alts), 'combination': combo, 'marker': marker,
+                 'why': 'the startup path: a RUNNING record is hydrated at server start '
+                        '(ConversationService.__aenter__), with the stored working_dir'})
+    return alts
+
+
+def container_shape(container):
+    """The facts of one conversation container that no stored field may change, with the
+    conversation id normalized."""
+    config, host = container.get('Config') or {}, container.get('HostConfig') or {}
+    hex_id = conversation_hex(container) or '?'
+
+    def norm(value):
+        return json.loads(json.dumps(value, sort_keys=True).replace(hex_id, '{hex}'))
+    labels_ = config.get('Labels') or {}
+    return norm({
+        'image': container.get('Image'), 'config_image': config.get('Image'),
+        'user': config.get('User'), 'working_dir': config.get('WorkingDir'),
+        'entrypoint': config.get('Entrypoint'), 'cmd': config.get('Cmd'),
+        'env_names': config.get('EnvNames'), 'apparmor': container.get('AppArmorProfile'),
+        'owner_label': labels_.get('ai.openhands.runtime-owner'),
+        'mounts': [list(m) for m in effective_container_mounts(container)],
+        # Moby reports Binds in no fixed order across a reprovision (observed): compared as a set
+        'host': {k: sorted(host.get(k) or []) if k == 'Binds' else host.get(k)
+                 for k in DRILL_SHAPE_HOST}})
+
+
+def shape_diff(a, b, path=''):
+    """Paths where two shapes differ."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        out = []
+        for k in sorted(set(a) | set(b)):
+            out += shape_diff(a.get(k), b.get(k), f'{path}.{k}' if path else k)
+        return out
+    return [] if a == b else [{'field': path, 'baseline': a, 'observed': b}]
+
+
+def server_view(api, conversation_id):
+    base = f'/api/conversations/{conversation_id}'
+    info, noauth, conv, runtime = _call(
+        api, {'method': 'GET', 'path': '/server_info', 'auth': False},
+        {'method': 'GET', 'path': base, 'auth': False},
+        {'method': 'GET', 'path': base}, {'method': 'GET', 'path': base + '/runtime'})
+    body = conv.get('body') if isinstance(conv.get('body'), dict) else {}
+    server = info.get('body') if isinstance(info.get('body'), dict) else {}
+    workspace = body.get('workspace') if isinstance(body.get('workspace'), dict) else {}
+    return {'conversation_runtime': server.get('conversation_runtime'),
+            'available_runtimes': server.get('available_conversation_runtimes'),
+            'unauthenticated_status': noauth.get('status'),
+            'conversation_status': conv.get('status'),
+            'state': {k: body.get(k) for k in ('id', 'execution_status', 'title', 'tags')},
+            'workspace': {k: workspace.get(k) for k in ('kind', 'working_dir')},
+            'runtime': runtime.get('body') if isinstance(runtime.get('body'), dict) else
+            {'status': runtime.get('status')}}
+
+
+# What the outer server logs when it resumes a stored conversation in its own process (the
+# 1.60.1 local runtime path: ConversationService.__aenter__ hydrates a RUNNING record;
+# EventService.start creates the stored working directory and initializes git there), observed
+# on the drill guests. The journal lines wrap, so these are fragments of single lines.
+RESUME_MARKERS = ('Resumed conversation', 'error_recovering_runni', 'Failed to initialize git',
+                  'Confirmation policy set')
+
+
+def journal_hints(obs, hex_id=None, conversation_id=None):
+    """The outer server's resume lines in its current invocation (this start only)."""
+    lines = ((obs or {}).get('server_invocation') or {}).get('lines')
+    if lines is None:
+        lines = ((obs or {}).get('journal') or {}).get(DRILL_SERVER_UNIT) or []
+    return [line for line in lines if any(m in str(line) for m in RESUME_MARKERS)]
+
+
+def state_cycle_verdict(baseline, cycle, marker):
+    """(verdict, rows) for one cycle against the baseline cycle: 'steered' when the runtime, the
+    image, the mounts, the caps, the working directory or the key handling changed; 'unknown'
+    when no container came up to compare (and nothing else changed); else 'unchanged'."""
+    rows = []
+    shape = cycle.get('shape')
+    shape_changes = shape_diff(baseline.get('shape'), shape) if shape is not None else None
+    rows.append(check_row('container shape unchanged (image, mounts, caps, user, working_dir, '
+                          'runtime options)', shape is None or not shape_changes,
+                          shape_changes if shape is not None else 'no container (not observed)'))
+    keys_b, keys_c = baseline.get('container_keys'), cycle.get('container_keys')
+    rows.append(check_row('the container keys are the conversation identity\'s (key handling)',
+                          shape is None or keys_c == keys_b, {'baseline': keys_b, 'observed': keys_c}))
+    view_b, view_c = baseline.get('view') or {}, cycle.get('view') or {}
+    rows.append(check_row('server runtime docker, not selectable',
+                          view_c.get('conversation_runtime') == 'docker' and
+                          not view_c.get('available_runtimes'),
+                          {k: view_c.get(k) for k in ('conversation_runtime', 'available_runtimes')}))
+    rows.append(check_row('unauthenticated request refused (key handling)',
+                          view_c.get('unauthenticated_status') == 401,
+                          view_c.get('unauthenticated_status')))
+    rows.append(check_row('the outer server did not resume the conversation in its own process '
+                          '(runtime: its journal at this start)', not cycle.get('journal'),
+                          cycle.get('journal')))
+    procs_b = sorted(p.get('comm') for p in baseline.get('server_processes') or [])
+    procs_c = sorted(p.get('comm') for p in cycle.get('server_processes') or [])
+    rows.append(check_row('no new process in the Agent Server unit (no local runtime)',
+                          procs_c == procs_b, {'baseline': procs_b, 'observed': procs_c}))
+    if marker:
+        state = ((cycle.get('marker') or {}).get(marker) or {}).get('state')
+        rows.append(check_row('the altered path was not created (working_dir, mounts)',
+                              state == 'absent', {marker: state}))
+    if not all(r['ok'] for r in rows):
+        return 'steered', rows
+    return ('unknown' if shape is None else 'unchanged'), rows
+
+
+def drill_stored_state(ctx, name, steps, chan, limit=None):
+    """Proof item 2: every field of the job-writable stored state altered alone, then a server
+    restart (the startup path) and a reopen; the created container must not change."""
+    cid = DRILL_IDS['state']
+    hex_id = cid.replace('-', '')
+    base = f'/api/conversations/{cid}'
+    memo = {'cycles': []}
+
+    def observe(paths=()):
+        return _detail(chan()[2]('observe', {'paths': list(paths), 'journal_lines': 60}))
+
+    def look(facts):
+        report = facts()
+        mine = [c for c in report.get('containers') or [] if conversation_hex(c) == hex_id]
+        return report, (mine[0] if mine else None)
+
+    def cycle(label, alteration=None):
+        api, facts, req = chan()
+        entry = {'label': label, 'alteration': alteration}
+        applied = []
+        ops = alteration.get('combination') if alteration and 'combination' in alteration else \
+            ([alteration] if alteration else [])
+        try:
+            for op in ops:
+                params = {'hex': hex_id, 'file': op['file'], 'op': op['op'],
+                          'pointer': op.get('pointer'), 'value': op.get('value')}
+                result = req('state-alter', params)
+                applied.append({k: result.get(k) for k in ('ok', 'error')} |
+                               {'detail': result.get('detail')})
+                if not result.get('ok'):
+                    raise Refused('DRILL', f'state-alter: {result.get("error")}')
+            entry['applied'] = applied
+            entry['restart'] = _detail(req('server-restart'))
+            marker = (alteration or {}).get('marker')
+            obs = observe([marker] if marker else [])
+            entry['server_processes'] = (obs.get('agent_server') or {}).get('processes') or []
+            entry['journal'] = journal_hints(obs, hex_id, cid)
+            entry['view'] = server_view(api, cid)
+            reopened, = _call(api, {'method': 'POST', 'path': base + '/runtime/reprovision',
+                                    'timeout': 600})
+            entry['reopen'] = {k: reopened.get(k) for k in ('status', 'seconds', 'body')}
+            report, mine = look(facts)
+            entry['shape'] = container_shape(mine) if mine else None
+            obs2 = observe([marker] if marker else [])
+            entry['container_keys'] = next(iter((obs2.get('containers') or {}).values()), {}).get('keys') \
+                if len(obs2.get('containers') or {}) == 1 else None
+            entry['marker'] = obs2.get('paths')
+            entry['view_after_reopen'] = server_view(api, cid)
+        finally:
+            entry['rollback'] = rollback(api, req)
+        return entry
+
+    def rollback(api, req):
+        """Stop the runtime, put the snapshot back, restart the server (which drops anything it
+        hydrated in memory and stops its lease renewal), put the snapshot back again (what the
+        shutdown wrote), and read the directory."""
+        stopped, = _call(api, {'method': 'DELETE', 'path': base + '/runtime', 'timeout': 300})
+        first = _detail(req('state-rollback', {'hex': hex_id}))
+        restart = _detail(req('server-restart'))
+        second = _detail(req('state-rollback', {'hex': hex_id}))
+        files = _detail(req('state-read', {'hex': hex_id}))
+        return {'stop': stopped.get('status'),
+                'first': {k: first.get(k) for k in ('removed', 'rewritten', 'equal')},
+                'restart_rc': restart.get('rc'),
+                'second': {k: second.get(k) for k in ('removed', 'rewritten', 'equal')},
+                'files': {e['path']: e.get('sha256') for e in files.get('entries') or []
+                          if e.get('kind') == 'file'}}
+
+    def setup():
+        api, facts, req = chan()
+        created, = _call(api, {'method': 'POST', 'path': '/api/conversations',
+                               'json': drill_body(ctx, cid), 'timeout': 600})
+        if not _status_ok(created):
+            return False, {'create': created}
+        stopped, = _call(api, {'method': 'DELETE', 'path': base + '/runtime', 'timeout': 300})
+        files = _detail(req('state-read', {'hex': hex_id}))
+        snapshot = _detail(req('state-snapshot', {'hex': hex_id}))
+        memo['files'] = files
+        memo['original'] = snapshot.get('files')
+        memo['alterations'] = state_alterations(files.get('content') or {})
+        return _status_ok(stopped), {'create': {k: created.get(k) for k in ('status', 'seconds')},
+                                     'stored_files': files.get('entries'),
+                                     'content': files.get('content'), 'snapshot': snapshot,
+                                     'alterations': len(memo['alterations'])}
+
+    def restored(entry):
+        rb = entry.get('rollback') or {}
+        return (rb.get('second') or {}).get('equal') is True and rb.get('files') == memo['original']
+
+    def baseline(label):
+        entry = cycle(label)
+        memo['cycles'].append(entry)
+        ok = entry.get('shape') is not None and entry.get('reopen', {}).get('status') == 200 and \
+            restored(entry)
+        if ok and 'baseline' not in memo:
+            memo['baseline'] = entry
+        same = shape_diff(memo['baseline']['shape'], entry['shape']) if ok else None
+        return ok and not same, {'cycle': entry, 'differences_from_first_baseline': same}
+
+    def sensitivity():
+        """The comparison's own control: a conversation created with request container
+        options (the upstream override, decision 0001 s3) must show as a shape change."""
+        api, facts, _ = chan()
+        sid = DRILL_IDS['state-sensitivity']
+        body = drill_body(ctx, sid)
+        body['container'] = dict(body.get('container') or {}, memory='2g', cpus=1.0)
+        created, = _call(api, {'method': 'POST', 'path': '/api/conversations', 'json': body,
+                               'timeout': 600})
+        report = facts()
+        mine = [c for c in report.get('containers') or [] if conversation_hex(c) == sid.replace('-', '')]
+        deleted, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{sid}', 'timeout': 300})
+        shape = container_shape(mine[0]) if mine else None
+        diff = shape_diff(memo['baseline']['shape'], shape) if shape else None
+        fields = sorted({d['field'] for d in diff or []})
+        return bool(diff) and any(f.startswith('host.Memory') or f.startswith('host.NanoCpus')
+                                  for f in fields), {
+            'create': created.get('status'), 'delete': deleted.get('status'), 'detected': fields}
+
+    def job_written(kill_inner):
+        """The startup pair written by the job itself, from inside its container (uid 999, its
+        own conversation-store bind), while its runtime runs; then the runtime is stopped
+        (``kill_inner``: the job first kills its own inner server, so that no shutdown of that
+        server rewrites the files) and the outer server restarts. Does the write survive, and
+        does the outer server act on it?"""
+        api, facts, req = chan()
+        marker = f'{DRILL_MARKER_ROOT}-job-{"kill" if kill_inner else "stop"}'
+        reopened, = _call(api, {'method': 'POST', 'path': base + '/runtime/reprovision', 'timeout': 600})
+        script = ("import json, os, subprocess\n"
+                  f"d = '/var/openhands/conversations/{hex_id}'\n"
+                  "b = json.load(open(d + '/base_state.json'))\n"
+                  "b['execution_status'] = 'running'\n"
+                  "open(d + '/base_state.json', 'w').write(json.dumps(b))\n"
+                  "m = json.load(open(d + '/meta.json'))\n"
+                  f"m['workspace']['working_dir'] = '{marker}'\n"
+                  "open(d + '/meta.json', 'w').write(json.dumps(m))\n"
+                  "pids = []\n")
+        if kill_inner:
+            script += ("for p in os.listdir('/proc'):\n"
+                       "    try:\n"
+                       "        if p.isdigit() and p != '1' and b'openhands-agent-server' in "
+                       "open('/proc/' + p + '/cmdline', 'rb').read():\n"
+                       "            pids.append(p)\n"
+                       "    except OSError:\n"
+                       "        pass\n"
+                       "subprocess.Popen(['sh', '-c', 'sleep 1; kill -9 ' + ' '.join(pids)], "
+                       "start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n")
+        script += "print(json.dumps({'uid': os.getuid(), 'gid': os.getgid(), 'killing': pids}))\n"
+        job, = _call(api, {'method': 'POST', 'path': base + '/bash/execute_bash_command',
+                           'json': {'command': container_python(script, ''), 'cwd': '/workspace',
+                                    'timeout': 60}, 'timeout': 180})
+        body = job.get('body') if isinstance(job.get('body'), dict) else {}
+        entry = {'kill_inner': kill_inner, 'marker': marker, 'reopen': reopened.get('status'),
+                 'job': {'status': job.get('status'), 'exit_code': body.get('exit_code'),
+                         'stdout': str(body.get('stdout') or '')[-300:]}}
+        try:
+            stopped, = _call(api, {'method': 'DELETE', 'path': base + '/runtime', 'timeout': 300})
+            entry['stop'] = stopped.get('status')
+            after_stop = _detail(req('state-read', {'hex': hex_id}))
+            content = after_stop.get('content') or {}
+            entry['persisted'] = {
+                'execution_status': (content.get('base_state.json') or {}).get('execution_status'),
+                'working_dir': ((content.get('meta.json') or {}).get('workspace') or {}).get('working_dir')}
+            entry['restart'] = _detail(req('server-restart'))
+            obs = observe([marker])
+            entry['paths'] = obs.get('paths')
+            entry['journal'] = journal_hints(obs)
+            entry['view'] = server_view(api, cid)
+            entry['server_processes'] = ((obs.get('agent_server') or {}).get('processes'))
+        finally:
+            entry['rollback'] = rollback(api, req)
+        written = body.get('exit_code') == 0
+        created = ((entry.get('paths') or {}).get(marker) or {}).get('state') not in (None, 'absent')
+        entry['summary'] = {'job_wrote': written,
+                            'execution_status_survived': (entry.get('persisted') or {}).get(
+                                'execution_status') == 'running',
+                            'working_dir_survived': (entry.get('persisted') or {}).get('working_dir') == marker,
+                            'outer_server_resumed_it': bool(entry.get('journal')),
+                            'outer_server_created_the_working_dir': created}
+        # steering by the job alone is a FAIL: the step passes only if the outer server did not act
+        return written and not entry['journal'] and not created and restored(entry), entry
+
+    def alterations():
+        rows, steering, unknown = [], [], []
+        todo = memo['alterations'][:limit] if limit is not None else memo['alterations']
+        for alt in todo:
+            log(f'drill stored-state: alteration {alt["n"] + 1}/{len(todo)}')
+            try:
+                entry = cycle(f'alteration {alt["n"]}', alt)
+                verdict, checks = state_cycle_verdict(memo['baseline'], entry, alt.get('marker'))
+                back = restored(entry)
+            except DrillSteps.CAUGHT as exc:
+                entry, verdict, checks, back = {'error': f'{type(exc).__name__}: {exc}'}, 'unknown', [], False
+            row = {'n': alt['n'], 'alteration': alt, 'verdict': verdict,
+                   'steered': verdict == 'steered', 'checks': checks, 'restored': back,
+                   'cycle': entry}
+            rows.append(row)
+            if verdict == 'steered':
+                steering.append(alt['n'])
+            elif verdict == 'unknown':
+                unknown.append(alt['n'])
+            if not back:
+                steps.broken = f'alteration {alt["n"]} was not rolled back'
+                break
+        memo['rows'] = rows
+        return not steering and not unknown and all(r['restored'] for r in rows), {
+            'alterations': len(todo), 'run': len(rows), 'steering': steering, 'unknown': unknown,
+            'rows': rows}
+
+    steps.run('create, stop and read the stored conversation', setup)
+    steps.run('baseline cycle (restart and reopen, nothing altered)', lambda: baseline('baseline'))
+    steps.run('comparison sensitivity (request caps differ)', sensitivity)
+    steps.run('every stored field altered alone, then restart and reopen', alterations)
+    steps.run('the job itself writes the startup pair, then its runtime stops and the server '
+              'restarts', lambda: job_written(False))
+    steps.run('the job itself writes the startup pair and kills its own inner server, then the '
+              'server restarts', lambda: job_written(True))
+    steps.run('closing baseline cycle', lambda: baseline('closing baseline'))
+
+    def cleanup():
+        api, _, req = chan()
+        discarded = req('state-discard', {'hex': hex_id})
+        deleted, = _call(api, {'method': 'DELETE', 'path': base, 'timeout': 300})
+        return deleted.get('status') == 200 and discarded.get('ok'), {
+            'delete': deleted.get('status'), 'snapshot_discarded': discarded.get('detail')}
+    steps.run('delete the drill conversation', cleanup, always=True)
+    return memo
+
+
+# ---------------------------------------------------------------- guest-root P5 (proof item 3)
+
+def canary_core_digests(canaries):
+    """{label: sha256 hex} of every 32-hex core of the canary set: what the guest searches
+    for (the values never travel to the guest)."""
+    out = {}
+    for label, value in sorted(((canaries or {}).get('needles') or {}).items()):
+        for i, core in enumerate(re.findall(r'[0-9a-f]{32}', value)):
+            out[f'{label}#{i}'] = hashlib.sha256(core.encode()).hexdigest()
+    return out
+
+
+def instance_key_body_sha256(key_path):
+    """sha256 of the per-instance private key's base64 body, whitespace removed."""
+    text = Path(key_path).read_text(encoding='ascii')
+    body = ''.join(line.strip() for line in text.splitlines()
+                   if line.strip() and not line.startswith('-----'))
+    return hashlib.sha256(''.join(body.split()).encode('ascii')).hexdigest()
+
+
+def declared_secret_store(label, path, owners, containers):
+    """Whether one place holding a guest secret is a declared store: the server's environment
+    file and its processes (profile provisioning.agent_server.secrets), the agent-readable
+    session key (.session_key), and for a conversation's own keys Moby's store of that
+    container, its runtime state and its own processes (fd-container-shares-service-uid)."""
+    kind = label.split(':')
+    if len(kind) >= 3 and kind[1] in ('server', 'server-copy'):
+        var = kind[2]
+        if path == '/etc/aieh/agent-server/secrets.env':
+            return 'the server environment file (secrets.env)'
+        if var in ('OH_SESSION_API_KEYS_0', 'session.key') and \
+                path == '/var/lib/aieh/agent-server/session.key':
+            return 'the agent-readable session key file (profiles P5, amended 2026-11-07)'
+        owner = owners.get(path) or {}
+        if path.endswith('/environ') and str(owner.get('cgroup', '')).endswith(
+                '/aieh-agent-server.service'):
+            return 'the Agent Server process environment'
+        return None
+    if len(kind) >= 4 and kind[1] == 'container':
+        cid = next((c for c in containers if c.startswith(kind[2])), None)
+        if cid is None:
+            return None
+        if path.startswith(f'/srv/scratch/docker/containers/{cid}/'):
+            return "Moby's store of that container (docker inspect)"
+        if path.startswith(f'/run/containerd/io.containerd.runtime.v2.task/moby/{cid}/'):
+            return "containerd's runtime state of that container"
+        if path == CONTAINERD_METADATA:
+            return "containerd's metadata store (the container's spec, root-only)"
+        owner = owners.get(path) or {}
+        if path.endswith(('/environ', '/cmdline')) and cid in str(owner.get('cgroup', '')):
+            return "that container's own processes"
+        hex_id = containers.get(cid)
+        if hex_id and (path.startswith(f'/srv/scratch/openhands/persistence/runtime-data/{hex_id}/') or
+                       path.startswith(f'/srv/scratch/openhands/conversations/{hex_id}/')):
+            return "that conversation's own (job-readable) storage"
+        return None
+    return None
+
+
+CONTAINERD_METADATA = '/var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db'
+# where an Owner-class pattern is expected in a provisioned guest: upstream content in Moby's
+# layer store (the pinned image's layers and the containers' upper layers, which hold the
+# Agent Server binary's own extraction), and the guest's own SSH host keys (profiles P5)
+PATTERN_PLACES = ((re.compile(r'^/srv/scratch/docker/overlay2/[0-9a-f]{64}(-init)?/diff/'),
+                   "Moby's layer store (upstream content of the pinned image)"),
+                  (re.compile(r'^/etc/ssh/ssh_host_[a-z0-9]+_key$'), "the guest's own SSH host keys"),
+                  (re.compile(r'^/var/lib/aieh-drill/control/'), "the scan's positive control"))
+
+
+def pattern_place(path):
+    return next((label for rx, label in PATTERN_PLACES if rx.match(path)), None)
+
+
+def root_scan_verdict(scan, key_sha, containers):
+    """(verdict, findings) of the guest-root P5 scan (proof item 3)."""
+    hits = scan.get('hits') or {}
+    owners = scan.get('process_owners') or {}
+    findings, rows = [], []
+    control = scan.get('control') or {}
+    control_found = [h['path'] for h in hits.get('control:canary') or []]
+    secret_control = [h['path'] for h in hits.get('control:secret') or []]
+    key_control = [k['path'] for k in scan.get('key_blocks') or []
+                   if k.get('body_sha256') == control.get('key_body_sha256')]
+    rows.append(check_row('positive control: canary-shaped value found at its path only',
+                          control_found == [control.get('path')], control_found))
+    rows.append(check_row('positive control: secret value found at its path only',
+                          secret_control == [f'{control.get("path")}.secret'], secret_control))
+    rows.append(check_row('positive control: private-key block found', key_control == [control.get('path')],
+                          key_control))
+    rows.append(check_row('the scan completed (every mount, no ceiling)', scan.get('complete') is True,
+                          {k: scan.get(k) for k in ('files', 'bytes', 'proc_files', 'seconds')}))
+    canary = {k: v for k, v in hits.items() if k.startswith('canary:')}
+    rows.append(check_row('no host canary anywhere in the guest', not canary, canary))
+    stray, declared = [], {}
+    for label, where in sorted(hits.items()):
+        if not label.startswith('secret:'):
+            continue
+        for h in where:
+            store = declared_secret_store(label, h['path'], owners, containers)
+            if store:
+                declared.setdefault(label, []).append({'path': h['path'], 'store': store})
+            else:
+                stray.append({'label': label, 'path': h['path'], 'count': h['count'],
+                              'owner': owners.get(h['path'])})
+    rows.append(check_row('every guest secret found only in a declared store', not stray, stray))
+    server_found = {lab: [d['store'] for d in v] for lab, v in declared.items()
+                    if lab.startswith('secret:server:')}
+    rows.append(check_row('the server secrets were found in their declared stores (live control)',
+                          any('secrets.env' in s for s in server_found.get('secret:server:OH_SECRET_KEY', []))
+                          and any('secrets.env' in s for s in
+                                  server_found.get('secret:server:OH_SESSION_API_KEYS_0', [])),
+                          server_found))
+    leaked_key = [k for k in scan.get('key_blocks') or [] if k.get('body_sha256') == key_sha]
+    rows.append(check_row('the per-instance private key is nowhere in the guest', not leaked_key,
+                          leaked_key))
+    copies = [lab for lab in hits if lab.startswith('secret:server-copy:')]
+    rows.append(check_row('no kept copy of the server secrets (key drill restored)', not copies, copies))
+    raw_rows = []
+    for device, r in sorted((scan.get('raw') or {}).items()):
+        mount = r.get('mount', '')
+        nested = [m for m in scan.get('mounts_walked') or [] if m != mount and
+                  m.startswith(mount.rstrip('/') + '/')]
+        for label, n in sorted((r.get('counts') or {}).items()):
+            files = sum(h['count'] for h in hits.get(label) or [] if not h['path'].startswith(
+                '/proc/') and (h['path'].startswith(mount.rstrip('/') + '/') or h['path'] == mount))
+            files -= sum(h['count'] for h in hits.get(label) or [] for m in nested
+                         if h['path'].startswith(m.rstrip('/') + '/'))
+            raw_rows.append({'device': device, 'mount': mount, 'label': label, 'raw': n,
+                             'files': files, 'residue': max(0, n - files)})
+    residue_server = [r for r in raw_rows if r['residue'] and
+                      r['label'].startswith(('secret:server:', 'canary:'))]
+    if scan.get('raw'):
+        rows.append(check_row('raw devices: no server secret or canary beyond the files that hold it',
+                              not residue_server, residue_server))
+    unexplained = [{'class': lab.split(':', 1)[1], 'path': h['path'], 'count': h['count']}
+                   for lab, where in sorted(hits.items()) if lab.startswith('owner:')
+                   for h in where if not pattern_place(h['path'])]
+    rows.append(check_row('Owner-class patterns only in upstream image content or the guest\'s own '
+                          'host keys', not unexplained, unexplained))
+    ok = all(r['ok'] for r in rows)
+    control_ok = all(r['ok'] for r in rows[:3])
+    verdict = 'PASS' if ok else ('UNKNOWN' if not control_ok and not canary and not stray
+                                 and not leaked_key and not unexplained else 'FAIL')
+    patterns = {lab: [{'path': h['path'], 'count': h['count'], 'place': pattern_place(h['path'])}
+                      for h in where]
+                for lab, where in sorted(hits.items()) if lab.startswith('owner:')}
+    return verdict, {'checks': rows, 'declared': declared, 'stray': stray,
+                     'raw': raw_rows, 'owner_patterns': patterns,
+                     'key_blocks': scan.get('key_blocks')}
+
+
+def drill_root_scan(ctx, name, idir, steps, chan, canaries, raw):
+    memo = {}
+
+    def scan():
+        api, facts, req = chan()
+        report = facts()
+        containers = {c.get('Id'): conversation_hex(c) for c in report.get('containers') or []}
+        params = {'canary_core_sha256': canary_core_digests(canaries), 'raw': bool(raw),
+                  'max_seconds': DRILL_SCAN_CEILING_S - 120}
+        result = req('root-scan', params, ceiling=DRILL_SCAN_CEILING_S)
+        data = _detail(result)
+        verdict, detail = root_scan_verdict(data, instance_key_body_sha256(idir / 'ssh' / 'id_ed25519'),
+                                            containers)
+        memo['verdict'] = verdict
+        return verdict == 'PASS', {'verdict': verdict, 'containers': containers,
+                                   'canaries': canary_summary(canaries['needles']) if canaries else None,
+                                   'canary_cores': len(params['canary_core_sha256']),
+                                   'scan': {k: data.get(k) for k in (
+                                       'mounts_walked', 'files', 'bytes', 'proc_files', 'errors',
+                                       'complete', 'seconds', 'secrets', 'control')},
+                                   'secret_occurrences_redacted': result.get('secret_occurrences_redacted'),
+                                   **detail}
+
+    def with_conversation():
+        """A running conversation, so its container and keys are in the scan."""
+        api, facts, _ = chan()
+        created, = _call(api, {'method': 'POST', 'path': '/api/conversations',
+                               'json': drill_body(ctx, DRILL_IDS['control']), 'timeout': 600})
+        return _status_ok(created), {'create': {k: created.get(k) for k in ('status', 'seconds')}}
+
+    def cleanup():
+        api, _, _ = chan()
+        deleted, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{DRILL_IDS["control"]}',
+                               'timeout': 300})
+        return deleted.get('status') == 200, {'delete': deleted.get('status')}
+
+    steps.run('create a conversation (its container and keys are scanned)', with_conversation)
+    steps.run('guest-root P5 scan', scan)
+    steps.run('delete the conversation', cleanup, always=True)
+    return memo
+
+
+# ---------------------------------------------------------------- the admitted create, live
+
+class GuestCreateTransport:
+    """send_create's transport for a live drill: exactly one POST to the guest's Agent Server
+    (as agent over the management SSH channel, as conversation-smoke does); a second call is
+    refused. The response is kept for the container check."""
+
+    def __init__(self, api):
+        self.api, self.calls = api, []
+
+    def __call__(self, method, path, body):
+        if self.calls:
+            raise Refused('REFUSED', 'the transport sends one create only')
+        self.calls.append({'method': method, 'path': path, 'body': copy.deepcopy(body)})
+        response, = _call(self.api, {'method': method, 'path': path, 'json': body, 'timeout': 600})
+        self.calls[-1]['response'] = {k: response.get(k) for k in ('status', 'seconds', 'error')}
+        if not _status_ok(response):
+            raise Refused('CREATE', f'{method} {path}: {response.get("status") or response.get("error")}')
+        return response
+
+
+def admitted_container_check(profile, record, report, admitted, sent):
+    """The created container against the admitted create (slice (a)'s AdmittedCreate.to_json):
+    its mounts equal the admitted mount set exactly, its caps equal the admitted caps (the
+    profile's, the body sends none), its runtime is the server's Docker runtime (a container
+    exists for the conversation, the image is the locked one), and the body sent is the
+    admitted body."""
+    hex_id = str(admitted.get('conversation_id', '')).replace('-', '')
+    mine = [c for c in report.get('containers') or [] if conversation_hex(c) == hex_id]
+    cfg = (provisioning_config(profile)['agent_server'].get('config') or {}).get('content') or {}
+    rows = [check_row('one container for the admitted conversation', len(mine) == 1, len(mine))]
+    c = mine[0] if mine else {}
+    host = c.get('HostConfig') or {}
+    want = sorted(('bind', m['source'], m['destination'], bool(m['rw'])) for m in admitted.get('mounts') or [])
+    rows.append(check_row('mounts equal the admitted mount set', effective_container_mounts(c) == want,
+                          {'admitted': [list(m) for m in want],
+                           'container': [list(m) for m in effective_container_mounts(c)]}))
+    container_opts = (admitted.get('body') or {}).get('container') or {}
+    # the caps the attempt was admitted under (the reserved policy's, when the driver gives
+    # them; else the profile's configuration), unless the admitted body itself sends a cap
+    policy = admitted.get('admission_caps') or {
+        'memory': cfg.get('conversation_container_memory'),
+        'cpus': cfg.get('conversation_container_cpus'),
+        'pids_limit': cfg.get('conversation_container_pids_limit')}
+    want_caps = {'Memory': memory_bytes(container_opts.get('memory') or policy.get('memory')),
+                 'NanoCpus': int(round(float(container_opts.get('cpus') or
+                                             policy.get('cpus') or 0) * 1e9)),
+                 'PidsLimit': policy.get('pids_limit')}
+    got_caps = {k: host.get(k) for k in want_caps}
+    rows.append(check_row('caps equal the admitted ones', got_caps == want_caps,
+                          {'admitted': want_caps, 'container': got_caps}))
+    rows.append(check_row('runtime: the Docker runtime ran it (locked image, configured tag)',
+                          c.get('Image') == (record.get('provisioning') or {}).get('image_id') and
+                          (c.get('Config') or {}).get('Image') == cfg.get('conversation_image') and
+                          (admitted.get('body') or {}).get('conversation_runtime') == 'docker',
+                          {'image': c.get('Image'), 'config_image': (c.get('Config') or {}).get('Image'),
+                           'body_runtime': (admitted.get('body') or {}).get('conversation_runtime')}))
+    rows.append(check_row('the body sent is the admitted body', sent == admitted.get('body'),
+                          'equal' if sent == admitted.get('body') else {'sent': sent}))
+    problems, _ = container_problems(profile, record, report, c) if c else ([{'check': 'absent'}], [])
+    rows.append(check_row('the container passes the declared shape (inspect rules)', not problems, problems))
+    return all(r['ok'] for r in rows), rows
+
+
+def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None,
+          ready_timeout=READY_TIMEOUT_S, channels=None, stop_fn=None, start_fn=None,
+          admitted_fn=None):
+    """drill (E-01.2.2 slice (b), TEST ONLY): on a running drill instance, ``fail-closed``
+    (the key check and the guard), ``stored-state`` (every field of the job-writable stored
+    state), ``root-scan`` (the guest-root P5 scan) or ``admitted-create`` (slice (a)'s admitted
+    create sent live; ``admitted_fn(transport, api)`` runs the dispatch chain). One verdict,
+    PASS or FAIL (root-scan may be UNKNOWN). ``channels(record) -> (api, facts, req)`` and the
+    *_fn hooks stand in for the guest in tests."""
+    if kind not in DRILL_KINDS:
+        raise Refused('REFUSED', f'--kind must be one of {", ".join(DRILL_KINDS)}')
+    idir, record = drill_instance(ctx, name)
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    if kind == 'root-scan' and not canary_dir:
+        raise Refused('REFUSED', 'root-scan needs --canaries (the set create planted)')
+    canaries = load_canaries(canary_dir) if canary_dir else None
+    profile = ctx.profile
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile), DrillChannel(ssh)
+    channels = channels or default_channels
+    stop_fn = stop_fn or (lambda: stop(ctx, name))
+    start_fn = start_fn or (lambda: start(ctx, name, ready_timeout))
+    current = {'record': record, 'channels': channels(record)}
+
+    def chan():
+        return current['channels']
+
+    def reboot():
+        stopped, started_ = stop_fn(), start_fn()
+        _, current['record'] = running_instance(ctx, name)
+        current['channels'] = channels(current['record'])
+        if stopped.get('result') != 'stopped' or started_.get('result') != 'ready':
+            raise Refused('REBOOT', f'stop {stopped.get("result")}, start {started_.get("result")}')
+        return {'stop': {'result': stopped.get('result'), 'phases': stopped.get('phases')},
+                'start': {'result': started_.get('result'), 'seconds': started_.get('seconds')}}
+
+    t0, started = time.time(), utc_now()
+    steps = DrillSteps(f'drill {kind}')
+    memo = {}
+    if kind == 'fail-closed':
+        drill_fail_closed(ctx, name, steps, chan, reboot)
+    elif kind == 'stored-state':
+        memo = drill_stored_state(ctx, name, steps, chan, limit)
+    elif kind == 'root-scan':
+        memo = drill_root_scan(ctx, name, idir, steps, chan, canaries, raw)
+    else:
+        if admitted_fn is None:
+            raise Refused('REFUSED', 'admitted-create runs from integrations/dispatch/tests/'
+                          'live_admitted_create.py (the dispatch chain builds the request)')
+
+        def admitted_step():
+            api, facts, _ = chan()
+            transport = GuestCreateTransport(api)
+            admitted = admitted_fn(transport, api)
+            report = facts()
+            ok, rows = admitted_container_check(profile, current['record'], report, admitted,
+                                                (transport.calls[0] if transport.calls else {}).get('body'))
+            memo['admitted'] = admitted
+            return ok and len(transport.calls) == 1, {
+                'admitted': admitted, 'transport_calls': transport.calls, 'checks': rows}
+
+        def cleanup():
+            api, _, _ = chan()
+            cid = (memo.get('admitted') or {}).get('conversation_id')
+            if not cid:
+                return True, {'delete': 'nothing created'}
+            deleted, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{cid}',
+                                   'timeout': 300})
+            return deleted.get('status') == 200, {'delete': deleted.get('status')}
+        steps.run('send_create of the admitted create; the container against it', admitted_step)
+        steps.run('delete the admitted conversation', cleanup, always=True)
+    result = 'PASS' if not steps.failed else 'FAIL'
+    if kind == 'root-scan' and memo.get('verdict') == 'UNKNOWN':
+        result = 'UNKNOWN'
+    out = {'schema': DRILL_SCHEMA, 'operation': 'drill', 'kind': kind, 'labels': labels(profile),
+           'profile': profile['name'], 'instance': name,
+           'validation': {k: (record.get('validation') or {}).get(k) for k in ('mode', 'plan_leaf',
+                                                                               'authority', 'script')},
+           'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
+           'result': result, 'failed_steps': steps.failed, 'broken': steps.broken,
+           'steps': steps.steps}
+    out['record'] = write_record(idir, f'drill-{kind}', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
+def defective_catalogue(catalogue, control_ids):
+    """A copy of the catalogue whose named positive controls attempt a read that cannot succeed
+    (proof item 1: an injected defective control), with the record of each replacement."""
+    out = copy.deepcopy(catalogue)
+    by_id = {c['id']: c for c in out.get('cases') or []}
+    injected = []
+    for cid in control_ids:
+        case = by_id.get(cid)
+        controls = {c.get('positive_control') for c in out.get('cases') or []}
+        if case is None or case.get('kind') != 'permitted' or cid not in controls or \
+                (case.get('probe') or {}).get('source') != 'containment-probe':
+            raise Refused('REFUSED', f'--drill-defective-control {cid}: not a positive control run '
+                          'by containment-probe itself')
+        injected.append({'control': cid, 'original_probe': case['probe'],
+                         'defective_probe': copy.deepcopy(DRILL_DEFECTIVE_PROBE),
+                         'dependent_cases': sorted(c['id'] for c in out['cases']
+                                                   if c.get('positive_control') == cid)})
+        case['probe'] = copy.deepcopy(DRILL_DEFECTIVE_PROBE)
+    return out, injected
 
 
 # ---------------------------------------------------------------- host census (S-01.4)
@@ -10365,7 +11620,7 @@ def main(argv=None):
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
-               'job-access-probe', 'containment-probe'):
+               'job-access-probe', 'containment-probe', 'drill'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -10386,9 +11641,20 @@ def main(argv=None):
                            help='a durable root to inventory before and after each destroy and '
                                 'recreate (repeatable; stands for Owner data)')
             p.add_argument('--out', help='also write the smoke record to this new file')
-        if op in ('conversation-smoke', 'admission-probe', 'job-access-probe', 'containment-probe'):
+        if op in ('conversation-smoke', 'admission-probe', 'job-access-probe', 'containment-probe',
+                  'drill'):
             p.add_argument('--out', help='also write the record to this new file')
+        if op == 'drill':
+            p.add_argument('--kind', required=True, choices=DRILL_KINDS[:3],
+                           help='E-01.2.2 slice (b), TEST ONLY, on a drill instance')
+            p.add_argument('--canaries', help='root-scan: the canary set create planted')
+            p.add_argument('--raw', action='store_true',
+                           help='root-scan: also count occurrences on the raw block devices')
+            p.add_argument('--limit', type=int, help='stored-state: only the first N alterations')
         if op == 'containment-probe':
+            p.add_argument('--drill-defective-control', action='append', default=[],
+                           help='E-01.2.2 slice (b), TEST ONLY, drill instances only: replace this '
+                                'positive control with an attempt that cannot succeed (repeatable)')
             p.add_argument('--sensitivity', action='store_true',
                            help="S-02.1: also run the catalogue's live mutations, each of which "
                                 'must be classified a success (FAIL)')
@@ -10407,11 +11673,15 @@ def main(argv=None):
                            help='S-01.4 fix-forward, with --provision: let job-access-probe add a '
                                 "temporary default route via SLIRP's gateway (always removed) to "
                                 'prove the egress guard with a route present')
+        if op == 'create':
+            p.add_argument('--drill', action='store_true',
+                           help='E-01.2.2 slice (b), TEST ONLY, with --provision: seed the drill '
+                                'helper (tools/guest_drill.py) as a second user-data part')
         if op in ('create', 'recreate', 'smoke'):
             p.add_argument('--provision', action='store_true',
                            help='F-04.1: seed the provisioning manifest of the verified host '
                                 'stage (smoke: and run provision after create and recreate)')
-        if op in ('create', 'start', 'recreate', 'netprobe', 'smoke', 'conversation-smoke'):
+        if op in ('create', 'start', 'recreate', 'netprobe', 'smoke', 'conversation-smoke', 'drill'):
             p.add_argument('--ready-timeout', type=int, default=READY_TIMEOUT_S,
                            help='overall readiness ceiling in seconds')
         if op == 'stop':
@@ -10444,8 +11714,10 @@ def main(argv=None):
         elif op == 'create':
             if args.egress_falsification and not args.provision:
                 raise Refused('REFUSED', '--egress-falsification needs --provision')
+            if args.drill and not args.provision:
+                raise Refused('REFUSED', '--drill needs --provision')
             result = create(ctx, args.name, args.ready_timeout, canaries, provision=True,
-                            egress_falsification=args.egress_falsification) \
+                            egress_falsification=args.egress_falsification, drill=args.drill) \
                 if args.provision else create(ctx, args.name, args.ready_timeout, canaries)
         elif op == 'provision':
             result = provision(ctx, args.name)
@@ -10477,7 +11749,11 @@ def main(argv=None):
             result = job_access_probe(ctx, args.name, args.out, args.token_fingerprint)
         elif op == 'containment-probe':
             result = containment_probe(ctx, args.name, args.out, args.token_fingerprint,
-                                       args.sensitivity)
+                                       args.sensitivity,
+                                       defective_controls=args.drill_defective_control)
+        elif op == 'drill':
+            result = drill(ctx, args.name, args.kind, args.canaries, args.raw, args.out,
+                           args.limit, args.ready_timeout)
         else:
             result = inspect(ctx, args.name, canaries)
     except Refused as exc:
@@ -10487,7 +11763,8 @@ def main(argv=None):
         return 1
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke',
-                                   'admission-probe', 'job-access-probe', 'containment-probe'):
+                                   'admission-probe', 'job-access-probe', 'containment-probe',
+                                   'drill'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \
