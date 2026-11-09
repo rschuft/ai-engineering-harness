@@ -606,9 +606,18 @@ selectable, the conversation caps times the concurrent runs within the guest cei
 declared mount set. The planned workspace is resolved under the `workspaces` category of the
 managed data root: device names, path tricks, another attempt's path and links or junctions on
 disk are refused. `send_create` runs every check again immediately before the injected
-transport and calls it exactly once; a refusal never reaches it. No live Agent Server or guest
-has been used: **not yet verified** beyond the tests' fake transport (the guest-side drills are
-E-01.2.2 slice (b)).
+transport and calls it exactly once; a refusal never reaches it.
+
+Slice (b) sent one admitted create live:
+[`integrations/dispatch/tests/live_admitted_create.py`](../integrations/dispatch/tests/live_admitted_create.py)
+(not a test module; `discover` never runs it) builds the request exactly as slice (a)'s positive
+control does, from the real `strong-windows-qemu-whpx` declaration with only
+`status.operational` set in a throwaway copy, and `send_create` hands it to `tools/guest.py`'s
+`GuestCreateTransport`, one POST to a running drill guest's Agent Server over the management
+SSH channel. The created container's mounts, caps and runtime are then compared with the
+admitted ones ([`evidence/E-01.2.2b-live-drills.md`](../evidence/E-01.2.2b-live-drills.md)).
+No live manifest, store or managed root was used: every dispatcher input stayed in the
+fixture's throwaway directories.
 
 ## Effects store
 
@@ -881,6 +890,51 @@ defaults them.
   listeners by PID, each of which must be on `127.0.0.1`, with the Windows Firewall
   profiles and rule count recorded as disclosure. It reads no file and changes no rule;
   `--exclude-pid` keeps a process out of every lookup.
+- `drill` (E-01.2.2 slice (b)) is a **test-only mode** for the fail-closed drills, under
+  the Owner's extended guest-run authorization of 2026-11-07. `create --provision --drill`
+  (with `--egress-falsification` and `--canaries` if wanted) seeds
+  [`tools/guest_drill.py`](../tools/guest_drill.py) as a second user-data part, which
+  cloud-init runs once as root: it installs a root helper behind a `root:agent` `0730`
+  request directory (`/var/lib/aieh-drill`), so that `agent` can ask it to break or restore
+  a control, alter or roll back a stored conversation, restart the Agent Server, observe
+  units, listeners and the server's journal, or scan the guest as root. The profile's
+  templates, `launch.argv` and every ordinary `create` are unchanged; the launch record
+  marks the instance as a drill instance (`validation.mode` `drill`, the helper's sha256),
+  it has no `guestfwd`, share or new host port, and `start` may boot it again. `drill
+  --kind` and `containment-probe --drill-defective-control` refuse any other instance.
+  - `--kind fail-closed`: the key check (the environment file rewritten without the
+    session key, then with a second one) and the guard (a drop-in that makes
+    `aieh-container-guard.service` fail before it installs a rule, then one that only
+    verifies, so a boot finds no rule), each followed by its restore and a positive
+    control; for the guard the guest is rebooted with the failing unit.
+  - `--kind stored-state`: one disposable conversation is created and stopped; every field
+    of its job-writable stored files (`meta.json`, `base_state.json`, and a planted
+    `owner_lease.json`) is altered alone, then the Agent Server restarts (its start-up
+    path) and the conversation is reopened; the container's image, mounts, caps, user,
+    working directory and keys, the server's runtime and processes, its resume lines in
+    the journal of that start and the altered path on disk are compared with a baseline
+    cycle, and the directory is rolled back to its snapshot (twice, around a server
+    restart). A failed server start is retried once and both attempts are recorded. A
+    sensitivity cycle (a create with request caps) shows the comparison catching a cap
+    change, and the job itself then writes the start-up pair (`execution_status` and the
+    working directory) from inside its container, once with its runtime stopped normally
+    and once after killing its own inner server. `--limit N` runs only the first N
+    alterations.
+  - `--kind root-scan --canaries <set> [--raw]`: the guest-root P5 scan. As root, every
+    regular file of every disk-backed and tmpfs mount and every process environment and
+    command line is searched for the canary set's cores (by sha256, the values never
+    enter the guest), the guest's own secrets (by value, in the guest), private-key blocks
+    and Owner-class patterns, with a planted positive control; `--raw` also counts the
+    secrets and canaries on the raw block devices. A secret is allowed only in its declared
+    store.
+  - `containment-probe --drill-defective-control <id>` replaces a positive control with an
+    attempt that cannot succeed: its cases must become UNKNOWN and the run must not PASS.
+
+  The live check of slice (a)'s admitted create runs from
+  [`integrations/dispatch/tests/live_admitted_create.py`](../integrations/dispatch/tests/live_admitted_create.py)
+  (see [Dispatch input resolution and admission](#dispatch-input-resolution-and-admission)).
+  There is no Task target. Destroy every drill instance afterwards. The observed runs are in
+  [`evidence/E-01.2.2b-live-drills.md`](../evidence/E-01.2.2b-live-drills.md).
 
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);

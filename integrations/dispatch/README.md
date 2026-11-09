@@ -12,8 +12,13 @@ nothing. Its output feeds
 create of the reserved attempt from trusted policy only, and validates it again immediately
 before the injected transport (step 03): workspace, mounts, caps, runtime, route and body.
 
-Nothing here has run against a live Backlog.md, a live store, a live manifest or a live Agent
-Server: **not yet verified** outside the tests' throwaway directories.
+Nothing here has run against a live Backlog.md, a live store or a live manifest: **not yet
+verified** outside the tests' throwaway directories. One admitted create, built from the
+fixture's throwaway inputs and the real `strong-windows-qemu-whpx` declaration (only
+`status.operational` set, in a throwaway copy), was sent by `send_create` to a live Agent
+Server in a disposable drill guest, and the created container's mounts, caps and runtime
+equalled the admitted ones (E-01.2.2 slice (b), `tests/live_admitted_create.py`,
+[`evidence/E-01.2.2b-live-drills.md`](../../evidence/E-01.2.2b-live-drills.md)).
 
 ## Contract
 
