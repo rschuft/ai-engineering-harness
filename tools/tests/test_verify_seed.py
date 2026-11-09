@@ -17,6 +17,7 @@ own verify_seed.py in this process (``verify``, plan leaf F-09.3): its ``main`` 
 the command's, and its git reads in baseline mode are real git processes.
 """
 from pathlib import Path
+import atexit
 import contextlib
 import hashlib
 import importlib.util
@@ -138,7 +139,12 @@ class SeedCopy(unittest.TestCase):
             return
         self._tmp = tempfile.TemporaryDirectory(prefix='verify_seed_')
         self.root = Path(self._tmp.name) / 'seed'
-        shutil.copytree(self.shared, self.root, copy_function=shutil.copyfile)
+        # Plain file copies: git's read-only object files become writable copies.
+        shutil.copytree(self.source(), self.root, copy_function=shutil.copyfile)
+
+    def source(self):
+        """The tree a writing test's private copy is made from."""
+        return self.shared
 
     def tearDown(self):
         if self._tmp is not None:
@@ -289,15 +295,23 @@ class DefaultMode(SeedCopy):
 
 @unittest.skipUnless(git_available(), 'git is not available')
 class BaselineMode(SeedCopy):
+    """Each test starts from a copy of one repository built per class (``golden``): the seeded
+    files with ``git init`` run, every file staged and the staged objects packed, nothing
+    committed. A test's first ``commit_all`` then commits the same tree as from a fresh
+    ``git init``, without writing the objects again; every commit is the test's own."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.golden = golden_repository(cls.shared, cls.shared_digest)
+
+    def source(self):
+        return self.golden
 
     def commit_all(self, message):
         git(self.root, 'add', '--all')
         git(self.root, 'commit', '--quiet', '--no-verify', '-m', message)
         return git(self.root, 'rev-parse', 'HEAD')
-
-    def setUp(self):
-        super().setUp()
-        git(self.root, 'init', '--quiet')
 
     def test_baseline_reads_object_database_not_working_tree(self):
         clean = self.commit_all('seed')
@@ -344,6 +358,26 @@ class BaselineMode(SeedCopy):
         result = run_verifier(self.root, '--baseline', 'seed', env=env)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn('ERROR: not a git repository', result.stderr)
+
+
+_golden = {}
+
+
+def golden_repository(seed, digest):
+    """A repository made once per process for each digest of the seeded files SEED: a copy of
+    them with ``git init`` run, every file staged and the staged objects in one pack (nothing
+    committed). Removed at exit."""
+    if digest not in _golden:
+        tmp = tempfile.TemporaryDirectory(prefix='verify_seed_golden_')
+        atexit.register(tmp.cleanup)
+        root = Path(tmp.name) / 'seed'
+        shutil.copytree(seed, root, copy_function=shutil.copyfile)
+        git(root, 'init', '--quiet')
+        git(root, 'add', '--all')
+        git(root, 'repack', '-a', '-d', '-q')
+        git(root, 'prune-packed')
+        _golden[digest] = root
+    return _golden[digest]
 
 
 def checkout_has_full_history():
