@@ -1,0 +1,608 @@
+"""The repository-access module's contract suite, recorded half (plan leaf F-10.2, decision 0014).
+
+Run from the repository root, under the tools interpreter (Dulwich is required: without it these
+tests fail with REPOSITORY_NEEDS_DULWICH, never skip):
+
+    <tools python> -I -B -m unittest discover -s integrations/repository/tests -v
+
+Every answer of the module over the git-built golden corpus (``repository_corpus.py``) equals
+git's recorded answer: the preserved revision grammar (``rev-parse --verify <form>^{commit}``
+and ``cat-file`` for object names), file lists, exports (blob bytes), HEAD, status, the index,
+listings and the work-tree check. The documented gap forms are refused before any repository
+access; damaged objects fail visibly; the configuration policy is explicit and observable; no
+process is launched. The git-oracle half (``test_repository_oracle.py``) asks git again.
+"""
+import hashlib
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+CATEGORY = 'contract'
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import repository_corpus as rc  # noqa: E402  (puts integrations/repository on sys.path)
+import repository_access as ra  # noqa: E402
+
+REPO = HERE.parents[2]
+TOOLS_LOCK = REPO / 'composition' / 'lock' / 'python' / 'tools-requirements.txt'
+
+# Every form decision 0014 section 2 lists as a documented gap, as it may be written.
+GAP_FORMS = [
+    ':/x', ':/fix the bug', 'HEAD^{/x}', 'main^{/fix}~1', 'HEAD~1^{/a b}:README.md',
+    'main@{yesterday}', '@{2026-11-01}', 'main@{1.day.ago}', 'HEAD@{now}', 'main@{100000000}', 'main@{}',
+    'main@{1}@{yesterday}', '@{upstream}', '@{u}', 'main@{U}', 'main@{upstream}~1', '@{push}', 'main@{Push}',
+    '@{-1}', '@{-2}~1', 'main@{-1}', 'A..B', 'HEAD~1..HEAD', 'HEAD...side', '..HEAD', 'HEAD..', '^HEAD',
+    'HEAD^@', 'HEAD^!', 'HEAD^-', 'HEAD^-1', 'refs/heads/../heads/main', 'heads/../main']
+INVALID_REVISIONS = ['', '-HEAD', '--all', 'HEAD main', 'HEAD\tx', 'HEAD\nx', 'main\x00', 'main\x7f', ' HEAD',
+                     'HEAD ', 'a' + chr(0xa0) + 'b', 'a' + chr(0x2028) + 'b', 'x\ud800', None, 3, b'HEAD']
+INVALID_NAMES = ['', '-HEAD', 'HEAD\x00', 'HEAD:a\nb', 'HEAD:\tx', 'x\x7f', 'x\ud800', None, b'HEAD']
+
+
+def lock_pin(name):
+    match = re.search(rf'^{re.escape(name)}==(\S+)', TOOLS_LOCK.read_text(encoding='utf-8'), re.M)
+    return match.group(1)
+
+
+def open_repo(name, policy='repository', work_tree=False):
+    return ra.open_repository(rc.corpus() / name, config=policy, work_tree=work_tree)
+
+
+class Spy:
+    """Stands in for the Dulwich repository: records any access."""
+
+    def __init__(self):
+        self.accessed = []
+
+    def __getattr__(self, name):
+        self.accessed.append(name)
+        raise AssertionError(f'repository accessed: {name}')
+
+
+class DulwichPresent(unittest.TestCase):
+    """Dulwich must be importable by the interpreter running the suite: the tools interpreter."""
+
+    def test_dulwich_is_importable_at_the_locked_version(self):
+        try:
+            d = ra.dulwich_modules()
+        except ra.CannotRun as exc:
+            self.fail(f'{exc} (run this suite under the tools interpreter)')
+        self.assertEqual(d.version, lock_pin('dulwich'), 'the pinned Dulwich of the tools lock')
+        # From the installed metadata: importing urllib3 opens a socket (its IPv6 probe).
+        from importlib import metadata
+        self.assertEqual(metadata.version('urllib3'), lock_pin('urllib3'))
+
+
+class MissingDulwich(unittest.TestCase):
+    category = 'unit'
+
+    def test_without_dulwich_opening_fails_with_the_stable_code_naming_tools_install(self):
+        with mock.patch.dict(sys.modules, {'dulwich': None}), mock.patch.object(ra, '_D', None):
+            with self.assertRaises(ra.CannotRun) as caught:
+                ra.open_repository(rc.corpus() / 'repo one', config='repository')
+            self.assertEqual(caught.exception.code, 'REPOSITORY_NEEDS_DULWICH')
+            self.assertIn('task tools:install', caught.exception.message)
+            self.assertIn('tools_install.py --python', caught.exception.message)
+            # The grammar needs no Dulwich: refusals still come before anything is opened.
+            with self.assertRaises(ra.RepositoryError):
+                ra.check_revision(':/x')
+            self.assertEqual(ra.check_revision('HEAD~1'), 'HEAD~1')
+
+
+class Grammar(unittest.TestCase):
+    """Refusals come before any repository access (an access spy records none)."""
+
+    category = 'unit'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = open_repo('repo one', work_tree=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.repo.close()
+
+    def refused(self, code, call, *args):
+        real, spy = self.repo._dul, Spy()
+        self.repo._dul = spy
+        try:
+            with self.assertRaises(ra.RepositoryError) as caught:
+                call(*args)
+        finally:
+            self.repo._dul = real
+        self.assertEqual(caught.exception.code, code, caught.exception)
+        self.assertEqual(spy.accessed, [])
+        return caught.exception
+
+    def test_every_gap_form_is_refused_before_any_access(self):
+        for form in GAP_FORMS:
+            with self.subTest(form=form):
+                self.assertIsNotNone(ra.gap_form(form))
+                error = self.refused('REVISION_INVALID', self.repo.commit, form)
+                if not any(ch.isspace() for ch in form):  # whitespace alone already refuses a revision
+                    self.assertIn('decision 0014', error.message)
+                for call in (self.repo.object_kind, self.repo.object_id, self.repo.read):
+                    self.assertIn('decision 0014', self.refused('REVISION_INVALID', call, form).message)
+        self.refused('REVISION_INVALID', self.repo.blob, 'HEAD^{/x}', 'README.md')
+        self.refused('REVISION_INVALID', self.repo.files, 'main@{yesterday}', 'docs')
+
+    def test_the_proof_forms_are_gaps(self):
+        for form, gap in ((':/x', 'history search'), ('HEAD^{/x}', 'history search'),
+                          ('main@{yesterday}', 'reflog date'), ('@{upstream}', 'configured branch'),
+                          ('@{-1}', 'previous checkout'), ('A..B', 'range')):
+            with self.subTest(form=form):
+                self.assertIn(gap, ra.gap_form(form))
+
+    def test_invalid_revisions_and_names_are_refused_before_any_access(self):
+        for revision in INVALID_REVISIONS:
+            with self.subTest(revision=revision):
+                self.refused('REVISION_INVALID', self.repo.commit, revision)
+        for name in INVALID_NAMES:
+            with self.subTest(name=name):
+                for call in (self.repo.object_kind, self.repo.object_id, self.repo.read):
+                    self.refused('OBJECT_NAME_INVALID', call, name)
+        for directory in ('', '.', '/docs', 'docs/', 'a//b', 'a/../b', './docs', 'd\x00'):
+            with self.subTest(directory=directory):
+                self.refused('OBJECT_NAME_INVALID', self.repo.files, 'HEAD', directory)
+
+    def test_preserved_forms_are_not_gaps(self):
+        facts = rc.expected()['facts']
+        for form in ('HEAD', '@', 'HEAD~1', 'HEAD^2', 'HEAD~1^2', 'main@{0}', '@{1}', 'HEAD^{tree}', 'v1^{}',
+                     'HEAD~1:README.md', ':README.md', ':2:x', 'HEAD:a..b.txt', 'HEAD:x@{yesterday}',
+                     'HEAD:x^{/y}', 'HEAD:x@{u}', ':/', facts['E'][:4], f'v1-1-g{facts["E"][:7]}', 'main@{99999999}'):
+            with self.subTest(form=form):
+                self.assertIsNone(ra.gap_form(form))
+
+    def test_names_keep_spaces_and_revisions_refuse_them(self):
+        self.assertEqual(ra.check_object_name('HEAD:a b.md'), 'HEAD:a b.md')
+        self.refused('REVISION_INVALID', self.repo.commit, 'HEAD:a b.md')
+
+    def test_refnames(self):
+        for name in ('refs/heads/main', 'refs/top', 'refs/heads/ünï', 'main-worktree/HEAD'):
+            self.assertTrue(ra.refname_valid(name), name)
+        for name in ('refs/heads/a..b', 'refs/heads/.x', 'refs/heads/x.lock', 'refs/heads/x/', 'refs//x', '@',
+                     'refs/heads/a b', 'refs/heads/a:b', 'refs/heads/a\\b', 'refs/heads/a@{b', 'refs/x.', 'main'):
+            self.assertFalse(ra.refname_valid(name), name)
+        self.assertTrue(ra.refname_valid('main', onelevel=True))
+
+
+class RecordedExpectations(unittest.TestCase):
+    """The module's answers equal git's recorded answers over the golden corpus."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = rc.corpus()
+        cls.expected = rc.expected()
+        cls.repos = cls.expected['repos']
+
+    def test_the_corpus_is_the_recorded_one(self):
+        self.assertEqual(self.expected['schema'], rc.SCHEMA)
+        self.assertEqual(rc.archive_digest(), self.expected['archive_sha256'])
+        self.assertEqual(len(self.expected['long_path']), 295)
+        for name in ('repo one', 'packed copy', 'bare.git', 'linked tree', 'separate work', 'sha256 repo',
+                     'long.git', 'id mismatch', 'corrupt zlib', 'corrupt pack', 'conflicted', 'not a repo'):
+            self.assertTrue((self.root / name).is_dir(), name)
+        packed = self.root / 'packed copy' / '.git' / 'objects'
+        self.assertEqual([p for p in packed.iterdir() if len(p.name) == 2 and any(p.iterdir())], [])
+        self.assertTrue(any((self.root / 'repo one' / '.git' / 'objects').glob('??/*')))
+
+    def test_commit_forms(self):
+        for repo, data in self.repos.items():
+            with open_repo(repo) as r:
+                for form, want in data['commits']:
+                    with self.subTest(repo=repo, form=form):
+                        self.assertEqual(r.commit(form), want)
+
+    def test_object_names(self):
+        for repo, data in self.repos.items():
+            with open_repo(repo) as r:
+                for name, want in data['names']:
+                    with self.subTest(repo=repo, name=name):
+                        found = r.read(name)
+                        self.assertEqual([found[0], found[1]] if found else None, want)
+                        self.assertEqual(r.object_kind(name), want[1] if want else None)
+                        self.assertEqual(r.object_id(name), want[0] if want else None)
+
+    def test_the_date_fallback_is_refused(self):
+        data = self.repos['repo one']
+        with open_repo('repo one') as r:
+            for kind, rows in (('commit', data['fallback_commits']), ('name', data['fallback_names'])):
+                for form, _clock_dependent in rows:
+                    with self.subTest(kind=kind, form=form):
+                        self.assertIsNone(ra.gap_form(form))
+                        with self.assertRaises(ra.RepositoryError) as caught:
+                            r.commit(form) if kind == 'commit' else r.read(form)
+                        self.assertEqual(caught.exception.code, 'REVISION_INVALID')
+                        self.assertIn('@{<date>}', caught.exception.message)
+
+    def test_blobs(self):
+        facts = self.expected['facts']
+        with open_repo('repo one') as r:
+            self.assertEqual(r.blob('HEAD', 'README.md'), b'readme\nsecond line\n')
+            self.assertEqual(r.blob(facts['E'], rc.UNI), 'unicode ü\n'.encode())
+            self.assertEqual(r.blob('HEAD', 'data/binary.bin'), b'\x00\x01\r\n\x02\x03\xff\r\n')
+            self.assertEqual(r.blob('HEAD', 'eol/crlf.txt'), b'line one\nline two\n')
+            for name, path, why in (('HEAD', 'docs', 'a tree, not a blob'), ('HEAD', 'no such', 'no such object'),
+                                    ('0' * 40, 'README.md', 'no such object')):
+                with self.subTest(path=path):
+                    with self.assertRaises(ra.RepositoryError) as caught:
+                        r.blob(name, path)
+                    self.assertEqual(caught.exception.code, 'GIT_FAILED')
+                    self.assertIn(why, caught.exception.message)
+        with open_repo('long.git') as r:
+            self.assertEqual(r.blob('HEAD', self.expected['long_path']), b'long path\n')
+
+    def test_file_lists(self):
+        for repo, data in self.repos.items():
+            if 'files' not in data:
+                continue
+            with open_repo(repo) as r:
+                for commit, directory, want in data['files']:
+                    with self.subTest(repo=repo, commit=commit, directory=directory):
+                        self.assertEqual(r.files(commit, directory), want)
+        with open_repo('repo one') as r, self.assertRaises(ra.RepositoryError) as caught:
+            r.files('0' * 40, 'docs')
+        self.assertEqual(caught.exception.code, 'GIT_FAILED')
+
+    def test_heads(self):
+        for repo, data in self.repos.items():
+            if 'head' in data:
+                with self.subTest(repo=repo), open_repo(repo) as r:
+                    head = r.head()
+                    self.assertEqual([head.commit, head.ref], data['head'])
+
+    def test_index_entries(self):
+        for repo, data in self.repos.items():
+            if 'index' in data:
+                with self.subTest(repo=repo), open_repo(repo, work_tree=True) as r:
+                    self.assertEqual([[e.mode, e.oid, e.stage, e.path] for e in r.index_entries()], data['index'])
+
+    def test_status(self):
+        for repo, data in self.repos.items():
+            if 'status' not in data:
+                continue
+            with open_repo(repo, work_tree=True) as r:
+                for untracked, paths, want in data['status']:
+                    with self.subTest(repo=repo, untracked=untracked, paths=paths):
+                        self.assertEqual([[e.xy, e.path] for e in r.status(paths, untracked)], want)
+
+    def test_listings(self):
+        for repo, data in self.repos.items():
+            if 'listing' not in data:
+                continue
+            with open_repo(repo, work_tree=True) as r:
+                for cached, others, exclude, want in data['listing']:
+                    with self.subTest(repo=repo, cached=cached, others=others, exclude=exclude):
+                        self.assertEqual(r.listing(cached, others, exclude), want)
+
+    def test_the_work_tree_check(self):
+        """Accepted: a work tree's root and subdirectories, a linked worktree, a separate git
+        directory's work tree. Refused: bare, .git and anything in it, and a non-repository."""
+        for subject, want in self.expected['work_trees']:
+            with self.subTest(subject=subject):
+                if want is None:
+                    with self.assertRaises(ra.CannotRun) as caught:
+                        ra.open_repository(self.root / subject, config='repository')
+                    self.assertEqual(caught.exception.code, 'NOT_A_WORK_TREE')
+                else:
+                    with ra.open_repository(self.root / subject, config='repository') as r:
+                        self.assertEqual(Path(r.root).resolve(), (self.root / want).resolve())
+        with ra.open_repository(self.root / 'bare.git', config='repository', work_tree=False) as r:
+            self.assertTrue(r.bare)
+        with self.assertRaises(ra.CannotRun) as caught:
+            ra.open_repository(self.root / 'not a repo', config='repository', work_tree=False)
+        self.assertEqual(caught.exception.code, 'NOT_A_REPOSITORY')
+        with self.assertRaises(ra.CannotRun):
+            ra.open_repository(self.root / 'no such directory', config='repository')
+        with self.assertRaises(ValueError):
+            ra.open_repository(self.root / 'repo one', config='system')
+
+
+class Export(unittest.TestCase):
+    """export_tree writes blob bytes (decision 0014 section 4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-export-'))
+        cls.count = 0
+
+    @classmethod
+    def tearDownClass(cls):
+        rc.rmtree(cls.tmp)
+
+    def destination(self):
+        type(self).count += 1
+        path = self.tmp / f'export {self.count} ü'
+        path.mkdir()
+        return path
+
+    def test_exports_equal_git_blob_bytes(self):
+        for repo, data in rc.expected()['repos'].items():
+            for commit, subtree, members in data.get('export', []):
+                with self.subTest(repo=repo, commit=commit, subtree=subtree), open_repo(repo) as r:
+                    dest = self.destination()
+                    counts = r.export_tree(commit, subtree, dest)
+                    self.check(dest, members)
+                    self.assertEqual(counts['files'], sum(1 for m in members if m[1] in ('100644', '100755')))
+
+    def check(self, dest, members):
+        written = []
+        for top, dirs, files in os.walk(dest):  # links are not followed
+            for name in files + [d for d in dirs if os.path.islink(os.path.join(top, d))]:
+                written.append(Path(top, name).relative_to(dest).as_posix())
+        written.sort()
+        expected_paths = sorted(path for path, mode, _sha, _size in members if mode != '160000')
+        self.assertEqual(written, expected_paths)
+        for path, mode, sha, size in members:
+            target = dest.joinpath(*path.split('/'))
+            if mode == '160000':
+                self.assertTrue(target.is_dir() and not any(target.iterdir()), path)
+            elif mode == '120000':
+                self.assertTrue(target.is_symlink(), path)
+                link = os.readlink(target).replace('\\', '/')
+                self.assertEqual(hashlib.sha256(link.encode()).hexdigest(), sha, path)
+            else:
+                data = target.read_bytes()
+                self.assertEqual((hashlib.sha256(data).hexdigest(), len(data)), (sha, size), path)
+                if os.name != 'nt':
+                    self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755 if mode == '100755' else 0o644)
+
+    def test_export_ignore_eol_and_binary_are_blob_bytes(self):
+        with open_repo('repo one') as r:
+            dest = self.destination()
+            r.export_tree('HEAD', '.', dest)
+        self.assertEqual((dest / 'ignored-export' / 'hidden.txt').read_bytes(), b'hidden from git archive\n')
+        self.assertEqual((dest / 'eol' / 'crlf.txt').read_bytes(), b'line one\nline two\n')
+        self.assertEqual((dest / 'text' / 'crlf-in-blob.txt').read_bytes(), b'a\r\nb\r\n')
+        self.assertEqual((dest / 'data' / 'binary.bin').read_bytes(), b'\x00\x01\r\n\x02\x03\xff\r\n')
+
+    def test_links_inside_are_links_and_a_gitlink_is_an_empty_directory(self):
+        with open_repo('repo one') as r:
+            dest = self.destination()
+            counts = r.export_tree('links-ok', '.', dest)
+        self.assertEqual((counts['files'], counts['links'], counts['directories']), (4, 2, 1))
+        self.assertEqual(os.readlink(dest / 'links' / 'inside').replace('\\', '/'), '../README.md')
+        self.assertEqual((dest / 'links' / 'inside').read_bytes(), b'readme\nsecond line\n')
+        self.assertTrue((dest / 'links' / 'dir').is_dir())
+        self.assertEqual(list((dest / 'links' / 'sub').iterdir()), [])
+
+    def test_refusals_write_nothing(self):
+        with open_repo('repo one') as r:
+            for commit, why in (('links-escape', 'leaves the export'), ('links-climb', 'climbs out of another link'),
+                                ('unsafe-name', 'git metadata')):
+                with self.subTest(commit=commit):
+                    dest = self.destination()
+                    with self.assertRaises(ra.RepositoryError) as caught:
+                        r.export_tree(commit, '.', dest)
+                    self.assertEqual(caught.exception.code, 'EXPORT_REFUSED')
+                    self.assertIn(why, caught.exception.message)
+                    self.assertEqual(list(dest.iterdir()), [])
+            dest = self.destination()
+            (dest / 'x').write_text('x')
+            with self.assertRaises(ra.RepositoryError) as caught:
+                r.export_tree('HEAD', '.', dest)
+            self.assertEqual(caught.exception.code, 'EXPORT_REFUSED')
+            with self.assertRaises(ra.RepositoryError) as caught:
+                r.export_tree('HEAD', 'no/such', self.destination())
+            self.assertEqual(caught.exception.code, 'GIT_FAILED')
+
+    def test_a_platform_refusing_links_refuses_the_export(self):
+        with open_repo('repo one') as r, mock.patch.object(ra.os, 'symlink', side_effect=OSError('privilege')):
+            with self.assertRaises(ra.RepositoryError) as caught:
+                r.export_tree('links-ok', '.', self.destination())
+        self.assertEqual(caught.exception.code, 'EXPORT_REFUSED')
+        self.assertIn('privilege', caught.exception.message)
+
+    def test_unsafe_names(self):
+        for name in ('.git', '.GIT', '..', '.', ''):
+            self.assertIsNotNone(ra._unsafe_component(name), name)
+        self.assertIsNone(ra._unsafe_component('a b ü.md'))
+        with mock.patch.object(ra, '_WINDOWS', True):
+            for name in ('aux.txt', 'CON', 'nul ', 'a:b', 'a\\b', 'x.', 'x ', 'git~1', '.git.', 'COM1.log'):
+                self.assertIsNotNone(ra._unsafe_component(name), name)
+            self.assertIsNone(ra._unsafe_component('auxiliary.txt'))
+
+
+class Integrity(unittest.TestCase):
+    """A damaged object fails visibly with GIT_FAILED naming it (decision 0014 section 3); no
+    crash, and the other objects still read."""
+
+    def test_damaged_objects(self):
+        facts = rc.expected()['facts']
+        for repo, oid in (('id mismatch', facts['mismatch']), ('corrupt zlib', facts['zlib']),
+                          ('corrupt pack', facts['pack'])):
+            with self.subTest(repo=repo):
+                r = open_repo(repo, work_tree=True)
+                try:
+                    for call, args in ((r.blob, ('HEAD', 'README.md')), (r.object_kind, (oid,)),
+                                       (r.read, ('HEAD:README.md',))):
+                        with self.assertRaises(ra.RepositoryError) as caught:
+                            call(*args)
+                        self.assertEqual(caught.exception.code, 'GIT_FAILED')
+                        self.assertEqual(caught.exception.details.get('object'), oid)
+                        self.assertIn(oid, caught.exception.message)
+                    self.assertEqual(r.blob('HEAD', 'other.txt'), b'other\n')
+                    self.assertEqual(r.blob('HEAD', 'dir/more.txt'), b'more\n')
+                    self.assertIsNotNone(r.commit('HEAD'))
+                    with self.assertRaises(ra.RepositoryError) as caught:
+                        r.export_tree('HEAD', '.', _empty_dir())
+                    self.assertEqual(caught.exception.code, 'GIT_FAILED')
+                finally:
+                    r.close()
+
+
+_EMPTY = []
+
+
+def _empty_dir():
+    if not _EMPTY:
+        _EMPTY.append(Path(tempfile.mkdtemp(prefix='aieh-repo-damaged-')))
+        import atexit
+        atexit.register(rc.rmtree, _EMPTY[0])
+    path = _EMPTY[0] / str(len(list(_EMPTY[0].iterdir())))
+    path.mkdir()
+    return path
+
+
+class ConfigPolicy(unittest.TestCase):
+    """Every call names its configuration policy, and config_sources lists the files read
+    (decision 0014 section 5)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-config-'))
+        cls.repo = cls.tmp / 'work'
+        shutil.copytree(rc.corpus() / 'separate work', cls.repo, symlinks=True)
+        shutil.copytree(rc.corpus() / 'separate.git', cls.tmp / 'separate.git', symlinks=True)
+        cls.excludes = cls.tmp / 'excludes'
+        cls.excludes.write_text('*.secret\n', encoding='utf-8')
+        cls.global_config = cls.tmp / 'global config'
+        cls.global_config.write_text(f'[core]\n\texcludesFile = {cls.excludes.as_posix()}\n', encoding='utf-8')
+        (cls.repo / 'note.secret').write_text('s\n', encoding='utf-8')
+        (cls.repo / 'note.txt').write_text('t\n', encoding='utf-8')
+        cls.config = os.path.join(str(cls.tmp / 'separate.git'), 'config')
+
+    @classmethod
+    def tearDownClass(cls):
+        rc.rmtree(cls.tmp)
+
+    def test_repository_and_none_read_only_the_repository_config(self):
+        for policy in ('repository', 'none'):
+            with self.subTest(policy=policy), ra.open_repository(self.repo, config=policy) as r:
+                r.status(None, 'all')
+                self.assertEqual([os.path.normcase(p) for p in r.config_sources], [os.path.normcase(self.config)])
+        with ra.open_repository(self.repo, config='repository') as r:
+            self.assertTrue(r._config_bool(b'core', b'bare', True) is False)
+        with ra.open_repository(self.repo, config='none') as r:
+            self.assertTrue(r._config_bool(b'core', b'bare', True), 'none applies no configuration')
+
+    def test_host_reads_what_dulwich_locates(self):
+        env = {'GIT_CONFIG_GLOBAL': str(self.global_config), 'GIT_CONFIG_NOSYSTEM': '1'}
+        with mock.patch.dict(os.environ, env):
+            with ra.open_repository(self.repo, config='host') as r:
+                untracked = [e.path for e in r.status(None, 'all') if e.xy == '??']
+                sources = list(r.config_sources)
+            self.assertEqual(ra.host_config_paths(), [str(self.global_config)])
+        self.assertIn('note.txt', untracked)
+        self.assertNotIn('note.secret', untracked)
+        self.assertEqual([os.path.normcase(p) for p in sources],
+                         [os.path.normcase(p) for p in (self.config, str(self.global_config), str(self.excludes))])
+        with mock.patch.dict(os.environ, env), ra.open_repository(self.repo, config='repository') as r:
+            self.assertIn('note.secret', [e.path for e in r.status(None, 'all')])
+
+    def test_host_config_paths_are_dulwichs_default_backends(self):
+        d = ra.dulwich_modules()
+        located = [p for p in ra.host_config_paths() if os.path.isfile(p) or p == os.devnull]
+        self.assertEqual([os.path.normcase(p) for p in located],
+                         [os.path.normcase(cf.path) for cf in d.config.StackedConfig.default_backends()])
+
+    def test_repository_policy_is_the_same_with_and_without_git_on_path(self):
+        def snapshot():
+            with ra.open_repository(self.repo, config='repository') as r:
+                return (r.config_sources, r.status(None, 'all'), r.listing(True, True, True), r.index_entries(),
+                        r.commit('HEAD'), r.read('HEAD:sep.txt'), r.head())
+
+        with_git = snapshot()
+        with mock.patch.dict(os.environ, {'PATH': ''}):
+            without_git = snapshot()
+        self.assertEqual(with_git, without_git)
+
+
+class Bundles(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-bundle-'))
+
+    @classmethod
+    def tearDownClass(cls):
+        rc.rmtree(cls.tmp)
+
+    def test_a_branch_bundle(self):
+        facts = rc.expected()['facts']
+        with open_repo('repo one') as r:
+            header = r.write_bundle(['refs/heads/main'], self.tmp / 'main.bundle')
+        self.assertEqual(header['version'], 2)
+        self.assertEqual(header['refs'], [[facts['E'], 'refs/heads/main']])
+        self.assertEqual(header['prerequisites'], [])
+        self.assertTrue(header['pack_trailer']['ok'])
+        self.assertEqual(ra.parse_bundle_header(self.tmp / 'main.bundle')['refs'], header['refs'])
+
+    def test_a_sha256_bundle_and_a_tag(self):
+        facts = rc.expected()['facts']
+        with open_repo('sha256 repo') as r:
+            header = r.write_bundle(['refs/heads/main', 'refs/tags/s1'], self.tmp / 'sha256.bundle')
+            tag = r._ref_value('refs/tags/s1')[1]
+        self.assertEqual((header['version'], header['capabilities']), (3, ['object-format=sha256']))
+        self.assertEqual(header['refs'], [[facts['H4'], 'refs/heads/main'], [tag, 'refs/tags/s1']])
+        self.assertEqual(header['pack_trailer']['algorithm'], 'sha256')
+        self.assertTrue(header['pack_trailer']['ok'])
+
+    def test_refusals(self):
+        with open_repo('repo one') as r:
+            (self.tmp / 'exists.bundle').write_bytes(b'x')
+            for refs, dest in ((['refs/heads/main'], 'exists.bundle'), (['refs/heads/nosuch'], 'a.bundle'),
+                               (['main'], 'b.bundle'), ('refs/heads/main', 'c.bundle'), ([], 'd.bundle')):
+                with self.subTest(refs=refs), self.assertRaises(ra.RepositoryError) as caught:
+                    r.write_bundle(refs, self.tmp / dest)
+                self.assertEqual(caught.exception.code, 'BUNDLE_INVALID')
+        self.assertEqual((self.tmp / 'exists.bundle').read_bytes(), b'x')
+        for name in ('a.bundle', 'b.bundle', 'c.bundle', 'd.bundle'):
+            self.assertFalse((self.tmp / name).exists())
+
+    def test_header_and_trailer_checks(self):
+        path = self.tmp / 'garbage.bundle'
+        for data in (b'not a bundle\n', b'# v2 git bundle\n' + b'x' * 10, b'# v2 git bundle\nbad line\n\n'):
+            path.write_bytes(data)
+            with self.subTest(data=data), self.assertRaises(ra.RepositoryError) as caught:
+                ra.parse_bundle_header(path)
+            self.assertEqual(caught.exception.code, 'BUNDLE_INVALID')
+        with open_repo('repo one') as r:
+            r.write_bundle(['refs/heads/side'], self.tmp / 'side.bundle')
+        data = bytearray((self.tmp / 'side.bundle').read_bytes())
+        header = ra.parse_bundle_header(self.tmp / 'side.bundle')
+        data[header['pack_offset'] + 20] ^= 0xff
+        (self.tmp / 'flipped.bundle').write_bytes(bytes(data))
+        self.assertFalse(ra.pack_trailer(self.tmp / 'flipped.bundle', header)['ok'])
+
+
+class NoProcess(unittest.TestCase):
+    """The module launches no process: every operation runs with process creation refused."""
+
+    category = 'unit'
+
+    def test_every_operation_without_a_process(self):
+        refuse = AssertionError('a process was launched')
+        patches = [mock.patch.object(subprocess, 'Popen', side_effect=refuse),
+                   mock.patch.object(os, 'system', side_effect=refuse)]
+        if os.name == 'nt':
+            import _winapi
+            patches.append(mock.patch.object(_winapi, 'CreateProcess', side_effect=refuse))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        dest = _empty_dir()
+        for policy in ra.POLICIES:
+            with self.subTest(policy=policy), open_repo('repo one', policy, work_tree=True) as r:
+                r.commit('HEAD~1^2')
+                r.read('HEAD:README.md')
+                r.files('HEAD', 'docs')
+                r.head()
+                r.status(None, 'all')
+                r.index_entries()
+                r.listing(True, True, True)
+                r.config_sources
+        with open_repo('repo one') as r:
+            r.export_tree('HEAD', 'openspec', dest)
+            r.write_bundle(['refs/heads/side'], dest / 'x.bundle')
+
+
+if __name__ == '__main__':
+    unittest.main()

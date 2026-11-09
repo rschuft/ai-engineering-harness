@@ -1,0 +1,5 @@
+# repository-corpus-tree.json.gz holds the git-built golden repositories byte for byte (gzipped
+# JSON; object files, packs and indexes as base64): never convert it. The recorded expectations
+# are LF text on every host.
+*.gz     -text -diff
+*.json   text eol=lf

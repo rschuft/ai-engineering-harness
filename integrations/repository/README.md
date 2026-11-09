@@ -196,10 +196,12 @@ section 9); it never skips.
   files, `export-ignore`, annotated, lightweight, nested, tree and blob tags, a merge, ambiguous
   abbreviations, symbolic links and a gitlink, unsafe names, a work tree with every kind of
   change, a conflicted merge, and three damaged repositories (an id mismatch, a corrupt zlib
-  stream, a corrupt pack). [`tests/fixtures/repository-corpus.tar.gz`](tests/fixtures/) holds
-  them byte for byte (git's sample hooks left out) and
+  stream, a corrupt pack). [`tests/fixtures/repository-corpus-tree.json.gz`](tests/fixtures/)
+  holds them byte for byte (git's sample hooks left out) as gzipped JSON, every directory and
+  file, plain text as text and git's binary files as base64, so that the publication-safety gate
+  can inspect all of it (it refuses an archive it cannot read as text), and
   [`tests/fixtures/repository-corpus.json`](tests/fixtures/repository-corpus.json) git's answers
-  to every question the suite asks, with the archive's sha256. The suite extracts the archive
+  to every question the suite asks, with the tree's sha256. The suite extracts the tree
   once per process into a temporary directory.
 - **Recorded half** ([`tests/test_repository_access.py`](tests/test_repository_access.py), no
   git): every answer equals the recorded one; every gap form is refused with an access spy
@@ -221,7 +223,7 @@ and review the JSON diff:
 python -I -B integrations/repository/tests/repository_corpus.py --record
 ```
 
-The archive is not byte-reproducible (git's index records the build's file times); the
+The tree is not byte-reproducible (git's index records the build's file times); the
 expectations are.
 
 ## Not verified
