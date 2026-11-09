@@ -36,7 +36,7 @@ NAME = 'seed-test'
 INSTANCE_ID = 'seed-test-00000000-0000-4000-8000-000000000000'
 # The sha256 of seed.iso for the fixed input above with key_line(bytes(range(32)),
 # 'aieh-test'). It changes only when a template pin or the generator's output changes.
-FIXED_INPUT_SHA256 = 'f5dfc76ed978c13cc72ae50bc7afd28e16406d5d000ede175c5f7183b8123906'
+FIXED_INPUT_SHA256 = 'ca1c23cbcf678cf15e0913ddb200aa2b70ed93ccde78171af5456b88a3f6ba23'
 
 
 def key_line(raw32, comment='aieh-test'):

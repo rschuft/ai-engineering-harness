@@ -2931,11 +2931,13 @@ def agent_server_facts(token='one', **override):
                  'IPAddressDeny': '0.0.0.0/0 ::/0', 'IPAddressAllow': '127.0.0.0/8 ::1/128',
                  'RestrictAddressFamilies': 'AF_UNIX AF_INET AF_INET6 AF_NETLINK',
                  'SystemCallArchitectures': 'native', 'UMask': '0077',
-                 'ReadWritePaths': '/srv/scratch/openhands'},
+                 'ReadWritePaths': '/srv/scratch/openhands',
+                 'Environment': ' '.join(f'{k}={v}' for k, v in AS['environment'].items())},
         'enabled': 'enabled',
         'processes': [{'pid': pid, 'name': 'agent-server', 'user': 'openhands',
                        'group': 'openhands', 'groups': ['docker', 'openhands'],
-                       'exe': AS['binary']['path'], 'environment_names': ['HOME', 'PATH'],
+                       'exe': AS['binary']['path'],
+                       'environment_names': ['HOME', 'LITELLM_LOCAL_MODEL_COST_MAP', 'PATH'],
                        'docker_environment': {}} for pid in ('1500', '1501')],
         'account': {'name': 'openhands', 'uid': 999, 'home': AS['user']['home'],
                     'shell': AS['user']['shell'], 'groups': ['openhands', 'docker'],
@@ -2959,6 +2961,8 @@ def agent_server_facts(token='one', **override):
         'journal': {'rc': 0, 'lines': 9, 'secret_occurrences': dict(zero),
                     'head': ['2026-11-07T00:00:00+00:00 guest agent-server[1500]: Starting '
                              'OpenHands Agent Server on 127.0.0.1:8000'], 'noted': []},
+        'start': {'rc': 0, 'count': 1,
+                  'last': ['aieh-agent-server-ready: ready start=clean seconds=4.2 restarts=0']},
     }
     facts.update(override)
     return facts
@@ -3298,8 +3302,8 @@ class ProvisionedInspect(LaunchRecord):
         props = self.props()
         self.assertEqual(self.failing(), [])
         self.assertEqual(props[guest.PROVISIONING_PROPERTY]['verdict'], 'PASS')
-        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 24)
-        self.assertTrue({guest.EGRESS_CHECK, guest.QUIESCE_CHECK} <= {
+        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 25)
+        self.assertTrue({guest.EGRESS_CHECK, guest.QUIESCE_CHECK, guest.START_CHECK} <= {
             c['check'] for c in props[guest.PROVISIONING_PROPERTY]['checks']})
         names = {c['check'] for c in props['profiles P6']['checks']}
         self.assertTrue({'guest Moby sockets', 'agent cannot reach Moby'} <= names)
@@ -3688,7 +3692,9 @@ class ProvisionedInspect(LaunchRecord):
         unit = dict(agent_server_facts()['unit'], User='root')
         self.assertEqual(self.failing(self.server(unit=unit)), [(prov, 'Agent Server service')])
         unit = dict(agent_server_facts()['unit'], NRestarts='2')
-        self.assertEqual(self.failing(self.server(unit=unit)), [(prov, 'Agent Server service')])
+        # E-01.4.3: a retried start also fails the start check
+        self.assertEqual(self.failing(self.server(unit=unit)), [(prov, 'Agent Server service'),
+                                                                (prov, guest.START_CHECK)])
         account = dict(agent_server_facts()['account'], shell='/bin/bash')
         self.assertEqual(self.failing(self.server(account=account)), [(prov, 'Agent Server service')])
         binary = dict(agent_server_facts()['binary'], sha256='0' * 64)
@@ -4482,6 +4488,84 @@ class EgressInspect(AdmissionInspect):
         del profile['provisioning']['agent_server']['admission']['network']['egress_guard']
         checks = guest.admission_check(profile, self.obs())
         self.assertEqual([c['check'] for c in checks], [guest.ADMISSION_CHECK])
+
+
+class StartInspect(unittest.TestCase):
+    """E-01.4.3: inspect's check of the start-race control and of this boot's start, from the
+    boot facts; a retried, slow, unverified or failed start never passes as clean."""
+    CLEAN = 'aieh-agent-server-ready: ready start=clean seconds=4.2 restarts=0'
+
+    def verdict(self, profile=PROFILE, **change):
+        server = agent_server_facts(**change)
+        facts = moby_facts(agent_server=server)
+        checks = guest.start_check(profile, {'guest': {'moby_facts': {'rc': 0,
+                                                                      'out': json.dumps(facts)}}})
+        self.assertEqual([c['check'] for c in checks], [guest.START_CHECK])
+        return checks[0]['verdict']
+
+    def test_a_clean_start_with_the_control_passes(self):
+        self.assertEqual(self.verdict(), 'PASS')
+        self.assertEqual(guest.CHECK_CLASSES[(guest.PROVISIONING_PROPERTY, guest.START_CHECK)][0],
+                         guest.STABLE)
+        # two clean lines this boot (a manual restart before the facts) still pass
+        self.assertEqual(self.verdict(start={'rc': 0, 'count': 2,
+                                             'last': [self.CLEAN, self.CLEAN]}), 'PASS')
+
+    def test_each_departure_fails(self):
+        good = agent_server_facts()
+        unit, procs = good['unit'], good['processes']
+        no_var = ' '.join(t for t in unit['Environment'].split()
+                          if not t.startswith('LITELLM_LOCAL_MODEL_COST_MAP='))
+        wrong = no_var + ' LITELLM_LOCAL_MODEL_COST_MAP=False'
+        lines = ('aieh-agent-server-ready: ready start=retried seconds=4.0 restarts=1',
+                 'aieh-agent-server-ready: ready start=slow seconds=31.0 restarts=0',
+                 'aieh-agent-server-ready: ready start=unverified seconds=4.0 restarts=None',
+                 'aieh-agent-server-ready: not ready start=main-exited seconds=1.4 restarts=0 '
+                 'last_status=None',
+                 'aieh-agent-server-ready: not ready start=timeout seconds=280.0 restarts=0 '
+                 'last_status=None',
+                 'aieh-agent-server-ready: ready')                      # the old wait's line
+        changes = [{'unit': dict(unit, Environment=no_var)},
+                   {'unit': dict(unit, Environment=wrong)},
+                   {'unit': dict(unit, NRestarts='1')},
+                   {'processes': [dict(procs[0]), dict(procs[1], environment_names=['HOME'])]},
+                   {'processes': []},
+                   {'start': {'rc': 0, 'count': 0, 'last': []}},
+                   {'start': {'rc': 1, 'count': 1, 'last': [self.CLEAN]}},
+                   {'start': None}]
+        changes += [{'start': {'rc': 0, 'count': 2, 'last': [self.CLEAN, line]}} for line in lines]
+        for change in changes:
+            self.assertEqual(self.verdict(**change), 'FAIL', change)
+
+    def test_no_declaration_no_check(self):
+        profile = copy.deepcopy(PROFILE)
+        del profile['provisioning']['agent_server']['start_race']
+        facts = moby_facts(agent_server=agent_server_facts())
+        self.assertEqual(guest.start_check(profile, {'guest': {'moby_facts': {
+            'rc': 0, 'out': json.dumps(facts)}}}), [])
+
+    def test_ready_outcome(self):
+        self.assertEqual(guest.ready_outcome('x python3[7]: ' + self.CLEAN),
+                         {'ready': True, 'start': 'clean', 'seconds': 4.2, 'restarts': '0',
+                          'last_status': None})
+        self.assertEqual(guest.ready_outcome(
+            'aieh-agent-server-ready: not ready start=main-exited seconds=1.6 restarts=0 '
+            'last_status=None'),
+            {'ready': False, 'start': 'main-exited', 'seconds': 1.6, 'restarts': '0',
+             'last_status': 'None'})
+        for line in ('aieh-agent-server-ready: ready', 'aieh-agent-server-ready: ok start=clean',
+                     'agent-server[1]: ready start=clean', '', None,
+                     'aieh-agent-server-ready: ready start=clean seconds=x restarts=0'):
+            out = guest.ready_outcome(line)
+            if out is not None:                          # only the unparsable seconds case
+                self.assertIsNone(out['seconds'])
+                self.assertEqual(out['start'], 'clean')
+
+    def test_the_declaration_matches_the_template(self):
+        server = PCONF['agent_server']
+        control = server['start_race']['control']
+        self.assertEqual(server['environment'][control['variable']], control['value'])
+        self.assertEqual(server['start_race']['evidence'], 'evidence/E-01.4.3-start-race.md')
 
 
 class QuiesceInspect(unittest.TestCase):

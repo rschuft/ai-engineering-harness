@@ -214,9 +214,17 @@ class AgentServerSeed(unittest.TestCase):
         lines = unit(s['service']['unit'])
         self.assertIn(f"User={s['user']['name']}", lines)
         self.assertIn(f"ExecStart={s['binary']['path']} {' '.join(s['service']['argv'])}", lines)
-        listener = s['listener']
-        self.assertIn(f"ExecStartPost=/usr/bin/python3 -I {s['service']['ready']} "
-                      f"{listener['address']} {listener['port']} 280", lines)
+        listener, readiness = s['listener'], s['service']['readiness']
+        self.assertIn(f"ExecStartPost={readiness['exec_start_post']}", lines)
+        self.assertEqual(readiness['exec_start_post'],
+                         f"/usr/bin/python3 -I {s['service']['ready']} {listener['address']} "
+                         f"{listener['port']} {readiness['ceiling_s']} {readiness['slow_after_s']} "
+                         '${MAINPID}')
+        for key, value in readiness['restart'].items():
+            self.assertIn(f'{key}={value}', lines)
+        # E-01.4.3: the start-race control is in the unit's environment as declared
+        control = s['start_race']['control']
+        self.assertIn(f"Environment={control['variable']}={control['value']}", lines)
         self.assertIn(f"EnvironmentFile={s['secrets']['env_file']}", lines)
         env = {l.split('=', 1)[1].split('=', 1)[0]: l.split('=', 2)[2] for l in lines
                if l.startswith('Environment=')}
@@ -644,6 +652,163 @@ class AdmissionSeed(unittest.TestCase):
             self.assertIn(word, counters)
         self.assertIn("data['admission'] = admission_facts()", SCRIPT)
         self.assertIn("'admission': admission_counters(),", SCRIPT)
+
+
+READY_SCRIPT = FILES[PCONF['agent_server']['service']['ready']]
+
+
+def ready_module():
+    """The seeded readiness wait's definitions, executed (not its main) in a fresh namespace."""
+    namespace = {'__name__': 'aieh_ready_test'}
+    exec(compile(READY_SCRIPT, 'aieh-agent-server-ready', 'exec'), namespace)
+    return namespace
+
+
+def proc_stat_text(state='S', start='4242', comm='agent-server'):
+    """A /proc/<pid>/stat line: pid (comm) state, then fields 4.. with starttime as field 22."""
+    rest = ['1'] * 18 + [start] + ['0'] * 10
+    return f'1500 ({comm}) {state} ' + ' '.join(rest) + chr(10)
+
+
+class Clock:
+    def __init__(self, step=0.5):
+        self.now, self.step, self.sleeps = 100.0, step, 0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps += 1
+        self.now += self.step
+
+
+class ReadinessWait(unittest.TestCase):
+    """E-01.4.3: the seeded readiness wait (ExecStartPost) stops at once when the main process
+    has exited, and its outcome line never reports a retried, slow or unverified start as a
+    clean one (provisioning.agent_server.service.readiness)."""
+    READINESS = PCONF['agent_server']['service']['readiness']
+
+    def run_wait(self, statuses, stats=None, restarts=0, argv=None, step=0.5):
+        m = ready_module()
+        clock = Clock(step)
+        statuses, stats = list(statuses), list(stats or [])
+        calls = {'probe': 0, 'restarts': 0}
+
+        def probe(host, port):
+            calls['probe'] += 1
+            return statuses.pop(0) if statuses else None
+
+        def proc_stat(pid):
+            self.assertEqual(pid, '1500')
+            return stats.pop(0) if len(stats) > 1 else (stats[0] if stats else None)
+
+        def restart_count():
+            calls['restarts'] += 1
+            return restarts
+        argv = argv or ['127.0.0.1', '8000', str(self.READINESS['ceiling_s']),
+                        str(self.READINESS['slow_after_s']), '1500']
+        code, line = m['wait'](argv, clock=clock, sleep=clock.sleep, probe=probe,
+                               proc_stat=proc_stat, restart_count=restart_count)
+        return code, line, clock, calls
+
+    def test_a_clean_start(self):
+        alive = proc_stat_text()
+        code, line, clock, calls = self.run_wait([None, None, 503, 200], [alive])
+        self.assertEqual(code, 0)
+        self.assertEqual(line, 'aieh-agent-server-ready: ready start=clean seconds=1.5 restarts=0')
+        self.assertEqual(calls['probe'], 4)
+
+    def test_slow_retried_and_unverified_are_never_clean(self):
+        alive = proc_stat_text()
+        slow = self.READINESS['slow_after_s'] + 1
+        cases = (
+            ({'restarts': 1}, 'start=retried'),
+            ({'restarts': 2, 'step': slow}, 'start=retried,slow'),
+            ({'step': slow}, 'start=slow'),
+            ({'restarts': None}, 'start=unverified'),
+            ({'restarts': None, 'step': slow}, 'start=unverified,slow'),
+        )
+        for kwargs, word in cases:
+            code, line, _, _ = self.run_wait([None, 200], [alive], **kwargs)
+            self.assertEqual(code, 0, kwargs)
+            self.assertIn(' ' + word + ' ', line, kwargs)
+            self.assertNotIn('clean', line)
+
+    def test_a_main_process_that_exits_stops_the_wait_at_once(self):
+        alive = proc_stat_text()
+        code, line, clock, calls = self.run_wait([None] * 1000, [alive, alive, alive, None])
+        self.assertEqual(code, 1)
+        self.assertTrue(line.startswith('aieh-agent-server-ready: not ready start=main-exited '
+                                        'seconds=1.0 restarts=0 '), line)
+        self.assertLess(clock.sleeps, 5)                 # not the 280 s ceiling
+
+    def test_gone_zombie_or_another_process_counts_as_exited(self):
+        for stats in ([None],
+                      [proc_stat_text(), proc_stat_text(state='Z')],
+                      [proc_stat_text(), proc_stat_text(start='9999')],
+                      [proc_stat_text(), proc_stat_text(state='X')]):
+            code, line, clock, _ = self.run_wait([None] * 1000, stats)
+            self.assertEqual(code, 1, stats)
+            self.assertIn('start=main-exited', line)
+            self.assertLess(clock.sleeps, 3)
+
+    def test_without_a_main_pid_it_waits_to_the_ceiling(self):
+        ceiling = self.READINESS['ceiling_s']
+        for pid in ('', 'x', '0'):
+            argv = ['127.0.0.1', '8000', str(ceiling), str(self.READINESS['slow_after_s']), pid]
+            code, line, clock, _ = self.run_wait([None] * 10000, [None], argv=argv, step=10)
+            self.assertEqual(code, 1)
+            self.assertTrue(line.startswith('aieh-agent-server-ready: not ready start=timeout '
+                                            f'seconds={ceiling:.1f} '), line)
+        # a live main process that never answers also ends at the ceiling, as a timeout
+        code, line, _, _ = self.run_wait([None] * 10000, [proc_stat_text()], step=10)
+        self.assertIn('start=timeout', line)
+        self.assertTrue(line.endswith(' last_status=None'))
+
+    def test_main_identity_reads_the_start_time_after_the_command_name(self):
+        m = ready_module()
+        self.assertEqual(m['main_identity'](proc_stat_text(comm='a) b')), '4242')
+        self.assertIsNone(m['main_identity'](proc_stat_text(state='Z')))
+        self.assertIsNone(m['main_identity']('1500 (x) S 1'))
+        self.assertIsNone(m['main_identity'](None))
+
+    def test_restart_count_reads_nrestarts_and_fails_closed(self):
+        m = ready_module()
+        done = subprocess.CompletedProcess([], 0, '3' + chr(10), '')
+        with mock.patch.object(subprocess, 'run', return_value=done) as run:
+            self.assertEqual(m['restart_count'](), 3)
+        self.assertEqual(run.call_args[0][0], ['systemctl', 'show', '--property=NRestarts',
+                                               '--value', PCONF['agent_server']['service']['unit']])
+        for result in (subprocess.CompletedProcess([], 1, '', 'no bus'),
+                       subprocess.CompletedProcess([], 0, chr(10), '')):
+            with mock.patch.object(subprocess, 'run', return_value=result):
+                self.assertIsNone(m['restart_count']())
+        with mock.patch.object(subprocess, 'run', side_effect=OSError('no systemctl')):
+            self.assertIsNone(m['restart_count']())
+
+    def test_outcome_lines_parse_in_inspect(self):
+        """Every line the wait can print is read back by guest.ready_outcome."""
+        alive = proc_stat_text()
+        lines = [self.run_wait([200], [alive])[1], self.run_wait([200], [alive], restarts=1)[1],
+                 self.run_wait([None] * 9, [alive, None])[1]]
+        parsed = [guest.ready_outcome('[ 12.3] guest python3[77]: ' + x) for x in lines]
+        self.assertEqual([(p['ready'], p['start'], p['restarts']) for p in parsed],
+                         [(True, 'clean', '0'), (True, 'retried', '1'),
+                          (False, 'main-exited', '0')])
+
+    def test_boot_facts_keep_the_outcome_lines(self):
+        ns = script_functions('ready_outcomes')
+        out = chr(10).join(['agent-server[1]: starting',
+                       'aieh-agent-server-ready: not ready start=main-exited seconds=1.4 '
+                       'restarts=0 last_status=None',
+                       'aieh-agent-server-ready: ready start=retried seconds=4.0 restarts=1'])
+        ns['run'] = lambda argv, timeout=None: (0, out, '')
+        facts = ns['ready_outcomes']()
+        self.assertEqual(facts['count'], 2)
+        self.assertEqual(facts['last'][-1],
+                         'aieh-agent-server-ready: ready start=retried seconds=4.0 restarts=1')
+        self.assertIn("'start': ready_outcomes()", SCRIPT)
+        self.assertEqual(script_constants()['READY_PREFIX'], 'aieh-agent-server-ready: ')
 
 
 QUIESCE = PCONF['agent_server']['quiesce']

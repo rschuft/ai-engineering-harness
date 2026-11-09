@@ -115,7 +115,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "bca242c245cf7863c2283ec599e3dde2d83bc3ec1c5fef3cfb6944fc88d2677b"
+          "sha256": "92deb03f4c472b564f716f189de8a590ac8a8e753fc67f6023afe7a744a06fc1"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -324,7 +324,19 @@
         "ready": "/usr/local/sbin/aieh-agent-server-ready",
         "argv": ["--host", "127.0.0.1", "--port", "8000"],
         "bind_rule": "The 1.60.1 entry point binds 0.0.0.0 by default once a session API key is configured (__main__.py), so --host 127.0.0.1 is explicit.",
-        "start": "Type=exec; ExecStartPost waits for GET /ready on 127.0.0.1:8000 (200) with a 280 s ceiling, so the unit is active only when the server is ready and the boot-time facts report (ordered after it) sees its listener.",
+        "start": "Type=exec; ExecStartPost waits for GET /ready on 127.0.0.1:8000 (200) with a 280 s ceiling, so the unit is active only when the server is ready and the boot-time facts report (ordered after it) sees its listener. The wait's failure handling and its outcome line are service.readiness (E-01.4.3).",
+        "readiness": {
+          "plan_leaf": "E-01.4.3",
+          "exec_start_post": "/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-ready 127.0.0.1 8000 280 30 ${MAINPID}",
+          "ceiling_s": 280,
+          "slow_after_s": 30,
+          "poll_s": 0.5,
+          "restart": {"Restart": "on-failure", "RestartSec": 5, "TimeoutStartSec": 300},
+          "fail_fast": "systemd passes the main process's PID to ExecStartPost (${MAINPID}) and does not stop a running ExecStartPost when the main process exits, so before E-01.4.3 a server that died during start-up held the start job until the 280 s ceiling (E-01.2.2c finding F-15). The wait now reads /proc/<MAINPID>/stat at its start and at every poll and stops at once, exit 1, when the process is gone, a zombie, or another process (a different start time); the start job then fails and Restart=on-failure starts the server again after RestartSec. Without a MAINPID it waits to the ceiling as before.",
+          "outcome": "One journal line per start, under the unit: 'aieh-agent-server-ready: ready start=<class> seconds=<s> restarts=<n>' (exit 0) or 'aieh-agent-server-ready: not ready start=<main-exited|timeout> seconds=<s> restarts=<n> last_status=<x>' (exit 1). <class> is clean only when the server answered within slow_after_s and the unit's NRestarts (systemctl show over the system bus, as the service user) is 0; otherwise the comma-joined qualifiers retried (NRestarts > 0: Restart=on-failure started it again), slow (ready after slow_after_s) and unverified (the restart count could not be read). A retried, slow or unverified start is therefore never reported as clean.",
+          "ceilings_rule": "A start that fails before readiness costs the time to its failure plus RestartSec (5 s) plus a new start; a start that hangs alive is bounded by the 280 s wait inside TimeoutStartSec=300. Restart=on-failure retries without a limit within systemd's default start-rate limit (StartLimitIntervalSec 10 s, StartLimitBurst 5).",
+          "check": "inspect 'Agent Server start (E-01.4.3)': this boot's last outcome line is start=clean and NRestarts is 0, from the boot facts (journalctl -b -u, root)"
+        },
         "dependencies": {
           "requires": ["docker.service", "aieh-agent-server-quiesce.service"],
           "after": ["docker.service", "aieh-agent-server-quiesce.service"],
@@ -398,9 +410,25 @@
         "HOME": "/srv/scratch/openhands/home",
         "TMPDIR": "/srv/scratch/openhands/tmp",
         "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
-        "LANG": "C.UTF-8"
+        "LANG": "C.UTF-8",
+        "LITELLM_LOCAL_MODEL_COST_MAP": "True"
       },
-      "environment_rule": "OH_PERSISTENCE_DIR is read by openhands-sdk get_user_persistence_dir, not by Config: it holds the runtime persistence (runtime-control and runtime-data of the Docker runtime) and the profile stores. TMPDIR keeps the PyInstaller extraction and the tmux directory on scratch (/tmp is a tmpfs).",
+      "environment_rule": "OH_PERSISTENCE_DIR is read by openhands-sdk get_user_persistence_dir, not by Config: it holds the runtime persistence (runtime-control and runtime-data of the Docker runtime) and the profile stores. TMPDIR keeps the PyInstaller extraction and the tmux directory on scratch (/tmp is a tmpfs). LITELLM_LOCAL_MODEL_COST_MAP is the start-race control (start_race, E-01.4.3).",
+      "start_race": {
+        "plan_leaf": "E-01.4.3",
+        "finding": "E-01.2.2c F-15 (E-01.2.2b F-5): 2 of 272 restarts failed about 1.5 s after the start with ImportError: cannot import name 'LoggerContext' from partially initialized module 'litellm.rust_bridge.catalog'; the PyInstaller bootloader exited 1.",
+        "bundled": "The release binary (provision lock release_binary) bundles litellm 1.105.1 (its dist-info; every file hash of the PyPI manylinux_2_28_x86_64 wheel's RECORD matches the bundled RECORD) on CPython 3.13.18, not the 1.105.7 of composition/lock/python, which the binary does not use.",
+        "root_cause": "During import litellm (litellm/__init__.py:563, reached from openhands/sdk/logger/logger.py:16 while the main thread holds the import locks of that chain), get_model_cost_map fetches the remote cost map. Offline the fetch fails as retryable, so it starts the daemon thread litellm-model-cost-map-retry (get_model_cost_map.py:657-670), whose first act is a warning (_next_retry_wait, :315), while the main thread logs its own (:672). Both records pass the LiteLLM logger's DiagnosticProcessingFilter (_logging.py:551, 455), which imports litellm.rust_bridge.catalog on first use (rust_bridge/diagnostics.py:47). Two threads importing that module for the first time while the main thread still initializes litellm can form a cycle of module locks; CPython 3.13's deadlock avoidance (_bootstrap._lock_unlock_module) then hands the main thread the partially initialized module, and the from-import of LoggerContext raises ImportError out of import litellm. Timing-dependent: whether it hits depends on the two threads' interleaving.",
+        "control": {
+          "variable": "LITELLM_LOCAL_MODEL_COST_MAP",
+          "value": "True",
+          "source": "litellm 1.105.1 litellm_core_utils/get_model_cost_map.py: module docstring (documented switch) and get_model_cost_map :643 (os.getenv(...).lower() == 'true'): the bundled local cost map is returned before any fetch, so no retry thread is started and neither warning is logged during import.",
+          "effect": "Removes the trigger (the background thread and the import-time warnings) and the start-up fetch of raw.githubusercontent.com that always failed offline. The cost map is the copy bundled in the pinned binary; it is pricing metadata only (no LLM is configured, decision 0006). Isolation unchanged: no network, credential, share or port."
+        },
+        "scope": "The outer server (this unit) only. Conversation containers run the image's own server, whose environment the 1.60.1 Docker runtime builds from a fixed list (docker_runtime/registry.py forwarded_env_names); this variable is not forwarded and no server configuration adds one, so the race can still hit a container's inner server start (not observed; recorded as a limit with the upstream report).",
+        "evidence": "evidence/E-01.4.3-start-race.md",
+        "reconsider": "When a pinned release no longer imports the diagnostics module lazily from a logging filter during import litellm, or no longer starts the retry thread at import (upstream report in the evidence), re-observed by R-01.2; keep or drop the variable by a recorded decision."
+      },
       "secrets": {
         "env_file": "/etc/aieh/agent-server/secrets.env",
         "owner": "root",

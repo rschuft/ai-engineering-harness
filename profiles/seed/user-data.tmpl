@@ -124,6 +124,7 @@ write_files:
       AS_UNIT = 'aieh-agent-server.service'
       AS_PROCESS = 'agent-server'
       AS_SECRET_VARS = ('OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0')
+      READY_PREFIX = 'aieh-agent-server-ready: '
       SECRET_VALUE = re.compile(r'^[A-Za-z0-9_-]{43}$')
       FINGERPRINT_PREFIX = b'aieh-secret-fingerprint/v1\n'
       AS_UNIT_PROPERTIES = ('LoadState', 'ActiveState', 'SubState', 'UnitFileState', 'MainPID',
@@ -448,6 +449,15 @@ write_files:
                   'head': [line[:400] for line in lines[:30]], 'noted': noted[-60:]}
 
 
+      def ready_outcomes():
+          """E-01.4.3: the readiness wait's outcome lines of this boot (its own fixed text: no
+          secret), the last 20, and their count."""
+          rc, out, err = run(['journalctl', '-b', '-u', AS_UNIT, '-o', 'cat', '--no-pager'], 120)
+          lines = [line[:300] for line in (out if rc == 0 else '').splitlines()
+                   if line.startswith(READY_PREFIX)]
+          return {'rc': rc, 'count': len(lines), 'last': lines[-20:]}
+
+
       def process_facts(pid, values):
           out = {'pid': pid}
           try:
@@ -540,7 +550,7 @@ write_files:
                               'occurrences': scanned},
                   'paths': paths, 'engine': {'docker_context_host': endpoint,
                                              'docker_server_version_as_openhands': server_version},
-                  'journal': unit_journal(values)}
+                  'journal': unit_journal(values), 'start': ready_outcomes()}
 
 
       def admission_facts():
@@ -1892,35 +1902,116 @@ write_files:
     permissions: '0755'
     content: |
       #!/usr/bin/python3
-      # aieh-agent-server-ready: ExecStartPost of aieh-agent-server.service (F-04.1). The
-      # server exposes no start notification, so this polls GET /ready on its loopback
-      # listener every 0.5 s until it answers 200, under the ceiling given in argv. It sends
-      # no credential (the route is unauthenticated) and prints only the outcome.
+      # aieh-agent-server-ready: ExecStartPost of aieh-agent-server.service (F-04.1; E-01.4.3,
+      # provisioning.agent_server.service.readiness). The server exposes no start notification,
+      # so this polls GET /ready on its loopback listener every 0.5 s until it answers 200,
+      # under the ceiling given in argv. It sends no credential (the route is unauthenticated).
+      # argv: host port ceiling_s slow_after_s main_pid (systemd's MAINPID; may be empty).
+      # It stops at once when the main process has exited (systemd does not stop a running
+      # ExecStartPost when the main process dies, so the wait would run to its ceiling), and
+      # its one outcome line says how the start went, so that a retried or slow start is
+      # never reported as a clean one:
+      #   aieh-agent-server-ready: ready start=<class> seconds=<s> restarts=<n>
+      #   aieh-agent-server-ready: not ready start=<main-exited|timeout> seconds=<s> restarts=<n> last_status=<x>
+      # <class> is clean, or the comma-joined qualifiers retried (the unit's NRestarts > 0:
+      # Restart=on-failure started it again), slow (ready after slow_after_s) and unverified
+      # (the restart count could not be read). Exit 0 when ready, else 1.
       import http.client
+      import subprocess
       import sys
       import time
 
-      host, port, ceiling = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
-      deadline = time.monotonic() + ceiling
-      while True:
-          status = None
+      UNIT = 'aieh-agent-server.service'
+      PREFIX = 'aieh-agent-server-ready: '
+
+
+      def probe(host, port):
+          """The status of GET /ready, or None when the listener does not answer."""
           try:
               conn = http.client.HTTPConnection(host, port, timeout=5)
-              conn.request('GET', '/ready')
-              response = conn.getresponse()
-              response.read()
-              status = response.status
-              conn.close()
+              try:
+                  conn.request('GET', '/ready')
+                  response = conn.getresponse()
+                  response.read()
+                  return response.status
+              finally:
+                  conn.close()
           except OSError:
-              pass
-          if status == 200:
-              print('aieh-agent-server-ready: ready', flush=True)
-              sys.exit(0)
-          if time.monotonic() >= deadline:
-              print('aieh-agent-server-ready: not ready within ' + str(ceiling) + ' s (last status ' +
-                    str(status) + ')', flush=True)
-              sys.exit(1)
-          time.sleep(0.5)
+              return None
+
+
+      def proc_stat(pid):
+          """The text of /proc/<pid>/stat, or None when there is no such process."""
+          try:
+              with open('/proc/' + str(pid) + '/stat', encoding='ascii', errors='replace') as handle:
+                  return handle.read()
+          except OSError:
+              return None
+
+
+      def main_identity(stat_text):
+          """The process start time (field 22) while it has not exited, else None (no process,
+          a zombie, or a dead one)."""
+          if not stat_text:
+              return None
+          fields = stat_text.rpartition(')')[2].split()
+          if len(fields) < 20 or fields[0] in ('Z', 'X', 'x'):
+              return None
+          return fields[19]
+
+
+      def restart_count():
+          """The unit's NRestarts (systemctl over the system bus, as the service user), or None."""
+          try:
+              done = subprocess.run(['systemctl', 'show', '--property=NRestarts', '--value', UNIT],
+                                    capture_output=True, text=True, timeout=15)
+          except (OSError, subprocess.SubprocessError):
+              return None
+          try:
+              return int(done.stdout.strip()) if done.returncode == 0 else None
+          except ValueError:
+              return None
+
+
+      def classify(seconds, slow_after, restarts):
+          flags = []
+          if restarts is None:
+              flags.append('unverified')
+          elif restarts > 0:
+              flags.append('retried')
+          if seconds > slow_after:
+              flags.append('slow')
+          return ','.join(flags) or 'clean'
+
+
+      def wait(argv, clock=time.monotonic, sleep=time.sleep, probe=probe, proc_stat=proc_stat,
+               restart_count=restart_count):
+          """(exit code, outcome line)."""
+          host, port, ceiling, slow_after = argv[0], int(argv[1]), float(argv[2]), float(argv[3])
+          main_pid = argv[4].strip() if len(argv) > 4 else ''
+          main_pid = main_pid if main_pid.isdigit() and int(main_pid) > 0 else None
+          start = clock()
+          first = main_identity(proc_stat(main_pid)) if main_pid else None
+          while True:
+              status = probe(host, port)
+              seconds = clock() - start
+              if status == 200:
+                  restarts = restart_count()
+                  return 0, (PREFIX + 'ready start=' + classify(seconds, slow_after, restarts) +
+                             ' seconds=%.1f restarts=%s' % (seconds, restarts))
+              exited = main_pid is not None and \
+                  (first is None or main_identity(proc_stat(main_pid)) != first)
+              if exited or seconds >= ceiling:
+                  return 1, (PREFIX + 'not ready start=' + ('main-exited' if exited else 'timeout') +
+                             ' seconds=%.1f restarts=%s last_status=%s' %
+                             (seconds, restart_count(), status))
+              sleep(0.5)
+
+
+      if __name__ == '__main__':
+          code, line = wait(sys.argv[1:])
+          print(line, flush=True)
+          sys.exit(code)
   - path: /usr/local/sbin/aieh-agent-server-quiesce
     owner: root:root
     permissions: '0755'
@@ -2304,10 +2395,11 @@ write_files:
       Environment=TMPDIR=/srv/scratch/openhands/tmp
       Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
       Environment=LANG=C.UTF-8
+      Environment=LITELLM_LOCAL_MODEL_COST_MAP=True
       WorkingDirectory=/srv/scratch/openhands/home
       ExecStartPre=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-keycheck
       ExecStart=/opt/aieh/agent-server/agent-server --host 127.0.0.1 --port 8000
-      ExecStartPost=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-ready 127.0.0.1 8000 280
+      ExecStartPost=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-ready 127.0.0.1 8000 280 30 ${MAINPID}
       TimeoutStartSec=300
       Restart=on-failure
       RestartSec=5

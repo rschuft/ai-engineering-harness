@@ -918,6 +918,165 @@ class FakeGuest:
         return {'result': 'ready', 'seconds': 1}
 
 
+
+
+# ---------------------------------------------------------------- E-01.4.3: restart series
+
+
+def ready_line(start='clean', seconds=4.4, restarts=0, ready=True):
+    if ready:
+        return (f'[ 9.1] g python3[7]: aieh-agent-server-ready: ready start={start} '
+                f'seconds={seconds} restarts={restarts}')
+    return (f'[ 9.1] g python3[7]: aieh-agent-server-ready: not ready start={start} '
+            f'seconds={seconds} restarts={restarts} last_status=None')
+
+
+class FakeRestarts:
+    """The root helper's server-restart, server-kill and observe for a restart series: a
+    server whose start fails (the main process exits at import) on the listed restarts, and
+    which systemd's Restart=on-failure then starts again; ``reports_retried`` False stands for
+    a readiness wait that would call that start clean."""
+
+    def __init__(self, fail_on=(), reports_retried=True, retry_fails=False):
+        self.fail_on, self.reports_retried, self.retry_fails = set(fail_on), reports_retried, retry_fails
+        self.n, self.restarts, self.pending_retry, self.calls = 0, 0, False, []
+
+    def active_unit(self):
+        return {'ActiveState': 'active', 'SubState': 'running', 'Result': 'success',
+                'NRestarts': str(self.restarts), 'ExecMainStatus': '0', 'MainPID': '1500'}
+
+    def retried_line(self):
+        return ready_line('retried' if self.reports_retried else 'clean', 4.6, self.restarts)
+
+    def __call__(self, action, params=None, ceiling=None):
+        self.calls.append(action)
+        if action == 'server-restart':
+            self.n += 1
+            self.restarts = 0                          # a manual start flushes the counter
+            if self.n in self.fail_on:
+                self.pending_retry = True
+                unit = {'ActiveState': 'activating', 'SubState': 'auto-restart',
+                        'Result': 'exit-code', 'NRestarts': '0', 'ExecMainStatus': '1'}
+                lines = ['[ 8.0] g agent-server[9]: ImportError: cannot import name ...',
+                         '[ 8.0] g agent-server[9]: [PYI-9:ERROR] Failed to execute script '
+                         "'__main__' due to unhandled exception!",
+                         ready_line('main-exited', 1.4, 0, ready=False)]
+                return {'ok': True, 'action': action,
+                        'detail': {'rc': 1, 'seconds': 1.9, 'stderr': 'Job failed', 'unit': unit,
+                                   'invocation': {'lines': lines}}}
+            return {'ok': True, 'action': action,
+                    'detail': {'rc': 0, 'seconds': 4.9, 'stderr': '', 'unit': self.active_unit(),
+                               'invocation': {'lines': ['[ 5.0] g agent-server[9]: started',
+                                                        ready_line(seconds=4.3 + self.n % 3)]}}}
+        if action == 'observe':
+            if self.pending_retry:
+                self.pending_retry = False
+                self.restarts += 1
+                if self.retry_fails:
+                    obs = observation(server='failed', restarts=self.restarts)
+                    obs['server_invocation'] = {'lines': []}
+                    return {'ok': True, 'action': action, 'detail': obs}
+            unit = self.active_unit()
+            obs = observation(restarts=self.restarts)
+            obs['units'][guest.DRILL_SERVER_UNIT] = unit
+            obs['server_invocation'] = {'lines': [self.retried_line()] if self.restarts else
+                                        [ready_line()]}
+            return {'ok': True, 'action': action, 'detail': obs}
+        if action == 'server-kill':
+            self.restarts += 1
+            return {'ok': True, 'action': action,
+                    'detail': {'rc': 0, 'seconds': 10.2, 'stderr': '', 'restarts_before': 0,
+                               'unit': self.active_unit(),
+                               'invocation': {'lines': [self.retried_line()]}}}
+        raise AssertionError(action)
+
+
+class RestartSeries(unittest.TestCase):
+    """E-01.4.3: the restart-series drill's counts, retry following, reporting step and
+    verdict (RESTART_SERIES_RULE) against fake guests with and without start failures."""
+
+    def run_series(self, fake, count=12):
+        steps = guest.DrillSteps('drill restart-series')
+        chan = lambda: (None, None, fake)                       # noqa: E731
+        with mock.patch.object(guest.time, 'sleep', lambda s: None):
+            memo = guest.drill_restart_series(None, 'abc', steps, chan, count)
+        return steps, memo
+
+    def test_a_series_without_failures_passes(self):
+        fake = FakeRestarts()
+        steps, memo = self.run_series(fake)
+        self.assertEqual(steps.failed, [])
+        s = memo['summary']
+        self.assertEqual((s['verdict'], s['restarts'], s['main_process_exits_during_start'],
+                          s['failed_starts'], s['outcome_classes']), ('PASS', 12, 0, 0, {'clean': 12}))
+        self.assertEqual(s['ready_wait_seconds']['n'], 12)
+        self.assertEqual(s['ready_wait_seconds']['max'], 6.3)
+        self.assertEqual(fake.calls.count('server-restart'), 13)       # 12 + the manual one after
+        self.assertEqual(memo['retried_report']['outcome']['start'], 'retried')
+        self.assertEqual(memo['manual_after_retry']['outcome']['start'], 'clean')
+        self.assertTrue(all('journal' not in r for r in memo['rows']))   # clean rows stay small
+        detail = steps.steps[1]['detail']
+        self.assertEqual(len(detail['rows']), 12)
+
+    def test_a_failed_start_is_followed_to_its_retry_and_fails_the_series(self):
+        fake = FakeRestarts(fail_on=(3, 9))
+        steps, memo = self.run_series(fake)
+        s = memo['summary']
+        self.assertEqual(s['verdict'], 'FAIL')
+        self.assertEqual(steps.failed, ['12 consecutive restarts (systemctl restart)'])
+        self.assertEqual((s['main_process_exits_during_start'], s['exit_restarts'], s['failed_starts'],
+                          s['failed_starts_retried_to_readiness']), (2, [3, 9], 2, 2))
+        self.assertEqual(s['outcome_classes'], {'clean': 10, 'main-exited': 2})
+        row = memo['rows'][2]
+        self.assertTrue(row['exit_during_start'] and row['failed'])
+        self.assertIn('Failed to execute script', ' '.join(row['journal']))
+        self.assertEqual(row['retry']['outcome']['start'], 'retried')
+        self.assertTrue(row['retry']['reached_readiness'])
+        self.assertEqual(s['failed_start_to_readiness_seconds']['n'], 2)
+
+    def test_a_retry_that_never_becomes_ready_is_recorded(self):
+        fake = FakeRestarts(fail_on=(2,), retry_fails=True)
+        steps, memo = self.run_series(fake, count=3)
+        retry = memo['rows'][1]['retry']
+        self.assertFalse(retry['reached_readiness'])
+        self.assertEqual(memo['summary']['failed_starts_retried_to_readiness'], 0)
+        self.assertEqual(memo['summary']['verdict'], 'FAIL')
+
+    def test_a_retried_start_reported_clean_fails_the_reporting_step(self):
+        steps, memo = self.run_series(FakeRestarts(reports_retried=False), count=2)
+        self.assertEqual(steps.failed, ['a Restart=on-failure start (SIGKILL) is reported start=retried'])
+        self.assertEqual(memo['summary']['verdict'], 'PASS')
+
+    def test_fewer_restarts_than_requested_or_a_non_clean_outcome(self):
+        rows = [guest.restart_row(1, {'rc': 0, 'seconds': 5.0, 'unit': {'ActiveState': 'active'},
+                                      'invocation': {'lines': [ready_line('slow', 31.0)]}})]
+        s = guest.series_summary(rows, 2)
+        self.assertEqual(s['verdict'], 'FAIL')                     # 1 of 2
+        self.assertEqual(s['outcome_classes'], {'slow': 1})
+        self.assertIn('journal', rows[0])                          # a non-clean start keeps it
+        # a start whose wait printed nothing is a failed start
+        row = guest.restart_row(1, {'rc': 0, 'unit': {'ActiveState': 'active'},
+                                    'invocation': {'lines': []}})
+        self.assertTrue(row['failed'])
+        self.assertEqual(guest.series_summary([row], 1)['verdict'], 'FAIL')
+
+    def test_distribution(self):
+        d = guest.distribution([5.0, 1.0, 2.0, 4.0, 3.0, None, 'x'])
+        self.assertEqual((d['n'], d['min'], d['p50'], d['p90'], d['max'], d['mean']),
+                         (5, 1.0, 3.0, 5.0, 5.0, 3.0))
+        self.assertEqual(d['buckets_s'], {'1-2': 1, '2-3': 1, '3-4': 1, '4-5': 1, '5-6': 1})
+        self.assertEqual(guest.distribution([]), {'n': 0})
+        self.assertEqual(guest.distribution([float(i) for i in range(1, 101)])['p99'], 99.0)
+
+    def test_limit_and_cli(self):
+        with self.assertRaises(guest.Refused):
+            guest.drill_restart_series(None, 'abc', guest.DrillSteps('x'), lambda: None, 0)
+        self.assertIn('restart-series', guest.DRILL_KINDS[:5])
+        self.assertNotIn('admitted-create', guest.DRILL_KINDS[:5])
+        with mock.patch.object(guest, 'Context', side_effect=guest.Refused('X', 'stop here')), \
+                mock.patch('sys.stdout'):
+            self.assertEqual(guest.main(['drill', '--profile', 'p', '--state-dir', 's', '--name', 'n',
+                                         '--kind', 'restart-series', '--limit', '3']), 1)
 class DrillRuns(tg.TempState):
     def run_drill(self, fake, kind, **kwargs):
         idir = self.state / 'instances' / 'abc'

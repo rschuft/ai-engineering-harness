@@ -3200,7 +3200,8 @@ def evaluate(profile, record, obs):
     if record.get('provisioning'):
         props.append(provisioning_property(profile, record, obs, agent.get('provisioning', []) +
                                            admission_check(profile, obs) +
-                                           quiesce_check(profile, obs)))
+                                           quiesce_check(profile, obs) +
+                                           start_check(profile, obs)))
     return props
 
 
@@ -7601,6 +7602,83 @@ def quiesce_check(profile, obs):
 
 CHECK_CLASSES[(PROVISIONING_PROPERTY, QUIESCE_CHECK)] = (STABLE, None)
 
+START_CHECK = 'Agent Server start (E-01.4.3)'
+READY_PREFIX = 'aieh-agent-server-ready: '
+
+
+def ready_outcome(line):
+    """{'ready': bool, 'start': class, 'seconds': float|None, 'restarts': str|None,
+    'last_status': str|None} of one outcome line of the readiness wait
+    (provisioning.agent_server.service.readiness), or None for any other line."""
+    text = str(line or '')
+    at = text.find(READY_PREFIX)
+    if at < 0:
+        return None
+    words = text[at + len(READY_PREFIX):].split()
+    if words[:1] == ['ready']:
+        ready, rest = True, words[1:]
+    elif words[:2] == ['not', 'ready']:
+        ready, rest = False, words[2:]
+    else:
+        return None
+    fields = dict(w.split('=', 1) for w in rest if '=' in w)
+    if 'start' not in fields:
+        return None
+    try:
+        seconds = float(fields.get('seconds'))
+    except (TypeError, ValueError):
+        seconds = None
+    return {'ready': ready, 'start': fields['start'], 'seconds': seconds,
+            'restarts': fields.get('restarts'), 'last_status': fields.get('last_status')}
+
+
+def start_race_config(profile):
+    return ((profile.get('provisioning') or {}).get('agent_server') or {}).get('start_race') or {}
+
+
+def start_check(profile, obs):
+    """E-01.4.3: the start-race control and this boot's start of the Agent Server, from the
+    boot facts (root): the control variable in the unit's environment and in every server
+    process's (names only), the unit's NRestarts, and the readiness wait's last outcome line
+    of this boot, which must say start=clean (a retried, slow or unverified start never
+    passes as clean)."""
+    conf = start_race_config(profile)
+    if not conf:
+        return []
+    control = conf.get('control') or {}
+    var, value = control.get('variable'), control.get('value')
+    facts = _probe_json(obs, 'moby_facts') or {}
+    server = facts.get('agent_server') if isinstance(facts.get('agent_server'), dict) else {}
+    unit = server.get('unit') if isinstance(server.get('unit'), dict) else {}
+    procs = server.get('processes') if isinstance(server.get('processes'), list) else []
+    start = server.get('start') if isinstance(server.get('start'), dict) else {}
+    # the boot's last outcome line decides; one that does not parse is no clean start
+    lines = start.get('last') if isinstance(start.get('last'), list) else []
+    outcome = ready_outcome(lines[-1]) if lines else None
+    observed = {
+        'unit_environment': f'{var}={value}' in str(unit.get('Environment') or '').split(),
+        'processes_with_variable': sorted({var in (p.get('environment_names') or [])
+                                           for p in procs}),
+        'NRestarts': unit.get('NRestarts'),
+        'last_outcome': None if outcome is None else
+        {'ready': outcome['ready'], 'start': outcome['start'], 'restarts': outcome['restarts']},
+        'outcome_lines_this_boot': start.get('count'),
+    }
+    declared = {
+        'unit_environment': True, 'processes_with_variable': [True], 'NRestarts': '0',
+        'last_outcome': {'ready': True, 'start': 'clean', 'restarts': '0'},
+        'outcome_lines_this_boot': 'at least 1'}
+    ok = bool(unit) and start.get('rc') == 0 and \
+        all(observed[k] == declared[k] for k in declared if k != 'outcome_lines_this_boot') and \
+        isinstance(start.get('count'), int) and start['count'] >= 1
+    return [check(START_CHECK, declared, observed,
+                  "facts: systemctl show of the server unit, /proc/<pid>/environ names, the "
+                  "readiness wait's outcome lines of this boot (journalctl -b -u, root, at boot)",
+                  ok)]
+
+
+CHECK_CLASSES[(PROVISIONING_PROPERTY, START_CHECK)] = (STABLE, None)
+
 # Run as agent: the unauthenticated sweep of every route of the inventory (HTTP: without a
 # key and with a wrong one; WebSocket: four refusals), and the running server's own
 # /openapi.json reduced to its operations. The session key is read from its file only to
@@ -10390,7 +10468,8 @@ DRILL_CEILING_S = 600            # bounds a hang of one root request (most take 
 DRILL_SCAN_CEILING_S = 2400      # the guest-root P5 scan (every file, optionally raw devices)
 DRILL_SETTLE_S = 300             # units settling after a boot or a restart (a ceiling)
 DRILL_SCHEMA = 'ai-engineering-harness/profiles/drill-record/v1'
-DRILL_KINDS = ('fail-closed', 'stored-state', 'root-scan', 'f2-closed', 'admitted-create')
+DRILL_KINDS = ('fail-closed', 'stored-state', 'root-scan', 'f2-closed', 'restart-series',
+               'admitted-create')
 DRILL_AUTHORITY = ("the Owner's extended guest-run authorization of 2026-11-07 "
                    '(evidence/bootstrap-log.md)')
 DRILL_GUARD_VARIANTS = ('fail-pre', 'check-only')
@@ -11982,6 +12061,175 @@ def admitted_container_check(profile, record, report, admitted, sent):
     return all(r['ok'] for r in rows), rows
 
 
+# ---------------------------------------------------------------- restart series (E-01.4.3)
+
+RESTART_SERIES_COUNT = 500
+RESTART_SERIES_RULE = (
+    'Fixed before observation (plan leaf E-01.4.3). With the control: PASS only when at least '
+    'the requested number of consecutive restarts ran and none had a main-process exit during '
+    'start, none failed, and every start reached readiness. Recorded either way: every failed '
+    "start, systemd's retry of it and the time to readiness, the distribution of start times, "
+    "and each start's outcome line (a retried, slow or unverified start is never counted as "
+    'clean).')
+# the PyInstaller bootloader's line when the main process dies with an unhandled exception
+START_EXIT_MARKERS = ('Failed to execute script',)
+RETRY_SETTLE_S = 420          # a failed start's Restart=on-failure retry reaching active (ceiling)
+
+
+def restart_row(index, detail):
+    """One restart of the series (a drill server-restart result) for the record: its outcome
+    line, the unit, whether the main process exited during the start, and the invocation's
+    journal in full only when the start was not clean."""
+    detail = detail or {}
+    unit = detail.get('unit') or {}
+    lines = (detail.get('invocation') or {}).get('lines') or []
+    outcomes = [o for o in (ready_outcome(x) for x in lines) if o]
+    outcome = outcomes[-1] if outcomes else None
+    markers = [x for x in lines if any(m in str(x) for m in START_EXIT_MARKERS)]
+    exit_during_start = bool(markers) or bool(outcome and outcome['start'] == 'main-exited')
+    failed = detail.get('rc') != 0 or unit.get('ActiveState') != 'active' or \
+        outcome is None or not outcome['ready']
+    row = {'i': index, 'rc': detail.get('rc'), 'seconds': detail.get('seconds'),
+           'outcome': outcome, 'exit_during_start': exit_during_start, 'failed': failed,
+           'unit': {k: unit.get(k) for k in ('ActiveState', 'SubState', 'Result', 'NRestarts',
+                                             'ExecMainStatus')}}
+    if failed or exit_during_start or (outcome or {}).get('start') != 'clean':
+        row['journal'] = lines
+        row['stderr'] = detail.get('stderr')
+    return row
+
+
+def distribution(values):
+    """n, min, p50, p90, p99, max (nearest rank) and 1-second buckets of a list of seconds."""
+    data = sorted(v for v in values if isinstance(v, (int, float)))
+    if not data:
+        return {'n': 0}
+
+    def rank(p):
+        return data[max(0, min(len(data) - 1, int(-(-p * len(data) // 100)) - 1))]
+    buckets = {}
+    for v in data:
+        key = f'{int(v)}-{int(v) + 1}'
+        buckets[key] = buckets.get(key, 0) + 1
+    return {'n': len(data), 'min': data[0], 'p50': rank(50), 'p90': rank(90), 'p99': rank(99),
+            'max': data[-1], 'mean': round(sum(data) / len(data), 2),
+            'buckets_s': dict(sorted(buckets.items(), key=lambda kv: int(kv[0].split('-')[0])))}
+
+
+def settle_retry(observe, restarts_before, ceiling=RETRY_SETTLE_S, clock=time.monotonic,
+                 sleep=time.sleep):
+    """After a failed start: wait (polling the root helper's observe) until systemd's
+    Restart=on-failure start is active, or the unit failed for good, under a ceiling. Returns
+    the retried start's outcome, its unit and the seconds it took."""
+    t0 = clock()
+    obs = {}
+    while True:
+        obs = observe()
+        unit = _unit(obs, DRILL_SERVER_UNIT)
+        restarts = int(unit.get('NRestarts') or 0)
+        if unit.get('ActiveState') == 'active' and restarts > restarts_before or \
+                unit.get('ActiveState') == 'failed' or clock() - t0 >= ceiling:
+            break
+        sleep(1.0)
+    lines = ((obs or {}).get('server_invocation') or {}).get('lines') or []
+    outcomes = [o for o in (ready_outcome(x) for x in lines) if o]
+    return {'seconds': round(clock() - t0, 1), 'outcome': outcomes[-1] if outcomes else None,
+            'reached_readiness': unit.get('ActiveState') == 'active' and restarts > restarts_before
+            and bool(outcomes) and outcomes[-1]['ready'],
+            'unit': {k: unit.get(k) for k in ('ActiveState', 'SubState', 'Result', 'NRestarts')},
+            'journal': lines}
+
+
+def series_summary(rows, requested):
+    """The series' counts, start-time distributions and verdict (RESTART_SERIES_RULE)."""
+    first = [r for r in rows if r.get('i') is not None]
+    classes = {}
+    for r in first:
+        key = (r.get('outcome') or {}).get('start') or 'no outcome line'
+        classes[key] = classes.get(key, 0) + 1
+    failed = [r['i'] for r in first if r['failed']]
+    exits = [r['i'] for r in first if r['exit_during_start']]
+    retried = [r for r in first if r.get('retry')]
+    out = {'requested': requested, 'restarts': len(first),
+           'main_process_exits_during_start': len(exits), 'exit_restarts': exits,
+           'failed_starts': len(failed), 'failed_restarts': failed,
+           'failed_starts_retried_to_readiness': sum(1 for r in retried
+                                                     if r['retry'].get('reached_readiness')),
+           'outcome_classes': classes,
+           'ready_wait_seconds': distribution([(r.get('outcome') or {}).get('seconds')
+                                               for r in first if (r.get('outcome') or {}).get('ready')]),
+           'restart_seconds': distribution([r.get('seconds') for r in first if not r['failed']]),
+           'failed_start_to_readiness_seconds': distribution(
+               [(r.get('seconds') or 0) + r['retry']['seconds'] for r in retried
+                if r['retry'].get('reached_readiness')]),
+           'rule': RESTART_SERIES_RULE}
+    out['verdict'] = 'PASS' if len(first) >= requested and not exits and not failed else 'FAIL'
+    return out
+
+
+def drill_restart_series(ctx, name, steps, chan, count=None):
+    """E-01.4.3: ``count`` (default 500) consecutive restarts of the Agent Server through the
+    root helper (systemctl restart), each with its outcome line; a failed start is followed to
+    systemd's retry and its readiness. Then the reporting itself: a SIGKILLed server's
+    Restart=on-failure start must say start=retried, and a manual restart after it is
+    recorded."""
+    count = RESTART_SERIES_COUNT if count is None else count
+    if count < 1:
+        raise Refused('REFUSED', '--limit must be at least 1')
+    memo = {'rows': []}
+
+    def observe():
+        return _detail(chan()[2]('observe', {'journal_lines': 20}))
+
+    def baseline():
+        obs = observe()
+        unit = _unit(obs, DRILL_SERVER_UNIT)
+        procs = _server_processes(obs)
+        memo['baseline'] = {'unit': {k: unit.get(k) for k in ('ActiveState', 'SubState',
+                                                             'NRestarts', 'MainPID')},
+                            'listening': _listening(obs), 'processes': len(procs)}
+        return unit.get('ActiveState') == 'active' and _listening(obs), memo['baseline']
+
+    def series():
+        req = chan()[2]
+        for i in range(1, count + 1):
+            row = restart_row(i, _detail(req('server-restart')))
+            if row['failed']:
+                row['retry'] = settle_retry(observe, int(row['unit'].get('NRestarts') or 0))
+            memo['rows'].append(row)
+            if i % 50 == 0 or row['failed'] or row['exit_during_start']:
+                log(f'restart-series: {i}/{count}; exits during start '
+                    f'{sum(r["exit_during_start"] for r in memo["rows"])}, failed '
+                    f'{sum(r["failed"] for r in memo["rows"])}')
+        memo['summary'] = series_summary(memo['rows'], count)
+        return memo['summary']['verdict'] == 'PASS', dict(memo['summary'], rows=memo['rows'])
+
+    def retried_report():
+        detail = _detail(chan()[2]('server-kill', {'ceiling': RETRY_SETTLE_S}))
+        lines = (detail.get('invocation') or {}).get('lines') or []
+        outcomes = [o for o in (ready_outcome(x) for x in lines) if o]
+        outcome = outcomes[-1] if outcomes else None
+        unit = detail.get('unit') or {}
+        memo['retried_report'] = {'outcome': outcome, 'restarts_before': detail.get('restarts_before'),
+                                  'unit': {k: unit.get(k) for k in ('ActiveState', 'SubState',
+                                                                     'NRestarts')},
+                                  'seconds': detail.get('seconds'), 'journal_tail': lines[-15:]}
+        return bool(outcome and outcome['ready'] and
+                    'retried' in outcome['start'].split(',')), memo['retried_report']
+
+    def manual_after():
+        row = restart_row(None, _detail(chan()[2]('server-restart')))
+        memo['manual_after_retry'] = row
+        return not row['failed'], row
+
+    steps.run('the server is active and listening', baseline)
+    steps.run(f'{count} consecutive restarts (systemctl restart)', series)
+    steps.run('a Restart=on-failure start (SIGKILL) is reported start=retried', retried_report,
+              always=True)
+    steps.run('a manual restart after it (recorded)', manual_after, always=True)
+    return memo
+
+
 def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None,
           ready_timeout=READY_TIMEOUT_S, channels=None, stop_fn=None, start_fn=None,
           admitted_fn=None):
@@ -12037,6 +12285,8 @@ def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None
         memo = drill_root_scan(ctx, name, idir, steps, chan, canaries, raw)
     elif kind == 'f2-closed':
         memo = drill_f2_closed(ctx, name, steps, chan, reboot)
+    elif kind == 'restart-series':
+        memo = drill_restart_series(ctx, name, steps, chan, limit)
     else:
         if admitted_fn is None:
             raise Refused('REFUSED', 'admitted-create runs from integrations/dispatch/tests/'
@@ -12263,12 +12513,14 @@ def main(argv=None):
                   'drill'):
             p.add_argument('--out', help='also write the record to this new file')
         if op == 'drill':
-            p.add_argument('--kind', required=True, choices=DRILL_KINDS[:4],
-                           help='E-01.2.2 slices (b) and (c), TEST ONLY, on a drill instance')
+            p.add_argument('--kind', required=True, choices=DRILL_KINDS[:5],
+                           help='E-01.2.2 slices (b) and (c) and E-01.4.3 (restart-series), TEST '
+                                'ONLY, on a drill instance')
             p.add_argument('--canaries', help='root-scan: the canary set create planted')
             p.add_argument('--raw', action='store_true',
                            help='root-scan: also count occurrences on the raw block devices')
-            p.add_argument('--limit', type=int, help='stored-state: only the first N alterations')
+            p.add_argument('--limit', type=int, help='stored-state: only the first N alterations; '
+                           f'restart-series: N restarts (default {RESTART_SERIES_COUNT})')
         if op == 'containment-probe':
             p.add_argument('--drill-defective-control', action='append', default=[],
                            help='E-01.2.2 slice (b), TEST ONLY, drill instances only: replace this '
