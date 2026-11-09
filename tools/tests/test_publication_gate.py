@@ -133,6 +133,11 @@ def _golden_repositories(files):
                            timeout=TIMEOUT)
         subprocess.run(['git', 'init', '-q', '-b', 'main', str(root)], env=env, check=True)
         subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(remote)], env=env, check=True)
+        # core.longpaths in both repositories' own configuration (fixture only; the copies keep
+        # it): under a long TEMP the bare origin's receive quarantine passes 260 characters.
+        for repository in (root, remote):
+            subprocess.run(['git', '-C', str(repository), 'config', 'core.longpaths', 'true'], env=env,
+                           check=True, capture_output=True, timeout=TIMEOUT)
         for rel, data in files.items():
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
