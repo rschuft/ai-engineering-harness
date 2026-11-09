@@ -70,7 +70,14 @@ tab among them) or starting with `-` is refused (`OBJECT_NAME_INVALID`) before i
 process; a revision is also refused for any whitespace (`REVISION_INVALID`), as before. Each
 request has
 the `TOOL_TIMEOUT_S` ceiling: past it the process is killed, `subprocess.TimeoutExpired` is
-raised as before, and every later read of the session fails closed (`GIT_FAILED`). The
+raised as before, and every later read of the session fails closed (`GIT_FAILED`). Before each
+request the reader checks that its process still runs: one that has exited fails it closed
+before anything is written. Every git process the adapter starts, the reader and the single
+commands alike, is one process tree (`ProcessTree`, `run_tree`): a git on `PATH` may be a
+launcher that runs the real git as its child (Git for Windows' `cmd\git.exe`, the git of a
+Windows shell's default `PATH`), and a kill, a timeout, an exception or the close ends that
+child too and waits for it. On Windows the process joins a job object (kill on close) before
+its first instruction runs; on POSIX it leads a new session whose process group is killed. The
 reader answers as the one-shot commands it replaces (`rev-parse --verify --quiet
 <rev>^{commit}`, `cat-file -t`, `cat-file blob`; tested), with the same git and the same
 environment; the work-tree check (`rev-parse --show-toplevel`), `ls-tree` and `archive`

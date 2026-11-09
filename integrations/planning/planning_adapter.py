@@ -42,6 +42,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -50,6 +51,10 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+if os.name == 'nt':
+    import ctypes
+    from ctypes import wintypes
 
 PLAN_FORMAT = 'planning-map/v1'
 RESULT_FORMAT = 'planning-map-result/v1'
@@ -150,6 +155,283 @@ def tool_env():
     return env
 
 
+# ---------------------------------------------------------------------------
+# Process trees
+#
+# The git on PATH may be a launcher that runs the real git as its child: Git for Windows'
+# cmd\git.exe, the git of a Windows shell's default PATH, is one. Killing the launched process
+# alone would leave that child running, still answering on the pipes it inherited. So every git
+# process the adapter starts is one process tree, killed and waited for as a whole: on Windows a
+# job object (kill on close) that the process joins before it runs its first instruction; on
+# POSIX a new session, whose process group is signalled.
+
+if os.name == 'nt':
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_ulonglong) for name in (
+            'ReadOperationCount', 'WriteOperationCount', 'OtherOperationCount',
+            'ReadTransferCount', 'WriteTransferCount', 'OtherTransferCount')]
+
+    class _BasicLimits(ctypes.Structure):
+        _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                    ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                    ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                    ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+                    ('SchedulingClass', wintypes.DWORD)]
+
+    class _ExtendedLimits(ctypes.Structure):
+        _fields_ = [('BasicLimitInformation', _BasicLimits), ('IoInfo', _IoCounters),
+                    ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                    ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+    class _ProcessIdList(ctypes.Structure):
+        _fields_ = [('NumberOfAssignedProcesses', wintypes.DWORD),
+                    ('NumberOfProcessIdsInList', wintypes.DWORD),
+                    ('ProcessIdList', ctypes.c_size_t * 64)]
+
+    class _ThreadEntry(ctypes.Structure):
+        _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD),
+                    ('th32ThreadID', wintypes.DWORD), ('th32OwnerProcessID', wintypes.DWORD),
+                    ('tpBasePri', wintypes.LONG), ('tpDeltaPri', wintypes.LONG), ('dwFlags', wintypes.DWORD)]
+
+    _KERNEL32 = None
+
+    def _kernel32():
+        """kernel32's job, process and thread functions, typed once (a private WinDLL instance,
+        so no other module's prototypes are changed)."""
+        global _KERNEL32
+        if _KERNEL32 is None:
+            k = ctypes.WinDLL('kernel32', use_last_error=True)
+            H, B, D = wintypes.HANDLE, wintypes.BOOL, wintypes.DWORD
+            for name, restype, argtypes in (
+                    ('CreateJobObjectW', H, (wintypes.LPVOID, wintypes.LPCWSTR)),
+                    ('SetInformationJobObject', B, (H, ctypes.c_int, wintypes.LPVOID, D)),
+                    ('QueryInformationJobObject', B, (H, ctypes.c_int, wintypes.LPVOID, D, wintypes.LPDWORD)),
+                    ('AssignProcessToJobObject', B, (H, H)),
+                    ('TerminateJobObject', B, (H, wintypes.UINT)),
+                    ('IsProcessInJob', B, (H, H, wintypes.PBOOL)),
+                    ('OpenProcess', H, (D, B, D)),
+                    ('TerminateProcess', B, (H, wintypes.UINT)),
+                    ('WaitForSingleObject', D, (H, D)),
+                    ('CloseHandle', B, (H,)),
+                    ('CreateToolhelp32Snapshot', H, (D, D)),
+                    ('Thread32First', B, (H, ctypes.POINTER(_ThreadEntry))),
+                    ('Thread32Next', B, (H, ctypes.POINTER(_ThreadEntry))),
+                    ('OpenThread', H, (D, B, D)),
+                    ('ResumeThread', D, (H,))):
+                function = getattr(k, name)
+                function.restype, function.argtypes = restype, argtypes
+            _KERNEL32 = k
+        return _KERNEL32
+
+    _CREATE_SUSPENDED = 0x4
+    _KILL_ON_JOB_CLOSE = 0x2000
+    _JOB_EXTENDED_LIMITS, _JOB_PROCESS_IDS = 9, 3
+    _PROCESS_TERMINATE, _PROCESS_SET_QUOTA = 0x1, 0x100
+    _PROCESS_QUERY_LIMITED, _SYNCHRONIZE = 0x1000, 0x100000
+    _THREAD_SUSPEND_RESUME, _SNAP_THREADS = 0x2, 0x4
+    _PROCESS_SUSPEND_RESUME = 0x800
+    _INVALID_HANDLE = ctypes.c_void_p(-1).value
+    _NT_RESUME = []
+
+    def _nt_resume(k, pid):
+        """True when ntdll's NtResumeProcess resumed process PID; False when it is not there or
+        failed, and the caller resumes the threads itself."""
+        if not _NT_RESUME:
+            function = getattr(ctypes.WinDLL('ntdll'), 'NtResumeProcess', None)
+            if function is not None:
+                function.restype, function.argtypes = ctypes.c_long, (wintypes.HANDLE,)
+            _NT_RESUME.append(function)
+        function = _NT_RESUME[0]
+        if function is None:
+            return False
+        handle = k.OpenProcess(_PROCESS_SUSPEND_RESUME, False, pid)
+        if not handle:
+            return False
+        try:
+            return function(handle) >= 0  # an NTSTATUS: success is not negative
+        finally:
+            k.CloseHandle(handle)
+
+
+def _remaining_ms(deadline):
+    return max(0, int((deadline - time.monotonic()) * 1000))
+
+
+class ProcessTree:
+    """One process started with ``subprocess.Popen`` and every process it starts, which are
+    killed and waited for together (``kill``). ``close`` kills whatever is left and releases the
+    tree. ``running`` says whether the started process itself still runs."""
+
+    def __init__(self, argv, **popen_args):
+        self._job = None
+        if os.name == 'nt':
+            self._start_in_job(argv, popen_args)
+        else:
+            self.process = subprocess.Popen(argv, start_new_session=True, **popen_args)
+
+    def _start_in_job(self, argv, popen_args):
+        k = _kernel32()
+        job = k.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            limits = _ExtendedLimits()
+            limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE
+            if not k.SetInformationJobObject(job, _JOB_EXTENDED_LIMITS, ctypes.byref(limits),
+                                             ctypes.sizeof(limits)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            flags = popen_args.pop('creationflags', 0) | _CREATE_SUSPENDED
+            self.process = subprocess.Popen(argv, creationflags=flags, **popen_args)
+        except BaseException:
+            k.CloseHandle(job)
+            raise
+        self._job = job
+        try:
+            handle = k.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, self.process.pid)
+            if not handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                if not k.AssignProcessToJobObject(job, handle):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            finally:
+                k.CloseHandle(handle)
+            self._resume(k)
+        except BaseException:
+            # Never left suspended, and never running outside the job: closing the job kills it.
+            self.process.kill()
+            self.close(TOOL_TIMEOUT_S)
+            raise
+
+    def _resume(self, k):
+        """Resume the suspended process (subprocess keeps no thread handle): ntdll's
+        NtResumeProcess, as psutil resumes a process, or else the documented thread walk."""
+        if not _nt_resume(k, self.process.pid):
+            self._resume_threads(k)
+
+    def _resume_threads(self, k):
+        """Resume every thread of the process found by a Toolhelp walk of the system's threads
+        (documented, but some 20 ms on a host with thousands of threads)."""
+        snapshot = k.CreateToolhelp32Snapshot(_SNAP_THREADS, 0)
+        if snapshot == _INVALID_HANDLE or not snapshot:
+            raise ctypes.WinError(ctypes.get_last_error())
+        resumed = 0
+        try:
+            entry = _ThreadEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            more = k.Thread32First(snapshot, ctypes.byref(entry))
+            while more:
+                if entry.th32OwnerProcessID == self.process.pid:
+                    thread = k.OpenThread(_THREAD_SUSPEND_RESUME, False, entry.th32ThreadID)
+                    if not thread:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    try:
+                        if k.ResumeThread(thread) == 0xFFFFFFFF:
+                            raise ctypes.WinError(ctypes.get_last_error())
+                    finally:
+                        k.CloseHandle(thread)
+                    resumed += 1
+                more = k.Thread32Next(snapshot, ctypes.byref(entry))
+        finally:
+            k.CloseHandle(snapshot)
+        if not resumed:
+            raise OSError(f'no thread of process {self.process.pid} to resume')
+
+    def running(self):
+        """Whether the started process still runs (on POSIX without reaping it, so that its
+        process group cannot be reused before ``kill``)."""
+        if self.process.returncode is not None:
+            return False
+        if os.name == 'nt' or not hasattr(os, 'waitid'):
+            return self.process.poll() is None
+        try:
+            return os.waitid(os.P_PID, self.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None
+        except ChildProcessError:
+            return self.process.poll() is None
+
+    def kill(self, timeout):
+        """Kill every process of the tree and wait (up to TIMEOUT) until each has ended."""
+        deadline = time.monotonic() + timeout
+        if os.name == 'nt':
+            if self._job is not None:
+                self._kill_job(deadline)
+        else:
+            self._kill_group(deadline)
+        try:
+            self.process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+
+    def _kill_job(self, deadline):
+        k = _kernel32()
+        while True:
+            pids = _ProcessIdList()
+            if not k.QueryInformationJobObject(self._job, _JOB_PROCESS_IDS, ctypes.byref(pids),
+                                               ctypes.sizeof(pids), None) \
+                    and ctypes.get_last_error() != 234:  # ERROR_MORE_DATA: more than 64, a part listed
+                raise ctypes.WinError(ctypes.get_last_error())
+            if not pids.NumberOfAssignedProcesses:
+                return
+            handles = []
+            for pid in pids.ProcessIdList[:pids.NumberOfProcessIdsInList]:
+                handle = k.OpenProcess(_SYNCHRONIZE | _PROCESS_QUERY_LIMITED, False, pid)
+                inside = wintypes.BOOL()
+                if handle and k.IsProcessInJob(handle, self._job, ctypes.byref(inside)) and inside:
+                    handles.append(handle)
+                elif handle:
+                    k.CloseHandle(handle)
+            k.TerminateJobObject(self._job, 1)
+            for handle in handles:
+                k.WaitForSingleObject(handle, _remaining_ms(deadline))
+                k.CloseHandle(handle)
+            if time.monotonic() >= deadline:
+                return
+
+    def _kill_group(self, deadline):
+        group = self.process.pid
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            self.process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            return
+        while time.monotonic() < deadline:  # the rest of the group, reaped by their new parent
+            try:
+                os.killpg(group, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.005)
+
+    def close(self, timeout):
+        """Kill whatever is left of the tree, wait for it, and release the tree."""
+        self.kill(timeout)
+        if self._job is not None:
+            _kernel32().CloseHandle(self._job)  # kill on close: nothing in it survives this
+            self._job = None
+
+
+def run_tree(argv, timeout=None, env=None):
+    """``subprocess.run(argv, capture_output=True, stdin=DEVNULL, timeout=...)`` for a git
+    command, as one process tree: when the ceiling expires every process of the tree is killed
+    and waited for before ``subprocess.TimeoutExpired`` is raised, and none outlives the call."""
+    timeout = TOOL_TIMEOUT_S if timeout is None else timeout
+    tree = ProcessTree(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    try:
+        try:
+            out, err = tree.process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            tree.kill(timeout)
+            try:
+                out, err = tree.process.communicate(timeout=timeout)  # at their end: no writer is left
+            except subprocess.TimeoutExpired:
+                out = err = None
+            raise subprocess.TimeoutExpired(argv, timeout, out, err) from None
+    finally:
+        tree.close(timeout)
+    return subprocess.CompletedProcess(argv, tree.process.returncode, out, err)
+
+
 # Object names and revisions reach git's batch protocol one per line on standard input. The
 # reader uses git's default output format (no %(rest)), so git takes the whole line as the
 # object name and a space is part of it; only a line terminator or a NUL could end or split a
@@ -183,7 +465,10 @@ class BatchReader:
     process is waited for (killed when it does not exit within the ceiling). Every request has
     the TOOL_TIMEOUT_S ceiling: when it expires the process is killed and
     ``subprocess.TimeoutExpired`` is raised. After a timeout, an unexpected answer or an exit,
-    the reader fails closed: every later request raises GIT_FAILED.
+    the reader fails closed: every later request raises GIT_FAILED. Before each request is
+    written the process is checked: one that has exited fails the reader closed, whatever its
+    pipes would still answer. The process is a ``ProcessTree``: a kill, and the close, end
+    every process it started (the real git behind a launcher), and none outlives the reader.
     """
 
     def __init__(self, argv, env, timeout=None):
@@ -194,8 +479,9 @@ class BatchReader:
         self._err = bytearray()
         self._eof = False
         self._broken = None
-        self.process = subprocess.Popen(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE, env=env)
+        self._tree = ProcessTree(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, env=env)
+        self.process = self._tree.process
         self._pumps = [threading.Thread(target=self._pump, args=(self.process.stdout, self._out, True), daemon=True),
                        threading.Thread(target=self._pump, args=(self.process.stderr, self._err, False), daemon=True)]
         for pump in self._pumps:
@@ -247,6 +533,8 @@ class BatchReader:
         line = batch_line(name)
         if self._broken:
             raise PlanningError('GIT_FAILED', f'git cat-file --batch: {self._broken}')
+        if not self._tree.running():
+            self._fail_exited()  # decided by the process, not by what its pipes would answer
         timeout = self.timeout
         deadline = time.monotonic() + timeout
         try:
@@ -284,25 +572,23 @@ class BatchReader:
         raise PlanningError('GIT_FAILED', f'git cat-file --batch: {why}')
 
     def _fail_exited(self):
+        self._broken = 'the process exited'
         try:
             code = self.process.wait(timeout=self.timeout)
         except subprocess.TimeoutExpired:
             code = None
+        self._kill()  # what it started may still hold the pipes: end it before reading stderr
         self._pumps[1].join(self.timeout)
         with self._cond:
             stderr = bytes(self._err).decode('utf-8', 'replace').strip()
         self._fail(f'exited {code}: {stderr}' if stderr else f'exited {code}')
 
     def _kill(self):
-        if self.process.poll() is None:
-            self.process.kill()
-        try:
-            self.process.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            pass
+        self._tree.kill(self.timeout)
 
     def close(self):
-        """Close standard input, wait for git to exit (kill it past the ceiling), end the pumps."""
+        """Close standard input, wait for git to exit (kill it past the ceiling), end every
+        process the reader started, end the pumps."""
         if self._broken is None:
             self._broken = 'the reader is closed'
         try:
@@ -312,7 +598,8 @@ class BatchReader:
         try:
             self.process.wait(timeout=self.timeout)
         except subprocess.TimeoutExpired:
-            self._kill()
+            pass
+        self._tree.close(self.timeout)
         for pump in self._pumps:
             pump.join(self.timeout)
         for stream in (self.process.stdout, self.process.stderr):
@@ -436,8 +723,7 @@ class Git:
             raise CannotRun(f'not a git working tree: {self.project}')
 
     def _run(self, *args, check=True):
-        result = subprocess.run(['git', '-C', str(self.project), *args], capture_output=True,
-                                stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_S, env=tool_env())
+        result = run_tree(['git', '-C', str(self.project), *args], timeout=TOOL_TIMEOUT_S, env=tool_env())
         if check and result.returncode != 0:
             raise PlanningError('GIT_FAILED', f'git {" ".join(args)}: '
                                 f'{result.stderr.decode("utf-8", "replace").strip()}')

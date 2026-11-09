@@ -12,11 +12,19 @@ the line protocol refused before anything reaches the process, the reader closed
 exit, on an exception and on a timeout (killed, and every later read fails closed), and no
 memo outliving its session. Stand-in processes play a git that hangs or answers out of
 protocol; every other process is the real git.
+
+A git on PATH may be a launcher that runs the real git as its child (Git for Windows'
+``cmd\\git.exe``; round 4). ``fake_launcher.py`` plays one on any platform: through it, a reader
+whose launcher exited fails closed before it writes, and a kill, a timeout, an exception and a
+normal close each end the child too. Where Git for Windows' own launcher is installed, the same
+is checked through it.
 """
+import contextlib
 import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,6 +65,108 @@ GARBLES = [sys.executable, '-I', '-c',
 ANSWERS_ANOTHER = [sys.executable, '-I', '-c',
                    'import sys, time; sys.stdin.readline(); '
                    'sys.stdout.buffer.write(b"main^{commit} missing" + bytes([10])); sys.stdout.flush(); time.sleep(300)']
+# A launcher that runs its command as a child (fake_launcher.py), and a child that never reads.
+FAKE_LAUNCHER = [sys.executable, '-I', '-B', str(HERE / 'fake_launcher.py')]
+SLEEPS = [sys.executable, '-I', '-c', 'import time; time.sleep(60)']
+GONE_WITHIN_S = 5  # a ceiling for a killed process to be gone, not an expected duration
+
+if os.name == 'nt':
+    import ctypes
+    from ctypes import wintypes
+
+    class _ProcessEntry(ctypes.Structure):
+        _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD),
+                    ('th32ProcessID', wintypes.DWORD), ('th32DefaultHeapID', ctypes.c_size_t),
+                    ('th32ModuleID', wintypes.DWORD), ('cntThreads', wintypes.DWORD),
+                    ('th32ParentProcessID', wintypes.DWORD), ('pcPriClassBase', wintypes.LONG),
+                    ('dwFlags', wintypes.DWORD), ('szExeFile', wintypes.WCHAR * 260)]
+
+    _K32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    for _name, _restype, _argtypes in (
+            ('OpenProcess', wintypes.HANDLE, (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)),
+            ('WaitForSingleObject', wintypes.DWORD, (wintypes.HANDLE, wintypes.DWORD)),
+            ('CloseHandle', wintypes.BOOL, (wintypes.HANDLE,)),
+            ('CreateToolhelp32Snapshot', wintypes.HANDLE, (wintypes.DWORD, wintypes.DWORD)),
+            ('Process32FirstW', wintypes.BOOL, (wintypes.HANDLE, ctypes.POINTER(_ProcessEntry))),
+            ('Process32NextW', wintypes.BOOL, (wintypes.HANDLE, ctypes.POINTER(_ProcessEntry)))):
+        getattr(_K32, _name).restype, getattr(_K32, _name).argtypes = _restype, _argtypes
+
+
+class Watch:
+    """Whether process PID still runs, checked without the adapter's own mechanism: on Windows
+    a handle opened at once (which also keeps the id from being reused) and waited on; on POSIX
+    ``os.kill(pid, 0)``."""
+
+    def __init__(self, test, pid):
+        self.pid, self.handle = pid, None
+        if os.name == 'nt':
+            self.handle = _K32.OpenProcess(0x100000 | 0x1000, False, pid)  # SYNCHRONIZE, query
+            if self.handle:
+                test.addCleanup(_K32.CloseHandle, self.handle)
+
+    def gone_within(self, seconds):
+        if os.name == 'nt':
+            return not self.handle or _K32.WaitForSingleObject(self.handle, int(seconds * 1000)) == 0
+        deadline = time.monotonic() + seconds
+        while True:
+            try:
+                os.kill(self.pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                pass
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
+    def alive(self):
+        return not self.gone_within(0)
+
+
+def read_pid(pidfile, seconds=10):
+    """The process id fake_launcher.py wrote, waiting (up to SECONDS) for the file to appear."""
+    deadline = time.monotonic() + seconds
+    while not pidfile.exists():
+        if time.monotonic() >= deadline:
+            raise AssertionError(f'the launcher wrote no {pidfile.name}')
+        time.sleep(0.01)
+    return int(pidfile.read_text(encoding='ascii'))
+
+
+def child_processes(pid):
+    """[(process id, executable name)] of the processes whose parent is PID (Windows)."""
+    snapshot = _K32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    found = []
+    try:
+        entry = _ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        more = _K32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            if entry.th32ParentProcessID == pid:
+                found.append((entry.th32ProcessID, entry.szExeFile))
+            more = _K32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        _K32.CloseHandle(snapshot)
+    return found
+
+
+def git_for_windows_launcher():
+    """Git for Windows' launcher ``cmd\\git.exe`` when it is installed, else None: the git on
+    PATH when it is the launcher (a Windows shell's default PATH), or the one beside the git
+    that PATH resolves (Git Bash's PATH resolves the real git)."""
+    if os.name != 'nt':
+        return None
+    found = shutil.which('git')
+    if found and Path(found).parent.name.lower() == 'cmd':
+        return Path(found)
+    out = subprocess.run(['git', '--exec-path'], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                         timeout=adapter.TOOL_TIMEOUT_S, env=adapter.tool_env()).stdout.strip()
+    parts = Path(out).parts if out else ()
+    if len(parts) > 3 and [p.lower() for p in parts[-2:]] == ['libexec', 'git-core']:
+        launcher = Path(*parts[:-3], 'cmd', 'git.exe')
+        if launcher.is_file():
+            return launcher
+    return None
 
 
 class Recorded(adapter.BatchReader):
@@ -557,6 +667,178 @@ class OperationScope(RepoCase):
         self.assertEqual(len(Recorded.made), 1)
         self.assertEnded(Recorded.made)
         self.assertIsNone(adapter.current_operation())
+
+
+class Launcher(RepoCase):
+    """A git behind a launcher (fake_launcher.py, round 4): the reader's state, not what the
+    child would still answer, decides that it fails closed, and no child outlives the reader."""
+
+    def through_launcher(self, name, argv):
+        pidfile = self.tmp / f'{name}.pid'
+        if pidfile.exists():
+            pidfile.unlink()
+        return [*FAKE_LAUNCHER, str(pidfile), *argv], pidfile
+
+    def batch(self, name):
+        return self.through_launcher(name, ['git', '-C', str(self.repo), 'cat-file', '--batch'])
+
+    def test_a_launcher_that_exits_fails_closed_and_its_child_ends(self):
+        argv, pidfile = self.batch('exits')
+        with mock.patch.object(adapter.Git, 'batch_argv', return_value=argv), self.git.session():
+            self.assertEqual(self.git.commit('HEAD'), self.commit)
+            child = Watch(self, read_pid(pidfile))
+            (reader,) = Recorded.made
+            recorder = WriteRecorder(reader.process.stdin)
+            reader.process.stdin = recorder
+            reader.process.kill()
+            reader.process.wait(adapter.TOOL_TIMEOUT_S)
+            self.assertTrue(child.alive())  # the launcher alone was killed: its child still answers
+            error = self.expect('GIT_FAILED', self.git.object_type, self.commit, DESIGN)
+            self.assertIn('exited', error.message)
+            self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its reader')
+            self.expect('GIT_FAILED', self.git.commit, 'main')
+            self.assertEqual(bytes(recorder.written), b'')  # nothing written after the exit
+        self.assertEnded(Recorded.made)
+
+    def test_a_timeout_through_a_launcher_ends_its_child(self):
+        argv, pidfile = self.through_launcher('timeout', HANGS)
+        with adapter.BatchReader(argv, adapter.tool_env(), timeout=0.5) as reader:
+            child = Watch(self, read_pid(pidfile))
+            with self.assertRaises(subprocess.TimeoutExpired):
+                reader.read('HEAD')
+            self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived the timeout')
+            self.assertIsNotNone(reader.process.poll())
+            recorder = WriteRecorder(reader.process.stdin)
+            reader.process.stdin = recorder
+            error = self.expect('GIT_FAILED', reader.read, 'main')
+            self.assertIn('killed', error.message)
+            self.assertEqual(bytes(recorder.written), b'')
+
+    def test_an_exception_ends_the_launcher_and_its_child(self):
+        argv, pidfile = self.batch('exception')
+        with mock.patch.object(adapter.Git, 'batch_argv', return_value=argv), self.assertRaises(RuntimeError):
+            with self.git.session():
+                self.git.commit('HEAD')
+                child = Watch(self, read_pid(pidfile))
+                raise RuntimeError('boom')
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its reader')
+        self.assertEqual(Recorded.made[0].process.returncode, 0)  # its input closed: it ended itself
+
+    def test_a_normal_close_ends_the_launcher_and_its_child(self):
+        argv, pidfile = self.batch('close')
+        reader = adapter.BatchReader(argv, adapter.tool_env(), timeout=10)
+        try:
+            self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
+            child = Watch(self, read_pid(pidfile))
+        finally:
+            reader.close()
+        self.assertEqual(reader.process.returncode, 0)  # its input closed: it ended itself
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its reader')
+
+    def test_a_one_shot_command_through_a_launcher_is_ended_whole_at_its_ceiling(self):
+        argv, pidfile = self.through_launcher('one-shot', SLEEPS)
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired) as ctx:
+            adapter.run_tree(argv, timeout=1, env=adapter.tool_env())
+        # The child sleeps 60 s holding the pipes; waiting for their end would wait for it.
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(ctx.exception.timeout, 1)
+        child = Watch(self, read_pid(pidfile, 0))
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived the call')
+
+    def test_the_one_shot_commands_run_as_process_trees(self):
+        with mock.patch.object(adapter, 'run_tree', wraps=adapter.run_tree) as tree:
+            git = adapter.Git(self.repo)
+            self.assertIn(DESIGN, git.files(self.commit, 'openspec'))
+        self.assertEqual([c.args[0][3] for c in tree.call_args_list], ['rev-parse', 'ls-tree'])
+
+
+@unittest.skipUnless(os.name == 'nt', 'job objects are Windows only')
+class JobObject(RepoCase):
+    """The Windows job's own failure paths: its documented resume path, and a process that
+    cannot join its job is ended rather than left running outside it."""
+
+    def test_the_documented_resume_path_starts_the_process(self):
+        with mock.patch.object(adapter, '_nt_resume', return_value=False) as nt_resume:
+            with adapter.BatchReader(self.git.batch_argv(), adapter.tool_env(), timeout=10) as reader:
+                self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
+        self.assertEqual(nt_resume.call_count, 1)
+        self.assertEqual(reader.process.returncode, 0)
+
+    def test_a_process_that_cannot_join_its_job_is_ended(self):
+        started, real_popen = [], subprocess.Popen
+
+        def popen(*args, **kwargs):
+            started.append(real_popen(*args, **kwargs))
+            return started[-1]
+
+        with mock.patch.object(adapter.subprocess, 'Popen', side_effect=popen), \
+                mock.patch.object(adapter._kernel32(), 'AssignProcessToJobObject', return_value=0):
+            with self.assertRaises(OSError):
+                adapter.BatchReader(self.git.batch_argv(), adapter.tool_env())
+        (process,) = started
+        self.assertIsNotNone(process.poll())
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
+
+
+class RealLauncher(RepoCase):
+    """The same through Git for Windows' own launcher, where it is installed: its child, the
+    real git, ends with the reader, and a reader whose launcher exited fails closed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.launcher = git_for_windows_launcher()
+        if cls.launcher is None:
+            raise unittest.SkipTest('Git for Windows\' launcher (cmd\\git.exe) is not installed here')
+        super().setUpClass()
+
+    def start(self, *args, timeout=None):
+        """A reader through the launcher, and a Watch on its one git child."""
+        reader = adapter.BatchReader([str(self.launcher), '-C', str(self.repo), *args], adapter.tool_env(),
+                                     timeout=timeout)
+        self.addCleanup(reader.close)
+        deadline = time.monotonic() + 10
+        while True:
+            children = [pid for pid, name in child_processes(reader.process.pid) if name.lower() == 'git.exe']
+            if children or time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
+        self.assertEqual(len(children), 1, 'the launcher runs the real git as its one child')
+        return reader, Watch(self, children[0])
+
+    def test_a_launcher_that_exits_fails_closed_and_the_real_git_ends(self):
+        reader, child = self.start('cat-file', '--batch')
+        self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
+        recorder = WriteRecorder(reader.process.stdin)
+        reader.process.stdin = recorder
+        reader.process.kill()
+        reader.process.wait(adapter.TOOL_TIMEOUT_S)
+        self.assertTrue(child.alive())  # the launcher alone was killed: the real git still answers
+        error = self.expect('GIT_FAILED', reader.read, f'{self.commit}:{DESIGN}')
+        self.assertIn('exited', error.message)
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived its reader')
+        self.assertEqual(bytes(recorder.written), b'')
+
+    def test_a_timeout_ends_the_real_git(self):
+        # hash-object --stdin reads the request and answers nothing until its input ends.
+        reader, child = self.start('hash-object', '--stdin', timeout=0.5)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            reader.read('HEAD')
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived the timeout')
+        self.expect('GIT_FAILED', reader.read, 'HEAD')
+
+    def test_an_exception_and_a_close_end_the_real_git(self):
+        for raises in (True, False):
+            with self.subTest(exception=raises):
+                reader, child = self.start('cat-file', '--batch')
+                with self.assertRaises(RuntimeError) if raises else contextlib.nullcontext():
+                    with reader:
+                        self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
+                        if raises:
+                            raise RuntimeError('boom')
+                self.assertEqual(reader.process.returncode, 0)  # its input closed: it ended itself
+                self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived its reader')
 
 
 if __name__ == '__main__':
