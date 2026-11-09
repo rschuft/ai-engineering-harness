@@ -1,5 +1,5 @@
 {
-  "task_count": 164,
+  "task_count": 165,
   "tasks": [
     {
       "id": "F-01.1",
@@ -710,6 +710,17 @@
       ],
       "path": "task_prompts/U-03.2.md",
       "sha256": "a18f49a29653d55be1a23f53d0e318776a405535e6846affa068a98e89f013eb"
+    },
+    {
+      "id": "E-01.4.3",
+      "title": "Eliminate or bound the Agent Server start-up import race",
+      "phase": 1,
+      "deps": [
+        "F-04.2",
+        "E-01.2.2"
+      ],
+      "path": "task_prompts/E-01.4.3.md",
+      "sha256": "f09c9dd80e3374f1c8003a9c4cacbc327c41aef7454455176257e0f7fd56fe74"
     },
     {
       "id": "E-01.4.1",

@@ -3,7 +3,7 @@
   "created_date": "2026-11-05",
   "origin_architecture": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
   "canonical_plan": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-  "task_count": 164,
+  "task_count": 165,
   "license_note": "Does not include or overwrite LICENSE from the target public MIT repository.",
   "task_status_note": "All tasks remain not started; package generation is not implementation evidence.",
   "files": [
@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "7e37598fe554684e84c08fa87a5b69a939777dafc6788bd11b5c2c3f6aaef17f",
-      "size_bytes": 2747003
+      "sha256": "4de0c4cb91db09bf700b3a615c7b99c8d75714fbc31b061132a9cc839169d38f",
+      "size_bytes": 2772096
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "121e1037df96b0729e89288551c15da3b0bd3c77ab45514d46879a40dc9b0dd4",
-      "size_bytes": 1427221
+      "sha256": "b2ef9e39bb9d5b9b1ff2b90528e2eb5189f207634062e09311d138ae3e7d2661",
+      "size_bytes": 1440571
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "043c267f084b19414afa6b036ea8417358ce748fec767a0d78dc6ce004645897",
-      "size_bytes": 244134
+      "sha256": "798513ea6dfa7a5250b5d7c8001b6de268f0e3500beb51c358d252322814b803",
+      "size_bytes": 246921
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,8 +49,8 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "67d276c911d72fbec63875e21ff345191fea24e4843466a0930e74723dd19c7f",
-      "size_bytes": 49174
+      "sha256": "a37a422e83e26a4792bdca92ac6a460caedec8885be1cdfae0f2dbefd1765ee8",
+      "size_bytes": 49491
     },
     {
       "path": "task_prompts/A-01.1.md",
@@ -116,6 +116,11 @@
       "path": "task_prompts/E-01.4.2.md",
       "sha256": "e80f3bbda6230a68674b56831b575e8a6709127a706a5ec1f870b8798385788d",
       "size_bytes": 4323
+    },
+    {
+      "path": "task_prompts/E-01.4.3.md",
+      "sha256": "f09c9dd80e3374f1c8003a9c4cacbc327c41aef7454455176257e0f7fd56fe74",
+      "size_bytes": 5751
     },
     {
       "path": "task_prompts/E-01.5.md",
