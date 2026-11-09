@@ -93,7 +93,9 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                stop the chain, then are restored), stored-state (every field of the
                job-writable stored conversation state altered alone, then a server restart
                and a reopen; the container must not change), root-scan (the guest-root P5
-               scan). containment-probe --drill-defective-control runs there only.
+               scan), f2-closed (slice (c): the quiesce step neutralizes job-written stored
+               state before every server start; variants A to G with a fixed decision
+               rule). containment-probe --drill-defective-control runs there only.
     host-census  S-01.4: a read-only, unelevated census of the harness's host listeners by
                PID (QEMU, Gitea, the Owner host's Vite servers; each must be on 127.0.0.1)
                and the Windows Firewall profiles and rule count, recorded as disclosure.
@@ -126,7 +128,7 @@ never defaulted, contract sections 4 and 11):
                                           [--sensitivity] [--token-fingerprint L=sha256:H] [--out FILE]
     python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision --drill
     python -I -B tools/guest.py drill     --profile PROFILE --state-dir STATE --name NAME
-                                          --kind fail-closed|stored-state|root-scan
+                                          --kind fail-closed|stored-state|root-scan|f2-closed
                                           [--canaries DIR] [--raw] [--limit N] [--out FILE]
     (start, stop, destroy and recreate take the same arguments as inspect; create and
     inspect also take --canaries DIR: create plants the set in its own environment
@@ -3197,7 +3199,8 @@ def evaluate(profile, record, obs):
     ]))
     if record.get('provisioning'):
         props.append(provisioning_property(profile, record, obs, agent.get('provisioning', []) +
-                                           admission_check(profile, obs)))
+                                           admission_check(profile, obs) +
+                                           quiesce_check(profile, obs)))
     return props
 
 
@@ -7519,6 +7522,84 @@ def egress_check(profile, adm, unit):
 
 CHECK_CLASSES[(PROVISIONING_PROPERTY, EGRESS_CHECK)] = (STABLE, None)
 
+
+QUIESCE_CHECK = 'Agent Server quiesce step (E-01.2.2)'
+
+
+def quiesce_config(profile):
+    return ((profile.get('provisioning') or {}).get('agent_server') or {}).get('quiesce') or {}
+
+
+def _monotonic(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def quiesce_check(profile, obs):
+    """E-01.2.2 (findings F-1, F-2): the quiesce step of a provisioned instance against
+    provisioning.agent_server.quiesce and the server's dependencies, from the boot facts
+    (root): the unit's settings, the server's Requires and After (no Wants), the script and
+    the quarantine directory, and this boot's last run: it succeeded, left no container and
+    exited before the server's ExecStart."""
+    conf = quiesce_config(profile)
+    if not conf:
+        return []
+    server = (profile.get('provisioning') or {}).get('agent_server') or {}
+    deps = (server.get('service') or {}).get('dependencies') or {}
+    settings = conf.get('unit_settings') or {}
+    quarantine = conf.get('quarantine') or {}
+    facts = _probe_json(obs, 'moby_facts') or {}
+    q = facts.get('quiesce') if isinstance(facts.get('quiesce'), dict) else {}
+    unit = q.get('unit') if isinstance(q.get('unit'), dict) else {}
+    srv = q.get('server') if isinstance(q.get('server'), dict) else {}
+    last = q.get('last') if isinstance(q.get('last'), dict) else {}
+
+    def present(text, names):
+        tokens = str(text or '').split()
+        return [n for n in names if n in tokens]
+    stat_keys = ('state', 'owner', 'group', 'mode')
+    script = q.get('script') if isinstance(q.get('script'), dict) else {}
+    qdir = q.get('quarantine') if isinstance(q.get('quarantine'), dict) else {}
+    exit_at = _monotonic(unit.get('ExecMainExitTimestampMonotonic'))
+    start_at = _monotonic(srv.get('ExecMainStartTimestampMonotonic'))
+    observed = {
+        'unit': {k: unit.get(k) for k in ('LoadState', 'Type', 'RemainAfterExit', 'Result')},
+        'unit_requires': present(unit.get('Requires'), settings.get('Requires') or []),
+        'unit_after': present(unit.get('After'), settings.get('After') or []),
+        'unit_before': present(unit.get('Before'), settings.get('Before') or []),
+        'server_requires': present(srv.get('Requires'), deps.get('requires') or []),
+        'server_after': present(srv.get('After'), deps.get('after') or []),
+        'server_wants_docker': 'docker.service' in str(srv.get('Wants') or '').split(),
+        'script': {k: script.get(k) for k in stat_keys},
+        'quarantine': {k: qdir.get(k) for k in stat_keys},
+        'ran_this_boot': _monotonic(q.get('runs_this_boot')) >= 1,
+        'last_run': {k: last.get(k) for k in ('ok', 'containers_remaining')},
+        'exited_before_server_exec_start': 0 < exit_at <= start_at,
+    }
+    declared = {
+        'unit': {'LoadState': 'loaded', 'Type': settings.get('Type'),
+                 'RemainAfterExit': settings.get('RemainAfterExit'), 'Result': 'success'},
+        'unit_requires': settings.get('Requires'), 'unit_after': settings.get('After'),
+        'unit_before': settings.get('Before'),
+        'server_requires': deps.get('requires'), 'server_after': deps.get('after'),
+        'server_wants_docker': False,
+        'script': {'state': 'file', 'owner': 'root', 'group': 'root', 'mode': '755'},
+        'quarantine': {'state': 'directory', 'owner': quarantine.get('owner'),
+                       'group': quarantine.get('group'), 'mode': quarantine.get('mode')},
+        'ran_this_boot': True, 'last_run': {'ok': True, 'containers_remaining': 0},
+        'exited_before_server_exec_start': True,
+        'invariant': conf.get('invariant')}
+    ok = bool(unit) and all(observed[k] == declared[k] for k in observed)
+    return [check(QUIESCE_CHECK, declared, observed,
+                  'facts: systemctl show of the quiesce and server units, stat of the script and '
+                  'the quarantine, the step\'s last journal summary of this boot (root, at boot)',
+                  ok)]
+
+
+CHECK_CLASSES[(PROVISIONING_PROPERTY, QUIESCE_CHECK)] = (STABLE, None)
+
 # Run as agent: the unauthenticated sweep of every route of the inventory (HTTP: without a
 # key and with a wrong one; WebSocket: four refusals), and the running server's own
 # /openapi.json reduced to its operations. The session key is read from its file only to
@@ -10308,13 +10389,15 @@ DRILL_CEILING_S = 600            # bounds a hang of one root request (most take 
 DRILL_SCAN_CEILING_S = 2400      # the guest-root P5 scan (every file, optionally raw devices)
 DRILL_SETTLE_S = 300             # units settling after a boot or a restart (a ceiling)
 DRILL_SCHEMA = 'ai-engineering-harness/profiles/drill-record/v1'
-DRILL_KINDS = ('fail-closed', 'stored-state', 'root-scan', 'admitted-create')
+DRILL_KINDS = ('fail-closed', 'stored-state', 'root-scan', 'f2-closed', 'admitted-create')
 DRILL_AUTHORITY = ("the Owner's extended guest-run authorization of 2026-11-07 "
                    '(evidence/bootstrap-log.md)')
 DRILL_GUARD_VARIANTS = ('fail-pre', 'check-only')
 DRILL_KEY_VARIANTS = ('missing-session-key', 'second-session-key')
 DRILL_SERVER_UNIT = 'aieh-agent-server.service'
 DRILL_GUARD_UNIT = 'aieh-container-guard.service'
+DRILL_QUIESCE_UNIT = 'aieh-agent-server-quiesce.service'
+DRILL_QUIESCE_VARIANTS = ('fail-pre',)
 DRILL_LISTENER = '127.0.0.1:8000'
 # the conversations the drills create (the pinned fixture with these ids; never the fixture's)
 DRILL_IDS = {
@@ -10322,9 +10405,20 @@ DRILL_IDS = {
     'key-second-session-key': 'e0122b00-0000-4000-8000-00000000c002',
     'guard-fail-pre': 'e0122b00-0000-4000-8000-00000000c011',
     'guard-check-only': 'e0122b00-0000-4000-8000-00000000c012',
+    'quiesce-fail-pre': 'e0122c00-0000-4000-8000-00000000c021',
     'control': 'e0122b00-0000-4000-8000-00000000c0ff',
     'state': 'e0122b00-0000-4000-8000-00000000d001',
     'state-sensitivity': 'e0122b00-0000-4000-8000-00000000d0ff',
+    # slice (c): the F-2 closed drill (decision rule fixed before observation)
+    'f2-a': 'e0122c00-0000-4000-8000-00000000f20a',
+    'f2-b1': 'e0122c00-0000-4000-8000-00000000f2b1',
+    'f2-b2': 'e0122c00-0000-4000-8000-00000000f2b2',
+    'f2-c': 'e0122c00-0000-4000-8000-00000000f20c',
+    'f2-d': 'e0122c00-0000-4000-8000-00000000f20d',
+    'f2-f-real': 'e0122c00-0000-4000-8000-00000000f2f1',
+    'f2-f-foreign': 'e0122c00-0000-4000-8000-00000000f2f2',
+    'f2-g-symlink': 'e0122c00-0000-4000-8000-00000000f2a1',
+    'f2-g-hardlink': 'e0122c00-0000-4000-8000-00000000f2a2',
 }
 # where a path-like stored field is pointed: a directory the outer server could create
 # (its ReadWritePaths) but no container mount reaches; its appearance is steering
@@ -10538,11 +10632,44 @@ def guard_drill_checks(boot, after, ready, create):
                   not _server_processes(boot) and not _listening(boot),
                   {'unit': {k: server.get(k) for k in ('ActiveState', 'SubState', 'Result')},
                    'processes': _server_processes(boot), 'listening': _listening(boot)}),
+        dependency_row(boot),
         check_row('no conversation created (no 2xx, no container)',
                   not _status_ok(create) and not shims,
                   {'create': {k: create.get(k) for k in ('status', 'error', 'body')},
                    'container_shims': shims}),
         check_row('GET /ready', True, {k: ready.get(k) for k in ('status', 'error')}),
+    ]
+
+
+DEPENDENCY_MARKERS = ('Dependency failed for', "result 'dependency'")
+
+
+def dependency_row(obs):
+    """The server's start job failed because a unit it Requires failed (E-01.2.2 slice (c):
+    systemd logs it under the server's unit; the unit's own Result stays that of its last run)."""
+    lines = ((obs or {}).get('journal') or {}).get(DRILL_SERVER_UNIT) or []
+    found = [line for line in lines if any(m in str(line) for m in DEPENDENCY_MARKERS)]
+    return check_row('Agent Server start refused with result dependency (journal)', bool(found),
+                     found[-2:])
+
+
+def quiesce_drill_checks(obs, ready, create):
+    """A failing quiesce step (E-01.2.2 variant E): the server does not start."""
+    step = _unit(obs, DRILL_QUIESCE_UNIT)
+    return [
+        check_row('quiesce step failed', step.get('ActiveState') == 'failed' or
+                  step.get('Result') not in (None, '', 'success'),
+                  {k: step.get(k) for k in ('ActiveState', 'SubState', 'Result')}),
+        check_row('Agent Server not running', _unit(obs, DRILL_SERVER_UNIT).get('ActiveState') != 'active',
+                  {k: _unit(obs, DRILL_SERVER_UNIT).get(k) for k in ('ActiveState', 'SubState', 'Result')}),
+        dependency_row(obs),
+        check_row(f'no listener on {DRILL_LISTENER}', not _listening(obs), obs.get('listeners')),
+        check_row('no agent-server process in its unit', not _server_processes(obs),
+                  _server_processes(obs)),
+        check_row('GET /ready gets no HTTP answer', not _reached(ready),
+                  {k: ready.get(k) for k in ('status', 'error')}),
+        check_row('POST /api/conversations gets no HTTP answer (no conversation)',
+                  not _reached(create), {k: create.get(k) for k in ('status', 'error')}),
     ]
 
 
@@ -10639,7 +10766,7 @@ def drill_fail_closed(ctx, name, steps, chan, reboot):
         report = facts()
         hexes = [conversation_hex(c) for c in report.get('containers') or []]
         cleanup = {}
-        for key in ['control'] + [k for k in DRILL_IDS if k.startswith(('key-', 'guard-'))]:
+        for key in ['control'] + [k for k in DRILL_IDS if k.startswith(('key-', 'guard-', 'quiesce-'))]:
             got, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{DRILL_IDS[key]}',
                                'timeout': 300})
             cleanup[key] = got.get('status')
@@ -10650,8 +10777,49 @@ def drill_fail_closed(ctx, name, steps, chan, reboot):
 
     for variant in DRILL_KEY_VARIANTS:
         steps.run(f'key check fails closed ({variant})', lambda v=variant: key_drill(v))
+    def quiesce_drill(variant):
+        """E-01.2.2 slice (c), variant E: a drop-in breaks the quiesce step; a server restart
+        and then a guest boot must leave the server not started (result dependency, no
+        listener, no process); after the restore it serves again."""
+        api, _, req = chan()
+        key = f'quiesce-{variant}'
+        broken = _detail(req('quiesce-break', {'variant': variant}))
+        restart = restart_summary(_detail(req('server-restart')))
+        after_restart, settled = wait_until(observe, _settled, DRILL_SETTLE_S)
+        ready, create = _call(api, ready_req, create_req(key))
+        checks = [dict(r, check='after a server restart: ' + r['check'])
+                  for r in quiesce_drill_checks(after_restart, ready, create)]
+        checks.append(check_row('after a server restart: systemctl restart reported the failure',
+                                restart.get('rc') != 0, {k: restart.get(k) for k in ('rc', 'stderr')}))
+        boots = reboot()
+        boot, settled2 = wait_until(observe, _settled, DRILL_SETTLE_S)
+        api, _, req = chan()
+        ready_b, create_b = _call(api, ready_req, create_req(key))
+        checks += [dict(r, check='after a guest boot: ' + r['check'])
+                   for r in quiesce_drill_checks(boot, ready_b, create_b)]
+        checks.append(check_row('units settled', settled and settled2, None))
+        restored = _detail(req('quiesce-restore'))
+        again = restart_summary(_detail(req('server-restart')))
+        post, _ = wait_until(observe, lambda o: _settled(o) and
+                             _unit(o, DRILL_SERVER_UNIT).get('ActiveState') == 'active', DRILL_SETTLE_S)
+        ready2, = _call(api, ready_req)
+        restore = restored_checks(post, ready2) + [
+            check_row('quiesce drop-in absent', post.get('quiesce_dropin_sha256') is None,
+                      post.get('quiesce_dropin_sha256')),
+            check_row('quiesce step succeeded at the restart',
+                      _unit(post, DRILL_QUIESCE_UNIT).get('Result') == 'success',
+                      _unit(post, DRILL_QUIESCE_UNIT).get('Result'))]
+        ok = all(c['ok'] for c in checks)
+        return ok and all(c['ok'] for c in restore), {
+            'variant': variant, 'verdict': 'PASS' if ok else 'FAIL', 'break': broken,
+            'restart': restart, 'reboot': boots, 'checks': checks, 'restore': restored,
+            'restart_after_restore': again, 'restore_checks': restore,
+            'observed': {'after_restart': after_restart, 'boot': boot, 'restored': post}}
+
     for variant in DRILL_GUARD_VARIANTS:
         steps.run(f'guard fails closed ({variant})', lambda v=variant: guard_drill(v))
+    for variant in DRILL_QUIESCE_VARIANTS:
+        steps.run(f'quiesce step fails closed ({variant})', lambda v=variant: quiesce_drill(v))
     steps.run('positive control: create with every control in place', control_create, always=True)
 
 
@@ -10902,7 +11070,25 @@ def state_cycle_verdict(baseline, cycle, marker):
                               state == 'absent', {marker: state}))
     if not all(r['ok'] for r in rows):
         return 'steered', rows
+    if cycle.get('quarantined'):
+        return 'quarantined', rows
     return ('unknown' if shape is None else 'unchanged'), rows
+
+
+def quiesce_summary(req):
+    """The quiesce step's summary of the server's last start (slice (c)), or None when the
+    guest has no quiesce step (slice (b)'s tooling against an older seed)."""
+    result = req('start-window')
+    if not result.get('ok'):
+        return None
+    return ((result.get('detail') or {}).get('last_run') or {}).get('summary')
+
+
+def quarantined_reason(summary, hex_id):
+    for entry in (summary or {}).get('quarantined') or []:
+        if isinstance(entry, dict) and entry.get('id') == hex_id:
+            return entry.get('reason') or 'quarantined'
+    return None
 
 
 def drill_stored_state(ctx, name, steps, chan, limit=None):
@@ -10938,11 +11124,18 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
                     raise Refused('DRILL', f'state-alter: {result.get("error")}')
             entry['applied'] = applied
             entry['restart'] = restart_server(req)
+            entry['quiesce'] = quiesce_summary(req)
+            entry['quarantined'] = quarantined_reason(entry['quiesce'], hex_id)
             marker = (alteration or {}).get('marker')
             obs = observe([marker] if marker else [])
             entry['server_processes'] = (obs.get('agent_server') or {}).get('processes') or []
             entry['journal'] = journal_hints(obs, hex_id, cid)
             entry['view'] = server_view(api, cid)
+            if entry['quarantined']:
+                # slice (c): the quiesce step moved the record aside before the server started;
+                # a reopen would make Moby create an empty bind source, so none is sent
+                entry['marker'] = obs.get('paths')
+                return entry
             reopened, = _call(api, {'method': 'POST', 'path': base + '/runtime/reprovision',
                                     'timeout': 600})
             entry['reopen'] = {k: reopened.get(k) for k in ('status', 'seconds', 'body')}
@@ -10954,6 +11147,8 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
             entry['marker'] = obs2.get('paths')
             entry['view_after_reopen'] = server_view(api, cid)
         finally:
+            if entry.get('quarantined'):
+                entry['returned'] = _detail(req('quarantine-return', {'hex': hex_id}))
             entry['rollback'] = rollback(api, req)
         return entry
 
@@ -11087,7 +11282,7 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
         return written and not entry['journal'] and not created and restored(entry), entry
 
     def alterations():
-        rows, steering, unknown = [], [], []
+        rows, steering, unknown, quarantined = [], [], [], []
         todo = memo['alterations'][:limit] if limit is not None else memo['alterations']
         for alt in todo:
             log(f'drill stored-state: alteration {alt["n"] + 1}/{len(todo)}')
@@ -11103,6 +11298,8 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
             rows.append(row)
             if verdict == 'steered':
                 steering.append(alt['n'])
+            elif verdict == 'quarantined':
+                quarantined.append(alt['n'])
             elif verdict == 'unknown':
                 unknown.append(alt['n'])
             if not back:
@@ -11111,6 +11308,9 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
         memo['rows'] = rows
         return not steering and not unknown and all(r['restored'] for r in rows), {
             'alterations': len(todo), 'run': len(rows), 'steering': steering, 'unknown': unknown,
+            'quarantined': quarantined,
+            'rewritten_by_quiesce': [r['n'] for r in rows if hex_id in
+                                     (((r.get('cycle') or {}).get('quiesce') or {}).get('rewritten') or [])],
             'rows': rows}
 
     steps.run('create, stop and read the stored conversation', setup)
@@ -11130,6 +11330,386 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
         return deleted.get('status') == 200 and discarded.get('ok'), {
             'delete': deleted.get('status'), 'snapshot_discarded': discarded.get('detail')}
     steps.run('delete the drill conversation', cleanup, always=True)
+    return memo
+
+
+# ---------------------------------------------------------------- F-2 closed (slice (c))
+
+F2_HOME = '/srv/scratch/openhands/home'
+F2_REMOVAL_ACTIONS = ('destroy', 'die', 'kill', 'stop')
+F2_RULE = ('FAIL on any of: a Resumed conversation, error_recovering_running_conversation or '
+           "Confirmation policy set to line in the server's start invocation; an "
+           'owner_lease.json written by the outer server; any path created outside the '
+           "conversation's three binds and the declared stores (in particular under "
+           f'{F2_HOME}); execution_status running surviving the quiesce step; any container '
+           "event between the step's end and the server's ExecStart, or a container left by "
+           "the step; the quiesce unit's result not success while the server is active. PASS "
+           'only when every variant passes with its control.')
+
+
+def _file_shas(state):
+    return {e['path']: e.get('sha256') for e in (state or {}).get('entries') or []
+            if e.get('kind') == 'file'}
+
+
+def _record_paths(state):
+    return sorted(e['path'] for e in (state or {}).get('entries') or [])
+
+
+def f2_rule_rows(hex_id, window, obs, before, after, home_before, marker=None, record_paths=True):
+    """The F-2 closed decision rule for one server start (fixed before observation)."""
+    last = ((window or {}).get('last_run') or {}).get('summary') or {}
+    events = (window or {}).get('events') or {}
+    between = events.get('quiesce_exit_to_server_exec_start')
+    q_unit, s_unit = (window or {}).get('quiesce_unit') or {}, (window or {}).get('server_unit') or {}
+    times = (window or {}).get('times') or {}
+    lease_b = _file_shas(before).get('owner_lease.json')
+    lease_a = _file_shas(after).get('owner_lease.json') if after is not None else lease_b
+    home_now = (((obs or {}).get('paths') or {}).get(F2_HOME) or {}).get('entries')
+    status = (((after or {}).get('content') or {}).get('base_state.json') or {}).get('execution_status') \
+        if after is not None else None
+    rows = [
+        check_row('no resume line in the server\'s start invocation', not journal_hints(obs),
+                  journal_hints(obs)),
+        check_row('no owner_lease.json written by the outer server', lease_a == lease_b,
+                  {'before': lease_b, 'after': lease_a}),
+        check_row(f'no new path under {F2_HOME}', home_now is not None and home_now == home_before,
+                  {'before': home_before, 'after': home_now}),
+        check_row('execution_status running did not survive the quiesce step', status != 'running',
+                  status if after is not None else 'record moved aside (quarantine)'),
+        check_row("no container between the step's end and the server's ExecStart; none left by "
+                  'the step', isinstance(between, list) and not between and
+                  last.get('containers_remaining') == 0 and
+                  bool(times.get('quiesce_exit')) and bool(times.get('server_exec_start')) and
+                  times['quiesce_exit'] <= times['server_exec_start'],
+                  {'events': between, 'containers_remaining': last.get('containers_remaining'),
+                   'times': times}),
+        check_row('the quiesce unit succeeded while the server is active',
+                  q_unit.get('Result') == 'success' and last.get('ok') is True and
+                  s_unit.get('ActiveState') == 'active',
+                  {'quiesce': q_unit.get('Result'), 'summary_ok': last.get('ok'),
+                   'server': s_unit.get('ActiveState')}),
+    ]
+    if marker:
+        state = (((obs or {}).get('paths') or {}).get(marker) or {}).get('state')
+        rows.append(check_row('the stored working directory was not created', state == 'absent',
+                              {marker: state}))
+    if record_paths and after is not None:
+        rows.append(check_row('no new path in the record directory', set(_record_paths(after)) <=
+                              set(_record_paths(before)),
+                              sorted(set(_record_paths(after)) - set(_record_paths(before)))))
+    return rows
+
+
+def drill_f2_closed(ctx, name, steps, chan, reboot):
+    """E-01.2.2 slice (c): the 'F-2 closed' drill. Variants A (the helper writes the start-up
+    pair), B1 (the job writes it; the runtime stops normally), B2 (the job writes it; root
+    force-kills the container), C (the job rewrites it in a loop while the server restarts with
+    its container alive), D (an idle record is retained), F (a record claims another
+    conversation's id), G (base_state.json a symbolic link, a hard link). Variant E (the step
+    itself fails) is part of the fail-closed drill."""
+    memo = {'rule': F2_RULE, 'variants': {}}
+
+    def observe(paths=()):
+        return _detail(chan()[2]('observe', {'paths': [F2_HOME] + list(paths), 'journal_lines': 60}))
+
+    def home_entries():
+        return ((observe().get('paths') or {}).get(F2_HOME) or {}).get('entries')
+
+    def read(hex_id):
+        return _detail(chan()[2]('state-read', {'hex': hex_id}))
+
+    def create(key, stop=True):
+        api, _, _ = chan()
+        cid = DRILL_IDS[key]
+        created, = _call(api, {'method': 'POST', 'path': '/api/conversations',
+                               'json': drill_body(ctx, cid), 'timeout': 600})
+        if not _status_ok(created):
+            raise Refused('DRILL', f'create {key}: {created.get("status")} {created.get("error")}')
+        stopped = None
+        if stop:
+            stopped, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{cid}/runtime',
+                                   'timeout': 300})
+        return cid, cid.replace('-', ''), {'create': created.get('status'),
+                                           'stop': (stopped or {}).get('status')}
+
+    def started(req, how='restart'):
+        """One server start (systemctl restart, or the server killed and restarted by systemd),
+        then the start's order and the server's journal of that start."""
+        detail = _detail(req('server-kill' if how == 'kill' else 'server-restart'))
+        return restart_summary(detail), _detail(req('start-window'))
+
+    def job_writes(api, cid, hex_id, marker, loop=False):
+        """The job, from inside its own container (uid 999, its conversation-store bind), writes
+        the start-up pair once, or starts a detached loop that rewrites it every 0.2 s."""
+        write = ("import json, time\n"
+                 f"d = '/var/openhands/conversations/{hex_id}'\n"
+                 "def pair():\n"
+                 "    b = json.load(open(d + '/base_state.json'))\n"
+                 "    b['execution_status'] = 'running'\n"
+                 "    open(d + '/base_state.json', 'w').write(json.dumps(b))\n"
+                 "    m = json.load(open(d + '/meta.json'))\n"
+                 f"    m['workspace']['working_dir'] = '{marker}'\n"
+                 "    open(d + '/meta.json', 'w').write(json.dumps(m))\n")
+        if loop:
+            body = write + ("end = time.time() + 900\n"
+                            "while time.time() < end:\n"
+                            "    try:\n"
+                            "        pair()\n"
+                            "    except (OSError, ValueError):\n"
+                            "        pass\n"
+                            "    time.sleep(0.2)\n")
+            script = ("import base64, os, subprocess, sys\n"
+                      f"code = base64.b64decode('{base64.b64encode(body.encode()).decode()}').decode()\n"
+                      "p = subprocess.Popen([sys.executable, '-c', code], start_new_session=True,\n"
+                      "                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                      "print('{\"loop_pid\": %d, \"uid\": %d}' % (p.pid, os.getuid()))\n")
+        else:
+            script = write + "pair()\nimport os\nprint('{\"uid\": %d, \"gid\": %d}' % (os.getuid(), os.getgid()))\n"
+        job, = _call(api, {'method': 'POST', 'path': f'/api/conversations/{cid}/bash/execute_bash_command',
+                           'json': {'command': container_python(script, ''), 'cwd': '/workspace',
+                                    'timeout': 60}, 'timeout': 180})
+        body = job.get('body') if isinstance(job.get('body'), dict) else {}
+        return {'status': job.get('status'), 'exit_code': body.get('exit_code'),
+                'stdout': str(body.get('stdout') or '')[-300:]}
+
+    def verdict(rows, extra):
+        rows = rows + extra
+        return all(r['ok'] for r in rows), rows
+
+    def cleanup(*keys):
+        api, _, req = chan()
+        out = {}
+        for key in keys:
+            cid = DRILL_IDS[key]
+            deleted, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{cid}',
+                                   'timeout': 300})
+            out[key] = deleted.get('status')
+            req('state-discard', {'hex': cid.replace('-', '')})
+        return out
+
+    def variant_a():
+        cid, hex_id, made = create('f2-a')
+        api, _, req = chan()
+        marker = f'{DRILL_MARKER_ROOT}-f2-a'
+        home0 = home_entries()
+        _detail(req('state-snapshot', {'hex': hex_id}))
+        for op in ({'file': 'base_state.json', 'pointer': ['execution_status'], 'value': 'running'},
+                   {'file': 'meta.json', 'pointer': ['workspace', 'working_dir'], 'value': marker}):
+            _detail(req('state-alter', dict(op, hex=hex_id, op='set')))
+        before = read(hex_id)
+        restart, window = started(req)
+        obs = observe([marker])
+        after = read(hex_id)
+        summary = ((window.get('last_run') or {}).get('summary') or {})
+        ok, rows = verdict(f2_rule_rows(hex_id, window, obs, before, after, home0, marker), [
+            check_row('the step rewrote this record (running to error)',
+                      hex_id in (summary.get('rewritten') or []), summary.get('rewritten'))])
+        view = server_view(api, cid)
+        return ok, {'made': made, 'restart': restart, 'window': window, 'checks': rows,
+                    'view': view, 'cleanup': cleanup('f2-a')}
+
+    def variant_b(kill):
+        key = 'f2-b2' if kill else 'f2-b1'
+        cid, hex_id, made = create(key, stop=False)
+        api, _, req = chan()
+        marker = f'{DRILL_MARKER_ROOT}-{key}'
+        home0 = home_entries()
+        job = job_writes(api, cid, hex_id, marker)
+        if kill:
+            stop = _detail(req('container-kill', {'hex': hex_id}))
+        else:
+            stopped, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{cid}/runtime',
+                                   'timeout': 300})
+            stop = {'status': stopped.get('status')}
+        before = read(hex_id)
+        persisted = {'execution_status': ((before.get('content') or {}).get('base_state.json') or {})
+                     .get('execution_status'),
+                     'working_dir': (((before.get('content') or {}).get('meta.json') or {})
+                                     .get('workspace') or {}).get('working_dir')}
+        restart, window = started(req)
+        obs = observe([marker])
+        after = read(hex_id)
+        summary = ((window.get('last_run') or {}).get('summary') or {})
+        wd_after = (((after.get('content') or {}).get('meta.json') or {}).get('workspace') or {}) \
+            .get('working_dir')
+        extra = [check_row('the job wrote the pair (exit 0, as uid 999)', job.get('exit_code') == 0,
+                           job),
+                 check_row('running persisted after the stop (what the step must neutralize)',
+                           persisted['execution_status'] == 'running', persisted),
+                 check_row('the step rewrote this record (running to error)',
+                           hex_id in (summary.get('rewritten') or []), summary.get('rewritten'))]
+        if kill:
+            extra += [check_row('the container was force-killed (no inner shutdown)',
+                                bool(stop.get('containers')) and not stop.get('remaining'), stop),
+                      check_row('the working_dir text survives in meta.json (the kill-race case)',
+                                persisted['working_dir'] == marker and wd_after == marker,
+                                {'after_kill': persisted['working_dir'], 'after_start': wd_after})]
+        ok, rows = verdict(f2_rule_rows(hex_id, window, obs, before, after, home0, marker,
+                                        record_paths=False), extra)
+        return ok, {'made': made, 'job': job, 'stop': stop, 'persisted': persisted,
+                    'restart': restart, 'window': window, 'checks': rows,
+                    'view': server_view(api, cid), 'cleanup': cleanup(key)}
+
+    def variant_c():
+        cid, hex_id, made = create('f2-c', stop=False)
+        api, _, req = chan()
+        marker = f'{DRILL_MARKER_ROOT}-f2-c'
+        home0 = home_entries()
+        job = job_writes(api, cid, hex_id, marker, loop=True)
+        before, _ = wait_until(lambda: read(hex_id), lambda s: (((s.get('content') or {})
+                               .get('base_state.json') or {}).get('execution_status') == 'running'), 30)
+        runs0 = _detail(req('start-window')).get('runs_this_boot')
+        restart, window = started(req, 'kill')
+        obs = observe([marker])
+        after = read(hex_id)
+        summary = ((window.get('last_run') or {}).get('summary') or {})
+        events = window.get('events') or {}
+        cleanup_events = [e for e in events.get('server_exec_start_to_active') or []
+                          if e.get('action') in F2_REMOVAL_ACTIONS]
+        removed = [e for e in events.get('during_quiesce') or [] if e.get('action') == 'destroy']
+        extra = [check_row('the job started its rewrite loop', job.get('exit_code') == 0, job),
+                 check_row('systemd restarted the killed server and ran the step again',
+                           (window.get('runs_this_boot') or 0) > (runs0 or 0) and
+                           int((restart.get('unit') or {}).get('NRestarts') or 0) >= 1,
+                           {'runs_before': runs0, 'runs_after': window.get('runs_this_boot'),
+                            'unit': restart.get('unit')}),
+                 check_row('the step removed the live container (containers removed >= 1)',
+                           (summary.get('containers_removed') or 0) >= 1,
+                           summary.get('containers_removed')),
+                 check_row('the step rewrote this record (records rewritten >= 1)',
+                           hex_id in (summary.get('rewritten') or []), summary.get('rewritten')),
+                 check_row("the server's own start-up cleanup found 0 (no removal event from its "
+                           'ExecStart to active)', isinstance(events.get('server_exec_start_to_active'), list)
+                           and not cleanup_events, events.get('server_exec_start_to_active')),
+                 check_row('control: the event method sees the step\'s removal (destroy during '
+                           'the step)', bool(removed), events.get('during_quiesce'))]
+        ok, rows = verdict(f2_rule_rows(hex_id, window, obs, before, after, home0, marker,
+                                        record_paths=False), extra)
+        return ok, {'made': made, 'job': job, 'restart': restart, 'window': window,
+                    'checks': rows, 'view': server_view(api, cid), 'cleanup': cleanup('f2-c')}
+
+    def variant_d():
+        cid, hex_id, made = create('f2-d')
+        api, _, req = chan()
+        home0 = home_entries()
+
+        def hashes():
+            s = _file_shas(read(hex_id))
+            return {k: s.get(k) for k in ('base_state.json', 'meta.json')}
+        h_stop = hashes()
+        before = read(hex_id)
+        restart, window = started(req)
+        obs = observe()
+        after = read(hex_id)
+        h_restart = hashes()
+        summary = ((window.get('last_run') or {}).get('summary') or {})
+        reopened, = _call(api, {'method': 'POST', 'path': f'/api/conversations/{cid}/runtime/reprovision',
+                                'timeout': 600})
+        h_reopen = hashes()
+        boots = reboot()
+        settled, _ = wait_until(observe, lambda o: _settled(o) and
+                                _unit(o, DRILL_SERVER_UNIT).get('ActiveState') == 'active', DRILL_SETTLE_S)
+        api, _, req = chan()
+        h_boot = hashes()
+        listed, got = _call(api, {'method': 'GET', 'path': '/api/conversations/search?limit=50'},
+                            {'method': 'GET', 'path': f'/api/conversations/{cid}'})
+        ids = [i.get('id') for i in ((listed.get('body') or {}).get('items') or [])
+               if isinstance(i, dict)]
+        extra = [check_row('base_state.json and meta.json sha256 unchanged across the restart, the '
+                           'reopen and the guest restart (F-04.2 retention)',
+                           h_stop == h_restart == h_reopen == h_boot and all(h_stop.values()),
+                           {'stopped': h_stop, 'restart': h_restart, 'reopen': h_reopen,
+                            'guest_restart': h_boot}),
+                 check_row('the step left the idle record unchanged',
+                           hex_id not in (summary.get('rewritten') or []) and
+                           not quarantined_reason(summary, hex_id), summary),
+                 check_row('reopen 200', reopened.get('status') == 200, reopened.get('status')),
+                 check_row('listed and readable after the guest restart',
+                           cid in ids and got.get('status') == 200,
+                           {'listed': cid in ids, 'get': got.get('status')})]
+        ok, rows = verdict(f2_rule_rows(hex_id, window, obs, before, after, home0), extra)
+        return ok, {'made': made, 'restart': restart, 'window': window, 'reboot': boots,
+                    'checks': rows, 'cleanup': cleanup('f2-d')}
+
+    def variant_f():
+        real, real_hex, made_r = create('f2-f-real')
+        foreign, foreign_hex, made_f = create('f2-f-foreign')
+        api, _, req = chan()
+        home0 = home_entries()
+        title = 'aieh-drill-foreign-record'
+        _detail(req('state-snapshot', {'hex': foreign_hex}))
+        for pointer, value in ((['id'], real), (['title'], title)):
+            _detail(req('state-alter', {'hex': foreign_hex, 'file': 'meta.json', 'op': 'set',
+                                        'pointer': pointer, 'value': value}))
+        before_real = read(real_hex)
+        restart, window = started(req)
+        obs = observe([f'/srv/scratch/openhands/conversations/{foreign_hex}'])
+        after_real = read(real_hex)
+        summary = ((window.get('last_run') or {}).get('summary') or {})
+        q = _detail(req('quarantine-list'))
+        got, = _call(api, {'method': 'GET', 'path': f'/api/conversations/{real}'})
+        body = got.get('body') if isinstance(got.get('body'), dict) else {}
+        gone = ((obs.get('paths') or {}).get(f'/srv/scratch/openhands/conversations/{foreign_hex}')
+                or {}).get('state')
+        extra = [check_row('the foreign-id record was quarantined (id-mismatch)',
+                           quarantined_reason(summary, foreign_hex) == 'id-mismatch',
+                           summary.get('quarantined')),
+                 check_row('it left the conversations path and is in the quarantine',
+                           gone == 'absent' and any(e['name'].startswith(foreign_hex + '.')
+                                                    for e in q.get('entries') or []),
+                           {'conversations_path': gone, 'quarantine': q}),
+                 check_row("the real conversation's GET answers from its own record",
+                           got.get('status') == 200 and str(body.get('id')).replace('-', '') == real_hex
+                           and body.get('title') != title,
+                           {'status': got.get('status'), 'id': body.get('id'), 'title': body.get('title')})]
+        ok, rows = verdict(f2_rule_rows(real_hex, window, obs, before_real, after_real, home0), extra)
+        return ok, {'made': [made_r, made_f], 'restart': restart, 'window': window,
+                    'checks': rows, 'cleanup': cleanup('f2-f-real', 'f2-f-foreign')}
+
+    def variant_g(kind):
+        key = f'f2-g-{kind}'
+        cid, hex_id, made = create(key)
+        api, _, req = chan()
+        home0 = home_entries()
+        planted = _detail(req('sentinel-plant', {'hex': hex_id, 'kind': kind}))
+        restart, window = started(req)
+        obs = observe([f'/srv/scratch/openhands/conversations/{hex_id}'])
+        summary = ((window.get('last_run') or {}).get('summary') or {})
+        sentinel = _detail(req('sentinel-check', {'hex': hex_id, 'kind': kind}))
+        gone = ((obs.get('paths') or {}).get(f'/srv/scratch/openhands/conversations/{hex_id}')
+                or {}).get('state')
+        reason = {'symlink': 'link', 'hardlink': 'hard-linked'}[kind]
+        extra = [check_row(f'the record was quarantined ({reason})',
+                           quarantined_reason(summary, hex_id) == reason and gone == 'absent',
+                           {'quarantined': summary.get('quarantined'), 'conversations_path': gone}),
+                 check_row('the planted link was in place before the start',
+                           planted.get('base_is_link') if kind == 'symlink' else
+                           planted.get('base_nlink') == 2, planted),
+                 check_row('nothing outside the record was read (atime) or written (mtime, ctime, '
+                           'size, sha256)', sentinel.get('unread') is True and
+                           sentinel.get('unwritten') is True and sentinel.get('sha256_equal') is True,
+                           {k: sentinel.get(k) for k in ('unread', 'unwritten', 'sha256_equal',
+                                                         'record', 'now')}),
+                 check_row('control: a read of the sentinel moves its atime',
+                           sentinel.get('control_read_moved_atime') is True,
+                           sentinel.get('control_read_moved_atime'))]
+        ok, rows = verdict(f2_rule_rows(hex_id, window, obs, None, None, home0), extra)
+        return ok, {'made': made, 'planted': planted, 'restart': restart, 'window': window,
+                    'checks': rows, 'cleanup': cleanup(key)}
+
+    for label, func in (('A: the helper writes the start-up pair', variant_a),
+                        ('B1: the job writes the pair; the runtime stops normally',
+                         lambda: variant_b(False)),
+                        ('B2: the job writes the pair; root force-kills the container',
+                         lambda: variant_b(True)),
+                        ('C: the job rewrites the pair in a loop; the server restarts with its '
+                         'container alive', variant_c),
+                        ('D: an idle record is retained (F-04.2)', variant_d),
+                        ('F: a record claims another conversation\'s id', variant_f),
+                        ('G: base_state.json a symbolic link', lambda: variant_g('symlink')),
+                        ('G: base_state.json a hard link', lambda: variant_g('hardlink'))):
+        memo['variants'][label] = steps.run(label, func)
     return memo
 
 
@@ -11450,6 +12030,8 @@ def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None
         memo = drill_stored_state(ctx, name, steps, chan, limit)
     elif kind == 'root-scan':
         memo = drill_root_scan(ctx, name, idir, steps, chan, canaries, raw)
+    elif kind == 'f2-closed':
+        memo = drill_f2_closed(ctx, name, steps, chan, reboot)
     else:
         if admitted_fn is None:
             raise Refused('REFUSED', 'admitted-create runs from integrations/dispatch/tests/'
@@ -11676,8 +12258,8 @@ def main(argv=None):
                   'drill'):
             p.add_argument('--out', help='also write the record to this new file')
         if op == 'drill':
-            p.add_argument('--kind', required=True, choices=DRILL_KINDS[:3],
-                           help='E-01.2.2 slice (b), TEST ONLY, on a drill instance')
+            p.add_argument('--kind', required=True, choices=DRILL_KINDS[:4],
+                           help='E-01.2.2 slices (b) and (c), TEST ONLY, on a drill instance')
             p.add_argument('--canaries', help='root-scan: the canary set create planted')
             p.add_argument('--raw', action='store_true',
                            help='root-scan: also count occurrences on the raw block devices')

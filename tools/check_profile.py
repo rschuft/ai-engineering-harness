@@ -506,8 +506,10 @@ STORAGE_ROLES = {'root', 'scratch', 'configuration-medium'}
 CONTRACT_SHARE_FSTYPES = {'9p', 'virtiofs', 'drvfs', 'fuse.sshfs', 'cifs', 'nfs', 'smb3'}
 DIRECTORY_ROLES = ('exchange', 'scratch')
 # Directories present only on a provisioned instance (F-04.1): Moby's data root and the
-# root step's state. Each carries "provisioned_only": true.
-PROVISIONED_DIRECTORY_ROLES = ('moby-data-root', 'provisioning-state', 'facts-request')
+# root step's state; E-01.2.2: the quiesce step's quarantine. Each carries
+# "provisioned_only": true.
+PROVISIONED_DIRECTORY_ROLES = ('moby-data-root', 'provisioning-state', 'facts-request',
+                               'agent-server-quarantine')
 # The Agent Server's scratch directories (F-04.1 slice (c)): several, each provisioned_only,
 # on the scratch disk and owned by its service user.
 AGENT_SERVER_ROLE = 'agent-server'
@@ -1001,6 +1003,8 @@ def check_agent_server(report, profile, root, conf):
         check_admission(report, profile, root, conf, server)
     if 'jobs' in server:
         check_jobs(report, conf, server)
+    if 'dependencies' in service or 'quiesce' in server:
+        check_quiesce(report, profile, root, server)
     try:
         body = json.loads((root / fixture['path']).read_text(encoding='utf-8'))
     except (OSError, ValueError, KeyError, TypeError):
@@ -1303,6 +1307,147 @@ JOB_CI_CONSTRAINTS = ['no-engine-endpoint', 'no-privileged-credential', 'not-pri
                       'no-host-path']
 JOB_CI_CARRIED_TO = ('Q-02.2.1', 'Q-02.2.2', 'Q-02.3.2')
 JOB_ENGINE_ENV = re.compile(r'(?i)^(DOCKER|CONTAINERD|CONTAINER_HOST|PODMAN|BUILDKIT)')
+
+
+# E-01.2.2 (findings F-1 and F-2): the server's unit dependencies and the quiesce step that
+# runs before every server start.
+QUIESCE_UNIT = 'aieh-agent-server-quiesce.service'
+QUIESCE_ACTIONS = ['remove-containers', 'quiesce-records']
+QUIESCE_RECORD_FILES = ['meta.json', 'base_state.json']
+QUIESCE_REWRITE = {'field': 'execution_status', 'from': 'running', 'to': 'error'}
+QUARANTINE_ROLE = 'agent-server-quarantine'
+
+
+def seed_files(root, profile):
+    """{path: content} of the user-data template's write_files block scalars (two-space list
+    items, six-space content), read without a YAML parser; {} when it cannot be read."""
+    entry = (((profile.get('boot_inputs') or {}).get('seed') or {}).get('templates') or {}) \
+        .get('user-data') or {}
+    try:
+        text = (root / entry['path']).read_text(encoding='utf-8')
+    except (OSError, KeyError, TypeError, UnicodeDecodeError):
+        return {}
+    out, path, body, in_body = {}, None, [], False
+    for line in text.split('\n'):
+        if line.startswith('  - path: '):
+            if path:
+                out[path] = '\n'.join(body)
+            path, body, in_body = line[len('  - path: '):], [], False
+        elif path and line.startswith('    content: |'):
+            in_body = True
+        elif path and in_body and (line.startswith('      ') or line == ''):
+            body.append(line[6:])
+        elif path and in_body:
+            out[path], path, in_body = '\n'.join(body), None, False
+    if path:
+        out[path] = '\n'.join(body)
+    return out
+
+
+def unit_directives(text):
+    """{key: [tokens]} of a systemd unit's directives (each value split on whitespace)."""
+    out = {}
+    for line in str(text).splitlines():
+        if line.startswith(('#', ';', '[')):
+            continue
+        key, sep, value = line.partition('=')
+        if sep:
+            out.setdefault(key.strip(), []).extend(value.split())
+    return out
+
+
+def check_quiesce(report, profile, root, server):
+    """provisioning.agent_server.service.dependencies and .quiesce (E-01.2.2): the server
+    Requires and starts After Moby and the quiesce step (never Wants=); the step is a root
+    oneshot without RemainAfterExit, after Moby and before the server, with its two actions in
+    order, the running-to-error rewrite, a root-only quarantine on the conversations path's
+    file system and the zero-container invariant; the seed template's units say the same."""
+    label = 'provisioning.agent_server'
+    service = server.get('service') or {}
+    unit = service.get('unit')
+    deps, q = service.get('dependencies'), server.get('quiesce')
+    if not isinstance(deps, dict) or not isinstance(q, dict):
+        report.fail(f'{label}: service.dependencies and quiesce are declared together (E-01.2.2)')
+        return
+    qunit, script = q.get('unit'), str(q.get('script', ''))
+    want = ['docker.service', qunit]
+    for key in ('requires', 'after'):
+        if not isinstance(deps.get(key), list) or not set(want) <= set(deps[key]):
+            report.fail(f'{label}.service.dependencies.{key}: must name docker.service and '
+                        'the quiesce unit')
+    if deps.get('wants') != [] or 'binds_to' in deps or 'requisite' in deps:
+        report.fail(f'{label}.service.dependencies: no Wants=, BindsTo= or Requisite= '
+                    '(finding F-1: with Wants= the server served with Moby down)')
+    if qunit != QUIESCE_UNIT or not re.match(r'^/usr/local/sbin/[a-z0-9-]+$', script):
+        report.fail(f'{label}.quiesce: unit {QUIESCE_UNIT} and a root script under /usr/local/sbin')
+    settings = q.get('unit_settings') or {}
+    if settings.get('Type') != 'oneshot' or settings.get('RemainAfterExit') != 'no' or \
+            'docker.service' not in (settings.get('Requires') or []) or \
+            'docker.service' not in (settings.get('After') or []) or \
+            unit not in (settings.get('Before') or []):
+        report.fail(f'{label}.quiesce.unit_settings: Type oneshot, RemainAfterExit no (so every '
+                    'server start runs it again), Requires and After docker.service, Before the '
+                    'server unit')
+    guard = (((server.get('admission') or {}).get('network') or {}).get('guard') or {}).get('unit')
+    order = ([guard] if guard else []) + ['docker.service', qunit, unit]
+    if q.get('order') != order:
+        report.fail(f'{label}.quiesce.order: must be {order}')
+    actions = [a.get('id') for a in q.get('actions') or [] if isinstance(a, dict)]
+    if actions != QUIESCE_ACTIONS or not all(a.get('rule') for a in q['actions']):
+        report.fail(f'{label}.quiesce.actions: exactly {QUIESCE_ACTIONS}, in this order, each '
+                    'with its rule (containers first, so no job writes while records are read)')
+    if q.get('record_files') != QUIESCE_RECORD_FILES or q.get('rewrite') != QUIESCE_REWRITE:
+        report.fail(f'{label}.quiesce: record_files {QUIESCE_RECORD_FILES} and the rewrite '
+                    f'{QUIESCE_REWRITE}')
+    size = q.get('file_max_bytes')
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        report.fail(f'{label}.quiesce.file_max_bytes: a positive integer')
+    if 'zero containers' not in str(q.get('invariant', '')) or not q.get('journal') or \
+            not q.get('fail_closed'):
+        report.fail(f'{label}.quiesce: the invariant (zero containers before the server\'s '
+                    'ExecStart), the journal rule and the fail-closed rule')
+    quarantine = q.get('quarantine') or {}
+    qpath = str(quarantine.get('path', ''))
+    storage = profile.get('guest_storage') or {}
+    dirs = [d for d in storage.get('directories') or [] if isinstance(d, dict)]
+    declared = [d for d in dirs if d.get('role') == QUARANTINE_ROLE]
+    conv = str(((server.get('config') or {}).get('content') or {}).get('conversations_path', ''))
+    conv_dir = next((d for d in dirs if d.get('path') == conv), {})
+    server_dirs = [str(d.get('path')) for d in dirs if d.get('role') == AGENT_SERVER_ROLE]
+    if len(declared) != 1 or {k: declared[0].get(k) for k in ('path', 'owner', 'group', 'mode')} != \
+            {'path': qpath, 'owner': 'root', 'group': 'root', 'mode': '700'} or \
+            {k: quarantine.get(k) for k in ('owner', 'group', 'mode')} != \
+            {'owner': 'root', 'group': 'root', 'mode': '700'}:
+        report.fail(f'{label}.quiesce.quarantine: root:root 700, the one guest_storage directory '
+                    f'of role {QUARANTINE_ROLE}')
+    elif not conv_dir or declared[0].get('mount') != conv_dir.get('mount') or \
+            any(qpath == p or qpath.startswith(p.rstrip('/') + '/') for p in server_dirs):
+        report.fail(f'{label}.quiesce.quarantine: on the mount of the conversations path (a '
+                    'rename, never a copy) and outside every agent-server directory (the '
+                    'server must not reach it)')
+    files = seed_files(root, profile)
+    server_unit = unit_directives(files.get(f'/etc/systemd/system/{unit}', ''))
+    step_unit = unit_directives(files.get(f'/etc/systemd/system/{qunit}', ''))
+    if not server_unit or not step_unit or script not in files:
+        report.fail(f'{label}.quiesce: the seed template must carry {unit}, {qunit} and {script}')
+        return
+    if not set(want) <= set(server_unit.get('Requires', [])) or \
+            not set(want) <= set(server_unit.get('After', [])) or \
+            any(server_unit.get(k) for k in ('Wants', 'BindsTo', 'Requisite')):
+        report.fail(f'{label}.service.dependencies: the seed template\'s {unit} differs')
+    if step_unit.get('Type') != ['oneshot'] or step_unit.get('RemainAfterExit', ['no']) != ['no'] or \
+            'docker.service' not in step_unit.get('Requires', []) or \
+            'docker.service' not in step_unit.get('After', []) or \
+            unit not in step_unit.get('Before', []) or script not in step_unit.get('ExecStart', []):
+        report.fail(f'{label}.quiesce.unit_settings: the seed template\'s {qunit} differs')
+    for option in settings.get('hardening') or []:
+        key, _, value = str(option).partition('=')
+        if step_unit.get(key) != value.split():
+            report.fail(f'{label}.quiesce.unit_settings.hardening: {option} is not in the seed '
+                        f'template\'s {qunit}')
+    if f"QUARANTINE = '{qpath}'" not in files[script] or \
+            not re.search(rf'(?m)^FILE_MAX = {size}\b', files[script]):
+        report.fail(f'{label}.quiesce: the seeded script\'s quarantine or size bound differs')
 
 
 def check_jobs(report, conf, server):

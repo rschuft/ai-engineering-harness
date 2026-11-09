@@ -3036,6 +3036,33 @@ def admission_facts():
                          'exec_start_pre': True}}
 
 
+QUIESCE = PCONF['agent_server']['quiesce']
+
+
+def quiesce_facts():
+    """What the seeded quiesce_facts reports at boot for a step that ran before the server
+    (E-01.2.2): systemctl show prints unit lists space-separated, with implicit units too."""
+    return {
+        'unit': {'LoadState': 'loaded', 'ActiveState': 'inactive', 'SubState': 'dead',
+                 'Result': 'success', 'Type': 'oneshot', 'RemainAfterExit': 'no',
+                 'Requires': 'system.slice docker.service sysinit.target',
+                 'After': 'systemd-journald.socket docker.service system.slice basic.target',
+                 'Before': 'aieh-agent-server.service shutdown.target', 'ExecMainStatus': '0',
+                 'ExecMainStartTimestampMonotonic': '9100000',
+                 'ExecMainExitTimestampMonotonic': '9400000'},
+        'server': {'Requires': 'docker.service system.slice aieh-agent-server-quiesce.service',
+                   'Wants': '', 'After': 'aieh-agent-server-quiesce.service docker.service basic.target',
+                   'ExecMainStartTimestampMonotonic': '9800000'},
+        'script': {'path': QUIESCE['script'], 'state': 'file', 'owner': 'root', 'group': 'root',
+                   'mode': '755'},
+        'quarantine': {'path': QUIESCE['quarantine']['path'], 'state': 'directory',
+                       'owner': 'root', 'group': 'root', 'mode': '700'},
+        'runs_this_boot': 1,
+        'last': {'ok': True, 'containers_removed': 0, 'containers_remaining': 0, 'entries': 0,
+                 'rewritten': [], 'quarantined': [], 'unparseable': [], 'unchanged': 0,
+                 'not_a_record': 0}}
+
+
 def moby_facts(boot_id='boot-1', **override):
     facts = {
         'schema': guest.MOBY_FACTS_SCHEMA, 'boot_id': boot_id, 'collected_at': 'x',
@@ -3065,6 +3092,7 @@ def moby_facts(boot_id='boot-1', **override):
         'ipv6': {'docker0_disable_ipv6': '1', 'addresses': []},
         'agent_server': agent_server_facts(),
         'admission': admission_facts(),
+        'quiesce': quiesce_facts(),
         'secret_occurrences_in_report': {'OH_SECRET_KEY': 0, 'OH_SESSION_API_KEYS_0': 0},
     }
     facts.update(override)
@@ -3212,7 +3240,8 @@ def provisioned_observation(record, token='one'):
                                  '/var/lib/aieh/facts-request|root|agent|730|directory|/')
     g['storage_dirs']['out'] += ''.join(
         f"\n{d['path']}|{d['owner']}|{d['group']}|{d['mode']}|directory|/srv/scratch"
-        for d in PROFILE['guest_storage']['directories'] if d['role'] == 'agent-server')
+        for d in PROFILE['guest_storage']['directories']
+        if d['role'] in ('agent-server', 'agent-server-quarantine'))
     g['socket_inventory']['out'] = '\n'.join(RECON_SOCKETS + MOBY_SOCKETS + ['end'])
     g['unix_sockets']['out'] += ''.join(f'\nu_str LISTEN 0      4096 {s} {7000 + i} * 0'
                                         for i, s in enumerate(MOBY_SOCKETS))
@@ -3259,9 +3288,9 @@ class ProvisionedInspect(LaunchRecord):
         props = self.props()
         self.assertEqual(self.failing(), [])
         self.assertEqual(props[guest.PROVISIONING_PROPERTY]['verdict'], 'PASS')
-        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 23)
-        self.assertIn(guest.EGRESS_CHECK, {c['check'] for c in
-                                           props[guest.PROVISIONING_PROPERTY]['checks']})
+        self.assertEqual(len(props[guest.PROVISIONING_PROPERTY]['checks']), 24)
+        self.assertTrue({guest.EGRESS_CHECK, guest.QUIESCE_CHECK} <= {
+            c['check'] for c in props[guest.PROVISIONING_PROPERTY]['checks']})
         names = {c['check'] for c in props['profiles P6']['checks']}
         self.assertTrue({'guest Moby sockets', 'agent cannot reach Moby'} <= names)
 
@@ -4432,6 +4461,52 @@ class EgressInspect(AdmissionInspect):
         del profile['provisioning']['agent_server']['admission']['network']['egress_guard']
         checks = guest.admission_check(profile, self.obs())
         self.assertEqual([c['check'] for c in checks], [guest.ADMISSION_CHECK])
+
+
+class QuiesceInspect(unittest.TestCase):
+    """E-01.2.2: the inspect check of the quiesce step and the server's dependencies, from
+    the boot facts."""
+
+    def verdict(self, profile=PROFILE, **change):
+        facts = moby_facts()
+        for key, value in change.items():
+            part, _, field = key.partition('__')
+            if field:
+                facts['quiesce'][part] = dict(facts['quiesce'][part], **{field: value})
+            else:
+                facts['quiesce'][part] = value
+        checks = guest.quiesce_check(profile, {'guest': {'moby_facts': {'rc': 0, 'out': json.dumps(facts)}}})
+        self.assertEqual([c['check'] for c in checks], [guest.QUIESCE_CHECK])
+        return checks[0]['verdict']
+
+    def test_a_step_that_ran_first_passes(self):
+        self.assertEqual(self.verdict(), 'PASS')
+        self.assertEqual(guest.CHECK_CLASSES[(guest.PROVISIONING_PROPERTY, guest.QUIESCE_CHECK)][0],
+                         guest.STABLE)
+
+    def test_each_departure_fails(self):
+        for change in ({'unit__Result': 'exit-code'}, {'unit__RemainAfterExit': 'yes'},
+                       {'unit__Type': 'simple'}, {'unit__LoadState': 'not-found'},
+                       {'unit__Requires': 'system.slice'}, {'unit__After': 'basic.target'},
+                       {'unit__Before': 'shutdown.target'},
+                       {'server__Requires': 'docker.service system.slice'},
+                       {'server__Wants': 'docker.service'},
+                       {'server__After': 'docker.service'},
+                       {'unit__ExecMainExitTimestampMonotonic': '9900000'},
+                       {'unit__ExecMainExitTimestampMonotonic': '0'},
+                       {'script__mode': '775'}, {'quarantine__mode': '755'},
+                       {'quarantine__owner': 'openhands'}, {'quarantine__state': 'absent'},
+                       {'last__ok': False}, {'last__containers_remaining': 1},
+                       {'runs_this_boot': 0}, {'last': None}):
+            self.assertEqual(self.verdict(**change), 'FAIL', change)
+        self.assertEqual(guest.quiesce_check(PROFILE, {'guest': {}})[0]['verdict'], 'FAIL')
+        # the counts of a run vary between boots and are not compared
+        self.assertEqual(self.verdict(last__containers_removed=3, last__rewritten=['a' * 32]), 'PASS')
+
+    def test_no_declaration_no_check(self):
+        profile = copy.deepcopy(PROFILE)
+        del profile['provisioning']['agent_server']['quiesce']
+        self.assertEqual(guest.quiesce_check(profile, {'guest': {}}), [])
 
 
 JOBS = AS['jobs']

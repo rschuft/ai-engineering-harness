@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -108,7 +109,9 @@ class SeededRootStep(unittest.TestCase):
             '/etc/systemd/system/aieh-egress-route.path',
             '/etc/systemd/system/aieh-egress-route.service',
             '/etc/systemd/system/docker.service.d/10-aieh-container-guard.conf',
-            '/usr/local/sbin/aieh-agent-server-keycheck'})
+            '/usr/local/sbin/aieh-agent-server-keycheck',
+            '/usr/local/sbin/aieh-agent-server-quiesce',
+            '/etc/systemd/system/aieh-agent-server-quiesce.service'})
         self.assertIn('  - path: /etc/aieh/provision.json\n    owner: root:root\n'
                       "    permissions: '0600'\n    encoding: b64\n"
                       '    content: "{{provision_manifest}}"\n', TEMPLATE)
@@ -641,6 +644,231 @@ class AdmissionSeed(unittest.TestCase):
             self.assertIn(word, counters)
         self.assertIn("data['admission'] = admission_facts()", SCRIPT)
         self.assertIn("'admission': admission_counters(),", SCRIPT)
+
+
+QUIESCE = PCONF['agent_server']['quiesce']
+QUIESCE_SCRIPT = FILES[QUIESCE['script']]
+
+
+def quiesce_module():
+    """The seeded quiesce step's definitions, executed (not its main) in a fresh namespace."""
+    namespace = {'__name__': 'aieh_quiesce_test'}
+    exec(compile(QUIESCE_SCRIPT, 'aieh-agent-server-quiesce', 'exec'), namespace)
+    return namespace
+
+
+class QuiesceSeed(unittest.TestCase):
+    """E-01.2.2 (findings F-1, F-2): the seeded quiesce step that runs before every Agent
+    Server start, its unit, the server's dependencies on it, and the step's decisions (ruling
+    R1) over files in a temporary directory: links, hard links, a wrong owner, an id that is
+    not the directory's, unparseable JSON and the running rewrite."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.q = quiesce_module()
+        cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-quiesce-'))
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
+
+    def path(self, name, data=b'{}'):
+        p = self.tmp / f'{self.id().rsplit(".", 1)[-1]}-{name}'
+        p.write_bytes(data)
+        return p
+
+    def owner(self, p):
+        st = os.lstat(p)
+        return st.st_uid, st.st_gid
+
+    # ------------------------------------------------------------ the seed and the profile
+
+    def test_script_and_units_are_seeded_as_declared(self):
+        ast.parse(QUIESCE_SCRIPT)
+        self.assertTrue(QUIESCE_SCRIPT.startswith('#!/usr/bin/python3\n'))
+        QUIESCE_SCRIPT.encode('ascii')
+        q = self.q
+        self.assertEqual(q['QUARANTINE'], QUIESCE['quarantine']['path'])
+        self.assertEqual(q['FILE_MAX'], QUIESCE['file_max_bytes'])
+        self.assertEqual(q['SERVICE_USER'], PCONF['agent_server']['user']['name'])
+        self.assertEqual(q['CONFIG'], PCONF['agent_server']['config']['path'])
+        self.assertEqual([q['META'], q['BASE']], QUIESCE['record_files'])
+        self.assertEqual((q['RUNNING'], q['ERROR']), (QUIESCE['rewrite']['from'], QUIESCE['rewrite']['to']))
+        settings = QUIESCE['unit_settings']
+        lines = unit(QUIESCE['unit'])
+        self.assertIn('Type=oneshot', lines)
+        self.assertFalse([l for l in lines if l.startswith('RemainAfterExit')])
+        self.assertIn(f"Before={PCONF['agent_server']['service']['unit']}", lines)
+        self.assertIn('Requires=docker.service', lines)
+        self.assertIn('After=docker.service', lines)
+        self.assertIn(f"ExecStart=/usr/bin/python3 -I {QUIESCE['script']}", lines)
+        self.assertIn('ConditionFileNotEmpty=/etc/aieh/provision.json', lines)
+        for option in settings['hardening']:
+            self.assertIn(option, lines)
+        self.assertNotIn('[Install]', FILES[f"/etc/systemd/system/{QUIESCE['unit']}"])
+        server = unit(PCONF['agent_server']['service']['unit'])
+        deps = PCONF['agent_server']['service']['dependencies']
+        self.assertIn('Requires=' + ' '.join(deps['requires']), server)
+        self.assertIn('After=' + ' '.join(deps['after']), server)
+        # never file content in the journal: one summary line of counts and hex ids
+        self.assertNotIn('read_text', QUIESCE_SCRIPT)
+        prints = [n for n in ast.walk(ast.parse(QUIESCE_SCRIPT)) if isinstance(n, ast.Call)
+                  and getattr(n.func, 'id', None) == 'print']
+        self.assertEqual(len(prints), 3)
+        for word in ('apt-get', 'curl', 'urllib', 'socket', 'unlink', 'rmtree', 'remove(', 'rmdir'):
+            self.assertNotIn(word, QUIESCE_SCRIPT)                # moves aside, never deletes
+
+    def test_the_root_step_installs_and_checks_it(self):
+        c = script_constants()
+        self.assertEqual(c['QUIESCE'], QUIESCE['script'])
+        self.assertEqual(c['QUIESCE_UNIT'], QUIESCE['unit'])
+        self.assertEqual(c['QUARANTINE'], QUIESCE['quarantine']['path'])
+        self.assertEqual(c['QUIESCE_PREFIX'], self.q['PREFIX'])
+        install = ast.unparse(script_function('install_agent_server'))
+        self.assertIn('os.mkdir(QUARANTINE, 448)', install)               # 0o700
+        self.assertIn('os.chown(QUARANTINE, 0, 0', install)
+        start = ast.unparse(script_function('start_agent_server'))
+        for word in ("'Result') != 'success'", "get('containers_remaining') != 0",
+                     "runs_this_boot'] < 1"):
+            self.assertIn(word, start)
+        facts = ast.unparse(script_function('facts'))
+        self.assertIn("data['quiesce'] = quiesce_facts()", facts)
+        dirs = [d for d in PROFILE['guest_storage']['directories']
+                if d['role'] == 'agent-server-quarantine']
+        self.assertEqual([d['path'] for d in dirs], [QUIESCE['quarantine']['path']])
+
+    # ------------------------------------------------------------ decisions (ruling R1)
+
+    def test_a_regular_singly_linked_file_of_the_owner_passes(self):
+        p = self.path('meta.json')
+        uid, gid = self.owner(p)
+        self.assertIsNone(self.q['file_problem'](os.lstat(p), uid, gid))
+        self.assertEqual(self.q['file_problem'](os.lstat(p), uid + 1, gid), 'owner')
+        self.assertEqual(self.q['file_problem'](os.lstat(p), uid, gid + 1), 'owner')
+        self.assertEqual(self.q['file_problem'](os.lstat(self.tmp), uid, gid), 'not-regular')
+        big = os.stat_result((stat.S_IFREG | 0o600, 1, 1, 1, uid, gid,
+                              self.q['FILE_MAX'] + 1, 0, 0, 0))
+        self.assertEqual(self.q['file_problem'](big, uid, gid), 'too-large')
+
+    def test_a_hard_link_is_refused_by_either_name(self):
+        p = self.path('base_state.json', b'{"execution_status": "running"}')
+        outside = self.tmp / f'outside-{p.name}'
+        os.link(p, outside)
+        uid, gid = self.owner(p)
+        for name in (p, outside):
+            self.assertEqual(self.q['file_problem'](os.lstat(name), uid, gid), 'hard-linked')
+        outside.unlink()
+        self.assertIsNone(self.q['file_problem'](os.lstat(p), uid, gid))
+
+    def test_a_symbolic_link_is_refused_never_followed(self):
+        target = self.path('target', b'{"execution_status": "running"}')
+        link = self.tmp / 'base_state.json-link'
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f'symbolic links are not available here: {exc}')
+        uid, gid = self.owner(target)
+        self.assertEqual(self.q['file_problem'](os.lstat(link), uid, gid), 'link')
+        self.assertEqual(self.q['dir_problem'](os.lstat(link), uid, gid), 'link')
+
+    def test_directories(self):
+        uid, gid = self.owner(self.tmp)
+        self.assertIsNone(self.q['dir_problem'](os.lstat(self.tmp), uid, gid))
+        self.assertEqual(self.q['dir_problem'](os.lstat(self.tmp), uid + 1, gid), 'owner')
+        self.assertEqual(self.q['dir_problem'](os.lstat(self.path('f')), uid, gid),
+                         'not-a-directory')
+
+    def test_record_actions(self):
+        act = self.q['record_action']
+        cid = 'e0122c00-0000-4000-8000-00000000f001'
+        hex_id = cid.replace('-', '')
+        meta = json.dumps({'id': cid, 'title': None}).encode()
+        idle = b'{"execution_status": "idle", "stuck_detection": true}'
+        self.assertEqual(act(hex_id, meta, idle), ('unchanged', None))
+        self.assertEqual(act(hex_id, meta, None), ('unchanged', None))
+        self.assertEqual(act(hex_id, None, b'{"execution_status": "running"}'), ('not-a-record', None))
+        # the id must be the directory's: another conversation's, none, or a non-hex directory
+        for other in (json.dumps({'id': 'e0122c00-0000-4000-8000-00000000f002'}),
+                      json.dumps({'title': 'no id'}), json.dumps({'id': 7}),
+                      json.dumps({'id': 'not-a-uuid'})):
+            self.assertEqual(act(hex_id, other.encode(), idle), ('quarantine', 'id-mismatch'))
+        self.assertEqual(act('entry', meta, idle), ('quarantine', 'id-mismatch'))
+        for same in (cid.upper(), hex_id, '{' + cid + '}'):
+            self.assertEqual(act(hex_id, json.dumps({'id': same}).encode(), idle)[0], 'unchanged')
+        # unparseable JSON is left alone (the catalog drops it), whichever file it is
+        for bad in (b'{"id": ', b'[1, 2]', b'\xff\xfe', b'"text"', b'\xef\xbb\xbf{}'):
+            self.assertEqual(act(hex_id, bad, idle), ('unparseable', 'meta.json'))
+            self.assertEqual(act(hex_id, meta, bad), ('unparseable', 'base_state.json'))
+        # only the exact value running is rewritten
+        for status in ('RUNNING', 'error', 'paused', None, ['running']):
+            base = json.dumps({'execution_status': status}).encode()
+            self.assertEqual(act(hex_id, meta, base)[0], 'unchanged', status)
+
+    def test_the_running_rewrite_changes_that_value_only(self):
+        cid = 'e0122c00-0000-4000-8000-00000000f003'
+        meta = json.dumps({'id': cid}).encode()
+        doc = {'id': cid, 'execution_status': 'running', 'agent': {'tools': [], 'kind': 'Agent'},
+               'n': 12345678901234567890, 'x': 0.1, 'nan': float('nan'), 'text': 'café \ud83d',
+               'nested': {'execution_status': 'running'}}
+        p = self.path('base_state.json', json.dumps(doc).encode())
+        action, data = self.q['record_action'](cid.replace('-', ''), meta, p.read_bytes())
+        self.assertEqual(action, 'rewrite')
+        p.write_bytes(data)                                    # in place, as the step writes it
+        again = json.loads(p.read_bytes().decode('ascii'))
+        self.assertEqual(again.pop('execution_status'), 'error')
+        original = json.loads(json.dumps(doc))
+        original.pop('execution_status')
+        self.assertEqual(json.dumps(again, sort_keys=True), json.dumps(original, sort_keys=True))
+        self.assertEqual(again['nested'], {'execution_status': 'running'})
+        # a repeated key: the parser keeps the last value, as the server's catalog reads it
+        dup = b'{"execution_status": "idle", "execution_status": "running"}'
+        action, data = self.q['record_action'](cid.replace('-', ''), meta, dup)
+        self.assertEqual((action, json.loads(data)), ('rewrite', {'execution_status': 'error'}))
+        dup = b'{"execution_status": "running", "execution_status": "idle"}'
+        self.assertEqual(self.q['record_action'](cid.replace('-', ''), meta, dup)[0], 'unchanged')
+
+    @unittest.skipUnless(os.open in os.supports_dir_fd and hasattr(os, 'O_NOFOLLOW') and
+                         hasattr(os, 'geteuid'), 'directory-relative opens need a POSIX host')
+    def test_entries_on_a_posix_file_system(self):
+        q = self.q
+        root = self.tmp / 'posix'
+        conv, quarantine, outside = root / 'conversations', root / 'quarantine', root / 'outside'
+        for d in (conv, quarantine, outside):
+            d.mkdir(parents=True)
+        uid, gid = os.getuid(), os.getgid()
+
+        def record(n, status='idle', meta_id=None):
+            cid = f'e0122c00-0000-4000-8000-0000000{n:05d}'
+            d = conv / cid.replace('-', '')
+            d.mkdir()
+            (d / 'meta.json').write_text(json.dumps({'id': meta_id or cid}))
+            (d / 'base_state.json').write_text(json.dumps({'execution_status': status}))
+            return d
+        running, idle, foreign = record(1, 'running'), record(2), record(3, meta_id='e0122c00-0000-4000-8000-000000009999')
+        linked, hard = record(4, 'running'), record(5, 'running')
+        sentinel = outside / 'sentinel'
+        sentinel.write_text('{"execution_status": "running"}')
+        (linked / 'base_state.json').unlink()
+        (linked / 'base_state.json').symlink_to(sentinel)
+        (hard / 'base_state.json').unlink()
+        os.link(sentinel, hard / 'base_state.json')
+        before = sentinel.read_bytes()
+        conv_fd = q['open_dir'](str(conv))
+        q_fd = q['open_dir'](str(quarantine))
+        try:
+            got = {p.name: q['handle_entry'](p.name, conv_fd, q_fd, uid, gid)
+                   for p in (running, idle, foreign, linked, hard)}
+        finally:
+            os.close(conv_fd)
+            os.close(q_fd)
+        self.assertEqual(got[running.name], ('rewrite', None))
+        self.assertEqual(json.loads((running / 'base_state.json').read_text()),
+                         {'execution_status': 'error'})
+        self.assertEqual(got[idle.name], ('unchanged', None))
+        self.assertEqual(got[foreign.name], ('quarantine', 'id-mismatch'))
+        self.assertEqual(got[linked.name], ('quarantine', 'link'))
+        self.assertEqual(got[hard.name], ('quarantine', 'hard-linked'))
+        self.assertEqual(sentinel.read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in conv.iterdir()), sorted([running.name, idle.name]))
+        self.assertEqual(sorted(p.name.split('.')[0] for p in quarantine.iterdir()),
+                         sorted([foreign.name, linked.name, hard.name]))
 
 
 class EgressRouteSeed(unittest.TestCase):

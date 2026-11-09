@@ -114,7 +114,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "035a9e672b0a5bc12f1403931bce3848606171281c64f322f8f3b27bc194b886"
+          "sha256": "bca242c245cf7863c2283ec599e3dde2d83bc3ec1c5fef3cfb6944fc88d2677b"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -212,7 +212,8 @@
       {"role": "agent-server", "path": "/srv/scratch/openhands/persistence", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
       {"role": "agent-server", "path": "/srv/scratch/openhands/worktrees", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
       {"role": "agent-server", "path": "/srv/scratch/openhands/home", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
-      {"role": "agent-server", "path": "/srv/scratch/openhands/tmp", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true}
+      {"role": "agent-server", "path": "/srv/scratch/openhands/tmp", "owner": "openhands", "group": "openhands", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true},
+      {"role": "agent-server-quarantine", "path": "/srv/scratch/aieh-quarantine", "owner": "root", "group": "root", "mode": "700", "mount": "/srv/scratch", "provisioned_only": true}
     ],
     "forbidden_fstypes": ["9p", "virtiofs", "drvfs", "fuse", "fuse.sshfs", "cifs", "smb3", "nfs", "nfs4"],
     "forbidden_paths": ["/mnt/c", "/mnt/wslg"],
@@ -323,10 +324,45 @@
         "argv": ["--host", "127.0.0.1", "--port", "8000"],
         "bind_rule": "The 1.60.1 entry point binds 0.0.0.0 by default once a session API key is configured (__main__.py), so --host 127.0.0.1 is explicit.",
         "start": "Type=exec; ExecStartPost waits for GET /ready on 127.0.0.1:8000 (200) with a 280 s ceiling, so the unit is active only when the server is ready and the boot-time facts report (ordered after it) sees its listener.",
+        "dependencies": {
+          "requires": ["docker.service", "aieh-agent-server-quiesce.service"],
+          "after": ["docker.service", "aieh-agent-server-quiesce.service"],
+          "wants": [],
+          "rule": "E-01.2.2 (findings F-1 and F-2): Requires= and After= on Moby and on the quiesce step, never Wants=, BindsTo=, Requisite= or an edge to the guard. Every start of the server (boot, systemctl start or restart, and Restart=on-failure) pulls a new start job for the oneshot quiesce step, which runs to completion first; if docker.service or the step does not succeed, the server's start job fails with result dependency, so the server neither runs nor listens. Moby's own start needs the container guard (its drop-in), so a failing guard stops all three."
+        },
         "hardening": {
           "options": ["NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=", "ProtectSystem=strict", "ReadWritePaths=/srv/scratch/openhands", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes", "ProtectProc=invisible", "RestrictSUIDSGID=yes", "RestrictRealtime=yes", "RestrictNamespaces=yes", "LockPersonality=yes", "SystemCallArchitectures=native", "SystemCallFilter=@system-service", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "IPAddressDeny=any", "IPAddressAllow=localhost", "UMask=0077"],
           "justification": "The server needs only: its own files under /srv/scratch/openhands (the one writable path), loopback TCP (its listener, and the loopback ports Moby publishes for conversation containers in F-04.2), and AF_UNIX to /run/docker.sock through the docker CLI it runs as a child. Containers are created by dockerd (root, outside this unit), so the unit needs no capability, namespace, device, kernel tunable or SUID binary; read-only mounts do not stop connect() to a unix socket. IPAddressDeny=any with IPAddressAllow=localhost refuses any non-loopback packet from the server's cgroup (defence in depth beside SLIRP restrict=on). Not set: MemoryDenyWriteExecute (the PyInstaller-built CPython and its native extensions are not qualified under it), PrivateNetwork (the listener must be reachable from the guest's loopback) and PrivateUsers (it would hide the docker group from the docker CLI)."
         }
+      },
+      "quiesce": {
+        "plan_leaf": "E-01.2.2 (slice (c): the fix forward of finding F-2)",
+        "use": "The pinned 1.60.1 server, at every start, resumes in its own process every stored conversation whose base_state.json says running (ConversationService.__aenter__: hydration, the stored tool modules imported, the stored working_dir created and git-initialized), before any lease check and with no configuration to turn it off; the conversation store is the job's own bind, and a job can write running (evidence/E-01.2.2b-live-drills.md section 4). This root step runs before every server start and makes that path unreachable: no job process exists while it runs or when the server starts, and no stored record says running. It is a compensating control for the upstream limit fd-outer-server-local-recovery (security/inventory.json), not an upstream change.",
+        "unit": "aieh-agent-server-quiesce.service",
+        "script": "/usr/local/sbin/aieh-agent-server-quiesce",
+        "unit_settings": {
+          "Type": "oneshot",
+          "RemainAfterExit": "no",
+          "Requires": ["docker.service"],
+          "After": ["docker.service"],
+          "Before": ["aieh-agent-server.service"],
+          "hardening": ["NoNewPrivileges=yes", "ProtectSystem=strict", "ReadWritePaths=/srv/scratch", "ProtectHome=read-only", "PrivateTmp=yes", "IPAddressDeny=any"]
+        },
+        "order": ["aieh-container-guard.service", "docker.service", "aieh-agent-server-quiesce.service", "aieh-agent-server.service"],
+        "actions": [
+          {"id": "remove-containers", "rule": "docker ps --all --quiet, then docker rm --force of every container, then docker ps again: none may remain. The guest's Moby runs only the server's conversation containers (profiles P6, S-01.3.2), and the server's own start-up cleanup removes every owner-labelled container anyway (docker_runtime/registry.py cleanup_stale_containers), so no running work is lost that the server would keep. First, so that no job process can write while the records are read."},
+          {"id": "quiesce-records", "rule": "Each entry of provisioning.agent_server.config conversations_path, through directory-relative opens that never follow a link (every path component opened with O_NOFOLLOW, then openat-style access from a directory fd). An entry is acted on only when it is a directory and its meta.json and base_state.json (where present) are regular files with link count 1, owned by the service user's uid and primary gid, within the size bound. base_state.json execution_status running is rewritten to error in place (the same inode, owner and mode; every other value as parsed; upstream's own recovery outcome, openhands/sdk/conversation/state.py). JSON that does not parse as an object is left alone (the catalog drops such a record). An entry that fails any check, or whose meta.json id is not the UUID whose hex is the directory name, is moved aside, never deleted: renamed into the quarantine. An entry without meta.json is not a record (the catalog skips it) and is left alone."}
+        ],
+        "record_files": ["meta.json", "base_state.json"],
+        "rewrite": {"field": "execution_status", "from": "running", "to": "error"},
+        "owner": "provisioning.agent_server.user (uid and primary gid of openhands, the user conversation containers run as)",
+        "file_max_bytes": 67108864,
+        "quarantine": {"path": "/srv/scratch/aieh-quarantine", "owner": "root", "group": "root", "mode": "700", "rule": "Created by the root step's agent-server-install step; a guest_storage directory of role agent-server-quarantine on the scratch disk, outside every agent-server directory, so the rename stays on one file system and the server's catalog (conversations_path) never reads it. The step refuses to run if it is not a root-only 0700 directory on the file system of the conversations path. Entries are named <hex id or entry>.<UTC time>.<random>; nothing in it is deleted by the step."},
+        "invariant": "zero containers before the server's ExecStart: the step ends with docker ps empty, and only the server creates containers",
+        "journal": "One line per run, prefixed 'aieh-agent-server-quiesce: ', a JSON object with counts and hex ids only (containers removed and remaining, entries, rewritten, quarantined with a reason code, unparseable, unchanged, not a record), never file content; the boot facts report this boot's last line.",
+        "fail_closed": "Any other failure (Moby unreachable, a container that remains, the conversations path or the quarantine not as declared, an I/O error) exits non-zero; the server's start job then fails with result dependency and Restart=on-failure does not retry it, so the server stays stopped until an operator acts.",
+        "limit": "fd-outer-server-local-recovery: the upstream defect stays in the pinned binary; when a pinned release skips local recovery for Docker-backed conversations, keeping or retiring this step is a recorded decision.",
+        "check": "check_profile validates this declaration against the seed template; inspect compares it with the boot facts (unit settings, the server's dependencies, the script, the quarantine, the last run and its order before the server's ExecStart)"
       },
       "config": {
         "path": "/etc/aieh/agent-server/config.json",

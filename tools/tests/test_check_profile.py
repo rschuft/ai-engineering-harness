@@ -935,6 +935,82 @@ class AdmissionBlock(unittest.TestCase):
         self.assertFails('admission.dispatcher')
 
 
+class QuiesceBlock(unittest.TestCase):
+    """E-01.2.2: provisioning.agent_server.service.dependencies and .quiesce, against the seed
+    template; each mutation must FAIL naming the rule."""
+    setUp = AgentServerBlock.setUp
+    errors = AgentServerBlock.errors
+    assertFails = AgentServerBlock.assertFails
+
+    def test_committed_declaration_passes(self):
+        self.assertEqual(self.errors(), [])
+        q = self.server['quiesce']
+        self.assertEqual([a['id'] for a in q['actions']], check_profile.QUIESCE_ACTIONS)
+        self.assertEqual(q['order'][-2:], [q['unit'], self.server['service']['unit']])
+
+    def test_declaration_mutations(self):
+        def mutated(change):
+            profile = copy.deepcopy(self.qemu)
+            change(profile['provisioning']['agent_server'], profile)
+            return profile
+        cases = [
+            (lambda s, p: s['service']['dependencies'].update(wants=['docker.service']), 'no Wants='),
+            (lambda s, p: s['service']['dependencies'].update(requires=['docker.service']),
+             'dependencies.requires'),
+            (lambda s, p: s['service']['dependencies'].update(after=['aieh-agent-server-quiesce.service']),
+             'dependencies.after'),
+            (lambda s, p: s['service']['dependencies'].update(binds_to=['docker.service']), 'BindsTo='),
+            (lambda s, p: s['service'].pop('dependencies'), 'declared together'),
+            (lambda s, p: s['quiesce']['unit_settings'].update(RemainAfterExit='yes'), 'unit_settings'),
+            (lambda s, p: s['quiesce']['unit_settings'].update(Before=[]), 'unit_settings'),
+            (lambda s, p: s['quiesce']['unit_settings'].update(Type='simple'), 'unit_settings'),
+            (lambda s, p: s['quiesce'].update(order=s['quiesce']['order'][::-1]), 'quiesce.order'),
+            (lambda s, p: s['quiesce'].update(actions=s['quiesce']['actions'][::-1]), 'quiesce.actions'),
+            (lambda s, p: s['quiesce'].update(rewrite={'field': 'execution_status', 'from': 'running',
+                                                       'to': 'idle'}), 'record_files'),
+            (lambda s, p: s['quiesce'].update(invariant='none'), 'the invariant'),
+            (lambda s, p: s['quiesce'].update(unit='other.service'), 'quiesce: unit'),
+            (lambda s, p: s['quiesce']['quarantine'].update(mode='755'), 'quiesce.quarantine'),
+            (lambda s, p: s['quiesce']['quarantine'].update(path='/srv/scratch/openhands/q'),
+             'quiesce.quarantine'),
+        ]
+        for change, fragment in cases:
+            self.assertFails(fragment, mutated(change))
+
+        def quarantine_inside_the_server(s, p):
+            entry = next(d for d in p['guest_storage']['directories']
+                         if d['role'] == 'agent-server-quarantine')
+            entry['path'] = s['quiesce']['quarantine']['path'] = '/srv/scratch/openhands/home/q'
+        self.assertFails('outside every agent-server directory', mutated(quarantine_inside_the_server))
+
+        def no_directory(s, p):
+            p['guest_storage']['directories'] = [d for d in p['guest_storage']['directories']
+                                                 if d['role'] != 'agent-server-quarantine']
+        self.assertFails('quiesce.quarantine', mutated(no_directory))
+
+    def test_the_seed_template_must_say_the_same(self):
+        path = self.tmp / 'profiles' / 'seed' / 'user-data.tmpl'
+        original = path.read_text(encoding='utf-8')
+        server_req = '      Requires=docker.service aieh-agent-server-quiesce.service\n'
+        start = '      Type=oneshot\n      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-quiesce\n'
+        for old, new, fragment in (
+                (server_req, server_req.replace('Requires=', 'Wants='),
+                 'service.dependencies: the seed template'),
+                ('      Before=aieh-agent-server.service\n', '\n', 'unit_settings: the seed template'),
+                (start, start.replace('oneshot\n', 'oneshot\n      RemainAfterExit=yes\n'),
+                 'unit_settings: the seed template'),
+                ('      ReadWritePaths=/srv/scratch\n      ProtectHome=read-only\n',
+                 '      ProtectHome=read-only\n', 'hardening: ReadWritePaths'),
+                ("      QUARANTINE = '/srv/scratch/aieh-quarantine'\n      SERVICE_USER",
+                 "      QUARANTINE = '/srv/scratch/elsewhere'\n      SERVICE_USER",
+                 'quarantine or size bound')):
+            self.assertEqual(original.count(old), 1, old)
+            path.write_text(original.replace(old, new), encoding='utf-8', newline='\n')
+            self.assertFails(fragment)
+        path.write_text(original, encoding='utf-8', newline='\n')
+        self.assertEqual(self.errors(), [])
+
+
 class JobsBlock(unittest.TestCase):
     """S-01.3.2: provisioning.agent_server.jobs, the job environment's declared hardening and
     the CI constraints carried as planned; each mutation must FAIL naming the rule."""

@@ -180,7 +180,17 @@ write_files:
       EGRESS_ROUTE_CEILING_S = 300
       EGRESS_ROUTE_PATH_UNIT = 'aieh-egress-route.path'
       KEYCHECK = '/usr/local/sbin/aieh-agent-server-keycheck'
-      UNIT_STATE = ('LoadState', 'ActiveState', 'SubState', 'Result', 'UnitFileState')
+      # E-01.2.2 (finding F-2): the quiesce step before every Agent Server start
+      # (provisioning.agent_server.quiesce): its script, unit, quarantine and journal prefix
+      QUIESCE = '/usr/local/sbin/aieh-agent-server-quiesce'
+      QUIESCE_UNIT = 'aieh-agent-server-quiesce.service'
+      QUARANTINE = '/srv/scratch/aieh-quarantine'
+      QUIESCE_PREFIX = 'aieh-agent-server-quiesce: '
+      QUIESCE_PROPERTIES = ('LoadState', 'ActiveState', 'SubState', 'Result', 'Type',
+                            'RemainAfterExit', 'Requires', 'After', 'Before', 'ExecMainStatus',
+                            'ExecMainStartTimestampMonotonic', 'ExecMainExitTimestampMonotonic')
+      SERVER_ORDER_PROPERTIES = ('Requires', 'Wants', 'After', 'ExecMainStartTimestampMonotonic')
+      UNIT_STATE =('LoadState', 'ActiveState', 'SubState', 'Result', 'UnitFileState')
       INVENTORY_MAX = 400
       HASH_MAX = 16 << 20
       LOG_TAIL = 1 << 20
@@ -614,6 +624,26 @@ write_files:
           return out
 
 
+      def quiesce_facts():
+          """E-01.2.2: the quiesce step before every Agent Server start: its unit, the server's
+          dependencies on it and on Moby, the script, the quarantine directory and the step's
+          summaries of this boot (counts and hex ids only, as it prints them)."""
+          rc, text, err = run(['journalctl', '-b', '-u', QUIESCE_UNIT, '-o', 'cat', '--no-pager'], 60)
+          runs = []
+          for line in text.splitlines() if rc == 0 else []:
+              if line.startswith(QUIESCE_PREFIX):
+                  try:
+                      value = json.loads(line[len(QUIESCE_PREFIX):])
+                  except ValueError:
+                      continue
+                  if isinstance(value, dict):
+                      runs.append(value)
+          return {'unit': unit_show(QUIESCE_UNIT, QUIESCE_PROPERTIES),
+                  'server': unit_show(AS_UNIT, SERVER_ORDER_PROPERTIES),
+                  'script': stat_entry(QUIESCE), 'quarantine': stat_entry(QUARANTINE),
+                  'runs_this_boot': len(runs), 'last': runs[-1] if runs else None}
+
+
       def facts():
           manifest = load_manifest()
           tag = manifest['image']['local_tag']
@@ -659,6 +689,10 @@ write_files:
               data['admission'] = admission_facts()
           except Exception as exc:              # recorded, never fatal to the Moby facts
               data['admission'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
+          try:
+              data['quiesce'] = quiesce_facts()
+          except Exception as exc:              # recorded, never fatal to the Moby facts
+              data['quiesce'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
           # the report is agent-readable: a secret value never reaches it (counted, redacted)
           text, counts = redact(json.dumps(data, sort_keys=True), secret_values())
           if any(counts.values()):
@@ -1163,8 +1197,8 @@ write_files:
 
       def install_agent_server(manifest):
           """The system user openhands (no login shell, group docker), its scratch directories,
-          the release binary (copied from the verified staging copy and hashed again) and the
-          non-secret config."""
+          the quiesce step's root-only quarantine directory, the release binary (copied from the
+          verified staging copy and hashed again) and the non-secret config."""
           conf = manifest['agent_server']
           step = 'agent-server-install'
           try:
@@ -1176,7 +1210,7 @@ write_files:
               grp.getgrnam('docker')
           except KeyError:
               raise Failed(step + ': group docker does not exist')
-          for path in (AS_BINARY, os.path.dirname(AS_BINARY), AS_CONFIG):
+          for path in (AS_BINARY, os.path.dirname(AS_BINARY), AS_CONFIG, QUARANTINE):
               if os.path.lexists(path):
                   raise Failed(step + ': ' + path + ' already exists (single use)')
           must(step, ['useradd', '--system', '--user-group', '--groups', 'docker', '--home-dir',
@@ -1190,6 +1224,11 @@ write_files:
               os.chown(d['path'], user.pw_uid, user.pw_gid, follow_symlinks=False)
               os.chmod(d['path'], mode)
               made.append(stat_entry(d['path']))
+          # the quiesce step moves a refused conversation record here (a rename on the same
+          # file system as the conversations path; the server's catalog never reads it)
+          os.mkdir(QUARANTINE, 0o700)
+          os.chown(QUARANTINE, 0, 0, follow_symlinks=False)
+          os.chmod(QUARANTINE, 0o700)
           os.makedirs(os.path.dirname(AS_BINARY), mode=0o755)
           copy_file(os.path.join(STAGING, conf['binary']['name']), AS_BINARY, 0o755)
           got = sha256_path(AS_BINARY)
@@ -1201,7 +1240,8 @@ write_files:
           return {'user': {'name': user.pw_name, 'uid': user.pw_uid, 'home': user.pw_dir,
                            'shell': user.pw_shell,
                            'groups': must(step, ['id', '-nG', AS_USER], 30).split()},
-                  'directories': made, 'binary': dict(stat_entry(AS_BINARY), sha256=got),
+                  'directories': made, 'quarantine': stat_entry(QUARANTINE),
+                  'binary': dict(stat_entry(AS_BINARY), sha256=got),
                   'config': dict(stat_entry(AS_CONFIG), sha256=sha256_path(AS_CONFIG))}
 
 
@@ -1260,7 +1300,16 @@ write_files:
           if mine != [want] or moby_owned:
               raise Failed(step + ': the Agent Server listens on ' + repr(mine) + ' (declared ' + want +
                            '); Moby listeners ' + repr(moby_owned))
-          return {'unit': unit, 'listeners': lines, 'agent_server_listeners': mine}
+          # E-01.2.2: the start ran the quiesce step first, and it succeeded with no container left
+          quiesce = quiesce_facts()
+          last = quiesce.get('last') or {}
+          if quiesce['unit'].get('Result') != 'success' or last.get('ok') is not True or \
+                  last.get('containers_remaining') != 0 or quiesce['runs_this_boot'] < 1:
+              raise Failed(step + ': the quiesce step did not succeed before the start: ' +
+                           json.dumps({'unit': quiesce['unit'].get('Result'), 'last': last},
+                                      sort_keys=True)[:600])
+          ran = {'unit': quiesce['unit'], 'last': last, 'quarantine': quiesce['quarantine']}
+          return {'unit': unit, 'listeners': lines, 'agent_server_listeners': mine, 'quiesce': ran}
 
 
       def enable_conversation_facts(manifest):
@@ -1872,6 +1921,365 @@ write_files:
                     str(status) + ')', flush=True)
               sys.exit(1)
           time.sleep(0.5)
+  - path: /usr/local/sbin/aieh-agent-server-quiesce
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/python3
+      # aieh-agent-server-quiesce: the root step that runs before every start of
+      # aieh-agent-server.service (E-01.2.2 fix forward of finding F-2; the profile's
+      # provisioning.agent_server.quiesce). The pinned 1.60.1 server resumes, in its own process,
+      # every stored conversation whose base_state.json says running (ConversationService
+      # .__aenter__), and a job can write that file through its conversation-store bind. In order:
+      #   (1) remove every container (docker ps -aq, docker rm -f) and verify that none remains, so
+      #       no job process exists while (2) runs and none exists when the server starts;
+      #   (2) for each entry of the configured conversations path, through directory-relative opens
+      #       that never follow a link: act only on a directory and on regular, singly linked
+      #       meta.json and base_state.json files owned by the conversation uid and gid; rewrite
+      #       base_state.json execution_status running to error in place (owner and mode kept, no
+      #       other value changed); leave unparseable JSON alone; and move aside, never delete, any
+      #       entry that fails these checks or whose meta.json id differs from its directory name:
+      #       a rename into the root-only quarantine on the same file system, which the server's
+      #       catalog does not read.
+      # Any other failure exits non-zero, so the server does not start (Requires=). It prints
+      # counts and hex ids only, never file content. Standard library only.
+      import json
+      import os
+      import re
+      import secrets
+      import stat
+      import subprocess
+      import sys
+      import time
+      import uuid
+
+      CONFIG = '/etc/aieh/agent-server/config.json'
+      QUARANTINE = '/srv/scratch/aieh-quarantine'
+      SERVICE_USER = 'openhands'
+      META, BASE = 'meta.json', 'base_state.json'
+      RUNNING, ERROR = 'running', 'error'
+      FILE_MAX = 67108864              # 64 MiB: a larger record is moved aside
+      HEX32 = re.compile(r'^[0-9a-f]{32}$')
+      PREFIX = 'aieh-agent-server-quiesce: '
+      ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/root'}
+      DIR_FLAGS = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0) | \
+          getattr(os, 'O_CLOEXEC', 0)
+      FILE_FLAGS = getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0) | \
+          getattr(os, 'O_NOCTTY', 0) | getattr(os, 'O_CLOEXEC', 0)
+
+
+      class Failed(Exception):
+          pass
+
+
+      # ---------------------------------------------------------------- decisions (no I/O)
+
+      def dir_problem(st, uid, gid):
+          """None for a directory (never a link) of uid:gid, else the reason."""
+          if stat.S_ISLNK(st.st_mode):
+              return 'link'
+          if not stat.S_ISDIR(st.st_mode):
+              return 'not-a-directory'
+          if (st.st_uid, st.st_gid) != (uid, gid):
+              return 'owner'
+          return None
+
+
+      def file_problem(st, uid, gid):
+          """None for a regular, singly linked file of uid:gid within FILE_MAX, else the reason."""
+          if stat.S_ISLNK(st.st_mode):
+              return 'link'
+          if not stat.S_ISREG(st.st_mode):
+              return 'not-regular'
+          if st.st_nlink != 1:
+              return 'hard-linked'
+          if (st.st_uid, st.st_gid) != (uid, gid):
+              return 'owner'
+          if st.st_size > FILE_MAX:
+              return 'too-large'
+          return None
+
+
+      def parse_object(data):
+          """The JSON object in data (the standard library's parser, as the server's catalog reads
+          base_state.json), or None when it is not one."""
+          try:
+              doc = json.loads(data.decode('utf-8'))
+          except (UnicodeDecodeError, ValueError, RecursionError):
+              return None
+          return doc if isinstance(doc, dict) else None
+
+
+      def id_matches(name, meta):
+          """True when meta.json's id is the UUID whose hex is the directory name."""
+          value = meta.get('id')
+          if not isinstance(value, str) or not HEX32.match(name):
+              return False
+          try:
+              return uuid.UUID(value).hex == name
+          except ValueError:
+              return False
+
+
+      def without_running(base):
+          """base_state.json's bytes with execution_status error instead of running and every other
+          value as parsed (ASCII JSON, so that any parsed string is writable)."""
+          doc = dict(base, execution_status=ERROR)
+          data = json.dumps(doc, ensure_ascii=True, separators=(',', ':')).encode('ascii')
+          again = parse_object(data)
+          if again is None or json.dumps(again, sort_keys=True) != json.dumps(doc, sort_keys=True):
+              raise Failed('the rewritten base_state.json does not parse back to the same values')
+          return data
+
+
+      def record_action(name, meta_data, base_data):
+          """(action, detail) for one entry whose files passed file_problem; meta_data and base_data
+          are the files' bytes, or None when the file is absent. Actions: not-a-record (no meta.json:
+          the catalog skips it), unparseable (left alone: the catalog drops it), quarantine (detail:
+          the reason), rewrite (detail: the new base_state.json bytes), unchanged."""
+          if meta_data is None:
+              return 'not-a-record', None
+          meta = parse_object(meta_data)
+          if meta is None:
+              return 'unparseable', META
+          if not id_matches(name, meta):
+              return 'quarantine', 'id-mismatch'
+          if base_data is None:
+              return 'unchanged', None
+          base = parse_object(base_data)
+          if base is None:
+              return 'unparseable', BASE
+          if base.get('execution_status') == RUNNING:
+              return 'rewrite', without_running(base)
+          return 'unchanged', None
+
+
+      # ---------------------------------------------------------------- the guest's file system
+
+      def open_dir(path):
+          """A directory fd for an absolute path, every component opened without following a link."""
+          if not path.startswith('/') or '..' in path.split('/'):
+              raise Failed('not an absolute path: ' + path)
+          fd = os.open('/', DIR_FLAGS)
+          try:
+              for part in [p for p in path.split('/') if p]:
+                  nxt = os.open(part, DIR_FLAGS, dir_fd=fd)
+                  os.close(fd)
+                  fd = nxt
+          except BaseException:
+              os.close(fd)
+              raise
+          return fd
+
+
+      def read_fd(fd):
+          chunks, total = [], 0
+          while True:
+              block = os.read(fd, 1 << 20)
+              if not block:
+                  return b''.join(chunks)
+              total += len(block)
+              if total > FILE_MAX:
+                  raise Failed('a file grew past the bound while it was read')
+              chunks.append(block)
+
+
+      def open_checked(name, dir_fd, uid, gid, flags):
+          """(fd, None) of a regular, singly linked file of uid:gid, opened without following a link,
+          or (None, reason). (None, None) when it is absent."""
+          try:
+              st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+          except FileNotFoundError:
+              return None, None
+          problem = file_problem(st, uid, gid)
+          if problem:
+              return None, problem
+          try:
+              fd = os.open(name, flags | FILE_FLAGS, dir_fd=dir_fd)
+          except OSError as exc:
+              return None, 'open-errno-' + str(exc.errno)
+          after = os.fstat(fd)
+          problem = file_problem(after, uid, gid)
+          if problem or (after.st_dev, after.st_ino) != (st.st_dev, st.st_ino):
+              os.close(fd)
+              return None, problem or 'changed'
+          return fd, None
+
+
+      def quarantine(name, conv_fd, q_fd):
+          """Rename the entry into the quarantine directory (same file system), never replacing."""
+          label = name if HEX32.match(name) else 'entry'
+          stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+          for _ in range(8):
+              target = label + '.' + stamp + '.' + secrets.token_hex(4)
+              try:
+                  os.stat(target, dir_fd=q_fd, follow_symlinks=False)
+              except FileNotFoundError:
+                  os.rename(name, target, src_dir_fd=conv_fd, dst_dir_fd=q_fd)
+                  return target
+          raise Failed('no free quarantine name')
+
+
+      def handle_entry(name, conv_fd, q_fd, uid, gid):
+          """(action, detail) for one entry of the conversations directory, acted on."""
+          st = os.stat(name, dir_fd=conv_fd, follow_symlinks=False)
+          problem = dir_problem(st, uid, gid)
+          if problem:
+              quarantine(name, conv_fd, q_fd)
+              return 'quarantine', problem
+          rec = os.open(name, DIR_FLAGS, dir_fd=conv_fd)
+          fds = []
+          try:
+              if (os.fstat(rec).st_dev, os.fstat(rec).st_ino) != (st.st_dev, st.st_ino):
+                  problem = 'changed'
+              data = {}
+              for fname, flags in ((META, os.O_RDONLY), (BASE, os.O_RDWR)):
+                  if problem:
+                      break
+                  fd, problem = open_checked(fname, rec, uid, gid, flags)
+                  if fd is not None:
+                      fds.append(fd)
+                      data[fname] = (fd, read_fd(fd))
+              if not problem:
+                  action, detail = record_action(name, (data.get(META) or (None, None))[1],
+                                                 (data.get(BASE) or (None, None))[1])
+                  if action == 'rewrite':
+                      fd = data[BASE][0]
+                      os.lseek(fd, 0, os.SEEK_SET)
+                      view = memoryview(detail)
+                      while view:
+                          view = view[os.write(fd, view):]
+                      os.ftruncate(fd, len(detail))
+                      os.fsync(fd)
+                      return 'rewrite', None
+                  if action != 'quarantine':
+                      return action, detail
+                  problem = detail
+          finally:
+              for fd in fds:
+                  os.close(fd)
+              os.close(rec)
+          quarantine(name, conv_fd, q_fd)
+          return 'quarantine', problem
+
+
+      def run(argv, timeout=120):
+          try:
+              r = subprocess.run(argv, env=ENV, stdin=subprocess.DEVNULL, capture_output=True,
+                                 timeout=timeout, check=False)
+          except (OSError, subprocess.TimeoutExpired) as exc:
+              raise Failed(argv[0] + ' ' + argv[1] + ': ' + type(exc).__name__)
+          return r.returncode, r.stdout.decode('utf-8', 'replace'), r.stderr.decode('utf-8', 'replace')
+
+
+      def containers():
+          rc, out, err = run(['docker', 'ps', '--all', '--quiet', '--no-trunc'])
+          if rc != 0:
+              raise Failed('docker ps exited ' + str(rc))
+          return out.split()
+
+
+      def remove_containers():
+          """(removed, remaining) after docker rm -f of every container."""
+          ids = containers()
+          if ids:
+              rc, out, err = run(['docker', 'rm', '--force'] + ids, timeout=300)
+              if rc != 0:
+                  raise Failed('docker rm exited ' + str(rc))
+          left = containers()
+          if left:
+              raise Failed(str(len(left)) + ' container(s) remain after docker rm')
+          return len(ids), 0
+
+
+      def quiesce_records():
+          import pwd                    # POSIX only: imported where it is used
+          with open(CONFIG, encoding='utf-8') as handle:
+              path = json.load(handle)['conversations_path']
+          user = pwd.getpwnam(SERVICE_USER)
+          uid, gid = user.pw_uid, user.pw_gid
+          conv_fd = open_dir(path)
+          q_fd = None
+          try:
+              q_fd = open_dir(QUARANTINE)
+              qst, cst = os.fstat(q_fd), os.fstat(conv_fd)
+              if (qst.st_uid, qst.st_gid, stat.S_IMODE(qst.st_mode)) != (0, 0, 0o700) or \
+                      qst.st_dev != cst.st_dev:
+                  raise Failed(QUARANTINE + ' is not a root-only 0700 directory on the file system of '
+                               'the conversations path')
+              if (cst.st_uid, cst.st_gid) != (uid, gid):
+                  raise Failed('the conversations path is not owned by ' + SERVICE_USER)
+              out = {'entries': 0, 'rewritten': [], 'quarantined': [], 'unparseable': [],
+                     'unchanged': 0, 'not_a_record': 0}
+              for name in sorted(os.listdir(conv_fd)):
+                  out['entries'] += 1
+                  action, detail = handle_entry(name, conv_fd, q_fd, uid, gid)
+                  hex_id = name if HEX32.match(name) else None
+                  if action == 'rewrite':
+                      out['rewritten'].append(hex_id)
+                  elif action == 'quarantine':
+                      out['quarantined'].append({'id': hex_id, 'reason': detail})
+                  elif action == 'unparseable':
+                      out['unparseable'].append({'id': hex_id, 'file': detail})
+                  elif action == 'not-a-record':
+                      out['not_a_record'] += 1
+                  else:
+                      out['unchanged'] += 1
+              return out
+          finally:
+              os.close(conv_fd)
+              if q_fd is not None:
+                  os.close(q_fd)
+
+
+      def main(argv):
+          if argv:
+              print(PREFIX + 'usage: aieh-agent-server-quiesce', flush=True)
+              return 2
+          if os.geteuid() != 0:
+              print(PREFIX + 'must run as root (from its systemd unit)', flush=True)
+              return 2
+          t0 = time.monotonic()
+          summary = {'schema': 'ai-engineering-harness/profiles/agent-server-quiesce/v1', 'ok': False}
+          try:
+              summary['containers_removed'], summary['containers_remaining'] = remove_containers()
+              summary.update(quiesce_records())
+              summary['ok'] = True
+          except Exception as exc:              # never file content: a Failed text, else type and errno
+              detail = str(exc) if isinstance(exc, Failed) else \
+                  type(exc).__name__ + (' errno ' + str(exc.errno) if isinstance(exc, OSError) else '')
+              summary['error'] = detail[:300]
+          summary['seconds'] = round(time.monotonic() - t0, 2)
+          print(PREFIX + json.dumps(summary, sort_keys=True), flush=True)
+          return 0 if summary['ok'] else 1
+
+
+      if __name__ == '__main__':
+          sys.exit(main(sys.argv[1:]))
+  - path: /etc/systemd/system/aieh-agent-server-quiesce.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH quiesce before every Agent Server start: no container, no stored running record (E-01.2.2)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      Requires=docker.service
+      After=docker.service
+      Before=aieh-agent-server.service
+      RequiresMountsFor=/srv/scratch
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-agent-server-quiesce
+      TimeoutStartSec=300
+      StandardOutput=journal
+      StandardError=journal
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ReadWritePaths=/srv/scratch
+      ProtectHome=read-only
+      PrivateTmp=yes
+      IPAddressDeny=any
   - path: /etc/systemd/system/aieh-agent-server.service
     owner: root:root
     permissions: '0644'
@@ -1881,8 +2289,8 @@ write_files:
       ConditionFileNotEmpty=/etc/aieh/provision.json
       ConditionPathExists=/opt/aieh/agent-server/agent-server
       ConditionPathExists=/etc/aieh/agent-server/secrets.env
-      Requires=docker.service
-      After=docker.service
+      Requires=docker.service aieh-agent-server-quiesce.service
+      After=docker.service aieh-agent-server-quiesce.service
       RequiresMountsFor=/srv/scratch
 
       [Service]

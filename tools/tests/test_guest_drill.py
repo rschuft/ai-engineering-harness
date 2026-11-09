@@ -90,7 +90,17 @@ class HelperFile(unittest.TestCase):
         self.assertEqual(set(helper.ACTIONS), {
             'observe', 'guard-break', 'guard-restore', 'key-break', 'key-restore',
             'server-restart', 'state-read', 'state-alter', 'state-snapshot', 'state-rollback',
-            'state-discard', 'root-scan'})
+            'state-discard', 'root-scan', 'quiesce-break', 'quiesce-restore', 'server-kill',
+            'start-window', 'container-kill', 'quarantine-list', 'quarantine-return',
+            'sentinel-plant', 'sentinel-check'})
+        self.assertEqual(set(helper.QUIESCE_VARIANTS), set(guest.DRILL_QUIESCE_VARIANTS))
+        quiesce = PROFILE['provisioning']['agent_server']['quiesce']
+        self.assertEqual((helper.QUIESCE_UNIT, helper.QUARANTINE),
+                         (quiesce['unit'], quiesce['quarantine']['path']))
+        self.assertEqual(guest.DRILL_QUIESCE_UNIT, quiesce['unit'])
+        self.assertIn(helper.QUIESCE_UNIT, helper.UNITS)
+        for text in helper.QUIESCE_VARIANTS.values():
+            self.assertIn('[Service]', text)
         self.assertEqual((helper.REQUEST_DIR, helper.RESULTS), (guest.DRILL_REQUEST_DIR,
                                                                guest.DRILL_RESULTS))
         for text in helper.GUARD_VARIANTS.values():      # a drop-in, never the guard script itself
@@ -305,13 +315,15 @@ class FailClosedChecks(unittest.TestCase):
 
     def test_a_failing_guard(self):
         boot = observation(server='failed', guard='failed', docker='inactive', listening=False,
-                           processes=0, moby=('containerd',))
+                           processes=0, moby=('containerd',),
+                           journal=['systemd[1]: Dependency failed for aieh-agent-server.service'])
         rows = guest.guard_drill_checks(boot, boot, {'error': 'ECONNREFUSED'}, {'error': 'ECONNREFUSED'})
         self.assertTrue(all(r['ok'] for r in rows), rows)
-        # Moby stopped, but the Agent Server serving: that check, and only that one, fails
+        # Moby stopped, but the Agent Server serving (slice (b)'s Wants=): those checks fail
         boot = observation(guard='failed', docker='inactive', moby=('containerd',))
         rows = guest.guard_drill_checks(boot, boot, {'status': 200}, {'status': 502})
-        self.assertEqual([r['check'] for r in rows if not r['ok']], ['Agent Server stopped'])
+        self.assertEqual([r['check'] for r in rows if not r['ok']],
+                         ['Agent Server stopped', 'Agent Server start refused with result dependency (journal)'])
         rows = guest.guard_drill_checks(observation(guard='failed'), observation(), {'status': 200},
                                         {'status': 201})
         self.assertIn('no conversation created (no 2xx, no container)',
@@ -574,28 +586,103 @@ class AdmittedCreate(unittest.TestCase):
 
 
 class FakeGuest:
-    """The state the drills act on: units, a key and a guard that may be broken, the stored
-    files of conversations, and an outer server that hydrates a RUNNING record at its start
-    (creating the stored working directory) when ``hydrates`` is set. ``serves_without_moby``
-    models a server that starts although Moby failed."""
+    """The state the drills act on: units, a key, a guard and (slice (c)) a quiesce step that
+    may be broken, the stored files of conversations, and an outer server that hydrates a
+    RUNNING record at its start (creating the stored working directory and reading through a
+    planted link) when ``hydrates`` is set. ``quiesce`` models the fixed guest: the step runs
+    before every server start, removes every container, rewrites running to error and moves
+    aside a record that is a link or claims another id; the server Requires it and Moby.
+    ``serves_without_moby`` models slice (b)'s server, which started although Moby failed."""
 
-    def __init__(self, hydrates=False, serves_without_moby=False):
+    HOME = '/srv/scratch/openhands/home'
+    CONV = '/srv/scratch/openhands/conversations/'
+
+    def __init__(self, hydrates=False, serves_without_moby=False, quiesce=None):
         self.hydrates, self.serves_without_moby = hydrates, serves_without_moby
-        self.key_broken, self.guard_broken, self.restarts = None, None, 0
+        self.quiesce = (not serves_without_moby) if quiesce is None else quiesce
+        self.key_broken, self.guard_broken, self.quiesce_broken, self.restarts = None, None, None, 0
         self.files, self.snapshots, self.created_dirs = {}, {}, set()
-        self.containers, self.hydrated = {}, False
+        self.quarantine, self.loops, self.sentinels = {}, set(), {}
+        self.containers, self.hydrated, self.runs, self.loop_marker = {}, False, [], {}
         self.boot()
 
     def boot(self):
         self.guard_up = not self.guard_broken
         self.docker_up = self.guard_up
-        self.server_up = not self.key_broken and (self.docker_up or self.serves_without_moby)
-        self.containers = {}
+        self.containers, self.runs = {}, []
         self.server_start()
 
-    def server_start(self):
+    def start_refused(self):
+        if self.key_broken:
+            return None
+        if self.serves_without_moby or not self.quiesce:
+            return None if (self.docker_up or self.serves_without_moby) else 'docker'
+        return 'docker' if not self.docker_up else 'quiesce' if self.quiesce_broken else None
+
+    def quiesce_step(self):
+        summary = {'ok': True, 'containers_removed': len(self.containers), 'containers_remaining': 0,
+                   'rewritten': [], 'quarantined': [], 'unparseable': [], 'unchanged': 0,
+                   'not_a_record': 0}
+        self.containers = {}
+        for hex_id in sorted(self.files):
+            files = self.files[hex_id]
+            reason = None
+            if '__link__' in files:
+                reason = 'link' if files['__link__'] == 'symlink' else 'hard-linked'
+            elif json.loads(files['meta.json']).get('id', '').replace('-', '') != hex_id:
+                reason = 'id-mismatch'
+            if reason:
+                self.quarantine[f'{hex_id}.20261109T000000Z.{len(self.quarantine):08x}'] = \
+                    self.files.pop(hex_id)
+                summary['quarantined'].append({'id': hex_id, 'reason': reason})
+                continue
+            base = json.loads(files['base_state.json'])
+            if base.get('execution_status') == 'running':
+                base['execution_status'] = 'error'
+                files['base_state.json'] = json.dumps(base)
+                summary['rewritten'].append(hex_id)
+            else:
+                summary['unchanged'] += 1
+        self.runs.append(summary)
+        return summary
+
+    def server_start(self, killed=False):
         self.hydrated = False
+        for hex_id in list(self.loops):          # a live job's loop keeps writing the pair
+            if hex_id in self.containers and hex_id in self.files:
+                self.job_pair(hex_id, self.loop_marker[hex_id])
+        removed = []
+        refused = self.start_refused()
+        self.server_up = not self.key_broken and refused is None
+        self.window = {'quiesce_unit': {'Result': None}, 'runs_this_boot': len(self.runs),
+                       'last_run': None, 'times': {}, 'events': {
+                           'during_quiesce': [], 'quiesce_exit_to_server_exec_start': [],
+                           'server_exec_start_to_active': []}}
+        if self.quiesce and self.docker_up and not self.key_broken:
+            if self.quiesce_broken:
+                self.window['quiesce_unit'] = {'Result': 'exit-code'}
+            else:
+                removed = list(self.containers)
+                summary = self.quiesce_step()
+                self.window.update(quiesce_unit={'Result': 'success'}, runs_this_boot=len(self.runs),
+                                   last_run={'summary': summary},
+                                   times={'quiesce_start': 1.0, 'quiesce_exit': 2.0,
+                                          'server_exec_start': 3.0, 'server_active': 4.0})
+                self.window['events']['during_quiesce'] = [{'action': 'destroy', 'id': h[:12]}
+                                                           for h in removed]
+        self.loops &= set(self.containers)
+        if not self.server_up:
+            return
+        if self.containers:                       # the server's own start-up cleanup
+            self.window['events']['server_exec_start_to_active'] = [
+                {'action': 'destroy', 'id': h[:12]} for h in self.containers]
+            self.containers = {}
+        self.window['server_unit'] = {'ActiveState': 'active'}
         for hex_id, files in self.files.items():
+            if '__link__' in files:
+                if self.hydrates:
+                    self.sentinels[(hex_id, files['__link__'])]['read'] = True
+                continue
             base = json.loads(files['base_state.json'])
             if self.hydrates and base.get('execution_status') == 'running':
                 wd = json.loads(files['meta.json'])['workspace']['working_dir']
@@ -604,23 +691,56 @@ class FakeGuest:
                 files['owner_lease.json'] = '{"owner": "outer"}'
                 self.hydrated = True
 
+    def job_pair(self, hex_id, marker):
+        files = self.files[hex_id]
+        base = json.loads(files['base_state.json'])
+        base['execution_status'] = 'running'
+        files['base_state.json'] = json.dumps(base)
+        meta = json.loads(files['meta.json'])
+        meta['workspace']['working_dir'] = marker
+        files['meta.json'] = json.dumps(meta)
+
     def obs(self, paths=()):
         server = 'activating' if self.key_broken else 'active' if self.server_up else 'failed'
-        return observation(server=server,
-                           guard='active' if self.guard_up else 'failed',
-                           docker='active' if self.docker_up else 'inactive',
-                           listening=self.server_up, processes=2 if self.server_up else 0,
-                           restarts=self.restarts,
-                           journal=['aieh-agent-server-keycheck: refused: x'] if self.key_broken else [],
-                           moby=('dockerd', 'containerd') if self.docker_up else ('containerd',),
-                           dropin='d' if self.guard_broken else None) | {
-            'paths': {p: {'state': 'dir' if p in self.created_dirs else 'absent'} for p in paths},
+        refused = self.start_refused()
+        journal = ['aieh-agent-server-keycheck: refused: x'] if self.key_broken else \
+            ['systemd[1]: Dependency failed for aieh-agent-server.service'] if refused else []
+
+        def path_state(p):
+            if p == self.HOME:
+                return {'state': 'dir', 'entries': sorted(
+                    d.rsplit('/', 1)[1] for d in self.created_dirs if d.rsplit('/', 1)[0] == self.HOME)}
+            if p.startswith(self.CONV):
+                return {'state': 'dir' if p[len(self.CONV):] in self.files else 'absent'}
+            return {'state': 'dir' if p in self.created_dirs else 'absent'}
+        out = observation(server=server,
+                          guard='active' if self.guard_up else 'failed',
+                          docker='active' if self.docker_up else 'inactive',
+                          listening=self.server_up, processes=2 if self.server_up else 0,
+                          restarts=self.restarts, journal=journal,
+                          moby=('dockerd', 'containerd') if self.docker_up else ('containerd',),
+                          dropin='d' if self.guard_broken else None) | {
+            'paths': {p: path_state(p) for p in paths},
             'containers': {h[:12]: {'keys': {'OH_SECRET_KEY': 'sha256:' + h[:4]}} for h in self.containers},
-            'server_invocation': {'lines': ['INFO Resumed conversation x'] if self.hydrated else []}}
+            'server_invocation': {'lines': ['INFO Resumed conversation x'] if self.hydrated else []},
+            'quiesce_dropin_sha256': 'q' if self.quiesce_broken else None}
+        out['units'][guest.DRILL_QUIESCE_UNIT] = {
+            'ActiveState': 'failed' if self.quiesce_broken else 'inactive',
+            'Result': (self.window.get('quiesce_unit') or {}).get('Result') or 'success'}
+        return out
+
+    def restart_detail(self):
+        return {'rc': 0 if self.server_up else 1, 'unit': {
+                    'ActiveState': 'active' if self.server_up else 'inactive',
+                    'NRestarts': str(self.restarts)},
+                'stderr': '' if self.server_up else 'A dependency job failed.',
+                'invocation': {'lines': ['INFO Uvicorn running'] +
+                               (['INFO Resumed conversation x'] if self.hydrated else [])}}
 
     def req(self, action, params=None, ceiling=None):
         params = params or {}
-        detail = None
+        detail, ok = None, True
+        hex_id = params.get('hex')
         if action == 'observe':
             if self.key_broken:
                 self.restarts += 1
@@ -629,7 +749,8 @@ class FakeGuest:
             self.key_broken, self.server_up = params['variant'], False
             detail = {'variant': params['variant']}
         elif action == 'key-restore':
-            self.key_broken, self.server_up = None, True
+            self.key_broken = None
+            self.server_start()
             detail = {'copy_removed': True}
         elif action == 'guard-break':
             self.guard_broken = params['variant']
@@ -637,23 +758,53 @@ class FakeGuest:
         elif action == 'guard-restore':
             self.guard_broken = None
             detail = {'removed': True}
+        elif action == 'quiesce-break':
+            self.quiesce_broken = params['variant']
+            detail = {'variant': params['variant']}
+        elif action == 'quiesce-restore':
+            self.quiesce_broken = None
+            detail = {'removed': True}
         elif action == 'server-restart':
-            self.containers = {}
+            self.containers = {}                  # the server's graceful stop stops its containers
             self.server_start()
-            detail = {'rc': 0, 'unit': {'ActiveState': 'active'},
-                      'invocation': {'lines': ['INFO Uvicorn running'] +
-                                     (['INFO Resumed conversation x'] if self.hydrated else [])}}
+            detail = self.restart_detail()
+        elif action == 'server-kill':
+            self.restarts += 1                    # containers stay alive; systemd restarts it
+            self.server_start()
+            detail = self.restart_detail()
+        elif action == 'start-window':
+            detail = copy.deepcopy(self.window)
+        elif action == 'container-kill':
+            gone = [hex_id] if self.containers.pop(hex_id, 'absent') != 'absent' else []
+            detail = {'containers': [h[:12] for h in gone], 'remaining': []}
+        elif action == 'quarantine-list':
+            detail = {'entries': [{'name': n, 'kind': 'dir'} for n in sorted(self.quarantine)]}
+        elif action == 'quarantine-return':
+            name = sorted(n for n in self.quarantine if n.startswith(hex_id + '.'))[-1]
+            self.files[hex_id] = self.quarantine.pop(name)
+            detail = {'returned': name}
+        elif action == 'sentinel-plant':
+            self.files[hex_id]['__link__'] = params['kind']
+            self.sentinels[(hex_id, params['kind'])] = {'read': False}
+            detail = {'base_is_link': params['kind'] == 'symlink',
+                      'base_nlink': 2 if params['kind'] == 'hardlink' else 1}
+        elif action == 'sentinel-check':
+            read = self.sentinels[(hex_id, params['kind'])]['read']
+            detail = {'unread': not read, 'unwritten': True, 'sha256_equal': True,
+                      'control_read_moved_atime': True}
         elif action == 'state-read':
-            files = self.files[params['hex']]
+            if hex_id not in self.files:
+                return {'id': 'x', 'action': action, 'ok': False, 'error': 'FileNotFoundError'}
+            files = {k: v for k, v in self.files[hex_id].items() if not k.startswith('__')}
             detail = {'entries': [{'path': k, 'kind': 'file', 'sha256': hashlib.sha256(v.encode()).hexdigest()}
                                   for k, v in sorted(files.items())],
                       'content': {k: json.loads(v) for k, v in files.items()}}
         elif action == 'state-snapshot':
-            self.snapshots[params['hex']] = dict(self.files[params['hex']])
+            self.snapshots[hex_id] = dict(self.files[hex_id])
             detail = {'files': {k: hashlib.sha256(v.encode()).hexdigest()
-                                for k, v in sorted(self.files[params['hex']].items())}}
+                                for k, v in sorted(self.files[hex_id].items())}}
         elif action == 'state-alter':
-            files = self.files[params['hex']]
+            files = self.files[hex_id]
             if params['op'] == 'plant':
                 files[params['file']] = json.dumps(params['value'])
             else:
@@ -663,12 +814,21 @@ class FakeGuest:
                 files[params['file']] = json.dumps(doc)
             detail = {'ok': True}
         elif action == 'state-rollback':
-            self.files[params['hex']] = dict(self.snapshots[params['hex']])
+            self.files[hex_id] = dict(self.snapshots[hex_id])
             detail = {'equal': True, 'removed': [], 'rewritten': []}
         elif action == 'state-discard':
-            self.snapshots.pop(params['hex'], None)
+            self.snapshots.pop(hex_id, None)
             detail = {'present_after': False}
-        return {'id': 'x', 'action': action, 'ok': True, 'detail': detail}
+        return {'id': 'x', 'action': action, 'ok': ok, 'detail': detail}
+
+    def catalog(self):
+        """{conversation id hex: record files}: keyed by the stored meta.json id, the last
+        directory winning (the 1.60.1 catalog)."""
+        out = {}
+        for hex_id in sorted(self.files):
+            meta = json.loads(self.files[hex_id]['meta.json'])
+            out[str(meta.get('id', '')).replace('-', '')] = self.files[hex_id]
+        return out
 
     def api(self, requests):
         out = []
@@ -690,16 +850,25 @@ class FakeGuest:
                     continue
                 self.files.setdefault(hex_id, {
                     'base_state.json': json.dumps({'execution_status': 'idle', 'stuck_detection': True}),
-                    'meta.json': json.dumps({'workspace': {'kind': 'LocalWorkspace', 'working_dir': '/workspace'},
-                                             'title': None})})
+                    'meta.json': json.dumps({'id': r['json']['conversation_id'], 'title': None,
+                                             'workspace': {'kind': 'LocalWorkspace',
+                                                           'working_dir': '/workspace'}})})
                 memory = (r['json'].get('container') or {}).get('memory')
                 self.containers[hex_id] = memory
                 out.append({'status': 201, 'body': {'id': r['json']['conversation_id']}})
             elif path.startswith('/api/conversations/search'):
-                out.append({'status': 200, 'body': {'items': []}})
+                items = [{'id': json.loads(f['meta.json'])['id']} for f in self.catalog().values()]
+                out.append({'status': 200, 'body': {'items': items}})
             elif m and m.group(2) == '' and method == 'GET':
-                out.append({'status': 401} if not r.get('auth', True) else
-                           {'status': 200, 'body': {'id': m.group(1), 'execution_status': 'idle'}})
+                record = self.catalog().get(m.group(1).replace('-', ''))
+                if not r.get('auth', True):
+                    out.append({'status': 401})
+                elif record is None:
+                    out.append({'status': 404})
+                else:
+                    meta = json.loads(record['meta.json'])
+                    out.append({'status': 200, 'body': {'id': meta.get('id'), 'title': meta.get('title'),
+                                                        'execution_status': 'idle'}})
             elif m and m.group(2) == '' and method == 'DELETE':
                 hex_id = m.group(1).replace('-', '')
                 self.containers.pop(hex_id, None)
@@ -714,14 +883,14 @@ class FakeGuest:
                 out.append({'status': 200, 'body': {'runtime_status': 'available'}})
             elif m and m.group(2) == '/bash/execute_bash_command':
                 hex_id = m.group(1).replace('-', '')
-                files = self.files[hex_id]
-                base = json.loads(files['base_state.json'])
-                base['execution_status'] = 'running'
-                files['base_state.json'] = json.dumps(base)
-                meta = json.loads(files['meta.json'])
                 script = __import__('base64').b64decode(r['json']['command'].split()[1]).decode()
-                meta['workspace']['working_dir'] = re.search(r"working_dir'\] = '([^']+)'", script).group(1)
-                files['meta.json'] = json.dumps(meta)
+                inner = re.search(r"b64decode\('([^']+)'\)", script)
+                if inner:                          # the detached rewrite loop (variant C)
+                    script = __import__('base64').b64decode(inner.group(1)).decode()
+                    self.loops.add(hex_id)
+                marker = re.search(r"working_dir'\] = '([^']+)'", script).group(1)
+                self.loop_marker = dict(getattr(self, 'loop_marker', {}), **{hex_id: marker})
+                self.job_pair(hex_id, marker)
                 out.append({'status': 200, 'body': {'exit_code': 0, 'stdout': '{"uid": 999}'}})
             else:
                 out.append({'status': 404})
@@ -762,25 +931,41 @@ class DrillRuns(tg.TempState):
         out = self.run_drill(FakeGuest(), 'fail-closed')
         self.assertEqual(out['result'], 'PASS', out['failed_steps'])
         names = [s['step'] for s in out['steps']]
-        self.assertEqual(len(names), 5)
+        self.assertEqual(len(names), 6)
+        self.assertIn('quiesce step fails closed (fail-pre)', names)
+        quiesce = out['steps'][4]['detail']
+        self.assertEqual(quiesce['verdict'], 'PASS')
+        self.assertTrue(any(r['check'] == 'after a guest boot: Agent Server start refused with '
+                            'result dependency (journal)' and r['ok'] for r in quiesce['checks']))
         self.assertTrue(Path(out['record']).is_file())
 
     def test_fail_closed_reports_a_server_that_serves_without_moby(self):
         out = self.run_drill(FakeGuest(serves_without_moby=True), 'fail-closed')
         self.assertEqual(out['result'], 'FAIL')
-        self.assertEqual(out['failed_steps'], ['guard fails closed (fail-pre)', 'guard fails closed (check-only)'])
+        self.assertEqual(out['failed_steps'], ['guard fails closed (fail-pre)', 'guard fails closed (check-only)',
+                                               'quiesce step fails closed (fail-pre)'])
         rows = out['steps'][2]['detail']['checks']
-        self.assertEqual([r['check'] for r in rows if not r['ok']], ['Agent Server stopped'])
+        self.assertEqual([r['check'] for r in rows if not r['ok']],
+                         ['Agent Server stopped', 'Agent Server start refused with result dependency (journal)'])
         self.assertIsNone(out['broken'])
 
     def test_stored_state_on_a_server_that_ignores_the_files(self):
         out = self.run_drill(FakeGuest(), 'stored-state')
         self.assertEqual(out['result'], 'PASS', out['failed_steps'])
-        rows = out['steps'][3]['detail']['rows']
+        detail = out['steps'][3]['detail']
+        rows = detail['rows']
         self.assertTrue(rows and not [r for r in rows if r['steered']])
+        # slice (c): meta.json's id altered alone is moved aside by the quiesce step, recorded
+        # and returned, never reopened
+        moved = [r['alteration']['pointer'] for r in rows if r['verdict'] == 'quarantined']
+        self.assertEqual(moved, [['id']])
+        self.assertEqual(detail['quarantined'], [r['n'] for r in rows if r['verdict'] == 'quarantined'])
+        cycle = next(r['cycle'] for r in rows if r['verdict'] == 'quarantined')
+        self.assertNotIn('reopen', cycle)
+        self.assertIn('returned', cycle)
 
     def test_stored_state_finds_the_startup_hydration(self):
-        out = self.run_drill(FakeGuest(hydrates=True), 'stored-state')
+        out = self.run_drill(FakeGuest(hydrates=True, quiesce=False), 'stored-state')
         self.assertEqual(out['result'], 'FAIL')
         detail = out['steps'][3]['detail']
         steered = [r['alteration'] for r in detail['rows'] if r['steered']]
@@ -792,6 +977,36 @@ class DrillRuns(tg.TempState):
                                    'working_dir_survived': True, 'outer_server_resumed_it': True,
                                    'outer_server_created_the_working_dir': True})
         self.assertEqual(len(out['failed_steps']), 3)
+
+    def test_stored_state_with_the_quiesce_step_on_a_hydrating_server(self):
+        out = self.run_drill(FakeGuest(hydrates=True), 'stored-state')
+        self.assertEqual(out['result'], 'PASS', out['failed_steps'])
+        detail = out['steps'][3]['detail']
+        self.assertEqual(detail['steering'], [])
+        rewritten = [r['alteration'] for r in detail['rows'] if r['n'] in detail['rewritten_by_quiesce']]
+        self.assertEqual([('combination' in a, a.get('pointer')) for a in rewritten],
+                         [(False, ['execution_status']), (True, None)])
+
+    def test_f2_closed_on_the_fixed_guest(self):
+        out = self.run_drill(FakeGuest(hydrates=True), 'f2-closed')
+        failing = [(s['step'], [r['check'] for r in (s.get('detail') or {}).get('checks') or []
+                                if not r['ok']], (s.get('detail') or {}).get('message'))
+                   for s in out['steps'] if not s['ok']]
+        self.assertEqual(out['result'], 'PASS', failing)
+        self.assertEqual(len(out['steps']), 8)
+
+    def test_f2_closed_fails_on_a_guest_without_the_step(self):
+        out = self.run_drill(FakeGuest(hydrates=True, quiesce=False), 'f2-closed')
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(len(out['failed_steps']), 8, out['failed_steps'])
+        self.assertIsNone(out['broken'])
+        failing = {s['step'][:3]: {r['check'] for r in s['detail']['checks'] if not r['ok']}
+                   for s in out['steps']}
+        self.assertIn("no resume line in the server's start invocation", failing['A: '])
+        self.assertIn('the stored working directory was not created', failing['A: '])
+        self.assertIn("the real conversation's GET answers from its own record", failing['F: '])
+        self.assertIn("the server's own start-up cleanup found 0 (no removal event from its "
+                      'ExecStart to active)', failing['C: '])
 
     def test_stored_state_limit(self):
         out = self.run_drill(FakeGuest(), 'stored-state', limit=2)

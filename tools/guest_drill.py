@@ -27,6 +27,20 @@
 #   state-rollback make the directory equal to the snapshot again (what a server added
 #                  while acting on an alteration included), and compare
 #   state-discard  delete the snapshot
+#   quiesce-break  a drop-in that makes aieh-agent-server-quiesce.service fail (slice (c))
+#   quiesce-restore remove that drop-in
+#   server-kill    SIGKILL every process of the server's unit, then wait for systemd's
+#                  Restart=on-failure start (a server restart with its containers alive)
+#   start-window   the quiesce step's runs of this boot and the last start's order: Moby's
+#                  container events between the step's start, its exit, the server's ExecStart
+#                  and the server's active state (only while docker.service is active)
+#   container-kill SIGKILL one conversation's container (no shutdown of its inner server)
+#   quarantine-list the quarantine's entries by name and kind
+#   quarantine-return move a quarantined conversation directory back (drill rollback)
+#   sentinel-plant replace a conversation's base_state.json by a symbolic or hard link to a
+#                  sentinel file outside the record, its access time set before its mtime
+#   sentinel-check whether the sentinel was read or written since (times, size, sha256), then
+#                  the access-time method's own control (a read moves it)
 #   root-scan      the guest-root P5 scan: every regular file of every disk-backed and
 #                  tmpfs mount and every process environment and command line, for the
 #                  host canary cores (by sha256 only), the guest's secrets (by value, in
@@ -76,16 +90,28 @@ GUARD_VARIANTS = {
                    'ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-container-guard check\n'),
 }
 AS_UNIT = 'aieh-agent-server.service'
+QUIESCE_UNIT = 'aieh-agent-server-quiesce.service'
+QUIESCE_PREFIX = 'aieh-agent-server-quiesce: '
+QUIESCE_DROPIN = '/etc/systemd/system/aieh-agent-server-quiesce.service.d/90-aieh-drill.conf'
+QUIESCE_VARIANTS = {
+    'fail-pre': ('# aieh-drill (TEST ONLY): the quiesce step fails before it acts\n'
+                 '[Service]\n'
+                 "ExecStartPre=/bin/sh -c 'echo aieh-drill: quiesce made to fail; exit 1'\n"),
+}
+QUARANTINE = '/srv/scratch/aieh-quarantine'
+SENTINEL_DIR = '/srv/scratch/aieh-drill-sentinel'
+SENTINEL_KINDS = ('symlink', 'hardlink')
 AS_SECRETS = '/etc/aieh/agent-server/secrets.env'
 AS_SESSION_KEY = '/var/lib/aieh/agent-server/session.key'
 AS_VARS = ('OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0')
 KEY_VARIANTS = ('missing-session-key', 'empty-session-key', 'second-session-key')
-UNITS = (GUARD_UNIT, 'docker.service', 'docker.socket', 'containerd.service', AS_UNIT,
-         'aieh-conversation-facts.path', PATH_UNIT)
+UNITS = (GUARD_UNIT, 'docker.service', 'docker.socket', 'containerd.service', QUIESCE_UNIT,
+         AS_UNIT, 'aieh-conversation-facts.path', PATH_UNIT)
 PROPS = ('LoadState', 'ActiveState', 'SubState', 'Result', 'NRestarts', 'MainPID',
          'ExecMainPID', 'ExecMainCode', 'ExecMainStatus', 'ActiveEnterTimestampMonotonic',
-         'InactiveEnterTimestampMonotonic', 'ConditionResult', 'DropInPaths')
-JOURNAL_UNITS = (GUARD_UNIT, 'docker.service', AS_UNIT)
+         'InactiveEnterTimestampMonotonic', 'ConditionResult', 'DropInPaths',
+         'ExecMainStartTimestampMonotonic', 'ExecMainExitTimestampMonotonic')
+JOURNAL_UNITS = (GUARD_UNIT, 'docker.service', QUIESCE_UNIT, AS_UNIT)
 MOBY = ('dockerd', 'containerd', 'docker-proxy', 'containerd-shim', 'containerd-shim-runc-v2')
 OWNER_LABEL = 'ai.openhands.runtime-owner'
 CONVERSATIONS = '/srv/scratch/openhands/conversations'
@@ -305,14 +331,18 @@ def observe(params):
     for cid, env in container_envs().items():
         containers[cid[:12]] = {'keys': {n: fingerprint(env[n]) for n in AS_VARS if env.get(n)},
                                 'variables': sorted(env)}
-    dropin = None
+    dropin = quiesce_dropin = None
     if os.path.lexists(GUARD_DROPIN):
         with open(GUARD_DROPIN, 'rb') as h:
             dropin = sha256_bytes(h.read())
+    if os.path.lexists(QUIESCE_DROPIN):
+        with open(QUIESCE_DROPIN, 'rb') as h:
+            quiesce_dropin = sha256_bytes(h.read())
     with open('/proc/uptime', encoding='ascii') as h:
         uptime = float(h.read().split()[0])
     return {'boot_id': boot_id, 'uptime_s': uptime,
             'units': units, 'guard_dropin_sha256': dropin,
+            'quiesce_dropin_sha256': quiesce_dropin,
             'listeners': [line.split()[3] + ' ' + (line.split()[5] if len(line.split()) > 5 else '')
                           for line in out.splitlines() if len(line.split()) > 3],
             'moby_processes': moby_processes(),
@@ -646,6 +676,244 @@ def state_discard(params):
     return {'hex': hex_id, 'files_removed': gone, 'present_after': os.path.lexists(snap)}
 
 
+# ---------------------------------------------------------------- the quiesce step (slice (c))
+
+def quiesce_break(params):
+    variant = params.get('variant')
+    if variant not in QUIESCE_VARIANTS:
+        raise Failed('unknown quiesce variant ' + repr(variant))
+    os.makedirs(os.path.dirname(QUIESCE_DROPIN), mode=0o755, exist_ok=True)
+    data = QUIESCE_VARIANTS[variant].encode('ascii')
+    write_in_place(QUIESCE_DROPIN, data, 0o644, 0, 0)
+    daemon_reload()
+    return {'variant': variant, 'dropin': QUIESCE_DROPIN, 'sha256': sha256_bytes(data),
+            'content': QUIESCE_VARIANTS[variant], 'unit': unit_show(QUIESCE_UNIT)}
+
+
+def quiesce_restore(params):
+    present = os.path.lexists(QUIESCE_DROPIN)
+    if present:
+        os.unlink(QUIESCE_DROPIN)
+    daemon_reload()
+    return {'removed': present, 'present_after': os.path.lexists(QUIESCE_DROPIN),
+            'unit': unit_show(QUIESCE_UNIT)}
+
+
+def server_kill(params):
+    """SIGKILL every process of the server's unit (the containers live in Moby's cgroups and
+    stay up), then wait for systemd's Restart=on-failure start to settle, under a ceiling."""
+    t0 = time.monotonic()
+    before = unit_show(AS_UNIT)
+    n0 = int(before.get('NRestarts') or 0)
+    rc, out, err = run(['systemctl', 'kill', '--signal=SIGKILL', AS_UNIT])
+    deadline = t0 + float(params.get('ceiling', 420))
+    unit = before
+    while time.monotonic() < deadline:
+        unit = unit_show(AS_UNIT)
+        if int(unit.get('NRestarts') or 0) > n0 and unit.get('ActiveState') in ('active', 'failed',
+                                                                              'inactive'):
+            break
+        time.sleep(0.5)
+    return {'rc': rc, 'stderr': err.strip()[-600:], 'seconds': round(time.monotonic() - t0, 1),
+            'restarts_before': n0, 'unit': unit, 'invocation': invocation_journal(AS_UNIT, 120)}
+
+
+def monotonic_to_unix(value_us):
+    """A systemd CLOCK_MONOTONIC timestamp (microseconds) as Unix time, or None."""
+    try:
+        value = int(value_us)
+    except (TypeError, ValueError):
+        return None
+    return None if value <= 0 else time.time() - (time.monotonic() - value / 1e6)
+
+
+def docker_events(since, until):
+    """Moby's container events between two Unix times (never socket-activating Moby)."""
+    if since is None or until is None or not is_active('docker.service'):
+        return None
+    fmt = '{' + '{json .}' + '}'
+    rc, out, err = run(['docker', 'events', '--since', '%.6f' % since, '--until', '%.6f' % until,
+                        '--filter', 'type=container', '--format', fmt], 60)
+    if rc != 0:
+        return {'error': err.strip()[-300:]}
+    events = []
+    for line in out.splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        events.append({'action': e.get('Action') or e.get('status'),
+                       'id': str(e.get('id') or (e.get('Actor') or {}).get('ID') or '')[:12],
+                       'time_nano': e.get('timeNano')})
+    return events
+
+
+def quiesce_runs():
+    """The quiesce step's summaries of this boot, with their journal times and invocations."""
+    rc, out, _ = run(['journalctl', '-b', '-u', QUIESCE_UNIT, '-o', 'json', '--no-pager'], 60)
+    runs = []
+    for line in out.splitlines() if rc == 0 else []:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get('MESSAGE')
+        if isinstance(message, str) and message.startswith(QUIESCE_PREFIX):
+            try:
+                summary = json.loads(message[len(QUIESCE_PREFIX):])
+            except ValueError:
+                summary = {'unparsed': True}
+            runs.append({'monotonic_us': entry.get('__MONOTONIC_TIMESTAMP'),
+                         'invocation': entry.get('_SYSTEMD_INVOCATION_ID'), 'summary': summary})
+    return runs
+
+
+def start_window(params):
+    """The last server start's order: the quiesce step's last run (start, exit, summary), the
+    server's ExecStart and active state, and Moby's container events in the three windows
+    (during the step; between its exit and the server's ExecStart; from ExecStart to active)."""
+    q = unit_show(QUIESCE_UNIT)
+    s = unit_show(AS_UNIT)
+    q_start = monotonic_to_unix(q.get('ExecMainStartTimestampMonotonic'))
+    q_exit = monotonic_to_unix(q.get('ExecMainExitTimestampMonotonic'))
+    s_start = monotonic_to_unix(s.get('ExecMainStartTimestampMonotonic'))
+    s_active = monotonic_to_unix(s.get('ActiveEnterTimestampMonotonic'))
+    runs = quiesce_runs()
+    return {'quiesce_unit': q, 'server_unit': s, 'runs_this_boot': len(runs),
+            'last_run': runs[-1] if runs else None,
+            'times': {'quiesce_start': q_start, 'quiesce_exit': q_exit,
+                      'server_exec_start': s_start, 'server_active': s_active},
+            'events': {'during_quiesce': docker_events(q_start, q_exit),
+                       'quiesce_exit_to_server_exec_start': docker_events(q_exit, s_start),
+                       'server_exec_start_to_active': docker_events(s_start, s_active)}}
+
+
+def container_kill(params):
+    """SIGKILL the container(s) whose conversation-store bind is this conversation's: no
+    shutdown of its inner server runs (the container is --rm, so Moby removes it)."""
+    hex_id = params.get('hex')
+    if not isinstance(hex_id, str) or not HEX32.match(hex_id):
+        raise Failed('hex must be a 32-hex conversation id')
+    if not is_active('docker.service'):
+        raise Failed('docker.service is not active')
+    rc, out, _ = run(['docker', 'ps', '-q', '--no-trunc', '--filter', 'label=' + OWNER_LABEL])
+    ids = [i for i in out.split() if HEX64.match(i)] if rc == 0 else []
+    mine = []
+    if ids:
+        rc, out, _ = run(['docker', 'container', 'inspect'] + ids)
+        for c in json.loads(out) if rc == 0 else []:
+            if any(str(m.get('Source', '')).endswith('/conversations/' + hex_id)
+                   for m in c.get('Mounts') or []):
+                mine.append(c.get('Id'))
+    killed = run(['docker', 'kill', '--signal', 'KILL'] + mine)[0] if mine else None
+    left, deadline = mine, time.monotonic() + 60
+    while left and time.monotonic() < deadline:
+        rc, out, _ = run(['docker', 'ps', '-aq', '--no-trunc'])
+        left = [i for i in mine if i in out.split()]
+        if left:
+            time.sleep(0.5)
+    return {'hex': hex_id, 'containers': [i[:12] for i in mine], 'kill_rc': killed,
+            'remaining': [i[:12] for i in left]}
+
+
+def quarantine_list(params):
+    out = []
+    try:
+        names = sorted(os.listdir(QUARANTINE))
+    except OSError as exc:
+        return {'error': exc.errno}
+    for name in names:
+        st = os.lstat(os.path.join(QUARANTINE, name))
+        out.append({'name': name, 'kind': 'dir' if stat.S_ISDIR(st.st_mode) else
+                    'link' if stat.S_ISLNK(st.st_mode) else 'file' if stat.S_ISREG(st.st_mode)
+                    else 'other', 'uid': st.st_uid, 'mode': format(stat.S_IMODE(st.st_mode), 'o')})
+    st = os.lstat(QUARANTINE)
+    return {'entries': out, 'directory': {'uid': st.st_uid, 'gid': st.st_gid,
+                                          'mode': format(stat.S_IMODE(st.st_mode), 'o')}}
+
+
+def quarantine_return(params):
+    """Move the newest quarantined entry of a conversation back to the conversations path
+    (drill rollback); an entry that took its place meanwhile is moved aside first."""
+    hex_id = params.get('hex')
+    if not isinstance(hex_id, str) or not HEX32.match(hex_id):
+        raise Failed('hex must be a 32-hex conversation id')
+    names = sorted(n for n in os.listdir(QUARANTINE) if n.startswith(hex_id + '.') and
+                   '.displaced.' not in n)
+    if not names:
+        raise Failed('no quarantined entry of ' + hex_id)
+    target = CONVERSATIONS + '/' + hex_id
+    displaced = None
+    if os.path.lexists(target):
+        displaced = hex_id + '.displaced.' + secrets.token_hex(4)
+        os.rename(target, QUARANTINE + '/' + displaced)
+    os.rename(QUARANTINE + '/' + names[-1], target)
+    return {'hex': hex_id, 'returned': names[-1], 'displaced': displaced}
+
+
+def sentinel_paths(params):
+    hex_id, cdir, _ = conversation_dir(params)
+    kind = params.get('kind')
+    if kind not in SENTINEL_KINDS:
+        raise Failed('kind must be one of ' + ', '.join(SENTINEL_KINDS))
+    return hex_id, cdir, kind, SENTINEL_DIR + '/' + hex_id + '-' + kind
+
+
+def sentinel_plant(params):
+    """Replace base_state.json by a symbolic or hard link to a sentinel file outside the
+    record (a copy of it saying running, the same owner and mode), and set the sentinel's
+    access time an hour before its mtime, so that any later read moves it (relatime)."""
+    hex_id, cdir, kind, sentinel = sentinel_paths(params)
+    base = cdir + '/base_state.json'
+    data, st = read_regular(base)
+    doc = json.loads(data.decode('utf-8'))
+    doc['execution_status'] = 'running'
+    content = json.dumps(doc, separators=(',', ':')).encode('utf-8')
+    os.makedirs(SENTINEL_DIR, mode=0o711, exist_ok=True)
+    os.chmod(SENTINEL_DIR, 0o711)
+    if os.path.lexists(sentinel):
+        raise Failed(sentinel + ' exists')
+    write_in_place(sentinel, content, stat.S_IMODE(st.st_mode), st.st_uid, st.st_gid)
+    os.unlink(base)
+    if kind == 'symlink':
+        os.symlink(sentinel, base)
+    else:
+        os.link(sentinel, base)
+    s1 = os.lstat(sentinel)
+    os.utime(sentinel, ns=(s1.st_mtime_ns - 3600 * 10 ** 9, s1.st_mtime_ns), follow_symlinks=False)
+    s2 = os.lstat(sentinel)
+    record = {'path': sentinel, 'sha256': sha256_bytes(content), 'ino': s2.st_ino,
+              'size': s2.st_size, 'atime_ns': s2.st_atime_ns, 'mtime_ns': s2.st_mtime_ns,
+              'ctime_ns': s2.st_ctime_ns, 'nlink': s2.st_nlink}
+    write_in_place(sentinel + '.record', json.dumps(record).encode('ascii'), 0o600, 0, 0)
+    link = os.lstat(base)
+    return dict(record, kind=kind, base_is_link=stat.S_ISLNK(link.st_mode),
+                base_nlink=link.st_nlink)
+
+
+def sentinel_check(params):
+    """Was the sentinel read or written since it was planted? (atime, mtime, ctime, size and
+    inode unchanged; then its sha256.) The control: the sha256 read itself must move atime."""
+    hex_id = params.get('hex')
+    kind = params.get('kind')
+    if not isinstance(hex_id, str) or not HEX32.match(hex_id) or kind not in SENTINEL_KINDS:
+        raise Failed('hex and kind needed')
+    sentinel = SENTINEL_DIR + '/' + hex_id + '-' + kind
+    with open(sentinel + '.record', encoding='ascii') as h:
+        record = json.load(h)
+    s = os.lstat(sentinel)
+    now = {'ino': s.st_ino, 'size': s.st_size, 'atime_ns': s.st_atime_ns,
+           'mtime_ns': s.st_mtime_ns, 'ctime_ns': s.st_ctime_ns}
+    unread = now['atime_ns'] == record['atime_ns']
+    unwritten = all(now[k] == record[k] for k in ('ino', 'size', 'mtime_ns', 'ctime_ns'))
+    data, _ = read_regular(sentinel)
+    after = os.lstat(sentinel)
+    return {'sentinel': sentinel, 'record': record, 'now': now, 'nlink': s.st_nlink,
+            'unread': unread, 'unwritten': unwritten,
+            'sha256_equal': sha256_bytes(data) == record['sha256'],
+            'control_read_moved_atime': after.st_atime_ns != s.st_atime_ns}
+
+
 # ---------------------------------------------------------------- root P5 scan
 
 def mounts():
@@ -854,7 +1122,12 @@ def proc_owner(path):
 ACTIONS = {'observe': observe, 'guard-break': guard_break, 'guard-restore': guard_restore,
            'key-break': key_break, 'key-restore': key_restore, 'server-restart': server_restart,
            'state-read': state_read, 'state-alter': state_alter, 'state-snapshot': state_snapshot,
-           'state-rollback': state_rollback, 'state-discard': state_discard, 'root-scan': root_scan}
+           'state-rollback': state_rollback, 'state-discard': state_discard, 'root-scan': root_scan,
+           'quiesce-break': quiesce_break, 'quiesce-restore': quiesce_restore,
+           'server-kill': server_kill, 'start-window': start_window,
+           'container-kill': container_kill, 'quarantine-list': quarantine_list,
+           'quarantine-return': quarantine_return, 'sentinel-plant': sentinel_plant,
+           'sentinel-check': sentinel_check}
 
 
 def redact(text, values):

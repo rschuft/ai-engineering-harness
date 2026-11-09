@@ -822,6 +822,23 @@ defaults them.
   `icc` is off on Moby's default bridge, and the Agent Server's `ExecStartPre` refuses
   to start without a valid session key. `inspect` checks all three from the boot-time
   facts.
+- The server's start is ordered and fail-closed (E-01.2.2 slice (c)):
+  `aieh-agent-server.service` `Requires=` and starts `After=` both `docker.service` and
+  `aieh-agent-server-quiesce.service` (never `Wants=`), so a failing guard, Moby or
+  quiesce step fails the server's start job with result `dependency`. The quiesce step is
+  a seeded root oneshot without `RemainAfterExit`, so every server start (boot, restart,
+  `Restart=on-failure`) runs it again first. It removes every container (`docker rm -f`,
+  then none may remain), then, for each record of the conversations path, through
+  directory-relative opens that never follow a link, acts only on regular, singly linked
+  `meta.json` and `base_state.json` files owned by the service user: `execution_status`
+  `running` becomes `error` in place, unparseable JSON is left alone, and a record that
+  fails a check or whose `meta.json` id is not its directory name is moved aside into the
+  root-only `/srv/scratch/aieh-quarantine`, never deleted. Its journal line carries counts
+  and hex ids only. This compensates the pinned 1.60.1 server's start-up resume of a
+  stored `running` record in its own process (`fd-outer-server-local-recovery` in
+  [`security/inventory.json`](../security/inventory.json)). The profile declares it in
+  `provisioning.agent_server.quiesce` and `service.dependencies`; `check_profile` checks
+  the declaration against the seed template and `inspect` against the boot facts.
 - `job-access-probe` (S-01.3.2) proves the job environment declared in
   `provisioning.agent_server.jobs`: each conversation container, where builder and
   reviewer runs execute. It creates two disposable conversations; compares each
@@ -890,7 +907,7 @@ defaults them.
   listeners by PID, each of which must be on `127.0.0.1`, with the Windows Firewall
   profiles and rule count recorded as disclosure. It reads no file and changes no rule;
   `--exclude-pid` keeps a process out of every lookup.
-- `drill` (E-01.2.2 slice (b)) is a **test-only mode** for the fail-closed drills, under
+- `drill` (E-01.2.2 slices (b) and (c)) is a **test-only mode** for the fail-closed drills, under
   the Owner's extended guest-run authorization of 2026-11-07. `create --provision --drill`
   (with `--egress-falsification` and `--canaries` if wanted) seeds
   [`tools/guest_drill.py`](../tools/guest_drill.py) as a second user-data part, which
@@ -906,7 +923,9 @@ defaults them.
     session key, then with a second one) and the guard (a drop-in that makes
     `aieh-container-guard.service` fail before it installs a rule, then one that only
     verifies, so a boot finds no rule), each followed by its restore and a positive
-    control; for the guard the guest is rebooted with the failing unit.
+    control; for the guard the guest is rebooted with the failing unit. Slice (c) adds the
+    quiesce step: a drop-in makes it fail, then a server restart and a guest boot must
+    leave the server not started (result `dependency`, no listener, no process).
   - `--kind stored-state`: one disposable conversation is created and stopped; every field
     of its job-writable stored files (`meta.json`, `base_state.json`, and a planted
     `owner_lease.json`) is altered alone, then the Agent Server restarts (its start-up
@@ -919,7 +938,22 @@ defaults them.
     change, and the job itself then writes the start-up pair (`execution_status` and the
     working directory) from inside its container, once with its runtime stopped normally
     and once after killing its own inner server. `--limit N` runs only the first N
-    alterations.
+    alterations. With the quiesce step, an alteration whose record the step moves aside
+    (a `meta.json` id that is not the directory's) is recorded as `quarantined`, is not
+    reopened, and is moved back before the rollback.
+  - `--kind f2-closed` (slice (c)): the "F-2 closed" drill, its decision rule fixed before
+    observation. On fresh disposable conversations: the start-up pair written by the
+    helper (A); written by the job from inside its container, then the runtime stopped
+    normally (B1) or the container force-killed by root (B2); rewritten by the job in a
+    loop while the server is killed and restarted by systemd with the container alive
+    (C); an idle record's files kept across a restart, a reopen and a guest restart (D); a
+    record claiming another conversation's id (F); `base_state.json` replaced by a symbolic
+    link and by a hard link to a sentinel outside the record, whose times show it was
+    neither read nor written (G). Each start is judged by the rule: no resume line, no
+    `owner_lease.json` from the outer server, no new path under the server's home or the
+    record, no `running` left, no container event between the step's end and the server's
+    `ExecStart` (Moby's events), and the step's result `success` while the server is
+    active.
   - `--kind root-scan --canaries <set> [--raw]`: the guest-root P5 scan. As root, every
     regular file of every disk-backed and tmpfs mount and every process environment and
     command line is searched for the canary set's cores (by sha256, the values never

@@ -169,6 +169,15 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   - **Never inside a conversation container (amended 2026-11-07, S-01.4).** The guest's
     own Moby is reachable only from the guest itself, and never inside a conversation
     container: no engine socket, no engine TCP endpoint (S-01.3.2).
+  - **The management principal starts only behind its controls (amended 2026-11-09,
+    E-01.2.2).** The Agent Server's unit requires, and starts after, Moby (which requires
+    the container guard) and a root quiesce step that runs before every server start: it
+    removes every container, then neutralizes the job-writable stored state the server
+    would act on in its own process (a `running` record becomes `error`; a record that is
+    a link, a hard link, of another owner or of another conversation's id is moved into a
+    root-only quarantine, never deleted). If any of them fails, the server does not start.
+    The profile declares the step (`provisioning.agent_server.quiesce`) and `inspect`
+    compares it with the boot facts.
   - A provider agent channel (incus-agent, QEMU guest agent) is declared, and is
     host→guest only.
 - **trusted-workload (WSL):**
