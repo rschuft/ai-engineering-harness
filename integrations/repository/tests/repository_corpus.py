@@ -61,6 +61,7 @@ GIT_ENV = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_AUT
 
 UNI = 'docs/ünïcode é.md'
 SPACED = 'openspec/changes/qual 02 spaced/design.md'
+NON_ASCII_DIR = 'openspec/changes/ünï çhange'
 LONG_DIRS = ('d' * 100, 'e' * 100)
 LONG_NAME = 'g' * 72 + '.txt'
 LONG_PATH = f'openspec/changes/{LONG_DIRS[0]}/{LONG_DIRS[1]}/{LONG_NAME}'
@@ -192,6 +193,8 @@ def build(root):
         'openspec/config.yaml': 'schema: spec-driven\n',
         SPACED: '# design\n',
         'openspec/changes/plain/x.md': 'plain\n',
+        f'{NON_ASCII_DIR}/design.md': '# désign\n',
+        f'{NON_ASCII_DIR}/spécs/s péc.md': 'spec\n',
         'data/binary.bin': b'\x00\x01\r\n\x02\x03\xff\r\n',
         '.gitattributes': 'eol/*.txt text eol=crlf\nignored-export export-ignore\n*.bin binary\n',
         '.gitignore': 'build/\n*.log\n',
@@ -494,7 +497,8 @@ def forms(facts):
                 'HEAD@{0}:', 'side@{0}~5']
     fallback_names = ['@{1}^{blob}', 'main@{1}^{tag}', 'HEAD@{0}^{blob}']
     main_commits = refs + ids + navigation + peel + paths + reflog + describe
-    spaced = [f'HEAD:{UNI}', f'HEAD:{SPACED}', 'HEAD:openspec/changes/qual 02 spaced', f'{E}:{UNI}',
+    spaced = [f'HEAD:{UNI}', f'HEAD:{SPACED}', f'HEAD:{NON_ASCII_DIR}', f'HEAD:{NON_ASCII_DIR}/spécs/s péc.md',
+              f':{NON_ASCII_DIR}/design.md', 'HEAD:openspec/changes/qual 02 spaced', f'{E}:{UNI}',
               f'HEAD:docs//{UNI[5:]}', 'HEAD: README.md', 'HEAD:README.md ', ':staged new.txt', f':{UNI}',
               ':data/binary.bin', 'HEAD:data/binary.bin', 'HEAD:eol/crlf.txt', 'no such name', f'HEAD~1:{UNI}',
               'HEAD:openspec/changes/qual 02 spaced/', 'links-ok:links/file.txt', 'HEAD:ignored-export/hidden.txt']
@@ -543,6 +547,7 @@ WORK_TREE_SUBJECTS = ['repo one', 'repo one/docs', 'repo one/openspec/changes/qu
                       'separate work', 'separate work/dir', 'sha256 repo', 'conflicted', 'bare.git',
                       'repo one/.git', 'repo one/.git/refs', 'separate.git', 'long.git', 'not a repo']
 FILES = {'repo one': [('HEAD', 'openspec/changes'), ('HEAD', 'openspec/changes/qual 02 spaced'), ('HEAD', 'docs'),
+                      ('HEAD', NON_ASCII_DIR), ('HEAD', f'{NON_ASCII_DIR}/spécs'),
                       ('HEAD', 'no/such'), ('HEAD', 'README.md'), ('HEAD', 'openspec'), ('HEAD~2', 'docs'),
                       ('links-ok', 'links'), ('HEAD', 'ignored-export')],
          'packed copy': [('HEAD', 'openspec/changes'), ('HEAD', 'docs')],

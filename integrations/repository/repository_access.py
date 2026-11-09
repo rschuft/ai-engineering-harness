@@ -538,9 +538,15 @@ class Repository:
             try:
                 repo.close()
             except BufferError:
-                # A pack whose read failed may still hold an exported buffer; the failure was
-                # already raised as GIT_FAILED, and closing must not crash.
-                pass
+                # A pack whose read failed may still hold an exported buffer (the failure was
+                # already raised as GIT_FAILED): release the buffers and close again; closing
+                # must not crash.
+                import gc
+                gc.collect()
+                try:
+                    repo.close()
+                except BufferError:
+                    pass
 
     def __enter__(self):
         return self
@@ -578,18 +584,27 @@ class Repository:
 
     # -- objects
 
-    def _guard(self, oid, exc):
-        return RepositoryError('GIT_FAILED', f'cannot read object {oid}: {type(exc).__name__}: {exc}', object=oid)
+    def _boundary(self, oid, call, *args):
+        """CALL(*ARGS) at the module boundary (decision 0014 section 3): KeyError (no such
+        object) passes; any other Dulwich or OS error becomes GIT_FAILED naming OID, raised after
+        the failing call's frames are released (they may pin a pack's buffer, which would keep
+        the pack open after close)."""
+        failure = None
+        try:
+            return call(*args)
+        except KeyError:
+            raise
+        except Exception as exc:
+            failure = f'{type(exc).__name__}: {exc}'
+        raise RepositoryError('GIT_FAILED', f'cannot read object {oid}: {failure}', object=oid)
 
     def _raw(self, oid):
         """(type name, bytes) of object OID, or None when the repository has none. The content
         must hash to OID (Dulwich 1.2.21 does not check a loose object's id on this path)."""
         try:
-            type_num, data = self._dul.object_store.get_raw(oid.encode('ascii'))
+            type_num, data = self._boundary(oid, self._dul.object_store.get_raw, oid.encode('ascii'))
         except KeyError:
             return None
-        except Exception as exc:  # the module boundary (decision 0014 section 3)
-            raise self._guard(oid, exc) from None
         kind = _TYPE_NAMES.get(type_num)
         algorithm = hashlib.sha256 if self._hexsz == 64 else hashlib.sha1
         if kind is None or algorithm(b'%s %d\0' % (kind.encode(), len(data)) + data).hexdigest() != oid:
@@ -602,11 +617,9 @@ class Repository:
         if self._raw(oid) is None:
             return None
         try:
-            return self._dul.object_store[oid.encode('ascii')]
+            return self._boundary(oid, self._dul.object_store.__getitem__, oid.encode('ascii'))
         except KeyError:
             return None
-        except Exception as exc:
-            raise self._guard(oid, exc) from None
 
     def _kind(self, oid):
         found = self._raw(oid)
@@ -635,11 +648,9 @@ class Repository:
 
     def _parents(self, oid):
         try:
-            return [p.decode('ascii') for p in self._dul.get_parents(oid.encode('ascii'))]
+            return [p.decode('ascii') for p in self._boundary(oid, self._dul.get_parents, oid.encode('ascii'))]
         except KeyError:
             return None
-        except Exception as exc:
-            raise self._guard(oid, exc) from None
 
     def _peel_to_type(self, oid, wanted):
         """git's peel_to_type: tags to their targets and commits to their trees until WANTED
@@ -676,10 +687,7 @@ class Repository:
         tree = self._object(oid)
         if tree is None or tree.type_name != b'tree':
             raise RepositoryError('GIT_FAILED', f'cannot read tree {oid}: no such tree', object=oid)
-        try:
-            items = list(tree.iteritems())
-        except Exception as exc:
-            raise self._guard(oid, exc) from None
+        items = self._boundary(oid, lambda: list(tree.iteritems()))
         return [(entry.path.decode('utf-8', 'surrogateescape'), entry.mode, entry.sha.decode('ascii'))
                 for entry in items]
 
@@ -698,11 +706,9 @@ class Repository:
                 return None
             name, sep, rest = remaining.partition('/')
             try:
-                mode, sha = tree[name.encode('utf-8', 'surrogateescape')]
+                mode, sha = self._boundary(current, tree.__getitem__, name.encode('utf-8', 'surrogateescape'))
             except KeyError:
                 return None
-            except Exception as exc:
-                raise self._guard(current, exc) from None
             sha = sha.decode('ascii')
             if not sep:
                 return sha, mode

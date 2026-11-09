@@ -12,6 +12,7 @@ listings and the work-tree check. The documented gap forms are refused before an
 access; damaged objects fail visibly; the configuration policy is explicit and observable; no
 process is launched. The git-oracle half (``test_repository_oracle.py``) asks git again.
 """
+import gc
 import hashlib
 import os
 import re
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -434,8 +436,14 @@ class Integrity(unittest.TestCase):
                     with self.assertRaises(ra.RepositoryError) as caught:
                         r.export_tree('HEAD', '.', _empty_dir())
                     self.assertEqual(caught.exception.code, 'GIT_FAILED')
+                    self.assertIsNone(caught.exception.__context__)
                 finally:
-                    r.close()
+                    with warnings.catch_warnings(record=True) as seen:
+                        warnings.simplefilter('always')
+                        r.close()
+                        gc.collect()
+                # Closing released every file of the damaged repository.
+                self.assertEqual([str(w.message) for w in seen if issubclass(w.category, ResourceWarning)], [])
 
 
 _EMPTY = []

@@ -1,12 +1,12 @@
 {
- "archive_sha256": "dd51dab9e85a403dff83cce1b1f8042f275885efc5a2cc852dbfd11a9c2a22d9",
+ "archive_sha256": "079af071d03cb5e1521917a39d20ccf125b4e0c03dd94acab4afe1a800dc67cd",
  "facts": {
-  "A": "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
-  "B": "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
-  "C": "674b41e70863caf3509851e1b3502ab3ed46a1cc",
-  "D": "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
-  "E": "8c89f72afa6e654275db24feacc1cb1b3f781a20",
-  "F": "b972ffc43dc962ef4a430c8f563506f991781d31",
+  "A": "72f0c241a570e6f91cd38bb368986b81914ef1bd",
+  "B": "51bd368335b36557a80882ad6a325034ed007b40",
+  "C": "3097cb26c375337357bed0a2b3ebe356aafb6900",
+  "D": "dd1673624c1034a252fa23c6dd483114ab3e986c",
+  "E": "b07164adea8ec71b783009513c37a5e09b9f0ed4",
+  "F": "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
   "H1": "2dfdcee8173b8f0bfd113ee3a60ef1fb3d1303dbb2f732b3effa12e916ec9308",
   "H2": "5bc4e6404a4fecf4130ad20ae7702462765f3cc386332c5251f7b9b42922640d",
   "H3": "305a4d9b5cacec3f4a705091f0f46effa73f97cd62f9142dbeb7b9385088efb4",
@@ -14,16 +14,16 @@
   "L": "70dcb2ce4a56e6fcf2a5ba153db1972f48083aa6",
   "S": "5eb005579d165ca25e799fc6cfe2690302d88888",
   "amb4": "6d80",
-  "cb4": "8c89",
+  "cb4": "b071",
   "links_climb": "13ef02687cf2d3d7960a20ffdb80774ecd70fb64",
-  "links_escape": "5fde941711129ed600ebdcdcb6659bba7455fc3e",
-  "links_ok": "4d8ccd03d9f6c5f25dbfe5a7d22914912c007036",
+  "links_escape": "af0b070dba5a251d5daeb8056ab36f91e008b192",
+  "links_ok": "751e7cf5821ceea0e4a1d169185923bf5b287c15",
   "mismatch": "ce013625030ba8dba906f756967f9e9ca394464a",
   "pack": "ce013625030ba8dba906f756967f9e9ca394464a",
   "readme_blob": "c420dd70c7b165204b263fce50097b225887074a",
-  "tree": "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+  "tree": "2aea620c85c55a398fba75e89c976bdc955f1f5b",
   "unsafe": "5c45c75f17f8549be8955d9acc98014e65eb3f78",
-  "v1_tag": "952072523d388174e8ed69ea7726ca4984011277",
+  "v1_tag": "924b3993ccc146f1a517a07844b371752dbb474b",
   "zlib": "ce013625030ba8dba906f756967f9e9ca394464a"
  },
  "git": "git version 2.52.0.windows.1",
@@ -33,55 +33,55 @@
    "commits": [
     [
      "HEAD",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "@",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "side",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "v1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v1^{}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "origin",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "refs/remotes/origin/HEAD",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "HEAD~1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD^2",
      null
     ],
     [
-     "8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "6d80",
      null
     ],
     [
-     "8c89",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b071",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main@{0}",
@@ -89,7 +89,7 @@
     ],
     [
      "@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD@{0}",
@@ -117,70 +117,70 @@
     ]
    ],
    "head": [
-    "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+    "b07164adea8ec71b783009513c37a5e09b9f0ed4",
     "refs/heads/main"
    ],
    "names": [
     [
      "HEAD",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "@",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "main",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "side",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "v1",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
     [
      "v1^{}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "origin",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "refs/remotes/origin/HEAD",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "HEAD~1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
@@ -189,9 +189,9 @@
      null
     ],
     [
-     "8c89f72",
+     "b07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -200,9 +200,9 @@
      null
     ],
     [
-     "8c89",
+     "b071",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -213,7 +213,7 @@
     [
      "@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -564,51 +564,51 @@
    "commits": [
     [
      "HEAD",
-     "b972ffc43dc962ef4a430c8f563506f991781d31"
+     "ed7a4d28cdaac481deef490b46cf8e021f5f2aec"
     ],
     [
      "@",
-     "b972ffc43dc962ef4a430c8f563506f991781d31"
+     "ed7a4d28cdaac481deef490b46cf8e021f5f2aec"
     ],
     [
      "wtb",
-     "b972ffc43dc962ef4a430c8f563506f991781d31"
+     "ed7a4d28cdaac481deef490b46cf8e021f5f2aec"
     ],
     [
      "main",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD~1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "HEAD@{0}",
-     "b972ffc43dc962ef4a430c8f563506f991781d31"
+     "ed7a4d28cdaac481deef490b46cf8e021f5f2aec"
     ],
     [
      "HEAD@{1}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "HEAD@{2}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "@{0}",
-     "b972ffc43dc962ef4a430c8f563506f991781d31"
+     "ed7a4d28cdaac481deef490b46cf8e021f5f2aec"
     ],
     [
      "@{1}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "wtb@{0}",
-     "b972ffc43dc962ef4a430c8f563506f991781d31"
+     "ed7a4d28cdaac481deef490b46cf8e021f5f2aec"
     ],
     [
      "wtb@{1}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "wtb@{2}",
@@ -616,7 +616,7 @@
     ],
     [
      "main@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      ":linked.txt",
@@ -632,11 +632,11 @@
     ],
     [
      "ORIG_HEAD",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "FETCH_HEAD",
@@ -644,7 +644,7 @@
     ]
    ],
    "head": [
-    "b972ffc43dc962ef4a430c8f563506f991781d31",
+    "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
     "refs/heads/wtb"
    ],
    "index": [
@@ -716,6 +716,18 @@
     ],
     [
      33188,
+     "1b297b7fe9150fcf49727a34a5fafbebbe275469",
+     0,
+     "openspec/changes/ünï çhange/design.md"
+    ],
+    [
+     33188,
+     "79c6997b8654fe2aa481bc770c477339c6af8875",
+     0,
+     "openspec/changes/ünï çhange/spécs/s péc.md"
+    ],
+    [
+     33188,
      "b4bbeb946f4c4d9310ee8730c5f89564bc95e9f0",
      0,
      "openspec/config.yaml"
@@ -744,6 +756,8 @@
       "linked.txt",
       "openspec/changes/plain/x.md",
       "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md",
       "openspec/config.yaml",
       "text/crlf-in-blob.txt"
      ]
@@ -776,6 +790,8 @@
       "linked.txt",
       "openspec/changes/plain/x.md",
       "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md",
       "openspec/config.yaml",
       "text/crlf-in-blob.txt"
      ]
@@ -785,84 +801,84 @@
     [
      "HEAD",
      [
-      "b972ffc43dc962ef4a430c8f563506f991781d31",
+      "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
       "commit"
      ]
     ],
     [
      "@",
      [
-      "b972ffc43dc962ef4a430c8f563506f991781d31",
+      "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
       "commit"
      ]
     ],
     [
      "wtb",
      [
-      "b972ffc43dc962ef4a430c8f563506f991781d31",
+      "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
       "commit"
      ]
     ],
     [
      "main",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "HEAD~1",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "HEAD@{0}",
      [
-      "b972ffc43dc962ef4a430c8f563506f991781d31",
+      "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
       "commit"
      ]
     ],
     [
      "HEAD@{1}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "HEAD@{2}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "@{0}",
      [
-      "b972ffc43dc962ef4a430c8f563506f991781d31",
+      "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
       "commit"
      ]
     ],
     [
      "@{1}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "wtb@{0}",
      [
-      "b972ffc43dc962ef4a430c8f563506f991781d31",
+      "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
       "commit"
      ]
     ],
     [
      "wtb@{1}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
@@ -873,7 +889,7 @@
     [
      "main@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -901,14 +917,14 @@
     [
      "ORIG_HEAD",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "v1",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
@@ -1027,67 +1043,67 @@
    "commits": [
     [
      "HEAD",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "@",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "refs/heads/main",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "side",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "v1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v1^{}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "lw",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "dup",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "origin",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "top",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "6d80",
      null
     ],
     [
-     "8c89",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b071",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD~1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD^2",
@@ -1095,7 +1111,7 @@
     ],
     [
      "HEAD~1^2",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "HEAD^{tree}",
@@ -1111,23 +1127,23 @@
     ],
     [
      "main@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main@{1}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD@{1}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "v1-1-g8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "v1-1-gb07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "nosuch",
@@ -1135,7 +1151,7 @@
     ],
     [
      "ORIG_HEAD",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      ":README.md",
@@ -1160,6 +1176,18 @@
        9
       ],
       [
+       "openspec/changes/ünï çhange/design.md",
+       "100644",
+       "1405449c4ae7d2d04338194753fc0a8de9955113e3d88519730c1e2939373a1a",
+       10
+      ],
+      [
+       "openspec/changes/ünï çhange/spécs/s péc.md",
+       "100644",
+       "3b92cc255009c1a8541990fd00bcde181bc803a80b234f086647210c078bb7e4",
+       5
+      ],
+      [
        "openspec/config.yaml",
        "100644",
        "85b53dd24fbe7d19c8b0f0ddccf5e82600c5c372c76b57a2a89dc34dfb0fc5b9",
@@ -1174,7 +1202,9 @@
      "openspec/changes",
      [
       "openspec/changes/plain/x.md",
-      "openspec/changes/qual 02 spaced/design.md"
+      "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md"
      ]
     ],
     [
@@ -1187,7 +1217,7 @@
     ]
    ],
    "head": [
-    "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+    "b07164adea8ec71b783009513c37a5e09b9f0ed4",
     "refs/heads/main"
    ],
    "index": [
@@ -1259,6 +1289,18 @@
     ],
     [
      33188,
+     "1b297b7fe9150fcf49727a34a5fafbebbe275469",
+     0,
+     "openspec/changes/ünï çhange/design.md"
+    ],
+    [
+     33188,
+     "79c6997b8654fe2aa481bc770c477339c6af8875",
+     0,
+     "openspec/changes/ünï çhange/spécs/s péc.md"
+    ],
+    [
+     33188,
      "b4bbeb946f4c4d9310ee8730c5f89564bc95e9f0",
      0,
      "openspec/config.yaml"
@@ -1287,6 +1329,8 @@
       "ignored-export/hidden.txt",
       "openspec/changes/plain/x.md",
       "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md",
       "openspec/config.yaml",
       "text/crlf-in-blob.txt"
      ]
@@ -1319,6 +1363,8 @@
       "ignored-export/hidden.txt",
       "openspec/changes/plain/x.md",
       "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md",
       "openspec/config.yaml",
       "text/crlf-in-blob.txt"
      ]
@@ -1328,91 +1374,91 @@
     [
      "HEAD",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "@",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "main",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "refs/heads/main",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "side",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "v1",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
     [
      "v1^{}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "lw",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "dup",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "origin",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "top",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8c89f72",
+     "b07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -1421,13 +1467,13 @@
      null
     ],
     [
-     "8c89",
+     "b071",
      null
     ],
     [
      "HEAD~1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
@@ -1438,14 +1484,14 @@
     [
      "HEAD~1^2",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "HEAD^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
@@ -1459,42 +1505,42 @@
     [
      "HEAD:",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
     [
      "main@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "main@{1}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD@{1}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "v1-1-g8c89f72",
+     "v1-1-gb07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -1505,7 +1551,7 @@
     [
      "ORIG_HEAD",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
@@ -1526,7 +1572,7 @@
     [
      "HEAD:openspec",
      [
-      "73b42e7de2a4a8d772c1f9aa7b0f561934dbf424",
+      "5df7e7431654e51e1815dc854275bbb181aca931",
       "tree"
      ]
     ]
@@ -1543,51 +1589,51 @@
    "commits": [
     [
      "HEAD",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "@",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "heads/main",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "refs/heads/main",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "side",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "refs/heads/side",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "v1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "tags/v1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "refs/tags/v1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "lw",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "v2",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "treetag",
@@ -1599,59 +1645,59 @@
     ],
     [
      "dup",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "heads/dup",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "tags/dup",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "refs/heads/dup",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "origin",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "origin/main",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "remotes/origin/main",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "refs/remotes/origin/HEAD",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "top",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "refs/top",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "ünï",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "cafe",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "ORIG_HEAD",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "FETCH_HEAD",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "MERGE_HEAD",
@@ -1695,7 +1741,7 @@
     ],
     [
      "links-ok",
-     "4d8ccd03d9f6c5f25dbfe5a7d22914912c007036"
+     "751e7cf5821ceea0e4a1d169185923bf5b287c15"
     ],
     [
      "HEAD@",
@@ -1703,7 +1749,7 @@
     ],
     [
      "main-worktree/HEAD",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "info/exclude",
@@ -1730,55 +1776,55 @@
      null
     ],
     [
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8C89F72AFA6E654275DB24FEACC1CB1B3F781A20",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "B07164ADEA8EC71B783009513C37A5E09B9F0ED4",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c89",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b071",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c89f",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b0716",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c89f72afa6e",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8e",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c89f72afa6e654275db24feacc1cb1b3f781a2",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c8",
+     "b07",
      null
     ],
     [
-     "8C89F72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "B07164A",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "ae06d5d",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c24",
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "6d80",
      null
     ],
     [
-     "8c89",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b071",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+     "2aea620c85c55a398fba75e89c976bdc955f1f5b",
      null
     ],
     [
@@ -1786,8 +1832,8 @@
      null
     ],
     [
-     "952072523d388174e8ed69ea7726ca4984011277",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "924b3993ccc146f1a517a07844b371752dbb474b",
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "0000000000000000000000000000000000000000",
@@ -1811,27 +1857,27 @@
     ],
     [
      "cafe",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "HEAD~",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD~0",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD~1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD~2",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "HEAD~3",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "HEAD~4",
@@ -1843,15 +1889,15 @@
     ],
     [
      "HEAD^",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD^0",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD^1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD^2",
@@ -1859,19 +1905,19 @@
     ],
     [
      "HEAD^^",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "HEAD^^^",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "HEAD~1^1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "HEAD~1^2",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "HEAD~1^3",
@@ -1879,43 +1925,43 @@
     ],
     [
      "HEAD~1^2~1",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "HEAD~1^2^",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "main~0",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "@~1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "@^",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "v1~1",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "v1^",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "v1^0",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v2~1",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "lw~0",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "lw^",
@@ -1931,23 +1977,23 @@
     ],
     [
      "HEAD^01",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD~01",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
-     "8c89f72~1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "b07164a~1",
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
-     "8c89~1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "b071~1",
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "origin~1",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "treetag~1",
@@ -1959,15 +2005,15 @@
     ],
     [
      "HEAD~1~1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "HEAD^^2",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "HEAD^{commit}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD^{tree}",
@@ -1983,23 +2029,23 @@
     ],
     [
      "HEAD^{}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD^{object}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "v1^{}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v1^{tag}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v1^{commit}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v1^{tree}",
@@ -2007,19 +2053,19 @@
     ],
     [
      "v1^{object}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v2^{}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v2^{tag}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "v2^{commit}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "treetag^{tree}",
@@ -2047,7 +2093,7 @@
     ],
     [
      "HEAD^{commit}garbage}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD^{commitx}",
@@ -2059,18 +2105,18 @@
     ],
     [
      "HEAD^{}^{}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "8c89f72^{tree}",
+     "b07164a^{tree}",
      null
     ],
     [
-     "8c89^{tree}",
+     "b071^{tree}",
      null
     ],
     [
-     "8c89^{}",
+     "b071^{}",
      null
     ],
     [
@@ -2079,18 +2125,18 @@
     ],
     [
      "HEAD~1^{commit}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD^{commit}~1",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD~1^{commit}^2",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
-     "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076^{tree}",
+     "2aea620c85c55a398fba75e89c976bdc955f1f5b^{tree}",
      null
     ],
     [
@@ -2166,7 +2212,7 @@
      null
     ],
     [
-     "8c89:README.md",
+     "b071:README.md",
      null
     ],
     [
@@ -2215,19 +2261,19 @@
     ],
     [
      "main@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main@{1}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "main@{2}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "main@{3}",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "main@{4}",
@@ -2243,19 +2289,19 @@
     ],
     [
      "main@{00001}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD@{1}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "HEAD@{2}",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "HEAD@{8}",
@@ -2263,23 +2309,23 @@
     ],
     [
      "@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "@{1}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "@@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "side@{0}",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "side@{1}",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "side@{2}",
@@ -2291,19 +2337,19 @@
     ],
     [
      "refs/heads/main@{1}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "main@{1}~1",
-     "674b41e70863caf3509851e1b3502ab3ed46a1cc"
+     "3097cb26c375337357bed0a2b3ebe356aafb6900"
     ],
     [
      "main@{1}^{commit}",
-     "8f75939a9ded8fb29f26e68cb960cb1712c896c8"
+     "dd1673624c1034a252fa23c6dd483114ab3e986c"
     ],
     [
      "main@{1}^2",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "nosuch@{0}",
@@ -2311,11 +2357,11 @@
     ],
     [
      "origin@{0}",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "origin/main@{0}",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ],
     [
      "origin/main@{1}",
@@ -2323,11 +2369,11 @@
     ],
     [
      "dup@{0}",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "wtb@{0}",
-     "b972ffc43dc962ef4a430c8f563506f991781d31"
+     "ed7a4d28cdaac481deef490b46cf8e021f5f2aec"
     ],
     [
      "main@{99999999}",
@@ -2335,26 +2381,26 @@
     ],
     [
      "@{2}~1",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "main-worktree/HEAD@{0}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "v1-1-g8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "v1-1-gb07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "x-g8c89f72",
+     "x-gb07164a",
      null
     ],
     [
-     "g8c89f72",
+     "gb07164a",
      null
     ],
     [
-     "v1-gae06d5d",
+     "v1-g72f0c24",
      null
     ],
     [
@@ -2366,59 +2412,59 @@
      null
     ],
     [
-     "a-g8c8",
+     "a-gb07",
      null
     ],
     [
-     "a-g8c89",
+     "a-gb071",
      null
     ],
     [
-     "a-1-g8c89",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "a-1-gb071",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "a-g0eecb09~1",
+     "a-g51bd368~1",
      null
     ],
     [
-     "a-9-g0eecb09~1",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "a-9-g51bd368~1",
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
-     "v1-2-g8c89f72^{tree}",
+     "v1-2-gb07164a^{tree}",
      null
     ],
     [
-     "1-g8c89f72",
+     "1-gb07164a",
      null
     ],
     [
-     "a-01-g8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "a-01-gb07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "a-1x-g8c89f72",
+     "a-1x-gb07164a",
      null
     ],
     [
-     "a-b-1-g8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "a-b-1-gb07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "v1-1-g8c89f72-dirty",
+     "v1-1-gb07164a-dirty",
      null
     ],
     [
-     "a--1-g8c89f72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "a--1-gb07164a",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "v1-1-g8C89F72",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "v1-1-gB07164A",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
-     "a-1-G8c89f72",
+     "a-1-Gb07164a",
      null
     ],
     [
@@ -2426,7 +2472,7 @@
      null
     ],
     [
-     "x-1-g8a057bc",
+     "x-1-g2aea620",
      null
     ]
    ],
@@ -2502,6 +2548,18 @@
        9
       ],
       [
+       "openspec/changes/ünï çhange/design.md",
+       "100644",
+       "1405449c4ae7d2d04338194753fc0a8de9955113e3d88519730c1e2939373a1a",
+       10
+      ],
+      [
+       "openspec/changes/ünï çhange/spécs/s péc.md",
+       "100644",
+       "3b92cc255009c1a8541990fd00bcde181bc803a80b234f086647210c078bb7e4",
+       5
+      ],
+      [
        "openspec/config.yaml",
        "100644",
        "85b53dd24fbe7d19c8b0f0ddccf5e82600c5c372c76b57a2a89dc34dfb0fc5b9",
@@ -2530,6 +2588,18 @@
        "100644",
        "ab4b56eeb9f2f80d5d5f7ef35ba2cdc47e02f70d06ed455259c30a11f73b52ef",
        9
+      ],
+      [
+       "openspec/changes/ünï çhange/design.md",
+       "100644",
+       "1405449c4ae7d2d04338194753fc0a8de9955113e3d88519730c1e2939373a1a",
+       10
+      ],
+      [
+       "openspec/changes/ünï çhange/spécs/s péc.md",
+       "100644",
+       "3b92cc255009c1a8541990fd00bcde181bc803a80b234f086647210c078bb7e4",
+       5
       ],
       [
        "openspec/config.yaml",
@@ -2603,52 +2673,52 @@
    "fallback_commits": [
     [
      "main@{0}:README.md",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main@{1}^{tree}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main@{1}x",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "main@{3}~1",
-     "ae06d5d9724bce5b2dbf5d1901dea465213a14b7"
+     "72f0c241a570e6f91cd38bb368986b81914ef1bd"
     ],
     [
      "@{1}^{blob}",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "HEAD@{0}:",
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20"
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4"
     ],
     [
      "side@{0}~5",
-     "0eecb0914813d9894424b0e3753d3ed173dd1bb7"
+     "51bd368335b36557a80882ad6a325034ed007b40"
     ]
    ],
    "fallback_names": [
     [
      "@{1}^{blob}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "main@{1}^{tag}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "HEAD@{0}^{blob}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ]
@@ -2659,7 +2729,9 @@
      "openspec/changes",
      [
       "openspec/changes/plain/x.md",
-      "openspec/changes/qual 02 spaced/design.md"
+      "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md"
      ]
     ],
     [
@@ -2679,6 +2751,21 @@
     ],
     [
      "HEAD",
+     "openspec/changes/ünï çhange",
+     [
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md"
+     ]
+    ],
+    [
+     "HEAD",
+     "openspec/changes/ünï çhange/spécs",
+     [
+      "openspec/changes/ünï çhange/spécs/s péc.md"
+     ]
+    ],
+    [
+     "HEAD",
      "no/such",
      []
     ],
@@ -2693,6 +2780,8 @@
      [
       "openspec/changes/plain/x.md",
       "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md",
       "openspec/config.yaml"
      ]
     ],
@@ -2722,7 +2811,7 @@
     ]
    ],
    "head": [
-    "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+    "b07164adea8ec71b783009513c37a5e09b9f0ed4",
     "refs/heads/main"
    ],
    "index": [
@@ -2788,6 +2877,18 @@
     ],
     [
      33188,
+     "1b297b7fe9150fcf49727a34a5fafbebbe275469",
+     0,
+     "openspec/changes/ünï çhange/design.md"
+    ],
+    [
+     33188,
+     "79c6997b8654fe2aa481bc770c477339c6af8875",
+     0,
+     "openspec/changes/ünï çhange/spécs/s péc.md"
+    ],
+    [
+     33188,
      "b4bbeb946f4c4d9310ee8730c5f89564bc95e9f0",
      0,
      "openspec/config.yaml"
@@ -2821,6 +2922,8 @@
       "ignored-export/hidden.txt",
       "openspec/changes/plain/x.md",
       "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md",
       "openspec/config.yaml",
       "staged new.txt",
       "text/crlf-in-blob.txt"
@@ -2876,6 +2979,8 @@
       "ignored-export/hidden.txt",
       "openspec/changes/plain/x.md",
       "openspec/changes/qual 02 spaced/design.md",
+      "openspec/changes/ünï çhange/design.md",
+      "openspec/changes/ünï çhange/spécs/s péc.md",
       "openspec/config.yaml",
       "staged new.txt",
       "text/crlf-in-blob.txt"
@@ -2886,91 +2991,91 @@
     [
      "HEAD",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "@",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "main",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "heads/main",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "refs/heads/main",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "side",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "refs/heads/side",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "v1",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
     [
      "tags/v1",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
     [
      "refs/tags/v1",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
     [
      "lw",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "v2",
      [
-      "31b5cd22ce63e5c562c57eb49368ccb6726f8cbd",
+      "eedf429630d4e0ac894885e65d9c293df712d125",
       "tag"
      ]
     ],
     [
      "treetag",
      [
-      "3c8a1f92fb4a4d5e0601aff6891c9a3575405606",
+      "b64f95d5313b10c0d914ca5d9f3e8eb808803905",
       "tag"
      ]
     ],
@@ -2984,98 +3089,98 @@
     [
      "dup",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "heads/dup",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "tags/dup",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "refs/heads/dup",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "origin",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "origin/main",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "remotes/origin/main",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "refs/remotes/origin/HEAD",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "top",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "refs/top",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "ünï",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "cafe",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "ORIG_HEAD",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "FETCH_HEAD",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
@@ -3122,7 +3227,7 @@
     [
      "links-ok",
      [
-      "4d8ccd03d9f6c5f25dbfe5a7d22914912c007036",
+      "751e7cf5821ceea0e4a1d169185923bf5b287c15",
       "commit"
      ]
     ],
@@ -3133,7 +3238,7 @@
     [
      "main-worktree/HEAD",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -3162,66 +3267,66 @@
      null
     ],
     [
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8C89F72AFA6E654275DB24FEACC1CB1B3F781A20",
+     "B07164ADEA8EC71B783009513C37A5E09B9F0ED4",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8c89",
+     "b071",
      null
     ],
     [
-     "8c89f",
+     "b0716",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8c89f72",
+     "b07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8c89f72afa6e",
+     "b07164adea8e",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8c89f72afa6e654275db24feacc1cb1b3f781a2",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8c8",
+     "b07",
      null
     ],
     [
-     "8C89F72",
+     "B07164A",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "ae06d5d",
+     "72f0c24",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
@@ -3230,13 +3335,13 @@
      null
     ],
     [
-     "8c89",
+     "b071",
      null
     ],
     [
-     "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+     "2aea620c85c55a398fba75e89c976bdc955f1f5b",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
@@ -3248,9 +3353,9 @@
      ]
     ],
     [
-     "952072523d388174e8ed69ea7726ca4984011277",
+     "924b3993ccc146f1a517a07844b371752dbb474b",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
@@ -3277,42 +3382,42 @@
     [
      "cafe",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "HEAD~",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD~0",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "HEAD~1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD~2",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "HEAD~3",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
@@ -3327,21 +3432,21 @@
     [
      "HEAD^",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD^0",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "HEAD^1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
@@ -3352,28 +3457,28 @@
     [
      "HEAD^^",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "HEAD^^^",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "HEAD~1^1",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "HEAD~1^2",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
@@ -3384,70 +3489,70 @@
     [
      "HEAD~1^2~1",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "HEAD~1^2^",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "main~0",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "@~1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "@^",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "v1~1",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "v1^",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "v1^0",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "v2~1",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "lw~0",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
@@ -3466,35 +3571,35 @@
     [
      "HEAD^01",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD~01",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
-     "8c89f72~1",
+     "b07164a~1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
-     "8c89~1",
+     "b071~1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "origin~1",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
@@ -3509,28 +3614,28 @@
     [
      "HEAD~1~1",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "HEAD^^2",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "HEAD^{commit}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "HEAD^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
@@ -3545,84 +3650,84 @@
     [
      "HEAD^{}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "HEAD^{object}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "v1^{}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "v1^{tag}",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
     [
      "v1^{commit}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "v1^{tree}",
      [
-      "b072b8b96e9f1e7f83fb625f06287e222f87637e",
+      "b175d2362f9a0454b4c91a7a153c0feaa8aa3a5d",
       "tree"
      ]
     ],
     [
      "v1^{object}",
      [
-      "952072523d388174e8ed69ea7726ca4984011277",
+      "924b3993ccc146f1a517a07844b371752dbb474b",
       "tag"
      ]
     ],
     [
      "v2^{}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "v2^{tag}",
      [
-      "31b5cd22ce63e5c562c57eb49368ccb6726f8cbd",
+      "eedf429630d4e0ac894885e65d9c293df712d125",
       "tag"
      ]
     ],
     [
      "v2^{commit}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "treetag^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
     [
      "treetag^{}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
@@ -3647,14 +3752,14 @@
     [
      "HEAD^{tree}^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
     [
      "HEAD^{commit}garbage}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
@@ -3669,26 +3774,26 @@
     [
      "HEAD^{}^{}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "8c89f72^{tree}",
+     "b07164a^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
     [
-     "8c89^{tree}",
+     "b071^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
     [
-     "8c89^{}",
+     "b071^{}",
      null
     ],
     [
@@ -3698,28 +3803,28 @@
     [
      "HEAD~1^{commit}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD^{commit}~1",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD~1^{commit}^2",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
-     "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076^{tree}",
+     "2aea620c85c55a398fba75e89c976bdc955f1f5b^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
@@ -3744,21 +3849,21 @@
     [
      "HEAD:",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
     [
      "HEAD:openspec",
      [
-      "73b42e7de2a4a8d772c1f9aa7b0f561934dbf424",
+      "5df7e7431654e51e1815dc854275bbb181aca931",
       "tree"
      ]
     ],
     [
      "HEAD:openspec/",
      [
-      "73b42e7de2a4a8d772c1f9aa7b0f561934dbf424",
+      "5df7e7431654e51e1815dc854275bbb181aca931",
       "tree"
      ]
     ],
@@ -3794,7 +3899,7 @@
     [
      "HEAD:./",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
@@ -3829,7 +3934,7 @@
      null
     ],
     [
-     "8c89:README.md",
+     "b071:README.md",
      [
       "c420dd70c7b165204b263fce50097b225887074a",
       "blob"
@@ -3846,7 +3951,7 @@
     [
      "links-ok:links/sub",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
@@ -3891,28 +3996,28 @@
     [
      "main@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "main@{1}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "main@{2}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "main@{3}",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
@@ -3931,28 +4036,28 @@
     [
      "main@{00001}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "HEAD@{1}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "HEAD@{2}",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
@@ -3963,35 +4068,35 @@
     [
      "@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "@{1}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "@@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
      "side@{0}",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "side@{1}",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
@@ -4006,28 +4111,28 @@
     [
      "refs/heads/main@{1}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "main@{1}~1",
      [
-      "674b41e70863caf3509851e1b3502ab3ed46a1cc",
+      "3097cb26c375337357bed0a2b3ebe356aafb6900",
       "commit"
      ]
     ],
     [
      "main@{1}^{commit}",
      [
-      "8f75939a9ded8fb29f26e68cb960cb1712c896c8",
+      "dd1673624c1034a252fa23c6dd483114ab3e986c",
       "commit"
      ]
     ],
     [
      "main@{1}^2",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
@@ -4038,14 +4143,14 @@
     [
      "origin@{0}",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
     [
      "origin/main@{0}",
      [
-      "0eecb0914813d9894424b0e3753d3ed173dd1bb7",
+      "51bd368335b36557a80882ad6a325034ed007b40",
       "commit"
      ]
     ],
@@ -4056,14 +4161,14 @@
     [
      "dup@{0}",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "wtb@{0}",
      [
-      "b972ffc43dc962ef4a430c8f563506f991781d31",
+      "ed7a4d28cdaac481deef490b46cf8e021f5f2aec",
       "commit"
      ]
     ],
@@ -4074,34 +4179,34 @@
     [
      "@{2}~1",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
      "main-worktree/HEAD@{0}",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "v1-1-g8c89f72",
+     "v1-1-gb07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "x-g8c89f72",
+     "x-gb07164a",
      null
     ],
     [
-     "g8c89f72",
+     "gb07164a",
      null
     ],
     [
-     "v1-gae06d5d",
+     "v1-g72f0c24",
      null
     ],
     [
@@ -4113,80 +4218,80 @@
      null
     ],
     [
-     "a-g8c8",
+     "a-gb07",
      null
     ],
     [
-     "a-g8c89",
+     "a-gb071",
      null
     ],
     [
-     "a-1-g8c89",
+     "a-1-gb071",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "a-g0eecb09~1",
+     "a-g51bd368~1",
      null
     ],
     [
-     "a-9-g0eecb09~1",
+     "a-9-g51bd368~1",
      [
-      "ae06d5d9724bce5b2dbf5d1901dea465213a14b7",
+      "72f0c241a570e6f91cd38bb368986b81914ef1bd",
       "commit"
      ]
     ],
     [
-     "v1-2-g8c89f72^{tree}",
+     "v1-2-gb07164a^{tree}",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
     [
-     "1-g8c89f72",
+     "1-gb07164a",
      null
     ],
     [
-     "a-01-g8c89f72",
+     "a-01-gb07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "a-1x-g8c89f72",
+     "a-1x-gb07164a",
      null
     ],
     [
-     "a-b-1-g8c89f72",
+     "a-b-1-gb07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "v1-1-g8c89f72-dirty",
+     "v1-1-gb07164a-dirty",
      null
     ],
     [
-     "a--1-g8c89f72",
+     "a--1-gb07164a",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "v1-1-g8C89F72",
+     "v1-1-gB07164A",
      [
-      "8c89f72afa6e654275db24feacc1cb1b3f781a20",
+      "b07164adea8ec71b783009513c37a5e09b9f0ed4",
       "commit"
      ]
     ],
     [
-     "a-1-G8c89f72",
+     "a-1-Gb07164a",
      null
     ],
     [
@@ -4194,9 +4299,9 @@
      null
     ],
     [
-     "x-1-g8a057bc",
+     "x-1-g2aea620",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
@@ -4215,6 +4320,27 @@
      ]
     ],
     [
+     "HEAD:openspec/changes/ünï çhange",
+     [
+      "286a75f80229e2b9502d3346d2f73c503b135ef9",
+      "tree"
+     ]
+    ],
+    [
+     "HEAD:openspec/changes/ünï çhange/spécs/s péc.md",
+     [
+      "79c6997b8654fe2aa481bc770c477339c6af8875",
+      "blob"
+     ]
+    ],
+    [
+     ":openspec/changes/ünï çhange/design.md",
+     [
+      "1b297b7fe9150fcf49727a34a5fafbebbe275469",
+      "blob"
+     ]
+    ],
+    [
      "HEAD:openspec/changes/qual 02 spaced",
      [
       "484556620977251de0850b128875c6c37985f294",
@@ -4222,7 +4348,7 @@
      ]
     ],
     [
-     "8c89f72afa6e654275db24feacc1cb1b3f781a20:docs/ünïcode é.md",
+     "b07164adea8ec71b783009513c37a5e09b9f0ed4:docs/ünïcode é.md",
      [
       "f6496a71f5165c0ba0bca0989ffd9277dee42a25",
       "blob"
@@ -4314,7 +4440,7 @@
     [
      "main@{1}^{tree}",
      [
-      "afb741c13c8280277c24e6c0002b7c09bb5c2ee7",
+      "8dd60f9506b4a1688aff63ba5dbe83f315797957",
       "tree"
      ]
     ],
@@ -4329,7 +4455,7 @@
     [
      "HEAD@{0}:",
      [
-      "8a057bcd1c07a5e4e0a3af3eaae62955f54ae076",
+      "2aea620c85c55a398fba75e89c976bdc955f1f5b",
       "tree"
      ]
     ],
