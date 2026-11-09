@@ -100,9 +100,14 @@ Local mechanics decided here (0014 leaves them open):
   `read_reflog` fails on a line without a message (git writes one for `worktree add`).
 - **Every object read is checked against its id**: Dulwich 1.2.21's `get_raw` does not check a
   loose object's id, and 0014 section 3 accepts the stricter read (G9).
-- **Not applied:** replace references (`refs/replace/`), which git applies to every object read
-  by default. Grafts and shallow boundaries are applied (Dulwich's `get_parents`). A
-  repository using replace references gets the unreplaced objects.
+- **Replace references fail closed.** git applies `refs/replace/` to every object read unless
+  `core.useReplaceRefs` is false; the module does not replace objects. In a repository holding
+  any replace reference (loose or packed) every object read is refused with
+  `REPLACE_REFS_UNSUPPORTED` (at the first read, not at open: HEAD, references, the index and
+  the listing are not replaced and answer as git); with `core.useReplaceRefs=false` in the
+  applied configuration it reads as git does. `GIT_NO_REPLACE_OBJECTS` is not read (the module
+  takes configuration from its policy, not git's environment). Grafts and shallow boundaries
+  are applied (Dulwich's `get_parents`).
 
 ## Errors (decision 0014 section 3)
 
@@ -114,6 +119,8 @@ Local mechanics decided here (0014 leaves them open):
 | `EXPORT_REFUSED` | `RepositoryError` | Local: the export cannot be written safely (below). |
 | `BUNDLE_INVALID` | `RepositoryError` | Local: an unparsable bundle header, or refused `write_bundle` input (not a full reference name, no such reference, an existing destination). |
 | `FILTER_UNSUPPORTED` | `RepositoryError` | Local: `status` meets a path git would pass through a configured filter driver (a process, such as Git LFS) or a `working-tree-encoding`. |
+| `ATTRIBUTES_UNSUPPORTED` | `RepositoryError` | Local: `status` under a policy whose attribute file outside the repository (below) sets an attribute status consults, or cannot be read. |
+| `REPLACE_REFS_UNSUPPORTED` | `RepositoryError` | Local: an object read in a repository whose replace references git would apply. |
 | `NOT_A_WORK_TREE`, `NOT_A_REPOSITORY` | `CannotRun` | The work-tree check. |
 | `REPOSITORY_NEEDS_DULWICH` | `CannotRun` | Dulwich is not importable by the running interpreter; the message names `task tools:install` and the interpreter `tools_install.py --python` prints. |
 
@@ -127,18 +134,27 @@ Every `open_repository` names its policy; `config_sources` lists every configura
 
 | Policy | Applies | Reads |
 |---|---|---|
-| `host` | The repository's own configuration, then the user and system files located as Dulwich's `StackedConfig.default_backends` locates them (`GIT_CONFIG_GLOBAL`, `~/.gitconfig`, `$XDG_CONFIG_HOME/git/config`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, `/etc/gitconfig`, and on Windows Git for Windows' `etc/gitconfig`, found through `PATH` or the registry); `core.excludesFile` or `$XDG_CONFIG_HOME/git/ignore`. | All of these that exist. |
-| `repository` | The repository's own `config` (and `config.worktree` when `extensions.worktreeConfig` is set), `core.excludesFile` only if that configuration sets it. | Those files. Never `PATH`. |
+| `host` | The repository's own configuration, then the user and system files git reads, located **without `PATH`** (`host_config_paths`): `GIT_CONFIG_GLOBAL`, else `~/.gitconfig` and `$XDG_CONFIG_HOME/git/config`; then `GIT_CONFIG_SYSTEM`, else, unless `GIT_CONFIG_NOSYSTEM` is true, the system file (`system_file`): on Windows `<InstallPath>\etc\gitconfig` from Git for Windows' registry entry (`SOFTWARE\GitForWindows`, value `InstallPath`, read only), on POSIX `/etc/gitconfig`, otherwise none. `core.excludesFile` or `$XDG_CONFIG_HOME/git/ignore`. The attribute files: the system one (`<InstallPath>\etc\gitattributes`, `/etc/gitattributes`) unless `GIT_ATTR_NOSYSTEM`, and `core.attributesFile` or `$XDG_CONFIG_HOME/git/attributes`. | All of these that exist. |
+| `repository` | The repository's own `config` (and `config.worktree` when `extensions.worktreeConfig` is set), `core.excludesFile` and `core.attributesFile` only if that configuration sets them. | Those files. |
 | `none` | Nothing: git's defaults. | The repository's own `config`, read for its format only (`core.repositoryformatversion`, `extensions.*`, `core.bare`, `core.worktree`), as every git must to open a repository; it is listed. |
 
 The configuration a call applies: `core.autocrlf`, `core.symlinks`, `core.fileMode` (POSIX only;
 Windows has no executable bit), `core.ignorecase`, `core.excludesFile`, `filter.<driver>`.
-Neither Dulwich nor the module reads git's user or system attribute files
-(`core.attributesFile`, `$XDG_CONFIG_HOME/git/attributes`, the system attributes): under `host`,
-a path those files would convert can differ from git's status. Observed on this host: under Git
-Bash's `PATH`, Dulwich locates `C:\Program Files\Git\mingw64\etc\gitconfig` (absent), so `host`
-reads no system configuration there, while git reads `C:\Program Files\Git\etc\gitconfig`
-(`core.autocrlf=true`); under PowerShell's `PATH` both read the latter.
+No policy's answer depends on `PATH`. Dulwich's own location of the system file does: it
+derives Git for Windows' directory from the first `git` on `PATH`, so under Git Bash's `PATH` it
+picks `…\mingw64\etc\gitconfig` (absent) where git reads `…\etc\gitconfig`; the module does
+not use it. On this host `host` reads exactly the files `git var GIT_CONFIG_SYSTEM`,
+`GIT_CONFIG_GLOBAL`, `GIT_ATTR_SYSTEM` and `GIT_ATTR_GLOBAL` name (the oracle checks it).
+
+**Attribute files outside the repository.** Dulwich applies the repository's own
+`.gitattributes` files and `info/attributes`, not the user and system ones. `status` reads
+those the policy names (`attribute_files`; each read is listed in `config_sources`) and refuses
+with `ATTRIBUTES_UNSUPPORTED` when one sets an attribute status consults, a macro included;
+attributes status never consults (`diff`, `merge`, `whitespace`, `export-ignore`,
+`export-subst`, `delta`, `encoding`, `conflict-marker-size`) cannot change its answer and are
+ignored. Git for Windows' own system attributes set only `diff=astextplain`, so `host` status
+works on a default installation. No other operation consults attributes: reads, file lists,
+exports (blob bytes), the index and listings do not.
 
 ## Export (decision 0014 section 4)
 
@@ -195,8 +211,9 @@ section 9); it never skips.
   directory, a SHA-256 repository, a 295-character path, `eol=crlf`, binary, CRLF and executable
   files, `export-ignore`, annotated, lightweight, nested, tree and blob tags, a merge, ambiguous
   abbreviations, symbolic links and a gitlink, unsafe names, a work tree with every kind of
-  change, a conflicted merge, and three damaged repositories (an id mismatch, a corrupt zlib
-  stream, a corrupt pack). [`tests/fixtures/repository-corpus-tree.json.gz`](tests/fixtures/)
+  change, a conflicted merge, three damaged repositories (an id mismatch, a corrupt zlib
+  stream, a corrupt pack), and replace references (loose, packed, and disabled by
+  `core.useReplaceRefs=false`). [`tests/fixtures/repository-corpus-tree.json.gz`](tests/fixtures/)
   holds them byte for byte (git's sample hooks left out) as gzipped JSON, every directory and
   file, plain text as text and git's binary files as base64, so that the publication-safety gate
   can inspect all of it (it refuses an archive it cannot read as text), and
@@ -206,13 +223,17 @@ section 9); it never skips.
 - **Recorded half** ([`tests/test_repository_access.py`](tests/test_repository_access.py), no
   git): every answer equals the recorded one; every gap form is refused with an access spy
   recording nothing; damaged objects are `GIT_FAILED` naming the object; exports equal the
-  recorded blob digests; the policies; bundles; and no process is launched (process creation
-  patched to fail).
+  recorded blob digests; the policies, `host` identical under Git Bash's `PATH` order,
+  PowerShell's and an empty `PATH`; the attribute files; replace references refused; bundles;
+  and no process is launched (process creation patched to fail).
 - **Git-oracle half** ([`tests/test_repository_oracle.py`](tests/test_repository_oracle.py)):
   where git is on `PATH`, git is asked again over the same corpus (the `repository` policy's
   environment: no system, global or XDG configuration or attributes, no optional index writes);
-  the module must give git's answer, and git's answer must still be the recorded one. Bundles the
-  module writes pass `git bundle verify`. Where git is absent the module skips with the reason
+  the module must give git's answer, and git's answer must still be the recorded one. `host`
+  reads the files `git var` names (`GIT_CONFIG_SYSTEM`, `GIT_CONFIG_GLOBAL`, `GIT_ATTR_SYSTEM`,
+  `GIT_ATTR_GLOBAL`) and every file `git config --system --list --show-origin` shows; git
+  applies the replace references the module refuses. Bundles the module writes pass
+  `git bundle verify`. Where git is absent the module skips with the reason
   `git is not on PATH: the git-oracle comparison needs it (the recorded half still runs)`.
 
 Every git launch of the suite is the test fixtures' (the recorder and the oracle). Re-record the
@@ -231,6 +252,9 @@ expectations are.
 - Platforms other than Windows 11 with Git for Windows 2.52: Linux (F-10.5) and macOS; POSIX
   modes in exports and `core.fileMode` in status; symbolic links on a filesystem without them
   (the refusal is tested by a stand-in).
-- Reftable repositories, replace references, split or sparse indexes, submodule status,
+- The system files on macOS installations with another prefix (Homebrew's
+  `$(brew --prefix)/etc/gitconfig`, Xcode's git), and Git for Windows installed without its
+  registry entry (portable): the module then reads no system file.
+- Reftable repositories, replacing objects (refused), split or sparse indexes, submodule status,
   intent-to-add entries, `working-tree-encoding`, filter drivers (refused), and `status` under
   `host` with user or system attribute files.

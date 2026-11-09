@@ -491,8 +491,8 @@ class ConfigPolicy(unittest.TestCase):
         with ra.open_repository(self.repo, config='none') as r:
             self.assertTrue(r._config_bool(b'core', b'bare', True), 'none applies no configuration')
 
-    def test_host_reads_what_dulwich_locates(self):
-        env = {'GIT_CONFIG_GLOBAL': str(self.global_config), 'GIT_CONFIG_NOSYSTEM': '1'}
+    def test_host_reads_the_global_file_and_the_excludes_it_names(self):
+        env = {'GIT_CONFIG_GLOBAL': str(self.global_config), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_ATTR_NOSYSTEM': '1'}
         with mock.patch.dict(os.environ, env):
             with ra.open_repository(self.repo, config='host') as r:
                 untracked = [e.path for e in r.status(None, 'all') if e.xy == '??']
@@ -505,11 +505,53 @@ class ConfigPolicy(unittest.TestCase):
         with mock.patch.dict(os.environ, env), ra.open_repository(self.repo, config='repository') as r:
             self.assertIn('note.secret', [e.path for e in r.status(None, 'all')])
 
-    def test_host_config_paths_are_dulwichs_default_backends(self):
-        d = ra.dulwich_modules()
-        located = [p for p in ra.host_config_paths() if os.path.isfile(p) or p == os.devnull]
-        self.assertEqual([os.path.normcase(p) for p in located],
-                         [os.path.normcase(cf.path) for cf in d.config.StackedConfig.default_backends()])
+    def test_host_is_the_same_under_every_path(self):
+        """The system file is located without PATH (decision 0014 section 5): Git Bash's PATH
+        order, PowerShell's and an empty PATH give the same files and the same answers."""
+        install = ra._registry_install_path() if os.name == 'nt' else '/usr'
+        self.assertTrue(install, 'Git for Windows is not in the registry on this host')
+        orders = {'git bash': [os.path.join(install, 'mingw64', 'bin'), os.path.join(install, 'usr', 'bin'),
+                               os.path.join(install, 'cmd')],
+                  'powershell': [os.path.join(install, 'cmd')], 'empty': []}
+        seen = {}
+        for name, entries in orders.items():
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_CONFIG', 'GIT_ATTR'))}
+            env['PATH'] = os.pathsep.join(entries)
+            with mock.patch.dict(os.environ, env, clear=True), ra.open_repository(rc.corpus() / 'repo one',
+                                                                                  config='host') as r:
+                status = r.status(None, 'all')
+                seen[name] = (ra.host_config_paths(), ra.system_file('gitconfig'), r.config_sources,
+                              r.attribute_files(), status, r.listing(True, True, True))
+        self.assertEqual(seen['git bash'], seen['powershell'])
+        self.assertEqual(seen['git bash'], seen['empty'])
+        system = seen['empty'][1]
+        if os.name == 'nt':
+            self.assertEqual(system, os.path.join(install, 'etc', 'gitconfig'))
+        if os.path.isfile(system):
+            self.assertIn(os.path.normpath(system), seen['empty'][2])
+
+    def test_the_system_file_rules(self):
+        clean = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_CONFIG', 'GIT_ATTR'))}
+        with mock.patch.dict(os.environ, clean, clear=True), \
+                mock.patch.object(ra, '_registry_install_path', return_value='X:\\Git'), \
+                mock.patch.object(ra, '_WINDOWS', True):
+            system = os.path.join('X:\\Git', 'etc', 'gitconfig')
+            self.assertEqual(ra.host_config_paths()[-1], system)
+            self.assertEqual(ra.system_file('gitattributes'), os.path.join('X:\\Git', 'etc', 'gitattributes'))
+            for value, present in (('1', False), ('true', False), ('0', True), ('false', True), ('', True)):
+                with self.subTest(GIT_CONFIG_NOSYSTEM=value), mock.patch.dict(os.environ, {'GIT_CONFIG_NOSYSTEM': value}):
+                    self.assertEqual(system in ra.host_config_paths(), present)
+            with mock.patch.dict(os.environ, {'GIT_CONFIG_SYSTEM': 'chosen', 'GIT_CONFIG_NOSYSTEM': '1'}):
+                self.assertEqual(ra.host_config_paths()[-1], 'chosen')
+            with mock.patch.dict(os.environ, {'GIT_CONFIG_GLOBAL': 'g'}):
+                self.assertEqual(ra.host_config_paths(), ['g', system])
+        with mock.patch.dict(os.environ, clean, clear=True), mock.patch.object(ra, '_WINDOWS', True), \
+                mock.patch.object(ra, '_registry_install_path', return_value=None):
+            self.assertIsNone(ra.system_file('gitconfig'))
+            self.assertEqual(len(ra.host_config_paths()), 2, 'no system file without an installation')
+        with mock.patch.object(ra, '_WINDOWS', False):
+            self.assertEqual((ra.system_file('gitconfig'), ra.system_file('gitattributes')),
+                             ('/etc/gitconfig', '/etc/gitattributes'))
 
     def test_repository_policy_is_the_same_with_and_without_git_on_path(self):
         def snapshot():
@@ -521,6 +563,124 @@ class ConfigPolicy(unittest.TestCase):
         with mock.patch.dict(os.environ, {'PATH': ''}):
             without_git = snapshot()
         self.assertEqual(with_git, without_git)
+
+
+class AttributeFiles(unittest.TestCase):
+    """The user and system attribute files git reads: read, and status refused
+    (ATTRIBUTES_UNSUPPORTED) when one sets an attribute status consults."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-attributes-'))
+        for name in ('work', 'separate.git'):
+            shutil.copytree(rc.corpus() / ('separate work' if name == 'work' else name), cls.tmp / name, symlinks=True)
+        cls.repo = cls.tmp / 'work'
+        cls.neutral = cls.tmp / 'neutral attributes'
+        cls.neutral.write_text('# only diff drivers\n*.doc\tdiff=astextplain\n"a b.x" -diff !merge\n', encoding='utf-8')
+        cls.text = cls.tmp / 'text attributes'
+        cls.text.write_text('*.txt text eol=crlf\n', encoding='utf-8')
+        (cls.tmp / 'xdg' / 'git').mkdir(parents=True)
+        (cls.tmp / 'xdg' / 'git' / 'attributes').write_text('*.txt eol=crlf\n', encoding='utf-8')
+        (cls.tmp / 'no xdg').mkdir()
+
+    @classmethod
+    def tearDownClass(cls):
+        rc.rmtree(cls.tmp)
+
+    def env(self, attributes=None, xdg='no xdg'):
+        config = self.tmp / f'global {len(os.listdir(self.tmp))}'
+        config.write_text(f'[core]\n\tattributesFile = {Path(attributes).as_posix()}\n' if attributes else '',
+                          encoding='utf-8')
+        return {'GIT_CONFIG_GLOBAL': str(config), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_ATTR_NOSYSTEM': '1',
+                'XDG_CONFIG_HOME': str(self.tmp / xdg)}
+
+    def status(self, policy, env):
+        with mock.patch.dict(os.environ, env), ra.open_repository(self.repo, config=policy) as r:
+            return r.status(None, 'all'), r.config_sources
+
+    def refused(self, policy, env):
+        with self.assertRaises(ra.RepositoryError) as caught:
+            self.status(policy, env)
+        self.assertEqual(caught.exception.code, 'ATTRIBUTES_UNSUPPORTED')
+        return caught.exception
+
+    def test_status_attributes(self):
+        for text, found in (('*.doc diff=astextplain\n', None), ('# c\n\n*.x -diff !merge whitespace=x\n', None),
+                            ('*.txt text\n', 'text'), ('*.bin binary\n', 'binary'), ('[attr]m text\n', '[attr]m'),
+                            ('"a b" eol=lf\n', 'eol=lf'), ('"a b" diff\n', None), ('*.x filter=lfs\n', 'filter=lfs'),
+                            ('*.x -text\n', '-text'), ('*.x ident\n', 'ident'), ('*.x mymacro\n', 'mymacro')):
+            with self.subTest(text=text):
+                self.assertEqual(ra.status_attribute(text), found)
+
+    def test_a_global_file_is_read_and_refused_only_when_status_depends_on_it(self):
+        _status, sources = self.status('host', self.env(self.neutral))
+        self.assertIn(os.path.normpath(str(self.neutral)), sources)
+        error = self.refused('host', self.env(self.text))
+        self.assertEqual(error.details['attribute'], 'text')
+        self.assertEqual(os.path.normcase(error.details['path']), os.path.normcase(str(self.text)))
+
+    def test_the_xdg_file_applies_to_host_only(self):
+        self.refused('host', self.env(xdg='xdg'))
+        self.status('repository', self.env(xdg='xdg'))
+        self.status('host', self.env(xdg='no xdg'))
+
+    def test_the_system_file_and_git_attr_nosystem(self):
+        with mock.patch.object(ra, 'system_file', lambda name: str(self.text) if name == 'gitattributes' else None):
+            env = self.env()
+            env['GIT_ATTR_NOSYSTEM'] = '0'
+            self.refused('host', env)
+            env['GIT_ATTR_NOSYSTEM'] = '1'
+            self.status('host', env)
+            env['GIT_ATTR_NOSYSTEM'] = '0'
+            self.status('repository', env)
+
+    def test_a_repository_configured_file_applies_under_repository_too(self):
+        config = self.tmp / 'separate.git' / 'config'
+        original = config.read_bytes()
+        self.addCleanup(config.write_bytes, original)
+        config.write_bytes(original + f'[core]\n\tattributesFile = {self.text.as_posix()}\n'.encode())
+        self.refused('repository', self.env())
+        self.refused('host', self.env())
+        self.status('none', self.env())
+
+
+class ReplaceRefs(unittest.TestCase):
+    """git applies refs/replace/ to object reads by default: such a repository's object reads
+    are refused (REPLACE_REFS_UNSUPPORTED); core.useReplaceRefs=false reads as git does."""
+
+    def test_reads_are_refused_where_git_would_replace(self):
+        facts, repos = rc.expected()['facts'], rc.expected()['repos']
+        for repo in ('replace loose', 'replace packed'):
+            with self.subTest(repo=repo), open_repo(repo, work_tree=True) as r:
+                self.assertEqual(r.replace_refs(), [f'refs/replace/{facts["R3"]}'])
+                for form, _git in repos[repo]['replaced_commits']:
+                    with self.subTest(form=form):
+                        self.assertRefused(r.commit, form)
+                        self.assertRefused(r.read, form)
+                self.assertRefused(r.blob, 'HEAD', 'f.txt')
+                self.assertRefused(r.files, 'HEAD', 'x')
+                self.assertRefused(r.status, None, 'all')
+                self.assertRefused(r.export_tree, 'HEAD', '.', _empty_dir())
+                self.assertRefused(r.write_bundle, ['refs/heads/main'], _empty_dir() / 'b.bundle')
+                # References, the index and the listing are not replaced: they answer as git.
+                self.assertEqual([r.head().commit, r.head().ref], repos[repo]['head'])
+                self.assertEqual([[e.mode, e.oid, e.stage, e.path] for e in r.index_entries()], repos[repo]['index'])
+
+    def test_git_replaces_and_the_disabled_copy_reads_unreplaced(self):
+        repos = rc.expected()['repos']
+        replaced = dict(repos['replace loose']['replaced_names'])
+        disabled = dict(repos['replace disabled']['names'])
+        for name in ('HEAD~1', 'HEAD^{tree}', 'HEAD:f.txt'):
+            self.assertNotEqual(replaced[name], disabled[name], name)
+        with open_repo('replace disabled') as r:
+            self.assertEqual(r.blob('HEAD', 'f.txt'), b'three\n')
+        with open_repo('replace disabled', 'none') as r:  # no configuration: git's default applies
+            self.assertRefused(r.read, 'HEAD')
+
+    def assertRefused(self, call, *args):
+        with self.assertRaises(ra.RepositoryError) as caught:
+            call(*args)
+        self.assertEqual(caught.exception.code, 'REPLACE_REFS_UNSUPPORTED', caught.exception)
 
 
 class Bundles(unittest.TestCase):

@@ -258,6 +258,7 @@ def build(root):
     _long(base, facts)
     _damaged(base, facts)
     _conflicted(base, facts)
+    _replaced(base, facts)
     write(base / 'not a repo', {'file.txt': 'not a repository\n'})
     (base / 'xdg empty').mkdir()
     return facts
@@ -433,6 +434,29 @@ def _damaged(base, facts):
     facts['pack'] = readme
 
 
+def _replaced(base, facts):
+    """``replace loose``: R3 replaced by R1 with ``git replace`` (git then reads R1's content
+    for R3); ``replace packed``: the same after ``pack-refs --all``; ``replace disabled``: the
+    same with ``core.useReplaceRefs=false`` (git reads R3 unreplaced)."""
+    repo = base / 'replace loose'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    write(repo, {'f.txt': 'one\n'})
+    facts['R1'] = commit_all(repo, 'R1', 25)
+    write(repo, {'f.txt': 'two\n'})
+    facts['R2'] = commit_all(repo, 'R2', 26)
+    write(repo, {'f.txt': 'three\n'})
+    facts['R3'] = commit_all(repo, 'R3', 27)
+    git(repo, 'replace', facts['R3'], facts['R1'])
+    packed = base / 'replace packed'
+    shutil.copytree(repo, packed)
+    git(packed, 'pack-refs', '--all')
+    assert not (packed / '.git' / 'refs' / 'replace' / facts['R3']).exists()
+    disabled = base / 'replace disabled'
+    shutil.copytree(repo, disabled)
+    git(disabled, 'config', 'core.useReplaceRefs', 'false')
+
+
 def _conflicted(base, facts):
     repo = base / 'conflicted'
     repo.mkdir()
@@ -520,6 +544,8 @@ def forms(facts):
             E[:7], amb, cb, 'main@{0}', '@{0}', 'HEAD@{0}', ':README.md', 'HEAD:./README.md', 'HEAD:README.md',
             'links-ok', 'top']
     long = ['HEAD', 'HEAD:README.md', f'HEAD:{LONG_PATH}', f'HEAD:openspec/changes/{LONG_DIRS[0]}', 'main@{0}']
+    replaced = ['HEAD', 'HEAD~1', 'HEAD~2', 'HEAD^{tree}', 'HEAD:f.txt', 'main@{0}', facts['R3'], facts['R1'],
+                facts['R3'][:7]]
     conflicted = ['HEAD', 'MERGE_HEAD', 'other', ':conflict.txt', ':0:conflict.txt', ':1:conflict.txt',
                   ':2:conflict.txt', ':3:conflict.txt', ':both.txt', ':1:both.txt', ':2:both.txt', ':3:both.txt',
                   ':gone.txt', ':1:gone.txt', ':2:gone.txt', ':3:gone.txt', 'ORIG_HEAD', 'HEAD:gone.txt']
@@ -537,6 +563,9 @@ def forms(facts):
         'sha256 repo': {'commits': sha256, 'names': sha256},
         'long.git': {'commits': long, 'names': long},
         'conflicted': {'commits': conflicted, 'names': conflicted},
+        'replace disabled': {'commits': replaced, 'names': replaced},
+        'replace loose': {'commits': [], 'names': [], 'replaced_commits': replaced, 'replaced_names': replaced},
+        'replace packed': {'commits': [], 'names': [], 'replaced_commits': replaced, 'replaced_names': replaced},
     }
     for asked in out.values():
         asked['commits'] = commits_only(asked['commits'])
@@ -558,11 +587,13 @@ EXPORTS = {'repo one': [('HEAD', '.'), ('HEAD', 'openspec'), ('HEAD', 'eol'), ('
 STATUS = {'repo one': [('no', None), ('normal', None), ('all', None), ('all', ['docs']), ('normal', ['newdir']),
                        ('no', ['openspec/changes', 'README.md'])],
           'conflicted': [('no', None), ('all', None)], 'linked tree': [('all', None)],
-          'separate work': [('all', None)], 'sha256 repo': [('all', None)], 'packed copy': [('all', None)]}
+          'separate work': [('all', None)], 'sha256 repo': [('all', None)], 'packed copy': [('all', None)],
+          'replace disabled': [('all', None)]}
 LISTINGS = [(True, False, False), (False, True, False), (False, True, True), (True, True, True)]
-WORK_TREES = ['repo one', 'linked tree', 'separate work', 'sha256 repo', 'conflicted', 'packed copy']
+WORK_TREES = ['repo one', 'linked tree', 'separate work', 'sha256 repo', 'conflicted', 'packed copy',
+              'replace loose', 'replace packed', 'replace disabled']
 HEADS = ['repo one', 'packed copy', 'bare.git', 'linked tree', 'separate work', 'sha256 repo', 'long.git',
-         'conflicted']
+         'conflicted', 'replace loose', 'replace packed', 'replace disabled']
 
 
 # ---------------------------------------------------------------------------- git's answers
@@ -713,11 +744,13 @@ def answers(root, facts, batch=False):
         else:
             commits = [[f, oracle.commit(repo, f)] for f in asked['commits']]
         repos[repo] = {'commits': commits, 'names': [[n, names[n]] for n in asked['names']]}
-        if 'fallback_commits' in asked and not batch:
-            # Recorded for the record: these answers depend on the clock and are never compared.
-            fallback = oracle.names(repo, asked['fallback_names'])
-            repos[repo]['fallback_commits'] = [[f, oracle.commit(repo, f)] for f in asked['fallback_commits']]
-            repos[repo]['fallback_names'] = [[n, fallback[n]] for n in asked['fallback_names']]
+        for kind in ('fallback', 'replaced'):
+            # Recorded for the record, never compared with the module, which refuses these: the
+            # fallback answers depend on the clock, the replaced ones on refs/replace/.
+            if f'{kind}_commits' in asked and not batch:
+                found = oracle.names(repo, asked[f'{kind}_names'])
+                repos[repo][f'{kind}_commits'] = [[f, oracle.commit(repo, f)] for f in asked[f'{kind}_commits']]
+                repos[repo][f'{kind}_names'] = [[n, found[n]] for n in asked[f'{kind}_names']]
     for repo, cases in FILES.items():
         repos[repo]['files'] = [[c, d, oracle.files(repo, c, d)] for c, d in cases]
     for repo, cases in EXPORTS.items():

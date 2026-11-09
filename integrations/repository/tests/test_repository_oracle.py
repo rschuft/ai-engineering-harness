@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 CATEGORY = 'integration'
 
@@ -135,6 +136,57 @@ class OracleAgreement(unittest.TestCase):
                 except ra.CannotRun:
                     got = None
                 self.assertEqual(got, git)
+
+
+class OracleHostFiles(unittest.TestCase):
+    """The host policy reads the files git reads on this host (``git var``, git 2.42 or later),
+    under the environment without git's configuration-location variables."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_CONFIG', 'GIT_ATTR'))}
+
+    def git(self, *args):
+        result = subprocess.run(['git', *args], capture_output=True, stdin=subprocess.DEVNULL,
+                                timeout=rc.WAIT_CEILING_S, env=self.env, cwd=rc.corpus() / 'repo one')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [line for line in result.stdout.decode('utf-8').splitlines() if line]
+
+    def same(self, a, b):
+        return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+    def test_the_system_and_global_files_are_gits(self):
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                ra.open_repository(rc.corpus() / 'repo one', config='host') as r:
+            paths = ra.host_config_paths()
+            attributes = r.attribute_files()
+            r.status(None, 'no')
+            sources = r.config_sources
+        system = self.git('var', 'GIT_CONFIG_SYSTEM')[0]
+        self.assertTrue(self.same(system, paths[-1]), (system, paths))
+        self.assertEqual(len(paths), 3)
+        globals_ = self.git('var', 'GIT_CONFIG_GLOBAL')
+        self.assertEqual(sorted(os.path.normcase(os.path.normpath(p)) for p in globals_),
+                         sorted(os.path.normcase(os.path.normpath(p)) for p in paths[:2]))
+        self.assertTrue(self.same(self.git('var', 'GIT_ATTR_SYSTEM')[0], attributes[0]), attributes)
+        self.assertTrue(self.same(self.git('var', 'GIT_ATTR_GLOBAL')[0], attributes[-1]), attributes)
+        # Every system file git reads, host reads too.
+        origins = {line.split('\t', 1)[0].removeprefix('file:') for line in
+                   self.git('config', '--system', '--list', '--show-origin')}
+        for origin in origins:
+            self.assertTrue(any(self.same(origin, source) for source in sources), (origin, sources))
+
+
+class OracleReplaced(unittest.TestCase):
+    """git applies the replace references the module refuses (live, as recorded)."""
+
+    def test_git_replaces(self):
+        oracle = rc.Oracle(rc.corpus())
+        for repo in ('replace loose', 'replace packed'):
+            recorded = rc.expected()['repos'][repo]['replaced_names']
+            live = oracle.names(repo, [name for name, _ in recorded])
+            with self.subTest(repo=repo):
+                self.assertEqual([[name, live[name]] for name, _ in recorded], recorded)
 
 
 class OracleBundles(unittest.TestCase):

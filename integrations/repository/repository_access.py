@@ -19,7 +19,8 @@ answer is computed in this process from the repository's own files.
 
 Errors (decision 0014 section 3): ``RepositoryError`` with a stable ``code``
 (``REVISION_INVALID``, ``OBJECT_NAME_INVALID``, ``GIT_FAILED``, ``EXPORT_REFUSED``,
-``BUNDLE_INVALID``, ``FILTER_UNSUPPORTED``), and ``CannotRun`` (``NOT_A_WORK_TREE``,
+``BUNDLE_INVALID``, ``FILTER_UNSUPPORTED``, ``ATTRIBUTES_UNSUPPORTED``, ``REPLACE_REFS_UNSUPPORTED``), and
+``CannotRun`` (``NOT_A_WORK_TREE``,
 ``NOT_A_REPOSITORY``, ``REPOSITORY_NEEDS_DULWICH``). "No such object" and an ambiguous
 abbreviation answer ``None``.
 
@@ -195,22 +196,67 @@ def _policy_repo_class(base, config_module, git_file):
     return PolicyRepo
 
 
+_TRUE = ('true', 'yes', 'on', '1')
+_FALSE = ('false', 'no', 'off', '0', '')
+
+
+def _env_bool(name):
+    """git's git_env_bool: an unset or empty variable is false; otherwise a git boolean (an
+    unrecognised value counts as true, as git would refuse it rather than ignore it)."""
+    value = os.environ.get(name, '').strip().lower()
+    return value not in _FALSE
+
+
+def _registry_install_path():
+    """Git for Windows' installation directory from the registry
+    (``SOFTWARE\\GitForWindows``, value ``InstallPath``, machine before user, 64-bit view before
+    32-bit), read only; None where there is none."""
+    import winreg
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(hive, r'SOFTWARE\GitForWindows', 0, winreg.KEY_READ | view) as key:
+                    value, kind = winreg.QueryValueEx(key, 'InstallPath')
+            except OSError:
+                continue
+            if kind in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) and value:
+                return os.path.expandvars(value) if kind == winreg.REG_EXPAND_SZ else value
+    return None
+
+
+def system_file(name):
+    """The system-wide git file NAME ('gitconfig' or 'gitattributes'), located without PATH:
+    on Windows ``<InstallPath>\\etc\\<name>`` from Git for Windows' registry entry, elsewhere
+    ``/etc/<name>``; None when there is no installation to locate."""
+    if _WINDOWS:
+        install = _registry_install_path()
+        return os.path.join(install, 'etc', name) if install else None
+    return f'/etc/{name}'
+
+
+def _xdg_git_file(name):
+    home = os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config')
+    return os.path.join(home, 'git', name)
+
+
 def host_config_paths():
-    """The user and system configuration files, located as Dulwich's
-    ``StackedConfig.default_backends`` locates them (decision 0014 section 5, ``host``)."""
-    d = dulwich_modules()
+    """The user and system configuration files the ``host`` policy reads (decision 0014
+    section 5), in precedence order, located as git does and never through PATH:
+    ``GIT_CONFIG_GLOBAL``, else ``~/.gitconfig`` and ``$XDG_CONFIG_HOME/git/config``; then
+    ``GIT_CONFIG_SYSTEM``, else (unless ``GIT_CONFIG_NOSYSTEM``) the system file
+    (``system_file``)."""
     paths = []
     if 'GIT_CONFIG_GLOBAL' in os.environ:
         paths.append(os.environ['GIT_CONFIG_GLOBAL'])
     else:
-        paths.append(os.path.expanduser('~/.gitconfig'))
-        paths.append(d.config.get_xdg_config_home_path('git', 'config'))
+        paths.append(os.path.join(os.path.expanduser('~'), '.gitconfig'))
+        paths.append(_xdg_git_file('config'))
     if 'GIT_CONFIG_SYSTEM' in os.environ:
         paths.append(os.environ['GIT_CONFIG_SYSTEM'])
-    elif 'GIT_CONFIG_NOSYSTEM' not in os.environ:
-        paths.append('/etc/gitconfig')
-        if sys.platform == 'win32':
-            paths.extend(d.config.get_win_system_paths())
+    elif not _env_bool('GIT_CONFIG_NOSYSTEM'):
+        system = system_file('gitconfig')
+        if system:
+            paths.append(system)
     return paths
 
 
@@ -335,6 +381,37 @@ def refname_valid(name, onelevel=False):
         if any(ord(ch) < 0x20 or ch in ' ~^:?*[\\\x7f' for ch in part):
             return False
     return True
+
+
+# Attributes git's status never consults: setting them in a file outside the repository cannot
+# change a status answer. Any other attribute (text, eol, crlf, binary, filter, ident,
+# working-tree-encoding, a macro or an unknown name) can.
+STATUS_NEUTRAL_ATTRIBUTES = frozenset({'diff', 'merge', 'whitespace', 'export-ignore', 'export-subst', 'delta',
+                                       'encoding', 'conflict-marker-size'})
+
+
+def status_attribute(text):
+    """The first attribute in the gitattributes TEXT that git's status could apply (a macro
+    definition counts), or None."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('[attr]'):
+            return line.split()[0]
+        if line.startswith('"'):
+            end = line.find('"', 1)
+            while end > 0 and line[end - 1] == '\\':
+                end = line.find('"', end + 1)
+            rest = line[end + 1:] if end > 0 else ''
+        else:
+            parts = line.split(None, 1)
+            rest = parts[1] if len(parts) > 1 else ''
+        for token in rest.split():
+            name = token.lstrip('-!').split('=', 1)[0]
+            if name not in STATUS_NEUTRAL_ATTRIBUTES:
+                return token
+    return None
 
 
 def _pseudoref_syntax(name):
@@ -521,6 +598,7 @@ class Repository:
         self.object_format = fmt.name
         self._hexsz = fmt.hex_length
         self._packed = None
+        self._replace = None
         try:
             storage = repo.get_config().get((b'extensions',), b'refstorage')
         except KeyError:
@@ -598,9 +676,32 @@ class Repository:
             failure = f'{type(exc).__name__}: {exc}'
         raise RepositoryError('GIT_FAILED', f'cannot read object {oid}: {failure}', object=oid)
 
+    def replace_refs(self):
+        """The replace references (``refs/replace/``, loose and packed) of the repository."""
+        if self._replace is None:
+            found = set()
+            base = os.path.join(self._dul.commondir(), 'refs', 'replace')
+            for top, _dirs, files in os.walk(base):
+                for name in files:
+                    found.add('/'.join(['refs', 'replace',
+                                        *os.path.relpath(os.path.join(top, name), base).split(os.sep)]))
+            found.update(name for name in self._packed_refs() if name.startswith('refs/replace/'))
+            self._replace = sorted(found)
+        return self._replace
+
+    def _refuse_replacement(self):
+        """git applies replace references to every object read (core.useReplaceRefs, default
+        true); this module does not, so it refuses to read objects where git would replace them."""
+        refs = self.replace_refs()
+        if refs and self._config_bool(b'core', b'useReplaceRefs', True):
+            raise RepositoryError('REPLACE_REFS_UNSUPPORTED', f'the repository has replace references ({refs[0]}'
+                                  f'{" and others" if len(refs) > 1 else ""}), which git applies to object reads and '
+                                  'this module does not', refs=refs)
+
     def _raw(self, oid):
         """(type name, bytes) of object OID, or None when the repository has none. The content
         must hash to OID (Dulwich 1.2.21 does not check a loose object's id on this path)."""
+        self._refuse_replacement()
         try:
             type_num, data = self._boundary(oid, self._dul.object_store.get_raw, oid.encode('ascii'))
         except KeyError:
@@ -1293,6 +1394,7 @@ class Repository:
         if untracked not in UNTRACKED_MODES:
             raise ValueError(f'untracked must be one of {UNTRACKED_MODES}')
         selected = self._path_filter(paths)
+        self._check_attribute_files()
         rows = self._index_rows()
         stages, index = {}, {}
         for row in rows:
@@ -1382,6 +1484,50 @@ class Repository:
             if index and path not in self._dul._aieh_sources:
                 self._dul._aieh_sources.append(path)
         return d.ignore.IgnoreFilterManager(self.root, filters, ignorecase), ignorecase
+
+    def attribute_files(self):
+        """The attribute files outside the repository git would read for this policy, lowest
+        precedence first: under ``host`` the system file (unless ``GIT_ATTR_NOSYSTEM``) and the
+        global one (``core.attributesFile``, else ``$XDG_CONFIG_HOME/git/attributes``); under
+        ``repository`` only a ``core.attributesFile`` the repository's configuration sets."""
+        if self.policy == 'none':
+            return []
+        files = []
+        if self.policy == 'host' and not _env_bool('GIT_ATTR_NOSYSTEM'):
+            system = system_file('gitattributes')
+            if system:
+                files.append(system)
+        try:
+            configured = self._config().get((b'core',), b'attributesFile').decode('utf-8')
+        except KeyError:
+            configured = None
+        if configured:
+            files.append(os.path.expanduser(configured))
+        elif self.policy == 'host':
+            files.append(_xdg_git_file('attributes'))
+        return files
+
+    def _check_attribute_files(self):
+        """Read the attribute files of ``attribute_files``; refuse (ATTRIBUTES_UNSUPPORTED) when
+        one sets an attribute ``status`` consults, which Dulwich's attribute matching does not
+        apply. Attributes status never consults (``diff``, ``merge``, ...) cannot change its
+        answer and are ignored. Each file read is listed in ``config_sources``."""
+        for path in self.attribute_files():
+            try:
+                with open(path, 'rb') as handle:
+                    text = handle.read().decode('utf-8', 'replace')
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise RepositoryError('ATTRIBUTES_UNSUPPORTED', f'cannot read the attribute file {path}: {exc}',
+                                      path=path) from None
+            path = os.path.normpath(path)
+            if path not in self._dul._aieh_sources:
+                self._dul._aieh_sources.append(path)
+            found = status_attribute(text)
+            if found:
+                raise RepositoryError('ATTRIBUTES_UNSUPPORTED', f'{path} sets {found}, which git applies to status and '
+                                      'this module does not read from that file', path=path, attribute=found)
 
     def _untracked(self, tracked, mode, exclude_standard):
         """The untracked paths git's read_directory reports: files, a nested repository as
