@@ -310,7 +310,13 @@ sub-second scopes). `task test:budget` (`python -I -B tools/check_test_budget.py
 fewer tests, a median above its tolerance, or a suite or category the budgets do not name.
 Counts below budget pass and are reported. `python -I -B tools/check_test_budget.py propose
 --profile <file>` prints the budgets a profile implies; changing the budget file is a
-reviewed change with the profile that justifies it, never automatic. The wall budgets
+reviewed change with the profile that justifies it, never automatic. The counters do not
+depend on the shell or on which optional programs are on PATH: a test that needs one (`sh` or
+`pwsh` for the path adapters' round trips) attempts its launch in every environment and skips
+when the program is missing, and a failed attempt still counts as a launch, so PowerShell, Git
+Bash and a POSIX shell count the same launches and one profile's proposal holds in all of
+them. A test that decided to skip before launching would count one launch fewer where its
+program is missing, and budgets proposed there would fail elsewhere. The wall budgets
 belong to the baseline host (recorded in the file); on another host, check the counters
 with `-- --counters-only`, which needs one run and says that the wall time was not checked.
 
