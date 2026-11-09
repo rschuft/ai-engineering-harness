@@ -335,7 +335,12 @@ seam (F-09.4 round 2), three interleaved serial runs took a median of 147 s (135
 against 201 s for the F-09.3 tree and 175 s for the round-1 tree, and `test:all` 31 s. At
 `3366af4` (round 3: one read session per dispatch test, the profile checker compiled once per
 content), three interleaved serial runs took a median of 127 s (126 to 138 s) against 206 s
-for the F-09.3 tree and 143 s for the round-2 tree, and `test:all` 31 to 32 s;
+for the F-09.3 tree and 143 s for the round-2 tree, and `test:all` 31 to 32 s. Those runs
+were made from Git Bash, whose `PATH` resolves the real git. From PowerShell, whose default
+`PATH` resolves Git for Windows' launcher `cmd\git.exe` (one more process per git command),
+three interleaved serial runs at `e73f941` (round 4: every adapter git process one process
+tree) took a median of 147 s (147 to 149 s) against 249 s for the F-09.3 tree and 147 s for
+the round-3 tree, and `test:all` 33 s; one run from Git Bash took 147 s in the same period;
 [`evidence/F-09.4-batched-git.md`](../evidence/F-09.4-batched-git.md) has the measurements.
 
 **Shared fixtures and process boundaries.** Expensive fixtures are built once and copied, and
@@ -376,7 +381,11 @@ launch it (plan leaf F-09.3):
   example launches 7 processes with the fake Backlog.md launched (4 with it in the test
   process), against 79 and 70 before. The benchmark is the `performance` class
   `OneTraversal` in `integrations/lineage/tests/test_traversal_git.py`: its result is that
-  launch count, at most 10.
+  launch count, at most 10. Every adapter git process is one process tree (a Windows job
+  object, a POSIX process group), so a kill, a timeout or a close also ends the real git that
+  a launcher such as `cmd\git.exe` starts, and a reader whose process has exited fails closed
+  before it writes; `test_git_batch` checks it through a stand-in launcher and, where it is
+  installed, through Git for Windows' own (POSIX not yet verified).
 - **Long temporary paths.** The test processes create paths up to 176 characters below
   TEMP (measured; the provision tests), which Python on Windows opens past 260 characters only
   where long paths are enabled. Git for Windows needs `core.longpaths` past 260 characters:
