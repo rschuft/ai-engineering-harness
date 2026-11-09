@@ -369,6 +369,11 @@ three interleaved serial runs at `e73f941` (round 4: every adapter git process o
 tree) took a median of 147 s (147 to 149 s) against 249 s for the F-09.3 tree and 147 s for
 the round-3 tree, and `test:all` 33 s; one run from Git Bash took 147 s in the same period;
 [`evidence/F-09.4-batched-git.md`](../evidence/F-09.4-batched-git.md) has the measurements.
+At `3aa5ef3` (F-10.2: the repository-access suite added, and every suite under the tools
+interpreter), three serial runs took a median of 145 s (144 to 146 s) from Git Bash, the
+baseline of the budgets, and 159 s from PowerShell, and `test:all` 36 s;
+[`evidence/F-10.2-repository-module.md`](../evidence/F-10.2-repository-module.md) has the
+measurements.
 
 **Shared fixtures and process boundaries.** Expensive fixtures are built once and copied, and
 logic cases run in the test process; the tests that check a real process interaction still
