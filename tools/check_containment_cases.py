@@ -193,8 +193,8 @@ class Checker(csi.Checker):
     """Reuses the inventory checker's id tables, link and machine-path helpers."""
 
     def __init__(self, catalogue, inventory, root, readme_text=None, properties=None,
-                 matrix=None, profile=None):
-        super().__init__(inventory, root, readme_text)
+                 matrix=None, profile=None, files=None):
+        super().__init__(inventory, root, readme_text, files)
         self.cat = catalogue
         self.properties = _dict(properties)
         self.matrix = _dict(matrix)
@@ -667,17 +667,47 @@ def _load(root, rel):
         return {}
 
 
+class Inputs:
+    """The files a catalogue is checked against under a root, loaded once (the load/evaluate
+    seam): each JSON file the catalogue names (properties, matrix, profile) is parsed on first
+    use and kept, and the repository files the checks read go through one ``csi.RepoFiles``."""
+
+    def __init__(self, root):
+        self.root = root
+        self.files = csi.RepoFiles(root)
+        self._json = {}
+
+    def json(self, rel):
+        if rel not in self._json:
+            self._json[rel] = _load(self.root, rel)
+        return self._json[rel]
+
+
+def load_inputs(root):
+    """The inputs ``evaluate`` takes, under ROOT."""
+    return Inputs(root)
+
+
+def evaluate(catalogue, inventory, inputs, readme_text=None, properties=None, matrix=None,
+             profile=None):
+    """Return the problems found in ``catalogue`` (a parsed JSON value) with already-loaded
+    INPUTS (``load_inputs``): the files it names are read through INPUTS, once for all
+    evaluations, and none of them is changed."""
+    cat = _dict(catalogue)
+    if properties is None:
+        properties = inputs.json(_str(cat.get('properties')) or PROPERTIES)
+    if matrix is None:
+        matrix = inputs.json(_str(cat.get('matrix')) or MATRIX)
+    if profile is None:
+        profile = inputs.json(_str(cat.get('profile')))
+    return Checker(catalogue, inventory, inputs.root, readme_text, properties, matrix, profile,
+                   files=inputs.files).run()
+
+
 def check(catalogue, inventory, root, readme_text=None, properties=None, matrix=None,
           profile=None):
     """Return the problems found in ``catalogue`` (a parsed JSON value)."""
-    cat = _dict(catalogue)
-    if properties is None:
-        properties = _load(root, _str(cat.get('properties')) or PROPERTIES)
-    if matrix is None:
-        matrix = _load(root, _str(cat.get('matrix')) or MATRIX)
-    if profile is None:
-        profile = _load(root, _str(cat.get('profile')))
-    return Checker(catalogue, inventory, root, readme_text, properties, matrix, profile).run()
+    return evaluate(catalogue, inventory, load_inputs(root), readme_text, properties, matrix, profile)
 
 
 def main(argv=None):

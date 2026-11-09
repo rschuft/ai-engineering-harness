@@ -75,13 +75,58 @@ class Problem:
         return f'{self.code}: {self.where}: {self.message}'
 
 
+class RepoFiles:
+    """The repository files a checker reads under ROOT, read only: each text read once, each
+    file tested once and the plan's ids parsed once. A checker makes its own by default; a
+    caller that checks many inputs against one unchanged tree may load one and share it (the
+    checkers' load/evaluate seam)."""
+
+    def __init__(self, root):
+        self.root = Path(root)
+        self._text = {}
+        self._is_file = {}
+        self._plan_ids = {}
+
+    def read_text(self, rel):
+        if rel not in self._text:
+            try:
+                self._text[rel] = (self.root / rel).read_text(encoding='utf-8')
+            except (OSError, UnicodeDecodeError):
+                self._text[rel] = None
+        return self._text[rel]
+
+    def is_file(self, rel):
+        if rel not in self._is_file:
+            self._is_file[rel] = (self.root / rel).is_file()
+        return self._is_file[rel]
+
+    def plan_ids(self):
+        if 'ids' not in self._plan_ids:
+            self._plan_ids['ids'] = _plan_ids(self.read_text(PLAN))
+        ids = self._plan_ids['ids']
+        return None if ids is None else set(ids)
+
+
+def _plan_ids(text):
+    if text is None:
+        return None
+    try:
+        plan = json.loads(text)
+    except ValueError:
+        return None
+    ids = {w.get('id') for w in plan.get('work_packages', []) if isinstance(w, dict)}
+    parents = plan.get('decomposition', {}).get('parent_outcomes', [])
+    ids |= {p.get('id') for p in parents if isinstance(p, dict)}
+    return frozenset(i for i in ids if isinstance(i, str))
+
+
 class Checker:
-    def __init__(self, inventory, root, readme_text=None):
+    def __init__(self, inventory, root, readme_text=None, files=None):
         self.inv = inventory
         self.root = Path(root)
         self.readme = readme_text
         self.problems = []
-        self._file_cache = {}
+        self.files = files if files is not None else RepoFiles(root)
 
     def add(self, code, where, message):
         self.problems.append(Problem(code, where, message))
@@ -97,25 +142,10 @@ class Checker:
                 if isinstance(e, dict) and isinstance(e.get('id'), str)}
 
     def read_text(self, rel):
-        if rel not in self._file_cache:
-            try:
-                self._file_cache[rel] = (self.root / rel).read_text(encoding='utf-8')
-            except (OSError, UnicodeDecodeError):
-                self._file_cache[rel] = None
-        return self._file_cache[rel]
+        return self.files.read_text(rel)
 
     def plan_ids(self):
-        text = self.read_text(PLAN)
-        if text is None:
-            return None
-        try:
-            plan = json.loads(text)
-        except ValueError:
-            return None
-        ids = {w.get('id') for w in plan.get('work_packages', []) if isinstance(w, dict)}
-        parents = plan.get('decomposition', {}).get('parent_outcomes', [])
-        ids |= {p.get('id') for p in parents if isinstance(p, dict)}
-        return {i for i in ids if isinstance(i, str)}
+        return self.files.plan_ids()
 
     def check_link(self, where, link):
         """A link is a repository-relative file path, optionally with #anchor."""
@@ -128,8 +158,7 @@ class Checker:
                 or MACHINE_PATH.search(path):
             self.add('LINK_INVALID', where, f'not a repository-relative path: {link}')
             return
-        target = self.root / rel
-        if not target.is_file():
+        if not self.files.is_file(rel):
             self.add('LINK_MISSING', where, f'no such file in the repository: {path}')
             return
         if not anchor:

@@ -52,6 +52,11 @@ def codes(m, inv=None, readme=README, profiles=None):
     return {p.code for p in problems}, problems
 
 
+def shared_state(inputs):
+    """What an evaluation must leave as it found it in the shared inputs."""
+    return json.dumps([inputs.properties, inputs.profiles], sort_keys=True)
+
+
 def run_cli(*args):
     return subprocess.run([sys.executable, '-I', '-B', str(CHECKER), *map(str, args)],
                           capture_output=True, text=True, encoding='utf-8', cwd=REPO)
@@ -138,10 +143,28 @@ class CommittedMatrix(unittest.TestCase):
 
 
 class Acceptance(unittest.TestCase):
-    """The rules of the checker, each by a mutation that must fail with its code."""
+    """The rules of the checker, each by a mutation that must fail with its code. The inputs the
+    matrix is checked against (properties, profiles, the repository files the checks read) are
+    loaded once for the class (``load_inputs``) and every mutation, a deep copy, is evaluated
+    against them (``evaluate``); each test checks that they are unchanged. The committed matrix
+    goes through the file-reading path end to end in ``CommittedMatrix`` (``test_matrix_passes``
+    through ``check``, ``test_cli_passes_and_lists`` through the command line)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.inputs = cnm.load_inputs(REPO, profiles=PROFILES)
+        cls.loaded = shared_state(cls.inputs)
+
+    def tearDown(self):
+        self.assertEqual(shared_state(self.inputs), self.loaded, 'an evaluation changed the shared inputs')
+
+    def codes(self, m, inv=None, readme=README, profiles=None):
+        problems = cnm.evaluate(m, INVENTORY if inv is None else inv, self.inputs, readme,
+                                profiles=profiles)
+        return {p.code for p in problems}, problems
 
     def assert_code(self, code, m, inv=None, where=None, readme=README, profiles=None):
-        found, problems = codes(m, inv, readme, profiles)
+        found, problems = self.codes(m, inv, readme, profiles)
         self.assertIn(code, found, '\n'.join(map(str, problems)))
         if where:
             self.assertTrue(any(p.code == code and where in p.where for p in problems),
@@ -188,7 +211,7 @@ class Acceptance(unittest.TestCase):
         r.update(verdict='allow', endpoint='gitea-server')
         self.assert_code('TRUST_BOUNDARY', m, where='nm-runner-gitea')
         # a class endpoint into a trusted domain is fine
-        found, _ = codes(fresh())
+        found, _ = self.codes(fresh())
         self.assertNotIn('TRUST_BOUNDARY', found)
 
     def test_allow_without_prevention_fails(self):
@@ -284,7 +307,7 @@ class Acceptance(unittest.TestCase):
         profiles[QEMU]['status']['provider_validation'] = 'UNKNOWN'
         argv = profiles[QEMU]['launch']['argv']
         argv[argv.index('-netdev') + 1] += ',hostfwd=tcp:127.0.0.1:1-:2'
-        found, _ = codes(fresh(), profiles=profiles)
+        found, _ = self.codes(fresh(), profiles=profiles)
         self.assertNotIn('PROFILE_ENDPOINT', found)
 
     def test_observed_owner_act_needs_a_verbatim_approval(self):
@@ -347,14 +370,14 @@ class Acceptance(unittest.TestCase):
             for path in paths:
                 m = fresh()
                 m[path[0]] = v
-                codes(m)
+                self.codes(m)
             for key in keys:
                 m = fresh()
                 edge(m, 'nm-owner-guest-ssh')[key] = v
-                codes(m)
+                self.codes(m)
                 m = fresh()
                 edge(m, 'nm-owner-guest-ssh')['enforcement'] = [v]
-                codes(m)
+                self.codes(m)
         self.assert_code('SCHEMA', 'not a matrix')
 
 

@@ -131,8 +131,9 @@ def active_profile(profile):
 class Checker(csi.Checker):
     """Reuses the inventory checker's id tables, link and machine-path helpers."""
 
-    def __init__(self, matrix, inventory, root, readme_text=None, properties=None, profiles=None):
-        super().__init__(inventory, root, readme_text)
+    def __init__(self, matrix, inventory, root, readme_text=None, properties=None, profiles=None,
+                 files=None):
+        super().__init__(inventory, root, readme_text, files)
         self.matrix = matrix
         self.properties = properties if isinstance(properties, dict) else {}
         self.profiles = profiles if isinstance(profiles, dict) else {}
@@ -528,8 +529,17 @@ def load_profiles(root):
     return out
 
 
-def check(matrix, inventory, root, readme_text=None, properties=None, profiles=None):
-    """Return the problems found in ``matrix`` against ``inventory`` (parsed JSON values)."""
+class Inputs:
+    """What a matrix is checked against, loaded once under a root (the load/evaluate seam): the
+    properties, the profiles and the repository files the checks read (``csi.RepoFiles``)."""
+
+    def __init__(self, root, properties, profiles, files):
+        self.root, self.properties, self.profiles, self.files = root, properties, profiles, files
+
+
+def load_inputs(root, properties=None, profiles=None):
+    """Load the inputs ``evaluate`` takes from ROOT (PROPERTIES and PROFILES, when given, are used
+    as they are)."""
     if properties is None:
         try:
             properties = json.loads((Path(root) / PROPERTIES).read_text(encoding='utf-8'))
@@ -537,7 +547,20 @@ def check(matrix, inventory, root, readme_text=None, properties=None, profiles=N
             properties = {}
     if profiles is None:
         profiles = load_profiles(root)
-    return Checker(matrix, inventory, root, readme_text, properties, profiles).run()
+    return Inputs(root, properties, profiles, csi.RepoFiles(root))
+
+
+def evaluate(matrix, inventory, inputs, readme_text=None, profiles=None):
+    """Return the problems found in ``matrix`` against ``inventory`` and already-loaded INPUTS
+    (``load_inputs``); PROFILES, when given, replaces the loaded profiles. Reads nothing that
+    INPUTS has read already, and changes none of them."""
+    return Checker(matrix, inventory, inputs.root, readme_text, inputs.properties,
+                   inputs.profiles if profiles is None else profiles, files=inputs.files).run()
+
+
+def check(matrix, inventory, root, readme_text=None, properties=None, profiles=None):
+    """Return the problems found in ``matrix`` against ``inventory`` (parsed JSON values)."""
+    return evaluate(matrix, inventory, load_inputs(root, properties, profiles), readme_text)
 
 
 def main(argv=None):

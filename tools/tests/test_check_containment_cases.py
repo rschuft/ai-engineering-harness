@@ -45,6 +45,13 @@ def codes(c, readme=README, inventory=None):
     return [p.code for p in ccc.check(c, inventory or INVENTORY, REPO, readme)]
 
 
+def shared_state(inputs, names=None):
+    """What an evaluation must leave as it found it in the shared inputs: each loaded file (of
+    NAMES, when given; a later evaluation may load another file a mutation names)."""
+    return {rel: json.dumps(value, sort_keys=True) for rel, value in inputs._json.items()
+            if names is None or rel in names}
+
+
 class Committed(unittest.TestCase):
     category = 'contract'
 
@@ -91,124 +98,142 @@ class Committed(unittest.TestCase):
 
 
 class Rules(unittest.TestCase):
+    """Each rule by a mutation, a deep copy of the catalogue, that must fail with its code. The
+    files the catalogue names and the repository files the checks read are loaded once for the
+    class (``load_inputs``) and every mutation is evaluated against them (``evaluate``); each test
+    checks that they are unchanged. The committed catalogue goes through the file-reading path
+    end to end in ``Committed.test_catalogue_passes`` (``check``) and ``CommandLine``."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.inputs = ccc.load_inputs(REPO)
+        ccc.evaluate(CATALOGUE, INVENTORY, cls.inputs, README)  # loads every file it names
+        cls.loaded = shared_state(cls.inputs)
+
+    def tearDown(self):
+        self.assertEqual(shared_state(self.inputs, self.loaded), self.loaded, 'an evaluation changed the shared inputs')
+
+    def codes(self, c, readme=README, inventory=None):
+        return [p.code for p in ccc.evaluate(c, inventory or INVENTORY, self.inputs, readme)]
+
     def test_category_without_denial(self):
         c = fresh()
         c['cases'] = [x for x in c['cases'] if not (x['category'] == 'socket' and x['kind'] == 'denial')]
         c['mutations'] = [m for m in c['mutations'] if m['case'] in {x['id'] for x in c['cases']}]
-        self.assertIn('CATEGORY_MISSING', codes(c, readme=None))
+        self.assertIn('CATEGORY_MISSING', self.codes(c, readme=None))
 
     def test_enforcement_missing(self):
         c = fresh()
         case(c, 'file-shadow')['enforcement'] = []
-        self.assertIn('ENFORCEMENT_MISSING', codes(c, readme=None))
+        self.assertIn('ENFORCEMENT_MISSING', self.codes(c, readme=None))
 
     def test_enforcement_location_unknown(self):
         c = fresh()
         case(c, 'file-shadow')['enforcement'][0]['location'] = 'hope'
-        self.assertIn('ENFORCEMENT_MISSING', codes(c, readme=None))
+        self.assertIn('ENFORCEMENT_MISSING', self.codes(c, readme=None))
 
     def test_enforcement_without_refs(self):
         c = fresh()
         case(c, 'file-shadow')['enforcement'][0]['refs'] = []
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
 
     def test_dangling_references(self):
         for ref in ('P99', 'nm-nowhere', 'asset-nowhere'):
             c = fresh()
             case(c, 'file-shadow')['enforcement'][0]['refs'] = [ref]
-            self.assertIn('DANGLING_REF', codes(c, readme=None), ref)
+            self.assertIn('DANGLING_REF', self.codes(c, readme=None), ref)
 
     def test_references_of_each_kind_resolve(self):
         c = fresh()
         case(c, 'file-shadow')['enforcement'][0]['refs'] = [
             'P8', 'nm-job-engine', 'conversation-container', 'fd-container-shares-service-uid',
             'cred-conversation-keys']
-        self.assertEqual(codes(c, readme=None), [])
+        self.assertEqual(self.codes(c, readme=None), [])
 
     def test_principal_assets_and_findings_resolve(self):
         for field, value in (('principal', {'id': 'nobody', 'user': 'x', 'root_attempt': False}),
                              ('assets', ['no-asset']), ('carried', ['fd-none'])):
             c = fresh()
             case(c, 'file-shadow')[field] = value
-            self.assertIn('DANGLING_REF', codes(c, readme=None), field)
+            self.assertIn('DANGLING_REF', self.codes(c, readme=None), field)
 
     def test_assets_required(self):
         c = fresh()
         case(c, 'file-shadow')['assets'] = []
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
 
     def test_control_missing_or_not_permitted(self):
         c = fresh()
         case(c, 'file-shadow')['positive_control'] = None
-        self.assertIn('CONTROL_MISSING', codes(c, readme=None))
+        self.assertIn('CONTROL_MISSING', self.codes(c, readme=None))
         c = fresh()
         case(c, 'file-shadow')['positive_control'] = 'no-such-case'
-        self.assertIn('CONTROL_MISSING', codes(c, readme=None))
+        self.assertIn('CONTROL_MISSING', self.codes(c, readme=None))
         c = fresh()
         case(c, 'file-shadow')['positive_control'] = 'file-root-home'
-        self.assertIn('CONTROL_INVALID', codes(c, readme=None))
+        self.assertIn('CONTROL_INVALID', self.codes(c, readme=None))
         c = fresh()
         case(c, 'ctl-read-own-file')['positive_control'] = 'ctl-list-own-dir'
-        self.assertIn('CONTROL_INVALID', codes(c, readme=None))
+        self.assertIn('CONTROL_INVALID', self.codes(c, readme=None))
 
     def test_planned_control_for_an_executable_case(self):
         c = fresh()
         ctl = case(c, 'ctl-read-own-file')
         ctl['status'], ctl['verify_at'] = 'planned', 'S-02.2'
-        self.assertIn('CONTROL_INVALID', codes(c, readme=None))
+        self.assertIn('CONTROL_INVALID', self.codes(c, readme=None))
 
     def test_planned_case_needs_a_leaf(self):
         c = fresh()
         case(c, 'file-shadow')['status'] = 'planned'
-        self.assertIn('STATUS_UNSUPPORTED', codes(c, readme=None))
+        self.assertIn('STATUS_UNSUPPORTED', self.codes(c, readme=None))
 
     def test_expected_rules(self):
         c = fresh()
         case(c, 'file-shadow')['expected']['outcomes'] = ['EACCES', 'ok']
-        self.assertIn('EXPECTED_INVALID', codes(c, readme=None))
+        self.assertIn('EXPECTED_INVALID', self.codes(c, readme=None))
         c = fresh()
         case(c, 'ctl-read-own-file')['expected']['outcomes'] = ['ENOENT']
-        self.assertIn('EXPECTED_INVALID', codes(c, readme=None))
+        self.assertIn('EXPECTED_INVALID', self.codes(c, readme=None))
         c = fresh()
         case(c, 'file-shadow')['expected']['outcomes'] = []
-        self.assertIn('EXPECTED_INVALID', codes(c, readme=None))
+        self.assertIn('EXPECTED_INVALID', self.codes(c, readme=None))
         c = fresh()
         case(c, 'priv-no-new-privs')['expected']['outcomes'] = ['ok']
-        self.assertIn('EXPECTED_INVALID', codes(c, readme=None))
+        self.assertIn('EXPECTED_INVALID', self.codes(c, readme=None))
 
     def test_deviation_needs_compensating_cases(self):
         c = fresh()
         case(c, 'egr-network-none')['compensated_by'] = []
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
         c = fresh()
         case(c, 'egr-network-none')['compensated_by'] = ['ctl-read-own-file']
-        self.assertIn('DEVIATION', codes(c, readme=None))
+        self.assertIn('DEVIATION', self.codes(c, readme=None))
         c = fresh()
         case(c, 'file-shadow')['compensated_by'] = ['file-root-home']
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
 
     def test_probe_rules(self):
         c = fresh()
         case(c, 'file-shadow')['probe']['source'] = 'somewhere'
-        self.assertIn('PROBE_INVALID', codes(c, readme=None))
+        self.assertIn('PROBE_INVALID', self.codes(c, readme=None))
         c = fresh()
         case(c, 'sock-run-docker')['probe']['extract'] = 'nothing'
-        self.assertIn('PROBE_INVALID', codes(c, readme=None))
+        self.assertIn('PROBE_INVALID', self.codes(c, readme=None))
         c = fresh()
         del case(c, 'sock-run-docker')['probe']['args']['path']
-        self.assertIn('PROBE_INVALID', codes(c, readme=None))
+        self.assertIn('PROBE_INVALID', self.codes(c, readme=None))
         c = fresh()
         del case(c, 'file-shadow')['probe']['args']['path']
-        self.assertIn('PROBE_INVALID', codes(c, readme=None))
+        self.assertIn('PROBE_INVALID', self.codes(c, readme=None))
         c = fresh()
         case(c, 'file-shadow')['probe']['args']['path'] = 'etc/shadow'
-        self.assertIn('PROBE_INVALID', codes(c, readme=None))
+        self.assertIn('PROBE_INVALID', self.codes(c, readme=None))
         for op, args in (('mountinfo', {'check': 'x'}), ('socket', {'type': 'packet'}),
                          ('unshare', {'flags': ['pid']}), ('mknod', {'kind': 'block'}),
                          ('init-module', {'variant': 'load'})):
             c = fresh()
             case(c, 'file-shadow')['probe'] = {'source': 'containment-probe', 'op': op, 'args': args}
-            self.assertIn('PROBE_INVALID', codes(c, readme=None), op)
+            self.assertIn('PROBE_INVALID', self.codes(c, readme=None), op)
 
     def test_destructive_attempts(self):
         bad = [
@@ -231,93 +256,93 @@ class Rules(unittest.TestCase):
         for probe in bad:
             c = fresh()
             case(c, 'file-shadow')['probe'] = probe
-            self.assertIn('DESTRUCTIVE', codes(c, readme=None), json.dumps(probe))
+            self.assertIn('DESTRUCTIVE', self.codes(c, readme=None), json.dumps(probe))
 
     def test_off_host_only_through_the_s014_sweeps(self):
         c = fresh()
         case(c, 'egr-offlink-no-route')['attempt'] += ' (1.1.1.1)'
-        self.assertEqual(codes(c, readme=None), [])
+        self.assertEqual(self.codes(c, readme=None), [])
         c = fresh()
         case(c, 'file-shadow')['attempt'] += ' via 1.1.1.1'
-        self.assertIn('DESTRUCTIVE', codes(c, readme=None))
+        self.assertIn('DESTRUCTIVE', self.codes(c, readme=None))
 
     def test_route_present_needs_the_falsification_guest(self):
         c = fresh()
         del case(c, 'egr-offlink-route-present')['requires']
-        self.assertIn('DESTRUCTIVE', codes(c, readme=None))
+        self.assertIn('DESTRUCTIVE', self.codes(c, readme=None))
 
     def test_profile_value_must_match(self):
         c = fresh()
         case(c, 'file-guest-session-key')['probe']['args']['path'] = '/var/lib/aieh/other.key'
-        self.assertIn('PROFILE_VALUE', codes(c, readme=None))
+        self.assertIn('PROFILE_VALUE', self.codes(c, readme=None))
         c = fresh()
         case(c, 'file-guest-session-key')['probe']['args']['profile_value'] = 'provisioning.none'
-        self.assertIn('PROFILE_VALUE', codes(c, readme=None))
+        self.assertIn('PROFILE_VALUE', self.codes(c, readme=None))
 
     def test_mutations(self):
         c = fresh()
         c['mutations'][0]['case'] = 'ctl-read-own-file'
-        self.assertIn('MUTATION_INVALID', codes(c, readme=None))
+        self.assertIn('MUTATION_INVALID', self.codes(c, readme=None))
         c = fresh()
         c['mutations'][0]['op'] = 'exec'
         c['mutations'][0]['args'] = {'argv': ['rm', 'x']}
-        self.assertIn('DESTRUCTIVE', codes(c, readme=None))
+        self.assertIn('DESTRUCTIVE', self.codes(c, readme=None))
         c = fresh()
         c['mutations'] = [m for m in c['mutations'] if m['id'] != 'mut-egress']
-        self.assertIn('MUTATION_MISSING', codes(c, readme=None))
+        self.assertIn('MUTATION_MISSING', self.codes(c, readme=None))
         c = fresh()
         c['mutations'][1]['id'] = c['mutations'][0]['id']
-        self.assertIn('MUTATION_INVALID', codes(c, readme=None))
+        self.assertIn('MUTATION_INVALID', self.codes(c, readme=None))
         c = fresh()
         c['mutations'][0]['note'] = ''
-        self.assertIn('MUTATION_INVALID', codes(c, readme=None))
+        self.assertIn('MUTATION_INVALID', self.codes(c, readme=None))
 
     def test_ids(self):
         c = fresh()
         case(c, 'file-shadow')['id'] = 'File Shadow'
-        self.assertIn('ID_INVALID', codes(c, readme=None))
+        self.assertIn('ID_INVALID', self.codes(c, readme=None))
         c = fresh()
         c['cases'].append(copy.deepcopy(case(c, 'file-shadow')))
-        self.assertIn('ID_DUPLICATE', codes(c, readme=None))
+        self.assertIn('ID_DUPLICATE', self.codes(c, readme=None))
 
     def test_unknown_keys_and_vocabularies(self):
         c = fresh()
         case(c, 'file-shadow')['surprise'] = 1
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
         c = fresh()
         c['surprise'] = 1
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
         for field, value in (('category', 'kernel'), ('kind', 'maybe'), ('status', 'done'),
                              ('depends_on', ['weather']), ('requires', ['luck'])):
             c = fresh()
             case(c, 'file-shadow')[field] = value
-            self.assertIn('SCHEMA', codes(c, readme=None), field)
+            self.assertIn('SCHEMA', self.codes(c, readme=None), field)
         c = fresh()
         del c['enforcement_locations']['icc']
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
         c = fresh()
         c['version'] = ''
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
 
     def test_fingerprints(self):
         c = fresh()
         c['fingerprints']['gitea']['builder'] = 'the-token-itself'
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
         c = fresh()
         c['fingerprints']['gitea'] = {}
-        self.assertIn('SCHEMA', codes(c, readme=None))
+        self.assertIn('SCHEMA', self.codes(c, readme=None))
 
     def test_machine_path(self):
         c = fresh()
         case(c, 'file-shadow')['attempt'] = 'read C:\\Users\\user\\x'
-        self.assertIn('MACHINE_PATH', codes(c, readme=None))
-        self.assertIn('MACHINE_PATH', codes(fresh(), readme=README + '\nD:\\x\n'))
+        self.assertIn('MACHINE_PATH', self.codes(c, readme=None))
+        self.assertIn('MACHINE_PATH', self.codes(fresh(), readme=README + '\nD:\\x\n'))
 
     def test_readme_stale(self):
         c = fresh()
         case(c, 'file-shadow')['attempt'] = 'read /etc/shadow (changed)'
-        self.assertIn('README_STALE', codes(c))
-        self.assertIn('README_STALE', codes(fresh(), readme='no markers'))
+        self.assertIn('README_STALE', self.codes(c))
+        self.assertIn('README_STALE', self.codes(fresh(), readme='no markers'))
 
     def test_wrong_types_never_crash(self):
         """Type fuzzing: every value replaced by every wrong type gives named failures."""
@@ -344,11 +369,11 @@ class Rules(unittest.TestCase):
                     continue
                 node[path[-1]] = value
                 try:
-                    ccc.check(c, INVENTORY, REPO, README)
+                    ccc.evaluate(c, INVENTORY, self.inputs, README)
                 except Exception as exc:          # noqa: BLE001 - the test reports any crash
                     self.fail(f'{path} = {value!r} raised {type(exc).__name__}: {exc}')
         for value in values:
-            ccc.check(value, INVENTORY, REPO, README)
+            ccc.evaluate(value, INVENTORY, self.inputs, README)
 
 
 class CommandLine(unittest.TestCase):
