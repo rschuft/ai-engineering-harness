@@ -10836,6 +10836,30 @@ RESUME_MARKERS = ('Resumed conversation', 'error_recovering_runni', 'Failed to i
                   'Confirmation policy set')
 
 
+def restart_summary(detail):
+    """A server-restart result for the record: the journal of the new invocation in full only
+    when the restart failed or the unit is not active, else only its resume lines."""
+    unit = (detail or {}).get('unit') or {}
+    lines = ((detail or {}).get('invocation') or {}).get('lines') or []
+    failed = (detail or {}).get('rc') != 0 or unit.get('ActiveState') != 'active'
+    return {'rc': (detail or {}).get('rc'), 'seconds': (detail or {}).get('seconds'),
+            'stderr': (detail or {}).get('stderr'), 'failed': failed,
+            'unit': {k: unit.get(k) for k in ('ActiveState', 'SubState', 'Result', 'NRestarts',
+                                              'ExecMainStatus')},
+            'journal': lines if failed else [line for line in lines
+                                             if any(m in str(line) for m in RESUME_MARKERS)]}
+
+
+def restart_server(req):
+    """server-restart; a failed start is retried once (the first failure stays in the record:
+    an alteration that stops the server starting fails twice)."""
+    first = restart_summary(_detail(req('server-restart')))
+    if not first['failed']:
+        return first
+    retry = restart_summary(_detail(req('server-restart')))
+    return dict(retry, first_attempt=first)
+
+
 def journal_hints(obs, hex_id=None, conversation_id=None):
     """The outer server's resume lines in its current invocation (this start only)."""
     lines = ((obs or {}).get('server_invocation') or {}).get('lines')
@@ -10913,7 +10937,7 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
                 if not result.get('ok'):
                     raise Refused('DRILL', f'state-alter: {result.get("error")}')
             entry['applied'] = applied
-            entry['restart'] = _detail(req('server-restart'))
+            entry['restart'] = restart_server(req)
             marker = (alteration or {}).get('marker')
             obs = observe([marker] if marker else [])
             entry['server_processes'] = (obs.get('agent_server') or {}).get('processes') or []
@@ -10939,12 +10963,12 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
         shutdown wrote), and read the directory."""
         stopped, = _call(api, {'method': 'DELETE', 'path': base + '/runtime', 'timeout': 300})
         first = _detail(req('state-rollback', {'hex': hex_id}))
-        restart = _detail(req('server-restart'))
+        restart = restart_server(req)
         second = _detail(req('state-rollback', {'hex': hex_id}))
         files = _detail(req('state-read', {'hex': hex_id}))
         return {'stop': stopped.get('status'),
                 'first': {k: first.get(k) for k in ('removed', 'rewritten', 'equal')},
-                'restart_rc': restart.get('rc'),
+                'restart': restart,
                 'second': {k: second.get(k) for k in ('removed', 'rewritten', 'equal')},
                 'files': {e['path']: e.get('sha256') for e in files.get('entries') or []
                           if e.get('kind') == 'file'}}
@@ -11043,7 +11067,7 @@ def drill_stored_state(ctx, name, steps, chan, limit=None):
             entry['persisted'] = {
                 'execution_status': (content.get('base_state.json') or {}).get('execution_status'),
                 'working_dir': ((content.get('meta.json') or {}).get('workspace') or {}).get('working_dir')}
-            entry['restart'] = _detail(req('server-restart'))
+            entry['restart'] = restart_server(req)
             obs = observe([marker])
             entry['paths'] = obs.get('paths')
             entry['journal'] = journal_hints(obs)
@@ -11169,11 +11193,18 @@ def declared_secret_store(label, path, owners, containers):
 
 
 CONTAINERD_METADATA = '/var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db'
-# where an Owner-class pattern is expected in a provisioned guest: upstream content in Moby's
-# layer store (the pinned image's layers and the containers' upper layers, which hold the
-# Agent Server binary's own extraction), and the guest's own SSH host keys (profiles P5)
-PATTERN_PLACES = ((re.compile(r'^/srv/scratch/docker/overlay2/[0-9a-f]{64}(-init)?/diff/'),
-                   "Moby's layer store (upstream content of the pinned image)"),
+# Where an Owner-class pattern is expected in a provisioned guest (observed on the first
+# official drill guest): upstream content, namely the pinned guest image's and the pinned
+# packages' files under /usr (OpenSSH's binaries carry their key armor, cloud-init its example
+# keys, gnutls its test keys), Moby's layer store (the pinned conversation image's layers and the
+# containers' upper layers, which hold that image's own extraction of the server binary) and the
+# outer Agent Server's extraction of the locked release binary in its TMPDIR; the guest's own SSH
+# host keys (profiles P5); and the scan's positive control. Anything else is reported.
+PATTERN_PLACES = ((re.compile(r'^/usr/'), 'upstream content: the pinned guest image and packages (/usr)'),
+                  (re.compile(r'^/srv/scratch/docker/overlay2/[0-9a-f]{64}(-init)?/diff/'),
+                   "upstream content: Moby's layer store (the pinned conversation image)"),
+                  (re.compile(r'^/srv/scratch/openhands/tmp/_MEI[0-9A-Za-z]+/'),
+                   "upstream content: the outer Agent Server's extraction of the locked release binary"),
                   (re.compile(r'^/etc/ssh/ssh_host_[a-z0-9]+_key$'), "the guest's own SSH host keys"),
                   (re.compile(r'^/var/lib/aieh-drill/control/'), "the scan's positive control"))
 

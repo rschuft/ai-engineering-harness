@@ -398,6 +398,19 @@ class StoredStateAlterations(unittest.TestCase):
             verdict, rows = guest.state_cycle_verdict(base, self.cycle(**change), '/m')
             self.assertEqual(verdict, 'steered', change)
 
+    def test_a_restart_record_keeps_the_journal_of_a_failed_start_only(self):
+        ok = {'rc': 0, 'unit': {'ActiveState': 'active'},
+              'invocation': {'lines': ['a', 'x Resumed conversation y', 'b']}}
+        bad = {'rc': 1, 'unit': {'ActiveState': 'activating'}, 'invocation': {'lines': ['a', 'boom']}}
+        self.assertEqual(guest.restart_summary(ok)['journal'], ['x Resumed conversation y'])
+        self.assertEqual(guest.restart_summary(bad)['journal'], ['a', 'boom'])
+        answers = iter([{'ok': True, 'detail': bad}, {'ok': True, 'detail': ok}])
+        out = guest.restart_server(lambda action: next(answers))
+        self.assertFalse(out['failed'])
+        self.assertTrue(out['first_attempt']['failed'])
+        out = guest.restart_server(lambda action: {'ok': True, 'detail': bad})
+        self.assertTrue(out['failed'])
+
     def test_the_shape_normalizes_the_conversation(self):
         a = tg.conversation_container()
         b = copy.deepcopy(a)
@@ -429,6 +442,8 @@ def scan(**change):
                         {'path': '/proc/90/environ', 'count': 1}],
                     'owner:private-key-header': [
                         {'path': '/etc/ssh/ssh_host_ed25519_key', 'count': 1},
+                        {'path': '/usr/bin/ssh-keygen', 'count': 1},
+                        {'path': '/srv/scratch/openhands/tmp/_MEI00000881ymd8JC/botocore/x.json', 'count': 1},
                         {'path': f'/srv/scratch/docker/overlay2/{"d" * 64}/diff/usr/share/doc/x', 'count': 2}]},
            'key_blocks': [{'path': control['path'], 'body_sha256': 'k' * 64, 'kind': 'OPENSSH'},
                           {'path': '/etc/ssh/ssh_host_ed25519_key', 'body_sha256': 'h' * 64}],
@@ -459,7 +474,10 @@ class RootScanVerdict(unittest.TestCase):
         raw = scan(raw={'/dev/vda1': {'mount': '/', 'counts': {'secret:server:OH_SECRET_KEY': 3}}})
         pattern = scan()
         pattern['hits']['owner:llm-provider-key'] = [{'path': '/root/.bash_history', 'count': 1}]
-        for case in (canary, stray, foreign, leaked, raw, pattern):
+        outside = scan()          # the server's home and scratch are not its binary's extraction
+        outside['hits']['owner:cloud-token'] = [{'path': '/srv/scratch/openhands/home/x', 'count': 1},
+                                                {'path': '/srv/scratch/openhands/tmp/x', 'count': 1}]
+        for case in (canary, stray, foreign, leaked, raw, pattern, outside):
             verdict, _ = guest.root_scan_verdict(case, 'i' * 64, self.containers)
             self.assertEqual(verdict, 'FAIL')
 
@@ -622,7 +640,9 @@ class FakeGuest:
         elif action == 'server-restart':
             self.containers = {}
             self.server_start()
-            detail = {'rc': 0}
+            detail = {'rc': 0, 'unit': {'ActiveState': 'active'},
+                      'invocation': {'lines': ['INFO Uvicorn running'] +
+                                     (['INFO Resumed conversation x'] if self.hydrated else [])}}
         elif action == 'state-read':
             files = self.files[params['hex']]
             detail = {'entries': [{'path': k, 'kind': 'file', 'sha256': hashlib.sha256(v.encode()).hexdigest()}

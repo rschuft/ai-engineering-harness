@@ -394,7 +394,7 @@ def restart_server(timeout=420):
     t0 = time.monotonic()
     rc, out, err = run(['systemctl', 'restart', AS_UNIT], timeout)
     return {'rc': rc, 'stderr': err.strip()[-600:], 'seconds': round(time.monotonic() - t0, 1),
-            'unit': unit_show(AS_UNIT)}
+            'unit': unit_show(AS_UNIT), 'invocation': invocation_journal(AS_UNIT, 120)}
 
 
 def key_break(params):
