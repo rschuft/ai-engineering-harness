@@ -29,6 +29,7 @@ status.
 | `tests/test_references.py` | Round trip of every kind, malformed references, the schema check (and the defects it catches), the span anchor, `Resolution` and `Registry` contracts |
 | `tests/test_resolvers.py` | Every outcome of each resolver, against throwaway git repositories, the P-02 fake Backlog.md and its recorded fixtures, and F-05.2 effects-store fixtures; read-only checks; the command line |
 | `tests/test_trace.py` | The traversal: the example (regenerated and compared), read-only proof, every negative resolution fixture, the sample authorities and the command line |
+| `tests/test_traversal_git.py` | The traversal's git access (F-09.4): one batch reader per traversal, ended on a normal end, an exception and a timeout (failing closed), nothing kept between traversals, only git's read commands; and the `performance` benchmark `OneTraversal`, whose result is the launch count of one traversal of the example (at most 10) with projections equal to `examples/` byte for byte |
 | `tests/lineage_example.py` | Builds the example's throwaway sources, traces them and (with `--record`) writes `examples/` |
 | `tests/fixtures/sample-attempts.json` | The sample attempt records (`lineage-sample-attempts/v1`, `"sample": true`) |
 | `tests/test_live_lineage.py` | Live, against the pinned Backlog.md 1.55.3 and OpenSpec 1.16.0 (including the traversal over live tasks and after a real `openspec archive`); skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` are set |
@@ -130,7 +131,7 @@ outcomes or authority differ from the schema, and an answer outside the resolver
 | `design` | `planning_adapter.resolve_pointer` (P-02.1) on git objects only; `current` builds the pointer at `HEAD` | `missing` POINTER_ARTIFACT_MISSING; `revision-mismatch` POINTER_REVISION_MISSING; `digest-mismatch` POINTER_DIGEST_MISMATCH (with the observed digest); `authority-unavailable` PROJECT_UNAVAILABLE, GIT_FAILED |
 | `objective` | git objects only, at the pinned commit or at `HEAD` (decision 0008, point 6): every `openspec/changes/<change>/.openspec.yaml` and `openspec/changes/archive/<dated-change>/.openspec.yaml` is read with a strict reader of the `x-outcomes` block (`read_x_outcomes`); exactly one change must declare the id; its proposal is parsed with the intent-record/v1 parser (`tools/check_intent_record.py`) and the declared item must be an Objective item with `authority: accepted` and the declared acceptance. A resolved answer carries `facts`: the change, item, statement, acceptance, source and the accepted Acceptance Criteria citing the item; `observed_digest` is the sha256 of `proposal.md`. It never runs openspec or reads the working tree. | `missing` OUTCOME_MISSING, OUTCOME_NOT_ACCEPTED; `revision-mismatch` OUTCOME_REVISION_MISSING; `ambiguous` OUTCOME_AMBIGUOUS; `authority-unavailable` PROJECT_UNAVAILABLE, GIT_FAILED, OUTCOME_METADATA_INVALID |
 | `work` | Backlog.md's `task view <id> --json` and `task list --json` through the P-02 wrapper, limited to those two commands. A pinned reference is read by Backlog.md from a `git archive` export of that commit in a temporary directory; the pinned Backlog.md answered there and wrote nothing (observed live). | `missing` WORK_MISSING; `revision-mismatch` WORK_REVISION_MISSING; `ambiguous` WORK_AMBIGUOUS; `authority-unavailable` PROJECT_UNAVAILABLE, BACKLOG_UNAVAILABLE, BACKLOG_VIEW_FAILED, BACKLOG_LIST_FAILED |
-| `commit` | `git rev-parse --verify <commit>^{commit}` and `git cat-file -t` in the clone registered for the repository name | `missing` COMMIT_MISSING, COMMIT_NOT_A_COMMIT, COMMIT_ID_MISMATCH; `authority-unavailable` REPOSITORY_NOT_REGISTERED, REPOSITORY_UNAVAILABLE, GIT_FAILED |
+| `commit` | `<commit>^{commit}` and, when that is no commit, the object's type, read through the P-02.1 batch reader (`git cat-file --batch`) in the clone registered for the repository name | `missing` COMMIT_MISSING, COMMIT_NOT_A_COMMIT, COMMIT_ID_MISMATCH; `authority-unavailable` REPOSITORY_NOT_REGISTERED, REPOSITORY_UNAVAILABLE, GIT_FAILED |
 | `effect-receipt` | the effects store opened by the caller's `open_store` (its location and custody checks apply), then only `verify_chain`, `get`, `events`, `open_epochs`, `high_water_mark` | `missing` EFFECT_RECEIPT_MISSING (never evidence that the effect did not happen, decision 0004 point 7); `revision-mismatch` EFFECT_EVENT_MISSING; `digest-mismatch` EFFECT_EVENT_DIGEST_MISMATCH; `authority-unavailable` EFFECTS_STORE_UNAVAILABLE, EFFECTS_CHAIN_INVALID |
 
 The work resolver never reads a status: Backlog.md's verdicts stay Backlog.md's (P-02.2).
@@ -289,8 +290,17 @@ uncertainty, so a projection that uses a sample is never `complete`.
 
 ### Read-only
 
-- Git: `rev-parse`, `cat-file`, `ls-tree` and `archive` only (the P-02.1 reader), never the
-  working tree; OpenSpec is never run.
+- Git: `rev-parse`, `cat-file --batch`, `ls-tree` and `archive` only (the P-02.1 reader),
+  never the working tree; OpenSpec is never run.
+- One git access per traversal (plan leaf F-09.4): `Traversal.run` opens a git scope
+  (`lineage_resolve.git_scope`) in which every resolver and the enumeration share one
+  `planning_adapter.Git` per project, with one read session: one `git cat-file --batch`
+  process, objects memoized by full commit id and each revision resolved once (a snapshot
+  for the traversal). The scope closes every session when the traversal ends, normally or
+  by an exception; nothing is kept for the next traversal. One traversal of the example
+  launches 4 processes (the work-tree check, the batch reader and two `ls-tree`), against 70
+  before, with Backlog.md answered in the test process (with the fake Backlog.md launched,
+  its 9 reads come on top). A resolver called outside a traversal opens its own session.
 - Backlog.md: `task list --json` and `task view --json` only (`ReadOnlyBacklog`).
 - Integration store: `ReadOnlyIntegrationStore`. The store's own `open_store` migrates in a
   write transaction and creates an absent file, so it is not used. Instead the existing

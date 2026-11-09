@@ -342,6 +342,12 @@ class Traversal:
         root = L.parse(outcome) if isinstance(outcome, str) else outcome
         if not isinstance(root, L.ObjectiveRef):
             raise L.MalformedReference('REFERENCE_MALFORMED', f'the traversal starts from an outcome: {root!r}')
+        # One git access for the whole traversal (plan leaf F-09.4): every resolver and the
+        # enumeration share one batch reader per project, closed when the traversal ends.
+        with resolve_mod.git_scope():
+            return self._run(root)
+
+    def _run(self, root):
         self.p = _Projection(self.authorities, root.text)
         self.git, why = resolve_mod._git(self.project)
         sources = {'project_head': None, 'backlog': None, 'store_schema_version': None}

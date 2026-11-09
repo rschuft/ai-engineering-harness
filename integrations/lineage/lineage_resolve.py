@@ -28,6 +28,8 @@ reference, a schema problem, or any outcome other than resolved), 2 could not ru
 Standard library only, plus git and the tools named.
 """
 import argparse
+import contextlib
+import contextvars
 import hashlib
 import io
 import json
@@ -65,12 +67,49 @@ def _effects_module():
     return _load('effects_store', REPO / 'integrations' / 'effects' / 'effects_store.py')
 
 
-def _git(project):
-    """The P-02.1 read-only git access, or the reason it is unavailable."""
+def _open_git(project):
     try:
         return planning.Git(project), None
     except (planning.CannotRun, OSError, subprocess.TimeoutExpired) as exc:
         return None, str(exc)
+
+
+# The git access of the running traversal (git_scope), or None.
+_SCOPE = contextvars.ContextVar('lineage_git_scope', default=None)
+
+
+@contextlib.contextmanager
+def git_scope():
+    """One traversal's git access (plan leaf F-09.4). Inside it, ``_git(project)`` gives every
+    resolver the same ``planning_adapter.Git`` per project, with one read session open: one
+    ``git cat-file --batch`` reader, and memos of immutable objects and of the revisions it
+    resolved (a snapshot for this traversal). When the block ends, normally or by an
+    exception, every session is closed and its reader process ended; nothing is kept for the
+    next traversal. A scope inside a scope is the outer one."""
+    if _SCOPE.get() is not None:
+        yield
+        return
+    with contextlib.ExitStack() as stack:
+        token = _SCOPE.set({'stack': stack, 'projects': {}})
+        try:
+            yield
+        finally:
+            _SCOPE.reset(token)
+
+
+def _git(project):
+    """The P-02.1 read-only git access, or the reason it is unavailable: within a traversal
+    (git_scope), the traversal's own, opened once per project."""
+    scope = _SCOPE.get()
+    if scope is None:
+        return _open_git(project)
+    key = str(Path(project))
+    if key not in scope['projects']:
+        git, why = _open_git(project)
+        if git is not None:
+            scope['stack'].enter_context(git.session())
+        scope['projects'][key] = (git, why)
+    return scope['projects'][key]
 
 
 # ---------------------------------------------------------------------------
@@ -109,11 +148,12 @@ class DesignResolver:
             return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'PROJECT_UNAVAILABLE', why,
                             query='current')
         try:
-            commit = git.commit(self.current_revision)
-            if commit is None:
-                return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'GIT_FAILED',
-                                f'the project has no commit {self.current_revision!r}', query='current')
-            pointer = planning.make_pointer(git, reference.change, reference.artifact, commit)
+            with git.session():
+                commit = git.commit(self.current_revision)
+                if commit is None:
+                    return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'GIT_FAILED',
+                                    f'the project has no commit {self.current_revision!r}', query='current')
+                pointer = planning.make_pointer(git, reference.change, reference.artifact, commit)
         except planning.PlanningError as exc:
             outcome = L.MISSING if exc.code == 'POINTER_ARTIFACT_MISSING' else L.AUTHORITY_UNAVAILABLE
             return L.answer(reference, outcome, self.authority, exc.code, exc.message, query='current')
@@ -237,17 +277,18 @@ class ObjectiveResolver:
         if git is None:
             return say(L.AUTHORITY_UNAVAILABLE, 'PROJECT_UNAVAILABLE', why)
         try:
-            if query == 'reference' and reference.revision is not None:
-                commit = git.commit(reference.revision)
-                if commit != reference.revision:
-                    return say(L.REVISION_MISMATCH, 'OUTCOME_REVISION_MISSING',
-                               f'the project repository has no commit {reference.revision}')
-            else:
-                commit = git.commit(self.current_revision)
-                if commit is None:
-                    return say(L.AUTHORITY_UNAVAILABLE, 'GIT_FAILED',
-                               f'the project has no commit {self.current_revision!r}')
-            return self._read(git, commit, reference, say)
+            with git.session():
+                if query == 'reference' and reference.revision is not None:
+                    commit = git.commit(reference.revision)
+                    if commit != reference.revision:
+                        return say(L.REVISION_MISMATCH, 'OUTCOME_REVISION_MISSING',
+                                   f'the project repository has no commit {reference.revision}')
+                else:
+                    commit = git.commit(self.current_revision)
+                    if commit is None:
+                        return say(L.AUTHORITY_UNAVAILABLE, 'GIT_FAILED',
+                                   f'the project has no commit {self.current_revision!r}')
+                return self._read(git, commit, reference, say)
         except OutcomeMetadataInvalid as exc:
             return say(L.AUTHORITY_UNAVAILABLE, 'OUTCOME_METADATA_INVALID', str(exc))
         except planning.PlanningError as exc:
@@ -338,7 +379,8 @@ class WorkResolver:
         if git is None:
             return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'PROJECT_UNAVAILABLE', why)
         try:
-            commit = git.commit(reference.revision)
+            with git.session():
+                commit = git.commit(reference.revision)
             if commit != reference.revision:
                 return L.answer(reference, L.REVISION_MISMATCH, self.authority, 'WORK_REVISION_MISSING',
                                 f'the project repository has no commit {reference.revision}')
@@ -392,12 +434,6 @@ class WorkResolver:
 # ---------------------------------------------------------------------------
 # commit
 
-def _object_type(repository, oid):
-    result = subprocess.run(['git', '-C', str(repository), 'cat-file', '-t', oid], capture_output=True,
-                            stdin=subprocess.DEVNULL, timeout=planning.TOOL_TIMEOUT_S, env=planning.tool_env())
-    return result.stdout.decode('ascii', 'replace').strip() if result.returncode == 0 else None
-
-
 class CommitResolver:
     """Exact commits in registered local clones (repository name -> directory)."""
     kind = 'commit'
@@ -417,8 +453,9 @@ class CommitResolver:
             return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'REPOSITORY_UNAVAILABLE', why,
                             query=query)
         try:
-            commit = git.commit(reference.commit)
-            kind = _object_type(path, reference.commit) if commit is None else 'commit'
+            with git.session():
+                commit = git.commit(reference.commit)
+                kind = git.object_kind(reference.commit) if commit is None else 'commit'
         except (planning.PlanningError, subprocess.TimeoutExpired, OSError) as exc:
             return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'GIT_FAILED', str(exc), query=query)
         if commit is None:
