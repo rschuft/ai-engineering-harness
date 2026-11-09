@@ -330,9 +330,10 @@ median of 219 s (195 to 215 s in a later set whose interleaved runs of the earli
 [`evidence/F-09.3-shared-fixtures.md`](../evidence/F-09.3-shared-fixtures.md) has the
 measurements. At `7bb7254`, with the batched git reads below (F-09.4), three serial runs
 interleaved with runs of the F-09.3 tree took a median of 154 s against 203 s, and `test:all`
-34 to 36 s; the 150 s target is not met yet, and
-[`evidence/F-09.4-batched-git.md`](../evidence/F-09.4-batched-git.md) has the measurements
-and the remaining costs, ranked.
+34 to 36 s. At `34f9d8e`, with one git access per operation and the checkers' load/evaluate
+seam (F-09.4 round 2), three interleaved serial runs took a median of 147 s (135 to 155 s)
+against 201 s for the F-09.3 tree and 175 s for the round-1 tree, and `test:all` 31 s;
+[`evidence/F-09.4-batched-git.md`](../evidence/F-09.4-batched-git.md) has the measurements.
 
 **Shared fixtures and process boundaries.** Expensive fixtures are built once and copied, and
 logic cases run in the test process; the tests that check a real process interaction still
