@@ -96,6 +96,13 @@ def classify(task, listed_is_ready):
 
 def read_readiness(backlog, git=None, task_ids=None):
     """Readiness report for the listed (or given) tasks; pointers are resolved when GIT is given."""
+    if git is None:
+        return _read_readiness(backlog, None, task_ids)
+    with git.session():  # one read session: one git batch reader for every pointer of the report
+        return _read_readiness(backlog, git, task_ids)
+
+
+def _read_readiness(backlog, git, task_ids):
     listed = {t['id']: t.get('isReady') for t in backlog.list_tasks()}
     report = []
     for task_id in task_ids or list(listed):

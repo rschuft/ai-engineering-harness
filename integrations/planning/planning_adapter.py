@@ -34,6 +34,7 @@ run with ``node``. Exit status: 0 PASS, 1 FAIL (a visible failure), 2 could not 
 Standard library only.
 """
 import argparse
+import contextlib
 import hashlib
 import io
 import json
@@ -44,6 +45,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,6 +63,7 @@ CHANGE_ID = r'[a-z0-9]+(?:-[a-z0-9]+)*'
 PATH_PART = r'[A-Za-z0-9_][A-Za-z0-9._-]*'
 ARTIFACT_PATH = rf'{PATH_PART}(?:/{PATH_PART})*'
 COMMIT = r'[0-9a-f]{40}|[0-9a-f]{64}'
+OBJECT_ID_RE = re.compile(rf'^(?:{COMMIT})$')
 POINTER_RE = re.compile(
     rf'^openspec:changes/(?P<change>{CHANGE_ID})/(?P<artifact>{ARTIFACT_PATH})'
     rf'@(?P<revision>{COMMIT})#sha256=(?P<digest>[0-9a-f]{{64}})$')
@@ -144,11 +148,221 @@ def tool_env():
     return env
 
 
+# Object names and revisions reach git's batch protocol one per line on standard input, so a
+# name holding whitespace or a control character (it could end, split or extend a line) is
+# refused before it reaches the process.
+UNSAFE_NAME_RE = re.compile(r'[\s\x00-\x1f\x7f]')
+OBJECT_TYPES = (b'blob', b'tree', b'commit', b'tag')
+
+
+def batch_line(name):
+    """NAME as one request line of the batch protocol; refused (OBJECT_NAME_INVALID) when it is
+    not text, is empty, starts with '-' or holds whitespace or a control character."""
+    if not isinstance(name, str) or not name or name.startswith('-') or UNSAFE_NAME_RE.search(name):
+        raise PlanningError('OBJECT_NAME_INVALID', f'not an object name the batch reader takes: {name!r}')
+    try:
+        return name.encode('utf-8')
+    except UnicodeEncodeError:
+        raise PlanningError('OBJECT_NAME_INVALID', f'not an object name the batch reader takes: {name!r}') from None
+
+
+class _Expired(Exception):
+    pass
+
+
+class BatchReader:
+    """One long-lived ``git cat-file --batch`` process: git's own batch protocol, one object
+    name per line in; ``<oid> <type> <size>``, the contents and a newline out, or ``<name>
+    missing`` / ``<name> ambiguous``.
+
+    Its owner closes it (``close``, or ``with``): standard input is closed, git exits, and the
+    process is waited for (killed when it does not exit within the ceiling). Every request has
+    the TOOL_TIMEOUT_S ceiling: when it expires the process is killed and
+    ``subprocess.TimeoutExpired`` is raised. After a timeout, an unexpected answer or an exit,
+    the reader fails closed: every later request raises GIT_FAILED.
+    """
+
+    def __init__(self, argv, env, timeout=None):
+        self.argv = list(argv)
+        self._timeout = timeout
+        self._cond = threading.Condition()
+        self._out = bytearray()
+        self._err = bytearray()
+        self._eof = False
+        self._broken = None
+        self.process = subprocess.Popen(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, env=env)
+        self._pumps = [threading.Thread(target=self._pump, args=(self.process.stdout, self._out, True), daemon=True),
+                       threading.Thread(target=self._pump, args=(self.process.stderr, self._err, False), daemon=True)]
+        for pump in self._pumps:
+            pump.start()
+
+    @property
+    def timeout(self):
+        return TOOL_TIMEOUT_S if self._timeout is None else self._timeout
+
+    def _pump(self, stream, buffer, is_stdout):
+        try:
+            while True:
+                chunk = stream.read1(65536)
+                if not chunk:
+                    break
+                with self._cond:
+                    buffer.extend(chunk)
+                    if not is_stdout:
+                        del buffer[:-65536]  # keep the end of a long error output
+                    self._cond.notify_all()
+        except (OSError, ValueError):
+            pass
+        finally:
+            if is_stdout:
+                with self._cond:
+                    self._eof = True
+                    self._cond.notify_all()
+
+    def _take(self, size_of, deadline):
+        """Wait until SIZE_OF(buffer) is a length, then remove and return that many bytes; None at
+        the end of the output."""
+        with self._cond:
+            while True:
+                size = size_of(self._out)
+                if size is not None:
+                    data = bytes(self._out[:size])
+                    del self._out[:size]
+                    return data
+                if self._eof:
+                    return None
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _Expired()
+                self._cond.wait(remaining)
+
+    def read(self, name):
+        """(object id, type, contents) of NAME, or None when git has no such object or the name
+        is ambiguous. NAME is checked by ``batch_line`` before anything is written."""
+        line = batch_line(name)
+        if self._broken:
+            raise PlanningError('GIT_FAILED', f'git cat-file --batch: {self._broken}')
+        timeout = self.timeout
+        deadline = time.monotonic() + timeout
+        try:
+            try:
+                self.process.stdin.write(line + b'\n')
+                self.process.stdin.flush()
+            except (OSError, ValueError):
+                self._fail_exited()
+            header = self._take(lambda out: (out.find(b'\n') + 1) or None, deadline)
+            if header is None:
+                self._fail_exited()
+            fields = header[:-1].split(b' ')
+            if len(fields) == 2 and fields[0] == line and fields[1] in (b'missing', b'ambiguous'):
+                return None
+            if len(fields) != 3 or not OBJECT_ID_RE.fullmatch(fields[0].decode('ascii', 'replace')) \
+                    or fields[1] not in OBJECT_TYPES or not fields[2].isdigit():
+                self._fail(f'unexpected answer {header[:200]!r} for {name!r}')
+            size = int(fields[2])
+            body = self._take(lambda out: size + 1 if len(out) > size else None, deadline)
+            if body is None:
+                self._fail_exited()
+            if body[-1:] != b'\n':
+                self._fail(f'the contents of {name!r} do not end where their size says')
+            return fields[0].decode('ascii'), fields[1].decode('ascii'), body[:-1]
+        except _Expired:
+            self._broken = f'no answer for {name!r} within {timeout} s; the process was killed'
+            self._kill()
+            raise subprocess.TimeoutExpired(self.argv, timeout) from None
+
+    def _fail(self, why):
+        self._broken = why
+        self._kill()
+        raise PlanningError('GIT_FAILED', f'git cat-file --batch: {why}')
+
+    def _fail_exited(self):
+        try:
+            code = self.process.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            code = None
+        self._pumps[1].join(self.timeout)
+        with self._cond:
+            stderr = bytes(self._err).decode('utf-8', 'replace').strip()
+        self._fail(f'exited {code}: {stderr}' if stderr else f'exited {code}')
+
+    def _kill(self):
+        if self.process.poll() is None:
+            self.process.kill()
+        try:
+            self.process.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def close(self):
+        """Close standard input, wait for git to exit (kill it past the ceiling), end the pumps."""
+        if self._broken is None:
+            self._broken = 'the reader is closed'
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.process.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            self._kill()
+        for pump in self._pumps:
+            pump.join(self.timeout)
+        for stream in (self.process.stdout, self.process.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+class _Session:
+    """One read session of a Git: its batch reader, started on the first object read, and memos
+    that last only as long as the session. Objects are memoized only by an immutable name (a
+    full object id, or ``<full object id>:<path>``); revisions are resolved once per session, a
+    snapshot; file lists by (full commit id, directory)."""
+
+    def __init__(self, git):
+        self.git = git
+        self.reader = None
+        self.objects = {}
+        self.revisions = {}
+        self.trees = {}
+
+    def read(self, name):
+        batch_line(name)  # a refused name starts no process and is never written
+        immutable = OBJECT_ID_RE.fullmatch(name.partition(':')[0]) is not None
+        if immutable and name in self.objects:
+            return self.objects[name]
+        if self.reader is None:
+            self.reader = BatchReader(self.git.batch_argv(), tool_env())
+        found = self.reader.read(name)
+        if immutable:
+            self.objects[name] = found
+        return found
+
+    def close(self):
+        if self.reader is not None:
+            self.reader.close()
+
+
 class Git:
-    """Read-only access to the project repository."""
+    """Read-only access to the project repository.
+
+    Object reads (``commit``, ``object_type``, ``object_kind``, ``blob``) go through one ``git
+    cat-file --batch`` process per read session (``session()``), and are memoized for that
+    session only. Outside a session each call opens and closes its own.
+    """
 
     def __init__(self, project):
         self.project = Path(project)
+        self._session = None
         if not shutil.which('git'):
             raise CannotRun('git is not on PATH')
         top = self._run('rev-parse', '--show-toplevel', check=False)
@@ -163,26 +377,69 @@ class Git:
                                 f'{result.stderr.decode("utf-8", "replace").strip()}')
         return result
 
+    def batch_argv(self):
+        return ['git', '-C', str(self.project), 'cat-file', '--batch']
+
+    @contextlib.contextmanager
+    def session(self):
+        """A read session: one batch reader and the session's memos, closed when the block
+        ends, normally or by an exception. Re-entrant: an inner session is the outer one."""
+        if self._session is not None:
+            yield self
+            return
+        session = self._session = _Session(self)
+        try:
+            yield self
+        finally:
+            self._session = None
+            session.close()
+
+    def _object(self, name):
+        if self._session is not None:
+            return self._session.read(name)
+        with self.session():
+            return self._session.read(name)
+
     def commit(self, revision):
         """The full commit id of REVISION, or None when the repository has no such commit."""
         if not isinstance(revision, str) or not revision or revision.startswith('-') \
-                or any(ch.isspace() for ch in revision):
+                or any(ch.isspace() for ch in revision) or UNSAFE_NAME_RE.search(revision):
             raise PlanningError('REVISION_INVALID', f'not a usable revision: {revision!r}')
-        result = self._run('rev-parse', '--verify', '--quiet', f'{revision}^{{commit}}', check=False)
-        if result.returncode != 0:
-            return None
-        return result.stdout.decode('ascii').strip()
+        if self._session is None:
+            with self.session():
+                return self.commit(revision)
+        revisions = self._session.revisions
+        if revision not in revisions:
+            found = self._session.read(f'{revision}^{{commit}}')
+            revisions[revision] = found[0] if found is not None and found[1] == 'commit' else None
+        return revisions[revision]
+
+    def object_kind(self, name):
+        """The type of object NAME, or None when the repository has none."""
+        found = self._object(name)
+        return found[1] if found is not None else None
 
     def object_type(self, commit, path):
-        result = self._run('cat-file', '-t', f'{commit}:{path}', check=False)
-        return result.stdout.decode('ascii').strip() if result.returncode == 0 else None
+        return self.object_kind(f'{commit}:{path}')
 
     def blob(self, commit, path):
-        return self._run('cat-file', 'blob', f'{commit}:{path}').stdout
+        name = f'{commit}:{path}'
+        found = self._object(name)
+        if found is None or found[1] != 'blob':
+            raise PlanningError('GIT_FAILED', f'git cat-file blob {name}: '
+                                + ('no such object' if found is None else f'a {found[1]}, not a blob'))
+        return found[2]
 
     def files(self, commit, directory):
+        key = (commit, directory)
+        trees = self._session.trees if self._session is not None else None
+        if trees is not None and key in trees:
+            return list(trees[key])
         out = self._run('ls-tree', '-r', '-z', '--name-only', commit, '--', directory + '/').stdout
-        return [name.decode('utf-8') for name in out.split(b'\0') if name]
+        files = [name.decode('utf-8') for name in out.split(b'\0') if name]
+        if trees is not None and isinstance(commit, str) and OBJECT_ID_RE.fullmatch(commit):
+            trees[key] = list(files)
+        return files
 
     def archive(self, commit, directory):
         return self._run('archive', '--format=tar', commit, '--', directory).stdout
@@ -197,26 +454,28 @@ def make_pointer(git, change, artifact, commit):
     if not isinstance(artifact, str) or not ARTIFACT_RE.fullmatch(artifact):
         raise PlanningError('POINTER_MALFORMED', f'not a relative artifact path: {artifact!r}')
     path = f'{CHANGES_DIR}/{change}/{artifact}'
-    kind = git.object_type(commit, path)
-    if kind != 'blob':
-        raise PlanningError('POINTER_ARTIFACT_MISSING', f'{path} is not a file at {commit}',
-                            artifact=path, revision=commit)
-    digest = hashlib.sha256(git.blob(commit, path)).hexdigest()
+    with git.session():
+        kind = git.object_type(commit, path)
+        if kind != 'blob':
+            raise PlanningError('POINTER_ARTIFACT_MISSING', f'{path} is not a file at {commit}',
+                                artifact=path, revision=commit)
+        digest = hashlib.sha256(git.blob(commit, path)).hexdigest()
     return Pointer(change, artifact, commit, digest)
 
 
 def resolve_pointer(git, text):
     """Re-resolve a pointer against the repository. Returns the Pointer or raises."""
     pointer = Pointer.parse(text)
-    commit = git.commit(pointer.revision)
-    if commit != pointer.revision:
-        raise PlanningError('POINTER_REVISION_MISSING',
-                            f'the repository has no commit {pointer.revision}', pointer=text)
-    kind = git.object_type(commit, pointer.repo_path)
-    if kind != 'blob':
-        raise PlanningError('POINTER_ARTIFACT_MISSING',
-                            f'{pointer.repo_path} does not exist as a file at {commit}', pointer=text)
-    actual = hashlib.sha256(git.blob(commit, pointer.repo_path)).hexdigest()
+    with git.session():
+        commit = git.commit(pointer.revision)
+        if commit != pointer.revision:
+            raise PlanningError('POINTER_REVISION_MISSING',
+                                f'the repository has no commit {pointer.revision}', pointer=text)
+        kind = git.object_type(commit, pointer.repo_path)
+        if kind != 'blob':
+            raise PlanningError('POINTER_ARTIFACT_MISSING',
+                                f'{pointer.repo_path} does not exist as a file at {commit}', pointer=text)
+        actual = hashlib.sha256(git.blob(commit, pointer.repo_path)).hexdigest()
     if actual != pointer.digest:
         raise PlanningError('POINTER_DIGEST_MISMATCH',
                             f'{pointer.repo_path} at {commit} has sha256 {actual}, '
@@ -266,6 +525,11 @@ def schema_tracking(schema_text):
 
 def check_change(git, change, commit, openspec=None):
     """Refuse a change that is missing or carries or tracks its own implementation checklist."""
+    with git.session():
+        return _check_change(git, change, commit, openspec)
+
+
+def _check_change(git, change, commit, openspec):
     directory = f'{CHANGES_DIR}/{change}'
     files = git.files(commit, directory)
     if not files:
@@ -459,14 +723,15 @@ def create_tasks(git, backlog, plan, revision, openspec=None):
     """Create the plan's tasks in Backlog.md with source pointers and dependencies."""
     plan = load_plan(plan)
     change = plan['change']
-    commit = git.commit(revision)
-    if commit is None:
-        raise PlanningError('POINTER_REVISION_MISSING', f'the repository has no commit {revision!r}')
-    openspec_state = check_change(git, change, commit, openspec)
-    planned = []
-    for task in plan['tasks']:
-        pointers = [make_pointer(git, change, artifact, commit).text for artifact in task['artifacts']]
-        planned.append((task, pointers))
+    with git.session():
+        commit = git.commit(revision)
+        if commit is None:
+            raise PlanningError('POINTER_REVISION_MISSING', f'the repository has no commit {revision!r}')
+        openspec_state = check_change(git, change, commit, openspec)
+        planned = []
+        for task in plan['tasks']:
+            pointers = [make_pointer(git, change, artifact, commit).text for artifact in task['artifacts']]
+            planned.append((task, pointers))
     existing = backlog.list_tasks()
     for task, pointers in planned:
         for other in existing:
@@ -498,17 +763,18 @@ def resolve_tasks(git, backlog, task_ids=None):
     if not task_ids:
         task_ids = [t['id'] for t in backlog.list_tasks()]
     report = []
-    for task_id in task_ids:
-        task = backlog.view(task_id)
-        refs = task.get('references') or []
-        pointers = [r for r in refs if isinstance(r, str) and r.startswith(POINTER_PREFIX)]
-        entry = {'id': task['id'], 'pointers': []}
-        if not pointers:
-            entry['failure'] = {'code': 'POINTER_ABSENT',
-                                'message': f'{task["id"]} carries no OpenSpec source pointer'}
-        for text in pointers:
-            entry['pointers'].append(_resolve_entry(git, text))
-        report.append(entry)
+    with git.session():
+        for task_id in task_ids:
+            task = backlog.view(task_id)
+            refs = task.get('references') or []
+            pointers = [r for r in refs if isinstance(r, str) and r.startswith(POINTER_PREFIX)]
+            entry = {'id': task['id'], 'pointers': []}
+            if not pointers:
+                entry['failure'] = {'code': 'POINTER_ABSENT',
+                                    'message': f'{task["id"]} carries no OpenSpec source pointer'}
+            for text in pointers:
+                entry['pointers'].append(_resolve_entry(git, text))
+            report.append(entry)
     return report
 
 
@@ -564,15 +830,19 @@ def main(argv=None):
             print(json.dumps(create_tasks(git, backlog, plan, args.revision, openspec), indent=2))
             return 0
         if args.command == 'pointer':
-            commit = git.commit(args.revision)
-            if commit is None:
-                raise PlanningError('POINTER_REVISION_MISSING', f'the repository has no commit {args.revision!r}')
-            print(make_pointer(git, args.change, args.artifact, commit).text)
+            with git.session():
+                commit = git.commit(args.revision)
+                if commit is None:
+                    raise PlanningError('POINTER_REVISION_MISSING',
+                                        f'the repository has no commit {args.revision!r}')
+                text = make_pointer(git, args.change, args.artifact, commit).text
+            print(text)
             return 0
         if bool(args.pointer) == bool(args.backlog) or (args.task and not args.backlog):
             raise CannotRun('resolve takes either --pointer ... or --backlog CMD [--task ID ...]')
         if args.pointer:
-            report = [{'id': None, 'pointers': [_resolve_entry(git, p) for p in args.pointer]}]
+            with git.session():
+                report = [{'id': None, 'pointers': [_resolve_entry(git, p) for p in args.pointer]}]
         else:
             report = resolve_tasks(git, Backlog(tool_argv(args.backlog), args.project), args.task)
         failures = list(_failures(report))
