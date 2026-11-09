@@ -152,18 +152,14 @@ def child_processes(pid):
 
 def git_for_windows_launcher():
     """Git for Windows' launcher ``cmd\\git.exe`` when it is installed, else None: the git on
-    PATH when it is the launcher (a Windows shell's default PATH), or the one beside the git
-    that PATH resolves (Git Bash's PATH resolves the real git)."""
+    PATH when it is the launcher (a Windows shell's default PATH), or the ``cmd\\git.exe`` of
+    the installation whose real git PATH resolves (Git Bash: ``mingw64\\bin\\git.exe``). Found
+    from the path alone, without a launch, so that the class's counters are the same in both."""
     if os.name != 'nt':
         return None
     found = shutil.which('git')
-    if found and Path(found).parent.name.lower() == 'cmd':
-        return Path(found)
-    out = subprocess.run(['git', '--exec-path'], capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                         timeout=adapter.TOOL_TIMEOUT_S, env=adapter.tool_env()).stdout.strip()
-    parts = Path(out).parts if out else ()
-    if len(parts) > 3 and [p.lower() for p in parts[-2:]] == ['libexec', 'git-core']:
-        launcher = Path(*parts[:-3], 'cmd', 'git.exe')
+    for root in Path(found).parents[:3] if found else ():
+        launcher = root / 'cmd' / 'git.exe'
         if launcher.is_file():
             return launcher
     return None
