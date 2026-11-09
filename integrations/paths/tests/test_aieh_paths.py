@@ -490,28 +490,32 @@ class Adapters(Base):
                              {}, {}, {}, {}, [])
         self.assertIn("'C:" + BS + 'a' + chr(0x2019) * 2 + "b'", P.emit(curly, 'ps1'))
 
+    def run_shell(self, argv, adapter, timeout, **kwargs):
+        """Run an adapter's shell by name; a shell that is not on PATH skips the test.
+
+        The launch is attempted in every environment (a failed attempt still counts as a
+        launch), so the counted launches of the F-09.1 test budgets do not depend on which
+        shells PATH holds: PowerShell on Windows has no sh, Git Bash has one."""
+        try:
+            return subprocess.run(argv, capture_output=True, timeout=timeout, **kwargs)
+        except FileNotFoundError:
+            self.skipTest(f'no {argv[0]} on PATH: the {adapter} adapter round trip is unknown here')
+
     def test_sh_round_trip(self):
-        shell = shutil.which('sh')
-        if shell is None:
-            self.skipTest('no sh on PATH: the sh adapter round trip is unknown here')
         res = self.resolution()
         expected = self.expected(res)
         script = P.emit(res, 'sh') + ''.join(f'printf "%s|" "${key}"\n' for key in expected)
-        done = subprocess.run([shell, '-s'], input=script.encode('utf-8'), capture_output=True, timeout=60)
+        done = self.run_shell(['sh', '-s'], 'sh', 60, input=script.encode('utf-8'))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.decode('utf-8').split('|')[:-1], list(expected.values()))
 
     def test_ps1_round_trip(self):
-        pwsh = shutil.which('pwsh')
-        if pwsh is None:
-            self.skipTest('no pwsh on PATH: the ps1 adapter round trip is unknown here')
         res = self.resolution()
         expected = self.expected(res)
         script = ('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n' + P.emit(res, 'ps1')
                   + ''.join(f'[Console]::Out.Write($env:{key} + "|")\n' for key in expected))
         encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
-        done = subprocess.run([pwsh, '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-                              capture_output=True, timeout=120)
+        done = self.run_shell(['pwsh', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], 'ps1', 120)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.decode('utf-8').split('|')[:-1], list(expected.values()))
 
