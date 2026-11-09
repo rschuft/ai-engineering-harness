@@ -326,6 +326,40 @@
         "artifact_to_commit_evidence": "OCI images carry no revision label/provenance; release target_commitish is 'main'; GitHub marks the release immutable=true but that does not name a commit",
         "signature": "not_run"
       }
+    },
+    {
+      "id": "dulwich",
+      "blueprint_name": "Dulwich",
+      "selection": "selected",
+      "selected_by": "blueprint SHIP-02 and #integration-contracts; decision 0014 (Proposed) section 9; plan leaf F-10.1 (2026-11-09). Pinned in the python-tools and python-dev-tools sets (composition/lock/python/tools-requirements.txt, dev-requirements.txt), not in the component resolution",
+      "source": {"repository": "https://github.com/dulwich/dulwich", "tag": null, "commit": null, "command": null, "note": "named by PyPI's project_urls; the wheels' PEP 740 publisher is GitHub jelmer/dulwich. F-10.1 contacted PyPI only: no tag or commit was resolved"},
+      "version": "1.2.21",
+      "release_date": "2026-11-05T02:25:07Z",
+      "license": "Apache-2.0 OR GPL-2.0-or-later",
+      "license_elected": "Apache-2.0",
+      "license_evidence": "PyPI license_expression and the wheel METADATA License-Expression are 'Apache-2.0 OR GPL-2.0-or-later' (licence file COPYING). Apache-2.0 is elected (decision 0014 section 9), for SHIP-03's release-time licence gate; nothing is redistributed (decision 0005)",
+      "runtime": {"python": ">=3.10 (CPython 3.12 locked)", "requires": ["urllib3>=2.2.2, pinned urllib3==2.8.0 (MIT)", "typing_extensions>=4.6.0 for Python < 3.12 only: none on 3.12"], "os_arch": "cp312 platform wheels with three Rust (PyO3) extensions for Windows x86_64, arm64 and x86, manylinux_2_28 x86_64 and aarch64, macOS arm64 and x86_64; the pure py3-none-any wheel elsewhere; the sdist is listed and never built"},
+      "artifacts": [
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-cp312-cp312-win_amd64.whl", "digest": "sha256:b3d30d40384cee2e8aa3722f87cef2f3d71717a0b45ac88eba457d62acf65dda", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-cp312-cp312-win_arm64.whl", "digest": "sha256:4747b1f94dbbf06e90d49247199db458bd9fefc588a4368669cb551ba4b6439f", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-cp312-cp312-win32.whl", "digest": "sha256:3206426faf4cb2474458f2dacf5c1b597a076831f2e7afa2a350df5fff2cce1a", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-cp312-cp312-manylinux_2_28_x86_64.whl", "digest": "sha256:945278b0f74f83e0f0253aa5ede25f0228b7cca5ca31eb5f5fb76c445c5d5b02", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-cp312-cp312-manylinux_2_28_aarch64.whl", "digest": "sha256:a3ac7c2e075b5130ce7055b9278eb1d820cc8196cb07d5480b0dc89499d0357d", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-cp312-cp312-macosx_11_0_arm64.whl", "digest": "sha256:93adb787872f330cccf77b50ee41131d9932287725ca00625cd9c346c9ee70b9", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-cp312-cp312-macosx_10_13_x86_64.whl", "digest": "sha256:a7f106746f0596fa07974a5522dfd61d7516721a2ae6ecfdcce6e43f9deb6bd7", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21-py3-none-any.whl", "digest": "sha256:31a522b9611e8032a43b8fb6941469c24e65ff4f14e0427986c58e90c22e154f", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "dulwich", "file": "dulwich-1.2.21.tar.gz", "digest": "sha256:5d3939f64883e6799614cab708ef4ee9ef415dd6dcad47527cdbb0eea43bf3a2", "command": "curl -s https://pypi.org/pypi/dulwich/1.2.21/json"},
+        {"channel": "pypi", "name": "urllib3", "file": "urllib3-2.8.0-py3-none-any.whl", "digest": "sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3", "command": "curl -s https://pypi.org/pypi/urllib3/2.8.0/json"},
+        {"channel": "pypi", "name": "urllib3", "file": "urllib3-2.8.0.tar.gz", "digest": "sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63", "command": "curl -s https://pypi.org/pypi/urllib3/2.8.0/json"}
+      ],
+      "verification": {
+        "tag_to_commit": "not_run",
+        "artifact_digest": "pass",
+        "artifact_digest_evidence": "every file PyPI publishes for dulwich 1.2.21 (64) and urllib3 2.8.0 (2) was downloaded from files.pythonhosted.org and re-hashed: equal to PyPI's JSON API and to the tools and dev locks (evidence/F-10.1-dulwich-pins.md). The lock lists all 64 dulwich files; the 9 above are the ones named by the F-10.1 proof",
+        "artifact_to_commit": "unknown",
+        "artifact_to_commit_evidence": "PyPI serves PEP 740 provenance whose publisher is GitHub jelmer/dulwich (workflow python-distributions.yml) and urllib3/urllib3 (publish.yml); the attestations were not verified and name no commit here",
+        "signature": "not_run"
+      }
     }
   ],
   "couplings": [

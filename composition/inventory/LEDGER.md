@@ -49,6 +49,24 @@ All components are on the version line set by decision 0001, with identifiers fr
 | Backlog.md (backlog.md + platform packages) | 1.55.3 | `MrLesk/Backlog.md` v1.55.3 → `0cf4fdbc70020327f4366a29d3f405f83d180301` | MIT on the wrapper. **The platform packages declare no licence.** | npm (integrity; the linux-x64 and linux-arm64 tarballs are verified by download); release binaries via GitHub asset digest |
 | Gitea | 28.3.0 | `go-gitea/gitea` v28.3.0 (annotated `f1cd050b…`) → `4f5a3e13e5f3aca85d830e3a9024c893b0bbf1e1` | MIT | OCI `gitea:28.3.0` and `-rootless` indexes; release binaries via `.sha256`; source tarball via GitHub asset digest |
 
+## Harness tool sets (outside the component resolution)
+
+The managed-root tool sets that `task tools:install` and `task dev:install` install
+(`../lock/python/tools-requirements.txt`, `dev-requirements.txt`; see `../lock/README.md`) are
+not part of the resolver's run or of the inventory, SBOM and Grant outputs above. The Dulwich and
+urllib3 pins come from plan leaf F-10.1 and
+[decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
+(Proposed). Each is a PyPI release whose every file is hash-locked; no tag → commit mapping was
+resolved for it.
+
+| Package | Version | Declared licence (evidence) | Elected | Locked channels |
+|---|---|---|---|---|
+| Dulwich (`dulwich`) | 1.2.21 | `Apache-2.0 OR GPL-2.0-or-later` (PyPI `license_expression`; wheel METADATA `License-Expression`; licence file `COPYING`) | **Apache-2.0** (decision 0014 section 9), recorded for SHIP-03's release-time licence gate. Nothing is redistributed ([decision 0005](../../decisions/0005-distribution-model-upstream-download-no-redistribution.md)). | PyPI: all 64 files (wheels and sdist) by sha256; installed from the cp312 platform wheel (Windows x86_64 observed), never the sdist |
+| urllib3 (Dulwich's one runtime dependency on CPython 3.12) | 2.8.0 | MIT (PyPI `license_expression`; wheel METADATA) | not applicable | PyPI: the `py3-none-any` wheel and the sdist by sha256; installed from the wheel |
+
+The election records which licence the harness relies on. It is not a compliance verdict:
+**License compliance: NOT VERIFIED** applies here as everywhere in this ledger.
+
 ## Component metadata inventory
 
 `component-inventory.json` lists 199 PyPI items and 721 npm items, plus 4 OCI images, which it records by digest only.

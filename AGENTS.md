@@ -91,21 +91,27 @@ unless adaptation is necessary.
   Check a tier with `python -I -B tools/check_prereqs.py --tier basic` (or
   `components`, `inventory`); it exits 0 when the tier is met. Use `python3`
   instead of `python` outside Windows.
-- Setup and verification (offline, seconds): `task setup`, or the commands it
-  wraps:
+- Setup and verification: `task setup`, or the commands it wraps. The first
+  three are the basic-tier checks (standard library, offline, seconds). The
+  fourth installs the hash-locked Python tools set (PyYAML, Dulwich, urllib3;
+  wheels only, under the managed data root; network to PyPI once per lock).
+  The tests then run under that set's interpreter, `<tools python>`, which
+  `python -I -B integrations/paths/tools_install.py --python` prints (`task
+  test` finds it the same way):
 
   ```
   python -I -B tools/check_prereqs.py --tier basic
   python -I tools/verify_seed.py
   python -I tools/verify_seed.py --baseline seed
-  python -I -B -m unittest discover -s tools/tests -v
-  python -I -B -m unittest discover -s integrations/store/tests -v
-  python -I -B -m unittest discover -s integrations/effects/tests -v
-  python -I -B -m unittest discover -s integrations/planning/tests -v
-  python -I -B -m unittest discover -s integrations/lineage/tests -v
-  python -I -B -m unittest discover -s integrations/paths/tests -v
-  python -I -B -m unittest discover -s integrations/gitea/tests -v
-  python -I -B -m unittest discover -s integrations/dispatch/tests -v
+  python -I -B integrations/paths/tools_install.py
+  <tools python> -I -B -m unittest discover -s tools/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/store/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/effects/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/planning/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/lineage/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/paths/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/gitea/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the

@@ -3,7 +3,8 @@
 # docs/development.md. Every target wraps one repository command, so each also runs
 # without Task: the command is shown in its description and in docs/development.md.
 #
-#   task setup     supported setup command: fast, offline qualification smoke checks
+#   task setup     supported setup command: the basic-tier checks (standard library, offline), then
+#                  tools:install (PyPI, once per lock) and the test suites under the tools interpreter
 #   task qualify   setup, then full component resolution (network, several minutes)
 #
 # Override the interpreter with PYTHON, e.g.  task setup PYTHON="py -3"
@@ -21,12 +22,16 @@ tasks:
     cmds:
       - '"{{.TASK_EXE}}" --list'
 
+  # setup runs the basic-tier checks first, with the plain PYTHON (standard library, offline), then
+  # installs the python-tools set (PyYAML, Dulwich, urllib3; hash-locked, wheels only; PyPI once per
+  # lock) and runs test under that set's interpreter (plan leaf F-10.1, decision 0014 section 9).
   setup:
-    desc: Run the qualification smoke checks (prereqs, verify, verify:baseline, test)
+    desc: "Run the qualification smoke checks: prereqs, verify and verify:baseline (standard library, offline), then tools:install (network, PyPI, once per lock) and test under the python-tools interpreter"
     cmds:
       - task: prereqs
       - task: verify
       - task: verify:baseline
+      - task: tools:install
       - task: test
 
   # qualify is the release run (F-09.2): after the resolution it installs the dev tools venv, runs
@@ -73,17 +78,32 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
+  # test runs every suite under the python-tools venv's interpreter, so that Dulwich and PyYAML are
+  # present (plan leaf F-10.1, decision 0014 section 9). TOOLS_PYTHON is that interpreter for the
+  # current lock: locating it creates nothing and fails, naming tools:install, when the set is not
+  # installed. PYTHON is overridden with it for this target and passed to each suite target it calls.
   test:
-    desc: Run the tool tests (python -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the host Gitea tests (gitea:test) and the dispatch input resolution and create admission tests (dispatch:test)
+    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the host Gitea tests (gitea:test) and the dispatch input resolution and create admission tests (dispatch:test)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
       - task: store:test
+        vars: {PYTHON: '{{.PYTHON}}'}
       - task: effects:test
+        vars: {PYTHON: '{{.PYTHON}}'}
       - task: planning:test
+        vars: {PYTHON: '{{.PYTHON}}'}
       - task: lineage:test
+        vars: {PYTHON: '{{.PYTHON}}'}
       - task: paths:test
+        vars: {PYTHON: '{{.PYTHON}}'}
       - task: gitea:test
+        vars: {PYTHON: '{{.PYTHON}}'}
       - task: dispatch:test
+        vars: {PYTHON: '{{.PYTHON}}'}
 
   # Test profile and budgets (plan leaf F-09.1; docs/development.md#testing). test:budget is an
   # acceptance obligation: run it at the acceptance of every plan leaf and at every release,
@@ -111,7 +131,7 @@ tasks:
   # workers do not inherit -B) keep bytecode out of the checkout; pyproject.toml disables pytest's
   # cache. The e2e (live) classes never run in parallel: they stay opt-in in their own targets.
   dev:install:
-    desc: "Network (PyPI): install the hash-locked dev tools venv (pytest, pytest-xdist, PyYAML) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py --set python-dev-tools)"
+    desc: "Network (PyPI): install the hash-locked dev tools venv (pytest, pytest-xdist, and the python-tools set: PyYAML, Dulwich, urllib3) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py --set python-dev-tools)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/paths/tools_install.py --set python-dev-tools'
 
@@ -303,7 +323,7 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/paths/aieh_paths.py doctor'
 
   tools:install:
-    desc: "Network (PyPI): install the hash-locked Python tools venv (PyYAML, for config.yml) under the managed data root, wheels only (python -I -B integrations/paths/tools_install.py)"
+    desc: "Network (PyPI, once per lock): install the hash-locked Python tools venv (PyYAML, for config.yml; Dulwich and urllib3, for the Python components' repository operations) under the managed data root, wheels only; part of setup, and test runs under its interpreter (python -I -B integrations/paths/tools_install.py)"
     cmds:
       - '{{.PYTHON}} -I -B integrations/paths/tools_install.py'
 

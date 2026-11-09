@@ -27,27 +27,33 @@ cd ai-engineering-harness
 task setup
 ```
 
-`task setup` is the supported setup command. It checks the basic prerequisites,
-verifies the seed in both modes and runs the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution and create admission tests. It is offline, runs serially and took about four minutes on the verification host ([Testing](#testing) has the measurement). Before your first commit, also run
+`task setup` is the supported setup command. It checks the basic prerequisites and
+verifies the seed in both modes, with the standard library only and offline. It then installs
+the hash-locked Python tools set (`task tools:install`: PyYAML, Dulwich and urllib3, wheels only,
+under the [managed data root](#managed-data-root); it downloads from PyPI once per lock and
+reuses the verified wheels afterwards), and runs, under that set's interpreter, the tool tests, the integration store
+tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the host Gitea tests and the dispatch input resolution and create admission tests. The tests run serially; the whole of `setup` took 156 s from PowerShell on the verification host at F-10.1, with the tools set already downloaded ([Testing](#testing) has the measurements). Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the eleven commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the twelve commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
 python -I tools/verify_seed.py
 python -I tools/verify_seed.py --baseline seed
-python -I -B -m unittest discover -s tools/tests -v
-python -I -B -m unittest discover -s integrations/store/tests -v
-python -I -B -m unittest discover -s integrations/effects/tests -v
-python -I -B -m unittest discover -s integrations/planning/tests -v
-python -I -B -m unittest discover -s integrations/lineage/tests -v
-python -I -B -m unittest discover -s integrations/paths/tests -v
-python -I -B -m unittest discover -s integrations/gitea/tests -v
-python -I -B -m unittest discover -s integrations/dispatch/tests -v
+python -I -B integrations/paths/tools_install.py
+<tools python> -I -B -m unittest discover -s tools/tests -v
+<tools python> -I -B -m unittest discover -s integrations/store/tests -v
+<tools python> -I -B -m unittest discover -s integrations/effects/tests -v
+<tools python> -I -B -m unittest discover -s integrations/planning/tests -v
+<tools python> -I -B -m unittest discover -s integrations/lineage/tests -v
+<tools python> -I -B -m unittest discover -s integrations/paths/tests -v
+<tools python> -I -B -m unittest discover -s integrations/gitea/tests -v
+<tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
 ```
 
-Use `python3` instead of `python` outside Windows.
+`<tools python>` is the interpreter that `python -I -B integrations/paths/tools_install.py
+--python` prints: the `python-tools` venv for the current lock. That command creates nothing
+and exits 1 when the set is not installed. Use `python3` instead of `python` outside Windows.
 
 `task qualify` is the full qualification smoke run. It runs `setup`, then the
 component prerequisites, then a full component resolution into a new temporary
@@ -62,23 +68,32 @@ hash-checked and installed into that directory.
 
 | Tier | Needs | For |
 |---|---|---|
-| Basic development | CPython ≥ 3.12 and git, in a full (non-shallow) clone. [Task](#task) 3.54.0 is an optional convenience. | Seed verification, tool tests, editing docs and tools. |
+| Basic development | CPython ≥ 3.12 and git, in a full (non-shallow) clone. [Task](#task) 3.54.0 is an optional convenience. | Seed verification (`check_prereqs.py --tier basic`, `verify_seed.py` in both modes) and the [publication-safety gate](#publication-safety-gate): standard library only, offline. Editing docs and tools. |
+| Python tools set | The basic tier, plus HTTPS access to PyPI (pypi.org, files.pythonhosted.org) once per lock for `task tools:install`, which `task setup` runs. | `task test` and `task setup`'s tests, which run under the set's interpreter; `config.yml` (PyYAML); the Python components' repository operations (Dulwich 1.2.21 and urllib3 2.8.0, plan group F-10). |
 | Component verification | CPython **3.12** with pip ≥ 23.1, Node.js ≥ 24 with npm ≥ 11, git, and HTTPS access to the registries listed in [`composition/lock/README.md`](../composition/lock/README.md). | `composition/resolve.py` (`task resolve`, `task qualify`). |
 | Optional inventory | A resolver work directory from `task resolve` or `task qualify`, plus network access to PyPI (metadata) and GitHub and the image registries (SBOM). The SBOM scan downloads its pinned Syft 1.57.0 and Grant 0.7.0 archives itself and checks their sha256 before running them; only Windows x86_64 archives are pinned. Syft and Grant are **not** host prerequisites. | `task inventory`, `task sbom`. |
 
 Later milestones need more tools and environments than these tiers cover, such
 as managed execution guests and the services that run in them, Gitea, scanner
-tooling such as Grype, and Dulwich for Python Git operations in adapters. The
+tooling such as Grype. Dulwich, for the Python components' Git operations, is pinned in the
+Python tools set (plan leaf F-10.1); the components do not use it yet (F-10.2 onwards). The
 Windows reference guest profile has its own provider prerequisites in
 [`profiles/strong-windows-qemu-whpx/PREREQUISITES.md`](../profiles/strong-windows-qemu-whpx/PREREQUISITES.md).
 This guide does not record whether any of them is verified. That is recorded in
 the evidence: the [bootstrap log](../evidence/bootstrap-log.md),
 [`evidence/`](../evidence/) and each profile's `QUALIFICATION.md`.
 
-The basic tier stays standard-library only and offline. The one exception is the optional
-`config.yml` ([Managed data root](#managed-data-root)): reading it needs PyYAML, which
-`task tools:install` installs from PyPI, hash-locked and wheels only, into a venv under the
-managed data root. Without `config.yml` nothing beyond the basic tier is needed.
+The basic-tier checks stay standard-library only and offline: `check_prereqs.py --tier basic`,
+`verify_seed.py` in both modes and the publication-safety gate import nothing outside the
+standard library and use no network (shown with `python -I -S` and no network in
+[`evidence/F-10.1-dulwich-pins.md`](../evidence/F-10.1-dulwich-pins.md)), and the Taskfile runs
+them with the plain `PYTHON`. Everything that needs a package uses the Python tools set:
+`task tools:install` installs PyYAML (for the optional `config.yml`, [Managed data
+root](#managed-data-root)), Dulwich and urllib3 from PyPI, hash-locked and wheels only
+([`composition/lock/python/tools-requirements.txt`](../composition/lock/python/tools-requirements.txt)),
+into a venv under the managed data root, and `task setup` and `task test` run the test suites
+under that venv's interpreter ([decision 0014](../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
+section 9).
 
 Check a tier with `task prereqs`, `task prereqs:components` or
 `task prereqs:inventory`, or run `python -I -B tools/check_prereqs.py --tier <basic|components|inventory>`.
@@ -92,7 +107,8 @@ network.
 | CPython | 3.12.10, as `python` and `py -3` | 3.14.4 (`python3`); no 3.12 present | not yet verified | not yet verified |
 | git | 2.52.0.windows.1 | 2.53.0 | not yet verified | not yet verified |
 | Task 3.54.0 | release zip, sha256 verified, run from a directory outside the checkout | release tarball, sha256 verified, run from `/tmp` | not yet verified | not yet verified |
-| `task setup` | PASS | PASS (under Python 3.14.4) | not yet verified | not yet verified |
+| `task setup` | PASS. Since F-10.1 (`tools:install`, then the tests under the tools interpreter) its commands PASS, rendered from the Taskfile and run from PowerShell and Git Bash; not yet run under Task | PASS before F-10.1 (under Python 3.14.4); not yet verified since | not yet verified | not yet verified |
+| `task tools:install`, `task dev:install` (Dulwich 1.2.21, urllib3 2.8.0) | PASS: hash-locked, wheels only; Dulwich from its `cp312-cp312-win_amd64` wheel | not yet verified | not yet verified | not yet verified |
 | The four raw setup commands | PASS | PASS (under Python 3.14.4) | not yet verified | not yet verified |
 | Node.js / npm | 24.19.0 / 11.17.0 | 22.22.1 / 9.2.0: below the component tier | not yet verified | not yet verified |
 | `task qualify` (resolver) | PASS: 348 checks, 0 failed, digests equal to the F-01.2 record; about 4 minutes | not met: no CPython 3.12 and no pip; Node 22, npm 9 | not yet verified | not yet verified |
@@ -145,17 +161,17 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the eleven commands in [Quick start](#quick-start) | no | Supported setup command. |
+| `setup` | the twelve commands in [Quick start](#quick-start) | yes (PyPI, once per lock: `tools:install`) | Supported setup command: the basic-tier checks (offline), then `tools:install` and `test` under the tools interpreter. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK`, then `dev:install`, `test:all` and `hooks:verify` | yes | Full qualification smoke run, and the release run of the tests: the parallel runner, the Owner host's Vitest tests when Node.js 24 or later is present, and the gate's nested whole-tool-suite rerun. Needs the [publication-safety gate](#publication-safety-gate) installed. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `python -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test` | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch resolution and admission tests (stdlib `unittest`). |
+| `test` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `gitea:test` and `dispatch:test`, each with `PYTHON=<tools python>` (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, host Gitea tests and dispatch resolution and admission tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
 | `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `python -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `test:categories [-- --list]` | `python -I -B tools/test_profile.py categories [--list]` | no | Checks that every test class declares a valid category. Imports the test modules; runs no test. |
-| `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, and PyYAML for the `config.yml` tests, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
+| `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, and the Python tools set: PyYAML, Dulwich and urllib3, with the tools lock's hashes, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
 | `test:unit [-- ARGS]` | `PYTHONDONTWRITEBYTECODE=1 <dev python> -I -B -m pytest -n auto --maxprocesses 8 --dist loadscope -m unit [ARGS]` | no | [Testing](#testing): the inner loop, the `unit` tests in parallel under the unit guard. Needs `dev:install`. |
 | `test:fast [-- ARGS]` | the same with `-m "unit or contract"` | no | The inner loop: `unit` and `contract` tests in parallel. |
 | `test:component [-- ARGS]` | the same with `-m "contract or integration"` | no | The boundary: `contract` and `integration` tests in parallel. |
@@ -184,7 +200,7 @@ Only what is listed as verified has been exercised.
 | `paths:show [-- --format sh\|ps1]` | `python -I -B integrations/paths/aieh_paths.py show [--format json\|sh\|ps1]` | no | Prints the managed data root and its categories (`aieh-paths/v1` JSON, or shell assignments). Creates nothing. Exit 2 on a refusal, with its code and remedy. |
 | `paths:init` | `python -I -B integrations/paths/aieh_paths.py init` | no | Creates the managed data root, its `persistent/`, `ephemeral/` and `assets/` directories and its `aieh-root.json` marker. Idempotent. |
 | `paths:doctor` | `python -I -B integrations/paths/aieh_paths.py doctor` | no | Reports the root, what exists, the marker and the legacy locations with their migration recipes. Moves and changes nothing. |
-| `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`), wheels only, under the managed data root; prints its interpreter. Not part of `setup`. |
+| `tools:install` | `python -I -B integrations/paths/tools_install.py` | yes (PyPI, once per lock) | Installs the hash-locked Python tools venv (PyYAML, for `config.yml`; Dulwich 1.2.21 and urllib3 2.8.0, for the Python components' repository operations; [`composition/lock/python/tools-requirements.txt`](../composition/lock/python/tools-requirements.txt)), wheels only, under the managed data root; prints its interpreter. Part of `setup`; `test` runs under its interpreter. `python -I -B integrations/paths/tools_install.py --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. |
 | `gitea:test` | `python -I -B -m unittest discover -s integrations/gitea/tests -v` | no | [Host Gitea](#host-gitea) tests: pin, layout, `app.ini`, acquisition, the binary lock, identities and first login, role bots, fixture and rotation with fakes (never the real Credential Manager); the Job Object, socket-table and token code against child processes (Windows); the guest profile declares no path to a token store. The live lifecycle test runs only when `AIEH_GITEA_BINARY` names a copy of the pinned binary; the live authorization tests only with `AIEH_GITEA_AUTHZ=1` (`gitea:authz`). |
 | `dispatch:test` | `python -I -B -m unittest discover -s integrations/dispatch/tests -v` | no | [Dispatch input resolution and admission](#dispatch-input-resolution-and-admission) tests: every refusal before any reservation, a resolved record reserving in a throwaway store, determinism and the pinned policy digest, the approved-input manifest's schema check and custody; the create admission (workspace, mounts, caps, runtime, route and body bypasses never reach a fake transport; one admitted create reaches it once). Uses Backlog.md's recorded readiness output and a throwaway design repository; needs git. |
 | `dispatch:check-manifest MANIFEST=<file>` | `python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest <file>` | no | Schema-checks an approved-input manifest and prints a JSON report. Admits nothing. Exit 0 PASS, 1 FAIL, 2 could not read. |
@@ -252,8 +268,9 @@ items.
 
 The tests are standard-library `unittest` suites. Each lives beside the code it tests:
 `tools/tests/` for the tools and `integrations/<component>/tests/` for each integration.
-`task test` runs them serially, one `python -I -B -m unittest discover -s <suite> -v` per
-suite, in the order of the `test` target in `Taskfile.yml`. Live suites against installed
+`task test` runs them serially, one `<tools python> -I -B -m unittest discover -s <suite> -v`
+per suite, in the order of the `test` target in `Taskfile.yml`, under the Python tools set's
+interpreter (`tools_install.py --python`; [Tool tiers](#tool-tiers)). Live suites against installed
 tools or services are opt-in through their environment variables and are skipped, counted,
 otherwise.
 
@@ -402,12 +419,13 @@ launch it (plan leaf F-09.3):
   passes under a TEMP of 131 characters (F-09.4).
 
 **Parallel runner.** pytest and pytest-xdist run the same unittest suites as a second runner;
-`task test` and `task setup` stay the stdlib serial run, which needs nothing beyond the basic
-tier. `task dev:install` installs them, hash-locked and wheels only
+`task test` and `task setup` stay the serial unittest run, under the Python tools set's
+interpreter. `task dev:install` installs them, hash-locked and wheels only
 ([`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt):
 pytest, pytest-xdist 3.8.0, execnet, pluggy, iniconfig, Pygments, packaging, and colorama on
-Windows, all pure-Python wheels under MIT, BSD or Apache licences; and PyYAML 6.0.3, MIT, with
-exactly the hashes of the tools lock, so that the `config.yml` tests run under both runners), into the `python-dev-tools`
+Windows, all pure-Python wheels under MIT, BSD or Apache licences; and the Python tools set,
+PyYAML 6.0.3 (MIT), Dulwich 1.2.21 (Apache-2.0 elected) and urllib3 2.8.0 (MIT), with exactly the
+hashes of the tools lock, so that every suite runs with the same packages under both runners), into the `python-dev-tools`
 venv under the managed data root through the same mechanism as `task tools:install`.
 [`pyproject.toml`](../pyproject.toml) holds the pytest configuration only (the repository is
 not a Python package): the suites of `task test`, unittest's collection rules (only
@@ -1142,8 +1160,8 @@ app's README records the routes, the identity design and the evidence for the
 compatibility-matrix row "agent-canvas 1.36.0 / assistant-ui 0.15.32".
 
 These targets need the **component tier** (Node.js ≥ 24, npm ≥ 11), and `owner-host:install`
-needs access to the npm registry. They are not part of `setup` or `test`, whose basic tier
-needs only Python and git. The app has its own `package.json` and `package-lock.json` with
+needs access to the npm registry. They are not part of `setup` or `test`, which need only
+Python, git and the Python tools set. The app has its own `package.json` and `package-lock.json` with
 the component lock's versions for every package they share. Install it with
 `npm ci --ignore-scripts`, which runs no package's install scripts. `node_modules/` and
 `dist/` are not committed (decision 0005).

@@ -68,8 +68,8 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
-| `python/tools-requirements.txt` | The Python tools venv (`task tools:install`, F-07.1, [decision 0009](../../decisions/0009-managed-data-root-and-configuration-contract.md)): `pyyaml==6.0.3`, for the optional `config.yml`, with every hash copied unchanged from `windows-x86_64.txt`. Not part of the component resolution. See [`integrations/paths`](../../integrations/paths/README.md). | 1 pin |
-| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0`, `pytest-xdist==3.8.0` and `pyyaml==6.0.3`, compiled universally for CPython 3.12. Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 3 direct, 9 pins |
+| `python/tools-requirements.in` / `.txt` | The Python tools venv (`task tools:install`, part of `task setup`; F-07.1, [decision 0009](../../decisions/0009-managed-data-root-and-configuration-contract.md); F-10.1, [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)): `dulwich==1.2.21` and `urllib3==2.8.0`, for the Python components' repository operations, and `pyyaml==6.0.3`, for the optional `config.yml`, compiled universally for CPython 3.12. Not part of the component resolution. See [Tools lock](#tools-lock-f-071-f-101) and [`integrations/paths`](../../integrations/paths/README.md). | 3 direct, 3 pins |
+| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0` and `pytest-xdist==3.8.0`, and the tools set's `dulwich==1.2.21`, `pyyaml==6.0.3` and `urllib3==2.8.0`, compiled universally for CPython 3.12. Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 5 direct, 11 pins |
 | `python/windows-x86_64.txt` | The hash-locked closure for win_amd64, CPython 3.12. | 195 pins: 4 direct, 191 transitive |
 | `python/linux-x86_64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) x86_64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
 | `python/linux-aarch64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) aarch64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
@@ -164,13 +164,51 @@ The build backend is regenerated the same way, with `--universal` in place of `-
 uv pip compile python/build-requirements.in --python-version 3.12 --universal --no-build --generate-hashes --no-header --no-annotate -o python/build-requirements.txt
 ```
 
-So is the dev tools lock:
+So are the tools lock and the dev tools lock:
 
 ```
+uv pip compile python/tools-requirements.in --python-version 3.12 --universal --no-build --generate-hashes --no-header --no-annotate -o python/tools-requirements.txt
 uv pip compile python/dev-requirements.in --python-version 3.12 --universal --no-build --generate-hashes --no-header --no-annotate -o python/dev-requirements.txt
 ```
 
 After regenerating, update `components.lock.json`, which records pin and entry counts and the direct integrities, and run the resolver.
+
+## Tools lock (F-07.1, F-10.1)
+
+`python/tools-requirements.txt` pins the `python-tools` set that `task tools:install` installs
+under the managed data root, and that `task setup` installs and `task test` runs every unittest
+suite under ([decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
+section 9; `docs/development.md`, Testing). It is not an upstream component of the harness and is
+not part of `components.lock.json` or the resolver's run. `task tools:install` installs it with
+`pip download --require-hashes --only-binary=:all:` into an asset directory, then `pip install
+--no-index` from there into the `python-tools` venv.
+
+Until F-10.1 it held PyYAML 6.0.3 only, with its hashes copied unchanged from
+`windows-x86_64.txt` (F-07.1). On 2026-11-09 (F-10.1) it was compiled from
+`python/tools-requirements.in` (`dulwich==1.2.21`, `pyyaml==6.0.3`, `urllib3==2.8.0`) with the
+pinned uv 0.13.7 (archive sha256 checked against `components.lock.json` `tools` first), with
+`UV_NO_CONFIG=1`, `UV_PYTHON_DOWNLOADS=never` and an empty cache, by the command in
+[Regenerating the lock](#regenerating-the-lock). Rerunning it reproduces the file byte for byte. The PyYAML block is
+unchanged: the same 73 hashes, in the same order. On CPython 3.12 Dulwich needs urllib3 only
+(`typing_extensions` only below 3.12), so the set has no other package.
+
+Each pin lists every file PyPI publishes for that version, so that pip selects the platform wheel
+on Windows (x86_64, arm64, x86), manylinux_2_28 (x86_64, aarch64) and macOS (arm64, x86_64), and
+Dulwich's pure `py3-none-any` wheel elsewhere (musllinux, glibc older than 2.28). Installation uses
+wheels only; no sdist is built. Every digest was verified independently of uv: each of the 64
+Dulwich files and the 2 urllib3 files was downloaded from files.pythonhosted.org and hashed
+locally, and each hash equals both the lock and PyPI's JSON API, as do PyYAML's 73
+([`evidence/F-10.1-dulwich-pins.md`](../../evidence/F-10.1-dulwich-pins.md)).
+
+| Package | Version | Licence (wheel metadata) | Elected | Wheel installed on Windows x86_64 |
+|---|---|---|---|---|
+| Dulwich | 1.2.21 | `Apache-2.0 OR GPL-2.0-or-later` | **Apache-2.0** (decision 0014 section 9; for SHIP-03's release-time licence gate; nothing is redistributed under decision 0005) | `cp312-cp312-win_amd64`, with three Rust (PyO3) extensions |
+| urllib3 | 2.8.0 | MIT | not applicable | `py3-none-any` |
+| PyYAML | 6.0.3 | MIT | not applicable | `cp312-cp312-win_amd64` |
+
+The licence election is also recorded in `../candidates.json` (`dulwich`, `license_elected`) and
+in `../inventory/LEDGER.md`. A contract test in `tools/tests/test_pytest_conftest.py` keeps the
+tools lock to exactly these three pins, and the dev lock's blocks for them equal to it.
 
 ## Dev tools lock (F-09.2)
 
@@ -213,3 +251,12 @@ block), and the PyYAML block carries exactly the 73 hashes, in the same order, t
 `tools/tests/test_pytest_conftest.py` keeps the two equal. Unlike the eight above, PyYAML's
 wheels are platform wheels with a compiled extension (`cp312-cp312-win_amd64` on Windows), the
 same files the tools venv already installs; the licence is MIT.
+
+**Dulwich and urllib3 (F-10.1).** `dulwich==1.2.21` and `urllib3==2.8.0` were added to
+`dev-requirements.in` on 2026-11-09, so that every suite runs with Dulwich present under the
+parallel runner as under `task test`, and the lock recompiled with the same pinned uv 0.13.7
+(archive sha256 checked first), environment and command. The nine existing pins and their hashes
+did not move (the recompiled file differs from the previous one only by the two added blocks),
+and the two blocks carry exactly the hashes, in the same order, that `tools-requirements.txt`
+admits; the contract test keeps the dev lock's PyYAML, Dulwich and urllib3 blocks equal to the
+tools lock's. Licences and the election are in [Tools lock](#tools-lock-f-071-f-101).

@@ -1,11 +1,12 @@
 """Tests for the pytest configuration: pyproject.toml, the root conftest.py and the dev lock (plan
-leaf F-09.2).
+leaf F-09.2), and the tools lock (plan leaves F-07.1 and F-10.1).
 
 Run from the repository root:  python -I -B -m unittest discover -s tools/tests -v
 
 The contract cases read the committed configuration: the pytest suites equal the Taskfile's,
-every category is a declared marker, collection matches unittest discovery, and the dev lock pins
-exactly the locked set with hashes. The integration cases copy conftest.py, pyproject.toml and
+every category is a declared marker, collection matches unittest discovery, the dev and tools
+locks each pin exactly the locked set with hashes, and the dev lock admits exactly the tools
+lock's files for PyYAML, Dulwich and urllib3. The integration cases copy conftest.py, pyproject.toml and
 tools/test_profile.py into a generated project in a temporary directory and run pytest on it in a
 child process, serially and with two xdist workers: the unit guard fails a unit test that
 launches a process (the launch itself is refused), opens a socket or changes directory, in a test
@@ -48,6 +49,22 @@ def pytest_ini():
     return tomllib.loads((REPO / 'pyproject.toml').read_text(encoding='utf-8'))['tool']['pytest']['ini_options']
 
 
+# The python-tools set (composition/lock/python/tools-requirements.txt), which the dev set includes.
+TOOLS_PINS = {'dulwich': '1.2.21', 'pyyaml': '6.0.3', 'urllib3': '2.8.0'}
+
+
+def lock_blocks(name):
+    """Each pin of a lock file: its name -> (version, its hashes in order)."""
+    text = (REPO / 'composition' / 'lock' / 'python' / name).read_text(encoding='utf-8')
+    blocks = {}
+    for match in re.finditer(r'^([a-z0-9-]+)==(\S+)(?: ; [^\\\n]*)? \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n?)+)',
+                             text, re.M):
+        blocks[match.group(1)] = (match.group(2), re.findall(r'sha256:([0-9a-f]{64})', match.group(3)))
+    if len(blocks) != len([line for line in text.splitlines() if line and not line.startswith(' ')]):
+        raise ValueError(f'{name}: a pin is not a hash-locked block')
+    return blocks
+
+
 class Configuration(unittest.TestCase):
     """The committed pytest configuration and dev lock, read only."""
 
@@ -82,26 +99,94 @@ class Configuration(unittest.TestCase):
             self.assertGreaterEqual(len(hashes), 1, head)
             pins[match.group(1)] = (match.group(2), (match.group(3) or '').strip(' ;'))
         self.assertEqual(set(pins), {'pytest', 'pytest-xdist', 'execnet', 'pluggy', 'iniconfig', 'pygments',
-                                     'packaging', 'colorama', 'pyyaml'})
+                                     'packaging', 'colorama'} | set(TOOLS_PINS))
         self.assertEqual(pins['pytest-xdist'][0], '3.8.0')
         self.assertGreaterEqual(int(pins['pytest'][0].split('.')[0]), 9)
         self.assertEqual(pins['colorama'][1], "sys_platform == 'win32'")
         self.assertEqual({marker for name, (_, marker) in pins.items() if name != 'colorama'}, {''})
         source = (REPO / 'composition' / 'lock' / 'python' / 'dev-requirements.in').read_text(encoding='utf-8')
-        self.assertEqual(source.split(), ['pytest>=9.0', 'pytest-xdist==3.8.0', 'pyyaml==6.0.3'])
+        self.assertEqual(source.split(), ['dulwich==1.2.21', 'pytest>=9.0', 'pytest-xdist==3.8.0', 'pyyaml==6.0.3',
+                                          'urllib3==2.8.0'])
 
-    def test_the_dev_lock_admits_exactly_the_tools_lock_pyyaml(self):
-        # PyYAML is in the dev set only so that the config.yml tests run under the parallel
-        # runner too; it admits the files the tools lock (F-07.1) admits, no other.
-        def pyyaml(name):
-            text = (REPO / 'composition' / 'lock' / 'python' / name).read_text(encoding='utf-8')
-            block = re.search(r'^pyyaml==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n?)+)', text, re.M)
-            self.assertIsNotNone(block, name)
-            return block.group(1), re.findall(r'sha256:([0-9a-f]{64})', block.group(2))
-        dev, tools = pyyaml('dev-requirements.txt'), pyyaml('tools-requirements.txt')
-        self.assertEqual(dev[0], '6.0.3')
-        self.assertGreater(len(dev[1]), 1)
-        self.assertEqual(dev, tools)
+    def test_the_tools_lock_pins_exactly_the_locked_set_with_hashes(self):
+        # The python-tools set (F-07.1, F-10.1): PyYAML for config.yml, and Dulwich with its one
+        # runtime dependency on CPython 3.12, urllib3; no platform marker, every file PyPI publishes.
+        blocks = lock_blocks('tools-requirements.txt')
+        self.assertEqual({name: version for name, (version, _) in blocks.items()}, TOOLS_PINS)
+        self.assertGreater(len(blocks['dulwich'][1]), 9)  # the platform wheels, the pure wheel and the sdist
+        self.assertEqual(len(blocks['urllib3'][1]), 2)    # the pure wheel and the sdist
+        source = (REPO / 'composition' / 'lock' / 'python' / 'tools-requirements.in').read_text(encoding='utf-8')
+        self.assertEqual(source.split(), ['dulwich==1.2.21', 'pyyaml==6.0.3', 'urllib3==2.8.0'])
+
+    def test_the_dev_lock_admits_exactly_the_tools_lock_files(self):
+        # PyYAML, Dulwich and urllib3 are in the dev set so that every suite runs under the parallel
+        # runner as under task test; for each, the dev lock admits exactly the files the tools lock
+        # admits, in the same order, no other.
+        dev, tools = lock_blocks('dev-requirements.txt'), lock_blocks('tools-requirements.txt')
+        for name, version in TOOLS_PINS.items():
+            self.assertEqual(dev[name][0], version, name)
+            self.assertGreater(len(dev[name][1]), 1, name)
+            self.assertEqual(dev[name], tools[name], name)
+
+
+def taskfile_targets():
+    """Each Taskfile.yml target: its name -> the lines of its body, stripped, without blank lines."""
+    targets, name = {}, None
+    for line in (REPO / 'Taskfile.yml').read_text(encoding='utf-8').splitlines():
+        if header := re.match(r'^  ([\w:-]+):\s*$', line):
+            name = header.group(1)
+            targets[name] = []
+        elif name is not None and line.startswith('    '):
+            targets[name].append(line.strip())
+        elif line.strip():
+            name = None
+    return targets
+
+
+class RequiredTargets(unittest.TestCase):
+    """setup and test run the suites under the python-tools interpreter; the basic-tier checks keep
+    the plain interpreter (plan leaf F-10.1, decision 0014 section 9). Reads Taskfile.yml only."""
+
+    category = 'contract'
+
+    def setUp(self):
+        self.targets = taskfile_targets()
+
+    def commands(self, name):
+        body = self.targets[name]
+        return body[body.index('cmds:') + 1:]
+
+    def test_setup_runs_the_basic_tier_checks_then_installs_the_tools_set_then_test(self):
+        self.assertEqual(self.commands('setup'), ['- task: prereqs', '- task: verify', '- task: verify:baseline',
+                                                  '- task: tools:install', '- task: test'])
+        self.assertEqual(self.commands('tools:install'), ["- '{{.PYTHON}} -I -B integrations/paths/tools_install.py'"])
+
+    def test_test_runs_every_suite_under_the_tools_interpreter(self):
+        body = self.targets['test']
+        self.assertEqual(body[body.index('vars:') + 1:body.index('cmds:')], [
+            'TOOLS_PYTHON:', "sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'",
+            'PYTHON: \'"{{.TOOLS_PYTHON}}"\''])
+        commands = self.commands('test')
+        self.assertEqual(commands[0], "- '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'")
+        calls = commands[1::2]
+        self.assertEqual(len(calls), len(tp.select_suites([])) - 1)
+        self.assertTrue(all(call.startswith('- task: ') for call in calls), calls)
+        self.assertEqual(commands[2::2], ["vars: {PYTHON: '{{.PYTHON}}'}"] * len(calls))
+        for call in calls:  # each called suite target runs one discovery with the PYTHON it is given
+            self.assertRegex(self.commands(call.removeprefix('- task: '))[0],
+                             r"^- '\{\{\.PYTHON\}\} -I -B -m unittest discover -s \S+ -v'$")
+
+    def test_the_basic_tier_checks_keep_the_plain_interpreter(self):
+        # check_prereqs, verify_seed and the publication gate stay standard-library only and offline:
+        # they run under the PYTHON the Taskfile is given, never a managed venv's.
+        for name in ('prereqs', 'verify', 'verify:baseline', 'hooks:install', 'hooks:verify', 'scan:history'):
+            commands = self.commands(name)
+            self.assertTrue(commands, name)
+            for command in commands:
+                self.assertTrue(command.startswith("- '{{.PYTHON}} -I ") or command.startswith('- task: '), command)
+                self.assertNotIn('TOOLS_PYTHON', command)
+                self.assertNotIn('DEV_PYTHON', command)
+            self.assertNotIn('vars:', self.targets[name], name)
 
 
 GUARD_SUITE = '''
