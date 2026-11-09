@@ -1,6 +1,6 @@
 # 0014 - Dulwich adoption scope, the repository-access contracts, and the retained Git CLI
 
-Status: Proposed (Architect draft, 2026-11-09, with the Overseer's rulings of 2026-11-09), implementing the Owner's architectural direction of 2026-11-08; to be accepted by the Overseer at the completion of F-10.2, whose contract suite proves its contracts. Until then nothing in it is authority.
+Status: Accepted (Overseer) at the completion of F-10.2, 2026-11-09, as amended by the F-10.2 findings (sections 2, 3, 5 and 10). Architect draft of 2026-11-09 with the Overseer's rulings of 2026-11-09, implementing the Owner's architectural direction of 2026-11-08. The F-10.2 differential contract suite (`integrations/repository/tests/`, evidence `evidence/F-10.2-repository-module.md`) proves the contracts of sections 2 to 5 on Windows; the other platforms are bounded by section 8.
 
 **Authority:** the Owner's architectural direction of 2026-11-08 on Dulwich (verbatim in `evidence/bootstrap-log.md`, Decisions): adopt Dulwich as the preferred Git implementation for Python components; eliminate the external Git executable dependency where possible; one implementation across Windows, Linux and macOS; no unnecessary subprocess creation and management; simpler installation, testing and maintenance; preserve Git behaviour (paths containing spaces, repository integrity, revision resolution, failure semantics); cross-platform contract tests, measured performance and parity; retain the Git CLI only where a documented compatibility gap justifies it; no silent deferral. This record grants no authority of its own: it applies that direction within blueprint decision card SHIP-02 ("ADOPT Dulwich within Python adapters"), the Repository API policy and `#integration-contracts` ("Our Python adapters require no Git executable. Respect capabilities of pinned Dulwich version"), and SHIP-03 (the release-time licence gate). Where this record and those sources disagree, they govern and this record is the defect.
 
@@ -95,6 +95,8 @@ A name that resolves to a tree or a blob answers `None` where a commit is expect
 
 An **object name** is a preserved revision, or `<revision>:<path>` as above. Names outside the grammar are refused with `OBJECT_NAME_INVALID` before any access.
 
+**The date fallback (amended at F-10.2).** When a name holding a numeric `@{N}` does not resolve otherwise, git rereads the text after its last `@{` as a date (`main@{3}~1` past the root, `main@{0}:README.md` asked as a commit), so its answer depends on the clock. Such a name is refused as the `@{<date>}` gap, with `REVISION_INVALID`. It is the one refusal made after a failed resolution rather than before any access, because the shape is known only then. Forms git resolves that the list above does not name (describe output, `^{object}`, `ORIG_HEAD`, `FETCH_HEAD`, `MERGE_HEAD`, `main-worktree/HEAD`, `@@{N}`) are preserved too. Two refusals are slightly broader than git and are recorded in the module's README (`..` inside a describe-shaped name, and the empty `@{}`).
+
 Rejected:
 - the closed grammar, because it refuses forms git resolves today and the Owner's direction preserves revision resolution;
 - the open pass-through, because each Dulwich function accepts a different subset (probe: `parse_commit` lacks `~` and `^`, `parse_object` lacks abbreviations and misreads `^{commit}`), so it would diverge silently.
@@ -103,7 +105,7 @@ Rejected:
 - `REVISION_INVALID` and `OBJECT_NAME_INVALID` keep their meaning and are raised before any repository access; `REVISION_INVALID` now also covers the gap forms of section 2.
 - "No such object" and "ambiguous" answer `None`, as today.
 - `GIT_FAILED` keeps its name: it names the Git repository, not the executable, and `lineage_schema.json` documents it as an `authority-unavailable` code. It means the repository could not be read. It now covers a corrupt or mismatched object (`ChecksumMismatch`, `ObjectFormatException`, `zlib.error`, and any Dulwich or OS error at the module boundary), naming the object.
-- **Accepted parity difference (G9):** Dulwich verifies the object id on read where `git cat-file` served mismatched content silently (probe). A visible failure is the behaviour the Owner's "preserve repository integrity" asks for.
+- **Accepted parity difference (G9):** every object read is verified against its id, where `git cat-file` served mismatched content silently (probe). A visible failure is the behaviour the Owner's "preserve repository integrity" asks for. (Amended at F-10.2: Dulwich 1.2.21's `get_raw` does not verify a loose object's id, so the module verifies every read itself.)
 - `CannotRun` covers "not a git working tree" and "Dulwich is not importable". The latter has the stable code `REPOSITORY_NEEDS_DULWICH`, naming `task tools:install` and the interpreter it prints (the `CONFIG_NEEDS_YAML` precedent). The lineage resolvers keep mapping `CannotRun` to `PROJECT_UNAVAILABLE`.
 - Reads raise no `subprocess.TimeoutExpired`: there is no process to time out. Callers' existing `except` clauses stay harmless.
 - The `POINTER_*` family, the lineage outcome codes and the dispatch refusals are unchanged.
@@ -124,7 +126,7 @@ Consequences:
 
 ### 5. Configuration discovery (G12)
 The module never discovers configuration by finding git on PATH implicitly. Every call site names its configuration policy:
-- `host`: the user and system configuration git would read on that host, located as Dulwich's default backends locate them;
+- `host`: the user and system configuration git would read on that host, located without `PATH`. (Amended at F-10.2: Dulwich's default backends derive the system file from git's location on `PATH`, which gave a different file under Git Bash than under PowerShell.) The system file is `GIT_CONFIG_SYSTEM`, or none when `GIT_CONFIG_NOSYSTEM` is true; otherwise, on Windows, `<InstallPath>\etc\gitconfig` from Git for Windows' registry entry; on POSIX, `/etc/gitconfig`; otherwise none. The user files are git's (`GIT_CONFIG_GLOBAL`, `~/.gitconfig`, `$XDG_CONFIG_HOME/git/config`). The attribute files outside the repository that git reads (the system file unless `GIT_ATTR_NOSYSTEM`, then `core.attributesFile` or `$XDG_CONFIG_HOME/git/attributes`) are read, and an operation whose answer they could change in a way the module does not implement refuses with `ATTRIBUTES_UNSUPPORTED`;
 - `repository`: the repository's own `config` only;
 - `none`.
 
@@ -184,6 +186,24 @@ Evidence records carry `config_sources`, the files actually read. The exchange u
   - projections byte-equal to `integrations/lineage/examples/`;
   - budgets re-proposed, and the F-09 gate (serial `task test` at most 150 s) kept.
 - Documentation: the planning and lineage READMEs, `lineage_schema.json`'s open notes on git, the development reference's tiers and verification tables, `AGENTS.md`'s command list, and the README's component status.
+
+### 10. Parity differences settled at acceptance (F-10.2)
+Governing rule: a difference from git is either implemented equal to git or fails closed with a stable code. It never passes silently, and no answer depends on `PATH`. The F-10.2 suite established the following, each recorded with its test in `integrations/repository/README.md`:
+- **Fail closed:**
+  - Replace references (`refs/replace/`, loose or packed) refuse every object read with `REPLACE_REFS_UNSUPPORTED` unless the applied configuration sets `core.useReplaceRefs=false`. HEAD, references, the index and listings, which git does not replace, still answer.
+  - A path git would pass through a filter driver or a `working-tree-encoding` refuses status with `FILTER_UNSUPPORTED`.
+  - A status-relevant attribute in a user or system attribute file refuses with `ATTRIBUTES_UNSUPPORTED`.
+  - A reftable repository is `GIT_FAILED`.
+- **Implemented by the module where Dulwich 1.2.21 differs from git:** reference reading (Dulwich's reference container refuses `refs/<one component>`, `ORIG_HEAD` and `FETCH_HEAD`), reflog parsing (Dulwich's `read_reflog` fails on a line without a message), and integrity on read (section 3).
+- **Local codes added** (the module's README is their record): `EXPORT_REFUSED`, `BUNDLE_INVALID`, `FILTER_UNSUPPORTED`, `ATTRIBUTES_UNSUPPORTED`, `REPLACE_REFS_UNSUPPORTED`; the `CannotRun` codes `NOT_A_WORK_TREE`, `NOT_A_REPOSITORY` and `REPOSITORY_NEEDS_DULWICH`.
+- **Not verified:**
+  - the system-file location on macOS builds with another prefix, and on a portable Git for Windows without a registry entry (in both cases no system file is read);
+  - Linux (F-10.5) and POSIX modes;
+  - split or sparse indexes, submodule status, intent-to-add entries.
+- **Measurement shell:** the wall budgets and the F-09 criterion of at most 150 s serial are judged on the shell of the committed budget baseline (Git Bash on the verification host). Other shells are recorded, not gated.
+  - At F-10.2 the baseline median is 152.1 s.
+  - Interleaved single runs in the same period gave 150.5 s at the repair, and 151.2 s and 149.6 s at the commit before it. The repair adds nothing measurable; the rise from 145.0 s earlier in the leaf appears in suites whose code did not change (host drift).
+  - The criterion is evaluated at the F-10 group gate (F-10.5), after F-10.3 and F-10.4 remove the product git launches. F-10.3 reports the serial total from both shells.
 
 ## Owner confirmation
 None is needed for acceptance. The one Owner act this record requires is the per-run approval of the Linux guest run at F-10.5 (section 8); without it the leaf records Linux as not verified and does not pass.
