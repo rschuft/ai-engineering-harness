@@ -9,7 +9,8 @@ This adapter is the small resolver between them. It turns a task plan for one
 OpenSpec change into Backlog.md tasks through Backlog.md's command line, and gives
 each task source pointers that resolve the exact design revision (P-02.1). Its
 readiness read (P-02.2) reports Backlog.md's own readiness and dependency states per
-task, together with those pointers. It is Python standard library only, plus git.
+task, together with those pointers. It is Python standard library only, plus the shared
+repository-access module (Dulwich, from the Python tools set): it starts no git.
 
 It does not adopt Backlog.md or OpenSpec for this repository. Both run only in a
 managed project's repository (in the tests, a throwaway one).
@@ -58,36 +59,55 @@ A later design revision does not change a task's pointer: the task keeps naming 
 revision it was planned from, and a pointer made at the new revision has a
 different digest. Revalidation is therefore visible, never silent.
 
-**Git access (plan leaf F-09.4).** `Git` reads objects (`commit`, `object_type`,
-`object_kind`, `blob`) through git's own batch protocol: one `git cat-file --batch` process
+**Repository access (plan leaves F-09.4 and F-10.3).** `Git` is a facade over the shared
+repository-access module, [`integrations/repository/`](../repository/README.md) ([decision
+0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)): every
+answer is read in this process from the repository's own files, over Dulwich 1.2.21, and the
+adapter starts no git process. Making a `Git` is the work-tree check (`CannotRun` when the
+project is not inside a git work tree, or when Dulwich is not importable:
+`REPOSITORY_NEEDS_DULWICH`, naming `task tools:install`; run the adapter with the tools
+interpreter, `python -I -B integrations/paths/tools_install.py --python`). Reads (`commit`,
+`object_type`, `object_kind`, `blob`, `files`, `export_tree`) go through one opened repository
 per read session (`Git.session()`), which one command, one `create`, one `resolve` or one
-readiness read opens and closes. Within a session, objects named by a full commit id
-(`<id>` or `<id>:<path>`) and file lists of a full commit id are read once, and each
-revision is resolved once (a snapshot for the session); nothing is kept after it. The reader
-uses git's default output format, so git takes the whole request line as the name: a space is
-part of it. A name holding a control character (C0 or DEL: line feed, carriage return, NUL and
-tab among them) or starting with `-` is refused (`OBJECT_NAME_INVALID`) before it reaches the
-process; a revision is also refused for any whitespace (`REVISION_INVALID`), as before. Each
-request has
-the `TOOL_TIMEOUT_S` ceiling: past it the process is killed, `subprocess.TimeoutExpired` is
-raised as before, and every later read of the session fails closed (`GIT_FAILED`). Before each
-request the reader checks that its process still runs: one that has exited fails it closed
-before anything is written. Every git process the adapter starts, the reader and the single
-commands alike, is one process tree (`ProcessTree`, `run_tree`): a git on `PATH` may be a
-launcher that runs the real git as its child (Git for Windows' `cmd\git.exe`, the git of a
-Windows shell's default `PATH`), and a kill, a timeout, an exception or the close ends that
-child too and waits for it. On Windows the process joins a job object (kill on close) before
-its first instruction runs; on POSIX it leads a new session whose process group is killed. The
-reader answers as the one-shot commands it replaces (`rev-parse --verify --quiet
-<rev>^{commit}`, `cat-file -t`, `cat-file blob`; tested), with the same git and the same
-environment; the work-tree check (`rev-parse --show-toplevel`), `ls-tree` and `archive`
-still run as single commands.
+readiness read opens and closes. Within a session, objects named by a full commit id (`<id>` or
+`<id>:<path>`) and file lists of a full commit id are read once, and each revision is resolved
+once (a snapshot for the session); nothing is kept after it, and a read after the session's end
+fails closed (`GIT_FAILED`). Every repository is opened under the `repository` configuration
+policy (decision 0014 section 5: its own `config` only; `Git.config_sources` lists the files
+read): no answer the adapter gives depends on a user or system setting.
+
+The calls and codes are those of the git commands they replace, held to git's answers by tests:
+`commit` answers as `rev-parse --verify <rev>^{commit}`, `object_type` and `object_kind` as
+`cat-file -t`, `blob` as `cat-file blob`, `files` as `ls-tree -r --name-only`. A revision or
+object name is checked before anything is opened: empty text, a leading `-`, a C0 control
+character or DEL (and, for a revision, any whitespace) is `REVISION_INVALID` or
+`OBJECT_NAME_INVALID`, as before, and so is every form decision 0014 lists as a documented
+gap (`:/<text>`, `<rev>^{/<regex>}`, `@{<date>}`, `@{upstream}`, `@{push}`, `@{-N}`, ranges),
+`REVISION_INVALID`. "No such object" and an ambiguous abbreviation answer `None`. A repository
+that cannot be read (a damaged object, content that does not hash to its id, an unreadable
+file) is `GIT_FAILED`, naming the object, at once: reads raise no `subprocess.TimeoutExpired`.
+The module's local codes (`REPLACE_REFS_UNSUPPORTED`, `EXPORT_REFUSED`, and the others its
+README lists) pass through unchanged.
+
+`export_tree` writes an export of the exact revision (decision 0014 section 4): each file's
+blob bytes, with no end-of-line conversion and no attributes (`export-ignore` files included);
+it replaces `git archive`, whose output followed the host's `core.autocrlf` (CRLF on a Windows
+host configured so, LF elsewhere). OpenSpec (`instructions apply`) and Backlog.md (`task view`,
+for a pinned lineage reference) read such exports.
+
+**Process trees.** The adapter still starts the upstream command-line tools, Backlog.md and
+OpenSpec, and each runs as one process tree (`ProcessTree`, `run_tree`), with the
+`TOOL_TIMEOUT_S` ceiling: a command on `PATH` may be a launcher that runs the real program as
+its child (an npm shim such as `backlog.CMD`, which runs node through `cmd.exe`; Git for
+Windows' `cmd\git.exe`), and a kill, a timeout, an exception or the close ends that child too
+and waits for it. On Windows the process joins a job object (kill on close) before its first
+instruction runs; on POSIX it leads a new session whose process group is killed.
 
 **Operations.** One top-level adapter operation (`operation()`) is one lineage traversal, one
 readiness evaluation (`planning_readiness.read_readiness`, and so one dispatch read), or one
 resolution from the command line (`resolve`, `pointer`) or a lineage resolver entry point.
-Within it, each project's git access is one `Git` (`project_git`: one work-tree check) with
-one read session (one batch reader), and Backlog.md's reads are a snapshot: the same `task
+Within it, each project's repository access is one `Git` (`project_git`: one work-tree check)
+with one read session (one opened repository), and Backlog.md's reads are a snapshot: the same `task
 list` or `task view` in the same directory is run once, and a `task create` ends that
 snapshot. Everything is dropped when the operation ends, normally or by an exception; nothing
 is kept at module level or for the next operation.
@@ -227,8 +247,8 @@ OPENSPEC=<dir>/node_modules/@fission-ai/openspec/bin/openspec.js
 
 | Path | What |
 |---|---|
-| `tests/test_planning_adapter.py` | Offline: pointer format and resolution, the visible failures, plan refusals, the checklist and tracking refusals, no status in any Backlog.md command or result, partial failure, the command line. Backlog.md is `tests/fake_backlog.py`, OpenSpec `tests/fake_openspec.py`. It also re-resolves the committed capture against a freshly built design repository. Needs git only. |
-| `tests/test_git_batch.py` | Offline, git only: the batch reader's answers equal the one-shot commands' (revisions, object types, blobs, file lists, an ambiguous prefix), names that could break the line protocol are refused and never written, the reader process ends on a normal exit, an exception and a timeout (killed, then failing closed), an out-of-protocol answer or an exited reader fails closed, and no memo outlives its session; names with spaces answer as the one-shot commands do; one operation shares one `Git` and one reader, its Backlog.md reads are made once, and all of it ends with the operation (normally, by an exception, after a timeout). Stand-in processes play a git that hangs or answers out of protocol. |
+| `tests/test_planning_adapter.py` | Offline: pointer format and resolution, the visible failures, plan refusals, the checklist and tracking refusals, no status in any Backlog.md command or result, partial failure, the command line. Backlog.md is `tests/fake_backlog.py`, OpenSpec `tests/fake_openspec.py`. It also re-resolves the committed capture against a freshly built design repository. Needs the tools interpreter (Dulwich); git builds the fixture repositories. |
+| `tests/test_git_batch.py` | Offline, under the tools interpreter, with git as the oracle (F-09.4's test ids, retargeted at F-10.3): the facade's answers equal the one-shot git commands' (revisions, object types, blobs, file lists, an ambiguous prefix, names with spaces); refused names and revisions open and read nothing; the session's repository is closed on a normal exit and on an exception, and a read after it fails closed; a damaged repository (an object file that is a directory, a corrupt zlib stream, another object's content) and one that went away are `GIT_FAILED` at once, naming the object; no memo outlives its session; one operation shares one `Git` and one opened repository, its Backlog.md reads are made once, and all of it ends with the operation. The upstream CLIs run on `run_tree`, and through a stand-in launcher, and Git for Windows' own where it is installed, a kill, a timeout, an exception and a normal close end the launcher's child. |
 | `tests/test_live_backlog.py` | Live, against the pinned tools; skipped unless `AIEH_BACKLOG` and `AIEH_OPENSPEC` name their entry points. Checks the versions, regenerates the capture and compares it with the committed one, changes a status through Backlog.md and a design revision through git and shows that neither the adapter nor OpenSpec touches the status, refuses a change with a `tasks.md`, and shows each broken pointer edited in through Backlog.md failing visibly. |
 | `tests/two_task_fixture.py` | Builds the throwaway design repository and records the capture (`--record`). |
 | `tests/test_readiness.py` | Offline: Backlog.md's recorded readiness JSON replayed by the fake (`FAKE_BACKLOG_SNAPSHOT`). The report equals the recorded one, and the eligible tasks equal Backlog.md's own `task list --ready`. A blocked chain stays ineligible and a missing dependency is visible. Absent or malformed fields are unknown, and disagreeing fields are inconsistent. A failing or absent pointer is never eligible. Backlog.md's verdict wins over contrary statuses, and a trap fails the test if any `status` or `completed` field is read. The read issues only `task list` and `task view`. |
@@ -255,7 +275,9 @@ recorded ones, and run `planning_readiness.py` on the `missing` stage (exit 1,
 ## Not yet verified
 
 - Any host but Windows 11 x86_64 (Node 24.19.0, git 2.52.0): the live tests ran
-  there only.
+  there only. Since F-10.3 they read blob-bytes exports (LF where the repository stores LF) on a host
+  whose git converts to CRLF; repository access and process trees on Linux and macOS are
+  not yet verified (F-10.5).
 - Backlog.md's MCP surface (the CLI is used), concurrent edits by several writers,
   and Backlog.md's cross-branch task lookup (`check_active_branches` was off).
 - A design kept in a repository other than the Backlog.md project's.

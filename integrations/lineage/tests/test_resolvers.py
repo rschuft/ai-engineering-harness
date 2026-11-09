@@ -72,6 +72,7 @@ def tree_state(repo):
 class TempDirCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        fx.require_repository_access()  # without Dulwich: REPOSITORY_NEEDS_DULWICH, never a skip
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-lineage-test-'))
 
     @classmethod

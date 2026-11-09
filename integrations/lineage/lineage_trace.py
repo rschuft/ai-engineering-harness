@@ -47,8 +47,8 @@ Usage (from the repository root):
         [--backlog CMD] [--store DB]
 
 Exit status: 0 the projection is complete, 1 it carries uncertainty, 2 could not run.
-The command line uses the real authorities only. Standard library only, plus git and the
-tools named.
+The command line uses the real authorities only. Standard library only, plus the shared
+repository-access module (Dulwich; run it with the tools interpreter) and the tools named.
 """
 import argparse
 import hashlib
@@ -343,7 +343,7 @@ class Traversal:
         if not isinstance(root, L.ObjectiveRef):
             raise L.MalformedReference('REFERENCE_MALFORMED', f'the traversal starts from an outcome: {root!r}')
         # One traversal is one adapter operation (plan leaf F-09.4): every resolver and the
-        # enumeration share one Git per project (one work-tree check, one batch reader) and
+        # enumeration share one Git per project (one work-tree check, one opened repository) and
         # Backlog.md's reads, each made once; all of it is dropped when the traversal ends.
         with planning.operation():
             return self._run(root)

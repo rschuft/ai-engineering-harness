@@ -25,19 +25,18 @@ Usage (from the repository root):
 
 Exit status: 0 PASS (every reference parsed or resolved), 1 FAIL (a malformed
 reference, a schema problem, or any outcome other than resolved), 2 could not run.
-Standard library only, plus git and the tools named.
+Standard library only, plus the shared repository-access module (Dulwich; run it with the tools
+interpreter) and the tools named.
 """
 import argparse
 import functools
 import hashlib
-import io
 import json
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -67,15 +66,15 @@ def _effects_module():
 
 
 def _git(project):
-    """The P-02.1 read-only git access, or the reason it is unavailable: within an operation
+    """The P-02.1 read-only repository access, or the reason it is unavailable: within an operation
     (``planning_adapter.operation``) the operation's own, one per project (plan leaf F-09.4)."""
     return planning.project_git(project)
 
 
 def _operation(method):
-    """A resolver entry point is one adapter operation (F-09.4): its git reads share one work-tree
-    check and one batch reader, and Backlog.md's reads are made once each; inside a traversal it
-    is the traversal's operation."""
+    """A resolver entry point is one adapter operation (F-09.4): its repository reads share one
+    work-tree check and one opened repository, and Backlog.md's reads are made once each; inside a
+    traversal it is the traversal's operation."""
     @functools.wraps(method)
     def wrapper(*args, **kwargs):
         with planning.operation():
@@ -360,12 +359,12 @@ class WorkResolver:
                 return L.answer(reference, L.REVISION_MISMATCH, self.authority, 'WORK_REVISION_MISSING',
                                 f'the project repository has no commit {reference.revision}')
             with tempfile.TemporaryDirectory(prefix='aieh-lineage-work-') as tmp:
-                with tarfile.open(fileobj=io.BytesIO(git.archive(commit, '.')), mode='r:') as tar:
-                    tar.extractall(tmp, filter='data')
+                # The commit's blob bytes (decision 0014 section 4), read by Backlog.md there.
+                git.export_tree(commit, '.', tmp)
                 return self._read(Path(tmp), reference, commit, 'reference')
         except planning.PlanningError as exc:
             return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, exc.code, exc.message)
-        except (subprocess.TimeoutExpired, OSError, tarfile.TarError) as exc:
+        except (subprocess.TimeoutExpired, OSError) as exc:
             return L.answer(reference, L.AUTHORITY_UNAVAILABLE, self.authority, 'PROJECT_UNAVAILABLE', str(exc))
 
     @_operation

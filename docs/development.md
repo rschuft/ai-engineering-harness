@@ -190,14 +190,14 @@ Only what is listed as verified has been exercised.
 | `effects:restore ROOT=<dir> MANIFEST=<file> ACTOR=<name> [-- --accept-rollback]` | `python -I -B integrations/effects/effects_store.py restore --root <dir> --manifest <file> --actor <name> [--accept-rollback]` | no | The Owner's elevated act, with the executor stopped: restores a verified backup and opens a restore epoch. |
 | `effects:verify-chain ROOT=<dir>` | `python -I -B integrations/effects/effects_store.py verify-chain --root <dir>` | no | Verifies the journal's hash chain and every receipt; prints the chain head. |
 | `planning:test` | `<tools python> -I -B -m unittest discover -s integrations/planning/tests -v` | no | [Planning adapter](#planning-adapter) tests: offline with a fake Backlog.md and git. The live tests against the pinned Backlog.md and OpenSpec run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name their entry points, and are skipped otherwise. |
-| `planning:create PROJECT=<repo> PLAN=<file> REVISION=<rev> BACKLOG=<cmd> [-- --openspec <cmd>]` | `python -I -B integrations/planning/planning_adapter.py create --project <repo> --plan <file> --revision <rev> --backlog <cmd> [--openspec <cmd>]` | no | Creates a plan's Backlog.md tasks and their dependencies through `backlog task create`; each task carries OpenSpec source pointers at the exact design revision. Refuses a change with a `tasks.md` or a tracked schema, and any status. Exit 0 PASS, 1 FAIL, 2 could not run. |
-| `planning:readiness PROJECT=<repo> BACKLOG=<cmd> [-- --task ID --no-pointers]` | `python -I -B integrations/planning/planning_readiness.py --project <repo> --backlog <cmd> [--task ID ...] [--no-pointers]` | no | Reports Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; blocking and missing dependency ids from Backlog.md's `readiness`. Exit 1 on a missing dependency, a failing pointer or unknown readiness; blocked tasks alone exit 0. |
-| `planning:resolve PROJECT=<repo> -- --backlog <cmd> [--task ID]` (or `-- --pointer <p>`) | `python -I -B integrations/planning/planning_adapter.py resolve --project <repo> (--backlog <cmd> [--task ID ...] \| --pointer <p> ...)` | no | Re-resolves source pointers; exit 1 on a missing revision, a missing artifact, a digest mismatch or a task without a pointer. |
+| `planning:create PROJECT=<repo> PLAN=<file> REVISION=<rev> BACKLOG=<cmd> [-- --openspec <cmd>]` | `python -I -B integrations/planning/planning_adapter.py create --project <repo> --plan <file> --revision <rev> --backlog <cmd> [--openspec <cmd>]` | no | Creates a plan's Backlog.md tasks and their dependencies through `backlog task create`; each task carries OpenSpec source pointers at the exact design revision. Refuses a change with a `tasks.md` or a tracked schema, and any status. Exit 0 PASS, 1 FAIL, 2 could not run. Since F-10.3 it reads the repository through the shared repository-access module, so it needs Dulwich: run it with the tools interpreter (for the target, `PYTHON=<tools python>`); under an interpreter without Dulwich it exits 2 with `REPOSITORY_NEEDS_DULWICH`. |
+| `planning:readiness PROJECT=<repo> BACKLOG=<cmd> [-- --task ID --no-pointers]` | `python -I -B integrations/planning/planning_readiness.py --project <repo> --backlog <cmd> [--task ID ...] [--no-pointers]` | no | Reports Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; blocking and missing dependency ids from Backlog.md's `readiness`. Exit 1 on a missing dependency, a failing pointer or unknown readiness; blocked tasks alone exit 0. Since F-10.3 it reads the repository through the shared repository-access module, so it needs Dulwich: run it with the tools interpreter (for the target, `PYTHON=<tools python>`); under an interpreter without Dulwich it exits 2 with `REPOSITORY_NEEDS_DULWICH`. |
+| `planning:resolve PROJECT=<repo> -- --backlog <cmd> [--task ID]` (or `-- --pointer <p>`) | `python -I -B integrations/planning/planning_adapter.py resolve --project <repo> (--backlog <cmd> [--task ID ...] \| --pointer <p> ...)` | no | Re-resolves source pointers; exit 1 on a missing revision, a missing artifact, a digest mismatch or a task without a pointer. Since F-10.3 it reads the repository through the shared repository-access module, so it needs Dulwich: run it with the tools interpreter (for the target, `PYTHON=<tools python>`); under an interpreter without Dulwich it exits 2 with `REPOSITORY_NEEDS_DULWICH`. |
 | `lineage:test` | `<tools python> -I -B -m unittest discover -s integrations/lineage/tests -v` | no | [Lineage references](#lineage-references) tests: parsing and formatting of every kind, the schema, the span anchor, every outcome of each implemented resolver against throwaway git repositories, the fake Backlog.md and its recorded fixtures, and effects-store fixtures, and the P-03.2 traversal with its example and negative resolution fixtures. The live tests run only when `AIEH_BACKLOG` and `AIEH_OPENSPEC` name the pinned tools. |
 | `lineage:schema` | `python -I -B integrations/lineage/lineage_resolve.py schema` | no | Checks `integrations/lineage/lineage_schema.json` against the typed references and lists each kind's authority and status. Exit 0 PASS, 1 FAIL. |
-| `lineage:resolve -- REF ... [--current] [--project <repo>] [--backlog <cmd>] [--repo NAME=<dir>] [--effects-root <dir>]` | `python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [options]` | no | Resolves references read-only and prints one JSON resolution each. Exit 0 when all resolved, 1 on any other outcome or a malformed reference, 2 could not run. |
-| `lineage:trace -- OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | `python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | no | Projects the lineage of one outcome id read-only (statement, objective, design, task, attempt), with the real authorities only, and prints the `lineage-projection/v1` JSON. Exit 0 complete, 1 the projection carries uncertainty, 2 could not run. |
-| `lineage:example [-- --record]` | `python -I -B integrations/lineage/tests/lineage_example.py [--record]` | no | Rebuilds the lineage projection example offline (sample authorities and real registry) and prints each verdict; `--record` rewrites `integrations/lineage/examples/`. |
+| `lineage:resolve -- REF ... [--current] [--project <repo>] [--backlog <cmd>] [--repo NAME=<dir>] [--effects-root <dir>]` | `python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [options]` | no | Resolves references read-only and prints one JSON resolution each. Exit 0 when all resolved, 1 on any other outcome or a malformed reference, 2 could not run. Since F-10.3 it reads the repository through the shared repository-access module, so it needs Dulwich: run it with the tools interpreter (for the target, `PYTHON=<tools python>`); under an interpreter without Dulwich it exits 2 with `REPOSITORY_NEEDS_DULWICH`. |
+| `lineage:trace -- OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | `python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | no | Projects the lineage of one outcome id read-only (statement, objective, design, task, attempt), with the real authorities only, and prints the `lineage-projection/v1` JSON. Exit 0 complete, 1 the projection carries uncertainty, 2 could not run. Since F-10.3 it reads the repository through the shared repository-access module, so it needs Dulwich: run it with the tools interpreter (for the target, `PYTHON=<tools python>`); under an interpreter without Dulwich it exits 2 with `REPOSITORY_NEEDS_DULWICH`. |
+| `lineage:example [-- --record]` | `python -I -B integrations/lineage/tests/lineage_example.py [--record]` | no | Rebuilds the lineage projection example offline (sample authorities and real registry) and prints each verdict; `--record` rewrites `integrations/lineage/examples/`. Since F-10.3 it reads the repository through the shared repository-access module, so it needs Dulwich: run it with the tools interpreter (for the target, `PYTHON=<tools python>`); under an interpreter without Dulwich it exits 2 with `REPOSITORY_NEEDS_DULWICH`. |
 | `paths:test` | `<tools python> -I -B -m unittest discover -s integrations/paths/tests -v` | no | [Managed data root](#managed-data-root) tests: every refusal code, the platform defaults by injection, both adapters, the legacy table, `example_config.yml`, asset records. The `config.yml` tests skip, counted, when PyYAML is not importable. |
 | `paths:show [-- --format sh\|ps1]` | `python -I -B integrations/paths/aieh_paths.py show [--format json\|sh\|ps1]` | no | Prints the managed data root and its categories (`aieh-paths/v1` JSON, or shell assignments). Creates nothing. Exit 2 on a refusal, with its code and remedy. |
 | `paths:init` | `python -I -B integrations/paths/aieh_paths.py init` | no | Creates the managed data root, its `persistent/`, `ephemeral/` and `assets/` directories and its `aieh-root.json` marker. Idempotent. |
@@ -392,7 +392,8 @@ launch it (plan leaf F-09.3):
   runs without git; the suite extracts it once per test process and only reads it
   ([Repository access](#repository-access)).
 - **The Backlog runner.** `planning_adapter.Backlog` takes a runner (by default `None`:
-  `subprocess.run`, as before). The logic tests answer the fake Backlog.md in the test process
+  `run_tree`, one process tree, since F-10.3; `subprocess.run` before). The logic tests answer
+  the fake Backlog.md in the test process
   (`fake_backlog.InProcessRunner`); the command-line contracts and the traversal's recorded-
   process test launch it, and a contract test checks that both answer alike.
 - **In-process logic cases.** The verifier's logic cases call the copy's own
@@ -409,19 +410,23 @@ launch it (plan leaf F-09.3):
   checks that the shared copy is unchanged. The verifier's tests copy the seeded files once
   per class: the cases that only read use that copy, each writing case takes a private copy
   of it; the baseline-mode cases copy one repository per class with the seed staged and packed.
-- **Batched git reads (plan leaf F-09.4).** The planning adapter reads git objects through
-  one `git cat-file --batch` process per read session. One top-level operation (a lineage
-  traversal, a readiness evaluation or dispatch read, a resolution from the command line or a
-  resolver entry point) shares one work-tree check and one batch reader per project, and runs
+- **Repository reads in process (plan leaves F-09.4 and F-10.3).** The planning adapter's
+  `Git` is a facade over the shared [repository-access](#repository-access) module: it reads
+  the repository in the test process over Dulwich and launches no git (F-09.4's
+  `git cat-file --batch` reader is gone). One top-level operation (a lineage traversal, a
+  readiness evaluation or dispatch read, a resolution from the command line or a resolver
+  entry point) shares one work-tree check and one opened repository per project, and runs
   each Backlog.md read once; nothing outlives the operation. One traversal of the lineage
-  example launches 7 processes with the fake Backlog.md launched (4 with it in the test
-  process), against 79 and 70 before. The benchmark is the `performance` class
-  `OneTraversal` in `integrations/lineage/tests/test_traversal_git.py`: its result is that
-  launch count, at most 10. Every adapter git process is one process tree (a Windows job
-  object, a POSIX process group), so a kill, a timeout or a close also ends the real git that
-  a launcher such as `cmd\git.exe` starts, and a reader whose process has exited fails closed
-  before it writes; `test_git_batch` checks it through a stand-in launcher and, where it is
-  installed, through Git for Windows' own (POSIX not yet verified).
+  example launches 3 processes with the fake Backlog.md launched (none with it in the test
+  process), against 7 and 4 with the batch reader and 79 and 70 before it. The benchmark is
+  the `performance` class `OneTraversal` in
+  `integrations/lineage/tests/test_traversal_git.py`: its result is that launch count, at most
+  10, and it measures the traversal's repository access against the git oracle, interleaved
+  in the same run. The upstream CLIs (Backlog.md, OpenSpec) are each one process tree (a
+  Windows job object, a POSIX process group), so a kill, a timeout or a close also ends the
+  child a launcher such as an npm shim or `cmd\git.exe` starts; `test_git_batch` checks it
+  through a stand-in launcher and, where it is installed, through Git for Windows' own
+  (POSIX not yet verified).
 - **Long temporary paths.** The test processes create paths up to 176 characters below
   TEMP (measured; the provision tests), which Python on Windows opens past 260 characters only
   where long paths are enabled. Git for Windows needs `core.longpaths` past 260 characters:
@@ -1100,14 +1105,16 @@ delta specs. It does not check the content of a proposal; that is this checker's
 Plan leaf F-10.2 adds [`integrations/repository/`](../integrations/repository/README.md), the
 shared repository-access module of
 [decision 0014](../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
-(Proposed): read-only access to git repositories over Dulwich 1.2.21, from the Python tools set,
+(Accepted): read-only access to git repositories over Dulwich 1.2.21, from the Python tools set,
 in the calling process. It launches no process. It holds the work-tree check, the preserved
 revision grammar (every form git resolves, refusing only 0014's gap forms with
 `REVISION_INVALID` before any access), object reads, file lists, `export_tree` (blob bytes),
 HEAD, status, the index, listings, bundles, and an explicit configuration policy per call
-(`host`, `repository` or `none`, with `config_sources`). No component uses it yet: the planning
-adapter moves onto it in F-10.3, the guest exchange push, the snapshots and the listing in
-F-10.4.
+(`host`, `repository` or `none`, with `config_sources`). Since F-10.3 the planning adapter's
+`Git` is a facade over it (rows R1-R4 of the inventory: the work-tree check, revisions and
+object reads, file lists, and exports as blob bytes, replacing `git archive`), under the
+`repository` policy, so the planning, lineage and dispatch components launch no git; the
+guest exchange push, the snapshots and the listing move onto it in F-10.4.
 
 `task repository:test` runs its differential contract suite under the tools interpreter: the
 recorded half compares the module with git's answers recorded over a committed, git-built
@@ -1145,7 +1152,10 @@ The pinned Backlog.md 1.55.3 and OpenSpec 1.16.0 come from the component lock
 (`composition/lock/npm/`), installed with `npm ci --ignore-scripts` into a directory
 outside the checkout. Backlog.md runs without install scripts: npm installs its
 platform package from `optionalDependencies`. The offline tests use a fake Backlog.md
-and need git only. The live tests (`AIEH_BACKLOG`, `AIEH_OPENSPEC`) regenerate the
+and run under the tools interpreter (Dulwich; git builds their fixture repositories and is
+their oracle). The adapter reads the repository in process (F-10.3) and starts Backlog.md and
+OpenSpec as process trees; OpenSpec reads an export of the revision's blob bytes. The live
+tests (`AIEH_BACKLOG`, `AIEH_OPENSPEC`) regenerate the
 committed two-task capture in `integrations/planning/tests/fixtures/two-task/` and
 compare it with the recorded one. They ran on Windows 11 x86_64 only; other hosts,
 Backlog.md's MCP surface and concurrent writers are **not yet verified**.
@@ -1186,7 +1196,7 @@ and adapter exist:
 |---|---|---|---|
 | `design` | OpenSpec (git) | P-02.1 pointer resolution | implemented; offline tests |
 | `work` | Backlog.md | `task view --json`, `task list --json` (P-02) | implemented; offline, and live with `AIEH_BACKLOG` |
-| `commit` | Git | `git rev-parse`, `cat-file` in a registered clone | implemented; offline tests |
+| `commit` | Git | the P-02.1 repository access (in process, as `git rev-parse` and `cat-file` answer) in a registered clone | implemented; offline tests |
 | `effect-receipt` | effects store | F-05.2 read methods | implemented on fixtures only |
 | `objective` | OpenSpec | the outcome id declared under `x-outcomes` in the declaring change's `.openspec.yaml`, cross-checked against its intent record ([decision 0008](../decisions/0008-outcome-identity-assignment-form-and-record.md), Proposed) | implemented; offline, and live with `AIEH_OPENSPEC` (`validate --strict`, `archive`) |
 | `conversation`, `message` | Owner conversation store | none | authority unavailable (U-02.1); **not yet verified** |

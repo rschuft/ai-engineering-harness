@@ -31,13 +31,16 @@ Usage (from the repository root):
 
 CMD is a Backlog.md (or OpenSpec) executable, or its ``.js`` entry point, which is
 run with ``node``. Exit status: 0 PASS, 1 FAIL (a visible failure), 2 could not run.
-Standard library only.
+The standard library, plus the shared repository-access module
+(``integrations/repository/``, decision 0014), which reads the repository in this process
+over Dulwich: run it with the tools interpreter (``tools_install.py --python``). Without
+Dulwich every repository read is the stable CannotRun ``REPOSITORY_NEEDS_DULWICH`` (exit 2).
 """
 import argparse
 import contextlib
 import contextvars
 import hashlib
-import io
+import importlib.util
 import json
 import os
 import re
@@ -45,9 +48,7 @@ import shutil
 import signal
 import subprocess
 import sys
-import tarfile
 import tempfile
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,31 @@ from pathlib import Path
 if os.name == 'nt':
     import ctypes
     from ctypes import wintypes
+
+
+def _load_repository_access():
+    """The shared repository-access module, loaded by path once per process (standard library
+    at import; Dulwich only when a repository is opened)."""
+    module = sys.modules.get('repository_access')
+    if module is None:
+        path = Path(__file__).resolve().parents[1] / 'repository' / 'repository_access.py'
+        spec = importlib.util.spec_from_file_location('repository_access', path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['repository_access'] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['repository_access']
+            raise
+    return module
+
+
+repository_access = _load_repository_access()
+# The configuration policy of every repository the adapter opens (decision 0014 section 5):
+# the repository's own configuration only. No host setting changes an answer the adapter gives:
+# object reads, file lists and exports (blob bytes, section 4) consult no configuration git
+# would take from the user or the system files, and replace references fail closed.
+CONFIG_POLICY = 'repository'
 
 PLAN_FORMAT = 'planning-map/v1'
 RESULT_FORMAT = 'planning-map-result/v1'
@@ -158,12 +184,13 @@ def tool_env():
 # ---------------------------------------------------------------------------
 # Process trees
 #
-# The git on PATH may be a launcher that runs the real git as its child: Git for Windows'
-# cmd\git.exe, the git of a Windows shell's default PATH, is one. Killing the launched process
-# alone would leave that child running, still answering on the pipes it inherited. So every git
-# process the adapter starts is one process tree, killed and waited for as a whole: on Windows a
-# job object (kill on close) that the process joins before it runs its first instruction; on
-# POSIX a new session, whose process group is signalled.
+# A command on PATH may be a launcher that runs the real program as its child: an npm shim
+# (backlog.CMD runs node through cmd.exe), or Git for Windows' cmd\git.exe. Killing the launched
+# process alone would leave that child running, still answering on the pipes it inherited. So
+# every process the adapter starts (the upstream CLIs, Backlog.md and OpenSpec; it starts no git)
+# is one process tree, killed and waited for as a whole: on Windows a job object (kill on close)
+# that the process joins before it runs its first instruction; on POSIX a new session, whose
+# process group is signalled.
 
 if os.name == 'nt':
     class _IoCounters(ctypes.Structure):
@@ -411,12 +438,14 @@ class ProcessTree:
             self._job = None
 
 
-def run_tree(argv, timeout=None, env=None):
-    """``subprocess.run(argv, capture_output=True, stdin=DEVNULL, timeout=...)`` for a git
-    command, as one process tree: when the ceiling expires every process of the tree is killed
-    and waited for before ``subprocess.TimeoutExpired`` is raised, and none outlives the call."""
+def run_tree(argv, timeout=None, env=None, cwd=None):
+    """``subprocess.run(argv, cwd=..., capture_output=True, stdin=DEVNULL, timeout=...)`` as one
+    process tree: when the ceiling expires every process of the tree is killed and waited for
+    before ``subprocess.TimeoutExpired`` is raised, and none outlives the call. The default runner
+    of the upstream CLIs (``Backlog.run``, ``openspec_apply_state``)."""
     timeout = TOOL_TIMEOUT_S if timeout is None else timeout
-    tree = ProcessTree(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    tree = ProcessTree(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                       cwd=cwd)
     try:
         try:
             out, err = tree.process.communicate(timeout=timeout)
@@ -429,227 +458,132 @@ def run_tree(argv, timeout=None, env=None):
             raise subprocess.TimeoutExpired(argv, timeout, out, err) from None
     finally:
         tree.close(timeout)
+        for stream in (tree.process.stdout, tree.process.stderr):  # communicate closed them, unless it raised
+            if not stream.closed:
+                stream.close()
     return subprocess.CompletedProcess(argv, tree.process.returncode, out, err)
 
 
-# Object names and revisions reach git's batch protocol one per line on standard input. The
-# reader uses git's default output format (no %(rest)), so git takes the whole line as the
-# object name and a space is part of it; only a line terminator or a NUL could end or split a
-# request. A name holding a control character (C0 or DEL: LF, CR and NUL among them, and
-# TAB) is refused before it reaches the process. Revisions refuse any whitespace as well.
-UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f\x7f]')
-OBJECT_TYPES = (b'blob', b'tree', b'commit', b'tag')
+# ---------------------------------------------------------------------------
+# Repository access (decision 0014, plan leaf F-10.3)
+#
+# Git is a facade over the shared repository-access module (integrations/repository/): every
+# answer is read in this process from the repository's own files, over Dulwich; no git process
+# is started. The facade keeps the calls and codes lineage, dispatch and readiness use:
+# REVISION_INVALID and OBJECT_NAME_INVALID before any access, GIT_FAILED when the repository
+# cannot be read, None for no such object, CannotRun when the project is not a work tree or
+# Dulwich is not importable (REPOSITORY_NEEDS_DULWICH).
+
+def _planning_error(exc):
+    """The module's RepositoryError as the adapter's PlanningError: the same code, message and
+    details (decision 0014 section 3)."""
+    return PlanningError(exc.code, exc.message, **exc.details)
 
 
-def batch_line(name):
-    """NAME as one request line of the batch protocol; refused (OBJECT_NAME_INVALID) when it is
-    not text, is empty, starts with '-' or holds a control character (C0 or DEL)."""
-    if not isinstance(name, str) or not name or name.startswith('-') or UNSAFE_NAME_RE.search(name):
-        raise PlanningError('OBJECT_NAME_INVALID', f'not an object name the batch reader takes: {name!r}')
+def _checked(check, text):
+    failure = None
     try:
-        return name.encode('utf-8')
-    except UnicodeEncodeError:
-        raise PlanningError('OBJECT_NAME_INVALID', f'not an object name the batch reader takes: {name!r}') from None
+        return check(text)
+    except repository_access.RepositoryError as exc:
+        failure = _planning_error(exc)
+    raise failure
 
 
-class _Expired(Exception):
-    pass
+def check_revision(revision):
+    """REVISION, or REVISION_INVALID before any repository access: not text, empty, a leading
+    '-', whitespace, a C0 control or DEL, or a documented gap form (decision 0014 section 2)."""
+    return _checked(repository_access.check_revision, revision)
 
 
-class BatchReader:
-    """One long-lived ``git cat-file --batch`` process: git's own batch protocol, one object
-    name per line in; ``<oid> <type> <size>``, the contents and a newline out, or ``<name>
-    missing`` / ``<name> ambiguous``.
+def check_object_name(name):
+    """NAME, or OBJECT_NAME_INVALID before any repository access: not text, empty, a leading '-',
+    a C0 control or DEL (a space is part of a name); REVISION_INVALID for a gap form in its
+    revision."""
+    return _checked(repository_access.check_object_name, name)
 
-    Its owner closes it (``close``, or ``with``): standard input is closed, git exits, and the
-    process is waited for (killed when it does not exit within the ceiling). Every request has
-    the TOOL_TIMEOUT_S ceiling: when it expires the process is killed and
-    ``subprocess.TimeoutExpired`` is raised. After a timeout, an unexpected answer or an exit,
-    the reader fails closed: every later request raises GIT_FAILED. Before each request is
-    written the process is checked: one that has exited fails the reader closed, whatever its
-    pipes would still answer. The process is a ``ProcessTree``: a kill, and the close, end
-    every process it started (the real git behind a launcher), and none outlives the reader.
-    """
 
-    def __init__(self, argv, env, timeout=None):
-        self.argv = list(argv)
-        self._timeout = timeout
-        self._cond = threading.Condition()
-        self._out = bytearray()
-        self._err = bytearray()
-        self._eof = False
-        self._broken = None
-        self._tree = ProcessTree(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, env=env)
-        self.process = self._tree.process
-        self._pumps = [threading.Thread(target=self._pump, args=(self.process.stdout, self._out, True), daemon=True),
-                       threading.Thread(target=self._pump, args=(self.process.stderr, self._err, False), daemon=True)]
-        for pump in self._pumps:
-            pump.start()
+def open_project(project):
+    """The project's repository, opened under the adapter's configuration policy; CannotRun when
+    it is not a work tree, cannot be opened or Dulwich is not importable (the module's code
+    leads the message)."""
+    failure = None
+    try:
+        return repository_access.open_repository(project, config=CONFIG_POLICY)
+    except repository_access.CannotRun as exc:
+        failure = CannotRun(str(exc))
+    except repository_access.RepositoryError as exc:
+        failure = CannotRun(str(exc))
+    raise failure
 
-    @property
-    def timeout(self):
-        return TOOL_TIMEOUT_S if self._timeout is None else self._timeout
 
-    def _pump(self, stream, buffer, is_stdout):
-        try:
-            while True:
-                chunk = stream.read1(65536)
-                if not chunk:
-                    break
-                with self._cond:
-                    buffer.extend(chunk)
-                    if not is_stdout:
-                        del buffer[:-65536]  # keep the end of a long error output
-                    self._cond.notify_all()
-        except (OSError, ValueError):
-            pass
-        finally:
-            if is_stdout:
-                with self._cond:
-                    self._eof = True
-                    self._cond.notify_all()
-
-    def _take(self, size_of, deadline):
-        """Wait until SIZE_OF(buffer) is a length, then remove and return that many bytes; None at
-        the end of the output."""
-        with self._cond:
-            while True:
-                size = size_of(self._out)
-                if size is not None:
-                    data = bytes(self._out[:size])
-                    del self._out[:size]
-                    return data
-                if self._eof:
-                    return None
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise _Expired()
-                self._cond.wait(remaining)
-
-    def read(self, name):
-        """(object id, type, contents) of NAME, or None when git has no such object or the name
-        is ambiguous. NAME is checked by ``batch_line`` before anything is written."""
-        line = batch_line(name)
-        if self._broken:
-            raise PlanningError('GIT_FAILED', f'git cat-file --batch: {self._broken}')
-        if not self._tree.running():
-            self._fail_exited()  # decided by the process, not by what its pipes would answer
-        timeout = self.timeout
-        deadline = time.monotonic() + timeout
-        try:
-            try:
-                self.process.stdin.write(line + b'\n')
-                self.process.stdin.flush()
-            except (OSError, ValueError):
-                self._fail_exited()
-            header = self._take(lambda out: (out.find(b'\n') + 1) or None, deadline)
-            if header is None:
-                self._fail_exited()
-            # "<name> missing" or "<name> ambiguous" echoes the whole request line (spaces and
-            # all); anything else must be "<object id> <type> <size>".
-            if header[:-1] in (line + b' missing', line + b' ambiguous'):
-                return None
-            fields = header[:-1].split(b' ')
-            if len(fields) != 3 or not OBJECT_ID_RE.fullmatch(fields[0].decode('ascii', 'replace')) \
-                    or fields[1] not in OBJECT_TYPES or not fields[2].isdigit():
-                self._fail(f'unexpected answer {header[:200]!r} for {name!r}')
-            size = int(fields[2])
-            body = self._take(lambda out: size + 1 if len(out) > size else None, deadline)
-            if body is None:
-                self._fail_exited()
-            if body[-1:] != b'\n':
-                self._fail(f'the contents of {name!r} do not end where their size says')
-            return fields[0].decode('ascii'), fields[1].decode('ascii'), body[:-1]
-        except _Expired:
-            self._broken = f'no answer for {name!r} within {timeout} s; the process was killed'
-            self._kill()
-            raise subprocess.TimeoutExpired(self.argv, timeout) from None
-
-    def _fail(self, why):
-        self._broken = why
-        self._kill()
-        raise PlanningError('GIT_FAILED', f'git cat-file --batch: {why}')
-
-    def _fail_exited(self):
-        self._broken = 'the process exited'
-        try:
-            code = self.process.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            code = None
-        self._kill()  # what it started may still hold the pipes: end it before reading stderr
-        self._pumps[1].join(self.timeout)
-        with self._cond:
-            stderr = bytes(self._err).decode('utf-8', 'replace').strip()
-        self._fail(f'exited {code}: {stderr}' if stderr else f'exited {code}')
-
-    def _kill(self):
-        self._tree.kill(self.timeout)
-
-    def close(self):
-        """Close standard input, wait for git to exit (kill it past the ceiling), end every
-        process the reader started, end the pumps."""
-        if self._broken is None:
-            self._broken = 'the reader is closed'
-        try:
-            self.process.stdin.close()
-        except OSError:
-            pass
-        try:
-            self.process.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            pass
-        self._tree.close(self.timeout)
-        for pump in self._pumps:
-            pump.join(self.timeout)
-        for stream in (self.process.stdout, self.process.stderr):
-            try:
-                stream.close()
-            except OSError:
-                pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
+def check_work_tree(project):
+    """The work-tree check (``git rev-parse --show-toplevel``'s acceptance): (root, configuration
+    files read) of the work tree PROJECT is in; CannotRun otherwise. The repository is opened and
+    closed again."""
+    repository = open_project(project)
+    try:
+        return Path(repository.root), repository.config_sources
+    finally:
+        repository.close()
 
 
 class _Session:
-    """One read session of a Git: its batch reader, started on the first object read, and memos
-    that last only as long as the session. Objects are memoized only by an immutable name (a
-    full object id, or ``<full object id>:<path>``); revisions are resolved once per session, a
-    snapshot; file lists by (full commit id, directory)."""
+    """One read session of a Git: the repository, opened on the first read, and memos that last
+    only as long as the session. Objects are memoized only by an immutable name (a full object
+    id, or ``<full object id>:<path>``); revisions are resolved once per session, a snapshot;
+    file lists by (full commit id, directory). After the session ends every read fails closed
+    (GIT_FAILED)."""
 
     def __init__(self, git):
         self.git = git
-        self.reader = None
+        self.repository = None
+        self.closed = False
         self.objects = {}
         self.revisions = {}
         self.trees = {}
 
+    def call(self, method, *args):
+        """The repository's METHOD(*ARGS), with the module's refusals and failures raised as
+        PlanningErrors (raised after the module's frames are released)."""
+        failure = None
+        try:
+            return getattr(self._open(), method)(*args)
+        except repository_access.RepositoryError as exc:
+            failure = _planning_error(exc)
+        raise failure
+
+    def _open(self):
+        if self.closed:
+            raise PlanningError('GIT_FAILED', f'the read session of {self.git.project} is closed')
+        if self.repository is None:
+            try:
+                self.repository = open_project(self.git.project)
+            except CannotRun as exc:  # it was a work tree when the Git was made
+                raise PlanningError('GIT_FAILED', f'cannot open {self.git.project}: {exc}') from None
+        return self.repository
+
     def read(self, name):
-        batch_line(name)  # a refused name starts no process and is never written
+        check_object_name(name)  # a refused name opens nothing
         immutable = OBJECT_ID_RE.fullmatch(name.partition(':')[0]) is not None
         if immutable and name in self.objects:
             return self.objects[name]
-        if self.reader is None:
-            self.reader = BatchReader(self.git.batch_argv(), tool_env())
-        found = self.reader.read(name)
+        found = self.call('read', name)
         if immutable:
             self.objects[name] = found
         return found
 
     def close(self):
-        if self.reader is not None:
-            self.reader.close()
+        self.closed = True
+        repository, self.repository = self.repository, None
+        if repository is not None:
+            repository.close()
 
 
 # One top-level adapter operation (plan leaf F-09.4, the Overseer's ruling R3): one lineage
 # traversal, one readiness evaluation, or one resolution from the command line or a lineage
-# resolver entry point. Within it, each project's git access is one Git (one work-tree check)
-# with one read session (one batch reader), and Backlog.md's reads are a snapshot: the same
-# command is run once. Everything is dropped when the operation ends, normally or by an
+# resolver entry point. Within it, each project's repository access is one Git (one work-tree
+# check) with one read session (one opened repository), and Backlog.md's reads are a snapshot:
+# the same command is run once. Everything is dropped when the operation ends, normally or by an
 # exception: no module-level cache, nothing kept for the next operation.
 _OPERATION = contextvars.ContextVar('planning_operation', default=None)
 
@@ -684,8 +618,9 @@ def current_operation():
 
 
 def project_git(project):
-    """(Git, None) for PROJECT, or (None, why) when git cannot read it. Within an operation the
-    same Git, with its read session open, for every call; otherwise a new Git each call."""
+    """(Git, None) for PROJECT, or (None, why) when its repository cannot be read. Within an
+    operation the same Git, with its read session open, for every call; otherwise a new Git each
+    call."""
     op = _OPERATION.get()
     if op is None:
         return _open_git(project)
@@ -701,40 +636,29 @@ def project_git(project):
 def _open_git(project):
     try:
         return Git(project), None
-    except (CannotRun, OSError, subprocess.TimeoutExpired) as exc:
+    except (CannotRun, OSError) as exc:
         return None, str(exc)
 
 
 class Git:
-    """Read-only access to the project repository.
+    """Read-only access to the project repository: a facade over the shared repository-access
+    module (decision 0014), which reads it in this process; no process is started.
 
-    Object reads (``commit``, ``object_type``, ``object_kind``, ``blob``) go through one ``git
-    cat-file --batch`` process per read session (``session()``), and are memoized for that
-    session only. Outside a session each call opens and closes its own.
+    Making a Git is the work-tree check (CannotRun when PROJECT is not inside a git work tree,
+    or Dulwich is not importable: ``REPOSITORY_NEEDS_DULWICH``, naming ``task tools:install``).
+    Reads (``commit``, ``object_type``, ``object_kind``, ``blob``, ``files``, ``export_tree``)
+    go through one opened repository per read session (``session()``), and are memoized for
+    that session only. Outside a session each call opens and closes its own.
     """
 
     def __init__(self, project):
         self.project = Path(project)
         self._session = None
-        if not shutil.which('git'):
-            raise CannotRun('git is not on PATH')
-        top = self._run('rev-parse', '--show-toplevel', check=False)
-        if top.returncode != 0:
-            raise CannotRun(f'not a git working tree: {self.project}')
-
-    def _run(self, *args, check=True):
-        result = run_tree(['git', '-C', str(self.project), *args], timeout=TOOL_TIMEOUT_S, env=tool_env())
-        if check and result.returncode != 0:
-            raise PlanningError('GIT_FAILED', f'git {" ".join(args)}: '
-                                f'{result.stderr.decode("utf-8", "replace").strip()}')
-        return result
-
-    def batch_argv(self):
-        return ['git', '-C', str(self.project), 'cat-file', '--batch']
+        self.root, self.config_sources = check_work_tree(self.project)
 
     @contextlib.contextmanager
     def session(self):
-        """A read session: one batch reader and the session's memos, closed when the block
+        """A read session: one opened repository and the session's memos, closed when the block
         ends, normally or by an exception. Re-entrant: an inner session is the outer one."""
         if self._session is not None:
             yield self
@@ -746,55 +670,62 @@ class Git:
             self._session = None
             session.close()
 
-    def _object(self, name):
+    def _in_session(self, read, *args):
         if self._session is not None:
-            return self._session.read(name)
+            return read(self._session, *args)
         with self.session():
-            return self._session.read(name)
+            return read(self._session, *args)
 
     def commit(self, revision):
-        """The full commit id of REVISION, or None when the repository has no such commit."""
-        if not isinstance(revision, str) or not revision or revision.startswith('-') \
-                or any(ch.isspace() for ch in revision) or UNSAFE_NAME_RE.search(revision):
-            raise PlanningError('REVISION_INVALID', f'not a usable revision: {revision!r}')
-        if self._session is None:
-            with self.session():
-                return self.commit(revision)
-        revisions = self._session.revisions
-        if revision not in revisions:
-            found = self._session.read(f'{revision}^{{commit}}')
-            revisions[revision] = found[0] if found is not None and found[1] == 'commit' else None
-        return revisions[revision]
+        """The full commit id of REVISION (``git rev-parse --verify <revision>^{commit}``), or None
+        when the repository has no such commit. REVISION_INVALID, before any access, for text that
+        is not a usable revision or a documented gap form (decision 0014 section 2)."""
+        check_revision(revision)
+        return self._in_session(self._commit, revision)
+
+    @staticmethod
+    def _commit(session, revision):
+        if revision not in session.revisions:
+            session.revisions[revision] = session.call('commit', revision)
+        return session.revisions[revision]
 
     def object_kind(self, name):
         """The type of object NAME, or None when the repository has none."""
-        found = self._object(name)
+        check_object_name(name)
+        found = self._in_session(_Session.read, name)
         return found[1] if found is not None else None
 
     def object_type(self, commit, path):
         return self.object_kind(f'{commit}:{path}')
 
     def blob(self, commit, path):
-        name = f'{commit}:{path}'
-        found = self._object(name)
+        name = check_object_name(f'{commit}:{path}')
+        found = self._in_session(_Session.read, name)
         if found is None or found[1] != 'blob':
-            raise PlanningError('GIT_FAILED', f'git cat-file blob {name}: '
+            raise PlanningError('GIT_FAILED', f'blob {name}: '
                                 + ('no such object' if found is None else f'a {found[1]}, not a blob'))
         return found[2]
 
     def files(self, commit, directory):
+        """The paths below DIRECTORY at COMMIT (``git ls-tree -r --name-only``), in git's order; []
+        when it is absent; GIT_FAILED when COMMIT is no tree-ish."""
+        return self._in_session(self._files, commit, directory)
+
+    @staticmethod
+    def _files(session, commit, directory):
         key = (commit, directory)
-        trees = self._session.trees if self._session is not None else None
-        if trees is not None and key in trees:
-            return list(trees[key])
-        out = self._run('ls-tree', '-r', '-z', '--name-only', commit, '--', directory + '/').stdout
-        files = [name.decode('utf-8') for name in out.split(b'\0') if name]
-        if trees is not None and isinstance(commit, str) and OBJECT_ID_RE.fullmatch(commit):
-            trees[key] = list(files)
+        if key in session.trees:
+            return list(session.trees[key])
+        files = session.call('files', commit, directory)
+        if isinstance(commit, str) and OBJECT_ID_RE.fullmatch(commit):
+            session.trees[key] = list(files)
         return files
 
-    def archive(self, commit, directory):
-        return self._run('archive', '--format=tar', commit, '--', directory).stdout
+    def export_tree(self, commit, subtree, destination):
+        """Write the blob bytes of SUBTREE ('.' for the whole tree) at COMMIT into the empty
+        directory DESTINATION, each at its repository-relative path (decision 0014 section 4: no
+        end-of-line conversion, no attributes). EXPORT_REFUSED when it cannot be written safely."""
+        return self._in_session(lambda session: session.call('export_tree', commit, subtree, destination))
 
 
 # ---------------------------------------------------------------------------
@@ -919,13 +850,12 @@ def _check_change(git, change, commit, openspec):
 
 
 def openspec_apply_state(git, change, commit, openspec_argv):
-    """Ask OpenSpec, on an export of the exact revision, whether it tracks tasks for CHANGE."""
+    """Ask OpenSpec, on an export of the exact revision (blob bytes, decision 0014 section 4),
+    whether it tracks tasks for CHANGE. OpenSpec runs as one process tree (``run_tree``)."""
     with tempfile.TemporaryDirectory(prefix='aieh-planning-openspec-') as tmp:
-        with tarfile.open(fileobj=io.BytesIO(git.archive(commit, 'openspec')), mode='r:') as tar:
-            tar.extractall(tmp, filter='data')
-        result = subprocess.run([*openspec_argv, 'instructions', 'apply', '--change', change, '--json'],
-                                cwd=tmp, capture_output=True, stdin=subprocess.DEVNULL,
-                                timeout=TOOL_TIMEOUT_S, env=tool_env())
+        git.export_tree(commit, 'openspec', tmp)
+        result = run_tree([*openspec_argv, 'instructions', 'apply', '--change', change, '--json'],
+                          timeout=TOOL_TIMEOUT_S, env=tool_env(), cwd=tmp)
     if result.returncode != 0:
         raise PlanningError('OPENSPEC_FAILED', 'openspec instructions apply exited '
                             f'{result.returncode}: {result.stderr.decode("utf-8", "replace").strip()}')
@@ -1006,8 +936,9 @@ def load_plan(data):
 
 class Backlog:
     # The process runner, a dependency-injection seam for tests: None (the default) runs
-    # Backlog.md with subprocess.run. A runner takes subprocess.run's arguments and returns
-    # its CompletedProcess; it is given to the constructor, or set on the class.
+    # Backlog.md as one process tree (run_tree: an npm shim's node child ends with it). A runner
+    # takes subprocess.run's arguments and returns its CompletedProcess; it is given to the
+    # constructor, or set on the class.
     runner = None
 
     def __init__(self, argv_prefix, project, runner=None):
@@ -1035,9 +966,11 @@ class Backlog:
             if failure is not None:
                 raise PlanningError('BACKLOG_FAILED', failure)
             return out
-        run = subprocess.run if self.runner is None else self.runner
-        result = run([*self.argv_prefix, *args], cwd=self.project, capture_output=True,
-                     stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_S, env=tool_env())
+        if self.runner is None:
+            result = run_tree([*self.argv_prefix, *args], timeout=TOOL_TIMEOUT_S, env=tool_env(), cwd=self.project)
+        else:
+            result = self.runner([*self.argv_prefix, *args], cwd=self.project, capture_output=True,
+                                 stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_S, env=tool_env())
         if result.returncode != 0:
             failure = (f'backlog {" ".join(args[:2])} exited {result.returncode}: '
                        + (result.stderr or result.stdout).decode('utf-8', 'replace').strip())

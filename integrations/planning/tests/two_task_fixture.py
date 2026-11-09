@@ -64,6 +64,14 @@ sys.path.insert(0, str(PLANNING))
 import planning_adapter as adapter  # noqa: E402
 
 
+def require_repository_access():
+    """Fail, never skip, where the adapter's repository access cannot run (decision 0014 section
+    9): without Dulwich this raises CannotRun ``REPOSITORY_NEEDS_DULWICH``, naming ``task
+    tools:install``. A test whose resolver would turn that into ``PROJECT_UNAVAILABLE`` (as a
+    product run must) calls it first, so that its failure says why."""
+    adapter.repository_access.dulwich_modules()
+
+
 def rmtree(path):
     """Remove a tree that holds git's read-only object files (Windows refuses them otherwise)."""
     def retry(func, target, _exc):
@@ -118,6 +126,37 @@ def loose_head(repo):
     except (OSError, ValueError):
         return None
     return value if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value) else None
+
+
+def loose_object(repo, oid):
+    """The file git wrote for the loose object OID of REPO (it must exist)."""
+    path = Path(repo) / '.git' / 'objects' / oid[:2] / oid[2:]
+    if not path.is_file():
+        raise AssertionError(f'{oid} is not a loose object of {repo}')
+    return path
+
+
+def damage_object(repo, oid, how):
+    """Damage the loose object OID of REPO, as a disk or another writer could (plan leaf F-10.3):
+    'zlib', its bytes no zlib stream; 'another', the file of another object of REPO (HOW is then
+    ('another', other oid)); 'directory', a directory in the file's place."""
+    path = loose_object(repo, oid)
+    os.chmod(path, stat.S_IWRITE)  # git writes object files read-only
+    if how == 'zlib':
+        path.write_bytes(b'not a zlib stream')
+    elif how == 'directory':
+        path.unlink()
+        path.mkdir()
+    else:
+        kind, other = how
+        assert kind == 'another', how
+        path.write_bytes(loose_object(repo, other).read_bytes())
+
+
+def loose_objects(repo):
+    """Every loose object id of REPO."""
+    root = Path(repo) / '.git' / 'objects'
+    return sorted(p.parent.name + p.name for p in root.glob('[0-9a-f][0-9a-f]/*') if p.is_file())
 
 
 def head(repo):

@@ -374,8 +374,9 @@ class GoldenRepository(unittest.TestCase):
 
 
 class BacklogRunnerSeam(unittest.TestCase):
-    """The Backlog runner seam (plan leaf F-09.3): subprocess.run by default, looked up when
-    Backlog.md runs; a runner given to the constructor or set on the class replaces it."""
+    """The Backlog runner seam (plan leaf F-09.3): by default Backlog.md runs as one process tree
+    (``run_tree``, plan leaf F-10.3; it was ``subprocess.run`` before), looked up when Backlog.md
+    runs; a runner given to the constructor or set on the class replaces it."""
     category = 'unit'
 
     LIST = json.dumps({'schemaVersion': 1, 'kind': 'task-list', 'tasks': []}).encode()
@@ -384,15 +385,17 @@ class BacklogRunnerSeam(unittest.TestCase):
         return subprocess.CompletedProcess(argv, 0, self.LIST, b'')
 
     def test_the_default_runner_is_subprocess_run(self):
+        # The id is kept from F-09.3; the default runner is now run_tree (decision 0014 section
+        # 8), and subprocess.run is never used.
         self.assertIsNone(adapter.Backlog.runner)
         backlog = adapter.Backlog(['backlog-cmd'], Path('project'))
         self.assertIsNone(backlog.runner)
-        with mock.patch.object(adapter.subprocess, 'run', side_effect=self.completed) as run:
+        with mock.patch.object(adapter, 'run_tree', side_effect=self.completed) as tree, \
+                mock.patch.object(adapter.subprocess, 'run', side_effect=AssertionError('subprocess.run')):
             self.assertEqual(backlog.list_tasks(), [])
-        run.assert_called_once_with(['backlog-cmd', 'task', 'list', '--json'], cwd=Path('project'),
-                                    capture_output=True, stdin=subprocess.DEVNULL,
-                                    timeout=adapter.TOOL_TIMEOUT_S, env=mock.ANY)
-        self.assertEqual(run.call_args.kwargs['env'], adapter.tool_env())
+        tree.assert_called_once_with(['backlog-cmd', 'task', 'list', '--json'], timeout=adapter.TOOL_TIMEOUT_S,
+                                     env=mock.ANY, cwd=Path('project'))
+        self.assertEqual(tree.call_args.kwargs['env'], adapter.tool_env())
 
     def test_an_injected_runner_replaces_it(self):
         calls = []

@@ -180,6 +180,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Build and trace the P-03.2 lineage example.')
     parser.add_argument('--record', action='store_true', help='write the projections into examples/')
     args = parser.parse_args(argv)
+    try:
+        # Without Dulwich every resolver answers PROJECT_UNAVAILABLE: never print, nor record,
+        # such an example (decision 0014 section 9).
+        fx.require_repository_access()
+    except R.planning.repository_access.CannotRun as exc:
+        print(f'ERROR {exc}', file=sys.stderr)
+        return 2
     work = Path(tempfile.mkdtemp(prefix='aieh-lineage-example-'))
     try:
         projections = example(work)

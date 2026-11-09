@@ -2,7 +2,7 @@
 
 The shared repository-access module for AI Engineering's own Python components (plan leaf F-10.2,
 [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md),
-Proposed): read-only access to git repositories over
+Accepted): read-only access to git repositories over
 [Dulwich](https://www.dulwich.io/) 1.2.21, pinned in the Python tools set
 ([`composition/lock/python/tools-requirements.txt`](../../composition/lock/python/tools-requirements.txt)),
 and the differential contract suite that holds it to git's answers.
@@ -12,8 +12,10 @@ and the differential contract suite that holds it to git's answers.
 - [`tests/`](tests/): the contract suite. The recorded half runs without git; the git-oracle half
   asks git again where git is on `PATH`.
 
-**No caller uses it yet.** F-10.3 makes the planning adapter's `Git` a facade over it and F-10.4
-migrates the exchange push, the snapshots and the listing (decision 0014 section 1).
+**Callers.** Since F-10.3 the planning adapter's `Git`
+([`integrations/planning/`](../planning/README.md)) is a facade over it, under the `repository`
+policy, for the planning, lineage and dispatch components; F-10.4 migrates the exchange push, the
+snapshots and the listing (decision 0014 section 1).
 
 ## Use
 

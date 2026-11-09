@@ -51,6 +51,7 @@ OPENSPEC = os.environ.get('AIEH_OPENSPEC')
 class LiveWork(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        fx.require_repository_access()  # without Dulwich: REPOSITORY_NEEDS_DULWICH, never a skip
         cls.backlog = fx.adapter.tool_argv(BACKLOG)
         openspec = fx.adapter.tool_argv(OPENSPEC)
         cls.work = Path(tempfile.mkdtemp(prefix='aieh-lineage-live-'))
@@ -118,6 +119,7 @@ class LiveObjective(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        fx.require_repository_access()
         cls.openspec = fx.adapter.tool_argv(OPENSPEC)
         cls.work = Path(tempfile.mkdtemp(prefix='aieh-lineage-os-'))
         (cls.work / 'home').mkdir()
@@ -174,6 +176,7 @@ class LiveTrace(unittest.TestCase):
     def setUpClass(cls):
         sys.path.insert(0, str(HERE))
         import lineage_example as example
+        fx.require_repository_access()
         cls.E = example
         cls.T = example.T
         cls.backlog = fx.adapter.tool_argv(BACKLOG)

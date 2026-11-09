@@ -121,7 +121,7 @@
       },
       "validation_rule": "From git objects only, at the pinned commit or at HEAD for current: enumerate openspec/changes/<change>/.openspec.yaml and openspec/changes/archive/<dated-change>/.openspec.yaml; exactly one declares the id, else missing or ambiguous; the declared item exists in that change's proposal Objective section with authority: accepted and the same acceptance, else the outcome does not resolve; a resolved answer reports the declaring change, the item, its acceptance, its source and the accepted Acceptance Criteria that cite it (decision 0008, point 6). Trace to source statement, acceptance conditions and current revision. (#authority, link 'Accepted objective')",
       "status": "implemented",
-      "resolver": "lineage_resolve.ObjectiveResolver (the P-02.1 git reader and the intent-record/v1 parser)",
+      "resolver": "lineage_resolve.ObjectiveResolver (the P-02.1 repository access, in process over Dulwich, and the intent-record/v1 parser)",
       "outcomes": ["resolved", "missing", "revision-mismatch", "ambiguous", "authority-unavailable"],
       "outcome_codes": {
         "missing": "OUTCOME_MISSING; OUTCOME_NOT_ACCEPTED (declared item absent, not an Objective item, not accepted, or its acceptance differs)",
@@ -269,7 +269,7 @@
       },
       "validation_rule": "Verify repository, exact commit and reviewer; no path/title-only proof. (#authority, link 'Revision and review') The resolver maps the repository name to a registered local clone (configuration, never part of the reference) and requires that exact commit object there.",
       "status": "implemented",
-      "resolver": "lineage_resolve.CommitResolver (git rev-parse and cat-file, read-only)",
+      "resolver": "lineage_resolve.CommitResolver (the P-02.1 repository access: the shared module over Dulwich, answering as git rev-parse and cat-file; read-only)",
       "outcomes": ["resolved", "missing", "authority-unavailable"],
       "outcome_codes": {
         "missing": "COMMIT_MISSING, COMMIT_NOT_A_COMMIT, COMMIT_ID_MISMATCH",
@@ -281,7 +281,7 @@
       "citations": ["blueprint #authority", "blueprint #quality-pipeline ('gitCommit': 'repository@<full-commit-sha>')"],
       "open": [
         "Until Gitea is adopted, a repository name is the name configured for a local clone; whether a resolved commit is reachable from a branch is not part of this kind.",
-        "Blueprint #integration-contracts asks for Python adapters that need no Git executable (Dulwich); this resolver, like P-02.1, runs git."
+        "Blueprint #integration-contracts asks for Python adapters that need no Git executable (Dulwich): since F-10.3 this resolver, like P-02.1, reads the repository in process through the shared repository-access module (decision 0014) and runs no git."
       ]
     },
     {

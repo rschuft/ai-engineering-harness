@@ -1,23 +1,25 @@
-"""Tests of the planning adapter's batched git reads (stdlib unittest, plan leaf F-09.4).
+"""Tests of the planning adapter's repository access (stdlib unittest, plan leaves F-09.4 and F-10.3).
 
-Run from the repository root:
+Run from the repository root, under the tools interpreter (``tools_install.py --python``):
 
-    python -I -B -m unittest discover -s integrations/planning/tests -v
+    <tools python> -I -B -m unittest discover -s integrations/planning/tests -v
 
-``planning_adapter.Git`` reads objects through one ``git cat-file --batch`` process per
-read session (``BatchReader``), with memos that last only for that session. These tests
-check what that must keep: the answers of the one-shot commands it replaces (``rev-parse
---verify --quiet REV^{commit}``, ``cat-file -t``, ``cat-file blob``), names that could break
-the line protocol refused before anything reaches the process, the reader closed on a normal
-exit, on an exception and on a timeout (killed, and every later read fails closed), and no
-memo outliving its session. Stand-in processes play a git that hangs or answers out of
-protocol; every other process is the real git.
+``planning_adapter.Git`` is a facade over the shared repository-access module
+(``integrations/repository/``, decision 0014): every answer is read in this process over Dulwich,
+through one opened repository per read session, with memos that last only for that session; no
+git process is started. These tests keep F-09.4's test ids and check what the facade must keep:
+the answers of the one-shot git commands it replaces (``rev-parse --verify --quiet
+REV^{commit}``, ``cat-file -t``, ``cat-file blob``, ``ls-tree``; git is the oracle here), names
+refused before anything is opened or read, the repository closed on a normal exit and on an
+exception, a damaged or unreadable repository failing visibly (``GIT_FAILED``) at once, and no
+memo outliving its session.
 
-A git on PATH may be a launcher that runs the real git as its child (Git for Windows'
-``cmd\\git.exe``; round 4). ``fake_launcher.py`` plays one on any platform: through it, a reader
-whose launcher exited fails closed before it writes, and a kill, a timeout, an exception and a
-normal close each end the child too. Where Git for Windows' own launcher is installed, the same
-is checked through it.
+The upstream command-line tools (Backlog.md, OpenSpec) are still launched, as one process tree
+each (``ProcessTree``, ``run_tree``). A command on ``PATH`` may be a launcher that runs the real
+program as its child (an npm shim; Git for Windows' ``cmd\\git.exe``). ``fake_launcher.py``
+plays one on any platform: through it, a kill, a timeout, an exception and a normal close each
+end the child too. Where Git for Windows' own launcher is installed, the same is checked through
+it.
 """
 import contextlib
 import hashlib
@@ -41,9 +43,11 @@ import two_task_fixture as fx  # noqa: E402
 import fake_backlog  # noqa: E402
 
 adapter = fx.adapter
+ra = adapter.repository_access
 PlanningError = adapter.PlanningError
 DESIGN = f'openspec/changes/{fx.CHANGE}/design.md'
 FAKE_BACKLOG = [sys.executable, '-I', '-B', str(HERE / 'fake_backlog.py')]
+FAKE_OPENSPEC = [sys.executable, '-I', '-B', str(HERE / 'fake_openspec.py')]
 readiness = sys.modules.get('planning_readiness')
 if readiness is None:
     _spec = importlib.util.spec_from_file_location('planning_readiness', HERE.parent / 'planning_readiness.py')
@@ -52,23 +56,16 @@ if readiness is None:
     _spec.loader.exec_module(readiness)
 assert readiness.adapter is adapter, 'the readiness module and the fixture must share one adapter'
 
-# Every character the batch protocol cannot carry inside one name: the control characters
-# (C0, LF, CR and NUL among them, and DEL).
+# The control characters (C0, LF, CR and NUL among them, and DEL): refused in every name.
 CONTROL_CHARACTERS = [chr(c) for c in (0, 1, 9, 10, 11, 12, 13, 0x1b, 0x1f, 0x7f)]
-# Without a %(rest) format git takes the whole request line as the name: a space (or other
-# whitespace that is not a control character) is part of an object name, never of a revision.
+# A space (or other whitespace that is not a control character) is part of an object name, never
+# of a revision.
 WHITESPACE = [chr(c) for c in (0x20, 0x85, 0xa0, 0x2028, 0x3000)]
-# A stand-in that reads a request and never answers, and one that answers out of protocol.
-HANGS = [sys.executable, '-I', '-c', 'import sys, time; sys.stdin.readline(); time.sleep(300)']
-GARBLES = [sys.executable, '-I', '-c',
-           'import sys, time; sys.stdin.readline(); print("not an answer", flush=True); time.sleep(300)']
-ANSWERS_ANOTHER = [sys.executable, '-I', '-c',
-                   'import sys, time; sys.stdin.readline(); '
-                   'sys.stdout.buffer.write(b"main^{commit} missing" + bytes([10])); sys.stdout.flush(); time.sleep(300)']
-# A launcher that runs its command as a child (fake_launcher.py), and a child that never reads.
+# A launcher that runs its command as a child (fake_launcher.py), and children that never end.
 FAKE_LAUNCHER = [sys.executable, '-I', '-B', str(HERE / 'fake_launcher.py')]
 SLEEPS = [sys.executable, '-I', '-c', 'import time; time.sleep(60)']
 GONE_WITHIN_S = 5  # a ceiling for a killed process to be gone, not an expected duration
+CLOSE_CEILING_S = 10  # a ceiling for a process whose input closed to end itself
 
 if os.name == 'nt':
     import ctypes
@@ -165,40 +162,51 @@ def git_for_windows_launcher():
     return None
 
 
-class Recorded(adapter.BatchReader):
-    """A BatchReader that keeps every instance, so a test can check each process ended."""
+def is_open(repository):
+    """Whether the module's repository is still open (its Dulwich repository not yet released)."""
+    return repository._dul is not None
+
+
+class Recorded(adapter._Session):
+    """A read session that keeps every instance that opened its repository (as F-09.4 kept every
+    batch reader it started), so a test can check each one ended."""
     made = []
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        type(self).made.append(self)
+    def _open(self):
+        first = self.repository is None and not self.closed
+        repository = super()._open()
+        if first:
+            self.opened = repository
+            type(self).made.append(self)
+        return repository
 
 
-class WriteRecorder:
-    """Stands in for a reader's standard input and keeps what was written to it."""
+@contextlib.contextmanager
+def module_calls():
+    """Record every read the module answers for the facade (commit, read, files), in order."""
+    seen = []
+    with contextlib.ExitStack() as stack:
+        for method in ('commit', 'read', 'files'):
+            real = getattr(ra.Repository, method)
 
-    def __init__(self, stream):
-        self.stream, self.written = stream, bytearray()
+            def spy(repository, *args, _real=real, _method=method):
+                seen.append((_method, *args))
+                return _real(repository, *args)
 
-    def write(self, data):
-        self.written.extend(data)
-        return self.stream.write(data)
-
-    def flush(self):
-        return self.stream.flush()
-
-    def close(self):
-        return self.stream.close()
+            stack.enter_context(mock.patch.object(ra.Repository, method, spy))
+        yield seen
 
 
 def bare_git():
-    """A Git that never ran (no project): only argument checks can be exercised on it."""
+    """A Git that never opened anything (no project): only argument checks can be exercised on it."""
     git = adapter.Git.__new__(adapter.Git)
     git.project, git._session = Path('no-project'), None
     return git
 
 
 class BatchLine(unittest.TestCase):
+    """The names the facade takes (F-09.4's batch-line checks, now the module's grammar,
+    decision 0014 section 2), refused before anything is opened."""
     category = 'unit'
 
     def test_object_names_and_revisions_are_accepted(self):
@@ -206,7 +214,7 @@ class BatchLine(unittest.TestCase):
                      'HEAD~2:README.md', 'v1.0^{}', 'é:ü/ö.md', 'a' * 40 + ':docs/a b.md', 'HEAD: lead',
                      'HEAD:trail ') + tuple(f'HEAD:x{ch}y' for ch in WHITESPACE):
             with self.subTest(name=name):
-                self.assertEqual(adapter.batch_line(name), name.encode('utf-8'))
+                self.assertEqual(adapter.check_object_name(name), name)
 
     def test_names_that_could_break_a_line_are_refused(self):
         bad = [f'HEAD{ch}' for ch in CONTROL_CHARACTERS] + [f'{ch}HEAD' for ch in CONTROL_CHARACTERS]
@@ -214,14 +222,17 @@ class BatchLine(unittest.TestCase):
         for name in bad:
             with self.subTest(name=name):
                 with self.assertRaises(PlanningError) as ctx:
-                    adapter.batch_line(name)
+                    adapter.check_object_name(name)
                 self.assertEqual(ctx.exception.code, 'OBJECT_NAME_INVALID')
 
     def test_refused_revisions_never_reach_a_reader(self):
         git = bare_git()
-        with mock.patch.object(adapter, 'BatchReader', side_effect=AssertionError('a reader was started')), \
+        with mock.patch.object(adapter, 'open_project', side_effect=AssertionError('a repository was opened')), \
                 mock.patch.object(adapter.subprocess, 'Popen', side_effect=AssertionError('launched')):
-            for revision in [f'HEAD{ch}' for ch in CONTROL_CHARACTERS + WHITESPACE] + ['', '-x', '--all', None]:
+            # ... and every documented gap form of decision 0014 section 2, before any access.
+            gaps = [':/x', 'HEAD^{/x}', 'main@{yesterday}', '@{upstream}', 'main@{push}', '@{-1}', 'A..B', '^HEAD',
+                    'HEAD^@']
+            for revision in [f'HEAD{ch}' for ch in CONTROL_CHARACTERS + WHITESPACE] + ['', '-x', '--all', None] + gaps:
                 with self.subTest(revision=revision):
                     with self.assertRaises(PlanningError) as ctx:
                         git.commit(revision)
@@ -246,15 +257,16 @@ class RepoCase(unittest.TestCase):
 
     def setUp(self):
         Recorded.made = []
-        patch = mock.patch.object(adapter, 'BatchReader', Recorded)
+        patch = mock.patch.object(adapter, '_Session', Recorded)
         patch.start()
         self.addCleanup(patch.stop)
         self.git = adapter.Git(self.repo)
 
-    def assertEnded(self, readers):
-        self.assertTrue(readers)
-        for reader in readers:
-            self.assertIsNotNone(reader.process.poll(), f'process {reader.process.pid} is still running')
+    def assertEnded(self, sessions):
+        self.assertTrue(sessions)
+        for session in sessions:
+            self.assertTrue(session.closed, 'the session is still open')
+            self.assertFalse(is_open(session.opened), 'its repository is still open')
 
     def expect(self, code, func, *args):
         with self.assertRaises(PlanningError) as ctx:
@@ -262,9 +274,16 @@ class RepoCase(unittest.TestCase):
         self.assertEqual(ctx.exception.code, code, ctx.exception.message)
         return ctx.exception
 
+    def damaged(self, name, how, oid=None):
+        """A copy of the design repository whose object OID (the design commit) is damaged."""
+        repo = self.tmp / name
+        fx.build_repo(repo)
+        fx.damage_object(repo, oid or self.commit, how)
+        return repo
+
 
 class Equivalence(RepoCase):
-    """The batch reader answers as the one-shot commands it replaces, run as before."""
+    """The facade answers as the one-shot git commands it replaces, run as before (the oracle)."""
 
     def one_shot(self, *args):
         result = subprocess.run(['git', '-C', str(self.repo), *args], capture_output=True,
@@ -359,7 +378,7 @@ class Equivalence(RepoCase):
             out = self.one_shot('ls-tree', '-r', '-z', '--name-only', commit, '--', 'dir with space/')
             self.assertEqual(self.git.files(commit, 'dir with space'),
                              [n.decode() for n in out.split(bytes([0])) if n])
-        self.assertEqual(len(Recorded.made), 1)  # a missing spaced name kept the protocol in step
+        self.assertEqual(len(Recorded.made), 1)  # one repository served every spaced name
         self.assertEnded(Recorded.made)
 
     def plumbing(self, args, data):
@@ -378,30 +397,31 @@ class Equivalence(RepoCase):
 
 class InputSafety(RepoCase):
     def test_a_refused_name_is_never_written_to_the_process(self):
+        # No process remains to write to: a refused name never reaches the repository.
         with self.git.session():
             self.assertEqual(self.git.commit('HEAD'), self.commit)
-            reader = self.git._session.reader
-            recorder = WriteRecorder(reader.process.stdin)
-            reader.process.stdin = recorder
-            for ch in WHITESPACE:
-                with self.subTest(ch=ord(ch)):
-                    self.expect('REVISION_INVALID', self.git.commit, f'main{ch}HEAD')
-            for ch in CONTROL_CHARACTERS:
-                with self.subTest(ch=ord(ch)):
-                    self.expect('REVISION_INVALID', self.git.commit, f'main{ch}HEAD')
-                    self.expect('OBJECT_NAME_INVALID', self.git.object_type, self.commit, f'README.md{ch}x')
-                    self.expect('OBJECT_NAME_INVALID', self.git.blob, self.commit, f'{ch}README.md')
-                    self.expect('OBJECT_NAME_INVALID', self.git.object_kind, f'{self.commit}{ch}')
-                    self.expect('OBJECT_NAME_INVALID', reader.read, f'HEAD{ch}')
-            self.assertEqual(bytes(recorder.written), b'')
-            # The protocol is still in step: the next request gets its own answer.
-            self.assertEqual(self.git.object_type(self.commit, 'README.md'), 'blob')
-            self.assertEqual(bytes(recorder.written), f'{self.commit}:README.md'.encode() + bytes([10]))
+            session = self.git._session
+            with module_calls() as seen:
+                for ch in WHITESPACE:
+                    with self.subTest(ch=ord(ch)):
+                        self.expect('REVISION_INVALID', self.git.commit, f'main{ch}HEAD')
+                for ch in CONTROL_CHARACTERS:
+                    with self.subTest(ch=ord(ch)):
+                        self.expect('REVISION_INVALID', self.git.commit, f'main{ch}HEAD')
+                        self.expect('OBJECT_NAME_INVALID', self.git.object_type, self.commit, f'README.md{ch}x')
+                        self.expect('OBJECT_NAME_INVALID', self.git.blob, self.commit, f'{ch}README.md')
+                        self.expect('OBJECT_NAME_INVALID', self.git.object_kind, f'{self.commit}{ch}')
+                        self.expect('OBJECT_NAME_INVALID', session.read, f'HEAD{ch}')
+                self.assertEqual(seen, [])
+                # The next request gets its own answer.
+                self.assertEqual(self.git.object_type(self.commit, 'README.md'), 'blob')
+                self.assertEqual(seen, [('read', f'{self.commit}:README.md')])
         self.assertEqual(len(Recorded.made), 1)
         self.assertEnded(Recorded.made)
 
     def test_a_refused_name_starts_no_process(self):
-        with mock.patch.object(adapter.subprocess, 'Popen', side_effect=AssertionError('launched')):
+        with mock.patch.object(adapter.subprocess, 'Popen', side_effect=AssertionError('launched')), \
+                mock.patch.object(adapter, 'open_project', side_effect=AssertionError('a repository was opened')):
             for ch in CONTROL_CHARACTERS:
                 with self.subTest(ch=ord(ch)):
                     self.expect('REVISION_INVALID', self.git.commit, f'HEAD{ch}')
@@ -413,14 +433,18 @@ class InputSafety(RepoCase):
 
 
 class Lifecycle(RepoCase):
+    """The session's repository is closed when the session ends, and a repository that cannot be
+    read fails visibly at once: there is no process to wait on, kill or fall out of step (the
+    F-09.4 ids are kept; decision 0014 section 3)."""
+
     def test_a_normal_exit_ends_the_process(self):
         with self.git.session():
             self.assertEqual(self.git.commit('HEAD'), self.commit)
             self.assertEqual(self.git.object_type(self.commit, DESIGN), 'blob')
-            (reader,) = Recorded.made
-            self.assertIsNone(reader.process.poll())
-        self.assertEnded([reader])
-        self.expect('GIT_FAILED', reader.read, 'HEAD')  # closed: it fails closed
+            (session,) = Recorded.made
+            self.assertTrue(is_open(session.opened))
+        self.assertEnded([session])
+        self.expect('GIT_FAILED', session.read, 'HEAD')  # closed: it fails closed
 
     def test_an_exception_ends_the_process(self):
         with self.assertRaises(RuntimeError):
@@ -438,69 +462,76 @@ class Lifecycle(RepoCase):
         self.assertEnded(Recorded.made)
 
     def test_a_timeout_kills_the_process_and_fails_closed(self):
-        with mock.patch.object(adapter.Git, 'batch_argv', return_value=HANGS), \
-                mock.patch.object(adapter, 'TOOL_TIMEOUT_S', 0.2):
-            with self.git.session():
-                started = time.monotonic()
-                with self.assertRaises(subprocess.TimeoutExpired) as ctx:
-                    self.git.commit('HEAD')
-                self.assertGreaterEqual(time.monotonic() - started, 0.2)
-                self.assertEqual(ctx.exception.timeout, 0.2)
-                (reader,) = Recorded.made
-                self.assertEnded([reader])  # killed at once, not at the end of the session
-                error = self.expect('GIT_FAILED', self.git.object_type, self.commit, DESIGN)
-                self.assertIn('killed', error.message)
-            self.assertEnded(Recorded.made)
-            self.assertEqual(len(Recorded.made), 1)
+        # A read the operating system refuses (the commit's object file is a directory) is
+        # GIT_FAILED at once, naming the object: no ceiling is waited for and no
+        # subprocess.TimeoutExpired is raised.
+        git = adapter.Git(self.damaged('refused', 'directory'))
+        with mock.patch.object(adapter, 'TOOL_TIMEOUT_S', 0.2):
+            with git.session():
+                error = self.expect('GIT_FAILED', git.commit, 'HEAD')
+                self.assertEqual(error.details.get('object'), self.commit)
+                error = self.expect('GIT_FAILED', git.object_type, self.commit, DESIGN)
+                self.assertIn(self.commit, error.message)
+                (session,) = Recorded.made
+                self.assertTrue(is_open(session.opened))
+        self.assertEnded(Recorded.made)
+        self.assertEqual(len(Recorded.made), 1)
 
     def test_an_answer_out_of_protocol_fails_closed(self):
-        with mock.patch.object(adapter.Git, 'batch_argv', return_value=GARBLES):
-            with self.git.session():
-                error = self.expect('GIT_FAILED', self.git.commit, 'HEAD')
-                self.assertIn('unexpected answer', error.message)
-                self.assertEnded(Recorded.made)
-                self.expect('GIT_FAILED', self.git.commit, 'HEAD')
+        # The object's bytes are no zlib stream: a damaged answer, never a wrong one.
+        git = adapter.Git(self.damaged('garbled', 'zlib'))
+        with git.session():
+            error = self.expect('GIT_FAILED', git.commit, 'HEAD')
+            self.assertEqual(error.details.get('object'), self.commit)
+            self.expect('GIT_FAILED', git.commit, 'main')
         self.assertEnded(Recorded.made)
 
     def test_an_answer_for_another_name_fails_closed(self):
-        # "<name> missing" must echo the name asked; another name means the protocol is out of step.
-        with mock.patch.object(adapter.Git, 'batch_argv', return_value=ANSWERS_ANOTHER):
-            with self.git.session():
-                error = self.expect('GIT_FAILED', self.git.commit, 'HEAD')
-                self.assertIn('unexpected answer', error.message)
+        # The commit's file holds another object (README.md's blob): its content does not hash to
+        # the id asked for, so it is refused (decision 0014 section 3, G9), where git cat-file
+        # answered with the other object.
+        data = self.git.blob(self.commit, 'README.md')
+        other = hashlib.sha1(b'blob %d' % len(data) + bytes([0]) + data).hexdigest()
+        git = adapter.Git(self.damaged('another', ('another', other)))
+        with git.session():
+            error = self.expect('GIT_FAILED', git.commit, 'HEAD')
+            self.assertIn('does not hash to its id', error.message)
+            self.assertEqual(error.details.get('object'), self.commit)
         self.assertEnded(Recorded.made)
 
     def test_a_reader_that_exits_fails_closed(self):
-        with self.git.session():
-            self.git.commit('HEAD')
-            (reader,) = Recorded.made
-            reader.process.kill()
-            reader.process.wait(adapter.TOOL_TIMEOUT_S)
-            error = self.expect('GIT_FAILED', self.git.object_type, self.commit, DESIGN)
-            self.assertIn('exited', error.message)
-        self.assertEnded(Recorded.made)
+        # The repository went away after the Git was made: the session cannot open it.
+        repo = self.tmp / 'gone'
+        fx.build_repo(repo)
+        git = adapter.Git(repo)
+        os.rename(repo / '.git', repo / 'git-was-here')
+        try:
+            with git.session():
+                error = self.expect('GIT_FAILED', git.object_type, self.commit, DESIGN)
+                self.assertIn('cannot open', error.message)
+                self.expect('GIT_FAILED', git.commit, 'main')
+        finally:
+            os.rename(repo / 'git-was-here', repo / '.git')
+        self.assertEqual(Recorded.made, [])  # nothing was opened, so nothing is left open
 
 
 class Memo(RepoCase):
-    def reads(self):
-        return mock.patch.object(Recorded, 'read', autospec=True, side_effect=adapter.BatchReader.read)
-
     def test_a_session_reads_each_immutable_object_once(self):
-        with self.reads() as read, self.git.session():
+        with module_calls() as seen, self.git.session():
             for _ in range(3):
                 self.assertEqual(self.git.commit('HEAD'), self.commit)
                 self.assertEqual(self.git.object_type(self.commit, DESIGN), 'blob')
                 self.git.blob(self.commit, DESIGN)
                 self.assertIsNone(self.git.object_type(self.commit, 'no-such'))
-        self.assertEqual([call.args[1] for call in read.call_args_list],
-                         ['HEAD^{commit}', f'{self.commit}:{DESIGN}', f'{self.commit}:no-such'])
+        self.assertEqual(seen, [('commit', 'HEAD'), ('read', f'{self.commit}:{DESIGN}'),
+                                ('read', f'{self.commit}:no-such')])
 
     def test_names_that_can_change_are_not_memoized(self):
-        with self.reads() as read, self.git.session():
+        with module_calls() as seen, self.git.session():
             for _ in range(2):
                 self.assertEqual(self.git.object_type('HEAD', DESIGN), 'blob')
                 self.assertEqual(self.git.object_type('main', DESIGN), 'blob')
-        self.assertEqual(len(read.call_args_list), 4)
+        self.assertEqual(len(seen), 4)
 
     def test_revisions_are_a_snapshot_of_one_session_only(self):
         repo = self.tmp / 'moving'
@@ -519,20 +550,13 @@ class Memo(RepoCase):
         self.assertEnded(Recorded.made)
 
     def test_file_lists_are_kept_for_the_session_only(self):
-        runs = []
-        real_run = adapter.Git._run
-
-        def counting(git, *args, **kwargs):
-            runs.append(args[0])
-            return real_run(git, *args, **kwargs)
-
-        with mock.patch.object(adapter.Git, '_run', autospec=True, side_effect=counting):
+        with module_calls() as seen:
             for _ in range(2):
                 with self.git.session():
                     for _ in range(3):
                         self.assertIn(DESIGN, self.git.files(self.commit, 'openspec'))
                         self.assertIn(DESIGN, self.git.files('HEAD', 'openspec'))
-        self.assertEqual(runs, ['ls-tree'] * 8)
+        self.assertEqual([call[0] for call in seen], ['files'] * 8)
 
 
 class BacklogSnapshot(unittest.TestCase):
@@ -595,11 +619,11 @@ class BacklogSnapshot(unittest.TestCase):
 
 
 class OperationScope(RepoCase):
-    """One operation: one Git per project (one work-tree check), one batch reader, all ended
-    when it ends, normally, by an exception or after a timeout (ruling R3)."""
+    """One operation: one Git per project (one work-tree check), one opened repository, all ended
+    when it ends, normally, by an exception or after a failed read (ruling R3)."""
 
     def test_one_git_and_one_reader_per_operation(self):
-        with mock.patch.object(adapter.Git, '_run', autospec=True, side_effect=adapter.Git._run) as runs:
+        with mock.patch.object(adapter, 'check_work_tree', wraps=adapter.check_work_tree) as checks:
             for _ in range(2):
                 with adapter.operation():
                     first, why = adapter.project_git(self.repo)
@@ -610,18 +634,22 @@ class OperationScope(RepoCase):
                     pointer = adapter.make_pointer(second, fx.CHANGE, 'design.md', self.commit)
                     self.assertEqual(adapter.resolve_pointer(second, pointer.text), pointer)
                 self.assertIsNone(adapter.current_operation())
-        self.assertEqual([c.args[1] for c in runs.call_args_list], ['rev-parse'] * 2)  # one check each
-        self.assertEqual(len(Recorded.made), 2)  # one reader each, none shared between them
+                # The repository policy (decision 0014 section 5): its own configuration only.
+                self.assertEqual(adapter.CONFIG_POLICY, 'repository')
+                self.assertEqual(first.config_sources, (str(self.repo / '.git' / 'config'),))
+        self.assertEqual(checks.call_count, 2)  # one check each
+        self.assertEqual(len(Recorded.made), 2)  # one repository each, none shared between them
         self.assertEnded(Recorded.made)
 
     def test_an_unreadable_project_is_answered_once(self):
         empty = self.tmp / 'not-a-repo'
         empty.mkdir(exist_ok=True)
-        with mock.patch.object(adapter.Git, '_run', autospec=True, side_effect=adapter.Git._run) as runs:
+        with mock.patch.object(adapter, 'check_work_tree', wraps=adapter.check_work_tree) as checks:
             with adapter.operation():
                 answers = [adapter.project_git(empty) for _ in range(3)]
         self.assertEqual({(git, bool(why)) for git, why in answers}, {(None, True)})
-        self.assertEqual(len(runs.call_args_list), 1)
+        self.assertIn('NOT_A_WORK_TREE', answers[0][1])
+        self.assertEqual(checks.call_count, 1)
 
     def test_an_exception_ends_the_operation_s_reader(self):
         with self.assertRaises(RuntimeError):
@@ -633,14 +661,13 @@ class OperationScope(RepoCase):
         self.assertIsNone(adapter.current_operation())
 
     def test_a_timeout_in_an_operation_fails_closed_and_ends_the_reader(self):
-        with mock.patch.object(adapter.Git, 'batch_argv', return_value=HANGS), \
-                mock.patch.object(adapter, 'TOOL_TIMEOUT_S', 0.2):
-            with adapter.operation():
-                git, _ = adapter.project_git(self.repo)
-                with self.assertRaises(subprocess.TimeoutExpired):
-                    git.commit('HEAD')
-                self.assertEnded(Recorded.made)
-                self.expect('GIT_FAILED', adapter.project_git(self.repo)[0].commit, 'main')
+        # A damaged repository (the commit's bytes no zlib stream) fails visibly, at once and
+        # every time, within the operation; its repository is closed when the operation ends.
+        repo = self.damaged('damaged-operation', 'zlib')
+        with adapter.operation():
+            git, _ = adapter.project_git(repo)
+            self.expect('GIT_FAILED', git.commit, 'HEAD')
+            self.expect('GIT_FAILED', adapter.project_git(repo)[0].commit, 'main')
         self.assertEqual(len(Recorded.made), 1)
         self.assertEnded(Recorded.made)
 
@@ -666,8 +693,9 @@ class OperationScope(RepoCase):
 
 
 class Launcher(RepoCase):
-    """A git behind a launcher (fake_launcher.py, round 4): the reader's state, not what the
-    child would still answer, decides that it fails closed, and no child outlives the reader."""
+    """A command behind a launcher (fake_launcher.py): every process the adapter starts is one
+    process tree (``ProcessTree``, ``run_tree``), and no child outlives a kill, a timeout, an
+    exception or a normal close. The upstream CLIs run on it (decision 0014 section 8)."""
 
     def through_launcher(self, name, argv):
         pidfile = self.tmp / f'{name}.pid'
@@ -675,61 +703,68 @@ class Launcher(RepoCase):
             pidfile.unlink()
         return [*FAKE_LAUNCHER, str(pidfile), *argv], pidfile
 
-    def batch(self, name):
-        return self.through_launcher(name, ['git', '-C', str(self.repo), 'cat-file', '--batch'])
+    def tree(self, argv, **popen_args):
+        tree = adapter.ProcessTree(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=adapter.tool_env(),
+                                   **popen_args)
+        self.addCleanup(self.close, tree)
+        return tree
+
+    @staticmethod
+    def close(tree):
+        tree.close(CLOSE_CEILING_S)
+        for stream in (tree.process.stdin, tree.process.stdout, tree.process.stderr):
+            if stream is not None:
+                stream.close()
 
     def test_a_launcher_that_exits_fails_closed_and_its_child_ends(self):
-        argv, pidfile = self.batch('exits')
-        with mock.patch.object(adapter.Git, 'batch_argv', return_value=argv), self.git.session():
-            self.assertEqual(self.git.commit('HEAD'), self.commit)
-            child = Watch(self, read_pid(pidfile))
-            (reader,) = Recorded.made
-            recorder = WriteRecorder(reader.process.stdin)
-            reader.process.stdin = recorder
-            reader.process.kill()
-            reader.process.wait(adapter.TOOL_TIMEOUT_S)
-            self.assertTrue(child.alive())  # the launcher alone was killed: its child still answers
-            error = self.expect('GIT_FAILED', self.git.object_type, self.commit, DESIGN)
-            self.assertIn('exited', error.message)
-            self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its reader')
-            self.expect('GIT_FAILED', self.git.commit, 'main')
-            self.assertEqual(bytes(recorder.written), b'')  # nothing written after the exit
-        self.assertEnded(Recorded.made)
+        argv, pidfile = self.through_launcher('exits', SLEEPS)
+        tree = self.tree(argv, stdin=subprocess.DEVNULL)
+        child = Watch(self, read_pid(pidfile))
+        tree.process.kill()
+        tree.process.wait(adapter.TOOL_TIMEOUT_S)
+        self.assertFalse(tree.running())  # decided by the started process
+        self.assertTrue(child.alive())  # the launcher alone was killed: its child still runs
+        tree.kill(GONE_WITHIN_S)
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its tree')
 
     def test_a_timeout_through_a_launcher_ends_its_child(self):
-        argv, pidfile = self.through_launcher('timeout', HANGS)
-        with adapter.BatchReader(argv, adapter.tool_env(), timeout=0.5) as reader:
-            child = Watch(self, read_pid(pidfile))
-            with self.assertRaises(subprocess.TimeoutExpired):
-                reader.read('HEAD')
-            self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived the timeout')
-            self.assertIsNotNone(reader.process.poll())
-            recorder = WriteRecorder(reader.process.stdin)
-            reader.process.stdin = recorder
-            error = self.expect('GIT_FAILED', reader.read, 'main')
-            self.assertIn('killed', error.message)
-            self.assertEqual(bytes(recorder.written), b'')
+        # Backlog.md behind a launcher (an npm shim) that never answers: the Backlog wrapper's
+        # default runner ends the whole tree at the ceiling.
+        argv, pidfile = self.through_launcher('timeout', SLEEPS)
+        work = self.tmp / 'timeout-cwd'
+        work.mkdir(exist_ok=True)
+        with mock.patch.object(adapter, 'TOOL_TIMEOUT_S', 1):
+            started = time.monotonic()
+            with self.assertRaises(subprocess.TimeoutExpired) as ctx:
+                adapter.Backlog(argv, work).list_tasks()
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(ctx.exception.timeout, 1)
+        child = Watch(self, read_pid(pidfile, 0))
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived the timeout')
 
     def test_an_exception_ends_the_launcher_and_its_child(self):
-        argv, pidfile = self.batch('exception')
-        with mock.patch.object(adapter.Git, 'batch_argv', return_value=argv), self.assertRaises(RuntimeError):
-            with self.git.session():
-                self.git.commit('HEAD')
-                child = Watch(self, read_pid(pidfile))
-                raise RuntimeError('boom')
-        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its reader')
-        self.assertEqual(Recorded.made[0].process.returncode, 0)  # its input closed: it ended itself
+        argv, pidfile = self.through_launcher('exception', SLEEPS)
+        watched = []
+
+        def boom(process, *args, **kwargs):
+            watched.append(Watch(self, read_pid(pidfile)))  # the child runs
+            raise RuntimeError('boom')
+
+        with mock.patch.object(subprocess.Popen, 'communicate', autospec=True, side_effect=boom), \
+                self.assertRaises(RuntimeError):
+            adapter.run_tree(argv, timeout=60, env=adapter.tool_env())
+        (child,) = watched
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its tree')
 
     def test_a_normal_close_ends_the_launcher_and_its_child(self):
-        argv, pidfile = self.batch('close')
-        reader = adapter.BatchReader(argv, adapter.tool_env(), timeout=10)
-        try:
-            self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
-            child = Watch(self, read_pid(pidfile))
-        finally:
-            reader.close()
-        self.assertEqual(reader.process.returncode, 0)  # its input closed: it ended itself
-        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its reader')
+        argv, pidfile = self.through_launcher('close', [sys.executable, '-I', '-c',
+                                                        'import time; time.sleep(1); print("done")'])
+        tree = self.tree(argv, stdin=subprocess.DEVNULL)
+        child = Watch(self, read_pid(pidfile))
+        out, _ = tree.process.communicate(timeout=adapter.TOOL_TIMEOUT_S)
+        self.close(tree)
+        self.assertEqual((tree.process.returncode, out.strip()), (0, b'done'))
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its tree')
 
     def test_a_one_shot_command_through_a_launcher_is_ended_whole_at_its_ceiling(self):
         argv, pidfile = self.through_launcher('one-shot', SLEEPS)
@@ -743,10 +778,18 @@ class Launcher(RepoCase):
         self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived the call')
 
     def test_the_one_shot_commands_run_as_process_trees(self):
-        with mock.patch.object(adapter, 'run_tree', wraps=adapter.run_tree) as tree:
-            git = adapter.Git(self.repo)
-            self.assertIn(DESIGN, git.files(self.commit, 'openspec'))
-        self.assertEqual([c.args[0][3] for c in tree.call_args_list], ['rev-parse', 'ls-tree'])
+        # The upstream CLI launches (Backlog.md, OpenSpec) go through run_tree; no git is launched.
+        work = self.tmp / 'trees-cwd'
+        work.mkdir(exist_ok=True)
+        with mock.patch.object(adapter, 'run_tree', wraps=adapter.run_tree) as tree, \
+                mock.patch.object(adapter.subprocess, 'run', side_effect=AssertionError('subprocess.run')):
+            self.assertEqual(adapter.Backlog(FAKE_BACKLOG, work).list_tasks(), [])
+            state = adapter.openspec_apply_state(self.git, fx.CHANGE, self.commit, FAKE_OPENSPEC)
+        self.assertIs(state['taskTrackingConfigured'], False)
+        self.assertEqual([c.args[0] for c in tree.call_args_list],
+                         [[*FAKE_BACKLOG, 'task', 'list', '--json'],
+                          [*FAKE_OPENSPEC, 'instructions', 'apply', '--change', fx.CHANGE, '--json']])
+        self.assertEqual([c.kwargs['cwd'] for c in tree.call_args_list][0], work)
 
 
 @unittest.skipUnless(os.name == 'nt', 'job objects are Windows only')
@@ -756,10 +799,9 @@ class JobObject(RepoCase):
 
     def test_the_documented_resume_path_starts_the_process(self):
         with mock.patch.object(adapter, '_nt_resume', return_value=False) as nt_resume:
-            with adapter.BatchReader(self.git.batch_argv(), adapter.tool_env(), timeout=10) as reader:
-                self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
+            result = adapter.run_tree([sys.executable, '-I', '-c', 'print("resumed")'], timeout=CLOSE_CEILING_S)
         self.assertEqual(nt_resume.call_count, 1)
-        self.assertEqual(reader.process.returncode, 0)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, b'resumed'))
 
     def test_a_process_that_cannot_join_its_job_is_ended(self):
         started, real_popen = [], subprocess.Popen
@@ -771,7 +813,8 @@ class JobObject(RepoCase):
         with mock.patch.object(adapter.subprocess, 'Popen', side_effect=popen), \
                 mock.patch.object(adapter._kernel32(), 'AssignProcessToJobObject', return_value=0):
             with self.assertRaises(OSError):
-                adapter.BatchReader(self.git.batch_argv(), adapter.tool_env())
+                adapter.ProcessTree(SLEEPS, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    env=adapter.tool_env())
         (process,) = started
         self.assertIsNotNone(process.poll())
         for stream in (process.stdin, process.stdout, process.stderr):
@@ -780,7 +823,7 @@ class JobObject(RepoCase):
 
 class RealLauncher(RepoCase):
     """The same through Git for Windows' own launcher, where it is installed: its child, the
-    real git, ends with the reader, and a reader whose launcher exited fails closed."""
+    real git, ends with the tree, also when the launcher alone exited."""
 
     @classmethod
     def setUpClass(cls):
@@ -789,52 +832,71 @@ class RealLauncher(RepoCase):
             raise unittest.SkipTest('Git for Windows\' launcher (cmd\\git.exe) is not installed here')
         super().setUpClass()
 
-    def start(self, *args, timeout=None):
-        """A reader through the launcher, and a Watch on its one git child."""
-        reader = adapter.BatchReader([str(self.launcher), '-C', str(self.repo), *args], adapter.tool_env(),
-                                     timeout=timeout)
-        self.addCleanup(reader.close)
+    def start(self, *args):
+        """A process tree through the launcher, and a Watch on its one git child."""
+        tree = adapter.ProcessTree([str(self.launcher), '-C', str(self.repo), *args], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=adapter.tool_env())
+        self.addCleanup(self.close, tree)
         deadline = time.monotonic() + 10
         while True:
-            children = [pid for pid, name in child_processes(reader.process.pid) if name.lower() == 'git.exe']
+            children = [pid for pid, name in child_processes(tree.process.pid) if name.lower() == 'git.exe']
             if children or time.monotonic() >= deadline:
                 break
             time.sleep(0.01)
         self.assertEqual(len(children), 1, 'the launcher runs the real git as its one child')
-        return reader, Watch(self, children[0])
+        return tree, Watch(self, children[0])
+
+    @staticmethod
+    def close(tree):
+        """Close the input, wait for git to end itself (up to a ceiling), and close the tree."""
+        try:
+            tree.process.stdin.close()
+        except OSError:
+            pass
+        try:
+            tree.process.wait(timeout=CLOSE_CEILING_S)
+        except subprocess.TimeoutExpired:
+            pass
+        tree.close(CLOSE_CEILING_S)
+        for stream in (tree.process.stdout, tree.process.stderr):
+            stream.close()
+
+    def ask(self, tree, name):
+        tree.process.stdin.write(name.encode() + bytes([10]))
+        tree.process.stdin.flush()
+        return tree.process.stdout.readline()
 
     def test_a_launcher_that_exits_fails_closed_and_the_real_git_ends(self):
-        reader, child = self.start('cat-file', '--batch')
-        self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
-        recorder = WriteRecorder(reader.process.stdin)
-        reader.process.stdin = recorder
-        reader.process.kill()
-        reader.process.wait(adapter.TOOL_TIMEOUT_S)
-        self.assertTrue(child.alive())  # the launcher alone was killed: the real git still answers
-        error = self.expect('GIT_FAILED', reader.read, f'{self.commit}:{DESIGN}')
-        self.assertIn('exited', error.message)
-        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived its reader')
-        self.assertEqual(bytes(recorder.written), b'')
+        tree, child = self.start('cat-file', '--batch')
+        self.assertTrue(self.ask(tree, 'HEAD^{commit}').startswith(self.commit.encode()))
+        tree.process.kill()
+        tree.process.wait(adapter.TOOL_TIMEOUT_S)
+        self.assertFalse(tree.running())
+        self.assertTrue(child.alive())  # the launcher alone was killed: the real git still runs
+        tree.kill(GONE_WITHIN_S)
+        self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived its tree')
 
     def test_a_timeout_ends_the_real_git(self):
-        # hash-object --stdin reads the request and answers nothing until its input ends.
-        reader, child = self.start('hash-object', '--stdin', timeout=0.5)
+        # hash-object --stdin answers nothing until its input ends.
+        tree, child = self.start('hash-object', '--stdin')
         with self.assertRaises(subprocess.TimeoutExpired):
-            reader.read('HEAD')
+            tree.process.wait(timeout=0.5)
+        tree.kill(GONE_WITHIN_S)
         self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived the timeout')
-        self.expect('GIT_FAILED', reader.read, 'HEAD')
 
     def test_an_exception_and_a_close_end_the_real_git(self):
         for raises in (True, False):
             with self.subTest(exception=raises):
-                reader, child = self.start('cat-file', '--batch')
+                tree, child = self.start('cat-file', '--batch')
                 with self.assertRaises(RuntimeError) if raises else contextlib.nullcontext():
-                    with reader:
-                        self.assertEqual(reader.read('HEAD^{commit}')[0], self.commit)
+                    try:
+                        self.assertTrue(self.ask(tree, 'HEAD^{commit}').startswith(self.commit.encode()))
                         if raises:
                             raise RuntimeError('boom')
-                self.assertEqual(reader.process.returncode, 0)  # its input closed: it ended itself
-                self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived its reader')
+                    finally:
+                        self.close(tree)
+                self.assertEqual(tree.process.returncode, 0)  # its input closed: it ended itself
+                self.assertTrue(child.gone_within(GONE_WITHIN_S), f'git {child.pid} outlived its tree')
 
 
 if __name__ == '__main__':

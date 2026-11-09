@@ -78,6 +78,7 @@ class Case(unittest.TestCase):
     """A fresh throwaway project, store and work directory per test."""
 
     def setUp(self):
+        fx.require_repository_access()  # without Dulwich: REPOSITORY_NEEDS_DULWICH, never a skip
         patch = E.in_process_backlog()
         patch.start()
         self.addCleanup(patch.stop)
@@ -124,6 +125,7 @@ class Example(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        fx.require_repository_access()
         cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-trace-example-'))
         with E.in_process_backlog():
             cls.projections = E.example(cls.tmp)
@@ -223,30 +225,30 @@ class ReadOnly(Case):
         self.reserve_tasks('TASK-1', 'TASK-2')
         before = tree_state(self.repo), store_state(self.store)
         calls = []
-        real_run = subprocess.run
+        real_popen = subprocess.Popen
 
-        def recording(argv, *args, **kwargs):
-            calls.append(list(argv))
-            return real_run(argv, *args, **kwargs)
+        class Recording(real_popen):
+            def __init__(self, args, *more, **kwargs):
+                calls.append([str(arg) for arg in args])
+                super().__init__(args, *more, **kwargs)
 
         # The real process interaction: the Backlog runner seam left at its default, so the
-        # fake Backlog.md is launched through subprocess.run, as Backlog.md is.
+        # fake Backlog.md is launched as Backlog.md is (one process tree, run_tree), and every
+        # process the traversal starts is recorded.
         with mock.patch.object(R.planning.Backlog, 'runner', None), \
-                mock.patch.object(subprocess, 'run', side_effect=recording):
+                mock.patch.object(subprocess, 'Popen', Recording):
             projection = self.trace()
         self.assertEqual(projection['verdict'], 'incomplete')
         self.assertEqual((tree_state(self.repo), store_state(self.store)), before)
         backlog_prefix = E.FAKE_BACKLOG
         for argv in calls:
             with self.subTest(argv=argv[:4]):
-                if argv[0] == 'git':
-                    self.assertEqual(argv[1], '-C')
-                    self.assertIn(argv[3], ('rev-parse', 'cat-file', 'ls-tree', 'archive'))
-                else:
-                    self.assertEqual(argv[:len(backlog_prefix)], backlog_prefix)
-                    self.assertIn(tuple(argv[len(backlog_prefix):][:2]), {('task', 'list'), ('task', 'view')})
+                # No git process: the repository is read in this process (decision 0014).
+                self.assertNotEqual(Path(argv[0]).name.lower().removesuffix('.exe'), 'git')
+                self.assertEqual(argv[:len(backlog_prefix)], backlog_prefix)
+                self.assertIn(tuple(argv[len(backlog_prefix):][:2]), {('task', 'list'), ('task', 'view')})
         self.assertFalse(any('openspec' in Path(str(a[0])).name.lower() for a in calls))
-        # The default runner is subprocess.run: Backlog.md's reads went through it.
+        # The default runner launched Backlog.md: its reads went through it.
         self.assertTrue([argv for argv in calls if argv[:len(backlog_prefix)] == backlog_prefix])
         logged = self.backlog_argv()
         self.assertTrue(logged)
