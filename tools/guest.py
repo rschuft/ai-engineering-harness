@@ -6942,10 +6942,25 @@ def _fixture(ctx):
     return body, checker.fixture_problems(body), checker
 
 
+# tools/check_profile.py's compiled code, per process, by the sha256 of the bytes it was compiled
+# from (plan leaf F-09.4): a changed file is compiled again.
+_PROFILE_CHECKER_CODE = {}
+
+
 def load_profile_checker():
-    spec = importlib.util.spec_from_file_location('check_profile', REPO / 'tools' / 'check_profile.py')
+    """tools/check_profile.py as a fresh module on every call, as before: its bytes are read and
+    hashed each time and executed in a new module namespace, so no module state is shared
+    between calls; only the compilation of the same bytes is reused."""
+    path = REPO / 'tools' / 'check_profile.py'
+    data = path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    code = _PROFILE_CHECKER_CODE.get(digest)
+    if code is None:
+        code = compile(data, str(path), 'exec', dont_inherit=True)
+        _PROFILE_CHECKER_CODE[digest] = code
+    spec = importlib.util.spec_from_file_location('check_profile', path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    exec(code, module.__dict__)
     return module
 
 

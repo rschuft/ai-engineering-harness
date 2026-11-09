@@ -1516,6 +1516,64 @@ class Exchange(TempState):
         self.assertNotIn('-p', argv)
 
 
+class ProfileCheckerLoad(unittest.TestCase):
+    """guest.load_profile_checker (F-09.4): a fresh tools/check_profile.py module per call; only
+    the compiled code of the same bytes is reused, so a changed file is compiled again."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-checker-load-'))
+        self.addCleanup(remove_tree, self.tmp)
+        (self.tmp / 'tools').mkdir()
+        self.file = self.tmp / 'tools' / 'check_profile.py'
+
+    def write(self, text):
+        self.file.write_text(text, encoding='utf-8')
+
+    def test_the_default_result_is_the_module_as_loaded_before(self):
+        spec = importlib.util.spec_from_file_location('check_profile', REPO / 'tools' / 'check_profile.py')
+        before = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(before)
+        loaded = guest.load_profile_checker()
+        self.assertEqual(sorted(vars(loaded)), sorted(vars(before)))
+        self.assertEqual((loaded.__name__, loaded.__file__), (before.__name__, before.__file__))
+        for name in ('fixture_problems', 'route_problems'):
+            self.assertEqual(getattr(loaded, name).__code__.co_code, getattr(before, name).__code__.co_code)
+        self.assertEqual(loaded.route_problems({}), before.route_problems({}))
+        self.assertEqual(loaded.fixture_problems({}), before.fixture_problems({}))
+
+    def test_a_changed_file_is_compiled_again(self):
+        compiled = []
+        real = compile
+
+        def counting(*args, **kwargs):
+            compiled.append(args[1])
+            return real(*args, **kwargs)
+
+        with mock.patch.object(guest, 'REPO', self.tmp), \
+                mock.patch.object(guest, 'compile', side_effect=counting, create=True):
+            self.write('VALUE = 1\n')
+            self.assertEqual(guest.load_profile_checker().VALUE, 1)
+            self.assertEqual(guest.load_profile_checker().VALUE, 1)
+            self.write('VALUE = 2\n')
+            self.assertEqual(guest.load_profile_checker().VALUE, 2)
+            self.write('VALUE = 1\n')
+            self.assertEqual(guest.load_profile_checker().VALUE, 1)
+        self.assertEqual(compiled, [str(self.file)] * 2)  # the same bytes are compiled once
+
+    def test_two_calls_share_no_module_state(self):
+        with mock.patch.object(guest, 'REPO', self.tmp):
+            self.write('STATE = {}\n\ndef remember(key):\n    STATE[key] = True\n    return sorted(STATE)\n')
+            first = guest.load_profile_checker()
+            self.assertEqual(first.remember('a'), ['a'])
+            first.EXTRA = 1
+            second = guest.load_profile_checker()
+            self.assertIsNot(first, second)
+            self.assertEqual(second.STATE, {})
+            self.assertFalse(hasattr(second, 'EXTRA'))
+            self.assertEqual(second.remember('b'), ['b'])
+            self.assertEqual(first.remember('c'), ['a', 'c'])
+
+
 class RunGit(unittest.TestCase):
     """The host git's own options (no process is launched: subprocess.run is replaced)."""
 
