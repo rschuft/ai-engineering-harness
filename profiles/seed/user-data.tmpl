@@ -1881,7 +1881,7 @@ write_files:
       ConditionFileNotEmpty=/etc/aieh/provision.json
       ConditionPathExists=/opt/aieh/agent-server/agent-server
       ConditionPathExists=/etc/aieh/agent-server/secrets.env
-      Wants=docker.service
+      Requires=docker.service
       After=docker.service
       RequiresMountsFor=/srv/scratch
 

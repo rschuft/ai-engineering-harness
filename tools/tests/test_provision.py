@@ -228,6 +228,18 @@ class AgentServerSeed(unittest.TestCase):
         facts = unit('aieh-docker-facts.service')
         self.assertIn(f"After=docker.service {s['service']['unit']}", facts)
 
+    def test_the_server_requires_moby(self):
+        """E-01.2.2 finding F-1: with Wants= a failing guard stopped Moby but not the server.
+        Requires= and After= make the server's start fail (result dependency) whenever
+        docker.service does not start; no BindsTo=, no Requisite=, no edge to the guard."""
+        lines = unit(self.SERVER['service']['unit'])
+        tokens = {key: [t for l in lines if l.startswith(key + '=') for t in l.split('=', 1)[1].split()]
+                  for key in ('Requires', 'After', 'Wants', 'BindsTo', 'Requisite')}
+        self.assertIn('docker.service', tokens['Requires'])
+        self.assertIn('docker.service', tokens['After'])
+        self.assertEqual(tokens['Wants'] + tokens['BindsTo'] + tokens['Requisite'], [])
+        self.assertNotIn('aieh-container-guard.service', tokens['Requires'] + tokens['After'])
+
     def test_ready_wait_sends_no_credential(self):
         script = FILES[self.SERVER['service']['ready']]
         ast.parse(script)

@@ -114,7 +114,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "dc8ca258c79cb0bcb0924fcab07a103742147c4344ca4ef032c36821770fd101"
+          "sha256": "035a9e672b0a5bc12f1403931bce3848606171281c64f322f8f3b27bc194b886"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -469,7 +469,7 @@
             ],
             "families": ["iptables", "ip6tables"],
             "rule": "Guest-level, because the Agent Server cannot express it: in the filter table's INPUT chain, a packet that arrives from a container bridge (docker0, br-+) and is not part of a connection the guest opened jumps to the chain, is logged (rate-limited, kernel log) and is refused: TCP with a reset, anything else with an ICMP port-unreachable. A container therefore reaches no listener of the guest itself at any of its addresses (host.docker.internal is docker0): not sshd, not systemd-resolved's LLMNR, not the management listener. Replies to the guest's own connections (docker-proxy to a container's port 8000) are RELATED,ESTABLISHED and pass. Forwarded traffic is the egress guard's (egress_guard, S-01.4).",
-            "fail_closed": "The drop-in makes docker.service Require and start After the guard: if the rules cannot be installed, Moby does not start and no conversation container can be created. The root step's admission step verifies the unit, the rules of both families and the bridge's enable_icc before the Agent Server is installed."
+            "fail_closed": "The drop-in makes docker.service Require and start After the guard: if the rules cannot be installed, Moby does not start and no conversation container can be created; aieh-agent-server.service Requires and starts After docker.service (E-01.2.2 finding F-1: it had Wants=, and the server served its API with Moby down), so its start fails with result dependency and the server stays stopped. The root step's admission step verifies the unit, the rules of both families and the bridge's enable_icc before the Agent Server is installed."
           },
           "egress_guard": {
             "plan_leaf": "S-01.4",
