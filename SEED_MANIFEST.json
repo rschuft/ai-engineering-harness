@@ -3,7 +3,7 @@
   "created_date": "2026-11-05",
   "origin_architecture": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
   "canonical_plan": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-  "task_count": 158,
+  "task_count": 164,
   "license_note": "Does not include or overwrite LICENSE from the target public MIT repository.",
   "task_status_note": "All tasks remain not started; package generation is not implementation evidence.",
   "files": [
@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "844383454716a2948e763ebfbe1ecd15c7ece7438b67fe4583a0812032734f87",
-      "size_bytes": 2584955
+      "sha256": "7e37598fe554684e84c08fa87a5b69a939777dafc6788bd11b5c2c3f6aaef17f",
+      "size_bytes": 2747003
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "c148224c9f7a486f6357bcf241ade3afb32c250bd02d5f6d2d299c8125c0c7ab",
-      "size_bytes": 1344118
+      "sha256": "121e1037df96b0729e89288551c15da3b0bd3c77ab45514d46879a40dc9b0dd4",
+      "size_bytes": 1427221
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "661a237b7129fc0a31a7ea4c5022ee5c4f7f6e371fb836af4d8b102ff32c0069",
-      "size_bytes": 224787
+      "sha256": "043c267f084b19414afa6b036ea8417358ce748fec767a0d78dc6ce004645897",
+      "size_bytes": 244134
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,8 +49,8 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "cac93b8afca40f50cd7a4eeac5fa34000b86d547c8d051f6dd2255b7bdc84378",
-      "size_bytes": 47118
+      "sha256": "67d276c911d72fbec63875e21ff345191fea24e4843466a0930e74723dd19c7f",
+      "size_bytes": 49174
     },
     {
       "path": "task_prompts/A-01.1.md",
@@ -64,8 +64,8 @@
     },
     {
       "path": "task_prompts/D-01.1.md",
-      "sha256": "f8537a41f5dcee4e53cf448a6a0b4da5ceff67c2008128e0bb4ab82f08de5791",
-      "size_bytes": 3946
+      "sha256": "21569fc41d9c034df867996999502b73721cd257f58aac07f5375d1a2b05ae1a",
+      "size_bytes": 3962
     },
     {
       "path": "task_prompts/D-01.2.md",
@@ -338,6 +338,36 @@
       "size_bytes": 4814
     },
     {
+      "path": "task_prompts/F-10.1.md",
+      "sha256": "84cb2298f2745691c11c444f28c69357a9a324fc16b4a046f378cb4bb248fd3e",
+      "size_bytes": 6333
+    },
+    {
+      "path": "task_prompts/F-10.2.md",
+      "sha256": "6311d6c76f49d600e06e4b6d84598b90e0f1bdabfe1b0dd55645c4ebf1cc8704",
+      "size_bytes": 6816
+    },
+    {
+      "path": "task_prompts/F-10.3.md",
+      "sha256": "44df1fc513586ff50e83d5df9b6ec1dcd9b12b64f5c259d9f5b9c05dda57d070",
+      "size_bytes": 6545
+    },
+    {
+      "path": "task_prompts/F-10.4.md",
+      "sha256": "610d37780e12e95d031fbbe98ca4e3b74b8722747a043b34c442db26c61f872b",
+      "size_bytes": 6240
+    },
+    {
+      "path": "task_prompts/F-10.5.md",
+      "sha256": "d458b3ff07798e1c4641e9918239f91d800bc34e18910366ae94921846f5fd50",
+      "size_bytes": 6457
+    },
+    {
+      "path": "task_prompts/F-10.6.md",
+      "sha256": "9c4e603d43fbc21a3946663e158dfb194605da13c9d8c32929d490436155a952",
+      "size_bytes": 5402
+    },
+    {
       "path": "task_prompts/G-01.1.md",
       "sha256": "8cb24320e626d480c5d41a62bd58f96e78cdd66130ac776bc703613074598049",
       "size_bytes": 3863
@@ -544,8 +574,8 @@
     },
     {
       "path": "task_prompts/P-04.1.md",
-      "sha256": "7e620c56fe7a2976ec43b31d38a7bbef2f19be13e11fd3e8f58cde55c779e3f8",
-      "size_bytes": 4616
+      "sha256": "4275e90f26967b7190b31ef664746fe9f128d19cb0b5ecf38822524d2719b110",
+      "size_bytes": 4632
     },
     {
       "path": "task_prompts/P-04.2.md",
@@ -624,8 +654,8 @@
     },
     {
       "path": "task_prompts/R-02.1.2.md",
-      "sha256": "3164031e6f1b66ef62fa7cc376c4abe13875771c2fa90a579d1a087d1ba6dd39",
-      "size_bytes": 4230
+      "sha256": "8a79c3ad8ffb4f518add2da831b023f8fc249111ceef7dc75ed52ae0c8657ca2",
+      "size_bytes": 4246
     },
     {
       "path": "task_prompts/R-02.2.1.md",

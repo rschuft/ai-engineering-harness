@@ -1,5 +1,5 @@
 {
-  "task_count": 158,
+  "task_count": 164,
   "tasks": [
     {
       "id": "F-01.1",
@@ -498,15 +498,96 @@
       "sha256": "9a2296540816eeb9f5c388236e71f600730bbafca3bace95371784a3e7cdba49"
     },
     {
+      "id": "F-09.4",
+      "title": "Batch and memoize adapter git access",
+      "phase": 1,
+      "deps": [
+        "P-03.2",
+        "F-09.1",
+        "F-09.3"
+      ],
+      "path": "task_prompts/F-09.4.md",
+      "sha256": "6acfd2698b7b25c8200c8728a6e701f13ef50dee4ac0de77340afdb22487614d"
+    },
+    {
+      "id": "F-10.1",
+      "title": "Pin Dulwich and urllib3 in the tools and dev sets",
+      "phase": 1,
+      "deps": [
+        "F-07.1",
+        "F-09.2"
+      ],
+      "path": "task_prompts/F-10.1.md",
+      "sha256": "84cb2298f2745691c11c444f28c69357a9a324fc16b4a046f378cb4bb248fd3e"
+    },
+    {
+      "id": "F-10.2",
+      "title": "Build the shared repository-access module and its differential contract suite",
+      "phase": 1,
+      "deps": [
+        "F-10.1",
+        "F-09.3",
+        "F-09.4"
+      ],
+      "path": "task_prompts/F-10.2.md",
+      "sha256": "6311d6c76f49d600e06e4b6d84598b90e0f1bdabfe1b0dd55645c4ebf1cc8704"
+    },
+    {
+      "id": "F-10.3",
+      "title": "Migrate the planning adapter's repository access (R1-R4)",
+      "phase": 1,
+      "deps": [
+        "F-10.2"
+      ],
+      "path": "task_prompts/F-10.3.md",
+      "sha256": "44df1fc513586ff50e83d5df9b6ec1dcd9b12b64f5c259d9f5b9c05dda57d070"
+    },
+    {
+      "id": "F-10.4",
+      "title": "Migrate the exchange push, the checkout snapshots and the checkout listing; retain the exchange verifier",
+      "phase": 1,
+      "deps": [
+        "F-10.2"
+      ],
+      "path": "task_prompts/F-10.4.md",
+      "sha256": "610d37780e12e95d031fbbe98ca4e3b74b8722747a043b34c442db26c61f872b"
+    },
+    {
+      "id": "F-10.6",
+      "title": "Qualify Dulwich transports against the host Gitea: push, auth, ls-remote",
+      "phase": 1,
+      "deps": [
+        "F-10.2",
+        "F-06.1",
+        "S-01.2.2"
+      ],
+      "path": "task_prompts/F-10.6.md",
+      "sha256": "9c4e603d43fbc21a3946663e158dfb194605da13c9d8c32929d490436155a952"
+    },
+    {
+      "id": "F-10.5",
+      "title": "Cross-platform contract run, launch census guard, documentation and evidence",
+      "phase": 1,
+      "deps": [
+        "F-10.3",
+        "F-10.4",
+        "F-10.6",
+        "F-03.4"
+      ],
+      "path": "task_prompts/F-10.5.md",
+      "sha256": "d458b3ff07798e1c4641e9918239f91d800bc34e18910366ae94921846f5fd50"
+    },
+    {
       "id": "P-04.1",
       "title": "Record Owner acceptance and mint outcome identity",
       "phase": 1,
       "deps": [
         "P-03.2",
-        "P-01.2"
+        "P-01.2",
+        "F-10.3"
       ],
       "path": "task_prompts/P-04.1.md",
-      "sha256": "7e620c56fe7a2976ec43b31d38a7bbef2f19be13e11fd3e8f58cde55c779e3f8"
+      "sha256": "4275e90f26967b7190b31ef664746fe9f128d19cb0b5ecf38822524d2719b110"
     },
     {
       "id": "P-04.2",
@@ -518,18 +599,6 @@
       ],
       "path": "task_prompts/P-04.2.md",
       "sha256": "bb593e56ebecee31290e4c8bdac03dda4cf8e9d628bb07584e537f57b6f6064a"
-    },
-    {
-      "id": "F-09.4",
-      "title": "Batch and memoize adapter git access",
-      "phase": 1,
-      "deps": [
-        "P-03.2",
-        "F-09.1",
-        "F-09.3"
-      ],
-      "path": "task_prompts/F-09.4.md",
-      "sha256": "6acfd2698b7b25c8200c8728a6e701f13ef50dee4ac0de77340afdb22487614d"
     },
     {
       "id": "E-01.1.1",
@@ -970,10 +1039,11 @@
       "deps": [
         "E-04.4",
         "Q-03.2",
-        "S-01.4"
+        "S-01.4",
+        "F-10.6"
       ],
       "path": "task_prompts/D-01.1.md",
-      "sha256": "f8537a41f5dcee4e53cf448a6a0b4da5ceff67c2008128e0bb4ab82f08de5791"
+      "sha256": "21569fc41d9c034df867996999502b73721cd257f58aac07f5375d1a2b05ae1a"
     },
     {
       "id": "D-01.2",
@@ -1412,10 +1482,11 @@
       "title": "Create and restore a representative coordinated backup",
       "phase": 5,
       "deps": [
-        "R-02.1.1"
+        "R-02.1.1",
+        "F-10.4"
       ],
       "path": "task_prompts/R-02.1.2.md",
-      "sha256": "3164031e6f1b66ef62fa7cc376c4abe13875771c2fa90a579d1a087d1ba6dd39"
+      "sha256": "8a79c3ad8ffb4f518add2da831b023f8fc249111ceef7dc75ed52ae0c8657ca2"
     },
     {
       "id": "R-02.2.1",
