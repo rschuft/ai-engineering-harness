@@ -258,6 +258,8 @@ tasks:
   # Planning adapter (plan leaf P-02.1): OpenSpec design references into Backlog.md tasks.
   # BACKLOG and OPENSPEC name the pinned tools' entry points, installed outside the
   # checkout (integrations/planning/README.md); PROJECT is the managed project's repository.
+  # The adapter reads the repository through the shared repository-access module (Dulwich,
+  # decision 0014), so its commands, like the lineage ones, run under the tools interpreter.
   planning:test:
     desc: "Run the planning adapter tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/planning/tests -v); the live tests run only when AIEH_BACKLOG and AIEH_OPENSPEC name the pinned tools"
     vars:
@@ -268,23 +270,35 @@ tasks:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/planning/tests -v'
 
   planning:create:
-    desc: "Create a plan's Backlog.md tasks with OpenSpec source pointers at one design revision (python -I -B integrations/planning/planning_adapter.py create --project PROJECT --plan PLAN --revision REVISION --backlog BACKLOG [-- --openspec OPENSPEC])"
+    desc: "Create a plan's Backlog.md tasks with OpenSpec source pointers at one design revision (<tools python> -I -B integrations/planning/planning_adapter.py create --project PROJECT --plan PLAN --revision REVISION --backlog BACKLOG [-- --openspec OPENSPEC])"
     requires:
       vars: [PROJECT, PLAN, REVISION, BACKLOG]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/planning/planning_adapter.py create --project "{{.PROJECT}}" --plan "{{.PLAN}}" --revision "{{.REVISION}}" --backlog "{{.BACKLOG}}" {{.CLI_ARGS}}'
 
   planning:resolve:
-    desc: "Re-resolve OpenSpec source pointers; exit 1 on any missing revision, missing artifact, digest mismatch or task without a pointer (python -I -B integrations/planning/planning_adapter.py resolve --project PROJECT -- --backlog BACKLOG [--task ID] | --pointer P)"
+    desc: "Re-resolve OpenSpec source pointers; exit 1 on any missing revision, missing artifact, digest mismatch or task without a pointer (<tools python> -I -B integrations/planning/planning_adapter.py resolve --project PROJECT -- --backlog BACKLOG [--task ID] | --pointer P)"
     requires:
       vars: [PROJECT]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/planning/planning_adapter.py resolve --project "{{.PROJECT}}" {{.CLI_ARGS}}'
 
   planning:readiness:
-    desc: "Report Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; exit 1 on a missing dependency, a failing pointer or unknown readiness (python -I -B integrations/planning/planning_readiness.py --project PROJECT --backlog BACKLOG [-- --task ID --no-pointers])"
+    desc: "Report Backlog.md's own readiness per task (P-02.2): eligible only when Backlog.md says ready and every source pointer resolves; exit 1 on a missing dependency, a failing pointer or unknown readiness (<tools python> -I -B integrations/planning/planning_readiness.py --project PROJECT --backlog BACKLOG [-- --task ID --no-pointers])"
     requires:
       vars: [PROJECT, BACKLOG]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/planning/planning_readiness.py --project "{{.PROJECT}}" --backlog "{{.BACKLOG}}" {{.CLI_ARGS}}'
 
@@ -305,18 +319,30 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/lineage/lineage_resolve.py schema'
 
   lineage:resolve:
-    desc: "Resolve lineage references read-only; exit 1 on any outcome other than resolved (python -I -B integrations/lineage/lineage_resolve.py resolve REF ... [--current] [--project DIR] [--backlog CMD] [--repo NAME=DIR] [--effects-root DIR])"
+    desc: "Resolve lineage references read-only; exit 1 on any outcome other than resolved (<tools python> -I -B integrations/lineage/lineage_resolve.py resolve REF ... [--current] [--project DIR] [--backlog CMD] [--repo NAME=DIR] [--effects-root DIR])"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/lineage/lineage_resolve.py resolve {{.CLI_ARGS}}'
 
   # Lineage traversal (plan leaf P-03.2): the read-only projection from one outcome id.
   lineage:trace:
-    desc: "Project the lineage of one outcome read-only with the real authorities; exit 1 when the projection carries uncertainty (python -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project DIR [--backlog CMD] [--store DB])"
+    desc: "Project the lineage of one outcome read-only with the real authorities; exit 1 when the projection carries uncertainty (<tools python> -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project DIR [--backlog CMD] [--store DB])"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/lineage/lineage_trace.py trace {{.CLI_ARGS}}'
 
   lineage:example:
-    desc: "Rebuild the lineage projection example offline and print each projection's verdict; pass -- --record to rewrite integrations/lineage/examples/ (python -I -B integrations/lineage/tests/lineage_example.py)"
+    desc: "Rebuild the lineage projection example offline and print each projection's verdict; pass -- --record to rewrite integrations/lineage/examples/ (<tools python> -I -B integrations/lineage/tests/lineage_example.py)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/lineage/tests/lineage_example.py {{.CLI_ARGS}}'
 

@@ -36,7 +36,11 @@ MAX_LAUNCHES = 10  # F-09.4's acceptance: one traversal of the two-task example
 # Decision 0014 (Consequences): against the git oracle measured interleaved in the same run, the
 # traversal's repository access at least 4x faster and a one-shot resolve at least 8x faster.
 TRAVERSAL_RATIO, ONE_SHOT_RATIO = 4, 8
-TRAVERSAL_ROUNDS, ONE_SHOT_ROUNDS = 15, 30
+# The fewest interleaved rounds whose ratios stay clearly away from those thresholds: over ten
+# repetitions on the verification host (F-10.3 evidence), 3 and 6 rounds gave traversal ratios
+# 11.4 to 13.5 and one-shot ratios 11.3 to 11.7 from Git Bash, and 17.8 to 19.0 and 16.2 to 18.6
+# from PowerShell.
+TRAVERSAL_ROUNDS, ONE_SHOT_ROUNDS = 3, 6
 
 
 class Recorded(planning._Session):
@@ -121,14 +125,18 @@ def module_access(repo, requests):
         return [getattr(repository, op)(*args) for op, *args in requests]
 
 
-def interleaved(rounds, first, second):
-    """Median seconds of FIRST and SECOND, run alternately ROUNDS times each."""
+def interleaved(rounds, first, second, spent=None):
+    """Median seconds of FIRST and SECOND, run alternately ROUNDS times each; their total seconds
+    are added to SPENT['oracle'] and SPENT['module'] when it is given."""
     times = ([], [])
     for _ in range(rounds):
         for index, work in enumerate((first, second)):
             started = time.perf_counter()
             work()
             times[index].append(time.perf_counter() - started)
+    if spent is not None:
+        spent['oracle'] += sum(times[0])
+        spent['module'] += sum(times[1])
     return statistics.median(times[0]), statistics.median(times[1])
 
 
@@ -222,8 +230,9 @@ class OneTraversal(ExampleCase):
             self.assertEqual(self.trace(), E.recorded()['sample'])
         requests = list(requests)
         self.assertEqual(module_access(self.repo, requests), git_oracle(self.repo, requests))  # equal answers
+        spent = {'oracle': 0.0, 'module': 0.0}
         git_s, module_s = interleaved(TRAVERSAL_ROUNDS, lambda: git_oracle(self.repo, requests),
-                                      lambda: module_access(self.repo, requests))
+                                      lambda: module_access(self.repo, requests), spent)
         resolve = ['git', '-C', str(self.repo), 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}']
         env = planning.tool_env()
 
@@ -233,13 +242,14 @@ class OneTraversal(ExampleCase):
 
         self.assertEqual(planning.run_tree(resolve, env=env).stdout.decode('ascii').strip(), module_resolve())
         git_one, module_one = interleaved(ONE_SHOT_ROUNDS, lambda: planning.run_tree(resolve, env=env),
-                                          module_resolve)
+                                          module_resolve, spent)
         type(self).measured = measured = {
             'requests': dict(collections.Counter(op for op, *_ in requests)),
             'traversal_ms': {'git': round(git_s * 1000, 2), 'module': round(module_s * 1000, 2),
                              'ratio': round(git_s / module_s, 1), 'rounds': TRAVERSAL_ROUNDS},
             'one_shot_ms': {'git': round(git_one * 1000, 3), 'module': round(module_one * 1000, 3),
-                            'ratio': round(git_one / module_one, 1), 'rounds': ONE_SHOT_ROUNDS}}
+                            'ratio': round(git_one / module_one, 1), 'rounds': ONE_SHOT_ROUNDS},
+            'rounds_s': {name: round(value, 3) for name, value in spent.items()}}
         self.assertGreaterEqual(git_s, TRAVERSAL_RATIO * module_s, measured)
         self.assertGreaterEqual(git_one, ONE_SHOT_RATIO * module_one, measured)
 
