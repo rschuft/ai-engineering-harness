@@ -93,6 +93,9 @@ OBSERVE_ROOTS = ('/srv/scratch/openhands/', '/tmp/', '/var/tmp/', '/workspace')
 STATE_FILES = ('base_state.json', 'meta.json', 'owner_lease.json')
 SNAPSHOT_FMT = BACKUP + '/state-{hex}'
 FINGERPRINT_PREFIX = b'aieh-secret-fingerprint/v1\n'
+# the positive control's key armor, assembled so that this file (which travels in the seed, and
+# which the profiles P5 scan searches) holds no private-key header
+ARMOR = '-' * 5 + '{} OPENSSH PRIVATE KEY' + '-' * 5
 SECRET_VALUE = re.compile(r'^[A-Za-z0-9_-]{43}$')
 CORE = re.compile(rb'(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])')
 KEY_BLOCK = re.compile(rb'-----BEGIN ([A-Z0-9 ]*)PRIVATE KEY-----(.{0,20000}?)-----END \1PRIVATE KEY-----',
@@ -750,9 +753,9 @@ def root_scan(params):
     core = secrets.token_hex(16).encode()
     body = secrets.token_urlsafe(48).encode()
     control_path = CONTROL + '/p5-control-' + secrets.token_hex(4)
-    write_in_place(control_path, b'aieh-drill-control-canary-' + core + b'\n'
-                   b'-----BEGIN OPENSSH PRIVATE KEY-----\n' + body +
-                   b'\n-----END OPENSSH PRIVATE KEY-----\n', 0o600, 0, 0)
+    write_in_place(control_path, b'aieh-drill-control-canary-' + core + b'\n' +
+                   ARMOR.format('BEGIN').encode() + b'\n' + body + b'\n' +
+                   ARMOR.format('END').encode() + b'\n', 0o600, 0, 0)
     cores[sha256_bytes(core)] = 'control:canary'
     control_key = sha256_bytes(body)
     os.sync()

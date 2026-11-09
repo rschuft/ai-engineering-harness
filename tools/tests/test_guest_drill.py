@@ -59,6 +59,16 @@ class HelperFile(unittest.TestCase):
         compile(raw, 'guest_drill.py', 'exec')
         self.assertEqual(raw, (REPO / 'tools' / 'guest_drill.py').read_bytes())
 
+    def test_the_helper_holds_nothing_the_p5_scans_find(self):
+        """It travels in the seed, which the profiles P5 scan searches for Owner-class patterns,
+        canaries and the instance key (found on the first official drill guest: fixed forward)."""
+        literals, patterns = guest.p5_needles(None, None, environ={}, principal='HOST\\someone')
+        self.assertEqual(guest.scan_bytes(guest.drill_script(), literals, patterns), set())
+        owner = {k: [re.compile(rx) for rx in v] for k, v in helper.OWNER_PATTERNS.items()}
+        hits = {}
+        helper.scan_data(guest.drill_script(), 0, {}, {}, hits, {}, owner, 'helper')
+        self.assertEqual(hits, {})
+
     def test_checked_out_verbatim(self):
         """A clone with core.autocrlf=true would otherwise write CRLF, which the guest refuses."""
         rules = (REPO / 'tools' / '.gitattributes').read_text(encoding='utf-8').splitlines()
