@@ -7485,11 +7485,16 @@ def egress_check(profile, adm, unit):
         e = (fam or {}).get('egress') if isinstance((fam or {}).get('egress'), dict) else {}
         return {k: e.get(k) for k in ('chain', 'hook', 'forward_head', 'forward_jumps',
                                       'forward_policy')}
+    try:
+        ordered = 0 < int(order.get('guard_exit_monotonic')) < int(order.get('docker_start_monotonic'))
+    except (TypeError, ValueError):
+        ordered = False
+    # the order as a fact, not its per-boot monotonic times: this check is stable across a
+    # start and a recreate (E-01.2.2 slice (c), finding F-14)
     observed = {'families': {t: view(families.get(t)) for t in egress.get('families') or []},
                 'installed_before_docker': {t: view(installed.get(t))
                                             for t in egress.get('families') or []},
-                'guard_exit_monotonic': order.get('guard_exit_monotonic'),
-                'docker_start_monotonic': order.get('docker_start_monotonic'),
+                'guard_exited_before_docker_started': ordered,
                 'guard_unit': unit.get('ActiveState')}
 
     def family_ok(f):
@@ -7502,10 +7507,6 @@ def egress_check(profile, adm, unit):
     def survived(t):
         before, after = observed['installed_before_docker'][t], observed['families'][t]
         return before.get('chain') == after.get('chain') and before.get('hook') == after.get('hook')
-    try:
-        ordered = 0 < int(order.get('guard_exit_monotonic')) < int(order.get('docker_start_monotonic'))
-    except (TypeError, ValueError):
-        ordered = False
     tools = egress.get('families') or []
     ok = bool(tools) and unit.get('ActiveState') == 'active' and \
         all(family_ok(observed['families'][t]) for t in tools) and \

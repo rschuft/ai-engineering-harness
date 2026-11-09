@@ -3252,10 +3252,20 @@ def provisioned_observation(record, token='one'):
     return obs
 
 
-def provisioned_identity_record(base_record, token):
+def provisioned_identity_record(base_record, token, boot_us=None):
+    """``boot_us``: another boot's monotonic times (microseconds) in the boot facts, as every
+    boot has its own."""
     record = identity_record(base_record, token)
     prov = provisioned_record(base_record)
     obs = provisioned_observation(prov, token)
+    if boot_us is not None:
+        facts = json.loads(obs['guest']['moby_facts']['out'])
+        facts['admission']['order'] = {'guard_exit_monotonic': str(boot_us),
+                                       'docker_start_monotonic': str(boot_us + 90000)}
+        facts['quiesce']['unit'].update(ExecMainStartTimestampMonotonic=str(boot_us + 500000),
+                                        ExecMainExitTimestampMonotonic=str(boot_us + 580000))
+        facts['quiesce']['server']['ExecMainStartTimestampMonotonic'] = str(boot_us + 650000)
+        obs['guest']['moby_facts']['out'] = json.dumps(facts)
     for key in ('machine_id', 'host_keys', 'cpu_flags'):
         obs['guest'][key] = record['observations']['guest'][key]
     obs['known_hosts_fingerprints'] = record['observations']['known_hosts_fingerprints']
@@ -3457,6 +3467,17 @@ class ProvisionedInspect(LaunchRecord):
                          guest.compare_inspect(PROFILE, a, c, 'recreate')['not_ok'])
         ok, summary = guest.inspect_ok(a)
         self.assertTrue(ok, summary)
+
+    def test_per_boot_times_do_not_break_the_start_comparison(self):
+        """E-01.2.2 slice (c), finding F-14: the egress check carried the guard's and Moby's
+        per-boot monotonic times in its stable view, so every provisioned smoke failed its
+        start comparison."""
+        a = provisioned_identity_record(self.record, 'one')
+        b = provisioned_identity_record(self.record, 'one', boot_us=17100000)
+        self.assertNotEqual(a['observations']['guest']['moby_facts']['out'],
+                            b['observations']['guest']['moby_facts']['out'])
+        result = guest.compare_inspect(PROFILE, a, b, 'start')
+        self.assertEqual(result['result'], 'PASS', result['not_ok'])
 
     # ---- F-04.1 slice (c): the Agent Server
 
