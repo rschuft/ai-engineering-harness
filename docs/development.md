@@ -332,7 +332,10 @@ measurements. At `7bb7254`, with the batched git reads below (F-09.4), three ser
 interleaved with runs of the F-09.3 tree took a median of 154 s against 203 s, and `test:all`
 34 to 36 s. At `34f9d8e`, with one git access per operation and the checkers' load/evaluate
 seam (F-09.4 round 2), three interleaved serial runs took a median of 147 s (135 to 155 s)
-against 201 s for the F-09.3 tree and 175 s for the round-1 tree, and `test:all` 31 s;
+against 201 s for the F-09.3 tree and 175 s for the round-1 tree, and `test:all` 31 s. At
+`3366af4` (round 3: one read session per dispatch test, the profile checker compiled once per
+content), three interleaved serial runs took a median of 127 s (126 to 138 s) against 206 s
+for the F-09.3 tree and 143 s for the round-2 tree, and `test:all` 31 to 32 s;
 [`evidence/F-09.4-batched-git.md`](../evidence/F-09.4-batched-git.md) has the measurements.
 
 **Shared fixtures and process boundaries.** Expensive fixtures are built once and copied, and
