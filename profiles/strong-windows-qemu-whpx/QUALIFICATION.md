@@ -44,8 +44,8 @@ macOS are not yet verified (see Platform adaptation points).
 | P6 No host-management sockets or interop | PASS | F-03.3.1; S-02.1, S-02.2 | [F-03.3.1](../../evidence/F-03.3.1-guest-surfaces.md), [S-02.1](../../evidence/S-02.1-containment-probes.md), [S-02.2](../../evidence/S-02.2-isolation-evidence.md); re-run in every F-03.4 inspect |
 | P7 Network posture | PASS: enforcement point qualified | F-03.3.2; S-01.4, S-02.2 | [F-03.3.2](../../evidence/F-03.3.2-guest-network.md), [S-01.4](../../evidence/S-01.4-network-matrix.md), [S-02.2](../../evidence/S-02.2-isolation-evidence.md) |
 | P8 Identity | PASS | F-03.2.2b; F-03.4 (fresh across recreate, kept across start) | [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md) |
-| P9 Pinned boot inputs | PASS | F-03.2.1 (declared); F-03.2.2b; F-03.4 (`start` re-hashes every input); E-01.2.2c (re-declared: the seed template's new pin) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md), [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): every `inspect` of seven guests PASS with the new pin |
-| P10 Disposability | PASS | F-03.4; E-01.2.2c (re-observed) | [F-03.4](../../evidence/F-03.4-teardown-qualification.md): two `smoke` runs PASS end to end (one with a running sibling, one with a stopped sibling); no durable source changed. [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): `smoke --provision` PASS end to end after the seed change |
+| P9 Pinned boot inputs | PASS | F-03.2.1 (declared); F-03.2.2b; F-03.4 (`start` re-hashes every input); E-01.2.2c and E-01.4.3 (re-declared: the seed template's new pins) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md), [F-03.4](../../evidence/F-03.4-teardown-qualification.md), [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): every `inspect` of seven guests PASS with the new pin; [E-01.4.3](../../evidence/E-01.4.3-start-race.md): every `inspect` PASS with its pin |
+| P10 Disposability | PASS | F-03.4; E-01.2.2c and E-01.4.3 (re-observed) | [F-03.4](../../evidence/F-03.4-teardown-qualification.md): two `smoke` runs PASS end to end (one with a running sibling, one with a stopped sibling); no durable source changed. [E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md): `smoke --provision` PASS end to end after the seed change; [E-01.4.3](../../evidence/E-01.4.3-start-race.md): the same after its seed change |
 | P11 Tier label | PASS | every leaf; F-03.4 (schema check of every record and log header) | [F-03.4](../../evidence/F-03.4-teardown-qualification.md) |
 | P12 Virtualization extensions | PASS: masked | F-03.2.1b (configuration); F-03.2.2b (guest) | [F-03.2.1b](../../evidence/F-03.2.1b-provider-validation.md), [F-03.2.2b](../../evidence/F-03.2.2b-guest-lifecycle.md) |
 
@@ -61,6 +61,17 @@ the Agent Server only behind `Requires=` on `docker.service` and on the root qui
 ([E-01.2.2c](../../evidence/E-01.2.2c-fix-requalification.md)). The first provisioned smoke
 after S-01.4 exposed a comparison defect in `inspect`'s egress check (per-boot times in a
 stable view), fixed forward before the passing run.
+
+**Requalified after the E-01.4.3 seed change (2026-11-09).** The server unit now sets
+`LITELLM_LOCAL_MODEL_COST_MAP=True` (`provisioning.agent_server.start_race`: the control of the
+start-up import race, finding F-15 of E-01.2.2c), and its readiness wait stops at once when the
+main process has exited and reports each start as clean, retried, slow or unverified
+(`provisioning.agent_server.service.readiness`), checked by the new inspect check "Agent Server
+start (E-01.4.3)". At the fixed commit: 500 consecutive restarts with 0 main-process exits during
+start, `smoke --provision` PASS (start and recreate compared), `conversation-smoke --restart`,
+`admission-probe` and `job-access-probe` PASS, and every `inspect` PASS
+([E-01.4.3](../../evidence/E-01.4.3-start-race.md)). The control reaches the outer server only;
+conversation containers still fetch the cost map at their start (a recorded limit).
 
 ## Limitations
 
