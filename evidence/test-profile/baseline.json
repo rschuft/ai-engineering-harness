@@ -1,6 +1,6 @@
 {
  "schema": "ai-engineering-harness/test-profile-compact/v1",
- "revision": "7bb7254cc805dc4def55f07c6ec2f8384e3a1705",
+ "revision": "34f9d8e83083ad12e2568172e91a9ef13dbb2953",
  "dirty": false,
  "measured": "2026-11-09",
  "host": {
@@ -12,18 +12,18 @@
  },
  "runs": 3,
  "totals": {
-  "tests": 1526,
-  "launches": 1756,
-  "mkdtemp": 940,
+  "tests": 1543,
+  "launches": 1856,
+  "mkdtemp": 945,
   "sockets": 41,
   "chdir": 3,
   "wall": {
    "runs": [
-    163.204,
-    165.29,
-    162.033
+    137.346,
+    137.01,
+    137.182
    ],
-   "median": 163.204
+   "median": 137.182
   }
  },
  "suites": [
@@ -36,8 +36,8 @@
     "skip": 5
    },
    "successful": true,
-   "launches": 497,
-   "mkdtemp": 512,
+   "launches": 514,
+   "mkdtemp": 513,
    "sockets": 38,
    "chdir": 0,
    "unattributed": {
@@ -48,12 +48,12 @@
    },
    "wall": {
     "runs": [
-     106.116,
-     104.343,
-     103.141
+     82.592,
+     82.337,
+     82.299
     ],
-    "median": 104.343,
-    "discovery_median": 1.169
+    "median": 82.337,
+    "discovery_median": 1.117
    }
   },
   {
@@ -76,12 +76,12 @@
    },
    "wall": {
     "runs": [
-     15.866,
-     16.491,
-     16.203
+     14.837,
+     15.001,
+     15.005
     ],
-    "median": 16.203,
-    "discovery_median": 0.086
+    "median": 15.001,
+    "discovery_median": 0.079
    }
   },
   {
@@ -104,25 +104,25 @@
    },
    "wall": {
     "runs": [
-     2.669,
-     2.744,
-     2.741
+     2.622,
+     2.554,
+     2.609
     ],
-    "median": 2.741,
-    "discovery_median": 0.082
+    "median": 2.609,
+    "discovery_median": 0.075
    }
   },
   {
    "name": "planning",
    "start_dir": "integrations/planning/tests",
-   "tests": 83,
+   "tests": 93,
    "outcomes": {
-    "ok": 76,
+    "ok": 86,
     "skip": 7
    },
    "successful": true,
-   "launches": 326,
-   "mkdtemp": 45,
+   "launches": 369,
+   "mkdtemp": 46,
    "sockets": 0,
    "chdir": 0,
    "unattributed": {
@@ -133,25 +133,25 @@
    },
    "wall": {
     "runs": [
-     9.091,
-     10.09,
-     9.871
+     9.346,
+     9.375,
+     9.463
     ],
-    "median": 9.871,
-    "discovery_median": 0.067
+    "median": 9.375,
+    "discovery_median": 0.063
    }
   },
   {
    "name": "lineage",
    "start_dir": "integrations/lineage/tests",
-   "tests": 141,
+   "tests": 146,
    "outcomes": {
-    "ok": 135,
+    "ok": 140,
     "skip": 6
    },
    "successful": true,
-   "launches": 537,
-   "mkdtemp": 77,
+   "launches": 572,
+   "mkdtemp": 79,
    "sockets": 0,
    "chdir": 0,
    "unattributed": {
@@ -162,12 +162,12 @@
    },
    "wall": {
     "runs": [
-     18.606,
-     19.931,
-     19.243
+     17.779,
+     17.685,
+     17.736
     ],
-    "median": 19.243,
-    "discovery_median": 0.146
+    "median": 17.736,
+    "discovery_median": 0.135
    }
   },
   {
@@ -190,12 +190,12 @@
    },
    "wall": {
     "runs": [
-     1.453,
-     1.55,
-     1.438
+     1.329,
+     1.329,
+     1.342
     ],
-    "median": 1.453,
-    "discovery_median": 0.108
+    "median": 1.329,
+    "discovery_median": 0.098
    }
   },
   {
@@ -219,24 +219,24 @@
    },
    "wall": {
     "runs": [
-     2.708,
-     2.678,
-     2.533
+     2.442,
+     2.442,
+     2.442
     ],
-    "median": 2.678,
-    "discovery_median": 0.103
+    "median": 2.442,
+    "discovery_median": 0.09
    }
   },
   {
    "name": "dispatch",
    "start_dir": "integrations/dispatch/tests",
-   "tests": 78,
+   "tests": 80,
    "outcomes": {
-    "ok": 78
+    "ok": 80
    },
    "successful": true,
-   "launches": 165,
-   "mkdtemp": 77,
+   "launches": 170,
+   "mkdtemp": 78,
    "sockets": 0,
    "chdir": 0,
    "unattributed": {
@@ -247,12 +247,12 @@
    },
    "wall": {
     "runs": [
-     6.696,
-     7.464,
-     6.864
+     6.399,
+     6.288,
+     6.285
     ],
-    "median": 6.864,
-    "discovery_median": 0.104
+    "median": 6.288,
+    "discovery_median": 0.101
    }
   }
  ],
@@ -260,17 +260,17 @@
   "contract": {
    "classes": 40,
    "tests": 215,
-   "launches": 200,
-   "mkdtemp": 84,
+   "launches": 199,
+   "mkdtemp": 85,
    "sockets": 0,
    "chdir": 0,
    "wall": {
     "runs": [
-     19.472,
-     20.554,
-     19.514
+     16.686,
+     16.661,
+     16.747
     ],
-    "median": 19.514
+    "median": 16.686
    }
   },
   "e2e": {
@@ -284,57 +284,57 @@
     "runs": [
      0.001,
      0.001,
-     0.001
+     0.004
     ],
     "median": 0.001
    }
   },
   "integration": {
-   "classes": 68,
-   "tests": 363,
-   "launches": 1548,
-   "mkdtemp": 361,
+   "classes": 72,
+   "tests": 376,
+   "launches": 1635,
+   "mkdtemp": 365,
    "sockets": 41,
    "chdir": 3,
    "wall": {
     "runs": [
-     93.372,
-     96.386,
-     93.563
+     87.782,
+     87.598,
+     87.661
     ],
-    "median": 93.563
+    "median": 87.661
    }
   },
   "performance": {
    "classes": 1,
    "tests": 1,
-   "launches": 8,
+   "launches": 22,
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
    "wall": {
     "runs": [
-     0.205,
-     0.237,
-     0.213
+     0.562,
+     0.564,
+     0.555
     ],
-    "median": 0.213
+    "median": 0.562
    }
   },
   "unit": {
-   "classes": 116,
-   "tests": 932,
+   "classes": 117,
+   "tests": 936,
    "launches": 0,
    "mkdtemp": 494,
    "sockets": 0,
    "chdir": 0,
    "wall": {
     "runs": [
-     47.267,
-     45.111,
-     45.779
+     29.58,
+     29.441,
+     29.475
     ],
-    "median": 45.779
+    "median": 29.475
    }
   }
  },
@@ -342,19 +342,19 @@
  "invalid_categories": [],
  "determinism": [],
  "problems": [],
- "outcomes_digest": "60aafb2a4226b10ff9bfb1ff7233546bb6fd861150b7a4c84ba08eaf94e0e1fb",
+ "outcomes_digest": "66833fc6d83c53ad57fba95028d2553325d74e5f2eaec855de72e7ae22e332f2",
  "top_launch_programs": [
   {
    "program": "git cat-file @ integrations/planning/planning_adapter.py",
-   "launches": 345
+   "launches": 361
   },
   {
    "program": "git rev-parse @ integrations/planning/planning_adapter.py",
-   "launches": 197
+   "launches": 219
   },
   {
    "program": "git ls-tree @ integrations/planning/planning_adapter.py",
-   "launches": 165
+   "launches": 170
   },
   {
    "program": "python store_worker.py @ integrations/store/tests/test_reservation_crash_concurrency.py",
@@ -365,12 +365,12 @@
    "launches": 78
   },
   {
-   "program": "git commit @ integrations/planning/tests/two_task_fixture.py",
-   "launches": 67
+   "program": "git cat-file @ integrations/planning/tests/test_git_batch.py",
+   "launches": 72
   },
   {
-   "program": "git cat-file @ integrations/planning/tests/test_git_batch.py",
-   "launches": 52
+   "program": "git commit @ integrations/planning/tests/two_task_fixture.py",
+   "launches": 69
   },
   {
    "program": "git rev-parse @ tools/tests/test_publication_gate.py",
@@ -389,8 +389,12 @@
    "launches": 31
   },
   {
+   "program": "git config @ tools/tests/test_publication_gate.py",
+   "launches": 27
+  },
+  {
    "program": "git add @ integrations/planning/tests/two_task_fixture.py",
-   "launches": 24
+   "launches": 26
   },
   {
    "program": "git status @ tools/guest.py",
@@ -439,18 +443,26 @@
   {
    "program": "git count-objects @ integrations/planning/tests/two_task_fixture.py",
    "launches": 10
-  },
-  {
-   "program": "git for-each-ref @ integrations/planning/tests/two_task_fixture.py",
-   "launches": 10
   }
  ],
  "top_launch_classes": [
   {
    "class": "test_publication_gate.FailsClosed",
    "category": "integration",
-   "launches": 110,
+   "launches": 122,
    "tests": 7
+  },
+  {
+   "class": "test_git_batch.Equivalence",
+   "category": "integration",
+   "launches": 120,
+   "tests": 4
+  },
+  {
+   "class": "test_publication_gate.WithRealScanner",
+   "category": "integration",
+   "launches": 111,
+   "tests": 13
   },
   {
    "class": "test_guest.Exchange",
@@ -459,22 +471,10 @@
    "tests": 14
   },
   {
-   "class": "test_publication_gate.WithRealScanner",
-   "category": "integration",
-   "launches": 105,
-   "tests": 13
-  },
-  {
    "class": "test_resolvers.ObjectiveResolution",
    "category": "integration",
    "launches": 105,
    "tests": 13
-  },
-  {
-   "class": "test_git_batch.Equivalence",
-   "category": "integration",
-   "launches": 92,
-   "tests": 3
   },
   {
    "class": "test_trace.MovedOrGone",
@@ -513,28 +513,28 @@
    "tests": 6
   },
   {
-   "class": "test_verify_seed.BaselineMode",
-   "category": "contract",
-   "launches": 40,
-   "tests": 5
-  },
-  {
    "class": "test_resolvers.CommitResolution",
    "category": "integration",
    "launches": 39,
    "tests": 4
   },
   {
-   "class": "test_trace.ReadOnly",
-   "category": "integration",
+   "class": "test_verify_seed.BaselineMode",
+   "category": "contract",
    "launches": 39,
-   "tests": 7
+   "tests": 5
   },
   {
    "class": "test_planning_adapter.CommandLine",
    "category": "contract",
    "launches": 38,
    "tests": 4
+  },
+  {
+   "class": "test_trace.MissingNode",
+   "category": "integration",
+   "launches": 38,
+   "tests": 8
   }
  ],
  "top_mkdtemp_classes": [
@@ -641,7 +641,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.69
+   "wall": 0.638
   },
   {
    "id": "test_dispatch_admission.ProfilePolicyDenialTests",
@@ -654,7 +654,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.336
+   "wall": 1.197
   },
   {
    "id": "test_dispatch_admission.TamperDenialTests",
@@ -667,7 +667,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.074
+   "wall": 0.911
   },
   {
    "id": "test_dispatch_admission.WorkspaceDenialTests",
@@ -680,7 +680,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.73
+   "wall": 1.517
   },
   {
    "id": "test_dispatch_inputs.AcceptanceRefusalTests",
@@ -693,7 +693,7 @@
    "mkdtemp": 24,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.825
+   "wall": 0.761
   },
   {
    "id": "test_dispatch_inputs.CliTests",
@@ -706,7 +706,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.463
+   "wall": 0.425
   },
   {
    "id": "test_dispatch_inputs.DeterminismTests",
@@ -719,7 +719,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.274
+   "wall": 0.247
   },
   {
    "id": "test_dispatch_inputs.ManifestCheckerTests",
@@ -732,7 +732,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.016
+   "wall": 0.015
   },
   {
    "id": "test_dispatch_inputs.ManifestCustodyTests",
@@ -745,7 +745,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.014
+   "wall": 0.013
   },
   {
    "id": "test_dispatch_inputs.SuccessTests",
@@ -758,7 +758,20 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.25
+   "wall": 0.226
+  },
+  {
+   "id": "test_work_source_operation.ReadIsOneOperation",
+   "suite": "dispatch",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 5,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.133
   },
   {
    "id": "test_effects_store.BackupRestoreTests",
@@ -771,7 +784,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.032
+   "wall": 1.002
   },
   {
    "id": "test_effects_store.CrashTests",
@@ -784,7 +797,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.36
+   "wall": 0.339
   },
   {
    "id": "test_effects_store.CustodyEvaluationTests",
@@ -810,7 +823,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.068
+   "wall": 0.077
   },
   {
    "id": "test_effects_store.IsolationTests",
@@ -823,7 +836,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.052
+   "wall": 0.048
   },
   {
    "id": "test_effects_store.LocationTests",
@@ -836,7 +849,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.433
+   "wall": 0.392
   },
   {
    "id": "test_effects_store.ManifestCheckTests",
@@ -849,7 +862,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.38
+   "wall": 0.344
   },
   {
    "id": "test_effects_store.SchemaAndReceiptTests",
@@ -862,7 +875,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.111
+   "wall": 0.105
   },
   {
    "id": "test_effects_store.SurfaceTests",
@@ -875,7 +888,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.103
+   "wall": 0.095
   },
   {
    "id": "test_authorization_live.TestExecutor",
@@ -953,7 +966,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.064
+   "wall": 0.059
   },
   {
    "id": "test_gitea_host.TestAppIni",
@@ -966,7 +979,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.11
+   "wall": 0.093
   },
   {
    "id": "test_gitea_host.TestCheckoutFiles",
@@ -979,7 +992,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.028
+   "wall": 0.027
   },
   {
    "id": "test_gitea_host.TestCommandLine",
@@ -992,7 +1005,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.006
+   "wall": 0.005
   },
   {
    "id": "test_gitea_host.TestCredentialProvider",
@@ -1018,7 +1031,7 @@
    "mkdtemp": 18,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.506
+   "wall": 0.419
   },
   {
    "id": "test_gitea_host.TestIdentities",
@@ -1031,7 +1044,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.12
+   "wall": 0.106
   },
   {
    "id": "test_gitea_host.TestJobObject",
@@ -1044,7 +1057,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.362
+   "wall": 1.353
   },
   {
    "id": "test_gitea_host.TestLayout",
@@ -1057,7 +1070,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.069
+   "wall": 0.066
   },
   {
    "id": "test_gitea_host.TestLive",
@@ -1135,7 +1148,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.069
+   "wall": 0.067
   },
   {
    "id": "test_gitea_host.TestVerifyCheckoutScan",
@@ -1148,7 +1161,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.054
+   "wall": 0.051
   },
   {
    "id": "test_gitea_roles.TestFixture",
@@ -1356,7 +1369,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.712
+   "wall": 0.639
   },
   {
    "id": "test_resolvers.DesignResolution",
@@ -1369,7 +1382,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.839
+   "wall": 0.739
   },
   {
    "id": "test_resolvers.EffectReceiptResolution",
@@ -1382,7 +1395,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.331
+   "wall": 0.3
   },
   {
    "id": "test_resolvers.ObjectiveResolution",
@@ -1395,7 +1408,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 3.178
+   "wall": 2.94
   },
   {
    "id": "test_resolvers.RegistryAndCommandLine",
@@ -1408,7 +1421,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.413
+   "wall": 1.235
   },
   {
    "id": "test_resolvers.WorkResolution",
@@ -1421,7 +1434,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.477
+   "wall": 0.413
   },
   {
    "id": "test_trace.Ambiguous",
@@ -1434,7 +1447,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.317
+   "wall": 0.266
   },
   {
    "id": "test_trace.ChangedRevision",
@@ -1447,7 +1460,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.606
+   "wall": 0.544
   },
   {
    "id": "test_trace.CommandLine",
@@ -1460,7 +1473,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.647
+   "wall": 0.599
   },
   {
    "id": "test_trace.Contract",
@@ -1473,7 +1486,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.527
+   "wall": 0.477
   },
   {
    "id": "test_trace.DigestMismatch",
@@ -1486,7 +1499,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.35
+   "wall": 1.166
   },
   {
    "id": "test_trace.Example",
@@ -1499,7 +1512,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.238
+   "wall": 0.19
   },
   {
    "id": "test_trace.Intents",
@@ -1512,7 +1525,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.479
+   "wall": 0.428
   },
   {
    "id": "test_trace.MissingNode",
@@ -1525,7 +1538,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.304
+   "wall": 1.106
   },
   {
    "id": "test_trace.MovedOrGone",
@@ -1538,7 +1551,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.777
+   "wall": 1.491
   },
   {
    "id": "test_trace.ReadOnly",
@@ -1547,11 +1560,11 @@
    "source": "module",
    "tests": 7,
    "discovered": 7,
-   "launches": 39,
+   "launches": 33,
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.563
+   "wall": 1.108
   },
   {
    "id": "test_trace.Statements",
@@ -1564,7 +1577,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.562
+   "wall": 1.376
   },
   {
    "id": "test_trace.Tasks",
@@ -1577,7 +1590,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.376
+   "wall": 0.31
   },
   {
    "id": "test_traversal_git.GitAccess",
@@ -1590,7 +1603,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.823
+   "wall": 0.731
   },
   {
    "id": "test_traversal_git.OneTraversal",
@@ -1599,11 +1612,37 @@
    "source": "class",
    "tests": 1,
    "discovered": 1,
-   "launches": 8,
+   "launches": 22,
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.213
+   "wall": 0.562
+  },
+  {
+   "id": "test_traversal_git.ResolverOperation",
+   "suite": "lineage",
+   "category": "integration",
+   "source": "module",
+   "tests": 3,
+   "discovered": 3,
+   "launches": 10,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.376
+  },
+  {
+   "id": "test_traversal_git.SpacedChangeFolder",
+   "suite": "lineage",
+   "category": "integration",
+   "source": "module",
+   "tests": 2,
+   "discovered": 2,
+   "launches": 17,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.422
   },
   {
    "id": "test_aieh_paths.Adapters",
@@ -1616,7 +1655,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.272
+   "wall": 0.248
   },
   {
    "id": "test_aieh_paths.AssetRecords",
@@ -1629,7 +1668,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.009
+   "wall": 0.008
   },
   {
    "id": "test_aieh_paths.ExampleConfiguration",
@@ -1642,7 +1681,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.025
+   "wall": 0.024
   },
   {
    "id": "test_aieh_paths.InvalidConfiguration",
@@ -1655,7 +1694,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.074
+   "wall": 0.066
   },
   {
    "id": "test_aieh_paths.LegacyAndDoctor",
@@ -1668,7 +1707,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.023
+   "wall": 0.022
   },
   {
    "id": "test_aieh_paths.SectionNineCriteria",
@@ -1681,7 +1720,7 @@
    "mkdtemp": 16,
    "sockets": 0,
    "chdir": 3,
-   "wall": 0.789
+   "wall": 0.699
   },
   {
    "id": "test_aieh_paths.ToolsInstall",
@@ -1694,7 +1733,20 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.069
+   "wall": 0.066
+  },
+  {
+   "id": "test_git_batch.BacklogSnapshot",
+   "suite": "planning",
+   "category": "unit",
+   "source": "class",
+   "tests": 4,
+   "discovered": 4,
+   "launches": 0,
+   "mkdtemp": 0,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.001
   },
   {
    "id": "test_git_batch.BatchLine",
@@ -1714,13 +1766,13 @@
    "suite": "planning",
    "category": "integration",
    "source": "module",
-   "tests": 3,
-   "discovered": 3,
-   "launches": 92,
+   "tests": 4,
+   "discovered": 4,
+   "launches": 120,
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.52
+   "wall": 1.689
   },
   {
    "id": "test_git_batch.InputSafety",
@@ -1733,7 +1785,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.093
+   "wall": 0.085
   },
   {
    "id": "test_git_batch.Lifecycle",
@@ -1746,7 +1798,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.488
+   "wall": 0.446
   },
   {
    "id": "test_git_batch.Memo",
@@ -1759,7 +1811,20 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.423
+   "wall": 0.369
+  },
+  {
+   "id": "test_git_batch.OperationScope",
+   "suite": "planning",
+   "category": "integration",
+   "source": "module",
+   "tests": 5,
+   "discovered": 5,
+   "launches": 15,
+   "mkdtemp": 1,
+   "sockets": 0,
+   "chdir": 0,
+   "wall": 0.445
   },
   {
    "id": "test_live_backlog.LiveReadiness",
@@ -1798,7 +1863,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.001
+   "wall": 0.0
   },
   {
    "id": "test_planning_adapter.CommandLine",
@@ -1811,7 +1876,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.448
+   "wall": 1.277
   },
   {
    "id": "test_planning_adapter.CreateTasks",
@@ -1824,7 +1889,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.031
+   "wall": 0.923
   },
   {
    "id": "test_planning_adapter.GoldenRepository",
@@ -1837,7 +1902,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.118
+   "wall": 0.986
   },
   {
    "id": "test_planning_adapter.OpenSpecChecklist",
@@ -1850,7 +1915,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.147
+   "wall": 1.002
   },
   {
    "id": "test_planning_adapter.PlanInput",
@@ -1889,7 +1954,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.97
+   "wall": 0.927
   },
   {
    "id": "test_planning_adapter.RecordedCapture",
@@ -1902,7 +1967,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.275
+   "wall": 0.236
   },
   {
    "id": "test_planning_adapter.ResolveTasks",
@@ -1915,7 +1980,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.136
+   "wall": 0.117
   },
   {
    "id": "test_readiness.Stages",
@@ -1928,7 +1993,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.831
+   "wall": 0.727
   },
   {
    "id": "test_attempt_identity.AcceptanceTests",
@@ -1941,7 +2006,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.68
+   "wall": 0.614
   },
   {
    "id": "test_attempt_identity.ClaimRuleTests",
@@ -1954,7 +2019,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.152
+   "wall": 0.139
   },
   {
    "id": "test_attempt_identity.KeyAndIdentityTests",
@@ -1967,7 +2032,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.057
+   "wall": 0.054
   },
   {
    "id": "test_attempt_identity.LifecycleAndImmutabilityTests",
@@ -1980,7 +2045,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.196
+   "wall": 0.173
   },
   {
    "id": "test_attempt_identity.MigrationTests",
@@ -1993,7 +2058,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.114
+   "wall": 0.103
   },
   {
    "id": "test_attempt_identity.SqlGrammarDifferentialTests",
@@ -2006,7 +2071,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.071
+   "wall": 0.068
   },
   {
    "id": "test_backup_restore.BackupRestoreTests",
@@ -2019,7 +2084,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.114
+   "wall": 1.061
   },
   {
    "id": "test_backup_restore.ManifestCheckTests",
@@ -2032,7 +2097,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.754
+   "wall": 0.701
   },
   {
    "id": "test_backup_restore.RepositoryProjectionTests",
@@ -2045,7 +2110,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.753
+   "wall": 0.625
   },
   {
    "id": "test_integration_store.ContentionTests",
@@ -2058,7 +2123,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.601
+   "wall": 0.642
   },
   {
    "id": "test_integration_store.LocationTests",
@@ -2071,7 +2136,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.333
+   "wall": 0.292
   },
   {
    "id": "test_integration_store.MigrationTests",
@@ -2084,7 +2149,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.202
+   "wall": 0.175
   },
   {
    "id": "test_integration_store.PragmaAndVersionTests",
@@ -2097,7 +2162,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.027
+   "wall": 0.025
   },
   {
    "id": "test_integration_store.ProjectionTests",
@@ -2110,7 +2175,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.082
+   "wall": 0.077
   },
   {
    "id": "test_integration_store.ReservationTests",
@@ -2123,7 +2188,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.264
+   "wall": 0.233
   },
   {
    "id": "test_integration_store.RestartAndCrashTests",
@@ -2136,7 +2201,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.351
+   "wall": 0.311
   },
   {
    "id": "test_integration_store.TransitionTests",
@@ -2149,7 +2214,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.075
+   "wall": 0.068
   },
   {
    "id": "test_reservation_crash_concurrency.ConcurrencyTests",
@@ -2162,7 +2227,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.17
+   "wall": 2.12
   },
   {
    "id": "test_reservation_crash_concurrency.CrashMatrixTests",
@@ -2175,7 +2240,7 @@
    "mkdtemp": 21,
    "sockets": 0,
    "chdir": 0,
-   "wall": 6.536
+   "wall": 5.863
   },
   {
    "id": "test_reservation_crash_concurrency.RestartTests",
@@ -2188,7 +2253,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 1.474
+   "wall": 1.358
   },
   {
    "id": "test_check_containment_cases.CommandLine",
@@ -2201,7 +2266,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.341
+   "wall": 0.29
   },
   {
    "id": "test_check_containment_cases.Committed",
@@ -2214,7 +2279,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.015
+   "wall": 0.012
   },
   {
    "id": "test_check_containment_cases.Rules",
@@ -2227,7 +2292,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 9.158
+   "wall": 4.548
   },
   {
    "id": "test_check_intent_record.Catalog",
@@ -2253,7 +2318,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.063
+   "wall": 0.057
   },
   {
    "id": "test_check_intent_record.MethodMutations",
@@ -2292,7 +2357,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.129
+   "wall": 0.114
   },
   {
    "id": "test_check_network_matrix.Acceptance",
@@ -2305,7 +2370,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 10.309
+   "wall": 5.088
   },
   {
    "id": "test_check_network_matrix.CommittedMatrix",
@@ -2318,7 +2383,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.372
+   "wall": 0.312
   },
   {
    "id": "test_check_profile.AdmissionBlock",
@@ -2331,7 +2396,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.661
+   "wall": 0.547
   },
   {
    "id": "test_check_profile.AgentServerBlock",
@@ -2344,7 +2409,7 @@
    "mkdtemp": 9,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.811
+   "wall": 0.682
   },
   {
    "id": "test_check_profile.CheckedInProfiles",
@@ -2357,7 +2422,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.217
+   "wall": 0.191
   },
   {
    "id": "test_check_profile.CommandLine",
@@ -2370,7 +2435,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.145
+   "wall": 0.125
   },
   {
    "id": "test_check_profile.JobsBlock",
@@ -2383,7 +2448,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.561
+   "wall": 0.481
   },
   {
    "id": "test_check_profile.Negative",
@@ -2396,7 +2461,7 @@
    "mkdtemp": 19,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.737
+   "wall": 2.366
   },
   {
    "id": "test_check_profile.OpenApiSubset",
@@ -2409,7 +2474,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.074
+   "wall": 0.065
   },
   {
    "id": "test_check_role_tokens.Acceptance",
@@ -2422,7 +2487,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.571
+   "wall": 0.2
   },
   {
    "id": "test_check_role_tokens.AgentGrants",
@@ -2435,7 +2500,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.287
+   "wall": 0.102
   },
   {
    "id": "test_check_role_tokens.CommittedMatrix",
@@ -2448,7 +2513,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.387
+   "wall": 0.294
   },
   {
    "id": "test_check_role_tokens.Contract",
@@ -2461,7 +2526,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.495
+   "wall": 0.184
   },
   {
    "id": "test_check_role_tokens.Mapping",
@@ -2474,7 +2539,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.613
+   "wall": 0.219
   },
   {
    "id": "test_check_role_tokens.StatusAndLinks",
@@ -2487,7 +2552,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.452
+   "wall": 0.162
   },
   {
    "id": "test_check_security_inventory.AgentAndOwnerAuthority",
@@ -2500,7 +2565,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.747
+   "wall": 0.153
   },
   {
    "id": "test_check_security_inventory.CommittedInventory",
@@ -2513,7 +2578,7 @@
    "mkdtemp": 2,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.385
+   "wall": 0.219
   },
   {
    "id": "test_check_security_inventory.NamedPrincipal",
@@ -2526,7 +2591,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.233
+   "wall": 0.051
   },
   {
    "id": "test_check_security_inventory.Publication",
@@ -2539,7 +2604,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.299
+   "wall": 0.064
   },
   {
    "id": "test_check_security_inventory.References",
@@ -2552,7 +2617,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.54
+   "wall": 0.116
   },
   {
    "id": "test_check_security_inventory.SharedOsIdentity",
@@ -2565,7 +2630,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.19
+   "wall": 0.038
   },
   {
    "id": "test_check_security_inventory.StatusesAndLinks",
@@ -2578,7 +2643,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.65
+   "wall": 0.14
   },
   {
    "id": "test_check_test_budget.BudgetCheckTests",
@@ -2591,7 +2656,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.015
+   "wall": 0.013
   },
   {
    "id": "test_check_test_budget.CommittedBudgetTests",
@@ -2604,7 +2669,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.007
+   "wall": 0.006
   },
   {
    "id": "test_guest.AdmissionInspect",
@@ -2617,7 +2682,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.045
+   "wall": 0.041
   },
   {
    "id": "test_guest.AdmissionProbe",
@@ -2630,7 +2695,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.681
+   "wall": 0.572
   },
   {
    "id": "test_guest.AgentServerSecretScan",
@@ -2643,7 +2708,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.009
+   "wall": 0.007
   },
   {
    "id": "test_guest.ApiProbe",
@@ -2656,7 +2721,7 @@
    "mkdtemp": 2,
    "sockets": 2,
    "chdir": 0,
-   "wall": 3.241
+   "wall": 3.23
   },
   {
    "id": "test_guest.ArtifactLabels",
@@ -2669,7 +2734,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.048
+   "wall": 0.045
   },
   {
    "id": "test_guest.Canaries",
@@ -2682,7 +2747,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.051
+   "wall": 0.045
   },
   {
    "id": "test_guest.CompareInspect",
@@ -2695,7 +2760,7 @@
    "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.087
+   "wall": 0.083
   },
   {
    "id": "test_guest.ContainmentProbe",
@@ -2708,7 +2773,7 @@
    "mkdtemp": 26,
    "sockets": 0,
    "chdir": 0,
-   "wall": 6.53
+   "wall": 5.465
   },
   {
    "id": "test_guest.ConversationLifecycle",
@@ -2721,7 +2786,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.349
+   "wall": 0.305
   },
   {
    "id": "test_guest.Destroy",
@@ -2734,7 +2799,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.077
+   "wall": 0.071
   },
   {
    "id": "test_guest.EgressInspect",
@@ -2747,7 +2812,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.054
+   "wall": 0.048
   },
   {
    "id": "test_guest.Evaluate",
@@ -2760,7 +2825,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.074
+   "wall": 0.07
   },
   {
    "id": "test_guest.Exchange",
@@ -2773,7 +2838,7 @@
    "mkdtemp": 15,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.753
+   "wall": 2.375
   },
   {
    "id": "test_guest.ForwardingGuard",
@@ -2786,7 +2851,7 @@
    "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.052
+   "wall": 0.05
   },
   {
    "id": "test_guest.HostCensus",
@@ -2838,7 +2903,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.517
+   "wall": 0.493
   },
   {
    "id": "test_guest.JobAccessProbe",
@@ -2851,7 +2916,7 @@
    "mkdtemp": 20,
    "sockets": 0,
    "chdir": 0,
-   "wall": 2.145
+   "wall": 1.859
   },
   {
    "id": "test_guest.JobContainerShape",
@@ -2877,7 +2942,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.031
+   "wall": 0.03
   },
   {
    "id": "test_guest.MountTable",
@@ -2903,7 +2968,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.032
+   "wall": 0.027
   },
   {
    "id": "test_guest.NetprobeCycleOneRegressions",
@@ -2916,7 +2981,7 @@
    "mkdtemp": 15,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.124
+   "wall": 0.114
   },
   {
    "id": "test_guest.NetprobeFixture",
@@ -2929,7 +2994,7 @@
    "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.088
+   "wall": 0.091
   },
   {
    "id": "test_guest.NetprobeListener",
@@ -2942,7 +3007,7 @@
    "mkdtemp": 3,
    "sockets": 8,
    "chdir": 0,
-   "wall": 6.627
+   "wall": 6.578
   },
   {
    "id": "test_guest.NetprobeOverlay",
@@ -2955,7 +3020,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.009
+   "wall": 0.008
   },
   {
    "id": "test_guest.NetprobeSeed",
@@ -2968,7 +3033,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.042
+   "wall": 0.038
   },
   {
    "id": "test_guest.NetprobeSessionSockets",
@@ -2981,7 +3046,7 @@
    "mkdtemp": 3,
    "sockets": 4,
    "chdir": 0,
-   "wall": 0.376
+   "wall": 0.333
   },
   {
    "id": "test_guest.NetprobeVerdict",
@@ -2994,7 +3059,7 @@
    "mkdtemp": 29,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.232
+   "wall": 0.213
   },
   {
    "id": "test_guest.OrdinaryP7",
@@ -3007,7 +3072,7 @@
    "mkdtemp": 13,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.103
+   "wall": 0.091
   },
   {
    "id": "test_guest.OrdinaryPathRefusesValidation",
@@ -3020,7 +3085,7 @@
    "mkdtemp": 3,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.01
+   "wall": 0.008
   },
   {
    "id": "test_guest.P5Scan",
@@ -3033,7 +3098,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.06
+   "wall": 0.054
   },
   {
    "id": "test_guest.Ports",
@@ -3072,7 +3137,7 @@
    "mkdtemp": 32,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.343
+   "wall": 0.317
   },
   {
    "id": "test_guest.QmpClient",
@@ -3085,7 +3150,7 @@
    "mkdtemp": 0,
    "sockets": 2,
    "chdir": 0,
-   "wall": 0.02
+   "wall": 0.021
   },
   {
    "id": "test_guest.Refusals",
@@ -3098,7 +3163,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.222
+   "wall": 0.225
   },
   {
    "id": "test_guest.RenderArgv",
@@ -3137,7 +3202,7 @@
    "mkdtemp": 12,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.847
+   "wall": 0.766
   },
   {
    "id": "test_guest.SurfaceNegativeControls",
@@ -3150,7 +3215,7 @@
    "mkdtemp": 45,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.317
+   "wall": 0.3
   },
   {
    "id": "test_guest.XsaveDetector",
@@ -3176,7 +3241,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.028
+   "wall": 0.025
   },
   {
    "id": "test_msys2_lock.InstallTests",
@@ -3189,7 +3254,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.136
+   "wall": 0.124
   },
   {
    "id": "test_msys2_lock.ResolverTests",
@@ -3215,7 +3280,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.016
+   "wall": 0.014
   },
   {
    "id": "test_msys2_lock.VercmpTests",
@@ -3241,7 +3306,7 @@
    "mkdtemp": 6,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.142
+   "wall": 0.129
   },
   {
    "id": "test_nocloud_seed.ProvisionManifest",
@@ -3254,7 +3319,7 @@
    "mkdtemp": 5,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.123
+   "wall": 0.115
   },
   {
    "id": "test_nocloud_seed.Refusals",
@@ -3267,7 +3332,7 @@
    "mkdtemp": 11,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.301
+   "wall": 0.266
   },
   {
    "id": "test_nocloud_seed.RoundTrip",
@@ -3280,7 +3345,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.091
+   "wall": 0.079
   },
   {
    "id": "test_provision.AdmissionSeed",
@@ -3293,7 +3358,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.047
+   "wall": 0.039
   },
   {
    "id": "test_provision.AgentServerSeed",
@@ -3306,7 +3371,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.02
+   "wall": 0.018
   },
   {
    "id": "test_provision.ConversationFactsSeed",
@@ -3319,7 +3384,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.23
+   "wall": 0.19
   },
   {
    "id": "test_provision.EgressRouteSeed",
@@ -3332,7 +3397,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.334
+   "wall": 0.279
   },
   {
    "id": "test_provision.Manifest",
@@ -3345,7 +3410,7 @@
    "mkdtemp": 4,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.209
+   "wall": 0.174
   },
   {
    "id": "test_provision.ProvisionOperation",
@@ -3358,7 +3423,7 @@
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.481
+   "wall": 0.428
   },
   {
    "id": "test_provision.SeededRootStep",
@@ -3371,7 +3436,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.028
+   "wall": 0.026
   },
   {
    "id": "test_provision.SmokeAndCli",
@@ -3397,7 +3462,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.002
+   "wall": 0.001
   },
   {
    "id": "test_provision_fetch.ProvisionFetch",
@@ -3410,7 +3475,7 @@
    "mkdtemp": 18,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.483
+   "wall": 0.406
   },
   {
    "id": "test_publication_gate.ExistingCommands",
@@ -3423,7 +3488,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.296
+   "wall": 0.262
   },
   {
    "id": "test_publication_gate.FailsClosed",
@@ -3432,11 +3497,11 @@
    "source": "module",
    "tests": 7,
    "discovered": 7,
-   "launches": 110,
+   "launches": 122,
    "mkdtemp": 8,
    "sockets": 0,
    "chdir": 0,
-   "wall": 14.344
+   "wall": 13.352
   },
   {
    "id": "test_publication_gate.ScanWindows",
@@ -3449,7 +3514,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.013
+   "wall": 0.011
   },
   {
    "id": "test_publication_gate.WithRealScanner",
@@ -3458,11 +3523,11 @@
    "source": "module",
    "tests": 13,
    "discovered": 13,
-   "launches": 105,
+   "launches": 111,
    "mkdtemp": 16,
    "sockets": 0,
    "chdir": 0,
-   "wall": 16.942
+   "wall": 15.188
   },
   {
    "id": "test_pytest_conftest.Configuration",
@@ -3501,7 +3566,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.003
+   "wall": 0.002
   },
   {
    "id": "test_qualify_intent_skill.CommittedRuns",
@@ -3514,7 +3579,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.017
+   "wall": 0.014
   },
   {
    "id": "test_qualify_intent_skill.Corpus",
@@ -3540,7 +3605,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.006
+   "wall": 0.005
   },
   {
    "id": "test_qualify_intent_skill.Prompts",
@@ -3566,7 +3631,7 @@
    "mkdtemp": 10,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.574
+   "wall": 0.51
   },
   {
    "id": "test_test_profile.AggregationTests",
@@ -3605,7 +3670,7 @@
    "mkdtemp": 1,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.284
+   "wall": 0.268
   },
   {
    "id": "test_test_profile.ProgramKeyTests",
@@ -3666,11 +3731,11 @@
    "source": "module",
    "tests": 5,
    "discovered": 5,
-   "launches": 40,
-   "mkdtemp": 6,
+   "launches": 39,
+   "mkdtemp": 7,
    "sockets": 0,
    "chdir": 0,
-   "wall": 4.405
+   "wall": 3.346
   },
   {
    "id": "test_verify_seed.DefaultMode",
@@ -3683,7 +3748,7 @@
    "mkdtemp": 12,
    "sockets": 0,
    "chdir": 0,
-   "wall": 5.355
+   "wall": 4.748
   },
   {
    "id": "test_verify_seed.RealBootstrapBaseline",
@@ -3696,7 +3761,7 @@
    "mkdtemp": 0,
    "sockets": 0,
    "chdir": 0,
-   "wall": 0.152
+   "wall": 0.126
   }
  ],
  "modules": [
