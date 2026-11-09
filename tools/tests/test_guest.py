@@ -154,6 +154,48 @@ class RenderArgv(unittest.TestCase):
                                                         'msys2-ucrt64-11.1.3-1/ucrt64/bin'))))
 
 
+# ---------------------------------------------------------------- records
+
+
+class StampedRecords(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-guest-records-'))
+        self.addCleanup(remove_tree, self.tmp)
+
+    def test_records_within_one_clock_tick_all_persist_in_write_order(self):
+        # The clock is frozen: every write reads the same instant, as two writes within one
+        # tick of the clock do (its effective resolution is coarser than the microsecond).
+        tick = guest.datetime(2026, 11, 9, 6, 17, 45, 999998, tzinfo=guest.timezone.utc)
+
+        class Frozen(guest.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return tick
+
+        records = self.tmp / 'records'
+        records.mkdir()
+        foreign = records / 'conversation-smoke-20261109T061745999998Z.json'
+        foreign.write_text('{"writer": "another process"}\n', encoding='utf-8')
+        with mock.patch.object(guest, 'datetime', Frozen):
+            first = guest.write_record(self.tmp, 'inspect', {'n': 0})
+            paths = [guest.write_record(self.tmp, 'conversation-smoke', {'n': n})
+                     for n in (1, 2, 3)]
+            fetch = guest.write_stamped_record(records, 'provision-fetch', {'n': 4})
+        self.assertEqual(Path(first).name, 'inspect-20261109T061745999998Z.json')
+        self.assertEqual(fetch.name, 'provision-fetch-20261109T061745999998Z.json')
+        self.assertEqual([Path(p).name for p in paths],
+                         ['conversation-smoke-20261109T061745999999Z.json',
+                          'conversation-smoke-20261109T061746000000Z.json',
+                          'conversation-smoke-20261109T061746000001Z.json'])
+        self.assertEqual(foreign.read_text(encoding='utf-8'),
+                         '{"writer": "another process"}\n')     # never overwritten
+        self.assertEqual(sorted(records.glob('conversation-smoke-*.json')),
+                         [foreign] + [Path(p) for p in paths])
+        self.assertEqual([json.loads(Path(p).read_text(encoding='utf-8')) for p in paths],
+                         [{'n': 1}, {'n': 2}, {'n': 3}])
+        self.assertEqual(guest.latest_record(self.tmp, 'conversation-smoke'), {'n': 3})
+
+
 # ---------------------------------------------------------------- launch record
 
 

@@ -154,7 +154,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -442,13 +442,30 @@ def write_json_exclusive(path, data):
         handle.write('\n')
 
 
-def write_record(instance_dir, operation, data):
-    records = Path(instance_dir) / 'records'
+def write_stamped_record(records, operation, data):
+    """Write data to records/OPERATION-STAMP.json, STAMP being the UTC time to the
+    microsecond (%Y%m%dT%H%M%S%fZ), by exclusive create: a record is never overwritten.
+
+    The clock's effective resolution is coarser than a microsecond (about 1 ms, and up to
+    15.625 ms, on Windows CPython 3.12), so two records of one operation can read the same
+    instant. When the name exists, the stamp advances by one microsecond and the create is
+    retried until it succeeds. Every name keeps its shape and the names of an operation
+    sort in write order (unless more records are written within one clock tick than the
+    tick has microseconds)."""
+    records = Path(records)
     records.mkdir(exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    path = records / f'{operation}-{stamp}.json'
-    write_json_exclusive(path, data)
-    return str(path)
+    when = datetime.now(timezone.utc)
+    while True:
+        path = records / f'{operation}-{when.strftime("%Y%m%dT%H%M%S%fZ")}.json'
+        try:
+            write_json_exclusive(path, data)
+            return path
+        except FileExistsError:
+            when += timedelta(microseconds=1)
+
+
+def write_record(instance_dir, operation, data):
+    return str(write_stamped_record(Path(instance_dir) / 'records', operation, data))
 
 
 def read_launch_record(instance_dir):
@@ -5313,10 +5330,7 @@ def provision_fetch(ctx, opener=None, crane=None):
                    'image': {'ref': staged['image']['ref'], 'pull': pull},
                    'files': len(files), 'bytes': sum(f['size'] for f in files),
                    'seconds': round(time.time() - t0, 1)})
-    records = root / 'records'
-    records.mkdir(exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    write_json_exclusive(records / f'provision-fetch-{stamp}.json', result)
+    write_stamped_record(root / 'records', 'provision-fetch', result)
     return result
 
 
