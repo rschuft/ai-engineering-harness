@@ -28,6 +28,7 @@ The standard library is imported at module import; Dulwich only when a repositor
 that a missing Dulwich is the stable ``CannotRun`` ``REPOSITORY_NEEDS_DULWICH``, never an
 ``ImportError``.
 """
+import collections
 import hashlib
 import os
 import re
@@ -50,6 +51,12 @@ _MINIMUM_ABBREV = 4
 _SYMREF_MAX_DEPTH = 5
 _PER_WORKTREE_PREFIXES = ('refs/bisect/', 'refs/worktree/', 'refs/rewritten/')
 _TYPE_NAMES = {1: 'commit', 2: 'tree', 3: 'blob', 4: 'tag'}
+_TYPE_NUMS = {name: num for num, name in _TYPE_NAMES.items()}
+# The verified-object cache of one opened repository (decision 0014 section 3: an object enters it
+# only after its content hashed to its id; ids are immutable, so an entry never goes stale). It
+# holds at most this many bytes of object content, least recently used first out, and an object
+# larger than an eighth of it is not kept. Missing objects are not remembered.
+OBJECT_CACHE_BYTES = 32 * 1024 * 1024
 _S_IFMT = 0o170000
 _S_IFREG = 0o100000
 _S_IFLNK = 0o120000
@@ -587,6 +594,11 @@ def _date_gap(name):
                            gap='the reflog date @{<date>} (git fallback)')
 
 
+def _parse(type_num, data, oid, object_format):
+    """The Dulwich object of verified content DATA (its id OID already checked)."""
+    return dulwich_modules().objects.ShaFile.from_raw_string(type_num, data, oid.encode('ascii'), object_format=object_format)
+
+
 class Repository:
     """One opened repository. Close it (or use it as a context manager) when done."""
 
@@ -599,6 +611,8 @@ class Repository:
         self._hexsz = fmt.hex_length
         self._packed = None
         self._replace = None
+        self._objects = collections.OrderedDict()  # oid -> [type name, bytes, parsed ShaFile or None]
+        self._object_bytes = 0
         try:
             storage = repo.get_config().get((b'extensions',), b'refstorage')
         except KeyError:
@@ -611,6 +625,8 @@ class Repository:
     # -- lifetime and facts
 
     def close(self):
+        self._objects.clear()
+        self._object_bytes = 0
         repo, self._dul = self._dul, None
         if repo is not None:
             try:
@@ -698,29 +714,49 @@ class Repository:
                                   f'{" and others" if len(refs) > 1 else ""}), which git applies to object reads and '
                                   'this module does not', refs=refs)
 
-    def _raw(self, oid):
-        """(type name, bytes) of object OID, or None when the repository has none. The content
-        must hash to OID (Dulwich 1.2.21 does not check a loose object's id on this path)."""
+    def _cached(self, oid):
+        """The verified-object cache entry of OID, or None (OBJECT_CACHE_BYTES)."""
         self._refuse_replacement()
+        entry = self._objects.get(oid)
+        if entry is not None:
+            self._objects.move_to_end(oid)
+            return entry
         try:
             type_num, data = self._boundary(oid, self._dul.object_store.get_raw, oid.encode('ascii'))
         except KeyError:
             return None
         kind = _TYPE_NAMES.get(type_num)
         algorithm = hashlib.sha256 if self._hexsz == 64 else hashlib.sha1
+        # Every object read is checked against its id before its content is used (Dulwich 1.2.21
+        # does not check a loose object's id on this path).
         if kind is None or algorithm(b'%s %d\0' % (kind.encode(), len(data)) + data).hexdigest() != oid:
             raise RepositoryError('GIT_FAILED', f'cannot read object {oid}: its content does not hash to its id',
                                   object=oid)
-        return kind, data
+        entry = [kind, data, None]
+        if len(data) <= OBJECT_CACHE_BYTES // 8:
+            self._objects[oid] = entry
+            self._object_bytes += len(data)
+            while self._object_bytes > OBJECT_CACHE_BYTES:
+                _, (_, evicted, _) = self._objects.popitem(last=False)
+                self._object_bytes -= len(evicted)
+        return entry
+
+    def _raw(self, oid):
+        """(type name, bytes) of object OID, or None when the repository has none. The content
+        hashed to OID when it was read."""
+        entry = self._cached(oid)
+        return None if entry is None else (entry[0], entry[1])
 
     def _object(self, oid):
-        """The parsed object OID (a Dulwich ShaFile), or None when the repository has none."""
-        if self._raw(oid) is None:
+        """The parsed object OID (a Dulwich ShaFile), or None when the repository has none: parsed
+        from the verified bytes, once, not read again."""
+        entry = self._cached(oid)
+        if entry is None:
             return None
-        try:
-            return self._boundary(oid, self._dul.object_store.__getitem__, oid.encode('ascii'))
-        except KeyError:
-            return None
+        if entry[2] is None:
+            kind, data = entry[0], entry[1]
+            entry[2] = self._boundary(oid, _parse, _TYPE_NUMS[kind], data, oid, self._dul.object_store.object_format)
+        return entry[2]
 
     def _kind(self, oid):
         found = self._raw(oid)
@@ -748,8 +784,11 @@ class Repository:
         return target
 
     def _parents(self, oid):
+        commit = self._object(oid)  # verified, so the parents provider reads nothing again
+        if commit is None:
+            return None
         try:
-            return [p.decode('ascii') for p in self._boundary(oid, self._dul.get_parents, oid.encode('ascii'))]
+            return [p.decode('ascii') for p in self._boundary(oid, self._dul.get_parents, oid.encode('ascii'), commit)]
         except KeyError:
             return None
 

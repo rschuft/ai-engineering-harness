@@ -414,7 +414,8 @@ class Export(unittest.TestCase):
 
 class Integrity(unittest.TestCase):
     """A damaged object fails visibly with GIT_FAILED naming it (decision 0014 section 3); no
-    crash, and the other objects still read."""
+    crash, and the other objects still read. The verified-object cache (F-10.3) holds only
+    objects whose content hashed to their id, within its bound, and is emptied by close()."""
 
     def test_damaged_objects(self):
         facts = rc.expected()['facts']
@@ -430,9 +431,23 @@ class Integrity(unittest.TestCase):
                         self.assertEqual(caught.exception.code, 'GIT_FAILED')
                         self.assertEqual(caught.exception.details.get('object'), oid)
                         self.assertIn(oid, caught.exception.message)
+                    self.assertNotIn(oid, r._objects)  # a damaged object is never cached
                     self.assertEqual(r.blob('HEAD', 'other.txt'), b'other\n')
                     self.assertEqual(r.blob('HEAD', 'dir/more.txt'), b'more\n')
                     self.assertIsNotNone(r.commit('HEAD'))
+                    # A verified object is read from the repository once.
+                    store = type(r._dul.object_store)
+                    with mock.patch.object(store, 'get_raw', autospec=True, side_effect=store.get_raw) as reads:
+                        self.assertEqual(r.blob('HEAD', 'other.txt'), b'other\n')
+                    self.assertEqual(reads.call_count, 0)
+                    self.assertLessEqual(r._object_bytes, ra.OBJECT_CACHE_BYTES)
+                    with mock.patch.object(ra, 'OBJECT_CACHE_BYTES', 64):
+                        r._objects.clear()
+                        r._object_bytes = 0
+                        r.blob('HEAD', 'other.txt')
+                        r.blob('HEAD', 'dir/more.txt')
+                        self.assertLessEqual(r._object_bytes, 64)
+                        self.assertTrue(all(len(entry[1]) <= 64 // 8 for entry in r._objects.values()))
                     with self.assertRaises(ra.RepositoryError) as caught:
                         r.export_tree('HEAD', '.', _empty_dir())
                     self.assertEqual(caught.exception.code, 'GIT_FAILED')
@@ -442,6 +457,7 @@ class Integrity(unittest.TestCase):
                         warnings.simplefilter('always')
                         r.close()
                         gc.collect()
+                self.assertEqual((len(r._objects), r._object_bytes), (0, 0))
                 # Closing released every file of the damaged repository.
                 self.assertEqual([str(w.message) for w in seen if issubclass(w.category, ResourceWarning)], [])
 

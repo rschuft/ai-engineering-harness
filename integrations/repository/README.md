@@ -102,6 +102,16 @@ Local mechanics decided here (0014 leaves them open):
   `read_reflog` fails on a line without a message (git writes one for `worktree add`).
 - **Every object read is checked against its id**: Dulwich 1.2.21's `get_raw` does not check a
   loose object's id, and 0014 section 3 accepts the stricter read (G9).
+- **One read per object** (F-10.3 repair): an opened repository keeps the objects it has
+  verified in a cache keyed by object id (ids are immutable, so an entry never goes stale), at
+  most `OBJECT_CACHE_BYTES` (32 MiB) of content, least recently used out first, an object
+  larger than an eighth of that not kept, missing objects never remembered; it is emptied by
+  `close()`. A parsed object is parsed from those verified bytes (Dulwich's `from_raw_string`
+  with the checked id), not read again, and a commit's parents are taken from it. One
+  traversal of the lineage example reads 17 objects through Dulwich, against 180 before. Each
+  object Dulwich does not find in a pack still makes it list `objects/pack` once (its
+  `get_raw` looks in the packs first and rescans their directory on a miss); no supported
+  Dulwich call avoids that, and it costs about 0.5 ms of the example's 3.7 ms.
 - **Replace references fail closed.** git applies `refs/replace/` to every object read unless
   `core.useReplaceRefs` is false; the module does not replace objects. In a repository holding
   any replace reference (loose or packed) every object read is refused with
