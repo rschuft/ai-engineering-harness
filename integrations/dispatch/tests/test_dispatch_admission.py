@@ -76,13 +76,22 @@ def create_entries(data):
     return [r for r in data['routes'] if (r['method'], r['path']) == ('POST', '/api/conversations')]
 
 
+# The pinned server's recorded answers (E-01.3.1 request/response fixture).
+EXCHANGE = json.loads((HERE / 'fixtures' / 'agent-server-1.60.1-exchange.json').read_bytes())
+
+
 class CountingTransport:
-    """The OpenHands create, faked: records every call."""
+    """The Agent Server, faked: answers GET /server_info (decision 0001's preconditions, checked
+    before every create since E-01.3.1) with the pinned server's recorded answer and records it in
+    ``info_calls``; records every other call, the create, in ``calls``."""
 
     def __init__(self, fail=None):
-        self.calls, self.fail = [], fail
+        self.calls, self.info_calls, self.fail = [], [], fail
 
     def __call__(self, method, path, body):
+        if (method, path) == ('GET', '/server_info'):
+            self.info_calls.append((method, path, body))
+            return copy.deepcopy(EXCHANGE['server_info']['response'])
         self.calls.append((method, path, copy.deepcopy(body)))
         if self.fail is not None:
             raise self.fail
@@ -139,6 +148,7 @@ class AdmissionFixture(base.Fixture):
         self.assertIn(code, di.REFUSALS)
         self.assertEqual(caught.exception.to_json()['code'], code)
         self.assertEqual(self.transport.calls, [], 'a refusal must never reach the create')
+        self.assertEqual(self.transport.info_calls, [], 'an admission refusal calls the transport zero times')
         return caught.exception
 
     def approve_variant(self, mutate=None, template=TEMPLATE_BYTES, routes=ROUTES_BYTES):
@@ -180,6 +190,7 @@ class PositiveControlTests(AdmissionFixture):
         result = self.send(admitted, resolved)
         expected = self.expected_body(resolved)
         self.assertEqual(self.transport.calls, [('POST', '/api/conversations', expected)])
+        self.assertEqual(self.transport.info_calls, [('GET', '/server_info', None)])
         self.assertEqual(result['id'], reservation.conversation_id)
         self.assertEqual(expected['conversation_id'], reservation.conversation_id)
         # The body is the pinned template with only the reserved conversation id changed.

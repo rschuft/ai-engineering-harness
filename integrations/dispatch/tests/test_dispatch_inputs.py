@@ -55,6 +55,10 @@ WAIT_CEILING_S = 60  # bounds a hung child; the CLI normally answers in well und
 CHANGE = fx.CHANGE
 PIN_COMMIT = 'c' * 40
 BUILDER_SHA = hashlib.sha256(b'synthetic builder agent/Skill manifest').hexdigest()
+# The Work's outcome (decision 0008: a random UUID minted at acceptance): every task Backlog.md
+# reports here carries it as a reference (E-01.3.1: every reservation carries an outcomeRef).
+OUTCOME = '3f6a2c1d-9b4e-4f7a-8c2d-5e1b0a9f7d63'
+OUTCOME_REF = f'outcome:{OUTCOME}'
 REVIEWER_SHA = hashlib.sha256(b'synthetic reviewer agent/Skill manifest').hexdigest()
 
 
@@ -136,13 +140,15 @@ def write_agent_server(profile_dir, template=TEMPLATE_BYTES, routes=ROUTES_BYTES
 class SnapshotBacklog:
     """Backlog.md's recorded readiness output, replayed in process (task list and task view).
 
-    ``references`` overrides a task's references, as Backlog.md would report them after an edit.
+    ``references`` overrides a task's references, as Backlog.md would report them after an edit;
+    otherwise every task carries its recorded references and ``outcome`` (E-01.3.1), when given.
     """
 
-    def __init__(self, stage, references=None, fail=False):
+    def __init__(self, stage, references=None, fail=False, outcome=OUTCOME_REF):
         self.stage = READINESS / stage
         self.references = references or {}
         self.fail = fail
+        self.outcome = outcome
         self.calls = []
 
     def _envelope(self, name, kind):
@@ -164,6 +170,8 @@ class SnapshotBacklog:
         task = self._envelope(path.name, 'task-view')['task']
         if task['id'] in self.references:
             task['references'] = list(self.references[task['id']])
+        elif self.outcome is not None:
+            task['references'] = task['references'] + [self.outcome]
         return task
 
 
@@ -265,9 +273,9 @@ class Fixture(unittest.TestCase):
         self.assertEqual(self.ordinal_calls, [])
         return caught.exception
 
-    def source_with(self, stage='unblocked', references=None, fail=False):
+    def source_with(self, stage='unblocked', references=None, fail=False, outcome=OUTCOME_REF):
         return {'demo-app': CountingSource(di.PlanningWorkSource(
-            SnapshotBacklog(stage, references=references, fail=fail), self.git))}
+            SnapshotBacklog(stage, references=references, fail=fail, outcome=outcome), self.git))}
 
     def task2_references(self):
         view = json.loads((READINESS / 'unblocked' / 'task-view-TASK-2.json').read_text(encoding='utf-8'))

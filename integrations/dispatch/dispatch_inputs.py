@@ -1,5 +1,5 @@
-"""Trusted dispatch input resolution and create admission (plan leaves E-01.2.1 and E-01.2.2,
-blueprint #execution-qualification).
+"""Trusted dispatch input resolution, create admission and the native conversation create
+(plan leaves E-01.2.1, E-01.2.2 and E-01.3.1, blueprint #execution-qualification).
 
 Dispatch step 01 resolves the authoritative Work and profile before anything is reserved
 or created: "Check Backlog readiness, accepted OpenSpec revision and executable
@@ -8,6 +8,12 @@ resolver. It is pure: it reads, through injected sources, and changes nothing. I
 admission (``admit``, then ``send_create``) builds the one OpenHands create of a reserved
 attempt from trusted policy only and validates it again immediately before the injected
 transport; a refusal never reaches the transport (section "Admission" below).
+
+``dispatch`` (E-01.3.1) runs the dispatcher's order on one request: resolve, reserve, admit,
+send_create, with the reserved record re-read from the store, the host workspace created only
+after admission, every Agent Server call checked against the profile's pinned route allowlist
+(``AgentServerClient``), decision 0001's ``/server_info`` preconditions before the create, and
+the returned conversation id recorded in the store; a refused attempt is marked failed.
 
 * **Input:** a dispatch request (``ai-engineering-harness/dispatch/request/v1``) that names
   identifiers only: the Work (a Backlog.md task id), the repository, the stage, the
@@ -77,10 +83,13 @@ store = _load('integration_store', REPO / 'integrations' / 'store' / 'integratio
 readiness = _load('planning_readiness', REPO / 'integrations' / 'planning' / 'planning_readiness.py')
 planning = readiness.adapter
 paths = _load('aieh_paths', REPO / 'integrations' / 'paths' / 'aieh_paths.py')
+# The reference grammar integrations/lineage reads a reservation's outcomeRef with (decision 0008).
+lineage = _load('lineage', REPO / 'integrations' / 'lineage' / 'lineage.py')
 
 REQUEST_FORMAT = 'ai-engineering-harness/dispatch/request/v1'
 MANIFEST_SCHEMA = 'ai-engineering-harness/dispatch/approved-inputs/v1'
-RESOLVED_FORMAT = 'ai-engineering-harness/dispatch/resolved-inputs/v1'
+# v2 (E-01.3.1): v1 plus outcome_ref, the Work's outcome reference (the reservation's outcomeRef).
+RESOLVED_FORMAT = 'ai-engineering-harness/dispatch/resolved-inputs/v2'
 # v2 (E-01.2.2): v1 plus the admission policy (runtime, create route and template, working
 # directory, conversation caps, guest ceilings, declared mounts) under "admission".
 POLICY_FORMAT = 'ai-engineering-harness/dispatch/policy-inputs/v2'
@@ -90,6 +99,10 @@ CHECK_FORMAT = 'ai-engineering-harness/dispatch/manifest-check/v1'
 PROFILE_SCHEMA = 'ai-engineering-harness/profiles/profile/v1'
 ROUTES_SCHEMA = 'ai-engineering-harness/profiles/agent-server-routes/v1'
 INTENT_KEY = 'dispatchInputs'
+# The reservation intent's correlation keys (blueprint #integration-contracts), the names
+# integrations/lineage reads (lineage_trace.WORK_KEY, OUTCOME_KEY).
+WORK_REF_KEY, OUTCOME_REF_KEY = store.WORK_REF_KEY, 'outcomeRef'
+OUTCOME_SCHEME = 'outcome:'
 MANIFEST_CATEGORY = 'state'           # aieh_paths category (persistent/, class B)
 MANIFEST_COMPONENT = 'dispatch'       # the <component>/ layout of the state category
 MANIFEST_NAME = 'approved-inputs.json'
@@ -146,6 +159,10 @@ REFUSALS = {
     'DESIGN_AMBIGUOUS': 'the task\'s source pointers pin more than one change or commit',
     'DESIGN_NOT_ACCEPTED': 'the manifest records no accepted revision of the task\'s OpenSpec change',
     'DESIGN_REVISION_MISMATCH': 'the task pins a revision other than the accepted one',
+    'OUTCOME_REF_ABSENT': 'the task carries no outcome reference (outcome:<id>), so the reservation could not '
+                          'carry an outcomeRef',
+    'OUTCOME_REF_INVALID': 'an outcome reference of the task is not a well-formed outcome:<uuid>[@<commit>]',
+    'OUTCOME_REF_AMBIGUOUS': 'the task references more than one outcome (or one at several revisions)',
     'IDENTITY_INVALID': 'the resolved inputs do not form a valid attempt identity',
     # E-01.2.2: admission before the OpenHands create
     'PROFILE_ADMISSION_INVALID': 'the profile declares no complete, well-formed admission policy (Agent Server '
@@ -166,8 +183,10 @@ REFUSALS = {
     'MOUNTS_NOT_DECLARED': 'the effective mount set is not exactly the declared one (an extra, missing or '
                            'altered mount, or a body field that would add one)',
     'WORKING_DIR_NOT_ALLOWED': 'the create body\'s workspace is not the server-provisioned working directory',
-    'ROUTE_NOT_ALLOWLISTED': 'the create does not target the one create route the dispatcher allowlist admits',
-    'BODY_MALFORMED': 'the create body is not a JSON object',
+    'ROUTE_NOT_ALLOWLISTED': 'the call (the create or any other dispatcher call) does not target a route the '
+                             'pinned route allowlist lists exactly once with dispatcher "allowed"',
+    'ROUTE_PARAMETER_INVALID': 'a route\'s path parameters are not exactly its placeholders, each in its grammar',
+    'BODY_MALFORMED': 'the create body is not a JSON object, or a bodyless call (GET, HEAD, DELETE) carries a body',
     'BODY_FIELD_UNKNOWN': 'the create body carries a field outside the allowlist',
     'BODY_NOT_TEMPLATE': 'an allowlisted create body field differs from the profile\'s pinned create template',
     'CONVERSATION_ID_MISMATCH': 'the create body does not carry the reserved conversation id',
@@ -179,11 +198,19 @@ REFUSALS = {
     'WORKSPACE_NOT_PLANNED': 'the planned workspace is not the fixed rule\'s workspace for this attempt',
     'WORKSPACE_PATH_UNSAFE': 'an existing part of the workspace path is a link, junction, reparse point or '
                              'not a directory',
+    # E-01.3.1: the native conversation create
+    'SERVER_PRECONDITION_FAILED': 'GET /server_info does not show decision 0001\'s preconditions P1 to P5 (the '
+                                  'pinned version, conversation_runtime_routes_v1, idempotent_conversation_create_v1, '
+                                  'runtime docker, no selectable runtime)',
+    'RESERVATION_INVALID': 'the stored reservation is not a dispatch reservation consistent with its typed identity',
+    'ATTEMPT_NOT_RESERVED': 'the stored attempt is no longer in the reserved state',
+    'CREATE_REFUSED': 'the Agent Server answered the create with a 4xx refusal',
 }
 
 
 class DispatchRefused(Exception):
-    """A typed refusal, raised before any reservation and before any external call."""
+    """A typed refusal. Resolution refuses before any reservation; admission and the create's own
+    checks refuse before the create is sent; only ``CREATE_REFUSED`` reports the server's answer."""
 
     def __init__(self, code: str, detail: str, **context):
         if code not in REFUSALS:
@@ -434,13 +461,15 @@ class PlanningWorkSource:
 
     def read(self, work_id: str) -> dict | None:
         # One readiness evaluation is one adapter operation (F-09.4): one git batch reader, and
-        # Backlog.md's reads made once each.
+        # Backlog.md's reads made once each (the task view below is the readiness read's, memoized).
         with planning.operation():
             listed = [t['id'] for t in self.backlog.list_tasks() if t['id'].upper() == work_id.upper()]
             if not listed:
                 return None
             report = readiness.read_readiness(self.backlog, self.git, [listed[0]])
-            return report['tasks'][0]
+            references = self.backlog.view(listed[0]).get('references')
+            # The task's own references (E-01.3.1: its outcome reference), as Backlog.md reports them.
+            return {**report['tasks'][0], 'references': list(references) if isinstance(references, list) else None}
 
 
 def read_profile_file(profile_id: str, *, profiles_root=REPO / 'profiles') -> bytes:
@@ -479,10 +508,15 @@ class ResolvedInputs:
     policy_inputs_json: str
     manifest_version: int
     manifest_sha256: str
+    outcome_ref: str
 
     @property
     def policy_inputs(self) -> dict:
         return json.loads(self.policy_inputs_json)
+
+    @property
+    def work_ref(self) -> str:
+        return f'{store.WORK_REF_PREFIX}{self.work_id}'
 
     def attempt_identity(self):
         return store.AttemptIdentity(
@@ -496,14 +530,42 @@ class ResolvedInputs:
                 'profile': self.profile, 'profile_digest': self.profile_digest,
                 'catalog_pin': self.catalog_pin, 'agent_manifest_digest': self.agent_manifest_digest,
                 'planned_workspace': self.planned_workspace, 'policy_digest': self.policy_digest,
-                'policy_inputs': self.policy_inputs,
+                'policy_inputs': self.policy_inputs, 'outcome_ref': self.outcome_ref,
                 'approval': {'manifest_schema': MANIFEST_SCHEMA, 'manifest_version': self.manifest_version,
                              'manifest_sha256': self.manifest_sha256}}
 
     def intent(self) -> dict:
-        """The reservation intent: the record under ``dispatchInputs``. Its digest therefore covers
-        the approval provenance, so a later audit ties the attempt to the manifest that approved it."""
-        return {INTENT_KEY: self.to_json()}
+        """The reservation intent: the record under ``dispatchInputs``, with the correlation keys
+        ``workRef`` (``backlog:<work_id>``) and ``outcomeRef`` (the Work's ``outcome:`` reference)
+        that integrations/lineage reads. Its digest therefore covers the approval provenance, so a
+        later audit ties the attempt to the manifest that approved it."""
+        return {INTENT_KEY: self.to_json(), WORK_REF_KEY: self.work_ref, OUTCOME_REF_KEY: self.outcome_ref}
+
+    @classmethod
+    def from_json(cls, record) -> 'ResolvedInputs':
+        """The record ``to_json`` wrote (as the store holds it), checked strictly: exactly its keys
+        and types, and ``to_json`` of the result equal to it. RESERVATION_INVALID otherwise."""
+        def invalid(detail):
+            raise DispatchRefused('RESERVATION_INVALID', f'the stored dispatch record {detail}')
+
+        strings = ('work_id', 'repository', 'stage', 'design_revision', 'profile', 'profile_digest', 'catalog_pin',
+                   'agent_manifest_digest', 'planned_workspace', 'policy_digest', 'outcome_ref')
+        keys = {'format', 'ordinal', 'policy_inputs', 'approval', *strings}
+        if not isinstance(record, dict) or set(record) != keys or record['format'] != RESOLVED_FORMAT:
+            invalid(f'is not {RESOLVED_FORMAT}')
+        approval = record['approval']
+        if not all(isinstance(record[k], str) for k in strings) or type(record['ordinal']) is not int \
+                or not isinstance(record['policy_inputs'], dict) or not isinstance(approval, dict) \
+                or set(approval) != {'manifest_schema', 'manifest_version', 'manifest_sha256'} \
+                or approval['manifest_schema'] != MANIFEST_SCHEMA or type(approval['manifest_version']) is not int \
+                or not isinstance(approval['manifest_sha256'], str):
+            invalid('has a field of the wrong type')
+        resolved = cls(**{k: record[k] for k in strings}, ordinal=record['ordinal'],
+                       policy_inputs_json=_canonical(record['policy_inputs']),
+                       manifest_version=approval['manifest_version'], manifest_sha256=approval['manifest_sha256'])
+        if _canonical(resolved.to_json()) != _canonical(record):
+            invalid('does not round-trip')
+        return resolved
 
 
 def policy_inputs(repository: dict, stage: str, design: dict, profile: dict, catalog_pin: dict,
@@ -621,6 +683,29 @@ def _design_revision(work_id: str, entry: dict) -> tuple[str, str, str]:
     return revision, change, commit
 
 
+def _outcome_ref(work_id: str, entry: dict) -> str:
+    """The Work's outcome reference: the one ``outcome:`` reference among the task's own Backlog.md
+    references (decision 0008 point 4: a change serving an outcome references it, a Backlog
+    ``--ref``), in the grammar integrations/lineage reads; or a refusal."""
+    references = entry.get('references')
+    texts = sorted({r for r in references if isinstance(r, str) and r.startswith(OUTCOME_SCHEME)}) \
+        if isinstance(references, list) else []
+    if not texts:
+        raise DispatchRefused('OUTCOME_REF_ABSENT', f'{work_id} carries no {OUTCOME_SCHEME}<id> reference')
+    for text in texts:
+        try:
+            reference = lineage.parse(text)
+        except lineage.MalformedReference as exc:
+            raise DispatchRefused('OUTCOME_REF_INVALID', f'{work_id}: {exc.code}: {text!r}', reference=text) from None
+        if not isinstance(reference, lineage.ObjectiveRef):
+            raise DispatchRefused('OUTCOME_REF_INVALID', f'{work_id}: not an outcome reference: {text!r}',
+                                  reference=text)
+    if len(texts) != 1:
+        raise DispatchRefused('OUTCOME_REF_AMBIGUOUS', f'{work_id} references {len(texts)} outcomes: {texts}',
+                              references=texts)
+    return texts[0]
+
+
 def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], WorkSource | None],
             next_ordinal: Callable[[str, str, str], int],
             read_profile: Callable[[str], bytes] = read_profile_file) -> ResolvedInputs:
@@ -685,6 +770,7 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
         raise DispatchRefused('DESIGN_REVISION_MISMATCH', f'{work_id} pins {change}@{commit}; the accepted '
                               f'revision is {change}@{design_entry["commit"]}',
                               pinned=commit, accepted=design_entry['commit'])
+    outcome_ref = _outcome_ref(work_id, entry)
 
     inputs = policy_inputs(repo_entry, stage, design_entry, profile_entry, pin_entry, admission)
     inputs_json = _canonical(inputs)
@@ -704,7 +790,7 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
         design_revision=design_revision, profile=profile, profile_digest=profile_digest, catalog_pin=pin,
         agent_manifest_digest=identity.agent_manifest_digest, planned_workspace=identity.planned_workspace,
         policy_digest=policy_digest, policy_inputs_json=inputs_json, manifest_version=manifest.version,
-        manifest_sha256=manifest.sha256)
+        manifest_sha256=manifest.sha256, outcome_ref=outcome_ref)
 
 
 # ---------------------------------------------------------------------------
@@ -1065,6 +1151,7 @@ class AdmittedCreate:
     host_workspace: str
     policy_digest: str
     template_bytes: bytes     # the pinned create template, re-checked against its sha256 on send
+    routes_bytes: bytes       # the pinned route allowlist every Agent Server call is checked against (E-01.3.1)
 
     @property
     def body(self) -> dict:
@@ -1080,7 +1167,8 @@ class AdmittedCreate:
                 'body': self.body, 'mounts': self.mounts,
                 'workspace': {'planned': self.planned_workspace, 'host': self.host_workspace},
                 'policy_digest': self.policy_digest,
-                'create_template_sha256': hashlib.sha256(self.template_bytes).hexdigest()}
+                'create_template_sha256': hashlib.sha256(self.template_bytes).hexdigest(),
+                'routes_sha256': hashlib.sha256(self.routes_bytes).hexdigest()}
 
 
 def _resolved_admission(resolved: ResolvedInputs) -> dict:
@@ -1115,6 +1203,10 @@ def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admis
     if hashlib.sha256(template_raw).hexdigest() != admission['create_template']['sha256']:
         raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted create template is not the pinned one')
     template = _artifact_object(template_raw, 'create template')
+    routes_raw = admitted.routes_bytes if isinstance(admitted.routes_bytes, bytes) else b''
+    if hashlib.sha256(routes_raw).hexdigest() != admission['routes']['sha256']:
+        raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted route allowlist is not the pinned one')
+    _check_route_allowlist(routes_raw, admission['route'])
     if not _same({'method': admitted.method, 'path': admitted.path}, admission['route']):
         raise DispatchRefused('ROUTE_NOT_ALLOWLISTED', f'{admitted.method} {admitted.path} is not the admitted '
                               f'create route {admission["route"]}')
@@ -1160,7 +1252,8 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
     host = workspace_host_path(resolved, workspaces, key)
     template_raw = _read_pinned(read_artifact, admission['create_template'], 'create template')
     template = _artifact_object(template_raw, 'create template')
-    _check_route_allowlist(_read_pinned(read_artifact, admission['routes'], 'route allowlist'), admission['route'])
+    routes_raw = _read_pinned(read_artifact, admission['routes'], 'route allowlist')
+    _check_route_allowlist(routes_raw, admission['route'])
     conversation_id = store.conversation_id_for(key)
     body = json.loads(_canonical(template))
     body['conversation_id'] = conversation_id
@@ -1169,24 +1262,358 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
         path=admission['route']['path'], body_json=_canonical(body),
         mounts_json=_canonical(_binds_for(admission['mounts']['binds'], conversation_id.replace('-', ''))),
         planned_workspace=resolved.planned_workspace, host_workspace=str(host),
-        policy_digest=resolved.policy_digest, template_bytes=template_raw)
+        policy_digest=resolved.policy_digest, template_bytes=template_raw, routes_bytes=routes_raw)
     _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces)
     return admitted
 
 
 def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspaces,
-                transport: Callable[[str, str, dict], object]):
+                transport: Callable[[str, str, dict | None], object]):
     """Validate the admitted create again, against the policy the attempt was reserved under
-    (``resolved``, the record ``reserve_attempt`` stored), immediately before the transport; then
-    call ``transport(method, path, body)`` exactly once and return its result. A refusal calls it
-    zero times. Nothing is retried and no other runtime is ever tried."""
+    (``resolved``, the record ``reserve_attempt`` stored), immediately before the transport; then,
+    through an ``AgentServerClient`` on the pinned route allowlist, read ``GET /server_info`` and
+    refuse unless decision 0001's preconditions P1 to P5 hold (``server_preconditions``); then send
+    the create exactly once and return the transport's answer. A refusal never sends the create
+    (an admission refusal calls the transport zero times). Nothing is retried and no other runtime
+    is ever tried."""
     if not isinstance(admitted, AdmittedCreate):
         raise TypeError('admitted must be AdmittedCreate (admit)')
     if not isinstance(resolved, ResolvedInputs):
         raise TypeError('resolved must be ResolvedInputs (resolve)')
     admission = _resolved_admission(resolved)
     body = _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces)
-    return transport(admitted.method, admitted.path, body)
+    client = AgentServerClient(admitted.routes_bytes, transport, routes_sha256=admission['routes']['sha256'])
+    try:
+        info = client.call(SERVER_INFO_ROUTE['method'], SERVER_INFO_ROUTE['path'])
+    except DispatchRefused:
+        raise
+    except Exception as exc:  # no answer: no precondition is established, and nothing was created
+        raise DispatchRefused('SERVER_PRECONDITION_FAILED', f'GET /server_info was not answered: '
+                              f'{type(exc).__name__}', failed=list(PRECONDITIONS), observed=None) from None
+    server_preconditions(info, client.version)
+    return client.call(admitted.method, admitted.path, body=body)
+
+
+# ---------------------------------------------------------------------------
+# The native conversation create (E-01.3.1)
+#
+# dispatch(): resolve -> reserve_attempt -> (the reserved record re-read from the store) -> admit
+# -> create_workspace -> transition dispatched -> send_create (GET /server_info, P1 to P5, POST)
+# -> the returned conversation id recorded in the store. Every Agent Server call goes through
+# AgentServerClient, which refuses any route the profile's pinned allowlist does not list exactly
+# once as dispatcher "allowed", before the transport is called.
+
+SERVER_INFO_ROUTE = {'method': 'GET', 'path': '/server_info'}   # server_details_router.py, public
+REQUIRED_CAPABILITIES = ('conversation_runtime_routes_v1', 'idempotent_conversation_create_v1')
+# Decision 0001 s1 and s2, as GET /server_info shows them (observed at 1.60.1: F-04.1c section 3).
+PRECONDITIONS = {
+    'P1': '/server_info answers 2xx with a JSON object whose version is the pinned API version (the version of '
+          'the pinned route allowlist, decision 0001 s1)',
+    'P2': 'capabilities include conversation_runtime_routes_v1 (decision 0001 s2)',
+    'P3': 'capabilities include idempotent_conversation_create_v1 (decision 0001 s2, the retry rule)',
+    'P4': 'conversation_runtime is docker (decision 0001 s2, required configuration)',
+    'P5': 'available_conversation_runtimes is empty: the runtime is not selectable (decision 0001 s2, '
+          'conversation_runtime_selectable=false; hybrid mode only by recorded exception, and none is recorded)',
+}
+# Path parameters of the dispatcher-allowed routes, each in a grammar that cannot leave its segment.
+ROUTE_PARAMETERS = {'conversation_id': UUID_RE, 'event_id': re.compile(r'[A-Za-z0-9_-]{1,128}')}
+PLACEHOLDER_RE = re.compile(r'\{([^{}]*)\}')
+BODYLESS_METHODS = ('GET', 'HEAD', 'DELETE')
+CREATE_STATUSES = {201: True, 200: False}  # status -> created; 200 returns the existing one (F-04.2 s4.5)
+EXECUTION_REF_PREFIX = 'openhands:conversation/'
+DISPATCHED_FORMAT = 'ai-engineering-harness/dispatch/create-dispatched/v1'
+RECEIPT_FORMAT = 'ai-engineering-harness/dispatch/create-receipt/v1'
+RESULT_FORMAT = 'ai-engineering-harness/dispatch/dispatch-result/v1'
+
+
+class AgentServerClient:
+    """The dispatcher's only way to the Agent Server: ``call(method, route, params=, body=)`` sends
+    ``transport(method, path, body)`` only when ``(method, route)`` is listed exactly once in the
+    profile's pinned route allowlist (``agent-server/routes.json``, S-01.3.1) with ``dispatcher``
+    ``allowed``, and its path parameters are exactly the route's placeholders, each in its grammar.
+    Anything else is refused before the transport is called. ``version`` is the allowlist's API
+    version (the pinned one, decision 0001 s1).
+
+    The transport contract: ``transport(method, path, body)`` returns the HTTP answer as
+    ``{"status": <int>, "body": <parsed JSON>}`` (the shape tools/guest.py's API calls return) and
+    raises when there is no answer. No implementation for live use exists here (E-01.3.3 brings
+    the management key's custody); tests inject one."""
+
+    def __init__(self, routes_raw: bytes, transport: Callable[[str, str, dict | None], object], *,
+                 routes_sha256: str):
+        if not callable(transport):
+            raise TypeError('transport must be callable as transport(method, path, body)')
+        raw = routes_raw if isinstance(routes_raw, bytes) else b''
+        if hashlib.sha256(raw).hexdigest() != routes_sha256:
+            raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the route allowlist is not the pinned one')
+        data = _artifact_object(raw, 'route allowlist')
+        routes, version = data.get('routes'), data.get('version')
+        if data.get('schema') != ROUTES_SCHEMA or not isinstance(routes, list) \
+                or not isinstance(version, str) or not version:
+            raise DispatchRefused('PROFILE_ARTIFACT_INVALID', f'the route allowlist is not {ROUTES_SCHEMA} with a '
+                                  'version')
+        listed = [(r.get('method'), r.get('path'), r.get('dispatcher')) for r in routes if isinstance(r, dict)]
+        counts: dict = {}
+        for method, path, _ in listed:
+            counts[(method, path)] = counts.get((method, path), 0) + 1
+        self._allowed = frozenset((m, p) for m, p, d in listed
+                                  if d == 'allowed' and isinstance(m, str) and isinstance(p, str)
+                                  and counts[(m, p)] == 1)
+        self._transport, self.version, self.routes_sha256 = transport, version, routes_sha256
+
+    def allows(self, method, route) -> bool:
+        return (method, route) in self._allowed
+
+    def call(self, method: str, route: str, *, params: Mapping[str, str] | None = None, body: dict | None = None):
+        if not (isinstance(method, str) and isinstance(route, str)) or not self.allows(method, route):
+            raise DispatchRefused('ROUTE_NOT_ALLOWLISTED', f'{method} {route} is not a dispatcher-allowed route of '
+                                  'the pinned route allowlist', method=str(method), route=str(route))
+        params = {} if params is None else params
+        names = PLACEHOLDER_RE.findall(route)
+        if not isinstance(params, Mapping) or sorted(params) != sorted(set(names)) or len(set(names)) != len(names):
+            raise DispatchRefused('ROUTE_PARAMETER_INVALID', f'{route} takes {sorted(names)}, not '
+                                  f'{sorted(map(str, params)) if isinstance(params, Mapping) else params!r}')
+        path = route
+        for name in names:
+            value, grammar = params[name], ROUTE_PARAMETERS.get(name)
+            if grammar is None or not isinstance(value, str) or grammar.fullmatch(value) is None:
+                raise DispatchRefused('ROUTE_PARAMETER_INVALID', f'{name} of {route} is not in its grammar',
+                                      parameter=name)
+            path = path.replace('{' + name + '}', value)
+        if method in BODYLESS_METHODS and body is not None:
+            raise DispatchRefused('BODY_MALFORMED', f'{method} {route} takes no body')
+        return self._transport(method, path, body)
+
+
+def _json_value(value):
+    """``value`` when it is plain JSON, else its type name (refusal context reaches the store)."""
+    try:
+        _canonical(value)
+        return value
+    except (TypeError, ValueError):
+        return f'<{type(value).__name__}>'
+
+
+def server_preconditions(response, pinned_version: str) -> dict:
+    """Decision 0001's preconditions on a ``GET /server_info`` answer (``PRECONDITIONS``, P1 to
+    P5). Returns the observed fields, or raises SERVER_PRECONDITION_FAILED naming every failed one."""
+    status = response.get('status') if isinstance(response, Mapping) else None
+    body = response.get('body') if isinstance(response, Mapping) else None
+    answered = type(status) is int and 200 <= status < 300 and isinstance(body, dict)
+    info = body if answered else {}
+    capabilities = info.get('capabilities')
+    listed = isinstance(capabilities, list) and all(isinstance(c, str) for c in capabilities)
+    runtime, runtimes = info.get('conversation_runtime'), info.get('available_conversation_runtimes')
+    results = {
+        'P1': answered and type(info.get('version')) is str and info['version'] == pinned_version,
+        'P2': listed and REQUIRED_CAPABILITIES[0] in capabilities,
+        'P3': listed and REQUIRED_CAPABILITIES[1] in capabilities,
+        'P4': type(runtime) is str and runtime == DOCKER_RUNTIME,
+        'P5': type(runtimes) is list and runtimes == [],
+    }
+    observed = {'status': status if type(status) is int else None, 'pinned_version': pinned_version,
+                **{key: _json_value(info.get(key)) for key in (
+                    'version', 'conversation_runtime', 'available_conversation_runtimes', 'capabilities')}}
+    failed = [name for name, ok in results.items() if not ok]
+    if failed:
+        raise DispatchRefused('SERVER_PRECONDITION_FAILED', f'/server_info fails {", ".join(failed)}',
+                              failed=failed, observed=observed)
+    return observed
+
+
+def reserved_inputs(integration_store, operation_key: str) -> ResolvedInputs:
+    """The attempt's dispatch record re-read from the store: the stored intent, checked against its
+    digest, its typed identity row and the record's own intent (``workRef``, ``outcomeRef`` and the
+    identity included), and the attempt still ``reserved``. RESERVATION_INVALID or
+    ATTEMPT_NOT_RESERVED otherwise."""
+    reservation = integration_store.get(operation_key)
+    if reservation is None:
+        raise DispatchRefused('RESERVATION_INVALID', f'no reservation under {operation_key!r}')
+    if reservation.state != 'reserved':
+        raise DispatchRefused('ATTEMPT_NOT_RESERVED', f'{operation_key!r} is {reservation.state}',
+                              state=reservation.state)
+    if _sha256(reservation.intent_json) != reservation.intent_digest:
+        raise DispatchRefused('RESERVATION_INVALID', 'the stored intent does not have its digest')
+    try:
+        intent = _strict_loads(reservation.intent_json)
+    except ValueError:
+        raise DispatchRefused('RESERVATION_INVALID', 'the stored intent is not strict JSON') from None
+    resolved = ResolvedInputs.from_json(intent.get(INTENT_KEY) if isinstance(intent, dict) else None)
+    try:
+        identity = resolved.attempt_identity()
+    except store.InvalidIdentity as exc:
+        raise DispatchRefused('RESERVATION_INVALID', f'the stored record: {exc}') from None
+    typed = integration_store.attempt_identity(operation_key)
+    if identity.operation_key != operation_key or typed is None or typed.identity != identity:
+        raise DispatchRefused('RESERVATION_INVALID', 'the stored record is not the typed identity reserved under '
+                              f'{operation_key!r}')
+    expected = _canonical({**resolved.intent(), store.IDENTITY_INTENT_KEY: identity.as_intent()})
+    if expected != reservation.intent_json:
+        raise DispatchRefused('RESERVATION_INVALID', 'the stored intent is not exactly the dispatch record with its '
+                              'workRef, outcomeRef and typed identity')
+    return resolved
+
+
+def _real_directory(path: Path) -> None:
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        raise DispatchRefused('WORKSPACE_PATH_UNSAFE', f'{path}: {type(exc).__name__}') from None
+    if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT \
+            or not stat.S_ISDIR(info.st_mode):
+        raise DispatchRefused('WORKSPACE_PATH_UNSAFE', f'{path} is a link, junction, reparse point or not a directory',
+                              path=str(path))
+
+
+def create_workspace(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspaces) -> Path:
+    """Create the admitted attempt's host workspace, after admission and without following links:
+    the ``workspaces`` category (through ``aieh_paths.ensure`` when it is missing), then one
+    directory per part, each created with a single ``mkdir`` under a parent just checked (``lstat``)
+    to be a plain directory, and checked again after it; then the whole walk again. An existing link,
+    junction, reparse point or file anywhere from the category down is WORKSPACE_PATH_UNSAFE."""
+    if not isinstance(admitted, AdmittedCreate):
+        raise TypeError('admitted must be AdmittedCreate (admit)')
+    key = _operation_key(resolved)
+    host = workspace_host_path(resolved, workspaces, key)
+    if (admitted.operation_key, admitted.planned_workspace, admitted.host_workspace) != \
+            (key, resolved.planned_workspace, str(host)):
+        raise DispatchRefused('WORKSPACE_NOT_PLANNED', f'the admitted workspace {admitted.host_workspace!r} is '
+                              f'not {str(host)!r}')
+    category = Path(str(workspaces.paths[WORKSPACE_CATEGORY]))
+    if not os.path.lexists(category):
+        try:
+            paths.ensure(WORKSPACE_CATEGORY, workspaces)
+        except (paths.PathsError, OSError, ValueError, KeyError) as exc:
+            raise DispatchRefused('WORKSPACE_CATEGORY_UNAVAILABLE', f'{category}: {exc}') from None
+    step = category
+    _real_directory(step)
+    for part in _workspace_parts(resolved.planned_workspace):
+        step = step / part
+        try:
+            os.mkdir(step)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise DispatchRefused('WORKSPACE_PATH_UNSAFE', f'{step}: {type(exc).__name__}') from None
+        _real_directory(step)
+    if workspace_host_path(resolved, workspaces, key) != step:
+        raise DispatchRefused('WORKSPACE_NOT_PLANNED', f'{step} is not the planned workspace')
+    return step
+
+
+class CreateOutcomeUnknown(Exception):
+    """The create was sent and its outcome is not known (no answer, a 5xx, or a 2xx that is not the
+    reserved conversation): the attempt is ``unknown`` and must be reconciled by its reserved
+    conversation id before anything else (store lifecycle contract; blueprint step 05)."""
+
+    def __init__(self, operation_key: str, detail: str, **context):
+        self.operation_key, self.detail, self.context = operation_key, detail, context
+        super().__init__(f'{operation_key}: {detail}')
+
+
+@dataclass(frozen=True)
+class DispatchResult:
+    """A confirmed create: the returned native identifiers, and nothing else of the answer."""
+    operation_key: str
+    attempt_id: str
+    conversation_id: str
+    execution_ref: str
+    http_status: int
+    created: bool
+    host_workspace: str
+
+    def to_json(self) -> dict:
+        return {'format': RESULT_FORMAT, 'operation_key': self.operation_key, 'attempt_id': self.attempt_id,
+                'conversation_id': self.conversation_id, 'execution_ref': self.execution_ref,
+                'http_status': self.http_status, 'created': self.created, 'host_workspace': self.host_workspace}
+
+
+def create_receipt(answer, conversation_id: str) -> dict | None:
+    """The typed identifiers of a create answer (ConversationInfo, observed at 1.60.1: F-04.2
+    section 4.2): its native ``id``, the HTTP status and whether it was created (201) or already
+    existed (200). None unless the answer is 200 or 201 with an object whose ``id`` is the
+    reserved conversation id. Nothing else of the answer is kept."""
+    status = answer.get('status') if isinstance(answer, Mapping) else None
+    body = answer.get('body') if isinstance(answer, Mapping) else None
+    if type(status) is not int or status not in CREATE_STATUSES or not isinstance(body, Mapping) \
+            or not isinstance(body.get('id'), str) or body['id'] != conversation_id:
+        return None
+    return {'format': RECEIPT_FORMAT, 'executionRef': f'{EXECUTION_REF_PREFIX}{body["id"]}',
+            'conversationId': body['id'], 'httpStatus': status, 'created': CREATE_STATUSES[status]}
+
+
+def _refusal_detail(refusal: DispatchRefused, **extra) -> dict:
+    """The refusal as a transition detail: refusal/v1, its context reduced to plain JSON."""
+    return {**refusal.to_json(), 'context': _json_value(refusal.context), **extra}
+
+
+def _mark(integration_store, key: str, from_state: str, to_state: str, actor: str, reason: str, detail) -> None:
+    integration_store.transition(key, to_state, actor=actor, reason=reason, detail=detail, expected_from=from_state)
+
+
+def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], WorkSource | None],
+             integration_store, workspaces, transport: Callable[[str, str, dict | None], object], actor: str,
+             read_profile: Callable[[str], bytes] = read_profile_file,
+             read_artifact: Callable[[str], bytes] = read_profile_artifact) -> DispatchResult:
+    """One native Docker conversation create for a dispatch request, in the dispatcher's order:
+
+    1. ``resolve`` (a refusal reserves nothing);
+    2. ``reserve_attempt`` with ``ResolvedInputs.intent()`` (``workRef`` and ``outcomeRef`` included);
+    3. the record re-read from the store (``reserved_inputs``), ``admit`` on it, and the host
+       workspace created only then (``create_workspace``); a refusal marks the attempt ``failed``;
+    4. ``dispatched``, immediately before ``send_create`` (on the re-read record): ``GET
+       /server_info`` and P1 to P5, then the create; a refusal there marks it ``failed`` (the create
+       was not sent);
+    5. the answer: 200 or 201 with the reserved id is ``confirmed`` with the returned identifiers
+       (``create_receipt``) as the transition's detail, and returned; a 4xx is ``failed`` and
+       CREATE_REFUSED; no answer, a 5xx or any other answer is ``unknown`` and CreateOutcomeUnknown
+       (a transport exception is re-raised). Nothing is retried and no event history is stored.
+    """
+    resolved = resolve(request, manifest=manifest, work_sources=work_sources,
+                       next_ordinal=store_next_ordinal(integration_store), read_profile=read_profile)
+    identity = resolved.attempt_identity()
+    key = identity.operation_key
+    integration_store.reserve_attempt(identity, resolved.intent(), actor=actor)
+    try:
+        reserved = reserved_inputs(integration_store, key)
+        admitted = admit(reserved, manifest=manifest, workspaces=workspaces, read_profile=read_profile,
+                         read_artifact=read_artifact)
+        host = create_workspace(admitted, resolved=reserved, workspaces=workspaces)
+    except DispatchRefused as refusal:
+        if refusal.code != 'ATTEMPT_NOT_RESERVED':
+            _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code, _refusal_detail(refusal))
+        raise
+    _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create',
+          {'format': DISPATCHED_FORMAT, 'conversationId': admitted.conversation_id,
+           'route': {'method': admitted.method, 'path': admitted.path}})
+    try:
+        answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport)
+    except DispatchRefused as refusal:
+        _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
+              _refusal_detail(refusal, create_sent=False))
+        raise
+    except Exception as exc:
+        _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-unanswered',
+              {'error': type(exc).__name__})
+        raise
+    receipt = create_receipt(answer, admitted.conversation_id)
+    if receipt is not None:
+        _mark(integration_store, key, 'dispatched', 'confirmed', actor,
+              'created' if receipt['created'] else 'existing', receipt)
+        return DispatchResult(operation_key=key, attempt_id=store.attempt_id_for(key),
+                              conversation_id=receipt['conversationId'], execution_ref=receipt['executionRef'],
+                              http_status=receipt['httpStatus'], created=receipt['created'], host_workspace=str(host))
+    status = answer.get('status') if isinstance(answer, Mapping) else None
+    status = status if type(status) is int else None
+    if status is not None and 400 <= status < 500:
+        refusal = DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the create with {status}',
+                                  status=status)
+        _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
+              _refusal_detail(refusal, create_sent=True))
+        raise refusal
+    detail = {'httpStatus': status, 'reason': 'no 200 or 201 answer carrying the reserved conversation id'}
+    _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-outcome-uncertain', detail)
+    raise CreateOutcomeUnknown(key, detail['reason'], http_status=status)
 
 
 # ---------------------------------------------------------------------------

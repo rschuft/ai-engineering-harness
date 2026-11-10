@@ -1,6 +1,7 @@
-# Dispatch input resolution and create admission
+# Dispatch input resolution, create admission and the conversation create
 
-Plan leaves E-01.2.1 (resolution) and E-01.2.2 (admission, slice (a)), blueprint section
+Plan leaves E-01.2.1 (resolution), E-01.2.2 (admission, slice (a)) and E-01.3.1 (the native
+conversation create, [below](#the-native-conversation-create-e-0131)), blueprint section
 [`#execution-qualification`](../../AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification),
 dispatch step 01: "Resolve the authoritative Work and profile. Check Backlog readiness,
 accepted OpenSpec revision and executable requirements; choose ... a qualified profile."
@@ -69,7 +70,11 @@ The checks run in this order, and the first failing one refuses:
 9. the design: every OpenSpec source pointer of the task resolves in git, all of them pin
    one change at one full commit (`design_revision_from_pointers`), and that is the
    accepted revision the manifest records for the change in this repository;
-10. the ordinal: `next_ordinal(work_id, design_revision, stage)` (`store_next_ordinal`
+10. the outcome (E-01.3.1): exactly one `outcome:` reference among the task's own Backlog.md
+    references, in the grammar the lineage reader parses (`outcome:<uuid>[@<full commit>]`,
+    decision 0008). None is `OUTCOME_REF_ABSENT`, a malformed one `OUTCOME_REF_INVALID`, and two
+    outcomes, or one at two revisions, `OUTCOME_REF_AMBIGUOUS`;
+11. the ordinal: `next_ordinal(work_id, design_revision, stage)` (`store_next_ordinal`
     reads the store's typed claims; `reserve_attempt` remains the arbiter of live claims).
 
 Steps 1 to 6 read the manifest only. No file, Backlog.md or git read happens for an
@@ -81,11 +86,14 @@ unapproved repository, stage, profile or pin.
 | `next_ordinal` | `store_next_ordinal(store)` | the same, on a throwaway store |
 | `read_profile` | `read_profile_file` (the checkout's `profiles/`, byte-exact by `profiles/.gitattributes`) | throwaway profile declarations |
 
-### Resolved record: `ai-engineering-harness/dispatch/resolved-inputs/v1`
+### Resolved record: `ai-engineering-harness/dispatch/resolved-inputs/v2`
 
 `ResolvedInputs` is frozen. `attempt_identity()` gives the store's `AttemptIdentity`;
-`intent()` gives `{"dispatchInputs": <the record>}` for `reserve_attempt`, so the stored
-intent and its digest carry the approval provenance.
+`intent()` gives `{"dispatchInputs": <the record>, "workRef": "backlog:<work_id>", "outcomeRef":
+<outcome_ref>}` for `reserve_attempt`, so the stored intent and its digest carry the approval
+provenance, and every reservation carries the two correlation keys the lineage reader follows
+(blueprint `#integration-contracts`). `ResolvedInputs.from_json` reads the record back from a
+stored intent, strictly. v1 (E-01.2.1, E-01.2.2) had no `outcome_ref`.
 
 | Field | Source |
 |---|---|
@@ -96,6 +104,7 @@ intent and its digest carry the approval provenance.
 | `catalog_pin`, `agent_manifest_digest` | the pin's `manifest_sha256`; never null (E-01.1.1 left it nullable until this leaf) |
 | `planned_workspace` | the fixed rule `<repository>/<work_id>/<attempt_id>`, relative to the managed root's `workspaces` category; `attempt_id` is the store's `uuid5(ATTEMPT_NAMESPACE, operation_key)`, so each attempt has its own |
 | `policy_digest`, `policy_inputs` | below |
+| `outcome_ref` | the task's one `outcome:` reference (resolution step 10) |
 | `approval` | the manifest's schema, `version` and the sha256 of its bytes |
 
 **`policy_digest`** is the sha256 of the canonical JSON (sorted keys, no whitespace, UTF-8)
@@ -179,10 +188,11 @@ A profile without a complete admission declaration is refused at resolution
 **Defence in depth.** `send_create` takes the `ResolvedInputs` the attempt was reserved under
 (its policy digest is the reserved one), re-derives the admission policy from it, re-checks
 that policy's rules, and runs every admission check on the `AdmittedCreate` again: identity,
-workspace (with the on-disk walk), the template's sha256, route, body and mounts. Only then
-does it call `transport(method, path, body)` with the body it validated, exactly once. A
-refusal calls the transport zero times. A transport failure is raised, never retried and never
-re-routed to another runtime.
+workspace (with the on-disk walk), the template's and the route allowlist's sha256, route, body
+and mounts. Only then, through the route-checked client and after decision 0001's
+`/server_info` preconditions (E-01.3.1, [below](#the-native-conversation-create-e-0131)), does it
+send the body it validated, exactly once. An admission refusal calls the transport zero times. A
+transport failure is raised, never retried and never re-routed to another runtime.
 
 **Not closed here.** Two recorded deviations are upstream registry behaviour that no create
 field controls: `host.docker.internal:host-gateway` and no `--network none` on every
@@ -191,7 +201,108 @@ mount set and caps is observed guest-side (`conversation-smoke`, and E-01.2.2 sl
 
 `AdmittedCreate.to_json()` is `ai-engineering-harness/dispatch/admitted-create/v1`: the
 operation key, conversation id, route, body, mount set, planned and host workspace, policy
-digest and the template's sha256.
+digest and the sha256 of the template and of the route allowlist (since E-01.3.1).
+
+## The native conversation create (E-01.3.1)
+
+Plan leaf E-01.3.1, blueprint `#execution-qualification` dispatch steps 02 and 03 and decision
+0001: `dispatch(request, manifest=, work_sources=, integration_store=, workspaces=, transport=,
+actor=)` runs one request through the dispatcher's order and creates one native Docker
+conversation, or refuses.
+
+```
+resolve                         -> ResolvedInputs (a refusal reserves nothing)
+reserve_attempt(intent())       -> reserved; the intent carries workRef and outcomeRef
+reserved_inputs(store, key)     -> the record re-read from the store
+admit(re-read record)           -> AdmittedCreate
+create_workspace                -> the host workspace, only now, never through a link
+transition dispatched           -> immediately before the send
+send_create(re-read record)     -> GET /server_info, P1 to P5, then POST /api/conversations once
+transition confirmed            -> with the returned identifiers as its detail; DispatchResult
+```
+
+**Every call is checked.** `AgentServerClient(routes_bytes, transport, routes_sha256=)` is the
+only way to the transport. `call(method, route, params=, body=)` sends `transport(method, path,
+body)` only when `(method, route)` is listed exactly once in the profile's pinned route allowlist
+(`agent-server/routes.json`, S-01.3.1, sha256-pinned in the reserved policy) with `dispatcher`
+`allowed`. The route is the allowlist's template (`/api/conversations/{conversation_id}`), and
+its path parameters must be exactly its placeholders, `conversation_id` a lower-case UUID and
+`event_id` one segment. Anything else (an unlisted, `not-used` or `validation` route, another
+method, a concrete path, a query string, a case variant, a route listed twice) is
+`ROUTE_NOT_ALLOWLISTED` or `ROUTE_PARAMETER_INVALID` before the transport is called. A bodyless
+method with a body is `BODY_MALFORMED`. `send_create` builds its client from the allowlist bytes
+the admission read (`AdmittedCreate.routes_bytes`, re-checked against the pinned sha256).
+
+**The preconditions (decision 0001).** Before the create, `send_create` reads `GET /server_info`
+through the client and `server_preconditions` requires all five; each failed one is named in
+`SERVER_PRECONDITION_FAILED`'s context, and the create is not sent:
+
+| | Condition | Source |
+|---|---|---|
+| P1 | a 2xx answer with a JSON object whose `version` is the pinned API version, the `version` of the pinned route allowlist (`1.60.1`) | decision 0001 s1 (the 1.60.1 line) |
+| P2 | `conversation_runtime_routes_v1` in `capabilities` | s2 |
+| P3 | `idempotent_conversation_create_v1` in `capabilities` | s2 (the retry rule) |
+| P4 | `conversation_runtime` is `docker` | s2, required configuration |
+| P5 | `available_conversation_runtimes` is `[]`: the runtime is not selectable | s2, `conversation_runtime_selectable=false` (hybrid only by recorded exception; none is recorded) |
+
+Decision 0001 s2 accepts `"docker" in available_conversation_runtimes` as an alternative to P4.
+With P5, which the plan's proof requires, that alternative is closed: a hybrid server is refused
+until a recorded exception says otherwise. A transport that raises on the `GET` gives
+`SERVER_PRECONDITION_FAILED` with every precondition failed. Decision 0001 does not number the
+preconditions; P1 to P5 are this table's numbering of the plan's proof text.
+
+**The request and the answer, as observed.** The request is the admitted body: the pinned
+template (the F-04.2 fixture, valid against `#/components/schemas/StartConversationRequest` of the
+locked release `openapi.json`, sha256 `3de49fac…e0d0`) with the reserved `conversation_id` and
+`conversation_runtime` `docker`. The transport returns the HTTP answer as `{"status": <int>,
+"body": <JSON>}` and raises when there is none, the shape tools/guest.py's API calls return. The
+answer is the Agent Server's ConversationInfo, `201` for a new conversation and `200` for an
+existing one with the same id (F-04.2 sections 4.2 and 4.5). `create_receipt` keeps only its
+identifiers: `{format: create-receipt/v1, executionRef: "openhands:conversation/<id>",
+conversationId, httpStatus, created}`. `executionRef` is the lineage reader's attempt reference.
+Nothing else of the answer, and no event, is stored. The fixture
+[`tests/fixtures/agent-server-1.60.1-exchange.json`](tests/fixtures/agent-server-1.60.1-exchange.json)
+holds the two calls as the pinned server answered them (`/server_info` complete, the create's
+answer as the selected fields the evidence records).
+
+**The store.** The transitions follow the store's
+[lifecycle contract](../store/README.md#lifecycle-contract):
+
+| What happened | State | Detail |
+|---|---|---|
+| a refusal after the reservation and before the send (re-read, admission, workspace) | `reserved` -> `failed` | the refusal (refusal/v1) |
+| about to send | `reserved` -> `dispatched` | `create-dispatched/v1`: the conversation id and route |
+| a refusal in `send_create` (re-check, allowlist, preconditions): the create was not sent | `dispatched` -> `failed` | the refusal, `create_sent: false` |
+| `200` or `201` with the reserved id | `dispatched` -> `confirmed` | the receipt |
+| a `4xx`: `CREATE_REFUSED` | `dispatched` -> `failed` | the refusal, `create_sent: true` |
+| no answer (the transport raised; re-raised), a `5xx`, another `2xx`, another id: `CreateOutcomeUnknown` | `dispatched` -> `unknown` | the status only |
+
+Nothing is retried. An `unknown` attempt is a live claim, so no other attempt on the same Work,
+design revision and stage is reserved until it is reconciled by its reserved conversation id
+(E-01.4.x). Treating a `5xx` as `unknown`, not `failed`, is this leaf's conservative reading of
+decision 0001's "any non-2xx is a refusal": the dispatch stops either way, and an outcome that
+may have created a conversation is reconciled before another attempt.
+
+**The re-read record.** `reserved_inputs(store, key)` reads the reservation back: the attempt
+must still be `reserved` (`ATTEMPT_NOT_RESERVED`), the stored intent must have its digest, the
+record must be `resolved-inputs/v2` exactly (`ResolvedInputs.from_json`), its identity must be
+the typed identity row, and the stored intent must be exactly the record's own intent (its
+`workRef`, `outcomeRef` and typed identity included). Anything else is `RESERVATION_INVALID`.
+`admit` and `send_create` receive this record, not the resolution's object.
+
+**The workspace.** `create_workspace` runs after admission. It creates the `workspaces` category
+through `aieh_paths.ensure` when the category is missing. It then creates one directory per part
+with a single `mkdir`, under a parent that `lstat` has just shown to be a plain directory, and
+checks each created directory the same way. Then it walks the whole path again. A link, junction,
+reparse point or file anywhere from the category down is `WORKSPACE_PATH_UNSAFE`. A junction
+planted between the check and the `mkdir` remains a race the walk detects afterwards, not one it
+prevents.
+
+**Not this leaf.** No transport for live use exists. The management key's custody and the
+per-attempt role tokens are E-01.3.3. The create body is still the F-04.2 disposable template
+(finding F3, carried to A-01.x and E-03.1). Reconciliation and the idempotent retry are E-01.4.x.
+The independent `docker inspect` of the created runtime is E-01.5. Nothing here has run against a
+live Agent Server: **not yet verified** live.
 
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
@@ -269,6 +380,7 @@ accepted again.
 | `WORK_SOURCE_UNAVAILABLE`, `WORK_NOT_FOUND`, `WORK_UNREADABLE`, `WORK_NOT_READY` | the Work cannot be read, does not exist, or Backlog.md does not report it ready |
 | `DESIGN_POINTER_ABSENT`, `DESIGN_UNRESOLVED`, `DESIGN_AMBIGUOUS` | the task has no source pointer, one does not resolve, or they pin several revisions |
 | `DESIGN_NOT_ACCEPTED`, `DESIGN_REVISION_MISMATCH` | no accepted revision of the change, or the task pins another one |
+| `OUTCOME_REF_ABSENT`, `OUTCOME_REF_INVALID`, `OUTCOME_REF_AMBIGUOUS` | the task has no `outcome:` reference, a malformed one, or several outcomes (or one at several revisions) |
 | `IDENTITY_INVALID` | the resolved inputs do not form a valid attempt identity |
 | `PROFILE_ADMISSION_INVALID` | the profile declares no complete, well-formed admission policy |
 | `PROFILE_ARTIFACT_MISSING`, `PROFILE_ARTIFACT_DRIFTED`, `PROFILE_ARTIFACT_INVALID` | a pinned create template or route allowlist is absent, changed, or not strict JSON of its shape |
@@ -277,9 +389,13 @@ accepted again.
 | `CAPS_ABOVE_CEILING`, `CAPS_OVERRIDE_FORBIDDEN` | the declared caps times the concurrent runs exceed the guest ceilings; a body cap other than the declared one, or a cap field the policy does not establish |
 | `MOUNT_POLICY_INVALID`, `MOUNTS_NOT_DECLARED` | declared binds outside the rules; an effective mount set other than the declared one, or a body field that would add a mount |
 | `WORKING_DIR_NOT_ALLOWED` | the body's workspace is not the server-provisioned `/workspace` |
-| `ROUTE_NOT_ALLOWLISTED` | the create does not target `POST /api/conversations`, or the allowlist does not admit it |
-| `BODY_MALFORMED`, `BODY_FIELD_UNKNOWN`, `BODY_NOT_TEMPLATE`, `CONVERSATION_ID_MISMATCH` | the body is not an object, carries a field outside the allowlist, differs from the pinned template, or lacks the reserved conversation id |
+| `ROUTE_NOT_ALLOWLISTED` | a call (the create or any other) whose route the pinned allowlist does not list exactly once with `dispatcher` `allowed`; or a create that does not target `POST /api/conversations` |
+| `ROUTE_PARAMETER_INVALID` | a route's path parameters are not exactly its placeholders, each in its grammar |
+| `BODY_MALFORMED`, `BODY_FIELD_UNKNOWN`, `BODY_NOT_TEMPLATE`, `CONVERSATION_ID_MISMATCH` | the body is not an object (or a bodyless call carries one), carries a field outside the allowlist, differs from the pinned template, or lacks the reserved conversation id |
 | `WORKSPACE_CATEGORY_UNAVAILABLE`, `WORKSPACE_PATH_INVALID`, `WORKSPACE_RESERVED_NAME`, `WORKSPACE_NOT_PLANNED`, `WORKSPACE_PATH_UNSAFE` | the host workspace: no usable category; outside the fixed rule's grammar; a Windows device name; not this attempt's; a link, junction, reparse point or non-directory on disk |
+| `SERVER_PRECONDITION_FAILED` | `GET /server_info` does not show P1 to P5 (above), or was not answered; the create is not sent |
+| `RESERVATION_INVALID`, `ATTEMPT_NOT_RESERVED` | the stored reservation is not the dispatch record of its typed identity; the attempt is no longer `reserved` |
+| `CREATE_REFUSED` | the Agent Server answered the create with a `4xx` |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. Until
 A-01.1 promotes approved catalog pins into the manifest, every request is refused
@@ -335,3 +451,17 @@ managed root is an `AIEH_DATA_ROOT` in the throwaway directory.
 | `WorkspaceDenialTests` | path shapes (`..`, absolute, drive, UNC, device, backslash, streams, trailing dot or space, case, look-alikes, empty or extra parts); Windows device names, from an approved repository named `con` (and `prn`, `aux`, `nul`, `com1`, `com0`, `lpt9`) through the real resolver and in any part and form; another attempt's workspace; an altered admitted host path; junctions at the category, repository, Work and attempt, and a file, at admission and planted after it; a symbolic link (skipped without the privilege); a missing or foreign-platform category |
 | `ProfilePolicyDenialTests` | an approved profile declaring a local, process, absent, case-variant or selectable runtime (refused at resolution, nothing reserved); caps times runs above the ceilings; malformed caps or ceilings, no Agent Server declaration; binds on the Docker socket, Moby's data root, outside or at the source root, around a forbidden source, with `..` or an unknown placeholder, a relative or duplicate destination, no `/workspace` bind, the socket no longer forbidden; a route allowlist marking the create `not-used` or `validation`, listing it twice or not at all; a drifted, missing, malformed or misplaced pinned artifact; a template with a local or omitted runtime, a host or remote working directory, a cap override, a pids field, volumes, an initial message or an image |
 | `TamperDenialTests` | an admitted request altered after construction and refused by `send_create`: 26 body alterations (runtime, working directory, caps, mounts, unknown fields, template fields, conversation id), non-object or non-strict JSON, the mount set (extra, missing, reordered, read-only, altered, none), the route, the template bytes, the identity and digest; resolved policy inputs altered with or without a matching digest, and forged consistent pairs breaking the ceilings, the runtime, the route, the working directory or the mount policy; provenance (another manifest, a drifted profile, a wrong profile digest, wrong types) |
+
+[`tests/test_conversation_create.py`](tests/test_conversation_create.py) (E-01.3.1), on the same
+fixture, with a fake Agent Server that replays the recorded answers of
+[`tests/fixtures/agent-server-1.60.1-exchange.json`](tests/fixtures/agent-server-1.60.1-exchange.json).
+Every refusal asserts that the create was never sent, and that the transport was called zero
+times wherever nothing may be called. The positive control asserts exactly one `GET
+/server_info` and one create with the exact body.
+
+| Class | What it shows |
+|---|---|
+| `RouteAllowlistTests` (unit) | over every route of the pinned allowlist, a call is sent only for `dispatcher` `allowed`, with the rendered path; unknown paths, other methods, concrete paths, query strings, trailing slashes, case variants, `validation`, `not-used` and WebSocket routes, an allowed route listed twice or re-marked, wrong, extra, missing or out-of-grammar path parameters, a body on a `GET`, and a drifted or malformed allowlist are refused with zero calls |
+| `ServerPreconditionTests` (unit) | the recorded `/server_info` meets P1 to P5; each precondition alone refuses (another version, a non-2xx or malformed answer, a missing capability, a local, process, case-variant or absent runtime, a selectable runtime list), and several failures are all named |
+| `CreateReceiptTests` (unit) | 201 is created, 200 existing; another, missing or hex id, other statuses and non-objects give no receipt; the execution reference parses as the lineage reader's attempt reference |
+| `DispatchTests` | the positive control (two calls, the store's three transitions and their details, `workRef` and `outcomeRef` in the reservation, nothing of the answer but its id stored, no event route called, the workspace created as plain directories); an existing conversation is confirmed as existing; the call order and the re-read record (spied: admit and `send_create` get the store's record, not the resolution's object; admission ran with no workspace, the send on a `dispatched` attempt with one); a stored intent altered in seven ways is `RESERVATION_INVALID` and failed; `reserved_inputs` on a missing, untyped or no longer reserved attempt; a resolution refusal reserves nothing; an admission refusal is failed and creates no workspace; junctions planted after admission at the category, the repository and the Work, and a file at the workspace, are refused and nothing is created through them; every precondition case refuses the create through `dispatch` (one `GET`, no `POST`, failed with `create_sent` false), as do an unanswered `/server_info` and an allowlist that no longer allows it; a 4xx is `CREATE_REFUSED` and failed; a 5xx, a 202 or another conversation's id is `unknown` (reconciliation required) and never retried; a lost answer is `unknown`, re-raised, and blocks the next attempt; the outcome reference absent, malformed, ambiguous or at two revisions is refused before any reservation |
