@@ -121,6 +121,24 @@ network.
 | `task qualify` (resolver) | PASS: 348 checks, 0 failed, digests equal to the F-01.2 record; about 4 minutes | not met: no CPython 3.12 and no pip; Node 22, npm 9 | not yet verified | not yet verified |
 | `task inventory` | PASS: 924 items | not yet verified | not yet verified | not yet verified |
 | `task sbom` | PASS with `-- --skip-oci` (host Python and npm, about 6 minutes); the OCI scans are not yet verified through Task | not supported | not yet verified | not yet verified |
+| Host service `install` (Gitea) | PASS: the live instance (F-06.1); a fixture instance in the live lifecycle test ([F-06.2](../evidence/F-06.2-platform-windows.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `up`, `down` | PASS: a fixture instance, including a hard kill of the supervisor ending Gitea through the Job Object ([F-06.2](../evidence/F-06.2-platform-windows.md)); the live instance runs since F-06.1 | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `restart` | PASS: a fixture instance ([F-06.2](../evidence/F-06.2-platform-windows.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `status` | PASS: the live instance, output byte-identical before and after F-06.2 ([F-06.2](../evidence/F-06.2-platform-windows.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `inspect` | PASS: the live instance (read-only) and a fixture instance ([F-06.2](../evidence/F-06.2-platform-windows.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `verify` and its `aieh-readiness/1` record | PASS: the live instance, output byte-identical before and after F-06.2; the readiness record carries the platform ([F-06.2](../evidence/F-06.2-platform-windows.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Credential `provision` | PASS on the live instance in F-06.1 and S-01.2.2 (`identities`, `gitea:roles -- provision`); since F-06.2 fakes only | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Credential `rotate` | PASS on the live instance in F-06.1 section 8 and S-01.2.2 (`finalize-credentials`, `gitea:roles -- rotate`); since F-06.2 fakes only | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Credential `retire` | fakes only: not yet verified against Gitea | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `upgrade` | fixture assets and fakes only (one version is pinned): not yet verified; rehearsal in F-06.6 | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `recover` | PASS: a fixture instance (an interrupted restart resumed) ([F-06.2](../evidence/F-06.2-platform-windows.md)); upgrade recovery with fakes only | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Host service `uninstall` | PASS: a fixture instance (refused while running; persistent state and the asset kept) ([F-06.2](../evidence/F-06.2-platform-windows.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Credential provider: Windows Credential Manager (ctypes) | PASS: the live entries (S-01.2.2), read by `gitea:authz` ([F-06.2](../evidence/F-06.2-platform-windows.md)); `CREDENTIAL_PROVIDER_LOCKED` with fakes only | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| Credential provider: keyring (Secret Service, macOS Keychain) | not applicable: kept off Windows | not yet verified (F-06.3, F-06.4) | not yet verified (F-06.3, F-06.4) | not yet verified (F-06.3, F-06.5) |
+
+The host-service rows follow the lifecycle contract of plan leaf F-06.2 (draft decision 0011): one row
+per verb and per credential provider. A platform counts as supported only with its own evidence
+record; every result names its OS.
 
 The Linux install path for the component sets (inside the F-03/F-04 guest) is
 **unknown** until the resolver runs there.
