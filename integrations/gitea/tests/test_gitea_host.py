@@ -142,21 +142,29 @@ def setUpModule():
     """The Root tests' two starting states, each built once in a temporary directory of its own (F-09.3:
     a shared fixture): 'initialized' (the root and Gitea's directories) and 'configured' (also the fake
     asset acquired and app.ini written, as TestIdentities, TestFinalizeCredentials and
-    TestVerifyCheckoutScan start)."""
-    for start in ('initialized', 'configured'):
-        tmp = Path(tempfile.mkdtemp(prefix='gh-'))
-        SHARED[start] = {'tmp': tmp}
-        res, lay = make_root(tmp)
-        if start == 'configured':
-            acquire_fake(tmp, res, lay)
-            G.configure(res, lay, FAKE_PIN, 13300, run=FakeRun())
-        SHARED[start].update(res=res, resolution=copy.deepcopy(res), state=tree_state(tmp))
+    TestVerifyCheckoutScan start). If any step fails, what it created is removed before the failure is
+    raised: unittest runs no tearDownModule after a failed setUpModule."""
+    try:
+        for start in ('initialized', 'configured'):
+            tmp = Path(tempfile.mkdtemp(prefix='gh-'))
+            SHARED[start] = {'tmp': tmp}
+            res, lay = make_root(tmp)
+            if start == 'configured':
+                acquire_fake(tmp, res, lay)
+                G.configure(res, lay, FAKE_PIN, 13300, run=FakeRun())
+            SHARED[start].update(res=res, resolution=copy.deepcopy(res), state=tree_state(tmp))
+    except BaseException:
+        tearDownModule()
+        raise
 
 
 def tearDownModule():
-    for shared in SHARED.values():
-        shutil.rmtree(shared['tmp'], onexc=_writable_retry)
-    SHARED.clear()
+    """Remove every shared root, also one setUpModule only partly built."""
+    try:
+        for shared in SHARED.values():
+            shutil.rmtree(shared['tmp'], onexc=_writable_retry)
+    finally:
+        SHARED.clear()
 
 
 class Root(unittest.TestCase):
