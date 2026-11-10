@@ -1,6 +1,8 @@
 # 0015 - Inference broker placement, provider-credential custody and the guest `inference` endpoint
 
-Status: Proposed - 2026-11-10, for plan leaf S-03.1 at `7b93fb3`: an Architect design (gates B and G), reviewed by the Overseer and put to the Owner as Owner action OA-12 ([the authorization request](../evidence/S-03.1-owner-authorization-request.md)). It authorizes nothing: every act it names waits for the Owner's answer to the S-03.1 authorization request, and no model run, credential entry, host listener, guest-to-host path or guest composition change happens before that answer is recorded in `evidence/bootstrap-log.md`. S-03.2 implements it exactly as authorized, or not at all.
+Status: Proposed, amended - 2026-11-10. The Owner approved amendment 1 (below) on 2026-11-10 (Owner decision (c) on OA-12, verbatim in `evidence/bootstrap-log.md`, Decisions). That approval, and the Owner's acceptance on the same day of the ACP coding-provider path, its brokered dedicated-key authentication in principle and Claude Code as the first provider to qualify, are **architectural acceptance, not execution authorization**: no key is created or stored, no capacity bought, no host listener, guest forward, guest hardening change, egress or model call happens until its own Owner act is recorded. The original status follows unchanged as history.
+
+Original status: Proposed - 2026-11-10, for plan leaf S-03.1 at `7b93fb3`: an Architect design (gates B and G), reviewed by the Overseer and put to the Owner as Owner action OA-12 ([the authorization request](../evidence/S-03.1-owner-authorization-request.md)). It authorizes nothing: every act it names waits for the Owner's answer to the S-03.1 authorization request, and no model run, credential entry, host listener, guest-to-host path or guest composition change happens before that answer is recorded in `evidence/bootstrap-log.md`. S-03.2 implements it exactly as authorized, or not at all.
 
 **Authority:** the Owner's decision of 2026-11-07 ("Model access: design it now ... brought to the Owner for authorization before anything runs", bootstrap log, Decisions) and the plan leaf S-03.1; blueprint `#containment-architecture` ("Launcher and credential broker: checks accepted Work, policy revision, mounts, network, resource budget and provider entitlement before starting"; "bounded inference endpoint"; "Provider CLI requires authentication token: prefer trusted inference proxy or truly scoped short-lived token, not Owner credentials in agent-readable env/files"; acceptance: "negative-test ... provider-secret access") and `#security` ("Use scoped execution identities, protected secret storage, and isolated workspaces"). This record applies those within decisions 0003, 0006, 0007, 0009, 0010 and 0013; where it and they disagree, they govern and this record is the defect.
 
@@ -96,6 +98,51 @@ In scope (decision 0010 point 1): an agent or job reading the provider credentia
 
 ## Owner authorization
 Pending: Owner action OA-12, [the S-03.1 authorization request](../evidence/S-03.1-owner-authorization-request.md). Nothing in this record is performed before the Owner's answer is recorded in the bootstrap log. A refusal leaves the strong tier as it is (no model access) and sends the design back to the Architect with the refused item named.
+
+
+## Amendment 1 (2026-11-10): ACP coding providers through the broker
+
+Approved by the Owner on 2026-11-10 (decision (c) on OA-12), from the Architect's recommendation
+[`evidence/S-03-acp-coding-provider-recommendation.md`](../evidence/S-03-acp-coding-provider-recommendation.md) section 3.1, which holds the
+source facts and the reasoning. The text above stays as written; where it and this amendment disagree, this
+amendment governs. Sections 1, 2, 4, 6 and 7 (placement, credential custody, the endpoint and its inspection,
+audit, the three named items) hold for ACP providers unchanged.
+
+1. **Tokens are bound to an API family** (sections 3.1 and 3.2). Each per-attempt token is bound to one API
+   family as well as to its conversation, model list, budget and expiry. Model, path, attempt, budget and
+   expiry limits are kept.
+2. **Two ways the token reaches an attempt** (section 3.2 and Consequences, "The typed create"). For an ACP
+   agent (the default engineering coding path: OpenHands' `ACPAgent`, `agent_settings.agent_kind` `acp`), the
+   token travels in the create's `secrets` under the pinned registry entry's `api_key_env_var`, with the broker
+   endpoint under its `base_url_env_var`. For a native direct-LLM agent (optional), it travels in the LLM
+   settings as written above. Each is one template shape per stage. The create's tamper test extends to: no
+   secret name beyond the registry's two, and no provider key.
+3. **Per-family, untranslated pass-through** (section 5.3). The broker's path and model allowlist becomes
+   declared per-family entries, routed by path and passed through without translation. The path and model set
+   of a family is pinned from observed traffic at the leaf that first runs that family. No wildcard model
+   allowance; model names are verified, never assumed.
+4. **Direct-model inference stays an optional capability.** Local inference remains the openai-chat family's
+   degenerate upstream (section 2.4).
+5. **Withdrawn:** the local-first request's section 3 refinement that narrowed the guest-facing contract to
+   the OpenAI-compatible Chat Completions family alone. It would exclude both default ACP providers.
+6. **Subscription authentication** (Claude OAuth tokens, a Codex ChatGPT login) is **not qualified for this
+   sandboxed path at the pinned versions** (recommendation section 1.2). This is a finding at the pins, not a
+   universal or permanent limit; a later pin is re-examined on its own evidence.
+7. **Boundaries** (Owner, 2026-11-10). The provider's adapter and CLI run inside the qualified execution
+   container, within its enforceable CPU, memory, filesystem, process and network limits. ACP
+   permission-suppressing modes confer no authority and are not isolation controls. No unrestricted Owner
+   credential, inherited MCP server, unexpected tool, arbitrary ACP command or unapproved network destination
+   enters an attempt. The harness builds no orchestration layer of its own and does not replicate OpenHands'
+   ACP implementation. Provider selection stays in the governed agent catalog.
+8. **Closed "Not verified" item:** the create's credential and endpoint fields for the ACP kind are the
+   `secrets` channel and the registry's two variable names (recommendation section 1.1, read at the pin). The
+   LLM-settings field names of the native kind stay as listed.
+
+Still open, each its own Owner act or presentation (bootstrap log, OA-12): the exact model identifiers
+(including any secondary model Claude Code uses), the key, spend caps and budgets, the broker's host
+listeners, the guest forward and hardening change, external egress, the first model call, and the image
+adapter check (whether the pinned image contains the Claude Code and Codex ACP adapters; a derived image, if
+needed, is presented before adoption; no runtime `npx` fallback).
 
 ## Evidence
 - Plan leaves S-03, S-03.1, S-03.2; the Owner's decisions of 2026-11-07 and the guest-run authorization extension (bootstrap log).
