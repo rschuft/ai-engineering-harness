@@ -1,5 +1,5 @@
 {
-  "task_count": 165,
+  "task_count": 167,
   "tasks": [
     {
       "id": "F-01.1",
@@ -311,7 +311,7 @@
     },
     {
       "id": "S-03.2",
-      "title": "Implement and qualify the authorized inference broker",
+      "title": "Implement and qualify the inference-access plane without a model",
       "phase": 0,
       "deps": [
         "S-03.1",
@@ -319,7 +319,28 @@
         "F-06.3"
       ],
       "path": "task_prompts/S-03.2.md",
-      "sha256": "6caca894e2334c87fa59626f6c961b2430a01cb5d7a8f550737a3f30b15f69ef"
+      "sha256": "7a7da7800695f8d677298e554bbac87de3395795c56d35438bfca01efab0d562"
+    },
+    {
+      "id": "S-03.4",
+      "title": "Optional: qualify native local inference through the broker",
+      "phase": 0,
+      "deps": [
+        "S-03.2"
+      ],
+      "path": "task_prompts/S-03.4.md",
+      "sha256": "f21dc44da46277cc48782291cd8230a5cf9d24173a34797bdc0c7b7be237ed2d"
+    },
+    {
+      "id": "S-03.3",
+      "title": "Qualify the first ACP coding provider through the broker",
+      "phase": 0,
+      "deps": [
+        "S-03.2",
+        "F-04.2"
+      ],
+      "path": "task_prompts/S-03.3.md",
+      "sha256": "80ef888fe82b1cad109740f5c09a0a4086216ff825c21fd142d669ae3978b177"
     },
     {
       "id": "F-08.1",
@@ -823,10 +844,11 @@
       "phase": 2,
       "deps": [
         "A-01.2",
-        "E-02.2"
+        "E-02.2",
+        "S-03.3"
       ],
       "path": "task_prompts/E-03.1.md",
-      "sha256": "81382e6ee3565884b44fb41144770324cc03178f0796040c6f366c0689d74225"
+      "sha256": "1f4ac966b7dd27a189be12a651a10a5dfab6502480af2dba0215d45abc338de6"
     },
     {
       "id": "E-03.2.1",
@@ -844,10 +866,10 @@
       "phase": 2,
       "deps": [
         "E-03.2.1",
-        "S-03.2"
+        "S-03.3"
       ],
       "path": "task_prompts/E-03.2.2.md",
-      "sha256": "4539be915743b512f99018ff06820c9fcffde38c8fa8791bbbae9d5ef3a8491e"
+      "sha256": "f581c48a382129b71c6b1686a7901829f712ec712dff2a31603cc4f9af8c84d2"
     },
     {
       "id": "E-03.3.1",
