@@ -2,7 +2,7 @@
  "schema": "ai-engineering-harness/policy/test-budgets/v1",
  "description": "Enforceable test budgets (plan leaf F-09.1). Counters are exact: tests at least, launches and mkdtemp at most. wall_s is a median over wall.runs serial runs on the baseline host; a median passes up to wall_s x (1 + wall.tolerance), and never below wall_s + wall.min_slack_s. Checked by tools/check_test_budget.py (task test:budget) at every leaf acceptance and release, never in a hook.",
  "baseline": {
-  "revision": "5e205f3a5a8ca99b1f8a9972d25f7c387bad82a7",
+  "revision": "98bb781aaef730e78d7340bed69e977c17fbd562",
   "measured": "2026-11-10",
   "runs": 3,
   "host": {
@@ -21,17 +21,17 @@
   "min_slack_s": 0.5
  },
  "total": {
-  "tests": 1966,
-  "launches": 1236,
-  "mkdtemp": 1046,
+  "tests": 1970,
+  "launches": 1158,
+  "mkdtemp": 1047,
   "wall_s": 134.2
  },
  "suites": {
   "tools": {
-   "tests": 1117,
-   "launches": 381,
-   "mkdtemp": 550,
-   "wall_s": 77.5
+   "tests": 1120,
+   "launches": 303,
+   "mkdtemp": 551,
+   "wall_s": 71.1
   },
   "store": {
    "tests": 84,
@@ -49,16 +49,16 @@
    "tests": 104,
    "launches": 190,
    "mkdtemp": 50,
-   "wall_s": 12.1
+   "wall_s": 12.0
   },
   "lineage": {
    "tests": 146,
    "launches": 163,
    "mkdtemp": 79,
-   "wall_s": 18.1
+   "wall_s": 14.0
   },
   "owner": {
-   "tests": 37,
+   "tests": 38,
    "launches": 11,
    "mkdtemp": 17,
    "wall_s": 2.5
@@ -91,7 +91,7 @@
    "tests": 82,
    "launches": 8,
    "mkdtemp": 80,
-   "wall_s": 5.0
+   "wall_s": 4.6
   },
   "repository": {
    "tests": 103,
@@ -102,25 +102,25 @@
  },
  "categories": {
   "unit": {
-   "tests": 1183,
+   "tests": 1186,
    "launches": 0,
-   "mkdtemp": 537,
-   "wall_s": 23.8
+   "mkdtemp": 538,
+   "wall_s": 22.3
   },
   "contract": {
    "tests": 321,
-   "launches": 142,
+   "launches": 130,
    "mkdtemp": 97,
    "wall_s": 16.9
   },
   "integration": {
    "tests": 445,
-   "launches": 1065,
+   "launches": 999,
    "mkdtemp": 411,
    "wall_s": 88.9
   },
   "e2e": {
-   "tests": 16,
+   "tests": 17,
    "launches": 0,
    "mkdtemp": 0,
    "wall_s": 0.1
