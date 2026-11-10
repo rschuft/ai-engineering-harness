@@ -977,10 +977,10 @@ class TestCheckoutFiles(unittest.TestCase):
         core.excludesFile, from the repository module's contract corpus with git's recorded
         listing: a path git lists and the scan does not would go unscanned."""
         corpus = _load('repository_corpus', REPO / 'integrations' / 'repository' / 'tests' / 'repository_corpus.py')
-        root = corpus.corpus()
+        cases = {name: data for name, data in corpus.expected()['cases'].items() if name.startswith('ignore ')}
+        root = corpus.corpus_subset([*cases, 'xdg empty'])   # only these repositories, not the whole tree
         env = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'XDG_CONFIG_HOME': str(root / 'xdg empty'),
                'GIT_CEILING_DIRECTORIES': str(root.parent)}
-        cases = {name: data for name, data in corpus.expected()['cases'].items() if name.startswith('ignore ')}
         self.assertEqual(len(cases), 10)
         with mock.patch.dict(os.environ, env):
             for name, data in sorted(cases.items()):

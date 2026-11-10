@@ -95,6 +95,22 @@ def corpus():
     return _ROOT
 
 
+_SUBSETS = {}
+
+
+def corpus_subset(names):
+    """A corpus root holding only the repositories NAMES (each a top-level name below the root),
+    extracted once per process and per NAMES into its own temporary directory removed at exit:
+    for a suite that needs a few repositories, not the whole tree."""
+    key = tuple(sorted(names))
+    if key not in _SUBSETS:
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-corpus-'))
+        atexit.register(rmtree, tmp)
+        extract_tree(ARCHIVE, tmp, only=key)
+        _SUBSETS[key] = tmp / ROOT_NAME
+    return _SUBSETS[key]
+
+
 def ceilings():
     """The ceiling directories of every test that opens a repository of the corpus: its temporary
     root, so that no discovery examines that root or anything above it (git's
@@ -102,9 +118,10 @@ def ceilings():
     return [str(corpus().parent)]
 
 
-def extract_tree(archive, destination):
+def extract_tree(archive, destination, only=None):
     """Write the tree ARCHIVE holds below DESTINATION: directories, then files with their bytes,
-    read-only where git wrote them read-only. Every path must be a plain relative path."""
+    read-only where git wrote them read-only. Every path must be a plain relative path. ONLY, when
+    given, names the top-level entries below the root to write (the root itself is written)."""
     data = json.loads(gzip.decompress(Path(archive).read_bytes()).decode('utf-8'))
     if data.get('schema') != TREE_SCHEMA:
         raise ValueError(f'{archive}: not a {TREE_SCHEMA} tree')
@@ -113,6 +130,8 @@ def extract_tree(archive, destination):
         parts = PurePosixPath(entry['path']).parts
         if not parts or entry['path'].startswith('/') or any(p in ('', '.', '..') for p in parts):
             raise ValueError(f'{archive}: unsafe path {entry["path"]!r}')
+        if only is not None and len(parts) > 1 and parts[1] not in only:
+            continue
         target = destination.joinpath(*parts)
         if entry['type'] == 'dir':
             target.mkdir(parents=True, exist_ok=True)
