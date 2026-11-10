@@ -9,12 +9,18 @@ points to the hash-locked Python and npm files.
 ## Resolver command
 
 ```
-python -I composition/resolve.py --work <empty-or-absent directory outside the checkout>
+<tools python> -I -B composition/resolve.py --work <empty-or-absent directory outside the checkout>
 ```
+
+`<tools python>` is the Python tools interpreter (`task tools:install`; `python -I -B
+integrations/paths/tools_install.py --python` prints it): the resolver reads the source tags with
+the shared [repository-access module](../../integrations/repository/README.md) over Dulwich
+(plan leaf F-10.6, decision 0014, R11). Under an interpreter without Dulwich it stops with
+`REPOSITORY_NEEDS_DULWICH` (exit 2), naming `task tools:install`; there is no git fallback.
 
 The resolver does five things:
 
-1. It runs `git ls-remote` against each pinned source tag and checks the tag → commit mapping.
+1. It lists each pinned source tag over HTTPS (`ls_remote` of the repository-access module: anonymous, no git, no credential helper) and checks the tag → commit mapping: an annotated tag's object id and its peeled commit, or a lightweight tag's commit.
 2. It downloads every locked Python wheel for each locked target and checks its sha256. It builds the one reviewed sdist (see [Reviewed sdist exception](#reviewed-sdist-exception-decision-0002)). It installs the host target's set with
    `pip install --target <work>/python/site --only-binary :all: --require-hashes --no-deps --no-index`
    and reads the installed versions back with `pip inspect --path`. It re-hashes every installed file against its RECORD.
@@ -48,9 +54,8 @@ Exit codes:
 
 **Host prerequisites** (the resolver checks each one):
 
-- CPython 3.12 with pip ≥ 23.1
+- CPython 3.12 with pip ≥ 23.1, as the Python tools interpreter (which provides Dulwich)
 - Node.js ≥ 24 with npm ≥ 11
-- git
 - HTTPS access to:
   - pypi.org and files.pythonhosted.org
   - registry.npmjs.org

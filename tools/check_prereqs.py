@@ -7,8 +7,10 @@ basic       Python >= 3.12 (CPython), git, and the seed revision in this clone's
             history (needed by `verify_seed.py --baseline seed`). Task is an
             optional convenience and is only reported.
 components  The resolver's own prerequisite check (composition/resolve.py):
-            CPython 3.12 with pip >= 23.1, Node.js >= 24 with npm >= 11, git.
-            Registry network access is required but not probed here.
+            CPython 3.12 with pip >= 23.1, Node.js >= 24 with npm >= 11.
+            Registry network access is required but not probed here. The
+            resolver runs under the Python tools interpreter, whose Dulwich
+            reads the source tags; this check never imports Dulwich.
 inventory   The optional SBOM/licence scan (composition/inventory/scan.py)
             downloads its pinned Syft and Grant archives itself; only Windows
             x86_64 archives are pinned, so this tier checks the host platform.
@@ -72,7 +74,7 @@ def basic():
 
 def components():
     resolve = load('resolve', ROOT / 'composition' / 'resolve.py')
-    ok, info, _npm, _git = resolve.prerequisites(resolve.Checks())
+    ok, info, _npm = resolve.prerequisites(resolve.Checks())
     print(f'[INFO] host: {info}')
     print('[INFO] network: HTTPS to the registries in composition/lock/README.md is required, not probed')
     return ok

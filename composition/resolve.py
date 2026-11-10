@@ -6,12 +6,18 @@ hash / integrity / digest against the lock, installs the Python and npm sets
 into a throwaway directory, and writes a machine-readable report of the
 verified digests and the versions the installers actually installed.
 
-    python -I composition/resolve.py --work <empty directory outside the checkout>
+    <tools python> -I -B composition/resolve.py --work <empty directory outside the checkout>
 
 Prerequisites (checked; see composition/lock/README.md): CPython 3.12 with pip
->= 23.1, Node.js >= 24 with npm >= 11, git, and HTTPS access to pypi.org,
+>= 23.1, Node.js >= 24 with npm >= 11, and HTTPS access to pypi.org,
 files.pythonhosted.org, registry.npmjs.org, github.com, api.github.com,
-ghcr.io and registry-1.docker.io / auth.docker.io.
+ghcr.io and registry-1.docker.io / auth.docker.io. The source tags (R11 of
+decision 0014) are read with the shared repository-access module over Dulwich,
+so the resolver runs under the Python tools interpreter (<tools python>: what
+`python -I -B integrations/paths/tools_install.py --python` prints); without
+Dulwich it stops with REPOSITORY_NEEDS_DULWICH (exit 2), naming task
+tools:install. No git is launched. `prerequisites` itself imports nothing
+beyond the standard library (tools/check_prereqs.py loads it).
 
 Safety: Python is installed from binary wheels only (--only-binary :all:,
 --require-hashes, --no-deps) with `pip install --target`. The single exception
@@ -170,36 +176,61 @@ def prerequisites(checks):
     ok &= checks.add("prereq.pip", bool(pipv) and vtuple(pipv.split()[1]) >= (23, 1), f"pip >= 23.1 required, found {pipv!r}")
     node = shutil.which("node")
     npm = shutil.which("npm")
-    git = shutil.which("git")
     nodev = tool_version([node, "--version"]) if node else None
     npmv = tool_version([npm, "--version"]) if npm else None
-    gitv = tool_version([git, "--version"]) if git else None
-    info.update({"node": nodev, "npm": npmv, "git": gitv})
+    info.update({"node": nodev, "npm": npmv})
     ok &= checks.add("prereq.node", bool(nodev) and vtuple(nodev) >= (24,), f"Node >= 24 required, found {nodev!r}")
     ok &= checks.add("prereq.npm", bool(npmv) and vtuple(npmv) >= (11,), f"npm >= 11 required, found {npmv!r}")
-    ok &= checks.add("prereq.git", bool(gitv), "git required")
-    return ok, info, npm, git
+    return ok, info, npm
 
 
 # ---------------------------------------------------------------- sources
-def resolve_sources(lock, checks, git):
+REPOSITORY_ACCESS = CHECKOUT / "integrations" / "repository" / "repository_access.py"
+
+
+def repository_access():
+    """The shared repository-access module (decision 0014), loaded by path on first use, and only
+    on the source-tag path, so that the rest of this file (and `prerequisites`, which
+    tools/check_prereqs.py loads) stays standard-library only. Raises the module's CannotRun
+    REPOSITORY_NEEDS_DULWICH, naming task tools:install, where Dulwich is not importable."""
+    module = sys.modules.get("repository_access")
+    if module is None:
+        import importlib.util
+        sys.dont_write_bytecode = True  # leave no __pycache__ in the checkout
+        spec = importlib.util.spec_from_file_location("repository_access", REPOSITORY_ACCESS)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["repository_access"] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules["repository_access"]
+            raise
+    module.dulwich_modules()
+    return module
+
+
+def resolve_sources(lock, checks, ra=None):
+    """R11 of decision 0014: each locked source tag over HTTPS with the module's ls_remote
+    (anonymous, no credential helper, no git), checked against the lock: an annotated tag's object
+    id and its peeled commit, or a lightweight tag's commit and no peeled entry."""
+    ra = ra or repository_access()
     out = []
-    env = clean_env({"GIT_TERMINAL_PROMPT": "0"})
     for s in lock["sources"]:
         tag = s["tag"]
         url = s["repository"].rstrip("/") + ".git"
-        p = run([git, "-c", "credential.helper=", "ls-remote", url, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"], env=env)
-        refs = {}
-        for line in (p.stdout or "").splitlines():
-            sha, _, ref = line.partition("\t")
-            refs[ref] = sha
-        direct = refs.get(f"refs/tags/{tag}")
-        peeled = refs.get(f"refs/tags/{tag}^{{}}")
+        name = f"refs/tags/{tag}"
+        try:
+            refs, error = ra.ls_remote(url, names=[name]), None
+        except ra.RepositoryError as e:
+            refs, error = {}, f"{e.code}: {e.message}"
+        direct = refs.get(name)
+        peeled = refs.get(name + "^{}")
         if s.get("tag_type") == "annotated":
-            ok = p.returncode == 0 and direct == s.get("tag_object") and peeled == s["commit"]
+            ok = error is None and direct == s.get("tag_object") and peeled == s["commit"]
         else:
-            ok = p.returncode == 0 and direct == s["commit"] and peeled is None
-        checks.add(f"source.{s['id']}", ok, f"{tag}: observed tag={direct} peeled={peeled}, locked commit {s['commit']}")
+            ok = error is None and direct == s["commit"] and peeled is None
+        checks.add(f"source.{s['id']}", ok, f"{tag}: observed tag={direct} peeled={peeled}, locked commit {s['commit']}"
+                   + (f"; {error}" if error else ""))
         out.append({"id": s["id"], "repository": s["repository"], "tag": tag, "commit": peeled or direct, "verified": ok})
     return out
 
@@ -765,7 +796,7 @@ def main(argv=None):
     report_path = Path(args.report).resolve() if args.report else work / "report.json"
     started = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
     checks = Checks()
-    ok, host, npm, git = prerequisites(checks)
+    ok, host, npm = prerequisites(checks)
     if not ok:
         print("prerequisites not met", file=sys.stderr)
         return 2
@@ -776,7 +807,12 @@ def main(argv=None):
     installed = {}
     observations = {}
     print("== sources", flush=True)
-    resolution["sources"] = resolve_sources(lock, checks, git)
+    try:
+        ra = repository_access()
+    except Exception as e:  # CannotRun REPOSITORY_NEEDS_DULWICH: run under the tools interpreter
+        print(f"{e}", file=sys.stderr)
+        return 2
+    resolution["sources"] = resolve_sources(lock, checks, ra)
     print("== python", flush=True)
     try:
         resolution["python"], installed["python"] = resolve_python(lock, checks, work, observations)
