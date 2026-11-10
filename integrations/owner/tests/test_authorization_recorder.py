@@ -353,6 +353,31 @@ class Binding(OverHttp):
         self.assertNoMerge()
 
 
+class ReadBack(OverHttp):
+    """A merge that does not read back as recorded (the ref, the parents, the trailers, the digest,
+    merged_by) leaves the receipt unknown; resolve then confirms only what reads back."""
+
+    FAULTS = {'strip-trailers': 'failed', 'digest': 'failed', 'one-parent': 'failed', 'merged-by-other': 'failed',
+              'ref-moves': 'confirmed'}
+
+    def test_each_read_back_fault(self):
+        for fault, resolved in self.FAULTS.items():
+            with self.subTest(fault=fault):
+                self.gitea = SERVER.reset()
+                operation = f'op-{fault}'
+                number, challenge = self.ready(operation, branch=f'work/{fault}')
+                nonce = challenge['shown']['nonce']
+                self.gitea.on_merge = fault
+                error = self.assertRefused('OUTCOME_UNKNOWN', self.record, nonce, su.statement(operation),
+                                           refusal=False)
+                self.assertIn('read-back', error.detail)
+                self.assertEqual(self.gitea.merge_count(), 1)
+                self.assertEqual(self.receipts()[nonce], ('unknown', ['reserved', 'dispatched', 'unknown']))
+                self.gitea.on_merge = None
+                self.assertEqual(AR.resolve(self.ctx, nonce)['receipt']['state'], resolved)
+                self.assertEqual(len(self.gitea.requests_by('POST')), 1)
+
+
 class LostAnswer(OverHttp):
     """A lost answer is unknown, and resolve reads the ref; it never merges again."""
 

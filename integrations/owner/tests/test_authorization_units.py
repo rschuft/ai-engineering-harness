@@ -11,6 +11,7 @@ before anything is sent, the codes and remedies, that a fixture context never re
 root or the platform's credential store, and the command line. Every statement is synthetic.
 """
 import contextlib
+import datetime
 import io
 import json
 import re
@@ -154,6 +155,200 @@ class CredentialInput(InMemory):
         self.assertEqual(self.gitea.requests, [])
 
 
+class Manifest(unittest.TestCase):
+    def test_each_invalid_manifest(self):
+        cases = {
+            'too large': su.manifest(padding='x' * AR.MANIFEST_MAX_BYTES),
+            'not UTF-8': b'\xff\xfe',
+            'not JSON': b'operation: op-0001\n',
+            'a list': b'[]',
+            'no target': json.dumps({'operation': 'op-0001', 'kind': 'k', 'expiresAt': su.EXPIRES}).encode(),
+            'another operation': su.manifest(operation='op-0002'),
+            'kind': su.manifest(kind='Upper'),
+            'target on two lines': su.manifest(target='a\nb'),
+            'blank target': su.manifest(target='  '),
+            'long target': su.manifest(target='t' * 501),
+            'expiry': su.manifest(expiresAt='2026-11-11'),
+        }
+        for name, blob in cases.items():
+            with self.subTest(case=name), self.assertRaises(AR.RecorderError) as caught:
+                AR.read_manifest(blob, 'op-0001')
+            self.assertEqual(caught.exception.code, 'MANIFEST_INVALID')
+        self.assertEqual(AR.read_manifest(su.manifest(extra={'typed': 'later'}), 'op-0001')['kind'], 'example-effect')
+
+
+class Faults(InMemory):
+    """What Gitea answers otherwise, read by read, refuses before anything is merged."""
+
+    ROUTES = {
+        '/api/v1/user': ('/api/v1/user', 'GITEA_UNAVAILABLE'),
+        'tokens': ('/tokens', 'GITEA_UNAVAILABLE'),
+        'repository': (f'/api/v1/repos/{fg.REPOSITORY}', 'GITEA_UNAVAILABLE'),
+        'branch missing': ('/branches/main', 'POLICY_DRIFT'),
+        'pull': ('/pulls/1', 'GITEA_UNAVAILABLE'),
+        'files': ('/pulls/1/files', 'GITEA_UNAVAILABLE'),
+        'manifest at head': ('/raw/operations/op-0001.json?ref=', 'MANIFEST_INVALID'),
+    }
+
+    def test_each_failing_read(self):
+        number = self.propose()
+        for name, (fragment, code) in self.ROUTES.items():
+            with self.subTest(read=name):
+                exact = fragment in ('/api/v1/user', f'/api/v1/repos/{fg.REPOSITORY}')
+                self.gitea.fail_routes = {} if exact else {fragment: 500 if code != 'POLICY_DRIFT' else 404}
+                if exact:
+                    original = self.gitea._handle
+
+                    def failing(method, path, headers, body, fragment=fragment, original=original):
+                        return self.gitea.reply(500, None) if path == fragment else original(method, path, headers, body)
+                    self.gitea._handle = failing
+                self.assertRefused(code, self.prepare, number)
+                if exact:
+                    del self.gitea._handle
+        self.gitea.fail_routes = {}
+        main = self.gitea.branches['main']
+        self.gitea.fail_routes = {f'?ref={main}': 500}
+        self.assertRefused('GITEA_UNAVAILABLE', self.prepare, number)
+        self.assertEqual(self.gitea.merge_count(), 0)
+
+    def test_no_answer_and_odd_answers(self):
+        number = self.propose()
+
+        def unreachable(*args, **kw):
+            raise ConnectionRefusedError('nothing listens')
+
+        self.assertRefused('GITEA_UNAVAILABLE', AR.prepare, self.context(http=unreachable), fg.REPOSITORY, number)
+        self.gitea.pulls[number]['head_ref'] = 'work/op'
+        original = self.gitea.pull_view
+        self.gitea.pull_view = lambda n: {**original(n), 'head': {**original(n)['head'], 'sha': 'not a commit'}}
+        self.assertRefused('GITEA_UNAVAILABLE', self.prepare, number)
+        self.gitea.pull_view = original
+        self.gitea.branches['main'] = 'not-a-commit'
+        self.assertRefused('GITEA_UNAVAILABLE', self.prepare, number)
+
+    def test_an_operation_already_on_the_protected_branch_without_a_receipt(self):
+        base = self.gitea.branches['main']
+        self.gitea.advance_main({'operations/op-0001.json': su.manifest()})
+        number = self.propose(base=base)
+        self.assertRefused('OPERATION_NOT_NEW', self.prepare, number)
+        self.assertEqual(AR._receipts(self.store), {})
+
+    def test_prepare_arguments(self):
+        number = self.propose()
+        self.assertRefused('PULL_NOT_FOUND', self.prepare, 0)
+        self.assertRefused('PULL_NOT_FOUND', self.prepare, True)
+        for minutes in (0, AR.MAX_EXPIRY_MINUTES + 1, 1.5):
+            with self.subTest(minutes=minutes), self.assertRaises(ValueError):
+                self.prepare(number, expires_in_minutes=minutes)
+
+
+class ChallengeState(InMemory):
+    def test_a_damaged_challenge_in_the_state_is_refused(self):
+        number = self.propose()
+        nonce = self.prepare(number)['shown']['nonce']
+        path = self.dir / 'state' / 'challenges' / f'{nonce}.json'
+        good = json.loads(path.read_text(encoding='utf-8'))
+        damaged = {
+            'not JSON': '{',
+            'a list': '[]',
+            'another format': json.dumps({**good, 'format': 'owner-authorization-challenge/v0'}),
+            'another nonce': json.dumps({**good, 'shown': {**good['shown'], 'nonce': 'ab' * 16}}),
+            'a bad subject': json.dumps({**good, 'subject': {**good['subject'], 'head': 'HEAD'}}),
+            'a bad expiry': json.dumps({**good, 'shown': {**good['shown'], 'expiresAt': 'soon'}}),
+        }
+        for name, text in damaged.items():
+            with self.subTest(damage=name):
+                path.write_text(text, encoding='utf-8')
+                self.assertRefused('CHALLENGE_INVALID', self.record, nonce)
+        self.assertEqual(self.gitea.requests_by('POST'), [])
+
+
+class Store(InMemory):
+    """The receipt's reservation is the single use: a race on it refuses the second decision."""
+
+    class Racing:
+        def __init__(self, store, mode):
+            self.store, self.mode = store, mode
+
+        def __getattr__(self, name):
+            return getattr(self.store, name)
+
+        def reserve(self, key, intent, *, actor):
+            if self.mode == 'conflict':
+                raise su.IS.ConflictingReservation(f'{key} is reserved with another digest')
+            if self.mode == 'error':
+                raise OSError('the store is unavailable')
+            self.store.reserve(key, intent, actor=actor)
+            return self.store.reserve(key, intent, actor=actor)
+
+    def test_a_reservation_race_is_refused_before_the_merge(self):
+        number = self.propose()
+        nonce = self.prepare(number)['shown']['nonce']
+        with self.assertRaises(OSError):
+            AR.record(self.context(store=self.Racing(self.store, 'error')), nonce, su.statement(),
+                      recorded_by=su.RECORDED_BY)
+        for mode in ('conflict', 'existing'):
+            with self.subTest(mode=mode):
+                operation = f'op-{mode}'
+                nonce = self.prepare(self.propose(operation, branch=f'work/{mode}'))['shown']['nonce']
+                ctx = self.context(store=self.Racing(self.store, mode))
+                self.assertRefused('CHALLENGE_CONSUMED', AR.record, ctx, nonce, su.statement(operation),
+                                   recorded_by=su.RECORDED_BY)
+        self.assertEqual(self.gitea.requests_by('POST'), [])
+
+
+class Resolve(InMemory):
+    def test_a_receipt_left_reserved_is_failed(self):
+        number = self.propose()
+        nonce = self.prepare(number)['shown']['nonce']
+        transition = self.store.transition
+
+        def crash(key, to_state, **kw):
+            if to_state == 'dispatched':
+                raise OSError('the process ended here')
+            return transition(key, to_state, **kw)
+
+        with mock.patch.object(self.store, 'transition', side_effect=crash), self.assertRaises(OSError):
+            self.record(nonce)
+        self.assertEqual(AR._receipts(self.store)[nonce][0].state, 'reserved')
+        result = AR.resolve(self.ctx, nonce)
+        self.assertEqual((result['receipt']['state'], result['receipt']['events']), ('failed', ['reserved', 'failed']))
+        self.assertEqual(self.gitea.requests_by('POST'), [])
+
+    def test_a_receipt_left_dispatched_is_read(self):
+        number = self.propose()
+        nonce = self.prepare(number)['shown']['nonce']
+        real = self.http
+
+        def crash_on_post(port, path, *, method='GET', **kw):
+            if method == 'POST':
+                raise RuntimeError('the process ended during the call')
+            return real(port, path, method=method, **kw)
+
+        with self.assertRaises(RuntimeError):
+            AR.record(self.context(http=crash_on_post), nonce, su.statement(), recorded_by=su.RECORDED_BY)
+        self.assertEqual(AR._receipts(self.store)[nonce][0].state, 'dispatched')
+        self.assertEqual(AR.resolve(self.ctx, nonce)['receipt']['state'], 'unknown')
+        self.now = su.NOW + datetime.timedelta(minutes=AR.SETTLE_MINUTES)
+        result = AR.resolve(self.ctx, nonce)
+        self.assertEqual(result['receipt']['events'], ['reserved', 'dispatched', 'unknown', 'failed'])
+        self.assertEqual(self.gitea.merge_count(), 0)
+
+    def test_a_closed_pull_request_and_an_unreadable_one(self):
+        number = self.propose()
+        nonce = self.prepare(number)['shown']['nonce']
+        self.gitea.on_merge = 'drop-before'
+        self.assertRefused('OUTCOME_UNKNOWN', self.record, nonce, refusal=False)
+        self.gitea.fail_routes = {f'/pulls/{number}': 500}
+        self.assertRefused('GITEA_UNAVAILABLE', AR.resolve, self.ctx, nonce)
+        self.gitea.fail_routes = {}
+        self.gitea.pulls[number]['state'] = 'closed'
+        result = AR.resolve(self.ctx, nonce)
+        self.assertEqual(result['receipt']['state'], 'failed')
+        self.assertRefused('CHALLENGE_INVALID', AR.resolve, self.ctx, 'nonce')
+        self.assertEqual(len(self.gitea.requests_by('POST')), 1)
+
+
 class Codes(unittest.TestCase):
     SOURCE = (su.OWNER_DIR / 'authorization_recorder.py').read_text(encoding='utf-8')
 
@@ -193,6 +388,35 @@ class ManagedRootNeverReached(InMemory):
                     AR.prepare(self.context(**missing), fg.REPOSITORY, number)
         self.assertEqual(result['receipt']['state'], 'confirmed')
         self.assertTrue(self.store.path.is_relative_to(self.root))
+
+    def test_the_managed_context_is_built_only_from_the_managed_root(self):
+        """managed_context (the command line's) with the managed root, its host record, its store and the
+        platform provider all stood in for: the port from the host record, the state under
+        <state>/owner-authorization, the provider watched by the act's guard."""
+        res = mock.Mock(name='resolution')
+        guard = AR.contract.ExposureGuard()
+
+        @contextlib.contextmanager
+        def receipts(given):
+            self.assertIs(given, res)
+            yield self.store
+
+        with mock.patch.object(AR.host.paths, 'resolve', return_value=res), \
+                mock.patch.object(AR.host, 'layout', return_value='layout'), \
+                mock.patch.object(AR.host, 'read_host_record', return_value={'port': 3456}) as record, \
+                mock.patch.object(AR.host.paths, 'ensure', return_value=self.dir / 'managed-state') as ensure, \
+                mock.patch.object(AR.host, 'credential_provider', return_value=self.provider), \
+                mock.patch.object(AR.host, 'credential_receipts', side_effect=receipts):
+            with AR.managed_context(None, guard) as ctx:
+                self.assertEqual((ctx.port, ctx.state_dir, ctx.store), (3456, self.dir / 'managed-state', self.store))
+                self.assertIsInstance(ctx.provider, AR.contract.WatchedProvider)
+                ctx.provider.get(AR.OWNER_ENTRY)
+            with AR.managed_context(4567) as ctx:
+                self.assertEqual(ctx.port, 4567)
+                self.assertIs(ctx.provider, self.provider)
+        ensure.assert_called_with('state', res, 'owner-authorization')
+        self.assertEqual(record.call_count, 1)
+        self.assertEqual(guard.held, 1)
 
 
 class CommandLine(InMemory):
@@ -239,6 +463,7 @@ class CommandLine(InMemory):
         code, out, err = self.main('record', '--challenge', nonce, '--statement', str(self.dir / 'absent.json'),
                                    '--recorded-by', su.RECORDED_BY)
         self.assertEqual(code, 2)
+        self.assertIn('STATEMENT_INVALID', err)
         self.secrets_absent(out, err)
 
     def test_an_exposed_secret_fails_the_command(self):

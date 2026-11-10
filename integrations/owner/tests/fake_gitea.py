@@ -54,7 +54,10 @@ class FakeGitea:
         root = self.commit([], {'README.md': b'Authorization fixture\n'}, 'Initial commit')
         self.branches['main'] = root
         self.requests, self.merge_bodies, self.merges = [], [], 0
-        self.on_merge = None          # 'drop', 'drop-before', 'error-after' or 'move-head'
+        # 'drop', 'drop-before', 'error-after' or 'move-head'; or a read-back fault: 'strip-trailers',
+        # 'digest', 'one-parent', 'merged-by-other', 'ref-moves'
+        self.on_merge = None
+        self.fail_routes = {}         # {substring of the path: HTTP status} answered instead
         self.lock = threading.Lock()
 
     # ------------------------------------------------------------------ the repository's history
@@ -132,6 +135,9 @@ class FakeGitea:
                               'sudo': 'sudo' in lowered or 'sudo=' in path})
         if doer is None:
             return self.reply(401, {'message': 'unauthorized'})
+        for fragment, status in self.fail_routes.items():
+            if fragment in path:
+                return self.reply(status, {'message': 'a fault of the fake'})
         parsed = urllib.parse.urlsplit(path)
         query = dict(urllib.parse.parse_qsl(parsed.query))
         route = parsed.path.removeprefix('/api/v1')
@@ -236,10 +242,19 @@ class FakeGitea:
             message += '\n\n' + form['merge_message_field'].strip()
         base = self.branches[pr['base']]
         tree = {**self.commits[base]['tree'], **self.commits[head]['tree']}
-        merged = self.commit([base, head], tree, message + '\n')
+        # Faults of the read-back (a Gitea that wrote something else than it was asked to)
+        if self.on_merge == 'strip-trailers':
+            message = message.split('\n\n')[0]
+        if self.on_merge == 'digest':
+            tree = {name: (data + b' ' if name.startswith('operations/') else data) for name, data in tree.items()}
+        parents = [base] if self.on_merge == 'one-parent' else [base, head]
+        merged = self.commit(parents, tree, message + '\n')
         self.branches[pr['base']] = merged
-        pr.update(state='closed', merged=True, merged_by=doer, merge_commit_sha=merged)
+        pr.update(state='closed', merged=True, merged_by='aieh-site-admin' if self.on_merge == 'merged-by-other'
+                  else doer, merge_commit_sha=merged)
         self.merges += 1
+        if self.on_merge == 'ref-moves':
+            self.advance_main({'later.txt': b'a later change\n'})
         if self.on_merge == 'drop':
             return DROP
         if self.on_merge == 'error-after':
