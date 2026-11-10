@@ -38,9 +38,10 @@ with ra.open_repository(path, config='repository') as repo:   # config: 'host', 
 | `files(commit, directory)` | `git ls-tree -r -z --name-only <commit> -- <directory>/` | Paths in git's order; `[]` when the directory is absent or not a directory. `directory` is a literal repository-relative path. |
 | `export_tree(commit, subtree, destination)` | blob bytes (section 4) | See [Export](#export). Returns `{'files', 'links', 'directories', 'bytes'}`. |
 | `head()` | `git rev-parse --verify HEAD`, `git symbolic-ref HEAD` | `Head(commit, ref)`: `commit` is `None` on an unborn branch, `ref` `None` when detached. |
+| `full_name(name)` | `git rev-parse --verify --quiet --symbolic-full-name <name>` | F-10.4. The reference NAME resolves to, in git's order (`<name>`, `refs/<name>`, `refs/tags/<name>`, `refs/heads/<name>`, `refs/remotes/<name>`, `refs/remotes/<name>/HEAD`; `@` is HEAD), symbolic references followed to their end (`HEAD` gives `refs/heads/main`). `None` when NAME names no object, is no reference (an id, a navigation, a reflog entry, a path), or is ambiguous (more than one rule resolves, such as a tag shadowing a branch: git prints nothing), unless `core.warnAmbiguousRefs` is false, when the first rule wins. |
 | `status(paths=None, untracked='no')` | `git status --porcelain=v1 -z --no-renames --untracked-files=<untracked> -- :(literal)<paths>` | `StatusEntry(xy, path)`: tracked changes, then untracked entries (`??`, a collapsed directory ends with `/`), each sorted. |
 | `index_entries()` | `git ls-files -s -z` | `IndexEntry(mode, oid, stage, path)`, one per stage, in index order. |
-| `listing(cached=True, others=False, exclude_standard=False)` | `git ls-files -z [--cached] [--others] [--exclude-standard]` | Untracked paths first (sorted; a nested repository as `dir/`), then the index entries. |
+| `listing(cached=True, others=False, exclude_standard=False)` | `git ls-files -z [--cached] [--others] [--exclude-standard]` | Untracked paths first (sorted; a nested repository as `dir/`), then the index entries. See [Ignore rules](#ignore-rules). |
 | `write_bundle(refs, destination)` | `git bundle create` | A complete bundle (no prerequisites) of full reference names; see [Bundles](#bundles). |
 | `parse_bundle_header(path)`, `pack_trailer(path, header)` | the bundle format | Module functions: the checks `tools/guest.py` makes today, here for F-10.4 to switch it over (`BUNDLE_INVALID` where it raises `Refused`). |
 | `config_sources` | | The configuration files read, in reading order. |
@@ -131,7 +132,7 @@ Local mechanics decided here (0014 leaves them open):
 | `EXPORT_REFUSED` | `RepositoryError` | Local: the export cannot be written safely (below). |
 | `BUNDLE_INVALID` | `RepositoryError` | Local: an unparsable bundle header, or refused `write_bundle` input (not a full reference name, no such reference, an existing destination). |
 | `FILTER_UNSUPPORTED` | `RepositoryError` | Local: `status` meets a path git would pass through a configured filter driver (a process, such as Git LFS) or a `working-tree-encoding`. |
-| `ATTRIBUTES_UNSUPPORTED` | `RepositoryError` | Local: `status` under a policy whose attribute file outside the repository (below) sets an attribute status consults, or cannot be read. |
+| `ATTRIBUTES_UNSUPPORTED` | `RepositoryError` | Local: `status` under a policy whose attribute file outside the repository (below) sets an attribute status consults or defines a macro (`details`: `path`, `line`, `attribute`), or cannot be read. |
 | `REPLACE_REFS_UNSUPPORTED` | `RepositoryError` | Local: an object read in a repository whose replace references git would apply. |
 | `NOT_A_WORK_TREE`, `NOT_A_REPOSITORY` | `CannotRun` | The work-tree check. |
 | `REPOSITORY_NEEDS_DULWICH` | `CannotRun` | Dulwich is not importable by the running interpreter; the message names `task tools:install` and the interpreter `tools_install.py --python` prints. |
@@ -168,6 +169,29 @@ ignored. Git for Windows' own system attributes set only `diff=astextplain`, so 
 works on a default installation. No other operation consults attributes: reads, file lists,
 exports (blob bytes), the index and listings do not.
 
+## Ignore rules
+
+`listing(..., exclude_standard=True)` and the untracked part of `status` decide which untracked
+entries git excludes with the module's own reading of git's rules (`dir.c`), not with Dulwich's
+`IgnoreFilterManager`. Dulwich 1.2.21 reports a directory ignored when a pattern only reaches
+inside it (`logs/*`), so a directory re-included below it (`!logs/keep/`, gitignore(5)'s
+`/*`, `!/foo`, `/foo/*`, `!/foo/bar`) was never entered and its files were missing from the
+listing the secret-leak scan reads (F-10.4; introduced at F-10.2). Now:
+
+- an entry is decided by the last pattern that matches the entry itself, level by level from
+  the highest precedence: the `.gitignore` of its own directory, then of each directory above
+  it, then `info/exclude`, then `core.excludesFile` (a relative path is read from the top of
+  the work tree, as git reads it; else, under `host`, `$XDG_CONFIG_HOME/git/ignore`);
+- a negated pattern re-includes; a directory is pruned only when the directory itself is
+  excluded, and a directory's `.gitignore` is read only when the walk reaches it (an in-tree
+  `.gitignore` that is a symbolic link is not followed, as git does not);
+- each pattern is matched by Dulwich's `Pattern.matches` (git's wildmatch rules for the path
+  relative to the file's directory, and whether it is a directory); a UTF-8 byte-order mark is
+  skipped.
+
+The contract suite holds the listing equal to git's and checks the invariant the scan needs:
+a listing is never a strict subset of git's.
+
 ## Export (decision 0014 section 4)
 
 `export_tree(commit, subtree, destination)` writes the blob bytes of `subtree` (`'.'` for the
@@ -193,10 +217,44 @@ the export. A missing subtree or tree-ish is `GIT_FAILED`.
 the index against the work tree (`Y`: `D`, `M`, `T`), with git's clean conversion of the work
 tree's bytes (`text`, `eol`, `crlf` and `binary` attributes, `core.autocrlf`, git's binary
 detection and its rule of not converting a path whose index blob holds CRLF; `ident`). An
-unmerged path is reported by git's two-letter code (`UU`, `AA`, `UD`, ...). Local mechanics:
-content is always compared (no stat shortcut, so no racy-git case), renames are not detected
-(`--no-renames`), `paths` are literal (`:(literal)`), a submodule is not inspected (an existing
-directory for a gitlink is unchanged), and intent-to-add entries are not distinguished.
+unmerged path is reported by git's two-letter code (`UU`, `AA`, `UD`, ...).
+
+**git's size rule** (F-10.4): a regular file whose index entry records a non-zero size (git
+records zero for a size not yet known, or for an entry it smudged as racily clean) that differs
+from the file's size is modified, without a content comparison, as git's `ie_match_stat` decides
+it. `git status` therefore reports a file whose line endings were swapped as modified even where
+the cleaned content is equal (`git diff` then shows nothing); the module answers the same, which
+also errs towards dirty. Every other entry's content is compared after the clean conversion (the
+module keeps no other stat data, so where git's stat data matches and it compares nothing, the
+module compares the content and finds it equal; a file changed without changing its size or any
+stat data git records, git's racy case, the module reports modified). Symbolic links are
+compared by their target.
+
+**Attributes** (F-10.4): status evaluates the attributes itself, as git's `attr.c` does in the
+check-in direction, not with Dulwich's `GitAttributes`, which expands no macro, so that an earlier
+`text` won over a later `binary` (the shape of `composition/.gitattributes`, `* text eol=lf`
+then `*.gz binary`, which made seven files of this checkout modified; introduced at F-10.2):
+
+- the stack, lowest precedence first: the built-in `binary` macro (`-diff -merge -text`), the
+  root `.gitattributes`, each deeper directory's `.gitattributes` down to the path's own, then
+  `info/attributes`; an in-tree `.gitattributes` is read from the work tree (a regular file,
+  not a symbolic link), else from the index;
+- from the highest line down, each matching line determines the attributes not yet determined,
+  the last on the line first, and a macro set to true then determines its own attributes the
+  same way (`!name` determines a name as unspecified);
+- **`[attr]` macros are implemented as git implements them** where git allows them, in the root
+  `.gitattributes` and `info/attributes` (the definition of highest precedence wins, and a
+  macro may name a macro); a definition in a deeper `.gitattributes` is ignored, as git ignores
+  it; an `[attr]` line is never a glob pattern; a macro defined in a user or system attribute
+  file is refused with `ATTRIBUTES_UNSUPPORTED` naming the file and the line, like any
+  status-relevant attribute there;
+- as git drops them: a negative pattern, a line with an invalid attribute name, a line of 2048
+  bytes or more; a pattern ending in `/` never matches a file; a quoted pattern is unquoted;
+  with `core.ignorecase`, patterns match case-insensitively (ASCII).
+
+Local mechanics: renames are not detected (`--no-renames`), `paths` are literal
+(`:(literal)`), a submodule is not inspected (an existing directory for a gitlink is unchanged),
+and intent-to-add entries are not distinguished.
 
 ## Bundles
 
@@ -225,7 +283,14 @@ section 9); it never skips.
   abbreviations, symbolic links and a gitlink, unsafe names, a work tree with every kind of
   change, a conflicted merge, three damaged repositories (an id mismatch, a corrupt zlib
   stream, a corrupt pack), and replace references (loose, packed, and disabled by
-  `core.useReplaceRefs=false`). [`tests/fixtures/repository-corpus-tree.json.gz`](tests/fixtures/)
+  `core.useReplaceRefs=false`). F-10.4 added twelve repositories, answered apart (`cases`, so
+  that the F-10.2 answers and test ids stay as they were): ten of ignore rules (directories
+  re-included by a negation, gitignore(5)'s examples, nested `.gitignore` files, `**`,
+  `info/exclude`, a relative `core.excludesFile` and their precedence), `attributes` (git's
+  order, the built-in and `[attr]` macros, the `composition/.gitattributes` shape) and
+  `line endings` (git's size rule under `core.autocrlf=true`), and git's
+  `rev-parse --symbolic-full-name` answers for 72 names (`full_names`): 962 recorded answers
+  over 11 repositories before, 1,109 over 23 after. [`tests/fixtures/repository-corpus-tree.json.gz`](tests/fixtures/)
   holds them byte for byte (git's sample hooks left out) as gzipped JSON, every directory and
   file, plain text as text and git's binary files as base64, so that the publication-safety gate
   can inspect all of it (it refuses an archive it cannot read as text), and
@@ -237,7 +302,8 @@ section 9); it never skips.
   recording nothing; damaged objects are `GIT_FAILED` naming the object; exports equal the
   recorded blob digests; the policies, `host` identical under Git Bash's `PATH` order,
   PowerShell's and an empty `PATH`; the attribute files; replace references refused; bundles;
-  and no process is launched (process creation patched to fail).
+  the F-10.4 cases (`RecordedCases`, `AttributeLines`), among them that a listing is never a
+  strict subset of git's; and no process is launched (process creation patched to fail).
 - **Git-oracle half** ([`tests/test_repository_oracle.py`](tests/test_repository_oracle.py)):
   where git is on `PATH`, git is asked again over the same corpus (the `repository` policy's
   environment: no system, global or XDG configuration or attributes, no optional index writes);

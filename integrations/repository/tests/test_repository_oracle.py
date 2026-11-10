@@ -109,6 +109,34 @@ class OracleAgreement(unittest.TestCase):
                     with self.subTest(repo=repo, listing=(cached, others, exclude)):
                         self.assertEqual(r.listing(cached, others, exclude), git)
 
+    def test_git_still_gives_the_recorded_case_answers(self):
+        """The F-10.4 cases: ignore rules, attributes, the size rule, full reference names."""
+        for repo, recorded in self.expected['cases'].items():
+            with self.subTest(repo=repo):
+                self.assertEqual(self.live['cases'][repo], recorded)
+        self.assertEqual(self.live['full_names'], self.expected['full_names'])
+
+    def test_case_listings_status_and_index(self):
+        for repo, data in self.live['cases'].items():
+            with open_repo(repo, work_tree=True) as r:
+                with self.subTest(repo=repo, index=True):
+                    self.assertEqual([[e.mode, e.oid, e.stage, e.path] for e in r.index_entries()], data['index'])
+                for cached, others, exclude, git in data['listing']:
+                    with self.subTest(repo=repo, listing=(cached, others, exclude)):
+                        mine = r.listing(cached, others, exclude)
+                        self.assertEqual(set(git) - set(mine), set(), 'never a strict subset of git')
+                        self.assertEqual(mine, git)
+                for untracked, paths, git in data['status']:
+                    with self.subTest(repo=repo, status=untracked, paths=paths):
+                        self.assertEqual([[e.xy, e.path] for e in r.status(paths, untracked)], git)
+
+    def test_full_names_are_gits_symbolic_full_names(self):
+        for repo, rows in self.live['full_names'].items():
+            with open_repo(repo) as r:
+                for name, git in rows:
+                    with self.subTest(repo=repo, name=name):
+                        self.assertEqual(r.full_name(name), git)
+
     def test_exports_are_git_blob_bytes(self):
         tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-oracle-export-'))
         self.addCleanup(rc.rmtree, tmp)

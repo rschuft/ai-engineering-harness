@@ -259,6 +259,9 @@ def build(root):
     _damaged(base, facts)
     _conflicted(base, facts)
     _replaced(base, facts)
+    _ignore_cases(base)
+    _attribute_cases(base)
+    _line_endings(base)
     write(base / 'not a repo', {'file.txt': 'not a repository\n'})
     (base / 'xdg empty').mkdir()
     return facts
@@ -472,6 +475,157 @@ def _conflicted(base, facts):
     commit_all(repo, 'ours', 23)
     result = git(repo, 'merge', '-q', 'other', check=False, date=date(24))
     assert result.returncode != 0, 'the merge did not conflict'
+
+
+# ---------------------------------------------------------------------------- F-10.4 cases
+# Each case is its own repository, answered as `cases` (listings and status) apart from the
+# F-10.2 `repos`, so that the F-10.2 answers and test ids stay as they were.
+
+CRLF = b'one\r\ntwo\r\n'
+
+# name: (.gitignore text or None, untracked files, {other file: text appended}, tracked files)
+IGNORE_CASES = {
+    'ignore dir star': ('logs/*\n!logs/keep/\n', ['logs/x', 'logs/keep/y'], {}, []),
+    'ignore dir star no slash': ('logs/*\n!logs/keep\n', ['logs/x', 'logs/keep/y'], {}, []),
+    # gitignore(5), EXAMPLES: exclude everything except the directory foo/bar.
+    'ignore doc example': ('/*\n!/foo\n/foo/*\n!/foo/bar\n', ['a', 'foo/x', 'foo/bar/y'], {}, []),
+    'ignore dir then file': ('logs/\n!logs/y\n', ['logs/y', 'z'], {}, []),
+    'ignore double star': ('**/gen/*\n!**/gen/keep/\n', ['a/gen/x', 'a/gen/keep/y', 'gen/keep/z'], {}, []),
+    'ignore nested': ('out/*\n', ['out/x', 'out/keep/y'], {'out/.gitignore': '!keep/\n'}, []),
+    'ignore info exclude': (None, ['v/x', 'v/k/y'], {'.git/info/exclude': 'v/*\n!v/k/\n'}, []),
+    # gitignore(5): the info/exclude and Documentation/.gitignore example, and the pattern-format
+    # examples (doc/frotz/, frotz/, /*.c, abc/**, a/**/b, hello.*, \!, \#).
+    'ignore gitignore examples': (
+        'doc/frotz/\nfrotz/\n/*.c\nabc/**\na/**/b\nhello.*\n\\!important!.txt\n\\#hash\n',
+        ['Documentation/foo.html', 'Documentation/gitignore.html', 'file.o', 'lib.a', 'src/internal.o',
+         'doc/frotz/x', 'a/doc/frotz/y', 'x/frotz/z', 'frotz', 'cat-file.c', 'mozilla-sha1/sha1.c', 'abc/x',
+         'abc/d/e', 'a/b', 'a/x/b', 'a/x/y/b', 'a/bb', 'hello.txt', 'sub/hello.c', 'hello', '!important!.txt',
+         '#hash', 'plain.txt'],
+        {'.git/info/exclude': '*.[oa]\n', 'Documentation/.gitignore': '*.html\n!foo.html\n'}, []),
+    # The levels: core.excludesFile (a path relative to the work tree), info/exclude above it,
+    # each .gitignore above that.
+    'ignore levels': ('!lvl2\n', ['a.ex', 'lvl', 'lvl2', 'only-info', 'plain.txt', 'd/lvl'],
+                      {'.git/extra excludes': '*.ex\nlvl\nlvl2\n', '.git/info/exclude': '!lvl\nonly-info\n'}, []),
+    # The probe corpus: negation, directory patterns, **, nested .gitignore, info/exclude,
+    # a nested repository and tracked files under ignore rules.
+    'ignore corpus': (
+        '*.log\n!keep.log\nbuild/\n**/tmp/**\n/rootonly.txt\ndoc/**/*.pdf\ncache\n!cache/\n\\#hash\n*.o\n'
+        '!important.o\nlogs/*\n!logs/keep/\n',
+        ['x.log', 'keep.log', 'build/out.bin', 'src/build/x', 'one/tmp/two/f', 'tmp/f', 'rootonly.txt',
+         'sub/rootonly.txt', 'doc/a/b/c.pdf', 'doc/c.pdf', 'doc/c.txt', 'cache', 'dir/cache', 'cache2/cache/f',
+         '#hash', 'a.o', 'important.o', 'logs/x', 'logs/keep/y', 'a/t.txt', 'a/a-keep.txt', 'a/nested/f',
+         'a/b/t.txt', 'a/b/nested/f', 'secret-x', 'secret-public', 'd e/f g.txt', 'ü/ä.txt',
+         'empty-dir-sibling/.keep'],
+        {'a/.gitignore': '*.txt\n!a-keep.txt\nnested/\n', 'a/b/.gitignore': '!*.txt\n',
+         '.git/info/exclude': 'secret-*\n!secret-public\n'},
+        ['tracked.log', 'build/tracked.txt']),
+}
+CASE_LISTINGS = [(False, True, True), (True, True, True), (False, True, False)]
+CASE_STATUS = [('no', None), ('normal', None), ('all', None)]
+
+ATTRIBUTES = (
+    '[attr]mybin -text -diff\n'
+    '[attr]chain mybin\n'
+    '* text eol=lf\n'
+    '*.gz binary\n'            # composition/.gitattributes: a later binary unsets text
+    '*.dat mybin\n'
+    '*.late binary\n'
+    '*.late text\n'            # a later text wins over an earlier binary
+    '*.inl1 text binary\n'     # on one line, the macro after text wins
+    '*.inl2 binary text\n'     # and text after the macro wins
+    '*.chain chain\n'          # a macro naming a macro
+    '*.neg binary\n'
+    '*.neg -binary\n'          # a macro set false expands nothing
+    '*.unspec !text\n'
+    '*.UPPER binary\n'         # core.ignorecase: matched case-insensitively
+    'dironly/ -text\n'         # a directory-only pattern never matches a file
+    '!*.negpat -text\n'        # a negative pattern is ignored
+    '"quoted name.q" -text\n'
+    '*.info text\n'
+    '*.bad -text bad!name\n'   # an invalid attribute name drops the line
+)
+ATTRIBUTE_FILES = ['x.gz', 'x.dat', 'x.late', 'x.inl1', 'x.inl2', 'x.chain', 'x.neg', 'x.unspec', 'x.upper',
+                   'dironly/f.txt', 'x.negpat', 'quoted name.q', 'sub/y.sub', 'x.info', 'amybin', 'x.bad',
+                   'plain.txt']
+LINE_ENDINGS = {'lf.txt': b'one\ntwo\n', 'crlf.txt': CRLF, 'sub/a b.txt': b'space\r\n', 'same.txt': b'ab\n',
+                'unchanged.txt': b'unchanged\r\n'}
+
+
+def _ignore_cases(base):
+    for number, (name, (gitignore, files, extra, tracked)) in enumerate(IGNORE_CASES.items()):
+        repo = base / name
+        repo.mkdir()
+        git(repo, 'init', '-q', '-b', 'main')
+        if gitignore is not None:
+            write(repo, {'.gitignore': gitignore})
+        write(repo, {path: 'data\n' for path in files + tracked})
+        for path, text in extra.items():
+            with open(Path(repo, *path.split('/')), 'a', encoding='utf-8', newline='\n') as handle:
+                handle.write(text)
+        if name == 'ignore levels':
+            git(repo, 'config', 'core.excludesFile', '.git/extra excludes')
+        if tracked or name == 'ignore corpus':
+            git(repo, 'add', '-f', *tracked, *(p for p in ('.gitignore', *extra) if not p.startswith('.git/')))
+            git(repo, 'commit', '-q', '-m', name, date=date(28 + number))
+        if name == 'ignore corpus':
+            (repo / 'empty').mkdir()
+            inner = repo / 'inner'
+            inner.mkdir()
+            git(inner, 'init', '-q', '-b', 'main')
+
+
+def _attribute_cases(base):
+    """``attributes``: git's attribute order and macros (each file committed with CRLF content,
+    so that git's status of the unchanged work tree is clean only under git's own evaluation)."""
+    repo = base / 'attributes'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    write(repo, {'.gitattributes': ATTRIBUTES, 'sub/.gitattributes': '[attr]mybin text\n*.sub mybin\n'})
+    write(repo, {path: CRLF for path in ATTRIBUTE_FILES})
+    with open(repo / '.git' / 'info' / 'attributes', 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write('*.info binary\n')
+    commit_all(repo, 'attributes', 40)
+    write(repo, {'x.dat': b'ONE\r\ntwo\r\n'})   # same size, other content: compared
+
+
+def _line_endings(base):
+    """``line endings``: core.autocrlf=true in the repository; after the commit the work tree's
+    line endings are swapped, so git reports each such file modified by its size alone."""
+    repo = base / 'line endings'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    git(repo, 'config', 'core.autocrlf', 'true')
+    write(repo, LINE_ENDINGS)
+    git(repo, '-c', 'core.autocrlf=true', 'add', '-A')
+    write(repo, {'keep-crlf.txt': b'x\r\n'})
+    git(repo, 'add', 'keep-crlf.txt')            # autocrlf=false: a blob holding CRLF
+    git(repo, '-c', 'core.autocrlf=true', 'commit', '-q', '-m', 'line endings', date=date(41))
+    write(repo, {'lf.txt': CRLF, 'crlf.txt': b'one\ntwo\n', 'sub/a b.txt': b'space\n', 'keep-crlf.txt': b'x\n',
+                 'same.txt': b'cd\n'})
+
+
+CASES = {**{name: {'listing': CASE_LISTINGS, 'status': CASE_STATUS} for name in IGNORE_CASES},
+         'attributes': {'listing': CASE_LISTINGS, 'status': CASE_STATUS},
+         'line endings': {'listing': CASE_LISTINGS, 'status': CASE_STATUS}}
+
+
+def full_name_forms(facts):
+    """Per repository: the names asked of ``git rev-parse --verify --quiet --symbolic-full-name``."""
+    E = facts['E']
+    return {
+        'repo one': ['HEAD', '@', 'main', 'heads/main', 'refs/heads/main', 'side', 'v1', 'tags/v1', 'refs/tags/v1',
+                     'lw', 'treetag', 'blobtag', 'dup', 'heads/dup', 'tags/dup', 'refs/heads/dup', 'origin',
+                     'origin/main', 'remotes/origin/main', 'refs/remotes/origin/HEAD', 'top', 'refs/top', 'ünï',
+                     'cafe', 'ORIG_HEAD', 'FETCH_HEAD', 'nosuch', 'links-ok', 'main-worktree/HEAD', 'wtb',
+                     'refs/heads/wtb', E, E[:7], 'HEAD~1', 'HEAD^2', 'HEAD^{tree}', 'v1^{}', 'main@{0}',
+                     'HEAD:README.md', ':README.md', f'v1-1-g{E[:7]}'],
+        'packed copy': ['HEAD', 'main', 'side', 'v1', 'dup', 'origin', 'top', 'refs/remotes/origin/HEAD', 'nosuch'],
+        'linked tree': ['HEAD', '@', 'wtb', 'main', 'main-worktree/HEAD', 'HEAD~1'],
+        'bare.git': ['HEAD', 'main', 'side', 'origin', 'v1', 'dup'],
+        'sha256 repo': ['HEAD', 'main', 's1', 'side'],
+        'separate work': ['HEAD', 'main'],
+        'conflicted': ['HEAD', 'MERGE_HEAD', 'ORIG_HEAD', 'other'],
+    }
 
 
 # ---------------------------------------------------------------------------- the forms
@@ -725,6 +879,13 @@ class Oracle:
         result = self.run(repo, 'bundle', 'list-heads', str(path))
         return result.returncode, result.stdout.decode().splitlines()
 
+    def full_name(self, repo, name):
+        """``git rev-parse --verify --quiet --symbolic-full-name <name>`` (one process per name):
+        the name printed, or None when git prints nothing or fails."""
+        result = self.run(repo, 'rev-parse', '--verify', '--quiet', '--symbolic-full-name', name)
+        text = result.stdout.decode('utf-8').strip()
+        return text if result.returncode == 0 and text else None
+
     def bundle_verify(self, repo, path):
         result = self.run(repo, 'bundle', 'verify', '--quiet', str(path))
         return result.returncode, result.stderr.decode('utf-8', 'replace')
@@ -763,7 +924,15 @@ def answers(root, facts, batch=False):
     for repo in HEADS:
         repos[repo]['head'] = oracle.head(repo)
     work_trees = [[s, oracle.toplevel(s)] for s in WORK_TREE_SUBJECTS]
-    return {'git': oracle.version(), 'repos': repos, 'work_trees': work_trees}
+    cases = {}
+    for repo, asked in CASES.items():
+        cases[repo] = {'index': oracle.index(repo),
+                       'listing': [[c, o, x, oracle.listing(repo, c, o, x)] for c, o, x in asked['listing']],
+                       'status': [[u, p, oracle.status(repo, u, p)] for u, p in asked['status']]}
+    full_names = {repo: [[name, oracle.full_name(repo, name)] for name in names]
+                  for repo, names in full_name_forms(facts).items()}
+    return {'git': oracle.version(), 'repos': repos, 'work_trees': work_trees, 'cases': cases,
+            'full_names': full_names}
 
 
 # ---------------------------------------------------------------------------- recording

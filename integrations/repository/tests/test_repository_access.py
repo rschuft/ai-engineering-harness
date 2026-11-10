@@ -307,6 +307,111 @@ class RecordedExpectations(unittest.TestCase):
             ra.open_repository(self.root / 'repo one', config='system')
 
 
+class RecordedCases(unittest.TestCase):
+    """The F-10.4 cases (``repository_corpus.CASES``, each its own repository): the ignore rules
+    (directories re-included by a negation, gitignore(5)'s examples, nested files, info/exclude,
+    a relative core.excludesFile), git's attribute order and macros, git's size rule; and the
+    full reference name of a name (``full_name_forms``)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.expected = rc.expected()
+        cls.cases = cls.expected['cases']
+
+    def test_every_case_is_recorded(self):
+        self.assertEqual(sorted(self.cases), sorted(rc.CASES))
+        self.assertEqual(sorted(self.expected['full_names']), sorted(rc.full_name_forms(self.expected['facts'])))
+
+    def cases_with(self, prefix):
+        return [(name, data) for name, data in sorted(self.cases.items()) if name.startswith(prefix)]
+
+    def check_listings(self, prefix):
+        for repo, data in self.cases_with(prefix):
+            with open_repo(repo, work_tree=True) as r:
+                for cached, others, exclude, want in data['listing']:
+                    with self.subTest(repo=repo, cached=cached, others=others, exclude=exclude):
+                        self.assertEqual(r.listing(cached, others, exclude), want)
+
+    def check_status(self, prefix):
+        for repo, data in self.cases_with(prefix):
+            with open_repo(repo, work_tree=True) as r:
+                self.assertEqual([[e.mode, e.oid, e.stage, e.path] for e in r.index_entries()], data['index'])
+                for untracked, paths, want in data['status']:
+                    with self.subTest(repo=repo, untracked=untracked, paths=paths):
+                        self.assertEqual([[e.xy, e.path] for e in r.status(paths, untracked)], want)
+
+    def test_ignore_rule_listings(self):
+        self.check_listings('ignore ')
+
+    def test_ignore_rule_status(self):
+        self.check_status('ignore ')
+
+    def test_a_listing_is_never_a_strict_subset_of_gits(self):
+        """The secret-leak scan reads the listing: a path git lists and the module does not
+        would go unscanned."""
+        rows = [(repo, row) for repo, data in self.cases.items() for row in data['listing']]
+        rows += [(repo, row) for repo, data in self.expected['repos'].items() for row in data.get('listing', [])]
+        for repo, (cached, others, exclude, want) in rows:
+            with self.subTest(repo=repo, cached=cached, others=others, exclude=exclude), \
+                    open_repo(repo, work_tree=True) as r:
+                self.assertEqual(set(want) - set(r.listing(cached, others, exclude)), set())
+
+    def test_attribute_order_and_macros(self):
+        self.check_status('attributes')
+        self.assertEqual(self.cases['attributes']['status'][0][2], [[' M', 'x.dat']])
+
+    def test_a_changed_size_is_a_change_without_a_comparison(self):
+        self.check_status('line endings')
+        self.assertEqual([path for _xy, path in self.cases['line endings']['status'][0][2]],
+                         ['crlf.txt', 'keep-crlf.txt', 'lf.txt', 'same.txt', 'sub/a b.txt'])
+
+    def test_full_names(self):
+        for repo, rows in self.expected['full_names'].items():
+            with open_repo(repo) as r:
+                for name, want in rows:
+                    with self.subTest(repo=repo, name=name):
+                        self.assertEqual(r.full_name(name), want)
+
+    def test_full_name_refuses_what_a_revision_refuses(self):
+        with open_repo('repo one') as r:
+            for form in (':/x', 'main@{yesterday}', '-HEAD', 'HEAD main', ''):
+                with self.subTest(form=form), self.assertRaises(ra.RepositoryError) as caught:
+                    r.full_name(form)
+                self.assertEqual(caught.exception.code, 'REVISION_INVALID')
+
+    def test_an_ambiguous_name_resolves_without_the_warning(self):
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-ambiguous-'))
+        self.addCleanup(rc.rmtree, tmp)
+        shutil.copytree(rc.corpus() / 'bare.git', tmp / 'bare.git')
+        with open(tmp / 'bare.git' / 'config', 'a', encoding='utf-8') as handle:
+            handle.write('[core]\n\twarnAmbiguousRefs = false\n')
+        with ra.open_repository(tmp / 'bare.git', config='repository', work_tree=False) as r:
+            self.assertEqual(r.full_name('dup'), 'refs/tags/dup')   # git's first rule that resolves
+        with ra.open_repository(tmp / 'bare.git', config='none', work_tree=False) as r:
+            self.assertIsNone(r.full_name('dup'))
+
+
+class AttributeLines(unittest.TestCase):
+    """``parse_attribute_lines``: gitattributes lines as git's parse_attr_line reads them."""
+
+    category = 'unit'
+
+    def test_lines(self):
+        U = ra._UNSPECIFIED
+        text = (b'\xef\xbb\xbf# comment\n\n  *.c text -diff !merge eol=lf\r\n[attr]m -text\n[attr]\n'
+                b'!neg -text\n"a b.q" -text\n"bad\\x" text\n*.x -text=x bad!name\n' + b'*.y text\n' +
+                b'*.long ' + b'a' * 2048 + b'\n')
+        lines = ra.parse_attribute_lines(text, macros_allowed=True)
+        self.assertEqual(lines, [
+            (3, 'pattern', b'*.c', [(b'text', True), (b'diff', False), (b'merge', U), (b'eol', b'lf')]),
+            (4, 'macro', b'm', [(b'text', False)]),
+            (7, 'pattern', b'a b.q', [(b'text', False)]),
+            (8, 'pattern', b'"bad\\x"', [(b'text', True)]),
+            (10, 'pattern', b'*.y', [(b'text', True)])])
+        nested = ra.parse_attribute_lines(b'[attr]m -text\n*.z m\n', macros_allowed=False)
+        self.assertEqual(nested, [(2, 'pattern', b'*.z', [(b'm', True)])])   # never a glob pattern
+
+
 class Export(unittest.TestCase):
     """export_tree writes blob bytes (decision 0014 section 4)."""
 
@@ -634,6 +739,13 @@ class AttributeFiles(unittest.TestCase):
         error = self.refused('host', self.env(self.text))
         self.assertEqual(error.details['attribute'], 'text')
         self.assertEqual(os.path.normcase(error.details['path']), os.path.normcase(str(self.text)))
+
+    def test_a_macro_in_a_user_file_is_refused_naming_its_line(self):
+        macro = self.tmp / 'macro attributes'
+        macro.write_text('# a macro\n*.doc diff=astextplain\n[attr]mine -text\n', encoding='utf-8')
+        error = self.refused('host', self.env(macro))
+        self.assertEqual((error.details['line'], error.details['attribute']), (3, '[attr]mine'))
+        self.assertIn(':3 defines the macro [attr]mine', error.message)
 
     def test_the_xdg_file_applies_to_host_only(self):
         self.refused('host', self.env(xdg='xdg'))

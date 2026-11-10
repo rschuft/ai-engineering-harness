@@ -14,8 +14,11 @@ answer is computed in this process from the repository's own files.
   are refused with ``REVISION_INVALID`` before any repository access (``check_revision``,
   ``check_object_name``).
 - ``files`` (``ls-tree -r --name-only``), ``export_tree`` (blob bytes, section 4), ``head``,
-  ``status``, ``index_entries``, ``listing`` (``ls-files``), ``write_bundle``, and the module
-  functions ``parse_bundle_header`` and ``pack_trailer``.
+  ``full_name`` (``rev-parse --symbolic-full-name``, F-10.4), ``status``, ``index_entries``,
+  ``listing`` (``ls-files``), ``write_bundle``, and the module functions ``parse_bundle_header``
+  and ``pack_trailer``. Ignore rules and attributes are decided by the module as git decides
+  them (``_Excludes``, ``_Attributes``), not by Dulwich's ``IgnoreFilterManager`` and
+  ``GitAttributes`` (F-10.4).
 
 Errors (decision 0014 section 3): ``RepositoryError`` with a stable ``code``
 (``REVISION_INVALID``, ``OBJECT_NAME_INVALID``, ``GIT_FAILED``, ``EXPORT_REFUSED``,
@@ -29,6 +32,7 @@ that a missing Dulwich is the stable ``CannotRun`` ``REPOSITORY_NEEDS_DULWICH``,
 ``ImportError``.
 """
 import collections
+import io
 import hashlib
 import os
 import re
@@ -400,12 +404,19 @@ STATUS_NEUTRAL_ATTRIBUTES = frozenset({'diff', 'merge', 'whitespace', 'export-ig
 def status_attribute(text):
     """The first attribute in the gitattributes TEXT that git's status could apply (a macro
     definition counts), or None."""
-    for raw in text.splitlines():
+    found = status_attribute_line(text)
+    return found[1] if found else None
+
+
+def status_attribute_line(text):
+    """(line number, attribute) of the first attribute in the gitattributes TEXT that git's
+    status could apply (a macro definition counts), or None."""
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith('#'):
             continue
         if line.startswith('[attr]'):
-            return line.split()[0]
+            return lineno, line.split()[0]
         if line.startswith('"'):
             end = line.find('"', 1)
             while end > 0 and line[end - 1] == '\\':
@@ -417,7 +428,7 @@ def status_attribute(text):
         for token in rest.split():
             name = token.lstrip('-!').split('=', 1)[0]
             if name not in STATUS_NEUTRAL_ATTRIBUTES:
-                return token
+                return lineno, token
     return None
 
 
@@ -611,6 +622,7 @@ class Repository:
         self._hexsz = fmt.hex_length
         self._packed = None
         self._replace = None
+        self._index_sizes = {}
         self._objects = collections.OrderedDict()  # oid -> [type name, bytes, parsed ShaFile or None]
         self._object_bytes = 0
         try:
@@ -1309,6 +1321,29 @@ class Repository:
         resolved = self._ref_value(found[1])
         return Head(resolved[1] if resolved else None, found[1])
 
+    def full_name(self, name):
+        """The full reference name ``git rev-parse --verify --quiet --symbolic-full-name NAME``
+        prints, or None (F-10.4): NAME must name an object (``--verify``), and is then read as a
+        reference in git's order (``repo_dwim_ref``: ``NAME``, ``refs/NAME``, ``refs/tags/NAME``,
+        ``refs/heads/NAME``, ``refs/remotes/NAME``, ``refs/remotes/NAME/HEAD``; ``@`` is HEAD),
+        following symbolic references to the name they end at. None when NAME is no reference
+        (an object id, a navigation, a reflog entry, a path) and when it is ambiguous: when more
+        than one rule resolves (a tag shadowing a branch), git prints nothing, unless
+        ``core.warnAmbiguousRefs`` is false, when the first rule wins."""
+        check_revision(name)
+        if self.object_id(name) is None:
+            return None
+        text = 'HEAD' if name == '@' else name
+        warn = self._config_bool(b'core', b'warnambiguousrefs', True)
+        found = []
+        for candidate in self._dwim_candidates(text):
+            resolved = self._ref_value(candidate)
+            if resolved is not None:
+                found.append(resolved[0])
+                if not warn:
+                    break
+        return found[0] if len(found) == 1 else None
+
     # -- export (decision 0014 section 4)
 
     def export_tree(self, commit, subtree, destination):
@@ -1400,7 +1435,7 @@ class Repository:
     def _index_rows(self):
         d = dulwich_modules()
         index = self._index()
-        rows = []
+        rows, sizes = [], {}
         try:
             for path, entry in index.iteritems():
                 name = path.decode('utf-8', 'surrogateescape')
@@ -1410,9 +1445,11 @@ class Repository:
                             rows.append(IndexEntry(part.mode, part.sha.decode('ascii'), stage, name))
                 else:
                     rows.append(IndexEntry(entry.mode, entry.sha.decode('ascii'), 0, name))
+                    sizes[name] = entry.size
         except Exception as exc:
             raise RepositoryError('GIT_FAILED', f'cannot read the index: {type(exc).__name__}: {exc}') from None
         rows.sort(key=lambda row: (row.path.encode('utf-8', 'surrogateescape'), row.stage))
+        self._index_sizes = sizes
         return rows
 
     def index_entries(self):
@@ -1448,7 +1485,7 @@ class Repository:
                 out = []
                 self._walk(tree, '', out)
                 head_files = {path: (mode, oid) for path, mode, oid in out}
-        checker = _WorktreeChecker(self, index)
+        checker = _WorktreeChecker(self, index, self._index_sizes)
         changes = []
         for path in sorted(set(stages) | set(head_files), key=lambda p: p.encode('utf-8', 'surrogateescape')):
             if not selected(path):
@@ -1502,27 +1539,31 @@ class Repository:
             out.extend(row.path for row in rows)
         return out
 
-    def _ignore_manager(self):
+    def _excludes(self):
+        """git's exclude levels for this work tree (``_Excludes``): ``core.excludesFile`` (else,
+        under ``host``, ``$XDG_CONFIG_HOME/git/ignore``), then ``info/exclude``, then each
+        directory's ``.gitignore``, read as the walk reaches it."""
         d = dulwich_modules()
         config = self._config()
-        filters = []
-        candidates = [os.path.join(self._dul.controldir(), 'info', 'exclude')]
         try:
             excludes = config.get((b'core',), b'excludesFile').decode('utf-8')
         except KeyError:
             excludes = d.config.get_xdg_config_home_path('git', 'ignore') if self.policy == 'host' else None
-        if excludes:
-            candidates.append(os.path.expanduser(excludes))
         ignorecase = self._config_bool(b'core', b'ignorecase', False)
-        for index, path in enumerate(candidates):
-            try:
-                filters.append(d.ignore.IgnoreFilter.from_path(path, ignorecase))
-            except OSError:
-                continue
-            path = os.path.normpath(path)
-            if index and path not in self._dul._aieh_sources:
-                self._dul._aieh_sources.append(path)
-        return d.ignore.IgnoreFilterManager(self.root, filters, ignorecase), ignorecase
+        levels = []
+        if excludes:
+            # git resolves a relative path from the top of the work tree, where it runs.
+            path = os.path.join(self.root, os.path.expanduser(excludes))
+            patterns = _Excludes.read(path, ignorecase)
+            if patterns is not None:
+                levels.append(patterns)
+                path = os.path.normpath(path)
+                if path not in self._dul._aieh_sources:
+                    self._dul._aieh_sources.append(path)
+        info = _Excludes.read(os.path.join(self._dul.controldir(), 'info', 'exclude'), ignorecase)
+        if info is not None:
+            levels.append(info)
+        return _Excludes(self.root, levels, ignorecase)
 
     def attribute_files(self):
         """The attribute files outside the repository git would read for this policy, lowest
@@ -1563,15 +1604,19 @@ class Repository:
             path = os.path.normpath(path)
             if path not in self._dul._aieh_sources:
                 self._dul._aieh_sources.append(path)
-            found = status_attribute(text)
+            found = status_attribute_line(text)
             if found:
-                raise RepositoryError('ATTRIBUTES_UNSUPPORTED', f'{path} sets {found}, which git applies to status and '
-                                      'this module does not read from that file', path=path, attribute=found)
+                lineno, attribute = found
+                what = 'defines the macro' if attribute.startswith('[attr]') else 'sets'
+                raise RepositoryError('ATTRIBUTES_UNSUPPORTED', f'{path}:{lineno} {what} {attribute}, which git '
+                                      'applies to status and this module does not read from that file',
+                                      path=path, line=lineno, attribute=attribute)
 
     def _untracked(self, tracked, mode, exclude_standard):
         """The untracked paths git's read_directory reports: files, a nested repository as
         'dir/', and in 'normal' mode an untracked directory with content as 'dir/'."""
-        manager, ignorecase = self._ignore_manager() if exclude_standard else (None, False)
+        excludes = self._excludes() if exclude_standard else None
+        ignorecase = excludes.ignorecase if excludes is not None else False
         tracked_dirs = set()
         for path in tracked:
             parts = path.split('/')
@@ -1579,9 +1624,7 @@ class Repository:
                 tracked_dirs.add('/'.join(parts[:i]))
 
         def ignored(rel, is_dir):
-            if manager is None:
-                return False
-            return manager.is_ignored(rel + ('/' if is_dir else '')) is True
+            return excludes is not None and excludes.excluded(rel, is_dir)
 
         def is_dot_git(name):
             return name.casefold() == '.git' if ignorecase or _WINDOWS else name == '.git'
@@ -1713,13 +1756,266 @@ def _has_symlink_leading_path(root, path):
     return False
 
 
+_UTF8_BOM = b'\xef\xbb\xbf'
+_ATTR_BLANK = b' \t\r\n'
+_ATTR_NAME = re.compile(rb'[-._0-9A-Za-z]+\Z')
+_ATTR_MAX_LINE = 2048  # git ignores longer attribute lines
+_UNSPECIFIED = object()  # '!name': determined as unspecified, which hides lower lines
+_BUILTIN_MACROS = {b'binary': [(b'diff', False), (b'merge', False), (b'text', False)]}
+_C_ESCAPES = {ord('a'): 7, ord('b'): 8, ord('f'): 12, ord('n'): 10, ord('r'): 13, ord('t'): 9, ord('v'): 11,
+              ord('\\'): 92, ord('"'): 34}
+
+
+def _unquote_c(data):
+    """git's unquote_c_style of a pattern that starts with '"': (pattern, rest) or None."""
+    out, i = bytearray(), 1
+    while i < len(data):
+        ch = data[i]
+        if ch == ord('"'):
+            return bytes(out), data[i + 1:]
+        if ch == ord('\\'):
+            i += 1
+            if i >= len(data):
+                return None
+            ch = data[i]
+            if ch in _C_ESCAPES:
+                out.append(_C_ESCAPES[ch])
+            elif ord('0') <= ch <= ord('3') and i + 2 < len(data) and \
+                    all(ord('0') <= c <= ord('7') for c in data[i + 1:i + 3]):
+                out.append(int(data[i:i + 3], 8))
+                i += 2
+            else:
+                return None
+        else:
+            out.append(ch)
+        i += 1
+    return None
+
+
+def parse_attribute_lines(data, macros_allowed):
+    """The lines of a gitattributes file as git's ``parse_attr_line`` reads them: a list of
+    ``(lineno, kind, pattern, states)``, ``kind`` 'macro' (``[attr]<name>``, where allowed) or
+    'pattern', ``states`` the ``(name, value)`` pairs in line order (True, False, a bytes value,
+    or ``_UNSPECIFIED`` for ``!name``). Dropped as git drops them: comments and blank lines,
+    a macro where none is allowed, a negative pattern, an invalid attribute name."""
+    if data.startswith(_UTF8_BOM):
+        data = data[len(_UTF8_BOM):]
+    lines = []
+    for lineno, line in enumerate(data.split(b'\n'), start=1):
+        text = line.lstrip(_ATTR_BLANK)
+        if not text or text.startswith(b'#') or len(line) >= _ATTR_MAX_LINE:
+            continue
+        quoted = _unquote_c(text) if text.startswith(b'"') else None
+        if quoted is not None:
+            name, rest = quoted
+        else:
+            cut = next((i for i, ch in enumerate(text) if ch in _ATTR_BLANK), len(text))
+            name, rest = text[:cut], text[cut:]
+        states = []
+        for token in rest.split():
+            attr = token[1:] if token[:1] in (b'-', b'!') else token
+            attr, equals, value = attr.partition(b'=')
+            if not _ATTR_NAME.match(attr) or attr.startswith(b'-'):
+                break  # git drops the whole line
+            if token[:1] == b'-':
+                states.append((attr, False))
+            elif token[:1] == b'!':
+                states.append((attr, _UNSPECIFIED))
+            else:
+                states.append((attr, value if equals else True))
+        else:
+            if name.startswith(b'[attr]'):
+                # A macro definition, never a glob pattern (git reads '[attr]' alone as one).
+                macro = name[len(b'[attr]'):]
+                if macros_allowed and _ATTR_NAME.match(macro) and not macro.startswith(b'-'):
+                    lines.append((lineno, 'macro', macro, states))
+            elif not name.startswith(b'!'):  # git: negative patterns are ignored in attributes
+                lines.append((lineno, 'pattern', name, states))
+    return lines
+
+
+class _Attributes:
+    """git's attributes for status (``attr.c``, the check-in direction), evaluated here and not
+    by Dulwich's ``GitAttributes``, which expands no macro, neither the built-in ``binary``
+    (``-diff -merge -text``) nor ``[attr]`` definitions, and so let an earlier ``text`` win
+    over a later ``binary`` (F-10.4).
+
+    The stack, lowest precedence first: the built-in macro, the root ``.gitattributes``, each
+    deeper directory's ``.gitattributes`` down to the path's own, then ``info/attributes``; a
+    ``.gitattributes`` is read from the work tree (a regular file, not a symbolic link), else
+    from the index. The user and system attribute files are refused before this
+    (``_check_attribute_files``) whenever they set an attribute status consults, a macro
+    definition included, so they contribute nothing here. As git's ``fill``: from the highest
+    line down, each matching line determines its attributes not yet determined, last on the
+    line first, and a macro set true then determines its own attributes the same way. Macro
+    definitions are read where git allows them (the root file and ``info/attributes``); the
+    definition of highest precedence wins. A pattern ending in '/' never matches a file; the
+    other patterns are matched by Dulwich's attribute ``Pattern`` (relative to the file's
+    directory), case-insensitively (ASCII) when ``core.ignorecase`` is set, as git matches."""
+
+    def __init__(self, repository, index):
+        self.repo = repository
+        self.index = index            # path -> stage-0 IndexEntry
+        self.ignorecase = repository._config_bool(b'core', b'ignorecase', False)
+        self._files = {}
+        info = os.path.join(repository._dul.controldir(), 'info', 'attributes')
+        try:
+            with open(info, 'rb') as handle:
+                self._info = self._compile(handle.read(), '', True)
+        except OSError:
+            self._info = ([], {})
+        self.macros = dict(_BUILTIN_MACROS)
+        self.macros.update(self._directory('')[1])
+        self.macros.update(self._info[1])
+
+    def _compile(self, data, base, macros_allowed):
+        d = dulwich_modules()
+        patterns, macros = [], {}
+        base_bytes = base.encode('utf-8', 'surrogateescape')
+        for _lineno, kind, name, states in parse_attribute_lines(data, macros_allowed):
+            if kind == 'macro':
+                macros[name] = states
+                continue
+            if name.endswith(b'/'):
+                continue  # git: a directory-only pattern never matches a file
+            if self.ignorecase:
+                name, pattern_base = name.lower(), base_bytes.lower()
+            else:
+                pattern_base = base_bytes
+            try:
+                patterns.append((d.attrs.Pattern(name, pattern_base), states))
+            except (re.error, ValueError):
+                continue
+        return patterns, macros
+
+    def _read(self, rel):
+        """The bytes of the ``.gitattributes`` of directory REL ('' for the root), or None."""
+        name = f'{rel}/.gitattributes' if rel else '.gitattributes'
+        full = os.path.join(self.repo.root, *name.split('/'))
+        if os.path.isfile(full) and not os.path.islink(full):
+            try:
+                with open(full, 'rb') as handle:
+                    return handle.read()
+            except OSError:
+                pass
+        entry = self.index.get(name)
+        if entry is not None:
+            found = self.repo._raw(entry.oid)
+            if found is not None and found[0] == 'blob':
+                return found[1]
+        return None
+
+    def _directory(self, rel):
+        if rel not in self._files:
+            data = self._read(rel)
+            self._files[rel] = self._compile(data, rel, rel == '') if data is not None else ([], {})
+        return self._files[rel]
+
+    def _fill(self, states, found):
+        for name, value in reversed(states):
+            if name not in found:
+                found[name] = value
+                if value is True and name in self.macros:
+                    self._fill(self.macros[name], found)
+
+    def match(self, path):
+        """{name: True, False or bytes} of PATH (repository-relative), unspecified ones left out."""
+        parts = path.split('/')
+        stack = [self._directory('/'.join(parts[:depth]))[0] for depth in range(len(parts))]
+        stack.append(self._info[0])
+        subject = path.encode('utf-8', 'surrogateescape')
+        if self.ignorecase:
+            subject = subject.lower()
+        found = {}
+        for patterns in reversed(stack):
+            for pattern, states in reversed(patterns):
+                if pattern.match(subject):
+                    self._fill(states, found)
+        return {name: value for name, value in found.items() if value is not _UNSPECIFIED}
+
+
+
+class _Excludes:
+    """git's exclude decision for the untracked walk (``dir.c``, ``last_matching_pattern``),
+    made here and not by Dulwich's ``IgnoreFilterManager``, which reports a directory ignored
+    when a pattern only reaches inside it (``logs/*``), so that a negation re-including a
+    directory below it (``!logs/keep/``) was never reached (F-10.4).
+
+    An entry is decided by the last pattern that matches the entry itself, searched level by
+    level from the highest precedence: the ``.gitignore`` of the entry's own directory, then of
+    each directory above it up to the root, then ``info/exclude``, then ``core.excludesFile``.
+    A negated pattern re-includes. The walk prunes a directory only when the directory itself is
+    excluded, and reads a directory's ``.gitignore`` only when it reaches the directory. Each
+    pattern is matched by Dulwich's ``Pattern.matches`` (git's wildmatch rules, for the entry's
+    path relative to the file's directory and whether it is a directory)."""
+
+    def __init__(self, root, levels, ignorecase):
+        self.root = root
+        self.levels = levels          # lowest precedence first: core.excludesFile, info/exclude
+        self.ignorecase = ignorecase
+        self._directories = {}
+
+    @staticmethod
+    def read(path, ignorecase, follow=True):
+        """The patterns of the exclude file PATH, in file order, or None when it cannot be read
+        (absent, a directory; an in-tree ``.gitignore`` that is a symbolic link, which git does
+        not follow)."""
+        d = dulwich_modules()
+        try:
+            if not follow and os.path.islink(path):
+                return None
+            with open(path, 'rb') as handle:
+                data = handle.read()
+        except OSError:
+            return None
+        if data.startswith(_UTF8_BOM):
+            data = data[len(_UTF8_BOM):]
+        patterns = []
+        for line in d.ignore.read_ignore_patterns(io.BytesIO(data)):
+            try:
+                patterns.append(d.ignore.Pattern(line, ignorecase))
+            except d.ignore.MalformedPattern:
+                continue  # git's wildmatch never matches it
+        return patterns
+
+    def _directory(self, rel):
+        if rel not in self._directories:
+            path = os.path.join(self.root, *rel.split('/'), '.gitignore') if rel else \
+                os.path.join(self.root, '.gitignore')
+            self._directories[rel] = self.read(path, self.ignorecase, follow=False) or []
+        return self._directories[rel]
+
+    @staticmethod
+    def _last(patterns, name, is_dir):
+        for pattern in reversed(patterns):
+            if pattern.matches(name, is_dir):
+                return pattern
+        return None
+
+    def excluded(self, rel, is_dir):
+        """Whether git excludes the untracked entry REL (repository-relative, '/'-separated)."""
+        parts = rel.split('/')
+        for depth in range(len(parts) - 1, -1, -1):
+            name = '/'.join(parts[depth:]).encode('utf-8', 'surrogateescape')
+            found = self._last(self._directory('/'.join(parts[:depth])), name, is_dir)
+            if found is not None:
+                return found.is_exclude
+        name = rel.encode('utf-8', 'surrogateescape')
+        for patterns in reversed(self.levels):
+            found = self._last(patterns, name, is_dir)
+            if found is not None:
+                return found.is_exclude
+        return False
+
+
 class _WorktreeChecker:
     """Worktree against index, as git's diff-files sees it: 'D' removed, 'T' type changed, 'M'
     content (after git's clean conversion) or executable bit changed, ' ' unchanged."""
 
-    def __init__(self, repository, index):
+    def __init__(self, repository, index, sizes):
         self.repo = repository
         self.index = index
+        self.sizes = sizes            # path -> the size git recorded in the index (stage 0)
         self.symlinks = repository._config_bool(b'core', b'symlinks', True)
         self.filemode = repository._config_bool(b'core', b'filemode', True) and not _WINDOWS
         try:
@@ -1735,10 +2031,12 @@ class _WorktreeChecker:
     def attributes(self, path):
         if self._attributes is None:
             try:
-                self._attributes = self.repo._dul.get_gitattributes()
+                self._attributes = _Attributes(self.repo, self.index)
+            except RepositoryError:
+                raise
             except Exception as exc:
                 raise RepositoryError('GIT_FAILED', f'cannot read the attributes: {type(exc).__name__}: {exc}') from None
-        return self._attributes.match_path(path.encode('utf-8', 'surrogateescape'))
+        return self._attributes.match(path)
 
     def change(self, entry):
         root = self.repo.root
@@ -1767,6 +2065,12 @@ class _WorktreeChecker:
         if not stat.S_ISREG(st.st_mode):
             return 'T'
         if self.filemode and bool(st.st_mode & 0o100) != bool(entry.mode & 0o100):
+            return 'M'
+        recorded = self.sizes.get(entry.path, 0)
+        if recorded and recorded != st.st_size & 0xffffffff:
+            # git's ie_match_stat: a recorded size (non-zero: zero means not yet known, or
+            # smudged as racily clean) that differs from the file's is a change, without a
+            # content comparison or any conversion (F-10.4).
             return 'M'
         data = self.clean(entry, Path(full).read_bytes())
         return ' ' if self.blob_id(data) == entry.oid else 'M'
@@ -1811,8 +2115,6 @@ class _WorktreeChecker:
 
     def crlf_action(self, attrs):
         text = attrs.get(b'text')
-        if b'text' not in attrs and b'binary' in attrs:
-            text = False if attrs[b'binary'] is True else None
         if text is True:
             action = 'text'
         elif text is False:
