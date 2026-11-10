@@ -194,7 +194,7 @@ DISCOVERY = r"^- '\{\{\.PYTHON\}\} -I -B -m unittest discover -s \S+ -v'$"
 
 
 class RequiredTargets(unittest.TestCase):
-    """setup, test, every suite target run alone, test:profile, test:budget and the gate's test
+    """setup, test, every suite target run alone, test:profile, test:categories, test:budget and the gate's test
     suite in hooks:verify run under the python-tools interpreter, so that a Dulwich-dependent test
     never meets an interpreter without Dulwich; the basic-tier checks keep the plain interpreter
     (plan leaves F-10.1 and F-10.2, decision 0014 section 9). Reads Taskfile.yml only."""
@@ -236,7 +236,9 @@ class RequiredTargets(unittest.TestCase):
                 self.assertRegex(self.commands(name)[0], DISCOVERY)
 
     def test_the_profile_and_budget_targets_run_under_the_tools_interpreter(self):
+        # test:categories imports every test module, and the credential provider tests import keyring.
         for name, script in (('test:profile', 'tools/test_profile.py run'),
+                             ('test:categories', 'tools/test_profile.py categories'),
                              ('test:budget', 'tools/check_test_budget.py check --run')):
             with self.subTest(target=name):
                 self.assertEqual(self.variables(name), TOOLS_VARS)

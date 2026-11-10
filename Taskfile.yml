@@ -117,7 +117,11 @@ tasks:
       - '{{.PYTHON}} -I -B tools/test_profile.py run {{.CLI_ARGS}}'
 
   test:categories:
-    desc: Check that every test class declares a valid category; imports the test modules, runs no test (python -I -B tools/test_profile.py categories)
+    desc: Check that every test class declares a valid category under the python-tools interpreter, which has the modules the test modules import; imports the test modules, runs no test (<tools python> -I -B tools/test_profile.py categories)
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/test_profile.py categories {{.CLI_ARGS}}'
 
