@@ -5,9 +5,11 @@ Run from the repository root:  python -I -B -m unittest discover -s tools/tests 
 Every test runs the verifier on a temporary copy of the seeded files, or on a
 temporary git repository built here. The only use of the checkout itself is
 reading its files to copy them and one read-only baseline run against its own
-git history. Each class copies the seeded files once; a test that writes gets a
-private copy of that copy, and the tests that only read use the class's copy
-itself and check that it is unchanged afterwards (``SeedCopy.READS_ONLY``).
+git history. Each class copies the seeded files once; the tests that write use
+the class's work copy, restored to that copy (or to the class's golden
+repository) and checked equal to it before each of them, and the tests that only
+read use the class's copy itself and check that it is unchanged afterwards
+(``SeedCopy.READS_ONLY``).
 
 The command-line contract (the exit status and the PASS, FAIL and ERROR lines of a
 real run, git missing from PATH, a directory that is not a repository, and the
@@ -26,6 +28,7 @@ import itertools
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -111,10 +114,56 @@ def tree_digest(root):
     return digest.hexdigest()
 
 
+def tree_state(root):
+    """Every file under ROOT by relative path with the sha256 of its bytes, and every
+    directory's relative path: what restore() makes equal."""
+    files, dirs = {}, set()
+    for top, subdirs, names in os.walk(root):
+        rel_top = Path(top).relative_to(root)
+        dirs.update((rel_top / name).as_posix() for name in subdirs)
+        for name in names:
+            files[(rel_top / name).as_posix()] = hashlib.sha256(
+                Path(top, name).read_bytes()).hexdigest()
+    return files, dirs
+
+
+def _writable(function, path, _exc):
+    """shutil.rmtree's onexc: git writes its object files read-only on Windows."""
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
+
+
+def restore(root, source, state):
+    """Make ROOT a copy of SOURCE again, whose tree_state is STATE: remove what a test added,
+    copy back from SOURCE (plain file copies) every file a test changed or removed, recreate
+    removed directories. Only the differences are written."""
+    files, dirs = tree_state(root)
+    want_files, want_dirs = state
+    for rel in sorted(dirs - want_dirs, reverse=True):
+        if (root / rel).is_dir():
+            shutil.rmtree(root / rel, onexc=_writable)
+    for rel in set(files) - set(want_files):
+        if (root / rel).exists():
+            os.chmod(root / rel, stat.S_IWRITE)
+            (root / rel).unlink()
+    for rel in sorted(want_dirs - dirs):
+        (root / rel).mkdir(parents=True, exist_ok=True)
+    for rel, digest in want_files.items():
+        if files.get(rel) != digest:
+            if (root / rel).exists():
+                os.chmod(root / rel, stat.S_IWRITE)
+            shutil.copyfile(source / rel, root / rel)
+
+
 class SeedCopy(unittest.TestCase):
-    """A temporary copy of the seeded files: copied once per class, then copied again for
-    each test that writes. The tests named in READS_ONLY only read, so they use the class's
-    copy itself, and each of them checks afterwards that it is unchanged."""
+    """A temporary copy of the seeded files, copied once per class. The tests named in
+    READS_ONLY only read, so they use the class's copy itself, and each of them checks
+    afterwards that it is unchanged. A test that writes gets the class's second copy, the
+    work copy, made from ``source()`` once per class and restored to it before each such test
+    (plan leaf F-09): only the files and directories the previous test changed are written
+    again, and the whole work copy is then checked to equal the source, every file's bytes
+    and every directory, so each writing test starts from the same tree a fresh copy gives.
+    A fresh copy's files are scanned when first read, which cost about 0.2 s a test."""
     READS_ONLY = frozenset()
 
     @classmethod
@@ -122,6 +171,8 @@ class SeedCopy(unittest.TestCase):
         shared = tempfile.TemporaryDirectory(prefix='verify_seed_')
         cls.addClassCleanup(shared.cleanup)
         cls.shared = Path(shared.name) / 'seed'
+        cls.work = Path(shared.name) / 'work' / 'seed'
+        cls.work_state = None
         for rel in seed_paths():
             dst = cls.shared / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -133,23 +184,26 @@ class SeedCopy(unittest.TestCase):
         cls.shared_digest = tree_digest(cls.shared)
 
     def setUp(self):
-        self._tmp = None
         if self._testMethodName in self.READS_ONLY:
             self.root = self.shared
             return
-        self._tmp = tempfile.TemporaryDirectory(prefix='verify_seed_')
-        self.root = Path(self._tmp.name) / 'seed'
-        # Plain file copies: git's read-only object files become writable copies.
-        shutil.copytree(self.source(), self.root, copy_function=shutil.copyfile)
+        cls = type(self)
+        if cls.work_state is None:
+            cls.work_state = tree_state(self.source())
+            # Plain file copies: git's read-only object files become writable copies.
+            shutil.copytree(self.source(), self.work, copy_function=shutil.copyfile)
+        else:
+            restore(self.work, self.source(), cls.work_state)
+        self.assertEqual(tree_state(self.work), cls.work_state,
+                         'the work copy differs from its source')
+        self.root = self.work
 
     def source(self):
-        """The tree a writing test's private copy is made from."""
+        """The tree the work copy of a writing test is made from."""
         return self.shared
 
     def tearDown(self):
-        if self._tmp is not None:
-            self._tmp.cleanup()
-        else:
+        if self.root == self.shared:
             self.assertEqual(tree_digest(self.shared), self.shared_digest,
                              'a test that writes is listed in READS_ONLY: the shared copy changed')
 
