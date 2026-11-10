@@ -506,6 +506,68 @@ class TestPolicy(unittest.TestCase):
         self.assertEqual(R.collaborators()[R.ROLES['reviewer']['user']], 'read')
         self.assertEqual(R.collaborators()[R.ROLES['verifier']['user']], 'read')
 
+    # The JSON names of Gitea 28.3.0's BranchProtection (modules/structs/repo_branch.go), in its order,
+    # without branch_name (deprecated alias), created_at and updated_at.
+    GITEA_28_3_0_FIELDS = (
+        'rule_name', 'priority', 'enable_push', 'enable_push_whitelist', 'push_whitelist_usernames',
+        'push_whitelist_teams', 'push_whitelist_deploy_keys', 'enable_force_push', 'enable_force_push_allowlist',
+        'force_push_allowlist_usernames', 'force_push_allowlist_teams', 'force_push_allowlist_deploy_keys',
+        'enable_merge_whitelist', 'merge_whitelist_usernames', 'merge_whitelist_teams', 'enable_bypass_allowlist',
+        'bypass_allowlist_usernames', 'bypass_allowlist_teams', 'enable_status_check', 'status_check_contexts',
+        'required_approvals', 'enable_approvals_whitelist', 'approvals_whitelist_username',
+        'approvals_whitelist_teams', 'block_on_rejected_reviews', 'block_on_official_review_requests',
+        'block_on_codeowner_reviews', 'block_on_outdated_branch', 'dismiss_stale_approvals', 'ignore_stale_approvals',
+        'require_signed_commits', 'protected_file_patterns', 'unprotected_file_patterns',
+        'block_admin_merge_override')
+
+    def test_the_protection_declaration_is_total(self):
+        """Every rule names every field (finding F-C of the P-04.2 protection-check recommendation), so a
+        PATCH re-applying the fixture resets a drifted field; the values are pinned field by field."""
+        self.assertEqual(len(self.GITEA_28_3_0_FIELDS), 34)
+        self.assertEqual(R.PROTECTION_FIELDS, self.GITEA_28_3_0_FIELDS)
+        zero = {f: False for f in self.GITEA_28_3_0_FIELDS}
+        zero.update({f: [] for f in ('push_whitelist_usernames', 'push_whitelist_teams',
+                                     'force_push_allowlist_usernames', 'force_push_allowlist_teams',
+                                     'merge_whitelist_usernames', 'merge_whitelist_teams', 'bypass_allowlist_usernames',
+                                     'bypass_allowlist_teams', 'status_check_contexts', 'approvals_whitelist_username',
+                                     'approvals_whitelist_teams')})
+        zero.update(protected_file_patterns='', unprotected_file_patterns='', required_approvals=0)
+        owner_merges = {'enable_merge_whitelist': True, 'merge_whitelist_usernames': [G.OWNER]}
+        expected = [
+            {**zero, 'rule_name': R.DEFAULT_BRANCH, 'priority': 1, **owner_merges, 'required_approvals': 1,
+             'enable_approvals_whitelist': True, 'approvals_whitelist_username': [R.ROLES['reviewer']['user']],
+             'block_on_rejected_reviews': True, 'block_on_outdated_branch': True, 'block_admin_merge_override': True},
+            {**zero, 'rule_name': R.PROPOSAL_PATTERN, 'priority': 2, 'enable_push': True, 'enable_push_whitelist': True,
+             'push_whitelist_usernames': [R.ROLES['planner']['user'], R.ROLES['builder']['user']], **owner_merges},
+            {**zero, 'rule_name': '**', 'priority': 3, **owner_merges},
+        ]
+        rules = R.protection_rules()
+        for rule, want in zip(rules, expected, strict=True):
+            with self.subTest(rule=rule['rule_name']):
+                self.assertEqual(tuple(rule), self.GITEA_28_3_0_FIELDS)
+                self.assertEqual(rule, want)
+                # the bypass allowlist grants a force merge past every gate: disabled and empty everywhere
+                self.assertEqual((rule['enable_bypass_allowlist'], rule['bypass_allowlist_usernames'],
+                                  rule['bypass_allowlist_teams']), (False, [], []))
+                self.assertFalse(rule['dismiss_stale_approvals'])  # open to G-03.1
+        with self.assertRaises(ValueError):
+            R._total_rule('x', 4, enable_bypass=True)
+
+    def test_the_fixture_reads_back_every_field(self):
+        api = SimpleNamespace(calls=[])
+        rules = R.protection_rules()
+
+        def call(method, path, body=None):
+            api.calls.append((method, path))
+            if path.endswith('/branch_protections'):
+                return 200, [{**rule, 'branch_name': rule['rule_name'], 'created_at': 'then'} for rule in rules]
+            if path.endswith('/permission'):
+                return 200, {'permission': 'read'}
+            return 200, {'full_name': 'x', 'private': True, 'default_branch': R.DEFAULT_BRANCH}
+
+        api.call = call
+        self.assertEqual(R.read_fixture(api)['branch_protections'], rules)
+
     def test_redaction_and_fingerprint(self):
         token = 'a' * 40
         self.assertEqual(R.redact(f'x {token} y'), 'x <redacted> y')

@@ -103,22 +103,57 @@ def redact(text: str) -> str:
     return re.sub(r'[0-9a-f]{40}', '<redacted>', text)
 
 
+# Every field of Gitea 28.3.0's branch protection API view (modules/structs/repo_branch.go BranchProtection,
+# in its order) but branch_name (a deprecated alias of rule_name), created_at and updated_at: 34 fields,
+# each of which CreateBranchProtectionOption and EditBranchProtectionOption (rule_name excepted) accept.
+PROTECTION_FIELDS = (
+    'rule_name', 'priority', 'enable_push', 'enable_push_whitelist', 'push_whitelist_usernames',
+    'push_whitelist_teams', 'push_whitelist_deploy_keys', 'enable_force_push', 'enable_force_push_allowlist',
+    'force_push_allowlist_usernames', 'force_push_allowlist_teams', 'force_push_allowlist_deploy_keys',
+    'enable_merge_whitelist', 'merge_whitelist_usernames', 'merge_whitelist_teams', 'enable_bypass_allowlist',
+    'bypass_allowlist_usernames', 'bypass_allowlist_teams', 'enable_status_check', 'status_check_contexts',
+    'required_approvals', 'enable_approvals_whitelist', 'approvals_whitelist_username', 'approvals_whitelist_teams',
+    'block_on_rejected_reviews', 'block_on_official_review_requests', 'block_on_codeowner_reviews',
+    'block_on_outdated_branch', 'dismiss_stale_approvals', 'ignore_stale_approvals', 'require_signed_commits',
+    'protected_file_patterns', 'unprotected_file_patterns', 'block_admin_merge_override')
+_LIST_FIELDS = frozenset(f for f in PROTECTION_FIELDS if f.endswith(('_usernames', '_username', '_teams'))
+                         or f == 'status_check_contexts')
+_TEXT_FIELDS = frozenset(('protected_file_patterns', 'unprotected_file_patterns'))
+_NUMBER_FIELDS = frozenset(('priority', 'required_approvals'))
+
+
+def _total_rule(rule_name: str, priority: int, **settings) -> dict:
+    """One rule over every field of PROTECTION_FIELDS: SETTINGS as given, every other flag false, every other
+    list empty, both pattern strings empty and no required approval (Gitea's own zero values), so that a
+    PATCH re-applying it resets whatever it does not set."""
+    unknown = sorted(set(settings) - set(PROTECTION_FIELDS))
+    if unknown:
+        raise ValueError(f'not a Gitea 28.3.0 branch protection field: {unknown}')
+    zero = {f: [] if f in _LIST_FIELDS else '' if f in _TEXT_FIELDS else 0 if f in _NUMBER_FIELDS else False
+            for f in PROTECTION_FIELDS}
+    rule = {**zero, **settings, 'rule_name': rule_name, 'priority': priority}
+    return {f: rule[f] for f in PROTECTION_FIELDS}
+
+
 def protection_rules() -> list[dict]:
-    """The fixture's branch protection, in priority order. The default branch: nobody pushes, nobody
-    force-pushes, only aieh-owner merges, one approval from the reviewer bot is required, and the site
+    """The fixture's branch protection, in priority order, total over PROTECTION_FIELDS. The default
+    branch: nobody pushes, nobody force-pushes, only aieh-owner merges, one approval from the reviewer bot
+    is required, a rejected review blocks, a branch behind it cannot be merged, and the site
     administrator's merge override is blocked. work/*: the planner and builder bots push. Every other
-    branch name: nobody pushes. Protected branches cannot be deleted."""
+    branch name: nobody pushes. On every rule the bypass allowlist is disabled and empty. Stale approvals
+    are not dismissed (dismiss_stale_approvals false) until G-03.1 decides the authorization branch's
+    policy. Protected branches cannot be deleted."""
     reviewer, planner, builder = (ROLES[r]['user'] for r in ('reviewer', 'planner', 'builder'))
+    only_owner_merges = {'enable_merge_whitelist': True, 'merge_whitelist_usernames': [host.OWNER]}
     return [
-        {'rule_name': DEFAULT_BRANCH, 'priority': 1, 'enable_push': False, 'enable_force_push': False,
-         'enable_merge_whitelist': True, 'merge_whitelist_usernames': [host.OWNER],
-         'block_admin_merge_override': True, 'required_approvals': 1, 'enable_approvals_whitelist': True,
-         'approvals_whitelist_username': [reviewer], 'block_on_rejected_reviews': True},
-        {'rule_name': PROPOSAL_PATTERN, 'priority': 2, 'enable_push': True, 'enable_push_whitelist': True,
-         'push_whitelist_usernames': [planner, builder], 'enable_force_push': False,
-         'enable_merge_whitelist': True, 'merge_whitelist_usernames': [host.OWNER]},
-        {'rule_name': '**', 'priority': 3, 'enable_push': False, 'enable_force_push': False,
-         'enable_merge_whitelist': True, 'merge_whitelist_usernames': [host.OWNER]},
+        _total_rule(DEFAULT_BRANCH, 1, enable_push=False, enable_force_push=False, **only_owner_merges,
+                    block_admin_merge_override=True, required_approvals=1, enable_approvals_whitelist=True,
+                    approvals_whitelist_username=[reviewer], block_on_rejected_reviews=True,
+                    block_on_outdated_branch=True, dismiss_stale_approvals=False, enable_bypass_allowlist=False,
+                    bypass_allowlist_usernames=[], bypass_allowlist_teams=[]),
+        _total_rule(PROPOSAL_PATTERN, 2, enable_push=True, enable_push_whitelist=True,
+                    push_whitelist_usernames=[planner, builder], enable_force_push=False, **only_owner_merges),
+        _total_rule('**', 3, enable_push=False, enable_force_push=False, **only_owner_merges),
     ]
 
 
@@ -336,14 +371,10 @@ def read_fixture(api: Api) -> dict:
         perms[user] = body.get('permission') if status == 200 and isinstance(body, dict) else f'HTTP {status}'
     status, rules = api.call('GET', f'{repo}/branch_protections')
     require(status, 200, f'GET {repo}/branch_protections', rules)
-    keep = ('rule_name', 'priority', 'enable_push', 'enable_push_whitelist', 'push_whitelist_usernames',
-            'enable_force_push', 'enable_merge_whitelist', 'merge_whitelist_usernames',
-            'block_admin_merge_override', 'required_approvals', 'enable_approvals_whitelist',
-            'approvals_whitelist_username', 'block_on_rejected_reviews')
     return {'repository': {'full_name': info.get('full_name'), 'private': info.get('private'),
                            'default_branch': info.get('default_branch')},
             'collaborator_permissions': perms,
-            'branch_protections': [{k: r.get(k) for k in keep} for r in rules or []]}
+            'branch_protections': [{k: r.get(k) for k in PROTECTION_FIELDS} for r in rules or []]}
 
 
 def admin_api(provider, port: int, http: Callable = None) -> Api:

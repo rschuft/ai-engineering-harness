@@ -242,6 +242,9 @@ class Record(Phases):
         refused = observed['outcomes'][stale['operation']]
         self.assertEqual((refused['code'], refused['moved'], refused['receipt']), ('HEAD_STALE', [201], 'failed'))
         self.assertNotEqual(self.gitea.head(stale['pull']), stale['approvedHead'])
+        # the stale-head control is sent first, so that A's merge does not leave it behind main
+        self.assertEqual([b['head_commit_id'] for b in self.gitea.merge_bodies[-2:]],
+                         [stale['approvedHead'], authorize['approvedHead']])
         self.assertEqual(observed['cleanup'], {stale['pull']: 201})
         self.assertEqual(self.gitea.pulls[stale['pull']]['state'], 'closed')
 

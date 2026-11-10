@@ -267,7 +267,9 @@ class Policy(NamedTuple):
 
 UNOBSERVABLE = ('merge_whitelist_usernames (who else may merge)', 'push_whitelist_usernames',
                 'enable_force_push and its allowlist', 'block_admin_merge_override', 'block_on_outdated_branch',
-                'approvals_whitelist_username', 'block_on_rejected_reviews', 'the effective rule\'s name')
+                'approvals_whitelist_username', 'block_on_rejected_reviews',
+                'enable_bypass_allowlist and its allowlists (who may force-merge past every gate)',
+                'block_on_codeowner_reviews', 'the effective rule\'s name')
 
 
 def admitted_policies():

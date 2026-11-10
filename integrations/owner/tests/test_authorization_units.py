@@ -108,6 +108,7 @@ class PolicyComparison(unittest.TestCase):
         drift = AR.policy_drift(policy, {**repo, 'allow_merge_commits': False}, {**policy.branch, 'protected': False})
         self.assertEqual([f for f, _, _ in drift], ['repository.allow_merge_commits', 'branch.protected'])
         self.assertIn('block_admin_merge_override', policy.unobservable)
+        self.assertTrue(any(f.startswith('enable_bypass_allowlist') for f in policy.unobservable))  # finding F-A
 
     def test_the_expected_policy_is_the_fixture_s_declared_protection(self):
         rule = next(r for r in AR.roles.protection_rules() if r['rule_name'] == 'main')

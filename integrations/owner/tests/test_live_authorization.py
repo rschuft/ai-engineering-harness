@@ -54,8 +54,10 @@ attempt that the exercise makes stale on purpose.
    head and the approved head as parents, the six trailers as written, the manifest digest at the merge,
    merged_by aieh-owner and the receipt confirmed; for B the builder pushes one commit to its branch
    after the recorder's checks and before its merge call (a hook on the recorder's merge call), Gitea
-   answers 409, nothing is merged and the receipt is failed with HEAD_STALE. A presentation that says a
-   verifier was available when none is now (or the reverse) is refused: the Owner saw other outcomes.
+   answers 409, nothing is merged and the receipt is failed with HEAD_STALE. B is recorded before A, so
+   that A's merge does not leave B behind main (main's rule blocks an outdated branch, a 405 that would
+   come before the 409). A presentation that says a verifier was available when none is now (or the
+   reverse) is refused: the Owner saw other outcomes.
 3. Read-backs: main's head as expected; aieh-owner still holds zero tokens (the recorder's identity
    check). Cleanup: the builder closes every pull request of the run that is still open. A merge commit
    stays on the fixture's main (a protected branch: only a site administrator could rewrite it) and the
@@ -447,7 +449,7 @@ def record_phase(live, statement_path, observed):
     try:
         ctx = _context(live, store)
         merged_commit = None
-        for c in authorized:
+        for c in sorted(authorized, key=lambda c: c['role'] != STALE):  # the stale-head control first
             if live.verifier is None:
                 try:
                     AR.record(ctx, c['nonce'], statement, recorded_by=RECORDED_BY)
