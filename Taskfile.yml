@@ -84,7 +84,7 @@ tasks:
   # is not installed. PYTHON is overridden with it for this target; each suite target it calls
   # resolves it the same way, so that it also runs under the tools interpreter when run alone.
   test:
-    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test) and the repository-access contract tests (repository:test)"
+    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the lifecycle contract and platform adapter tests (platform:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test) and the repository-access contract tests (repository:test)"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
@@ -96,6 +96,7 @@ tasks:
       - task: planning:test
       - task: lineage:test
       - task: paths:test
+      - task: platform:test
       - task: gitea:test
       - task: dispatch:test
       - task: repository:test
@@ -357,6 +358,17 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/paths/tests -v'
 
+  # The host-service lifecycle contract and the Windows adapter (plan leaf F-06.2; draft decision 0011):
+  # integrations/platform/, composed by integrations/gitea/gitea_host.py.
+  platform:test:
+    desc: "Run the lifecycle contract and platform adapter tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/platform/tests -v): verbs, records, refusal codes and remedies, transitions over a fake service, the exposure guard; the Windows adapter's declarations and refusals with fakes, and its listener, token and identity reads of the test process (Windows)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/platform/tests -v'
+
   paths:show:
     desc: "Print the managed data root and its categories; creates nothing (python -I -B integrations/paths/aieh_paths.py show); pass -- --format sh or -- --format ps1 for shell assignments"
     cmds:
@@ -454,7 +466,33 @@ tasks:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
       PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
-      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py verify'
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py verify {{.CLI_ARGS}}'
+
+  # The host-service lifecycle contract's further verbs (plan leaf F-06.2; integrations/platform/).
+  gitea:restart:
+    desc: Down (when running) and up again under a write-ahead aieh-service-transition/1 record; an interrupted restart is resumed by gitea:recover (python -I -B integrations/gitea/gitea_host.py restart)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py restart'
+
+  gitea:inspect:
+    desc: "Report the platform record (aieh-platform/1), the desired, staged and running versions, the supervisor and Gitea with their listeners (TCP table) and user identity (process token), the supervision record and the transitions; changes nothing (python -I -B integrations/gitea/gitea_host.py inspect)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py inspect'
+
+  gitea:upgrade:
+    desc: "Upgrade to a pinned version under a write-ahead transition record: stage and verify the asset, stop, back up gitea.db (SQLite backup API) and app.ini, start the target, check readiness; roll back automatically before verification; refuses VERSION_MISMATCH, DOWNGRADE_REFUSED and TRANSITION_PENDING; network once unless --from-file (python -I -B integrations/gitea/gitea_host.py upgrade --to VERSION); pass -- --to VERSION [--from-file EXE]"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py upgrade {{.CLI_ARGS}}'
+
+  gitea:recover:
+    desc: Reconcile the actual state with a pending transition record first, then resume it or roll it back; with nothing pending, report the reconciled state (python -I -B integrations/gitea/gitea_host.py recover)
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py recover'
+
+  gitea:uninstall:
+    desc: "Refused while Gitea runs (UNINSTALL_RUNNING); empties the ephemeral tmp/gitea only and deletes nothing under persistent/ and no asset, under a transition record (python -I -B integrations/gitea/gitea_host.py uninstall)"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py uninstall'
 
   gitea:identities:
     desc: "Create the site administrator and the non-administrator Owner account with Gitea's CLI, each with a random temporary password, written only into the credential provider (Windows Credential Manager) until gitea:finalize-credentials replaces it (python -I -B integrations/gitea/gitea_host.py identities)"

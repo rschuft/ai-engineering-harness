@@ -119,6 +119,7 @@ unless adaptation is necessary.
   <tools python> -I -B -m unittest discover -s integrations/planning/tests -v
   <tools python> -I -B -m unittest discover -s integrations/lineage/tests -v
   <tools python> -I -B -m unittest discover -s integrations/paths/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/platform/tests -v
   <tools python> -I -B -m unittest discover -s integrations/gitea/tests -v
   <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
   <tools python> -I -B -m unittest discover -s integrations/repository/tests -v

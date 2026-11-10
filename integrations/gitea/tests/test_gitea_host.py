@@ -1126,8 +1126,10 @@ class TestCommandLine(unittest.TestCase):
 @windows_only
 @unittest.skipUnless(os.environ.get('AIEH_GITEA_BINARY'), 'set AIEH_GITEA_BINARY to a copy of the pinned binary')
 class TestLive(Root):
-    """The pinned Gitea end to end in a temporary root on a free port: install, up, verify, a clean down,
-    up again, and a hard kill of the supervisor."""
+    """The pinned Gitea end to end in a temporary root on a free port: install, up, verify (and its
+    aieh-readiness/1 record), inspect, uninstall refused while running, restart, a clean down, uninstall,
+    up again, a hard kill of the supervisor, and recover of an interrupted restart (plan leaves F-06.1 and
+    F-06.2)."""
     category = 'e2e'
 
     def test_lifecycle(self):
@@ -1141,15 +1143,37 @@ class TestLive(Root):
                 self.assertTrue(up['running'])
                 result = G.verify(self.res, self.lay, PIN)
                 self.assertTrue(result['passed'], {k: v for k, v in result['checks'].items() if not v})
+                readiness = G.readiness(result)
+                self.assertEqual((readiness['format'], readiness['platform']['system'], readiness['passed']),
+                                 ('aieh-readiness/1', 'Windows', True))
+                inspected = G.inspect(self.res, self.lay, PIN)
+                self.assertEqual((inspected['running'], inspected['versions']['running'],
+                                  inspected['run_record']['format'], inspected['supervision']['kill_on_job_close']),
+                                 (True, G.VERSION, 'aieh-service-run/1', True))
+                self.assertTrue(inspected['service_process']['listeners'])
+                with self.assertRaises(G.GiteaError) as caught:
+                    G.uninstall(self.res, self.lay, PIN)
+                self.assertEqual(caught.exception.code, 'UNINSTALL_RUNNING')
+                restarted = G.restart(self.res, self.lay, PIN)
+                self.assertEqual((restarted['transition']['state'], restarted['status']['running']), ('completed', True))
+                self.assertNotEqual(restarted['status']['gitea']['pid'], up['gitea']['pid'])
                 stopped = G.down(self.res, self.lay, PIN)
                 self.assertEqual((stopped['method'], stopped['gitea_alive'], stopped['port_open']),
                                  ('gitea manager shutdown', False, False))
+                self.assertEqual(G.uninstall(self.res, self.lay, PIN)['state'], 'completed')
+                for kept in (self.lay.config, self.lay.db, self.lay.binary):
+                    self.assertTrue(kept.is_file(), kept)
                 up = G.up(self.res, self.lay, PIN)
                 sup, gitea = G.Proc(up['supervisor']['pid']), G.Proc(up['gitea']['pid'])
                 sup.terminate()
                 self.assertTrue(gitea.wait(30), 'Gitea outlived its killed supervisor')
                 self.assertFalse(G.port_in_use(port))
                 self.assertTrue(G.status(self.res, self.lay, PIN)['stale_record'])
+                interrupted = G.transitions(self.lay).begin('restart', {'desired': G.VERSION}, was_running=True)
+                recovered = G.recover(self.res, self.lay, PIN)
+                self.assertEqual((recovered['pending'], recovered['transition']['state']),
+                                 (interrupted['id'], 'completed'))
+                self.assertTrue(G.status(self.res, self.lay, PIN)['running'])
             finally:
                 G.down(self.res, self.lay, PIN)
 

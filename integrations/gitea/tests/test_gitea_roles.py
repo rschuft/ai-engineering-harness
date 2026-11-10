@@ -329,6 +329,49 @@ class TestRotate(Base):
         self.assertFalse(any(R.target(role) in G.FINAL_TARGETS.values() for role in R.ROLES))
 
 
+class TestRetire(Base):
+    """The contract's retire for a role credential (plan leaf F-06.2)."""
+
+    def retire(self, role='builder'):
+        return R.retire(role, http=self.gitea, ctx=ctx(self.cli, self.store))
+
+    def test_revoke_prove_fail_closed_then_delete_the_entry(self):
+        self.provision()
+        old = self.store.get(R.target('builder'))[1]
+        report = self.retire()
+        self.assertEqual(report['revocation'], {'delete_status': 204, 'next_call_status': 401, 'revoked': True})
+        self.assertEqual((report['state'], report['entry_deleted'], report['fingerprint']),
+                         ('retired', True, R.fingerprint(old)))
+        self.assertNotIn(old, self.gitea.tokens)
+        self.assertNotIn(R.target('builder'), self.store.entries)
+        self.assertIn(R.target('planner'), self.store.entries)  # one credential only
+        self.assert_no_token(json.dumps(report))
+
+    def test_a_rerun_resumes(self):
+        self.provision()
+        token = self.store.get(R.target('builder'))[1]
+        del self.gitea.tokens[token]  # an earlier run revoked it and stopped before deleting the entry
+        report = self.retire()
+        self.assertEqual((report['before']['status'], report['state']), (401, 'retired'))
+        self.assertIn('already refused', report['revocation'])
+        self.assertNotIn(R.target('builder'), self.store.entries)
+        self.assertEqual(self.retire()['state'], 'retired (no entry: nothing to revoke)')
+
+    def test_a_failed_revocation_keeps_the_entry(self):
+        self.provision()
+        self.gitea.fail_path = '/token'
+        with self.assertRaises(G.GiteaError) as caught:
+            self.retire()
+        self.assertEqual(caught.exception.code, 'REVOCATION_FAILED')
+        self.assertIn(R.target('builder'), self.store.entries)
+        self.assert_no_token(str(caught.exception))
+
+    def test_refusals(self):
+        with self.assertRaises(G.GiteaError) as caught:
+            self.retire('site-admin')
+        self.assertEqual(caught.exception.code, 'ROLE_UNKNOWN')
+
+
 class TestPolicy(unittest.TestCase):
     category = 'contract'
 

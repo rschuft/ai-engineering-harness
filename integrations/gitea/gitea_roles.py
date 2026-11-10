@@ -22,7 +22,11 @@ administration, and the report shows that the administrator holds none afterward
   python -I -B integrations/gitea/gitea_roles.py provision      # the bot accounts and missing tokens
   python -I -B integrations/gitea/gitea_roles.py fixture        # organization, repository, protection
   python -I -B integrations/gitea/gitea_roles.py rotate ROLE    # revoke a token, prove it fails closed, re-issue
+  python -I -B integrations/gitea/gitea_roles.py retire ROLE    # revoke a token, prove it fails closed, drop the entry
   python -I -B integrations/gitea/gitea_roles.py status         # entries, fingerprints, token checks
+
+These are the role credentials' realization of the lifecycle contract's credential verbs (plan leaf
+F-06.2): provision, rotate and retire. Every act ends with the I7 no-exposure scan of what it shows.
 
 Exit 0 done, 1 failed, 2 refused (a stable code). Windows only (Credential Manager).
 """
@@ -398,6 +402,31 @@ def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Calla
     return report
 
 
+def retire(role: str, provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
+    """The contract's retire: revoke the role's token through DELETE /api/v1/token, prove its next call fails
+    closed, then delete its entry (never before the revocation is shown). It resumes: a token Gitea already
+    refuses is not revoked again, and a missing entry is reported as retired. The bot account is kept."""
+    if role not in ROLES:
+        raise GiteaError('ROLE_UNKNOWN', f'{role!r} is not one of {sorted(ROLES)}')
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
+    report = {'role': role, 'user': ROLES[role]['user'], 'entry': target(role)}
+    token = read_token(provider, role)
+    if token is None:
+        report['state'] = 'retired (no entry: nothing to revoke)'
+        return report
+    report.update(fingerprint=fingerprint(token), before=token_check(port, token, http))
+    if report['before']['status'] == 401:
+        report['revocation'] = 'already refused by Gitea (an earlier run revoked it)'
+    else:
+        report['revocation'] = revoke_current(port, token, http)
+    del token
+    if isinstance(report['revocation'], dict) and not report['revocation']['revoked']:
+        raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
+    report['entry_deleted'] = provider.delete(target(role))
+    report['state'] = 'retired'
+    return report
+
+
 def status(provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
     lay, pinned, port, provider, cli = ctx or context(provider, run)
     users = cli.users()
@@ -452,6 +481,8 @@ def main(argv=None) -> int:
                      help='also check that the site administrator cannot merge or force-merge a proposal PR')
     rot = sub.add_parser('rotate', help='revoke a role token, prove it fails closed, re-issue it')
     rot.add_argument('role', choices=sorted(ROLES))
+    ret = sub.add_parser('retire', help='revoke a role token, prove it fails closed, delete its entry')
+    ret.add_argument('role', choices=sorted(ROLES))
     sub.add_parser('status', help='entries, fingerprints and what Gitea says of each token; changes nothing')
     args = parser.parse_args(argv)
     out = sys.stdout
@@ -460,6 +491,8 @@ def main(argv=None) -> int:
     if os.name != 'nt':
         sys.stderr.write('gitea-roles: REFUSED: only the Windows credential provider is implemented\n')
         return 2
+    guard = host.ACT_GUARD = host.contract.ExposureGuard()  # the provider holds what the act reads or writes
+    report, message, code = None, '', 0
     try:
         if args.command == 'provision':
             report = provision()
@@ -469,16 +502,29 @@ def main(argv=None) -> int:
             report = fixture(ctx=ctx, probe=probe)
         elif args.command == 'rotate':
             report = rotate(args.role)
+        elif args.command == 'retire':
+            report = retire(args.role)
         else:
             report = status()
     except host.paths.PathsError as exc:
-        sys.stderr.write(f'gitea-roles: {exc}\n')
-        return 2
+        message, code = f'gitea-roles: {exc}\n', 2
     except GiteaError as exc:
-        sys.stderr.write(f'gitea-roles: {redact(str(exc))}\n')
-        return 2 if exc.refusal else 1
-    out.write(redact(json.dumps(report, indent=2, default=str)) + '\n')
-    return 0
+        message, code = f'gitea-roles: {redact(str(exc))}\n', 2 if exc.refusal else 1
+    finally:
+        host.ACT_GUARD = None
+    text = '' if report is None else redact(json.dumps(report, indent=2, default=str)) + '\n'
+    scan = host.exposure_scan(guard, text, message)
+    guard.clear()
+    if scan['found_in']:
+        exposure = GiteaError('EXPOSURE_FOUND', 'a secret the act held is in its ' + ' and '.join(scan['found_in']),
+                              refusal=False)
+        sys.stderr.write(f'gitea-roles: {exposure}\n')
+        return 1
+    sys.stderr.write(message)
+    out.write(text)
+    sys.stderr.write(f'gitea-roles: I7 no-exposure scan: clean ({scan["secrets_held"]} secrets held; '
+                     f'{scan["scanned"]} outputs scanned)\n')
+    return code
 
 
 if __name__ == '__main__':

@@ -30,11 +30,22 @@ output. No password is ever printed, logged, put on a command line or in an envi
 Credentials are reached through CredentialProvider (get, set, delete, exists); its Windows
 implementation is Credential Manager (CredWriteW, CredReadW, CredDeleteW).
 
-  python -I -B integrations/gitea/gitea_host.py install [--from-file EXE] [--port N]
-  python -I -B integrations/gitea/gitea_host.py up | down | status | verify
-  python -I -B integrations/gitea/gitea_host.py identities | finalize-credentials
+The host-service lifecycle contract (plan leaf F-06.2, integrations/platform/platform_contract.py): this
+module composes the platform adapter (platform(): integrations/platform/platform_windows.py on Windows;
+PLATFORM_UNSUPPORTED elsewhere until F-06.4 and F-06.5) and its credential provider. Every process, job,
+listener, token and credential call goes through the adapter; what is Gitea's stays here. The contract's
+verbs map onto this module and gitea_roles.py: install, up, down, restart, status, inspect, verify;
+credential provision (identities; gitea_roles provision), rotate (finalize-credentials, the temporary to
+final rotation; gitea_roles rotate) and retire (gitea_roles retire); upgrade, recover and uninstall, under
+the write-ahead aieh-service-transition/1 records in run/transitions/. Every act ends with the I7
+no-exposure scan of what it is about to show (main).
 
-Exit 0 done, 1 failed, 2 refused (a stable code). Windows only.
+  python -I -B integrations/gitea/gitea_host.py install [--from-file EXE] [--port N]
+  python -I -B integrations/gitea/gitea_host.py up | down | restart | status | inspect | verify [--readiness]
+  python -I -B integrations/gitea/gitea_host.py identities | finalize-credentials
+  python -I -B integrations/gitea/gitea_host.py upgrade --to VERSION [--from-file EXE] | recover | uninstall
+
+Exit 0 done, 1 failed, 2 refused (a stable code). Windows only (the only adapter so far).
 """
 from __future__ import annotations
 
@@ -49,8 +60,8 @@ import json
 import os
 import re
 import secrets
-import socket
-import struct
+import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -63,10 +74,17 @@ HERE = Path(os.path.realpath(__file__)).parent
 REPO = HERE.parents[1]
 LOCK = 'composition/lock/components.lock.json'
 VERSION = '28.3.0'
-ASSET_NAME = f'gitea-{VERSION}-windows-amd64.exe'
+ASSET_KEY = 'windows-amd64'  # the Windows adapter's asset key (platform_contract.asset_key)
+
+
+def asset_name(version: str = VERSION) -> str:
+    return f'gitea-{version}-{ASSET_KEY}.exe'
+
+
+ASSET_NAME = asset_name()
 ASSET_KIND = 'release-binaries'
 HOST_RECORD, HOST_FORMAT = 'aieh-gitea-host.json', 'aieh-gitea-host/1'
-RUN_FORMAT = 'aieh-gitea-run/1'
+SERVICE = 'gitea'
 LOOPBACK = '127.0.0.1'
 DEFAULT_PORT = 13300
 SITE_ADMIN, OWNER = 'aieh-site-admin', 'aieh-owner'
@@ -115,42 +133,83 @@ def _load_repository_access():
 repository_access = _load_repository_access()
 
 
-class GiteaError(Exception):
-    """A refusal (exit 2) or a failure (exit 1) with a stable code."""
+def _load_platform(name: str, file_name: str):
+    """The lifecycle contract and the platform adapters (integrations/platform), loaded by path once per
+    process under the names they load each other by."""
+    if (module := sys.modules.get(name)) is None:
+        spec = importlib.util.spec_from_file_location(name, REPO / 'integrations' / 'platform' / file_name)
+        module = sys.modules[name] = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    return module
 
-    def __init__(self, code: str, detail: str, *, refusal: bool = True):
-        self.code, self.detail, self.refusal = code, detail, refusal
-        super().__init__(f'{code}: {detail}')
+
+contract = _load_platform('aieh_platform_contract', 'platform_contract.py')
+windows = _load_platform('aieh_platform_windows', 'platform_windows.py')
+RUN_FORMAT = contract.SERVICE_RUN_FORMAT  # aieh-service-run/1; readers also accept aieh-gitea-run/1
+
+# A refusal (exit 2) or a failure (exit 1) with a stable code: the contract's error, so that the adapter's
+# refusals and this module's are one kind.
+GiteaError = contract.LifecycleError
 
 
 def now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+_ADAPTER = None
+
+
+def platform():
+    """This host's platform adapter, selected once by the harness (PLATFORM_UNSUPPORTED where none exists)."""
+    global _ADAPTER
+    if _ADAPTER is None:
+        _ADAPTER = contract.select_adapter()
+    return _ADAPTER
+
+
+# The exposure guard of the act main() is running (I7), or None outside one.
+ACT_GUARD = None
+
+
 # ---------------------------------------------------------------- pin and layout
 
 
-def pin(repo: Path = REPO) -> dict:
+def pin(repo: Path = REPO, version: str = VERSION) -> dict:
     """The lock's release_assets entry for the Windows binary: sha256, url and checksum sources."""
     lock = json.loads((repo / LOCK).read_text(encoding='utf-8'))
-    rows = [a for a in lock.get('release_assets', []) if a.get('component') == 'gitea' and a.get('name') == ASSET_NAME]
+    name = asset_name(version)
+    rows = [a for a in lock.get('release_assets', []) if a.get('component') == 'gitea' and a.get('name') == name]
     if len(rows) != 1 or not re.fullmatch('[0-9a-f]{64}', str(rows[0].get('sha256'))) or not rows[0].get('url'):
-        raise GiteaError('PIN_MISSING', f'{LOCK} has no single release_assets entry for {ASSET_NAME} with sha256 and url')
+        raise GiteaError('PIN_MISSING', f'{LOCK} has no single release_assets entry for {name} with sha256 and url')
     return rows[0]
 
 
+def pinned_versions(repo: Path = REPO) -> list[str]:
+    """Every Gitea version the lock pins a release asset of for this platform's asset key."""
+    lock = json.loads((repo / LOCK).read_text(encoding='utf-8'))
+    shape = re.compile(rf'gitea-(\d+(?:\.\d+)+)-{re.escape(ASSET_KEY)}\.exe')
+    return sorted({m.group(1) for a in lock.get('release_assets', []) if a.get('component') == 'gitea'
+                   and (m := shape.fullmatch(str(a.get('name'))))}, key=contract.parse_version)
+
+
 class Layout(dict):
-    """Every location Gitea uses, from one resolution. Attribute access for brevity."""
+    """Every location Gitea uses, from one resolution. Attribute access for brevity. The Gitea version
+    whose asset it names is the attribute `version` (not a location, so not an item)."""
     __getattr__ = dict.__getitem__
 
 
-def layout(res) -> Layout:
-    """Pure: computes the locations from the resolver's categories and creates nothing."""
-    assets = Path(str(res.paths['assets'])) / ASSET_KIND / 'gitea' / VERSION
+def layout(res, version: str = VERSION) -> Layout:
+    """Pure: computes the locations from the resolver's categories and creates nothing. Assets of
+    different versions sit side by side; the configuration and state do not depend on the version."""
+    assets = Path(str(res.paths['assets'])) / ASSET_KIND / 'gitea' / version
     home = Path(str(res.paths['gitea']))
     lay = Layout(
         root=Path(str(res.root)), repo=Path(str(res.repo_root)),
-        asset_dir=assets, binary=assets / ASSET_NAME,
+        asset_dir=assets, binary=assets / asset_name(version),
         home=home, custom=home / 'custom', config=home / 'custom' / 'conf' / 'app.ini',
         data=home / 'data', db=home / 'data' / 'gitea.db', repositories=home / 'repositories',
         run=home / 'run', run_record=home / 'run' / 'supervisor.json', host_record=home / HOST_RECORD,
@@ -158,13 +217,14 @@ def layout(res) -> Layout:
     for name, path in lay.items():
         if name != 'repo' and (path.is_relative_to(lay.repo) or lay.repo.is_relative_to(path)):
             raise GiteaError('PATH_INSIDE_CHECKOUT', f'{name} {path} is inside or contains the checkout')
+    lay.version = version
     return lay
 
 
 def ensure_dirs(res, lay: Layout) -> list[str]:
     """Create the category directories through the resolver (it never creates above the root) and
     return every directory that did not exist before, parents first."""
-    targets = [(c, parts) for c, parts in (('assets', (ASSET_KIND, 'gitea', VERSION)), ('gitea', ('custom', 'conf')),
+    targets = [(c, parts) for c, parts in (('assets', (ASSET_KIND, 'gitea', lay.version)), ('gitea', ('custom', 'conf')),
                ('gitea', ('data',)), ('gitea', ('repositories',)), ('gitea', ('run',)), ('logs', ('gitea',)),
                ('tmp', ('gitea',)))]
     candidates = []
@@ -189,23 +249,13 @@ def sha256_stream(handle) -> str:
 
 @contextlib.contextmanager
 def _locked_read(path: Path):
-    """A read handle that, on Windows, shares read only: no writer, rename or delete while it is held."""
+    """A read handle that, on Windows, shares read only: no writer, rename or delete while it is held (the
+    adapter's verified-bytes guarantee); elsewhere, until an adapter exists, a plain read."""
     if os.name != 'nt':
         with open(path, 'rb') as handle:
             yield handle
         return
-    import ctypes
-    import msvcrt
-    from ctypes import wintypes
-    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
-    k32.CreateFileW.restype = wintypes.HANDLE
-    k32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
-                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
-    generic_read, file_share_read, open_existing = 0x80000000, 0x1, 3
-    handle = k32.CreateFileW(str(path), generic_read, file_share_read, None, open_existing, 0, None)
-    if handle in (None, wintypes.HANDLE(-1).value):
-        raise GiteaError('BINARY_UNREADABLE', f'{path}: CreateFileW failed ({ctypes.get_last_error()})')
-    with os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY), 'rb') as stream:
+    with platform().locked_read(path) as stream:
         yield stream
 
 
@@ -216,7 +266,7 @@ def verified_binary(lay: Layout, expected: str):
     if not lay.binary.is_file():
         raise GiteaError('BINARY_MISSING', f'{lay.binary} does not exist; run install')
     record = paths.read_asset_record(lay.asset_dir)
-    if record['integrity'].get('sha256', {}).get(ASSET_NAME) != expected:
+    if record['integrity'].get('sha256', {}).get(lay.binary.name) != expected:
         raise GiteaError('BINARY_MISMATCH', 'the asset record does not carry the pinned sha256')
     with _locked_read(lay.binary) as stream:
         if (digest := sha256_stream(stream)) != expected:
@@ -234,7 +284,7 @@ def acquire(res, lay: Layout, pinned: dict, *, from_file: Path | None = None,
         return {'asset': str(lay.binary), 'acquired': False}
     if os.path.lexists(lay.binary):
         raise GiteaError('ASSET_UNRECORDED', f'{lay.binary} exists without its record; move it aside and rerun')
-    partial = lay.tmp / f'{ASSET_NAME}.{secrets.token_hex(4)}.partial'
+    partial = lay.tmp / f'{lay.binary.name}.{secrets.token_hex(4)}.partial'
     digest = hashlib.sha256()
     with open(partial, 'xb') as out:
         if from_file is not None:
@@ -251,8 +301,8 @@ def acquire(res, lay: Layout, pinned: dict, *, from_file: Path | None = None,
                                               f'{pinned["sha256"]}; it was not moved into the assets', refusal=False)
     os.replace(partial, lay.binary)
     paths.write_asset_record(lay.asset_dir, paths.asset_record(
-        ASSET_KIND, 'gitea', VERSION, source=pinned['url'], sha256={ASSET_NAME: pinned['sha256']},
-        pin=f'{LOCK} release_assets {ASSET_NAME} sha256:{pinned["sha256"]}', consumers=['gitea'],
+        ASSET_KIND, 'gitea', lay.version, source=pinned['url'], sha256={lay.binary.name: pinned['sha256']},
+        pin=f'{LOCK} release_assets {lay.binary.name} sha256:{pinned["sha256"]}', consumers=['gitea'],
         reacquire=f'task gitea:install (downloads {pinned["url"]} and verifies it against the pin)'))
     with verified_binary(lay, pinned['sha256']):
         pass
@@ -362,8 +412,8 @@ def configure(res, lay: Layout, pinned: dict, port: int, run: Callable = subproc
     text = render_app_ini(lay, port, values)
     with open(lay.config, 'x', encoding='utf-8', newline='\n') as handle:
         handle.write(text)
-    record = {'format': HOST_FORMAT, 'version': VERSION, 'asset': ASSET_NAME, 'sha256': pinned['sha256'],
-              'port': port, 'bind': LOOPBACK, 'created_at': now(),
+    record = {'format': HOST_FORMAT, 'version': lay.version, 'asset': lay.binary.name, 'sha256': pinned['sha256'],
+              'port': port, 'bind': LOOPBACK, 'created_at': now(), 'platform': {'asset_key': ASSET_KEY},
               'secrets': {n: 'generated by gitea generate secret; in app.ini only' for n in SECRET_NAMES}}
     with open(lay.host_record, 'x', encoding='utf-8') as handle:
         json.dump(record, handle, indent=2)
@@ -384,265 +434,56 @@ def read_host_record(lay: Layout) -> dict:
     return record
 
 
-# ---------------------------------------------------------------- Windows: processes, jobs, sockets, tokens
-
-
-def _k32():
-    import ctypes
-    from ctypes import wintypes
-    k = ctypes.WinDLL('kernel32', use_last_error=True)
-    k.OpenProcess.restype = wintypes.HANDLE
-    k.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-    k.CloseHandle.argtypes = (wintypes.HANDLE,)
-    k.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
-    k.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
-    k.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
-    k.WaitForSingleObject.restype = wintypes.DWORD
-    k.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
-    k.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
-                                             ctypes.POINTER(wintypes.DWORD))
-    k.CreateJobObjectW.restype = wintypes.HANDLE
-    k.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
-    k.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
-    k.QueryInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
-                                            ctypes.POINTER(wintypes.DWORD))
-    k.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
-    k.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
-    k.GetCurrentProcess.restype = wintypes.HANDLE
-    return k
-
-
-class Proc:
-    """One process id, opened for query, wait and terminate; identified by its creation time."""
-    SYNCHRONIZE, TERMINATE, QUERY_LIMITED = 0x00100000, 0x0001, 0x1000
-    STILL_ACTIVE = 259
-
-    def __init__(self, pid: int):
-        import ctypes
-        self._ct, self._k, self.pid = ctypes, _k32(), int(pid)
-        self.handle = self._k.OpenProcess(self.SYNCHRONIZE | self.TERMINATE | self.QUERY_LIMITED, False, self.pid)
-        if not self.handle:
-            raise OSError(ctypes.get_last_error(), f'OpenProcess({pid}) failed')
-
-    @classmethod
-    def maybe(cls, pid, created) -> 'Proc | None':
-        """The live process with this id and creation time, else None (exited or id reused)."""
-        try:
-            proc = cls(pid)
-        except (OSError, TypeError, ValueError):
-            return None
-        if proc.alive() and proc.created() == created:
-            return proc
-        proc.close()
+def check_platform(lay: Layout) -> str | None:
+    """PLATFORM_MISMATCH when the host record names another platform's asset key than this host's adapter;
+    a record without one (written before F-06.2) or no record at all passes. Returns the recorded key."""
+    try:
+        record = json.loads(lay.host_record.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
         return None
-
-    def created(self) -> int:
-        from ctypes import wintypes
-        times = [wintypes.FILETIME() for _ in range(4)]
-        if not self._k.GetProcessTimes(self.handle, *[self._ct.byref(t) for t in times]):
-            raise OSError(self._ct.get_last_error(), 'GetProcessTimes failed')
-        return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
-
-    def image(self) -> str:
-        from ctypes import wintypes
-        size = wintypes.DWORD(32768)
-        buf = self._ct.create_unicode_buffer(size.value)
-        if not self._k.QueryFullProcessImageNameW(self.handle, 0, buf, self._ct.byref(size)):
-            raise OSError(self._ct.get_last_error(), 'QueryFullProcessImageNameW failed')
-        return buf.value
-
-    def alive(self) -> bool:
-        from ctypes import wintypes
-        code = wintypes.DWORD()
-        self._k.GetExitCodeProcess(self.handle, self._ct.byref(code))
-        return code.value == self.STILL_ACTIVE
-
-    def wait(self, seconds: float) -> bool:
-        """Wait on the process handle itself (its own completion signal); True once it has exited."""
-        return self._k.WaitForSingleObject(self.handle, int(seconds * 1000)) == 0
-
-    def in_any_job(self) -> bool:
-        from ctypes import wintypes
-        result = wintypes.BOOL()
-        if not self._k.IsProcessInJob(self.handle, None, self._ct.byref(result)):
-            raise OSError(self._ct.get_last_error(), 'IsProcessInJob failed')
-        return bool(result.value)
-
-    def terminate(self) -> None:
-        if not self._k.TerminateProcess(self.handle, 1):
-            raise OSError(self._ct.get_last_error(), 'TerminateProcess failed')
-
-    def close(self) -> None:
-        if self.handle:
-            self._k.CloseHandle(self.handle)
-            self.handle = None
+    key = (record.get('platform') or {}).get('asset_key') if isinstance(record, dict) else None
+    contract.check_asset_key(key, platform())
+    return key
 
 
-JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
-JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0800
-JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x1000
-JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+def desired_layout(res) -> Layout:
+    """The layout of the version the host record desires (VERSION when there is no record yet)."""
+    lay = layout(res)
+    try:
+        version = json.loads(lay.host_record.read_text(encoding='utf-8')).get('version')
+    except (OSError, ValueError, AttributeError):
+        return lay
+    if version in (None, VERSION):
+        return lay
+    contract.parse_version(version)
+    return layout(res, version)
 
 
-def _job_structs():
-    import ctypes
-    from ctypes import wintypes
+# ---------------------------------------------------------------- the platform adapter: processes, jobs, sockets, tokens
+# The Windows realization lives in integrations/platform/platform_windows.py (extracted unchanged in F-06.2).
+# These names stay importable from this module; the functions below go through the adapter, so that this
+# module names no Windows API.
 
-    class Basic(ctypes.Structure):
-        _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
-                    ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
-                    ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
-                    ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
-                    ('SchedulingClass', wintypes.DWORD)]
-
-    class IoCounters(ctypes.Structure):
-        _fields_ = [(n, ctypes.c_uint64) for n in ('ReadOps', 'WriteOps', 'OtherOps', 'ReadBytes', 'WriteBytes',
-                                                   'OtherBytes')]
-
-    class Extended(ctypes.Structure):
-        _fields_ = [('BasicLimitInformation', Basic), ('IoInfo', IoCounters),
-                    ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
-                    ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
-    return Extended
-
-
-class KillOnCloseJob:
-    """A Job Object whose last handle closing ends every process in it. Its handle is not inheritable
-    and is held by its creator only, so the job lives exactly as long as that process."""
-
-    def __init__(self):
-        import ctypes
-        self._ct, self._k = ctypes, _k32()
-        self.handle = self._k.CreateJobObjectW(None, None)
-        if not self.handle:
-            raise OSError(ctypes.get_last_error(), 'CreateJobObjectW failed')
-        info = _job_structs()()
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not self._k.SetInformationJobObject(self.handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
-                                               ctypes.byref(info), ctypes.sizeof(info)):
-            raise OSError(ctypes.get_last_error(), 'SetInformationJobObject failed')
-
-    def limit_flags(self) -> int:
-        info = _job_structs()()
-        if not self._k.QueryInformationJobObject(self.handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
-                                                 self._ct.byref(info), self._ct.sizeof(info), None):
-            raise OSError(self._ct.get_last_error(), 'QueryInformationJobObject failed')
-        return int(info.BasicLimitInformation.LimitFlags)
-
-    def assign_current(self) -> None:
-        if not self._k.AssignProcessToJobObject(self.handle, self._k.GetCurrentProcess()):
-            raise OSError(self._ct.get_last_error(), 'AssignProcessToJobObject(current) failed')
-
-    def contains(self, process_handle) -> bool:
-        from ctypes import wintypes
-        result = wintypes.BOOL()
-        if not self._k.IsProcessInJob(process_handle, self.handle, self._ct.byref(result)):
-            raise OSError(self._ct.get_last_error(), 'IsProcessInJob failed')
-        return bool(result.value)
-
-
-def _ip4(value: int) -> str:
-    return socket.inet_ntoa(struct.pack('<I', value))
-
-
-def _port(value: int) -> int:
-    return socket.ntohs(value & 0xFFFF)
+Proc = windows.Proc
+KillOnCloseJob = windows.KillOnCloseJob
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK
+JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = windows.JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
 
 
 def sockets(pid: int | None = None) -> list[dict]:
-    """TCP listeners and UDP endpoints, IPv4 and IPv6, from GetExtendedTcpTable/GetExtendedUdpTable;
+    """TCP listeners and UDP endpoints, IPv4 and IPv6, from the kernel's tables (the adapter's listeners);
     filtered to one owning process when pid is given."""
-    import ctypes
-    from ctypes import wintypes
-    ip = ctypes.WinDLL('iphlpapi')
-    rows = []
-    tables = (('tcp', socket.AF_INET, 3, 24), ('tcp', socket.AF_INET6, 3, 56),   # TCP_TABLE_OWNER_PID_LISTENER
-              ('udp', socket.AF_INET, 1, 12), ('udp', socket.AF_INET6, 1, 28))   # UDP_TABLE_OWNER_PID
-    for proto, family, table_class, row_size in tables:
-        func = ip.GetExtendedTcpTable if proto == 'tcp' else ip.GetExtendedUdpTable
-        size = wintypes.DWORD(0)
-        func(None, ctypes.byref(size), False, family, table_class, 0)
-        for _ in range(4):
-            buf = ctypes.create_string_buffer(size.value + 4096)
-            size = wintypes.DWORD(len(buf))
-            code = func(buf, ctypes.byref(size), False, family, table_class, 0)
-            if code == 0:
-                break
-            if code != 122:  # ERROR_INSUFFICIENT_BUFFER: the table grew; retry
-                raise OSError(code, f'GetExtended{proto.title()}Table failed')
-        data = buf.raw
-        count = struct.unpack_from('<I', data, 0)[0]
-        for i in range(count):
-            off = 4 + i * row_size
-            if family == socket.AF_INET:
-                if proto == 'tcp':
-                    _state, laddr, lport, _r, _rp, owner = struct.unpack_from('<6I', data, off)
-                else:
-                    laddr, lport, owner = struct.unpack_from('<3I', data, off)
-                address = _ip4(laddr)
-            else:
-                address = socket.inet_ntop(socket.AF_INET6, data[off:off + 16])
-                if proto == 'tcp':
-                    _scope, lport = struct.unpack_from('<2I', data, off + 16)
-                    owner = struct.unpack_from('<I', data, off + 52)[0]
-                else:
-                    _scope, lport, owner = struct.unpack_from('<3I', data, off + 16)
-            if pid is None or owner == pid:
-                rows.append({'proto': proto, 'family': 'ipv4' if family == socket.AF_INET else 'ipv6',
-                             'address': address, 'port': _port(lport), 'pid': owner})
-    return rows
+    return platform().listeners(pid)
 
 
 def token_report(pid: int) -> dict:
-    """The process token's elevation (TokenElevation, TokenElevationType) and integrity level RID."""
-    import ctypes
-    from ctypes import wintypes
-    k, adv = _k32(), ctypes.WinDLL('advapi32', use_last_error=True)
-    adv.OpenProcessToken.argtypes = (wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
-    adv.GetTokenInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
-                                        ctypes.POINTER(wintypes.DWORD))
-    adv.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
-    adv.GetSidSubAuthorityCount.argtypes = (wintypes.LPVOID,)
-    adv.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
-    adv.GetSidSubAuthority.argtypes = (wintypes.LPVOID, wintypes.DWORD)
-    process = k.OpenProcess(Proc.QUERY_LIMITED, False, pid)
-    if not process:
-        raise OSError(ctypes.get_last_error(), f'OpenProcess({pid}) failed')
-    token = wintypes.HANDLE()
-    try:
-        if not adv.OpenProcessToken(process, 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
-            raise OSError(ctypes.get_last_error(), 'OpenProcessToken failed')
-
-        def info(cls: int, size: int):
-            buf, needed = ctypes.create_string_buffer(size), wintypes.DWORD()
-            if not adv.GetTokenInformation(token, cls, buf, size, ctypes.byref(needed)):
-                raise OSError(ctypes.get_last_error(), f'GetTokenInformation({cls}) failed')
-            return buf
-        elevated = struct.unpack('<I', info(20, 4).raw[:4])[0]          # TokenElevation
-        elevation_type = struct.unpack('<I', info(18, 4).raw[:4])[0]    # TokenElevationType
-        label = info(25, 256)                                           # TokenIntegrityLevel
-        sid = ctypes.cast(label, ctypes.POINTER(ctypes.c_void_p))[0]
-        rid = adv.GetSidSubAuthority(sid, adv.GetSidSubAuthorityCount(sid)[0] - 1)[0]
-    finally:
-        if token:
-            k.CloseHandle(token)
-        k.CloseHandle(process)
-    return {'elevated': bool(elevated), 'elevation_type': {1: 'default', 2: 'full', 3: 'limited'}.get(elevation_type,
-            str(elevation_type)), 'integrity_rid': hex(rid)}
+    """The process's user identity: elevation, elevation type and integrity level (the adapter's)."""
+    return platform().user_identity(pid)
 
 
 def port_in_use(port: int) -> bool:
-    if any(row['port'] == port and row['proto'] == 'tcp' for row in sockets()):
-        return True
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        probe.setsockopt(socket.SOL_SOCKET, getattr(socket, 'SO_EXCLUSIVEADDRUSE', socket.SO_REUSEADDR), 1)
-        probe.bind((LOOPBACK, port))
-        return False
-    except OSError:
-        return True
-    finally:
-        probe.close()
+    return platform().port_in_use(port, LOOPBACK)
 
 
 # ---------------------------------------------------------------- the managed environment
@@ -655,35 +496,29 @@ def _write_json(path: Path, data: dict) -> None:
 
 
 def read_run_record(lay: Layout) -> dict | None:
-    try:
-        record = json.loads(lay.run_record.read_text(encoding='utf-8'))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError):
-        raise GiteaError('RUN_RECORD_INVALID', f'{lay.run_record} is unreadable') from None
-    return record if record.get('format') == RUN_FORMAT else None
+    """aieh-service-run/1, or the aieh-gitea-run/1 an instance started before F-06.2 wrote."""
+    return contract.read_run_record(lay.run_record)
 
 
 def live(record: dict | None, role: str) -> 'Proc | None':
     if not record or not isinstance(record.get(role), dict):
         return None
-    return Proc.maybe(record[role].get('pid'), record[role].get('created'))
+    return platform().process_maybe(record[role].get('pid'), record[role].get('created'))
 
 
 def supervise(res, lay: Layout, pinned: dict) -> int:
-    """The managed environment: join a new kill-on-close job, start Gitea in it, record both
-    processes, and wait for Gitea. When this process ends, however it ends, the job ends Gitea."""
+    """The managed environment: enter the adapter's supervision (Windows: join a new kill-on-close job),
+    start Gitea in it, record both processes, and wait for Gitea. When this process ends, however it
+    ends, the supervision ends Gitea."""
     host = read_host_record(lay)
-    job = KillOnCloseJob()
-    job.assign_current()  # every process this one starts from now on is born inside the job
-    flags = job.limit_flags()
-    if not flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE or flags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK |
-                                                                 JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK):
-        raise GiteaError('JOB_UNSAFE', f'job limit flags {flags:#x}', refusal=False)
-    me = Proc(os.getpid())
-    record = {'format': RUN_FORMAT, 'state': 'starting', 'port': host['port'], 'started_at': now(),
+    adapter = platform()
+    job = adapter.enter_supervision()  # every process this one starts from now on is born inside it
+    me = adapter.process(os.getpid())
+    record = {'format': RUN_FORMAT, 'service': SERVICE, 'version': lay.version,
+              'platform': {'asset_key': adapter.asset_key, 'supervision': adapter.supervision['mechanism']},
+              'state': 'starting', 'port': host['port'], 'started_at': now(),
               'supervisor': {'pid': me.pid, 'created': me.created(), 'image': me.image()},
-              'job': {'limit_flags': hex(flags), 'kill_on_job_close': True, 'breakaway_allowed': False}}
+              'job': job.report()}
     _write_json(lay.run_record, record)
     with open(lay.logs / 'console.log', 'ab') as console:
         console.write(f'--- {now()} supervisor {me.pid} starting gitea web\n'.encode())
@@ -692,7 +527,7 @@ def supervise(res, lay: Layout, pinned: dict) -> int:
             child = subprocess.Popen(gitea_argv(binary, lay, 'web'), env=child_env(lay), cwd=str(lay.home),
                                      stdin=subprocess.DEVNULL, stdout=console, stderr=console, close_fds=True,
                                      creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        gitea = Proc(child.pid)
+        gitea = adapter.process(child.pid)
         record.update(state='running', gitea={'pid': gitea.pid, 'created': gitea.created(), 'image': gitea.image(),
                                               'in_supervisor_job': job.contains(gitea.handle)})
         _write_json(lay.run_record, record)
@@ -731,14 +566,8 @@ def up(res, lay: Layout, pinned: dict) -> dict:
     with verified_binary(lay, pinned['sha256']):
         pass  # refuse before starting anything; the supervisor verifies again before it starts Gitea
     argv = [sys.executable, '-I', '-B', str(Path(os.path.realpath(__file__))), 'supervise']
-    base = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     with open(lay.logs / 'supervisor.log', 'ab') as log:
-        try:
-            supervisor = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True,
-                                          cwd=str(lay.home), creationflags=base | subprocess.CREATE_BREAKAWAY_FROM_JOB)
-        except OSError:  # the caller's job forbids breakaway: the supervisor then also ends with the caller
-            supervisor = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True,
-                                          cwd=str(lay.home), creationflags=base)
+        supervisor = platform().launch_supervisor(argv, log, lay.home)
     deadline = time.monotonic() + READY_CEILING_S
     while not healthy(host['port']):
         if supervisor.poll() is not None:
@@ -796,113 +625,26 @@ def status(res, lay: Layout, pinned: dict) -> dict:
     return report
 
 
-# ---------------------------------------------------------------- Windows Credential Manager
+# ---------------------------------------------------------------- credentials
+# The interface is the contract's; the Windows Credential Manager provider is the adapter's
+# (integrations/platform/platform_windows.py). F-06.3 moves the providers to integrations/credentials.
 
-
-class CredentialStore:
-    """Generic credentials through CredWriteW / CredReadW / CredDeleteW (advapi32). Values are bytes in
-    memory; nothing here prints or logs them."""
-    GENERIC, PERSIST_LOCAL_MACHINE, ERROR_NOT_FOUND = 1, 2, 1168
-
-    def __init__(self):
-        import ctypes
-        from ctypes import wintypes
-
-        class Credential(ctypes.Structure):
-            _fields_ = [('Flags', wintypes.DWORD), ('Type', wintypes.DWORD), ('TargetName', wintypes.LPWSTR),
-                        ('Comment', wintypes.LPWSTR), ('LastWritten', wintypes.FILETIME),
-                        ('CredentialBlobSize', wintypes.DWORD), ('CredentialBlob', ctypes.POINTER(ctypes.c_ubyte)),
-                        ('Persist', wintypes.DWORD), ('AttributeCount', wintypes.DWORD),
-                        ('Attributes', wintypes.LPVOID), ('TargetAlias', wintypes.LPWSTR),
-                        ('UserName', wintypes.LPWSTR)]
-        self._ct, self._Credential = ctypes, Credential
-        adv = ctypes.WinDLL('advapi32', use_last_error=True)
-        adv.CredWriteW.argtypes = (ctypes.POINTER(Credential), wintypes.DWORD)
-        adv.CredReadW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                                  ctypes.POINTER(ctypes.POINTER(Credential)))
-        adv.CredDeleteW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD)
-        adv.CredFree.argtypes = (wintypes.LPVOID,)
-        self._adv = adv
-
-    def write(self, target: str, user: str, secret: bytes, comment: str) -> None:
-        ct = self._ct
-        blob = (ct.c_ubyte * len(secret)).from_buffer_copy(secret)
-        cred = self._Credential(Type=self.GENERIC, TargetName=target, Comment=comment,
-                                CredentialBlobSize=len(secret), CredentialBlob=ct.cast(blob, ct.POINTER(ct.c_ubyte)),
-                                Persist=self.PERSIST_LOCAL_MACHINE, UserName=user)
-        ok = self._adv.CredWriteW(ct.byref(cred), 0)
-        ct.memset(blob, 0, len(secret))
-        if not ok:
-            raise GiteaError('CREDENTIAL_WRITE_FAILED', f'CredWriteW({target!r}) failed ({ct.get_last_error()})',
-                             refusal=False)
-
-    def read(self, target: str) -> tuple[str, bytes] | None:
-        ct = self._ct
-        pointer = ct.POINTER(self._Credential)()
-        if not self._adv.CredReadW(target, self.GENERIC, 0, ct.byref(pointer)):
-            if (code := ct.get_last_error()) == self.ERROR_NOT_FOUND:
-                return None
-            raise GiteaError('CREDENTIAL_READ_FAILED', f'CredReadW({target!r}) failed ({code})', refusal=False)
-        try:
-            cred = pointer.contents
-            return cred.UserName or '', ct.string_at(cred.CredentialBlob, cred.CredentialBlobSize)
-        finally:
-            self._adv.CredFree(pointer)
-
-    def delete(self, target: str) -> bool:
-        if self._adv.CredDeleteW(target, self.GENERIC, 0):
-            return True
-        if (code := self._ct.get_last_error()) == self.ERROR_NOT_FOUND:
-            return False
-        raise GiteaError('CREDENTIAL_DELETE_FAILED', f'CredDeleteW({target!r}) failed ({code})', refusal=False)
-
-
-class CredentialProvider:
-    """Where the harness keeps service credentials, by entry name: get, set, delete, exists. A secret is a
-    str held in memory; an implementation never prints or logs it. WindowsCredentialProvider is the only
-    implementation today; a cross-platform one replaces it through credential_provider() without its
-    callers changing."""
-
-    def get(self, name: str) -> tuple[str, str] | None:
-        """(user name, secret), or None when the entry does not exist."""
-        raise NotImplementedError
-
-    def set(self, name: str, user: str, secret: str, comment: str = '') -> None:
-        """Create or replace the entry."""
-        raise NotImplementedError
-
-    def delete(self, name: str) -> bool:
-        """True when an entry was deleted, False when there was none."""
-        raise NotImplementedError
-
-    def exists(self, name: str) -> bool:
-        return self.get(name) is not None
-
-
-class WindowsCredentialProvider(CredentialProvider):
-    """Windows Credential Manager generic credentials (CredentialStore); the secret is stored as UTF-16LE, as
-    the Credential Manager UI shows it."""
-
-    def __init__(self, store=None):
-        self.store = store or CredentialStore()
-
-    def get(self, name):
-        entry = self.store.read(name)
-        return None if entry is None else (entry[0], entry[1].decode('utf-16-le'))
-
-    def set(self, name, user, secret, comment=''):
-        self.store.write(name, user, secret.encode('utf-16-le'), comment)
-
-    def delete(self, name):
-        return self.store.delete(name)
+CredentialProvider = contract.CredentialProvider
+CredentialStore = windows.CredentialStore
+WindowsCredentialProvider = windows.WindowsCredentialProvider
 
 
 def credential_provider() -> CredentialProvider:
-    """The platform's credential provider."""
-    if os.name == 'nt':
-        return WindowsCredentialProvider()
-    raise GiteaError('NO_CREDENTIAL_PROVIDER', 'only the Windows Credential Manager provider is implemented; the '
-                     'cross-platform provider is pending')
+    """The platform's credential provider, chosen by the harness (I6). Inside an act of main() every secret
+    it reads or writes is held by the act's exposure guard, for the I7 scan that follows the act."""
+    try:
+        provider = platform().credential_provider()
+    except GiteaError as exc:
+        if exc.code != 'PLATFORM_UNSUPPORTED':
+            raise
+        raise GiteaError('NO_CREDENTIAL_PROVIDER', 'only the Windows Credential Manager provider is implemented; '
+                         'the cross-platform provider is pending') from None
+    return provider if ACT_GUARD is None else contract.WatchedProvider(provider, ACT_GUARD)
 
 
 # ---------------------------------------------------------------- identities
@@ -1333,6 +1075,9 @@ def verify(res, lay: Layout, pinned: dict) -> dict:
     checks['anonymous_web_redirected_to_login'] = probes['explore_users'] in (302, 303)
     secret_values = [ini['security']['SECRET_KEY'].encode(), ini['security']['INTERNAL_TOKEN'].encode(),
                      ini['oauth2']['JWT_SECRET'].encode()]
+    if ACT_GUARD is not None:  # I7: the scan after this act looks for them in what it shows
+        for value in secret_values:
+            ACT_GUARD.hold(value)
     checkout_scan = files_containing(checkout_files(lay.repo), secret_values)
     del secret_values
     # An incomplete scan is a failure, never a clean result; the unreadable paths are in 'checkout_scan'.
@@ -1380,6 +1125,244 @@ def anonymous_probes(port: int) -> dict:
     return probes
 
 
+# ---------------------------------------------------------------- readiness, inspection, transitions (F-06.2)
+
+# verify's checks (their F-06.1 names are kept) under the contract's platform-neutral names, for the
+# aieh-readiness/1 record (verify --readiness).
+READINESS_NAMES = {
+    'binary_sha256_equals_pin': 'asset_matches_pin',
+    'running_under_supervisor': 'running_under_supervision',
+    'gitea_image_is_the_asset': 'service_runs_the_asset',
+    'listeners_only_loopback': 'listeners_loopback_only',
+    'http_listener_on_configured_port': 'listener_on_configured_port',
+    'other_listeners_are_the_egress_proxy': 'other_listeners_accounted_for',
+    'no_other_listener_on_port': 'port_held_by_service_only',
+    'token_not_elevated': 'service_not_elevated',
+    'gitea_in_supervisor_kill_on_close_job': 'service_ends_with_managed_environment',
+    'paths_from_resolver': 'paths_from_resolver',
+    'paths_outside_checkout': 'paths_outside_checkout',
+    'config_settings': 'config_settings',
+    'sign_up_refused': 'sign_up_refused',
+    'no_account_created_by_probe': 'no_account_created_by_probe',
+    'accounts_are_the_expected_ones': 'accounts_are_the_expected_ones',
+    'bots_are_non_admin_bot_accounts': 'bots_are_non_admin_bot_accounts',
+    'anonymous_api_refused': 'anonymous_api_refused',
+    'anonymous_web_redirected_to_login': 'anonymous_web_redirected_to_login',
+    'no_gitea_secret_in_checkout': 'no_service_secret_in_checkout',
+}
+
+
+def readiness(result: dict) -> dict:
+    """verify's result as an aieh-readiness/1 record: the same verdicts under platform-neutral names, with
+    the platform record of the adapter they ran on."""
+    if unmapped := sorted(set(result['checks']) ^ set(READINESS_NAMES)):
+        raise GiteaError('READINESS_UNMAPPED', f'checks without a neutral name: {unmapped}', refusal=False)
+    return contract.readiness_record(SERVICE, platform(),
+                                     {READINESS_NAMES[k]: v for k, v in result['checks'].items()})
+
+
+def transitions(lay: Layout):
+    """The write-ahead transition records (aieh-service-transition/1) under run/transitions/."""
+    return contract.TransitionLog(lay.run / 'transitions', SERVICE, platform().asset_key)
+
+
+def staged_versions(lay: Layout) -> list[str]:
+    """The Gitea versions whose recorded asset is present, side by side under assets/."""
+    base, found = lay.asset_dir.parent, []
+    if base.is_dir():
+        for child in base.iterdir():
+            if contract.VERSION_SHAPE.fullmatch(child.name) and (child / paths.ASSET_RECORD_NAME).is_file():
+                found.append(child.name)
+    return sorted(found, key=contract.parse_version)
+
+
+def running_version(res, lay: Layout, image: str | None) -> str | None:
+    """The version of the staged asset a running image is; 'unknown' for an image that is none of them,
+    None when nothing runs."""
+    if not image:
+        return None
+    for version in staged_versions(lay):
+        if os.path.normcase(str(layout(res, version).binary)) == os.path.normcase(image):
+            return version
+    return 'unknown'
+
+
+def inspect(res, lay: Layout, pinned: dict) -> dict:
+    """Read-only inspection through the adapter: the platform record, the desired, staged and running
+    versions, the managed environment's processes with their listeners and user identity, its supervision
+    record and the transitions. Starts, stops and writes nothing."""
+    adapter = platform()
+    host = read_host_record(lay)
+    record = read_run_record(lay)
+    supervisor, gitea = live(record, 'supervisor'), live(record, 'gitea')
+    log = transitions(lay)
+    pending, latest = log.pending(), log.latest()
+
+    def process(proc, with_listeners: bool):
+        if proc is None:
+            return None
+        report = {'pid': proc.pid, 'image': proc.image(), 'in_a_job': proc.in_any_job(),
+                  'user': token_report(proc.pid)}
+        if with_listeners:
+            report['listeners'] = sockets(proc.pid)
+        return report
+    image = gitea.image() if gitea else None
+    return {'service': SERVICE, 'platform': adapter.record(), 'url': f'http://{LOOPBACK}:{host["port"]}/',
+            'host_record': {'format': host['format'], 'version': host['version'], 'port': host['port'],
+                            'platform_asset_key': (host.get('platform') or {}).get('asset_key')},
+            'versions': {'desired': host['version'], 'staged': staged_versions(lay),
+                         'running': running_version(res, lay, image)},
+            'run_record': None if record is None else {k: record.get(k) for k in ('format', 'state', 'started_at')},
+            'running': bool(supervisor and gitea), 'healthz': healthy(host['port']),
+            'supervisor': process(supervisor, False), 'service_process': process(gitea, True),
+            'supervision': record.get('job') if record and supervisor else None,
+            'transitions': {'pending': None if pending is None else {k: pending[k] for k in ('id', 'verb', 'started_at')},
+                            'latest': None if latest is None else {k: latest.get(k) for k in ('id', 'verb', 'state')}}}
+
+
+def sqlite_backup(source: Path, target: Path) -> None:
+    """SQLite's online backup API: source opened read-only, target written whole."""
+    src = sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True)
+    try:
+        dst = sqlite3.connect(str(target))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def _replace_copy(source: Path, target: Path) -> None:
+    partial = target.with_name(target.name + '.partial')
+    shutil.copyfile(source, partial)
+    os.replace(partial, target)
+
+
+class GiteaOperations(contract.ServiceOperations):
+    """Gitea's side of the transition verbs; each operation reuses this module's own install, up, down and
+    status code."""
+
+    def __init__(self, res, *, from_file: Path | None = None, run: Callable = subprocess.run,
+                 opener: Callable = urllib.request.urlopen):
+        self.res, self.from_file, self.run, self.opener = res, from_file, run, opener
+
+    def _lay(self, version: str | None = None) -> Layout:
+        return layout(self.res, version) if version else desired_layout(self.res)
+
+    def observe(self) -> dict:
+        lay = self._lay()
+        host = read_host_record(lay)
+        record = read_run_record(lay)
+        supervisor, gitea = live(record, 'supervisor'), live(record, 'gitea')
+        running = bool(supervisor or gitea)
+        return {'running': running, 'ready': running and healthy(host['port']),
+                'running_version': running_version(self.res, lay, gitea.image() if gitea else None),
+                'desired_version': host['version']}
+
+    def stop(self) -> dict:
+        running = self.observe()['running_version']
+        lay = self._lay(running if running not in (None, 'unknown') else None)
+        report = down(self.res, lay, pin(version=lay.version), self.run)
+        return {k: report.get(k) for k in ('stopped', 'method', 'gitea_alive', 'supervisor_alive', 'port_open')}
+
+    def start(self, version: str | None = None) -> dict:
+        lay = self._lay(version)
+        report = up(self.res, lay, pin(version=lay.version))
+        return {'running': report['running'], 'version': lay.version,
+                'supervisor_pid': (report['supervisor'] or {}).get('pid'), 'gitea_pid': (report['gitea'] or {}).get('pid')}
+
+    def ready(self, version: str | None = None) -> bool:
+        state = self.observe()
+        return state['running'] and state['ready'] and (version is None or state['running_version'] == version)
+
+    def stage(self, version: str) -> dict:
+        lay = layout(self.res, version)
+        paths.ensure('assets', self.res, ASSET_KIND, 'gitea', version)
+        paths.ensure('tmp', self.res, 'gitea')
+        return acquire(self.res, lay, pin(version=version), from_file=self.from_file, opener=self.opener)
+
+    def _backup_dir(self, transition_id: str) -> Path:
+        return self._lay().home / 'backups' / transition_id
+
+    def backup(self, transition_id: str) -> dict:
+        lay, target = self._lay(), self._backup_dir(transition_id)
+        target.mkdir(parents=True, exist_ok=True)
+        files = {}
+        if lay.db.is_file():
+            sqlite_backup(lay.db, target / 'gitea.db')
+            files['gitea.db'] = (target / 'gitea.db').stat().st_size
+        _replace_copy(lay.config, target / 'app.ini')
+        files['app.ini'] = (target / 'app.ini').stat().st_size
+        return {'directory': str(target), 'bytes': files, 'method': 'SQLite backup API; app.ini copied'}
+
+    def restore(self, transition_id: str) -> dict:
+        lay, source = self._lay(), self._backup_dir(transition_id)
+        restored = []
+        if (source / 'gitea.db').is_file():
+            sqlite_backup(source / 'gitea.db', lay.db)
+            restored.append('gitea.db')
+        _replace_copy(source / 'app.ini', lay.config)
+        restored.append('app.ini')
+        return {'from': str(source), 'restored': restored}
+
+    def set_desired(self, version: str) -> dict:
+        lay = layout(self.res, version)
+        record = json.loads(lay.host_record.read_text(encoding='utf-8'))
+        record.update(version=version, asset=asset_name(version), sha256=pin(version=version)['sha256'],
+                      platform={'asset_key': ASSET_KEY})
+        _write_json(lay.host_record, record)
+        return {'desired': version}
+
+    def pinned_versions(self) -> list[str]:
+        return pinned_versions()
+
+    def remove_ephemeral(self) -> dict:
+        lay = self._lay()
+        if not lay.tmp.is_relative_to(Path(str(self.res.paths['tmp']))):
+            raise GiteaError('PATH_NOT_EPHEMERAL', f'{lay.tmp} is not in the ephemeral tmp category', refusal=False)
+        removed = []  # the directory itself stays: Gitea's TMP points at it
+        for child in sorted(lay.tmp.iterdir()) if lay.tmp.is_dir() else []:
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+            removed.append(str(child))
+        return {'emptied': str(lay.tmp), 'removed': removed}
+
+    def retained(self) -> dict:
+        lay = self._lay()
+        return {'persistent': [str(lay.home), str(lay.logs)],
+                'assets': [str(layout(self.res, v).asset_dir) for v in staged_versions(lay)],
+                'registered_with_the_system': 'nothing: no service, scheduled task, PATH, registry or firewall entry'}
+
+
+def restart(res, lay: Layout, pinned: dict) -> dict:
+    """Down (when running) and up again under a write-ahead transition record."""
+    record = contract.restart(transitions(lay), GiteaOperations(res))
+    return {'transition': record, 'status': status(res, desired_layout(res), pin(version=desired_layout(res).version))}
+
+
+def upgrade(res, lay: Layout, pinned: dict, target: str, from_file: Path | None = None) -> dict:
+    return contract.upgrade(transitions(lay), GiteaOperations(res, from_file=from_file), target)
+
+
+def recover(res, lay: Layout, pinned: dict) -> dict:
+    return contract.recover(transitions(lay), GiteaOperations(res))
+
+
+def uninstall(res, lay: Layout, pinned: dict) -> dict:
+    return contract.uninstall(transitions(lay), GiteaOperations(res))
+
+
+def exposure_scan(guard, report_text: str, message: str) -> dict:
+    """I7 after an act: what it is about to show (its report and its message) holds none of the secrets
+    the act handled and nothing token-shaped."""
+    guard.scan_text('report', report_text)
+    guard.scan_text('message', message)
+    return guard.report()
+
+
 # ---------------------------------------------------------------- command line
 
 
@@ -1393,49 +1376,85 @@ def install(res, lay: Layout, pinned: dict, port: int, from_file: Path | None) -
 
 
 def main(argv=None) -> int:
+    global ACT_GUARD
     parser = argparse.ArgumentParser(prog='gitea_host.py', description='Host-loopback Gitea under the managed data '
-                                     'root (F-06.1). Exit 0 done, 1 failed, 2 refused.')
+                                     'root (F-06.1), through the host-service lifecycle contract (F-06.2). Exit 0 '
+                                     'done, 1 failed, 2 refused.')
     sub = parser.add_subparsers(dest='command', required=True)
     inst = sub.add_parser('install', help='init the root, acquire and verify the pinned binary, write app.ini')
     inst.add_argument('--from-file', type=Path, help='a local copy of the release asset (verified against the pin)')
     inst.add_argument('--port', type=int, default=DEFAULT_PORT)
     for name, text in (('up', 'start the managed environment and wait until Gitea answers'),
                        ('down', 'stop Gitea with its own manager shutdown, then the supervisor'),
+                       ('restart', 'down (when running) and up again, under a write-ahead transition record'),
                        ('status', 'report the processes, listeners, token and job; changes nothing'),
-                       ('verify', 'run the F-06.1 proof set against the running instance'),
+                       ('inspect', 'report the platform, versions, processes, listeners, user identity, supervision '
+                                   'and transitions; changes nothing'),
                        ('identities', 'create the site administrator and the Owner account (temporary passwords '
                                       'into the credential provider)'),
                        ('finalize-credentials', 'replace both temporary passwords with harness-held final ones '
                                                 "through Gitea's forced change, revoke the accounts' tokens, verify, "
                                                 'delete the temporary entries'),
+                       ('recover', 'reconcile the actual state with a pending transition, then resume or roll it back'),
+                       ('uninstall', 'refused while running; removes ephemeral state only, nothing under persistent/ '
+                                     'and no asset'),
                        ('supervise', 'internal: the managed environment process started by up')):
         sub.add_parser(name, help=text)
+    ver = sub.add_parser('verify', help='run the F-06.1 proof set against the running instance')
+    ver.add_argument('--readiness', action='store_true',
+                     help='print the result as an aieh-readiness/1 record (platform-neutral check names)')
+    upg = sub.add_parser('upgrade', help='upgrade to a pinned version under a write-ahead transition record')
+    upg.add_argument('--to', required=True, help='the target version (it must be pinned in the lock)')
+    upg.add_argument('--from-file', type=Path, help='a local copy of the target release asset')
     args = parser.parse_args(argv)
     out = sys.stdout
     if hasattr(out, 'reconfigure'):
         out.reconfigure(encoding='utf-8')
-    if os.name != 'nt':
-        sys.stderr.write('gitea-host: REFUSED: host-loopback Gitea is implemented for Windows only\n')
-        return 2
     try:
-        res = paths.resolve()
-        lay, pinned = layout(res), pin()
-        if args.command == 'supervise':
-            return supervise(res, lay, pinned)
-        if args.command == 'install':
-            report = install(res, lay, pinned, args.port, args.from_file)
-        else:
-            report = {'up': up, 'down': down, 'status': status, 'verify': verify,
-                      'identities': create_identities, 'finalize-credentials': finalize_credentials}[args.command](
-                res, lay, pinned)
-    except paths.PathsError as exc:
-        sys.stderr.write(f'gitea-host: {exc}\n')
-        return 2
+        platform()
     except GiteaError as exc:
         sys.stderr.write(f'gitea-host: {exc}\n')
-        return 2 if exc.refusal else 1
-    out.write(json.dumps(report, indent=2, default=str) + '\n')
-    return 1 if args.command == 'verify' and not report['passed'] else 0
+        return 2
+    guard = ACT_GUARD = contract.ExposureGuard()
+    report, message, code = None, '', 0
+    try:
+        res = paths.resolve()
+        lay = desired_layout(res)
+        pinned = pin(version=lay.version)
+        if args.command == 'supervise':
+            return supervise(res, lay, pinned)
+        check_platform(lay)
+        if args.command == 'install':
+            report = install(res, lay, pinned, args.port, args.from_file)
+        elif args.command == 'upgrade':
+            report = upgrade(res, lay, pinned, args.to, args.from_file)
+        else:
+            report = {'up': up, 'down': down, 'restart': restart, 'status': status, 'inspect': inspect,
+                      'verify': verify, 'identities': create_identities, 'finalize-credentials': finalize_credentials,
+                      'recover': recover, 'uninstall': uninstall}[args.command](res, lay, pinned)
+            if args.command == 'verify':
+                code = 0 if report['passed'] else 1
+                if args.readiness:
+                    report = readiness(report)
+    except paths.PathsError as exc:
+        message, code = f'gitea-host: {exc}\n', 2
+    except GiteaError as exc:
+        message, code = f'gitea-host: {exc}\n', 2 if exc.refusal else 1
+    finally:
+        ACT_GUARD = None
+    text = '' if report is None else json.dumps(report, indent=2, default=str) + '\n'
+    scan = exposure_scan(guard, text, message)
+    guard.clear()
+    if scan['found_in']:
+        exposure = GiteaError('EXPOSURE_FOUND', 'a secret the act held, or a token-shaped string, is in its '
+                              + ' and '.join(scan['found_in']), refusal=False)
+        sys.stderr.write(f'gitea-host: {exposure}\n')
+        return 1
+    sys.stderr.write(message)
+    out.write(text)
+    sys.stderr.write(f'gitea-host: I7 no-exposure scan: clean ({scan["secrets_held"]} secrets held; '
+                     f'{scan["scanned"]} outputs scanned)\n')
+    return code
 
 
 if __name__ == '__main__':

@@ -11,15 +11,22 @@ current Windows user without elevation, with no WSL, VM, Windows service, schedu
 registry or firewall change. Everything it uses comes from the [managed data root](../paths/README.md);
 nothing is written into the checkout. Windows only.
 
+Since plan leaf F-06.2, `gitea_host.py` composes the **host-service lifecycle contract** and the
+platform adapter of [`integrations/platform/`](../platform/README.md) (draft decision 0011): every process,
+Job Object, listener, token and Credential Manager call goes through the adapter, and the contract
+defines the verbs, the records and the refusal codes. Windows record:
+[`evidence/F-06.2-platform-windows.md`](../../evidence/F-06.2-platform-windows.md).
+
 ## Files
 
 | Path | What |
 |---|---|
-| `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `status`, `verify`, `identities`, `finalize-credentials` (and the internal `supervise`); the credential provider |
-| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `rotate ROLE`, `status` |
+| `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `restart`, `status`, `inspect`, `verify [--readiness]`, `identities`, `finalize-credentials`, `upgrade --to VERSION`, `recover`, `uninstall` (and the internal `supervise`); composes the platform adapter and its credential provider |
+| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `rotate ROLE`, `retire ROLE`, `status` |
+| `tests/test_lifecycle.py` | The composition over the contract (F-06.2): the moved names, the platform asset key and `PLATFORM_MISMATCH`, both run-record formats, readiness, `inspect`, the transitions over a real SQLite database and `app.ini` in a temporary root, and the I7 scan of `main` |
 | `tests/test_gitea_roles.py` | Bots, tokens, custody, fixture, revocation and rotation with a fake CLI and a fake API; the guest profile declares no path to a token store |
 | `tests/test_authorization_live.py` | Opt-in (`AIEH_GITEA_AUTHZ=1`, `task gitea:authz`) allowed and forbidden calls of each bot token against the running Gitea |
-| `tests/test_gitea_host.py` | Pin, layout, `app.ini`, acquisition, the binary lock, identities and first login with fakes; the Job Object, socket table and token code against real child processes; an opt-in live lifecycle test |
+| `tests/test_gitea_host.py` | Pin, layout, `app.ini`, acquisition, the binary lock, identities and first login with fakes; the Job Object, socket table and token code against real child processes; an opt-in live lifecycle test (install, up, verify and its readiness record, inspect, restart, down, uninstall, a supervisor kill, recover) on a fixture instance |
 | `../../composition/lock/components.lock.json` | The pin: `release_assets` entry `gitea-28.3.0-windows-amd64.exe` (sha256, URL, checksum sources) |
 
 ## Commands
@@ -28,15 +35,44 @@ From the repository root (`task gitea:<name>`):
 
 ```
 python -I -B integrations/gitea/gitea_host.py install [--port N] [--from-file EXE]   # network once: GitHub
-python -I -B integrations/gitea/gitea_host.py up | down | status | verify
+python -I -B integrations/gitea/gitea_host.py up | down | restart | status | inspect | verify [--readiness]
 python -I -B integrations/gitea/gitea_host.py identities
 python -I -B integrations/gitea/gitea_host.py finalize-credentials
-python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | rotate ROLE | status
+python -I -B integrations/gitea/gitea_host.py upgrade --to VERSION [--from-file EXE] | recover | uninstall
+python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | rotate ROLE | retire ROLE | status
 python -I -B -m unittest discover -s integrations/gitea/tests -v                    # task gitea:test
 AIEH_GITEA_AUTHZ=1 python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v   # task gitea:authz
 ```
 
 Exit 0 done, 1 failed, 2 refused (a stable code). Every command prints JSON and never a secret.
+Every act ends with the **I7 no-exposure scan** (credential invariant 7): before anything is shown, its
+report and its message are searched for every secret the act held (each secret the credential
+provider read or wrote during the act, and the `app.ini` secrets `verify` read), as UTF-8 and UTF-16LE,
+and for anything token-shaped (40 hex digits). A hit withholds the output and exits 1 with
+`EXPOSURE_FOUND`; a clean scan prints one line on standard error,
+`I7 no-exposure scan: clean (N secrets held; M outputs scanned)`.
+
+## The lifecycle contract's verbs
+
+| Verb | Here | What it does |
+|---|---|---|
+| install | `install` | the root, the verified asset, `app.ini` and the host record (now with `platform.asset_key`) |
+| up, down, status | `up`, `down`, `status` | unchanged from F-06.1 |
+| restart | `restart` | `down` (when running) and `up` under a write-ahead transition record |
+| inspect | `inspect` | read-only: the `aieh-platform/1` record, the desired, staged and running versions, both processes with their listeners and user identity, the supervision record, the transitions |
+| verify | `verify [--readiness]` | the F-06.1 proof set, unchanged; `--readiness` prints it as an `aieh-readiness/1` record with platform-neutral check names and the platform |
+| provision | `identities`; `gitea_roles.py provision` | the human accounts' temporary credentials; the role bots' tokens |
+| rotate | `finalize-credentials`; `gitea_roles.py rotate ROLE` | temporary to final (human accounts); revoke and re-issue (a role) |
+| retire | `gitea_roles.py retire ROLE` | revoke a role's token, prove its next call is refused (401), then delete its entry; resumes; the account is kept |
+| upgrade | `upgrade --to VERSION` | a pinned version only; stage and verify its asset beside the current one, stop, back up `gitea.db` (SQLite backup API) and `app.ini` into `persistent/gitea/backups/<transition>/`, make it desired, start it, check readiness; a failure before readiness rolls back automatically from that backup |
+| recover | `recover` | reconciles the actual state with the pending transition first, then resumes it (restart, uninstall) or completes or rolls back an upgrade |
+| uninstall | `uninstall` | refused while running (`UNINSTALL_RUNNING`); empties `ephemeral/tmp/gitea/` and deletes nothing under `persistent/` and no asset. On Windows nothing is registered with the system, so nothing else is removed and `up` works again afterwards |
+
+The transition records (`aieh-service-transition/1`) are in `persistent/gitea/run/transitions/`, one
+file per transition, written before any process is replaced and never deleted. While one is pending,
+`restart`, `upgrade` and `uninstall` are refused with `TRANSITION_PENDING`. The lock pins one Windows
+version today, so a real cross-version upgrade has not run: `upgrade` is exercised with fixture assets
+(plan leaf F-06.6 rehearses it on a disposable instance).
 
 ## Where everything lives
 
@@ -46,7 +82,8 @@ Exit 0 done, 1 failed, 2 refused (a stable code). Every command prints JSON and 
 | `app.ini` (class E: holds Gitea's secrets) | `gitea` | `persistent/gitea/custom/conf/app.ini` |
 | SQLite database, sessions, queues, indexers, avatars, git `HOME` | `gitea` | `persistent/gitea/data/` |
 | Repositories | `gitea` | `persistent/gitea/repositories/` |
-| The host record (`aieh-gitea-host/1`: version, pin, port) and the run record (`aieh-gitea-run/1`) | `gitea` | `persistent/gitea/aieh-gitea-host.json`, `persistent/gitea/run/supervisor.json` |
+| The host record (`aieh-gitea-host/1`: version, pin, port, optional `platform.asset_key`) and the run record (`aieh-service-run/1`; one written before F-06.2 is `aieh-gitea-run/1`, still read) | `gitea` | `persistent/gitea/aieh-gitea-host.json`, `persistent/gitea/run/supervisor.json` |
+| The transition records (`aieh-service-transition/1`) and the upgrade backups | `gitea` | `persistent/gitea/run/transitions/`, `persistent/gitea/backups/` |
 | Gitea's log, its console output, the supervisor's output | `logs` | `persistent/logs/gitea/` |
 | `TMP`/`TEMP` of Gitea and its git children; download staging | `tmp` | `ephemeral/tmp/gitea/` |
 
@@ -152,9 +189,11 @@ reads the Owner account's yet. How the Owner identity is used internally is stil
 bot, test or ordinary Builder or Reviewer context reads either entry.
 
 **The credential provider.** Callers reach credentials through `CredentialProvider` (`get`, `set`,
-`delete`, `exists`). `WindowsCredentialProvider` implements it with Credential Manager (`CredWriteW`,
-`CredReadW`, `CredDeleteW`; secrets as UTF-16LE). A cross-platform implementation can replace it
-through `credential_provider()` without its callers changing.
+`delete`, `exists`; the contract's interface). `WindowsCredentialProvider` implements it with Credential
+Manager (`CredWriteW`, `CredReadW`, `CredDeleteW`; secrets as UTF-16LE); since F-06.2 the Windows adapter
+supplies it, and a session without a credential store is refused with `CREDENTIAL_PROVIDER_LOCKED`. A
+cross-platform implementation can replace it through `credential_provider()` without its callers
+changing (F-06.3).
 
 ## Role credentials (S-01.2.2)
 
@@ -194,7 +233,10 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
 
 ## Not yet verified
 
-- Anything but Windows 11 on x86_64.
+- Anything but Windows 11 on x86_64 (Linux and macOS adapters: F-06.4, F-06.5).
+- A real cross-version `upgrade` (one version is pinned), and the rehearsal of upgrade, recovery and
+  uninstall on a disposable instance with a reboot or sign-out (F-06.6).
+- `retire` against the running Gitea (fakes only).
 - Gitea's egress proxy beyond the 407 answer, and the effective `EGRESS_MODE` policy.
 - Gitea's audit logging (off by default).
 - A credential provider other than Windows Credential Manager.
