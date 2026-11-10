@@ -304,14 +304,30 @@ class BaselineMode(SeedCopy):
     def setUpClass(cls):
         super().setUpClass()
         cls.golden = golden_repository(cls.shared, cls.shared_digest)
+        cls.seeded = frozenset(seed_paths())
 
     def source(self):
         return self.golden
 
     def commit_all(self, message):
-        git(self.root, 'add', '--all')
-        git(self.root, 'commit', '--quiet', '--no-verify', '-m', message)
-        return git(self.root, 'rev-parse', 'HEAD')
+        """Commit every change in the work tree; return the new commit. The index holds every
+        seeded file, so while no other file has appeared, ``commit --all`` stages exactly what
+        ``add --all`` would (edits and deletions) in one launch, and the new commit is read from
+        the branch's loose ref that git just wrote (plan leaf F-09); otherwise ``add --all``."""
+        if self.new_files():
+            git(self.root, 'add', '--all')
+        git(self.root, 'commit', '--quiet', '--no-verify', '--all', '-m', message)
+        ref = (self.root / '.git' / 'HEAD').read_text(encoding='ascii').strip().removeprefix('ref: ')
+        return (self.root / '.git' / ref).read_text(encoding='ascii').strip()
+
+    def new_files(self):
+        """The work tree's files that are not seeded files, .git excluded."""
+        found = set()
+        for top, dirs, files in os.walk(self.root):
+            if Path(top) == self.root:
+                dirs[:] = [d for d in dirs if d != '.git']
+            found.update(Path(top, name).relative_to(self.root).as_posix() for name in files)
+        return found - self.seeded
 
     def test_baseline_reads_object_database_not_working_tree(self):
         clean = self.commit_all('seed')
