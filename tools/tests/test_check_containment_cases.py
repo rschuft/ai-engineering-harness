@@ -28,13 +28,16 @@ _spec = importlib.util.spec_from_file_location('check_containment_cases', CHECKE
 ccc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ccc)
 
-CATALOGUE = json.loads(CATALOGUE_PATH.read_text(encoding='utf-8'))
+CATALOGUE_TEXT = CATALOGUE_PATH.read_text(encoding='utf-8')
+CATALOGUE = json.loads(CATALOGUE_TEXT)
 INVENTORY = json.loads(INVENTORY_PATH.read_text(encoding='utf-8'))
 README = README_PATH.read_text(encoding='utf-8')
 
 
 def fresh():
-    return copy.deepcopy(CATALOGUE)
+    # A new parse of the committed text: equal to CATALOGUE and sharing nothing with it, as a deep
+    # copy is, at a quarter of the cost (the type-fuzzing tests take hundreds; plan leaf F-09).
+    return json.loads(CATALOGUE_TEXT)
 
 
 def case(c, ident):

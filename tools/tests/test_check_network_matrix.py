@@ -28,7 +28,8 @@ _spec = importlib.util.spec_from_file_location('check_network_matrix', CHECKER)
 cnm = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cnm)
 
-MATRIX = json.loads(MATRIX_PATH.read_text(encoding='utf-8'))
+MATRIX_TEXT = MATRIX_PATH.read_text(encoding='utf-8')
+MATRIX = json.loads(MATRIX_TEXT)
 INVENTORY = json.loads(INVENTORY_PATH.read_text(encoding='utf-8'))
 README = README_PATH.read_text(encoding='utf-8')
 PROFILES = cnm.load_profiles(REPO)
@@ -36,7 +37,9 @@ QEMU = 'strong-windows-qemu-whpx'
 
 
 def fresh():
-    return copy.deepcopy(MATRIX)
+    # A new parse of the committed text: equal to MATRIX and sharing nothing with it, as a deep
+    # copy is, at a quarter of the cost (the type-fuzzing tests take hundreds; plan leaf F-09).
+    return json.loads(MATRIX_TEXT)
 
 
 def edge(m, ident):

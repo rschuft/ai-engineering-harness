@@ -372,7 +372,9 @@ def golden_repository(seed, digest):
         atexit.register(tmp.cleanup)
         root = Path(tmp.name) / 'seed'
         shutil.copytree(seed, root, copy_function=shutil.copyfile)
-        git(root, 'init', '--quiet')
+        # --template= (empty): no sample hooks, info/exclude or description, which nothing here reads;
+        # 16 fewer files in every copy (plan leaf F-09). The repository and its commits are the same.
+        git(root, 'init', '--quiet', '--template=')
         git(root, 'add', '--all')
         git(root, 'repack', '-a', '-d', '-q')
         git(root, 'prune-packed')
