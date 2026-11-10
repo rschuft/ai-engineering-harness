@@ -332,7 +332,17 @@ Proof: `test_repository_transport.py` (a local smart-HTTP server, Dulwich's `web
 under `wsgiref`, in process, answering 401 and 403 and declining a protected branch; process
 creation patched to fail), `OracleTransport` (git's `ls-remote` and `fsck --strict` agree), and the
 live matrix against the host Gitea, `task gitea:transport`
-([`evidence/F-10.6-transports.md`](../../evidence/F-10.6-transports.md)).
+([`evidence/F-10.6-transports.md`](../../evidence/F-10.6-transports.md)). `Redirects` shows that a
+redirect changing the scheme (either way), the host or the port carries no `Authorization`
+(urllib3 2.8.0 drops it when the origin changes, and the module adds it only for the remote's own
+origin); a redirect within the origin keeps it.
+
+**Pin-sensitive.** The transport subclasses Dulwich's `Urllib3HttpGitClient` and overrides its
+`_http_request`, an internal method of Dulwich 1.2.21 (the module adds its header there because
+Dulwich's `extra_headers` argument is stored but never sent, and keeps the HTTP status there
+because Dulwich reports a 403 as an untyped protocol error). It also sets urllib3's retry policy on
+Dulwich's pool manager. At every Dulwich or urllib3 pin change, `test_repository_transport.py`,
+`OracleTransport` and `task gitea:transport` are the check that this still holds.
 
 ## Bundles
 

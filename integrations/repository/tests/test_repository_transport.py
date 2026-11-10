@@ -552,5 +552,84 @@ class Clone(TransportCase):
             ra.clone(self.remote.url, destination, BASIC)
 
 
+class Redirects(TransportCase):
+    """A redirect that changes the scheme (either way), the host or the port carries no
+    ``Authorization``: urllib3 follows the redirect, and the module's credential must not follow
+    it to another origin. A stand-in replaces urllib3's connection-pool ``urlopen`` (no network):
+    the real PoolManager redirect logic and the module's transport run; each request is recorded
+    with the ``Authorization`` it carried."""
+
+    def standin(self, start, target):
+        from urllib3.connectionpool import HTTPConnectionPool
+        from urllib3.response import HTTPResponse
+        seen = []
+
+        def urlopen(pool, method, url, body=None, headers=None, **_kwargs):
+            origin = f'{pool.scheme}://{pool.host}:{pool.port}'
+            seen.append((origin, next((v for k, v in (headers or {}).items() if k.lower() == 'authorization'), None)))
+            if origin == start and not url.startswith('/moved'):
+                return HTTPResponse(body=b'', headers={'Location': f'{target}/moved{url}'}, status=302,
+                                    preload_content=False, retries=pool.retries, request_method=method,
+                                    request_url=url)
+            return HTTPResponse(body=b'gone', headers={'Content-Type': 'text/plain'}, status=404,
+                                preload_content=False, retries=pool.retries, request_method=method, request_url=url)
+
+        return seen, mock.patch.object(HTTPConnectionPool, 'urlopen', urlopen)
+
+    def test_a_redirect_to_another_origin_carries_no_credential(self):
+        cases = {'https to http (a downgrade)': ('https://127.0.0.1:8443', 'http://127.0.0.1:8443'),
+                 'http to https': ('http://127.0.0.1:8080', 'https://127.0.0.1:8080'),
+                 'another host': ('http://127.0.0.1:8080', 'http://127.0.0.2:8080'),
+                 'another port': ('http://127.0.0.1:8080', 'http://127.0.0.1:8081')}
+        for label, (start, target) in cases.items():
+            for credential in (BASIC, TOKEN):
+                for operation in ('ls_remote', 'push'):
+                    seen, standin = self.standin(start, target)
+                    with self.subTest(case=label, scheme=credential.scheme, operation=operation), standin:
+                        url = f'{start}/org/repo.git'
+                        if operation == 'ls_remote':
+                            error = self.expect('REMOTE_FAILED', ra.ls_remote, url, credential)
+                        else:
+                            error = self.expect('REMOTE_FAILED', self.local.push, url, 'HEAD:refs/heads/main',
+                                                credential)
+                        self.assertEqual(error.details['status'], 404)
+                        self.assertEqual(seen, [(start, credential.authorization()), (target, None)])
+
+    def test_a_redirect_within_the_origin_keeps_it(self):
+        # The control: the stand-in does see the header after a redirect when the origin is kept.
+        seen, standin = self.standin('http://127.0.0.1:8080', 'http://127.0.0.1:8080')
+        with standin:
+            self.expect('REMOTE_FAILED', ra.ls_remote, 'http://127.0.0.1:8080/org/repo.git', TOKEN)
+        self.assertEqual(seen, [('http://127.0.0.1:8080', TOKEN.authorization())] * 2)
+
+    def test_a_real_redirect_to_another_port(self):
+        """End to end: a loopback server answers 302 to the served remote on another port; the
+        remote receives the request without the credential, and refuses it (401)."""
+        received = []
+        target = self.remote.url
+
+        def redirect(environ, start_response):
+            received.append(environ.get('HTTP_AUTHORIZATION'))
+            query = environ.get('QUERY_STRING', '')
+            location = target + environ['PATH_INFO'].removeprefix('/org/repo.git') + (f'?{query}' if query else '')
+            start_response('302 Found', [('Location', location), ('Content-Type', 'text/plain')])
+            return [b'moved\n']
+
+        httpd = WSGIServer(('127.0.0.1', 0), Quiet)
+        httpd.set_app(redirect)
+        thread = threading.Thread(target=httpd.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        thread.start()
+        try:
+            url = f'http://127.0.0.1:{httpd.server_address[1]}/org/repo.git'
+            error = self.expect('REMOTE_REFUSED', ra.ls_remote, url, TOKEN)
+            self.assertEqual(error.details['status'], 401)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join()
+        self.assertEqual(received, [TOKEN.authorization()])
+        self.assertEqual([header for *_rest, header in self.remote.requests], [None])
+
+
 if __name__ == '__main__':
     unittest.main()
