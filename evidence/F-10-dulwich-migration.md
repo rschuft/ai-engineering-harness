@@ -241,6 +241,65 @@ is the Windows reference above without git (the image has no git, observed in F-
 the git-oracle module the one platform-marked skip. Items that would need their own approval (git
 in the guest, the manylinux platform wheel as a second pass, any network) are listed in the plan.
 
+## Linux finding and fix (2026-11-10)
+
+The section above was written before the run. The run was made once on 2026-11-10 (revision 3,
+[run evidence](F-10.5-oa05-linux-run.md), [report](F-10.5-linux-report.json)): 79 tests passed,
+1 module was skipped as expected and 2 failed. The two failures are
+`Ceilings.test_no_path_above_the_ceiling_is_touched` and
+`test_a_ceiling_between_the_start_and_a_repository_hides_it`.
+
+- **Mechanism.** On POSIX, `os.path.realpath` looks up each component prefix of its argument with
+  `os.lstat`. `discover` calls it for the start directory and `_ceiling_floor` calls it for each
+  ceiling. The test's stat spy recorded those lookups: 12 and 16 paths, the counts in the Linux
+  report. Discovery's own probes never went above the ceiling on either platform. On Windows,
+  `os.path.realpath` (`nt._getfinalpathname`) makes no call through the `os` module, so the spy
+  saw no lookup there.
+- **Classification:** introduced-by `7986f49` (F-10.4), exposed-by the F-10.5 Linux run. The
+  defect is in the test's observation and in wording that over-claimed (the README's Discovery
+  section, the docstrings and the F-10.4 record). The product was correct.
+- **Ruling (Overseer, 2026-11-10).** In the ceiling contract, "examined" means the upward search's
+  probes (decision 0014 section 8; git also resolves its ceilings to real paths). The metadata
+  lookups of path canonicalization are not examinations. No product behaviour changes. git's rule
+  for entries after an empty one is not in scope.
+- **Fix** (`3cf45cd`, test and wording only).
+  - `Ceilings.touched` pauses recording only while `os.path.realpath` runs. Every other probe is
+    still recorded.
+  - A probe of a path outside the corpus's temporary root is recorded and answered "absent"
+    without touching the disk.
+  - Two forced-POSIX tests replace `os.path.realpath` with a port of the POSIX component loop
+    (`os.lstat` through the `os` module). Under the spy, `os.lstat` answers a component above the
+    temporary root with a synthetic directory, so nothing above the root is read.
+  - A positive control runs the search without a ceiling. It checks that the observation records
+    exactly the probes of `.git` and `HEAD` at every ancestor up to the file system's root, each
+    answered "absent".
+  - The README's Discovery section, the `discover` docstring and the class docstring now carry the
+    ruling's meaning. The [F-10.4 record](F-10.4-exchange-snapshots-listing.md) has a dated
+    correction note.
+- **Validation (Windows, tools interpreter).**
+  - The repository suite passes: 106 tests, the 5 `Ceilings` tests among them.
+  - A boundary audit found 0 accesses outside the corpus's temporary root (94 inside). The audit
+    sits under the test's own patches and refuses any path outside that root.
+  - The mutations were run under that audit, in a throwaway clone:
+    - Guard removed: the stock tests pass on Windows; both forced-POSIX tests **fail**, recording
+      12 and 16 ancestors (the Linux shape); the control fails.
+    - Guard widened to cover the whole call (spy blinded): all five fail.
+    - Discovery made to ignore its ceilings: the four ceiling tests fail and the control passes.
+    - The control's search stopped at the temporary root: the control fails.
+    - The spy letting probes outside the root through to the disk: the audit refuses the first
+      such probe, so the audit itself is shown to detect them.
+  - The launch census guard passes (12 tests). `test_profile.py categories` passes.
+    `verify_seed` passes.
+- **Budget** (`check_test_budget.py check --run` at `3cf45cd`, Git Bash, Disk Cleanup not running
+  before or after). The repository suite took 6.8 s against a 7.67 s limit. The contract category
+  took 19.4 s against 22.1 s. The total median was 145.0 s. The five `Ceilings` tests take 0.03 s
+  together; the new ones add no launch and no temporary directory. The check failed on one row,
+  `WALL_ABOVE suite gitea` (3.35 s against a 3.25 s limit), a suite this fix does not touch. No
+  budget was changed.
+- **Not verified:** Linux. A revised run (revision 4: a new payload, because the test file and the
+  module's docstring changed) is prepared for the Overseer. It is not run and needs a new Owner
+  approval.
+
 ## The F-10 group proof
 
 | Clause | Evaluation | Verdict |
