@@ -258,9 +258,11 @@ class Stages(unittest.TestCase):
         code, out, err = self.run_main('missing', '--task', 'TASK-9')
         self.assertEqual(code, 1)
         self.assertIn('FAIL BACKLOG_FAILED', err)
-        with mock.patch.object(adapter, 'tool_argv', lambda spec: FAKE_BACKLOG), \
+        plain = self.tmp / 'plain'
+        plain.mkdir(exist_ok=True)
+        with mock.patch.object(adapter, 'tool_argv', lambda spec: FAKE_BACKLOG), fx.ceiling(self.tmp), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
-            code = readiness.main(['--project', str(self.tmp), '--backlog', 'fake'])
+            code = readiness.main(['--project', str(plain), '--backlog', 'fake'])
         self.assertEqual(code, 2)
         self.assertIn('not a git working tree', err.getvalue())
 

@@ -124,7 +124,7 @@ class DesignResolution(TempDirCase):
         empty.mkdir(exist_ok=True)
         for resolver in (R.DesignResolver(empty), R.DesignResolver(self.tmp / 'absent')):
             for method in (resolver.resolve, resolver.current):
-                with self.subTest(method=method.__name__):
+                with self.subTest(method=method.__name__), fx.ceiling(self.tmp):
                     result = method(self.ref)
                     self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'PROJECT_UNAVAILABLE'))
         with mock.patch.object(planning.Git, 'blob', side_effect=planning.PlanningError('GIT_FAILED', 'boom')):
@@ -375,7 +375,8 @@ class ObjectiveResolution(TempDirCase):
         empty.mkdir(exist_ok=True)
         resolver = R.ObjectiveResolver(empty)
         for method in (resolver.resolve, resolver.current):
-            result = method(L.parse(f'outcome:{OUTCOME}'))
+            with fx.ceiling(self.tmp):
+                result = method(L.parse(f'outcome:{OUTCOME}'))
             self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'PROJECT_UNAVAILABLE'))
         with mock.patch.object(planning.Git, 'blob', side_effect=planning.PlanningError('GIT_FAILED', 'boom')):
             result = self.ask(f'outcome:{OUTCOME}')
@@ -484,7 +485,8 @@ class WorkResolution(TempDirCase):
                 self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, code))
         not_repo = self.tmp / 'plain'
         not_repo.mkdir(exist_ok=True)
-        result = R.WorkResolver(not_repo, FAKE_BACKLOG).resolve(L.parse(f'backlog:TASK-1@{self.head}'))
+        with fx.ceiling(self.tmp):
+            result = R.WorkResolver(not_repo, FAKE_BACKLOG).resolve(L.parse(f'backlog:TASK-1@{self.head}'))
         self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, 'PROJECT_UNAVAILABLE'))
         with mock.patch.dict(os.environ, {'FAKE_BACKLOG_MODE': 'bad-envelope'}):
             result = self.resolve('backlog:TASK-1')
@@ -580,7 +582,7 @@ class CommitResolution(TempDirCase):
     def test_authority_unavailable(self):
         for text, code in ((f'git:unregistered@{self.first}', 'REPOSITORY_NOT_REGISTERED'),
                            (f'git:plain@{self.first}', 'REPOSITORY_UNAVAILABLE')):
-            with self.subTest(text=text):
+            with self.subTest(text=text), fx.ceiling(self.tmp):
                 result = self.resolve(text)
                 self.assertEqual((result.outcome, result.code), (L.AUTHORITY_UNAVAILABLE, code))
         with mock.patch.object(planning.Git, 'commit', side_effect=subprocess.TimeoutExpired('git', 1)):

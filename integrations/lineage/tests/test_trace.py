@@ -494,7 +494,8 @@ class MissingNode(Case):
         plain = self.tmp / 'plain'
         plain.mkdir()
         auth = T.Authorities(R.build_registry(project=plain, backlog=E.FAKE_BACKLOG))
-        projection = T.trace(f'outcome:{OUTCOME}', auth, project=plain, backlog=E.FAKE_BACKLOG)
+        with fx.ceiling(self.tmp):
+            projection = T.trace(f'outcome:{OUTCOME}', auth, project=plain, backlog=E.FAKE_BACKLOG)
         self.assertUncertain(projection, f'outcome:{OUTCOME}', 'enumeration-unavailable', 'PROJECT_UNAVAILABLE')
         self.assertUncertain(projection, f'outcome:{OUTCOME}', 'unresolved', 'PROJECT_UNAVAILABLE')
 

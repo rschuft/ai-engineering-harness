@@ -566,7 +566,10 @@ class CommandLine(RepoCase):
         self.assertEqual([code for code, *_ in runs['launched'][:len(steps)]], [0, 0, 1, 0, 0, 1, 0, 0, 1])
 
     def test_could_not_run(self):
-        code, _, err = self.run_main('resolve', '--project', self.tmp, '--pointer', 'x')
+        plain = self.tmp / 'plain'
+        plain.mkdir()
+        with fx.ceiling(self.tmp):
+            code, _, err = self.run_main('resolve', '--project', plain, '--pointer', 'x')
         self.assertEqual(code, 2)
         self.assertIn('not a git working tree', err)
         code, _, err = self.run_main('resolve', '--project', self.repo)

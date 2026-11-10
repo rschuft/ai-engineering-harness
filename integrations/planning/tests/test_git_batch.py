@@ -506,7 +506,7 @@ class Lifecycle(RepoCase):
         git = adapter.Git(repo)
         os.rename(repo / '.git', repo / 'git-was-here')
         try:
-            with git.session():
+            with fx.ceiling(self.tmp), git.session():
                 error = self.expect('GIT_FAILED', git.object_type, self.commit, DESIGN)
                 self.assertIn('cannot open', error.message)
                 self.expect('GIT_FAILED', git.commit, 'main')
@@ -645,7 +645,7 @@ class OperationScope(RepoCase):
         empty = self.tmp / 'not-a-repo'
         empty.mkdir(exist_ok=True)
         with mock.patch.object(adapter, 'check_work_tree', wraps=adapter.check_work_tree) as checks:
-            with adapter.operation():
+            with fx.ceiling(self.tmp), adapter.operation():
                 answers = [adapter.project_git(empty) for _ in range(3)]
         self.assertEqual({(git, bool(why)) for git, why in answers}, {(None, True)})
         self.assertIn('NOT_A_WORK_TREE', answers[0][1])

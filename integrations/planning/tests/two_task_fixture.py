@@ -72,6 +72,14 @@ def require_repository_access():
     adapter.repository_access.dulwich_modules()
 
 
+def ceiling(root):
+    """Bound the repository module's upward search at ROOT, a test's own temporary root, by git's
+    ``GIT_CEILING_DIRECTORIES`` (decision 0014 section 8): a test that opens a path which is not a
+    repository examines nothing above ROOT (the path boundary). ROOT must be a proper ancestor of
+    the path opened, because git, and the module, ignore a ceiling equal to it."""
+    return mock.patch.dict(os.environ, {'GIT_CEILING_DIRECTORIES': str(root)})
+
+
 def rmtree(path):
     """Remove a tree that holds git's read-only object files (Windows refuses them otherwise)."""
     def retry(func, target, _exc):
