@@ -993,6 +993,59 @@ push never implies parent acceptance.
     - OA-14: moved to Awaiting preparation; the exercise is reworked to issue the real challenge and stop for the Owner's explicit authorization before any merge.
     - OA-15: resolved by the decisions. (a) Decision 0012 point 6 amended to fail closed; the Overseer consults the Architect (gate G) on the trusted read-only protection check before the recorder is changed. (b) M-4 to be performed by the integrity process.
 
+- **2026-11-10: Owner direction: external defect reporting deferred from the first release** (a sixth message the same day), verbatim:
+
+  ```text
+  Additional Owner architectural direction:
+  Defer external defect reporting from the first release.
+
+  External defect reporting is not merely creating an
+  issue through GitHub, GitLab, Gitea or another service.
+
+  Before publication, the system would need to assemble
+  a complete defect kit containing:
+
+  - Minimal, independently reproducible steps
+  - Relevant platform, machine and environment details
+  - Expected and observed behavior
+  - Problem description and impact
+  - Known or plausible workarounds
+  - Plausible solutions, clearly identified as hypotheses
+    when not verified
+
+  A complete capability would also require review for
+  secrets and sensitive information, explicit Owner
+  publication authorization, host-specific submission
+  adapters, tracking of posted reports, upstream responses,
+  fixes and their eventual adoption.
+
+  I do not authorize building that capability in the
+  first release.
+
+  Retain existing OA-02, OA-03 and OA-09 technical
+  findings as internal evidence. Do not invest further
+  effort in preparing publication kits for them.
+
+  Do not file external reports, install publishing tools,
+  build provider-specific issue integrations, or introduce
+  a new reporting or tracking subsystem.
+
+  Do not keep these findings in "Needs Owner now".
+  They are internal findings with no publication obligation.
+
+  Continue consuming relevant upstream fixes and tracking
+  known upstream issues when doing so directly supports
+  our own engineering and dependency management.
+
+  Record external defect reporting as a deferred optional
+  capability, without adding executable first-release Work
+  or changing the core implementation plan.
+
+  Continue autonomous work on eligible first-release tasks.
+  ```
+
+  - **Overseer disposition** (2026-11-10): recorded as an addendum to [decision 0017](../decisions/0017-git-host-agnosticism-and-owner-scoped-external-publication.md); no plan change and no Work added. OA-02, OA-03 and OA-09 are already in Resolved as internal findings with no publication obligation (the earlier disposition of this day); no further effort on their publication kits. Upstream fixes and known upstream issues keep being consumed and tracked where they serve the harness's own engineering and dependency management.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

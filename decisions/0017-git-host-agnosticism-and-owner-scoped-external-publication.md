@@ -40,6 +40,24 @@ CLI or credential: a hosting provider's tooling becoming a de facto prerequisite
   of operating the system (as opposed to of publishing this repository). The Overseer schedules a bounded
   read-only audit; any finding is reconciled by the integrity process.
 
+
+## Addendum (Owner, 2026-11-10): external defect reporting deferred from the first release
+
+A second Owner direction the same day (verbatim in the bootstrap log, Decisions). External defect reporting is
+a **deferred, optional capability**, not authorized for the first release. It is more than creating an issue on
+some host: it would need a complete defect kit (minimal independently reproducible steps; relevant platform,
+machine and environment details; expected and observed behaviour; description and impact; known or plausible
+workarounds; plausible solutions marked as hypotheses when unverified), a review for secrets and sensitive
+information, explicit Owner publication authorization, host-specific submission adapters, and tracking of posted
+reports, upstream responses, fixes and their adoption.
+
+- No executable first-release Work is added for it and the core implementation plan is not changed.
+- The OA-02, OA-03 and OA-09 findings stay internal evidence; no further effort goes into publication kits.
+- No external report is filed, no publishing tool installed, no provider-specific issue integration built, and
+  no reporting or tracking subsystem introduced.
+- Consuming relevant upstream fixes, and tracking known upstream issues where that directly supports the
+  harness's own engineering and dependency management, continues as ordinary engineering.
+
 ## Evidence
 - The Owner direction of 2026-11-10 (bootstrap log, Decisions).
 - `evidence/E-01.4.3-start-race.md` section 13 (OA-02), `evidence/OA-03-openhands-resume-report.md` (OA-03),
