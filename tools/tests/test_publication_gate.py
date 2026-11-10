@@ -131,8 +131,11 @@ def _golden_repositories(files):
         def git(*args):
             subprocess.run(['git', '-C', str(root), *args], env=env, check=True, capture_output=True,
                            timeout=TIMEOUT)
-        subprocess.run(['git', 'init', '-q', '-b', 'main', str(root)], env=env, check=True)
-        subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(remote)], env=env, check=True)
+        # --template= (empty): no sample hooks, info/exclude or description, which nothing here reads;
+        # 16 fewer files in every copy (plan leaf F-09). The repository and its commits are the same.
+        subprocess.run(['git', 'init', '-q', '--template=', '-b', 'main', str(root)], env=env, check=True)
+        subprocess.run(['git', 'init', '-q', '--template=', '--bare', '-b', 'main', str(remote)], env=env,
+                       check=True)
         # core.longpaths in both repositories' own configuration (fixture only; the copies keep
         # it): under a long TEMP the bare origin's receive quarantine passes 260 characters.
         for repository in (root, remote):
@@ -145,7 +148,9 @@ def _golden_repositories(files):
         git('add', '-A')
         git('update-index', '--chmod=+x', '.githooks/pre-commit', '.githooks/pre-push')
         git('-c', f'core.hooksPath={no_hooks}', 'commit', '-q', '-m', 'add the gate')
-        git('remote', 'add', 'origin', str(remote))
+        # A relative URL: every copy's 'origin' is its own bare repository beside its work tree,
+        # as git resolves the path from the work tree it runs in (no set-url per copy; F-09).
+        git('remote', 'add', 'origin', '../origin.git')
         git('-c', f'core.hooksPath={no_hooks}', 'push', '-q', 'origin', 'main')
         git('config', 'core.hooksPath', '.githooks')
         initial = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], env=env, check=True,
@@ -174,9 +179,9 @@ class GateRepo:
     """A throwaway repository wired to the gate, with a bare 'origin'.
 
     The initial pair (the gate, its hooks and configuration committed and pushed) is a copy of
-    a golden pair built once per set of inputs; the copy's 'origin' is then pointed at its own
-    bare repository. With CACHE (a shared_scanner_cache), the tool cache is shared; otherwise
-    each repository has its own, holding a copy of SCANNER if given."""
+    a golden pair built once per set of inputs; the copy's 'origin' is its own bare repository
+    (the relative URL '../origin.git'). With CACHE (a shared_scanner_cache), the tool cache is
+    shared; otherwise each repository has its own, holding a copy of SCANNER if given."""
 
     def __init__(self, testcase, scanner=None, gate_source=None, config=None, cache=None):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-gate-test-'))
@@ -205,7 +210,6 @@ class GateRepo:
         golden, self.initial = _golden_repositories(files)
         shutil.copytree(golden / 'work', self.root, symlinks=True)
         shutil.copytree(golden / 'origin.git', self.remote, symlinks=True)
-        self.git('remote', 'set-url', 'origin', str(self.remote))
 
     def write(self, rel, content):
         path = self.root / rel
@@ -585,6 +589,12 @@ STUBS = {
                       'open(args[args.index("--report-path") + 1], "w").write("[]")\nsys.exit(0)\n'),
     'hangs': 'import time\ntime.sleep(120)\n',
 }
+# The pinned stub scanner: it runs the behaviour written beside it (one of STUBS), as that
+# behaviour's own program would run, with the same argv.
+STUB_BEHAVIOUR = 'gitleaks-stub-behaviour.py'
+STUB_SCANNER = ('import pathlib, sys\n'
+                f'_path = pathlib.Path(sys.argv[0]).with_name({STUB_BEHAVIOUR!r})\n'
+                "exec(compile(_path.read_text(encoding='utf-8'), str(_path), 'exec'))\n").encode()
 
 
 def stub_gate_source(stub_name, stub_sha256):
@@ -613,10 +623,13 @@ class FailsClosed(GateTestCase):
         self.assertEqual(r.remote_ref(), r.initial)
 
     def stub_repo(self, behaviour):
+        """A repository whose gate pins STUB_SCANNER, with BEHAVIOUR beside it in the tool
+        cache. The pinned stub is the same for every behaviour, so is the gate copy, and the
+        golden repository pair is built once for all of them (plan leaf F-09)."""
         name = 'gitleaks-stub.py'
-        source = STUBS[behaviour].encode()
-        r = GateRepo(self, gate_source=stub_gate_source(name, gate.sha256_bytes(source)))
-        (r.tool_dir / name).write_bytes(source)
+        r = GateRepo(self, gate_source=stub_gate_source(name, gate.sha256_bytes(STUB_SCANNER)))
+        (r.tool_dir / name).write_bytes(STUB_SCANNER)
+        (r.tool_dir / STUB_BEHAVIOUR).write_text(STUBS[behaviour], encoding='utf-8')
         return r
 
     def test_6a_scanner_not_installed(self):
@@ -640,8 +653,10 @@ class FailsClosed(GateTestCase):
         self.check_blocks_commit_and_push(self.stub_repo('no-marker'), 'did not inspect')
 
     def test_6f_scanner_times_out(self):
-        self.check_blocks_commit_and_push(self.stub_repo('hangs'), 'timed out',
-                                          extra_env={'AIEH_GATE_TIMEOUT': '3'})
+        # The stub never returns, so the shortest timeout the gate accepts (one second) is
+        # reached in every run; a longer one only adds its seconds twice (commit and push).
+        self.check_blocks_commit_and_push(self.stub_repo('hangs'), 'timed out after 1s',
+                                          extra_env={'AIEH_GATE_TIMEOUT': '1'})
 
 
 class ExistingCommands(unittest.TestCase):
