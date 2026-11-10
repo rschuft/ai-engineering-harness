@@ -14,8 +14,9 @@ architecture). F-09 patterns only, no new leaf. The verdict is the Overseer's.
   change: gitea median **2.358 s**, the wall lowered **2.5 → 2.4 s** (limit 3.12 s, 0.76 s above
   the median). Serial total 142.6 s.
 - **Commits** (on `a3efe58`): `c9a2db4` (the gitea tests), `86ac0b6` (budgets and baseline
-  re-proposed at `c9a2db4`), then this record. `integrations/gitea/tests/test_gitea_host.py`, the
-  two budget files and this record only; no product file, no integrity-tracked file, nothing under
+  re-proposed at `c9a2db4`), `057dc06` (this record), `1654271` (the F-2 repair, section 7), then
+  this record's update with F-1's ruling and F-2's repair. `integrations/gitea/tests/test_gitea_host.py`,
+  the two budget files and this record only; no product file, no integrity-tracked file, nothing under
   `decisions/`.
 - **Host:** Windows 11 x86_64, 32 logical processors, CPython 3.12.10 under the `python-tools`
   interpreter, Git for Windows 2.52.0. Every measurement ran from Git Bash with the default TEMP,
@@ -72,7 +73,7 @@ supervisor launch (`supcost.py`):
 
 | Cost | Wall (s) | Cause |
 |---|---|---|
-| `TestJobObject.test_control_without_the_job_the_child_survives` | 1.17 | **`child.wait(1.0)`: a fixed 1.0 s wait whose expiry is the expected outcome** (finding F-1), plus its supervisor launch. |
+| `TestJobObject.test_control_without_the_job_the_child_survives` | 1.17 | **`child.wait(1.0)`: the negative control's 1.0 s observation window**, whose expiry is the expected outcome (finding F-1, kept by ruling), plus its supervisor launch. |
 | `TestJobObject`, the other two process tests | 0.35 | One supervisor launch each, in series: Python start (about 22 ms) and the in-child load of `gitea_host.py` with its imports (about 125 ms; 171 modules, the checkout modules compiled from source under `-B`). The real Job Object and real processes are the subject. |
 | `Root` setUp, 45 tests in seven classes | 0.62 | A fresh managed root per test: `mkdtemp` 0.2 ms, `paths.resolve` 3.3 ms, `layout` 0.5 ms, `paths.init` 1.4 ms, `ensure_dirs` 5.0 ms, and its removal 1.5 ms (about 12 ms); TestIdentities, TestFinalizeCredentials and TestVerifyCheckoutScan also acquire the fake asset and write app.ini in every setUp (about 4 ms more). |
 | The same classes' test bodies | (0.08) | Part of the bodies' cost was Windows' first read of the files each new root had just written (TestFinalizeCredentials' bodies fell from 142 to 61 ms with no body changed; F-2 of the contract headroom record). |
@@ -181,24 +182,47 @@ Checks:
 
 ## 7. Findings
 
-- **F-1, `exposed-by-F-09-gitea-headroom` (its profiling), carried, not repaired:**
-  `TestJobObject.test_control_without_the_job_the_child_survives` waits a fixed 1.0 s
-  (`child.wait(1.0)`) and passes when the wait expires: a guessed duration, not a completion
-  signal, and now 1.0 of the suite's 2.33 s. Measured (`killlatency.py`, five runs): with the job,
-  the child is seen ended 0.8-2.1 ms after `TerminateProcess` of its supervisor (the supervisor
-  itself ended after 0.7-1.7 ms); without it, the child was still alive after 3.0 s in both
-  control runs. Any repair changes the window that test proves (the dispatch's stop rule), so the
-  choice is the Overseer's: (a) a shorter fixed window (weakens the control); (b) an
-  event-anchored control: kill a with-job and a without-job supervisor together and assert the
-  control child alive once the with-job child is seen ended (and, if wanted, after a margin
-  derived from that latency) (one more launch, a different window); (c) keep it. Saving about
-  0.9-1.0 s.
-- **F-2, observation:** the shared roots' files are scanned once at build time instead of once per
-  test (Windows' first read of newly written files, F-2 of the contract headroom record): part of
-  the bodies' saving in section 1 comes from that, not from `setUp`.
+- **F-1, the control's 1.0 s wait: a negative control's observation window, kept (Overseer's
+  ruling, option (c)); not a defect.**
+  `TestJobObject.test_control_without_the_job_the_child_survives` waits 1.0 s
+  (`child.wait(1.0)`) and passes when the wait expires: it is the observation window of a negative
+  control (without the job, the child must survive its killed supervisor), whose length is part of
+  what the test proves, not a guessed wait for work to finish. It is 1.0 of the suite's 2.33 s.
+  Measured (`killlatency.py`, five runs): with the job, the child is seen ended 0.8-2.1 ms after
+  `TerminateProcess` of its supervisor (the supervisor itself ended after 0.7-1.7 ms); without it,
+  the child was still alive after 3.0 s in both control runs. The options put to the Overseer were
+  (a) a shorter fixed window (weakens the control), (b) an event-anchored control (kill a with-job
+  and a without-job supervisor together and assert the control child alive once the with-job child
+  is seen ended; one more launch, a different window) and (c) keeping it; the ruling is (c), and the
+  window is unchanged.
+- **F-2, `introduced-by-c9a2db4`, repaired forward in `1654271`:** unittest runs no
+  `tearDownModule` after a failed `setUpModule`, so a step of the shared roots' build failing
+  midway left the temporary roots already created behind (seen once, with a mutant of section 5,
+  in the default TEMP; those two directories were removed). Repair: `setUpModule` removes what it
+  created and re-raises if any step fails, and `tearDownModule` removes a partly built state too
+  and always clears the shared record. Failure path only; no assertion changed. **Proof**
+  (`setupfail.py`, a throwaway clone of `057dc06`, each case with `TMP`, `TEMP` and `TMPDIR` set
+  to a new, empty directory under the session scratch, only that directory listed afterwards):
+
+  | Test file | Mutant | Result | Left in its TMP |
+  |---|---|---|---|
+  | `c9a2db4` | none | 74 tests OK (skipped=1) | nothing |
+  | `c9a2db4` | the second state fails (`acquire` writes no asset record, so `configure` refuses) | `setUpModule` error | **2 directories** |
+  | `c9a2db4` | the first state fails (`ensure_dirs` raises after `paths.init`) | `setUpModule` error (`OSError: mutant`) | **1 directory** |
+  | `1654271` | none | 74 tests OK (skipped=1) | nothing |
+  | `1654271` | the second state fails | `setUpModule` error | nothing |
+  | `1654271` | the first state fails | `setUpModule` error (`OSError: mutant`) | nothing |
+
+  At `1654271`: the gitea suite 132 tests, OK (skipped=8), the same ids and outcomes and the same
+  outcomes digest as before and at `c9a2db4`; counters unchanged (launches 4, mkdtemp 17,
+  sockets 3); a three-run profile median of 2.339 s against 2.333 s at `c9a2db4` (+0.006 s, under
+  the 0.05 s bound, so no budget re-run); `verify_seed.py`: PASS.
 - **F-3, observation:** the committed budget's test counters lagged the tree by 25 tests added in
   three commits since `538847a`; `check --run` reported them as `TESTS_ABOVE` notes (passing), and
   the re-proposal brings them to the tree.
+- **F-4, observation:** the shared roots' files are scanned once at build time instead of once per
+  test (Windows' first read of newly written files, F-2 of the contract headroom record): part of
+  the bodies' saving in section 1 comes from that, not from `setUp`.
 
 ## 8. Not verified
 
