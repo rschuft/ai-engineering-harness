@@ -54,7 +54,7 @@ def lock_pin(name):
 
 
 def open_repo(name, policy='repository', work_tree=False):
-    return ra.open_repository(rc.corpus() / name, config=policy, work_tree=work_tree)
+    return ra.open_repository(rc.corpus() / name, config=policy, work_tree=work_tree, ceilings=rc.ceilings())
 
 
 class Spy:
@@ -88,7 +88,7 @@ class MissingDulwich(unittest.TestCase):
     def test_without_dulwich_opening_fails_with_the_stable_code_naming_tools_install(self):
         with mock.patch.dict(sys.modules, {'dulwich': None}), mock.patch.object(ra, '_D', None):
             with self.assertRaises(ra.CannotRun) as caught:
-                ra.open_repository(rc.corpus() / 'repo one', config='repository')
+                ra.open_repository(rc.corpus() / 'repo one', config='repository', ceilings=rc.ceilings())
             self.assertEqual(caught.exception.code, 'REPOSITORY_NEEDS_DULWICH')
             self.assertIn('task tools:install', caught.exception.message)
             self.assertIn('tools_install.py --python', caught.exception.message)
@@ -291,20 +291,20 @@ class RecordedExpectations(unittest.TestCase):
             with self.subTest(subject=subject):
                 if want is None:
                     with self.assertRaises(ra.CannotRun) as caught:
-                        ra.open_repository(self.root / subject, config='repository')
+                        ra.open_repository(self.root / subject, config='repository', ceilings=rc.ceilings())
                     self.assertEqual(caught.exception.code, 'NOT_A_WORK_TREE')
                 else:
-                    with ra.open_repository(self.root / subject, config='repository') as r:
+                    with ra.open_repository(self.root / subject, config='repository', ceilings=rc.ceilings()) as r:
                         self.assertEqual(Path(r.root).resolve(), (self.root / want).resolve())
-        with ra.open_repository(self.root / 'bare.git', config='repository', work_tree=False) as r:
+        with ra.open_repository(self.root / 'bare.git', config='repository', work_tree=False, ceilings=rc.ceilings()) as r:
             self.assertTrue(r.bare)
         with self.assertRaises(ra.CannotRun) as caught:
-            ra.open_repository(self.root / 'not a repo', config='repository', work_tree=False)
+            ra.open_repository(self.root / 'not a repo', config='repository', work_tree=False, ceilings=rc.ceilings())
         self.assertEqual(caught.exception.code, 'NOT_A_REPOSITORY')
         with self.assertRaises(ra.CannotRun):
-            ra.open_repository(self.root / 'no such directory', config='repository')
+            ra.open_repository(self.root / 'no such directory', config='repository', ceilings=rc.ceilings())
         with self.assertRaises(ValueError):
-            ra.open_repository(self.root / 'repo one', config='system')
+            ra.open_repository(self.root / 'repo one', config='system', ceilings=rc.ceilings())
 
 
 class RecordedCases(unittest.TestCase):
@@ -385,10 +385,70 @@ class RecordedCases(unittest.TestCase):
         shutil.copytree(rc.corpus() / 'bare.git', tmp / 'bare.git')
         with open(tmp / 'bare.git' / 'config', 'a', encoding='utf-8') as handle:
             handle.write('[core]\n\twarnAmbiguousRefs = false\n')
-        with ra.open_repository(tmp / 'bare.git', config='repository', work_tree=False) as r:
+        with ra.open_repository(tmp / 'bare.git', config='repository', work_tree=False, ceilings=[str(tmp)]) as r:
             self.assertEqual(r.full_name('dup'), 'refs/tags/dup')   # git's first rule that resolves
-        with ra.open_repository(tmp / 'bare.git', config='none', work_tree=False) as r:
+        with ra.open_repository(tmp / 'bare.git', config='none', work_tree=False, ceilings=[str(tmp)]) as r:
             self.assertIsNone(r.full_name('dup'))
+
+
+class Ceilings(unittest.TestCase):
+    """git's ceiling directories (GIT_CEILING_DIRECTORIES): the upward search never examines a
+    ceiling or anything above it; the start directory is always examined."""
+
+    PROBES = ('isfile', 'isdir', 'exists', 'islink')
+
+    def touched(self, call):
+        """Every path a file-system probe received while CALL ran, and CALL's outcome."""
+        import builtins
+        seen, patches = [], []
+        for name in self.PROBES:
+            real = getattr(os.path, name)
+            patches.append(mock.patch.object(os.path, name, side_effect=lambda p, _r=real: (seen.append(p), _r(p))[1]))
+        for module, name in ((os, 'stat'), (os, 'lstat'), (os, 'scandir'), (os, 'listdir'), (builtins, 'open')):
+            real = getattr(module, name)
+            patches.append(mock.patch.object(module, name, side_effect=lambda p, *a, _r=real, **k: (seen.append(p), _r(p, *a, **k))[1]))
+        for patch in patches:
+            patch.start()
+        try:
+            outcome = call()
+        except ra.CannotRun as exc:
+            outcome = exc.code
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
+        return [os.path.normcase(os.path.realpath(os.fspath(p))) for p in seen if isinstance(p, (str, os.PathLike))], outcome
+
+    def below(self, paths, top):
+        top = os.path.normcase(os.path.realpath(top))
+        return [p for p in paths if p != top and not p.startswith(top + os.sep)]
+
+    def test_no_path_above_the_ceiling_is_touched(self):
+        root = rc.corpus()
+        paths, outcome = self.touched(lambda: ra.open_repository(root / 'not a repo', config='repository',
+                                                                 ceilings=rc.ceilings()))
+        self.assertEqual(outcome, 'NOT_A_WORK_TREE')
+        self.assertTrue(paths)
+        self.assertEqual(self.below(paths, root), [])
+        # the same ceilings from the environment, as git reads them
+        env = {'GIT_CEILING_DIRECTORIES': os.pathsep.join(['', 'relative', *rc.ceilings()])}
+        with mock.patch.dict(os.environ, env):
+            paths, outcome = self.touched(lambda: ra.open_repository(root / 'not a repo', config='repository'))
+        self.assertEqual(outcome, 'NOT_A_WORK_TREE')
+        self.assertEqual(self.below(paths, root), [])
+
+    def test_a_ceiling_between_the_start_and_a_repository_hides_it(self):
+        root = rc.corpus()
+        start, ceiling = root / 'repo one' / 'docs', [str(root / 'repo one')]
+        paths, outcome = self.touched(lambda: ra.open_repository(start, config='repository', ceilings=ceiling))
+        self.assertEqual(outcome, 'NOT_A_WORK_TREE')
+        self.assertEqual(self.below(paths, start), [])
+        # the start directory itself is examined even when it is the ceiling
+        with ra.open_repository(root / 'repo one', config='repository', ceilings=ceiling) as r:
+            self.assertEqual(Path(r.root).resolve(), (root / 'repo one').resolve())
+        self.assertEqual(ra.ceiling_directories({'GIT_CEILING_DIRECTORIES': os.pathsep.join(['', 'x', str(root)])}),
+                         [str(root)])
+        with self.assertRaises(ValueError):
+            ra.open_repository(start, config='repository', ceilings=str(root))
 
 
 class AttributeLines(unittest.TestCase):
@@ -604,18 +664,18 @@ class ConfigPolicy(unittest.TestCase):
 
     def test_repository_and_none_read_only_the_repository_config(self):
         for policy in ('repository', 'none'):
-            with self.subTest(policy=policy), ra.open_repository(self.repo, config=policy) as r:
+            with self.subTest(policy=policy), ra.open_repository(self.repo, config=policy, ceilings=[str(self.tmp)]) as r:
                 r.status(None, 'all')
                 self.assertEqual([os.path.normcase(p) for p in r.config_sources], [os.path.normcase(self.config)])
-        with ra.open_repository(self.repo, config='repository') as r:
+        with ra.open_repository(self.repo, config='repository', ceilings=[str(self.tmp)]) as r:
             self.assertTrue(r._config_bool(b'core', b'bare', True) is False)
-        with ra.open_repository(self.repo, config='none') as r:
+        with ra.open_repository(self.repo, config='none', ceilings=[str(self.tmp)]) as r:
             self.assertTrue(r._config_bool(b'core', b'bare', True), 'none applies no configuration')
 
     def test_host_reads_the_global_file_and_the_excludes_it_names(self):
         env = {'GIT_CONFIG_GLOBAL': str(self.global_config), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_ATTR_NOSYSTEM': '1'}
         with mock.patch.dict(os.environ, env):
-            with ra.open_repository(self.repo, config='host') as r:
+            with ra.open_repository(self.repo, config='host', ceilings=[str(self.tmp)]) as r:
                 untracked = [e.path for e in r.status(None, 'all') if e.xy == '??']
                 sources = list(r.config_sources)
             self.assertEqual(ra.host_config_paths(), [str(self.global_config)])
@@ -623,7 +683,7 @@ class ConfigPolicy(unittest.TestCase):
         self.assertNotIn('note.secret', untracked)
         self.assertEqual([os.path.normcase(p) for p in sources],
                          [os.path.normcase(p) for p in (self.config, str(self.global_config), str(self.excludes))])
-        with mock.patch.dict(os.environ, env), ra.open_repository(self.repo, config='repository') as r:
+        with mock.patch.dict(os.environ, env), ra.open_repository(self.repo, config='repository', ceilings=[str(self.tmp)]) as r:
             self.assertIn('note.secret', [e.path for e in r.status(None, 'all')])
 
     def test_host_is_the_same_under_every_path(self):
@@ -639,7 +699,7 @@ class ConfigPolicy(unittest.TestCase):
             env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_CONFIG', 'GIT_ATTR'))}
             env['PATH'] = os.pathsep.join(entries)
             with mock.patch.dict(os.environ, env, clear=True), ra.open_repository(rc.corpus() / 'repo one',
-                                                                                  config='host') as r:
+                                                                                  config='host', ceilings=rc.ceilings()) as r:
                 status = r.status(None, 'all')
                 seen[name] = (ra.host_config_paths(), ra.system_file('gitconfig'), r.config_sources,
                               r.attribute_files(), status, r.listing(True, True, True))
@@ -676,7 +736,7 @@ class ConfigPolicy(unittest.TestCase):
 
     def test_repository_policy_is_the_same_with_and_without_git_on_path(self):
         def snapshot():
-            with ra.open_repository(self.repo, config='repository') as r:
+            with ra.open_repository(self.repo, config='repository', ceilings=[str(self.tmp)]) as r:
                 return (r.config_sources, r.status(None, 'all'), r.listing(True, True, True), r.index_entries(),
                         r.commit('HEAD'), r.read('HEAD:sep.txt'), r.head())
 
@@ -716,7 +776,7 @@ class AttributeFiles(unittest.TestCase):
                 'XDG_CONFIG_HOME': str(self.tmp / xdg)}
 
     def status(self, policy, env):
-        with mock.patch.dict(os.environ, env), ra.open_repository(self.repo, config=policy) as r:
+        with mock.patch.dict(os.environ, env), ra.open_repository(self.repo, config=policy, ceilings=[str(self.tmp)]) as r:
             return r.status(None, 'all'), r.config_sources
 
     def refused(self, policy, env):

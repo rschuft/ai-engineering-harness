@@ -95,6 +95,13 @@ def corpus():
     return _ROOT
 
 
+def ceilings():
+    """The ceiling directories of every test that opens a repository of the corpus: its temporary
+    root, so that no discovery examines that root or anything above it (git's
+    GIT_CEILING_DIRECTORIES; the module's ``ceilings``)."""
+    return [str(corpus().parent)]
+
+
 def extract_tree(archive, destination):
     """Write the tree ARCHIVE holds below DESTINATION: directories, then files with their bytes,
     read-only where git wrote them read-only. Every path must be a plain relative path."""
@@ -131,9 +138,15 @@ def archive_digest():
 
 # ---------------------------------------------------------------------------- git
 
+_BUILD_CEILING = None
+
+
 def git(repo, *args, env=None, input=None, check=True, date=None):
-    """Run git in REPO with the fixture environment; stdout bytes (CompletedProcess when not CHECK)."""
+    """Run git in REPO with the fixture environment; stdout bytes (CompletedProcess when not CHECK).
+    While the corpus is built, its build directory is git's ceiling: no git discovery looks above it."""
     extra = dict(env or {})
+    if _BUILD_CEILING is not None:
+        extra.setdefault('GIT_CEILING_DIRECTORIES', _BUILD_CEILING)
     if date is not None:
         extra.update(GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
     result = subprocess.run(['git', '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-C', str(repo),
@@ -181,8 +194,10 @@ def loose_path(repo_gitdir, oid):
 
 def build(root):
     """Build the corpus under ROOT / ROOT_NAME with git; the facts the expectations need."""
+    global _BUILD_CEILING
     base = Path(root) / ROOT_NAME
     base.mkdir(parents=True)
+    _BUILD_CEILING = str(Path(root).resolve())
     facts = {}
     main = base / 'repo one'
     main.mkdir()
@@ -759,9 +774,11 @@ class Oracle:
 
     def __init__(self, root):
         self.root = Path(root)
+        # GIT_CEILING_DIRECTORIES: git's discovery never looks above the corpus's temporary root.
         self.env = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_ATTR_NOSYSTEM': '1',
                     'XDG_CONFIG_HOME': str(self.root / 'xdg empty'), 'GIT_OPTIONAL_LOCKS': '0',
-                    'GIT_TERMINAL_PROMPT': '0', 'LC_ALL': 'C'}
+                    'GIT_TERMINAL_PROMPT': '0', 'LC_ALL': 'C',
+                    'GIT_CEILING_DIRECTORIES': str(self.root.resolve().parent)}
 
     def run(self, repo, *args, input=None):
         return subprocess.run(['git', '-c', 'core.longpaths=true', '-C', str(self.root / repo), *args],
@@ -879,6 +896,89 @@ class Oracle:
         result = self.run(repo, 'bundle', 'list-heads', str(path))
         return result.returncode, result.stdout.decode().splitlines()
 
+    def files_batched(self, repo, cases):
+        """{(commit, directory): paths} for CASES, one ``ls-tree -r -z --name-only <commit> --
+        <dir>/ ...`` per commit: each directory's paths are the union's paths below it, in git's
+        order (what one ``ls-tree`` per directory gives)."""
+        out = {}
+        for commit in dict.fromkeys(c for c, _d in cases):
+            dirs = [d for c, d in cases if c == commit]
+            result = self.run(repo, 'ls-tree', '-r', '-z', '--name-only', commit, '--', *(d + '/' for d in dirs))
+            assert result.returncode == 0, result.stderr
+            union = [n.decode('utf-8') for n in result.stdout.split(b'\0') if n]
+            for d in dirs:
+                out[(commit, d)] = [n for n in union if n.startswith(d + '/')]
+        return out
+
+    def head_batched(self, repo):
+        """``rev-parse HEAD --symbolic-full-name HEAD`` in one launch: [commit, ref], the ref None
+        when HEAD is detached (git then prints HEAD), as ``head`` answers."""
+        result = self.run(repo, 'rev-parse', 'HEAD', '--symbolic-full-name', 'HEAD')
+        if result.returncode != 0:
+            return self.head(repo)
+        commit, ref = result.stdout.decode().split()
+        return [commit, None if ref == 'HEAD' else ref]
+
+    def listings_batched(self, repo, asked):
+        """{(cached, others, exclude): paths} for ASKED: the cached and the excluding listings from
+        one ``ls-files -z -t --cached --others --exclude-standard`` (its '?' entries are the
+        others, the rest the index entries, each in git's order), the others without excludes
+        from their own ``ls-files``."""
+        result = self.run(repo, 'ls-files', '-z', '-t', '--cached', '--others', '--exclude-standard')
+        assert result.returncode == 0, result.stderr
+        tagged = [(r[:1].decode(), r[2:].decode('utf-8')) for r in result.stdout.split(b'\0') if r]
+        out = {}
+        for cached, others, exclude in asked:
+            if exclude or not others:
+                out[(cached, others, exclude)] = [path for tag, path in tagged
+                                                  if (tag == '?' and others) or (tag != '?' and cached)]
+            else:
+                out[(cached, others, exclude)] = self.listing(repo, cached, others, exclude)
+        return out
+
+    def status_batched(self, repo, asked):
+        """{(untracked, paths): entries} for ASKED, with ``--untracked-files=no`` read from the
+        same paths' ``all`` answer (its entries without the untracked ``??`` ones) when both are
+        asked, and every other question asked of ``status`` itself."""
+        out = {}
+        for untracked, paths in asked:
+            key = (untracked, tuple(paths or ()))
+            if key in out:
+                continue
+            if untracked == 'no' and ('all', paths) in asked:
+                every = out.get(('all', tuple(paths or ()))) or self.status(repo, 'all', paths)
+                out[('all', tuple(paths or ()))] = every
+                out[key] = [entry for entry in every if entry[0] != '??']
+            else:
+                out[key] = self.status(repo, untracked, paths)
+        return out
+
+    def full_names_batched(self, repo, names):
+        """{name: full name or None} from one ``rev-parse --revs-only --symbolic-full-name <n1>
+        --absolute-git-dir <n2> --absolute-git-dir ...``: each name's answer is what rev-parse
+        prints before the next git-directory line (an absolute path, which no reference name is).
+        A name rev-parse cannot read as a revision makes it read every later argument as a path:
+        that name answers None and the launch restarts after it."""
+        answers, pending = {}, list(names)
+        while pending:
+            args = ['rev-parse', '--revs-only', '--symbolic-full-name']
+            for name in pending:
+                args += [name, '--absolute-git-dir']
+            lines = self.run(repo, *args).stdout.decode('utf-8').splitlines()
+            done, group = 0, []
+            for line in lines:
+                if os.path.isabs(line):
+                    assert len(group) <= 1, (pending[done], group)
+                    answers[pending[done]] = group[0] if group else None
+                    done, group = done + 1, []
+                else:
+                    group.append(line)
+            if done == len(pending):
+                break
+            answers[pending[done]] = None
+            pending = pending[done + 1:]
+        return answers
+
     def full_name(self, repo, name):
         """``git rev-parse --verify --quiet --symbolic-full-name <name>`` (one process per name):
         the name printed, or None when git prints nothing or fails."""
@@ -912,25 +1012,40 @@ def answers(root, facts, batch=False):
                 found = oracle.names(repo, asked[f'{kind}_names'])
                 repos[repo][f'{kind}_commits'] = [[f, oracle.commit(repo, f)] for f in asked[f'{kind}_commits']]
                 repos[repo][f'{kind}_names'] = [[n, found[n]] for n in asked[f'{kind}_names']]
+    # Recording asks one question per launch; the oracle tests (BATCH) ask git many questions per
+    # launch where git answers them in one (F-10.4), and check those answers against the recorded.
     for repo, cases in FILES.items():
-        repos[repo]['files'] = [[c, d, oracle.files(repo, c, d)] for c, d in cases]
+        found = oracle.files_batched(repo, cases) if batch else {(c, d): oracle.files(repo, c, d) for c, d in cases}
+        repos[repo]['files'] = [[c, d, found[(c, d)]] for c, d in cases]
     for repo, cases in EXPORTS.items():
         repos[repo]['export'] = [[c, s, oracle.export_members(repo, c, s)] for c, s in cases]
+
+    def statuses(repo, cases):
+        found = oracle.status_batched(repo, cases) if batch else \
+            {(u, tuple(p or ())): oracle.status(repo, u, p) for u, p in cases}
+        return [[u, p, found[(u, tuple(p or ()))]] for u, p in cases]
+
+    def listings(repo, cases):
+        found = oracle.listings_batched(repo, cases) if batch else \
+            {(c, o, x): oracle.listing(repo, c, o, x) for c, o, x in cases}
+        return [[c, o, x, found[(c, o, x)]] for c, o, x in cases]
+
     for repo, cases in STATUS.items():
-        repos[repo]['status'] = [[u, p, oracle.status(repo, u, p)] for u, p in cases]
+        repos[repo]['status'] = statuses(repo, cases)
     for repo in WORK_TREES:
         repos[repo]['index'] = oracle.index(repo)
-        repos[repo]['listing'] = [[c, o, x, oracle.listing(repo, c, o, x)] for c, o, x in LISTINGS]
+        repos[repo]['listing'] = listings(repo, LISTINGS)
     for repo in HEADS:
-        repos[repo]['head'] = oracle.head(repo)
+        repos[repo]['head'] = oracle.head_batched(repo) if batch else oracle.head(repo)
     work_trees = [[s, oracle.toplevel(s)] for s in WORK_TREE_SUBJECTS]
     cases = {}
     for repo, asked in CASES.items():
-        cases[repo] = {'index': oracle.index(repo),
-                       'listing': [[c, o, x, oracle.listing(repo, c, o, x)] for c, o, x in asked['listing']],
-                       'status': [[u, p, oracle.status(repo, u, p)] for u, p in asked['status']]}
-    full_names = {repo: [[name, oracle.full_name(repo, name)] for name in names]
-                  for repo, names in full_name_forms(facts).items()}
+        cases[repo] = {'index': oracle.index(repo), 'listing': listings(repo, asked['listing']),
+                       'status': statuses(repo, asked['status'])}
+    full_names = {}
+    for repo, names in full_name_forms(facts).items():
+        found = oracle.full_names_batched(repo, names) if batch else {n: oracle.full_name(repo, n) for n in names}
+        full_names[repo] = [[name, found[name]] for name in names]
     return {'git': oracle.version(), 'repos': repos, 'work_trees': work_trees, 'cases': cases,
             'full_names': full_names}
 

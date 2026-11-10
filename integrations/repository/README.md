@@ -36,7 +36,7 @@ with ra.open_repository(path, config='repository') as repo:   # config: 'host', 
 
 | Call | Answers as | Notes |
 |---|---|---|
-| `open_repository(path, *, config, work_tree=True)` | `git rev-parse --show-toplevel` (acceptance) | The work-tree check: any directory inside a work tree, a linked worktree, a separate git directory's work tree. A bare repository, a `.git` directory or anything inside it, and a non-repository are `CannotRun` `NOT_A_WORK_TREE`. With `work_tree=False` a git directory is accepted (`NOT_A_REPOSITORY` otherwise). `config` is required. |
+| `open_repository(path, *, config, work_tree=True, ceilings=None)` | `git rev-parse --show-toplevel` (acceptance) | The work-tree check: any directory inside a work tree, a linked worktree, a separate git directory's work tree. A bare repository, a `.git` directory or anything inside it, and a non-repository are `CannotRun` `NOT_A_WORK_TREE`. With `work_tree=False` a git directory is accepted (`NOT_A_REPOSITORY` otherwise). `config` is required. `ceilings`: git's ceiling directories (F-10.4); see [Discovery](#discovery). |
 | `commit(revision)` | `git rev-parse --verify <revision>^{commit}` | Full id or `None`. |
 | `object_id(name)`, `object_kind(name)`, `read(name)` | `git cat-file -t` / `cat-file --batch` | `None` when the repository has no such object, or an abbreviation is ambiguous. |
 | `blob(commit, path)` | `git cat-file blob <commit>:<path>` | The bytes; `GIT_FAILED` when there is no such blob (as the planning adapter today). |
@@ -53,6 +53,20 @@ with ra.open_repository(path, config='repository') as repo:   # config: 'host', 
 
 Paths and names are `str`; the repository's bytes are decoded as UTF-8 (undecodable bytes with
 `surrogateescape`).
+
+## Discovery
+
+`open_repository` finds the repository as git does, from `path` upwards. **Ceilings** (F-10.4)
+have git's `GIT_CEILING_DIRECTORIES` semantics: the search never moves up into a ceiling or above
+it, so nothing there is examined (`path` itself always is, even when it is a ceiling); the
+longest ceiling that is a proper ancestor of `path` applies. `ceilings=None` (the default, every
+product call site) reads them from `GIT_CEILING_DIRECTORIES` (`os.pathsep`-separated; empty and
+relative entries skipped), as git does, so that without it the search goes up to the file
+system's root. Ceilings are compared as real paths: git's rule that entries after an empty one
+are not resolved is not implemented. Every test that opens a corpus repository or a
+non-repository passes its temporary root as a ceiling, and the git oracle sets
+`GIT_CEILING_DIRECTORIES` likewise, so no test examines its temporary root's parent, the home
+directory or the drive root (`Ceilings`, `OracleAgreement.test_ceilings_are_gits`).
 
 ## The revision grammar (decision 0014 section 2)
 
@@ -318,6 +332,13 @@ section 9); it never skips.
   applies the replace references the module refuses. Bundles the module writes pass
   `git bundle verify`. Where git is absent the module skips with the reason
   `git is not on PATH: the git-oracle comparison needs it (the recorded half still runs)`.
+  Recording asks git one question per launch; the oracle asks many per launch where git
+  answers them in one (F-10.4): `cat-file --batch-check` for names and commit forms, one
+  `rev-parse --revs-only --symbolic-full-name` for every full name of a repository, one
+  `ls-files -t --cached --others --exclude-standard` for the cached and excluding listings, one
+  `ls-tree` per commit for the file lists, `rev-parse HEAD --symbolic-full-name HEAD` for HEAD,
+  and `--untracked-files=no` read from the `all` status; the recorded answers check every
+  batched one.
 
 Every git launch of the suite is the test fixtures' (the recorder and the oracle). Re-record the
 corpus (needs git; rewrites both fixture files) when the corpus or git's answers must change,

@@ -39,7 +39,7 @@ def setUpModule():
 
 
 def open_repo(name, work_tree=False):
-    return ra.open_repository(rc.corpus() / name, config='repository', work_tree=work_tree)
+    return ra.open_repository(rc.corpus() / name, config='repository', work_tree=work_tree, ceilings=rc.ceilings())
 
 
 class OracleAgreement(unittest.TestCase):
@@ -137,6 +137,26 @@ class OracleAgreement(unittest.TestCase):
                     with self.subTest(repo=repo, name=name):
                         self.assertEqual(r.full_name(name), git)
 
+    def test_ceilings_are_gits(self):
+        """GIT_CEILING_DIRECTORIES: a ceiling between a directory and its repository hides the
+        repository from git and from the module; the start directory itself is still examined."""
+        oracle = rc.Oracle(self.root)
+        cases = [('repo one/docs', 'repo one'), ('repo one', 'repo one'), ('repo one/docs', 'repo one/docs'),
+                 ('linked tree', 'repo one')]
+        for subject, ceiling in cases:
+            with self.subTest(subject=subject, ceiling=ceiling):
+                env = {**os.environ, **oracle.env, 'GIT_CEILING_DIRECTORIES': str((self.root / ceiling).resolve())}
+                result = subprocess.run(['git', '-C', str(self.root / subject), 'rev-parse', '--show-toplevel'],
+                                        capture_output=True, stdin=subprocess.DEVNULL, timeout=rc.WAIT_CEILING_S, env=env)
+                git = os.path.realpath(result.stdout.decode('utf-8').strip()) if result.returncode == 0 else None
+                try:
+                    with ra.open_repository(self.root / subject, config='repository',
+                                            ceilings=[str(self.root / ceiling)]) as r:
+                        mine = os.path.realpath(r.root)
+                except ra.CannotRun:
+                    mine = None
+                self.assertEqual(mine and os.path.normcase(mine), git and os.path.normcase(git))
+
     def test_exports_are_git_blob_bytes(self):
         tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-oracle-export-'))
         self.addCleanup(rc.rmtree, tmp)
@@ -159,7 +179,7 @@ class OracleAgreement(unittest.TestCase):
         for subject, git in self.live['work_trees']:
             with self.subTest(subject=subject):
                 try:
-                    with ra.open_repository(self.root / subject, config='repository') as r:
+                    with ra.open_repository(self.root / subject, config='repository', ceilings=rc.ceilings()) as r:
                         got = Path(os.path.relpath(os.path.realpath(r.root), os.path.realpath(self.root))).as_posix()
                 except ra.CannotRun:
                     got = None
@@ -185,7 +205,7 @@ class OracleHostFiles(unittest.TestCase):
 
     def test_the_system_and_global_files_are_gits(self):
         with mock.patch.dict(os.environ, self.env, clear=True), \
-                ra.open_repository(rc.corpus() / 'repo one', config='host') as r:
+                ra.open_repository(rc.corpus() / 'repo one', config='host', ceilings=rc.ceilings()) as r:
             paths = ra.host_config_paths()
             attributes = r.attribute_files()
             r.status(None, 'no')

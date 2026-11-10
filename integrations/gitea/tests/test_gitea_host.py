@@ -978,7 +978,8 @@ class TestCheckoutFiles(unittest.TestCase):
         listing: a path git lists and the scan does not would go unscanned."""
         corpus = _load('repository_corpus', REPO / 'integrations' / 'repository' / 'tests' / 'repository_corpus.py')
         root = corpus.corpus()
-        env = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'XDG_CONFIG_HOME': str(root / 'xdg empty')}
+        env = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'XDG_CONFIG_HOME': str(root / 'xdg empty'),
+               'GIT_CEILING_DIRECTORIES': str(root.parent)}
         cases = {name: data for name, data in corpus.expected()['cases'].items() if name.startswith('ignore ')}
         self.assertEqual(len(cases), 10)
         with mock.patch.dict(os.environ, env):
@@ -992,9 +993,13 @@ class TestCheckoutFiles(unittest.TestCase):
                     self.assertEqual(mine, theirs)
 
     def test_an_unlistable_checkout_is_a_failure_never_an_empty_scan(self):
-        with tempfile.TemporaryDirectory(prefix='aieh-gitea-unlisted-') as tmp:
+        # The temporary directory is git's ceiling: the search for a repository from the directory
+        # inside it never examines it or anything above it.
+        with tempfile.TemporaryDirectory(prefix='aieh-gitea-unlisted-') as tmp, \
+                mock.patch.dict(os.environ, {'GIT_CEILING_DIRECTORIES': tmp}):
+            (Path(tmp) / 'checkout').mkdir()
             with self.assertRaises(G.GiteaError) as caught:
-                G.checkout_files(Path(tmp))
+                G.checkout_files(Path(tmp) / 'checkout')
         self.assertEqual((caught.exception.code, caught.exception.refusal), ('CHECKOUT_UNLISTED', False))
 
 

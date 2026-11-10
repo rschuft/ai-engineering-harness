@@ -536,12 +536,27 @@ def is_git_directory(path):
     return os.path.isdir(os.path.join(common, 'objects')) and os.path.isdir(os.path.join(common, 'refs'))
 
 
-def discover(path):
+def _ceiling_floor(start, ceilings):
+    """git's ``longest_ancestor_length``: the longest of CEILINGS that is a proper ancestor of
+    START (both real paths), normalized for comparison; None when there is none."""
+    folded, best = os.path.normcase(start), None
+    for ceiling in ceilings:
+        ceiling = os.path.normcase(os.path.realpath(os.fspath(ceiling)))
+        prefix = ceiling if ceiling.endswith(os.sep) else ceiling + os.sep
+        if folded.startswith(prefix) and (best is None or len(ceiling) > len(best)):
+            best = ceiling
+    return best
+
+
+def discover(path, ceilings=()):
     """('worktree', root) or ('gitdir', directory) for the repository PATH is in, as git's
-    discovery walks up from it; None outside any repository."""
+    discovery walks up from it; None outside any repository. CEILINGS are git's ceiling
+    directories (``GIT_CEILING_DIRECTORIES``): the walk never moves up into one of them or above
+    it, so nothing there is examined (PATH itself is, even when it is a ceiling)."""
     start = os.path.realpath(os.fspath(path))
     if not os.path.isdir(start):
         return None
+    floor = _ceiling_floor(start, ceilings)
     current = start
     while True:
         dotgit = os.path.join(current, '.git')
@@ -557,19 +572,35 @@ def discover(path):
         parent = os.path.dirname(current)
         if parent == current:
             return None
+        if floor is not None and len(os.path.normcase(parent)) <= len(floor):
+            return None  # the parent is the ceiling or above it
         current = parent
 
 
-def open_repository(path, *, config, work_tree=True):
+def ceiling_directories(environ=None):
+    """git's ceiling directories from ``GIT_CEILING_DIRECTORIES`` (``os.pathsep``-separated; an
+    empty or relative entry is skipped, as git skips it)."""
+    value = (os.environ if environ is None else environ).get('GIT_CEILING_DIRECTORIES', '')
+    return [entry for entry in value.split(os.pathsep) if entry and os.path.isabs(entry)]
+
+
+def open_repository(path, *, config, work_tree=True, ceilings=None):
     """Open the repository at or above PATH under the configuration policy CONFIG ('host',
     'repository' or 'none'). With WORK_TREE (the default) only a work tree is accepted, as git's
     ``rev-parse --show-toplevel``: any directory inside one, a linked worktree or a separate git
     directory's work tree; a bare repository or a .git directory is refused (CannotRun
-    NOT_A_WORK_TREE). Without it a git directory is accepted too (NOT_A_REPOSITORY otherwise)."""
+    NOT_A_WORK_TREE). Without it a git directory is accepted too (NOT_A_REPOSITORY otherwise).
+    CEILINGS, git's ceiling directories, stop the upward search below them (``discover``); None
+    (the default) takes them from ``GIT_CEILING_DIRECTORIES``, as git does, so that without it the
+    search goes up to the file system's root."""
     if config not in POLICIES:
         raise ValueError(f'config must be one of {POLICIES}, not {config!r}')
+    if ceilings is None:
+        ceilings = ceiling_directories()
+    elif isinstance(ceilings, (str, bytes, os.PathLike)):
+        raise ValueError('ceilings must be a list of directories')
     d = dulwich_modules()
-    found = discover(path)
+    found = discover(path, ceilings)
     if found is None or (work_tree and found[0] != 'worktree'):
         if work_tree:
             raise CannotRun('NOT_A_WORK_TREE', f'not a git working tree: {path}')
