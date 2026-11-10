@@ -125,12 +125,13 @@ which each operation they perform today moves to its planned principal.
 |---|---|---|---|---|---|---|
 | `owner` The Owner | `owner` | no | `op-guest-boundary-change`, `op-host-privileged-change`, `op-git-push-public`, `op-policy-change`, `op-protected-merge`, `op-effect-store-custody` | `cap-code-merge-integration` | `cred-uac-consent`, `cred-gitea-owner-account`, `cred-owner-ui-session`, `cred-conversation-runtime-access` | planned |
 | `owner-os-account` The Owner's host account | `owner-os-account` | no | `op-guest-lifecycle`, `op-guest-exec`, `op-exchange`, `op-session-key-export`, `op-provision-fetch` | - | `cred-guest-ssh-key`, `cred-owner-github`, `cred-owner-provider-login` | observed |
-| `gitea-site-admin` Gitea site administrator | `gitea-site-admin` | no | `op-gitea-administration` | - | `cred-gitea-admin` | planned |
+| `gitea-site-admin` Gitea site administrator | `gitea-site-admin` | no | `op-gitea-administration`, `op-ci-administration` | - | `cred-gitea-admin` | planned |
 | `planner` Planning agent | `engineering-agent` | yes | - | `cap-read-repositories`, `cap-push-proposal-branch`, `cap-open-pr` | `cred-gitea-bot-planner`, `cred-conversation-keys` | planned |
 | `builder` Engineering agent (builder) | `engineering-agent` | yes | `op-open-proposal-pr` | `cap-read-repositories`, `cap-push-proposal-branch`, `cap-open-pr` | `cred-gitea-bot-builder`, `cred-conversation-keys` | planned |
 | `reviewer` Reviewer agent | `reviewer-agent` | yes | `op-submit-review` | `cap-read-repositories`, `cap-submit-review` | `cred-gitea-bot-reviewer` | planned |
-| `ci-job` CI job executing pull-request code | `ci-job` | yes | `op-ci-untrusted-job` | `cap-ci-statuses-artifacts` | `cred-ci-job-token` | planned |
-| `ci-runner-service` CI runner service | `ci-runner-service` | no | `op-ci-runner-registration` | - | `cred-runner-registration` | planned |
+| `ci-job` CI job executing pull-request code | `ci-job` | yes | `op-ci-untrusted-job` | - | `cred-ci-job-token`, `cred-ci-runtime-token` | planned |
+| `ci-runner-service` CI runner service | `ci-runner-service` | no | `op-ci-runner-registration` | - | `cred-runner-registration`, `cred-runner-token` | planned |
+| `ci-lane-coordinator` CI lane coordinator (the dispatcher as reporter) | `management-dispatcher` | no | `op-ci-dispatch` | - | `cred-gitea-bot-ci` | planned |
 | `management-dispatcher` Trusted dispatcher and credential broker | `management-dispatcher` | no | `op-as-conversation-create`, `op-as-runtime-stop`, `op-as-runtime-reprovision`, `op-as-conversation-delete`, `op-as-conversation-pause`, `op-as-management-read`, `op-as-unenumerated-routes`, `op-child-conversation` | - | `cred-agent-server-session-key` | planned |
 | `integration-service` Integration Service | `integration-service` | no | `op-integration-store-write` | - | - | planned |
 | `authorization-verifier` Authorization verifier | `authorization-verifier` | no | `op-authorization-verify` | `cap-read-repositories` | `cred-verifier-read` | planned |
@@ -150,7 +151,8 @@ which each operation they perform today moves to its planned principal.
 | `planner` | `op-protected-merge`, `cap-code-merge-integration`, `cap-protected-ref-push`, `op-gitea-administration`, `cap-work-status-mutation`, `op-effect-apply`, `op-effect-receipt-write`, `cred-executor-identity`, `cred-executor-target-secrets`, `cred-agent-server-session-key`, `op-as-conversation-create`, `op-child-conversation`, `cred-moby-docker-group`, `op-moby-container-control`, `cred-gitea-owner-account`, `cred-gitea-admin`, `cred-uac-consent`, `cred-owner-github`, `cred-llm-provider-key`, `cred-gitea-bot-builder`, `cred-gitea-bot-reviewer` |
 | `builder` | `op-protected-merge`, `cap-code-merge-integration`, `cap-protected-ref-push`, `op-gitea-administration`, `cap-work-status-mutation`, `op-effect-apply`, `op-effect-receipt-write`, `cred-executor-identity`, `cred-executor-target-secrets`, `cred-agent-server-session-key`, `op-as-conversation-create`, `op-child-conversation`, `cred-moby-docker-group`, `op-moby-container-control`, `cred-gitea-owner-account`, `cred-gitea-admin`, `cred-uac-consent`, `cred-owner-github`, `cred-llm-provider-key`, `cred-gitea-bot-planner`, `cred-gitea-bot-reviewer` |
 | `reviewer` | `op-protected-merge`, `cap-code-merge-integration`, `cap-protected-ref-push`, `op-gitea-administration`, `cap-work-status-mutation`, `op-effect-apply`, `op-effect-receipt-write`, `cred-executor-identity`, `cred-executor-target-secrets`, `cred-agent-server-session-key`, `op-as-conversation-create`, `op-child-conversation`, `cred-moby-docker-group`, `op-moby-container-control`, `cred-gitea-owner-account`, `cred-gitea-admin`, `cred-uac-consent`, `cred-owner-github`, `cred-llm-provider-key`, `cap-push-proposal-branch`, `cred-gitea-bot-planner`, `cred-gitea-bot-builder` |
-| `ci-job` | `op-protected-merge`, `cap-code-merge-integration`, `cap-protected-ref-push`, `op-gitea-administration`, `cap-work-status-mutation`, `op-effect-apply`, `op-effect-receipt-write`, `cred-executor-identity`, `cred-executor-target-secrets`, `cred-agent-server-session-key`, `op-as-conversation-create`, `op-child-conversation`, `cred-moby-docker-group`, `op-moby-container-control`, `cred-gitea-owner-account`, `cred-gitea-admin`, `cred-uac-consent`, `cred-owner-github`, `cred-llm-provider-key`, `op-release-signing-deploy`, `cred-runner-registration`, `cap-push-proposal-branch` |
+| `ci-job` | `op-protected-merge`, `cap-code-merge-integration`, `cap-protected-ref-push`, `op-gitea-administration`, `cap-work-status-mutation`, `op-effect-apply`, `op-effect-receipt-write`, `cred-executor-identity`, `cred-executor-target-secrets`, `cred-agent-server-session-key`, `op-as-conversation-create`, `op-child-conversation`, `cred-moby-docker-group`, `op-moby-container-control`, `cred-gitea-owner-account`, `cred-gitea-admin`, `cred-uac-consent`, `cred-owner-github`, `cred-llm-provider-key`, `op-release-signing-deploy`, `cred-runner-registration`, `cap-push-proposal-branch`, `cap-ci-statuses-artifacts`, `cred-runner-token`, `cred-gitea-bot-ci` |
+| `ci-lane-coordinator` | `op-protected-merge`, `cap-code-merge-integration`, `cap-protected-ref-push`, `op-ci-administration`, `cred-runner-registration`, `cred-gitea-admin`, `op-effect-apply` |
 | `management-dispatcher` | `op-effect-apply`, `op-effect-receipt-write`, `cred-executor-identity` |
 | `integration-service` | `cred-gitea-owner-account`, `cred-uac-consent`, `op-effect-receipt-write` |
 | `authorization-verifier` | `cap-push-proposal-branch`, `cap-open-pr`, `op-protected-merge`, `op-effect-apply` |
@@ -166,7 +168,7 @@ which each operation they perform today moves to its planned principal.
 | `cap-push-proposal-branch` Push a proposal branch: Push `work/*` proposal branches; never a protected ref. | scoped | `planner`, `builder` | - | planned |
 | `cap-open-pr` Open a pull request: Open a pull request from a proposal branch. | scoped | `planner`, `builder` | - | planned |
 | `cap-submit-review` Submit a review: Submit a review as evidence; a review never merges. | scoped | `reviewer` | - | planned |
-| `cap-ci-statuses-artifacts` Report CI statuses and artifacts: Report commit statuses and upload artifacts for the job's own run, within the job token's repository context. | scoped | `ci-job` | - | planned |
+| `cap-ci-statuses-artifacts` Report CI statuses and artifacts: Report commit statuses and upload artifacts for the job's own run, within the job token's repository context. | scoped | no role | - | planned |
 | `cap-protected-ref-push` Push to a protected ref: Push, force-push or API-merge directly to a protected ref, bypassing the merge rules. No role is granted it: protected refs change only through protected merges. | owner | no role | - | planned |
 | `cap-work-status-mutation` Change Work status: Change a Work item's status. Backlog status belongs to the deterministic coordinator, which the inventory does not name yet; no role here is granted it. | management | no role | - | planned |
 
@@ -187,8 +189,11 @@ which each operation they perform today moves to its planned principal.
 | `cred-gitea-bot-builder` | `builder` | `gitea-site-admin` | `management-dispatcher` | Delivered per attempt by the dispatcher into the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only). | `gitea-site-admin` | The site administrator revokes the bot's tokens (observed at S-01.2.2: it lists and deletes another account's token, which then answers 401) or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime; DELETE /api/v1/token also revokes the authenticating token (observed). | attempt-end, suspected-exposure, definition-revocation, policy-revision, expiry, owner-direction | `management-dispatcher` |
 | `cred-conversation-keys` | `builder` | `guest-service-openhands` | - | Passed by the Agent Server's Docker runtime as environment values into the conversation container. | `guest-service-openhands` | They end with their container: stopping the runtime or deleting the conversation removes them. | attempt-end, suspected-exposure, definition-revocation, policy-revision, owner-direction | `guest-service-openhands` |
 | `cred-gitea-bot-reviewer` | `reviewer` | `gitea-site-admin` | `management-dispatcher` | Delivered per attempt by the dispatcher into the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only). | `gitea-site-admin` | The site administrator revokes the bot's tokens (observed at S-01.2.2: it lists and deletes another account's token, which then answers 401) or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime; DELETE /api/v1/token also revokes the authenticating token (observed). | attempt-end, suspected-exposure, definition-revocation, policy-revision, expiry, owner-direction | `management-dispatcher` |
-| `cred-ci-job-token` | `ci-job` | `external:gitea-actions` | - | Minted by Gitea Actions for one job into the job environment, within the configured token maxima. | `gitea-site-admin` | It expires with its job; on exposure the site administrator cancels the job and disables the runner. | attempt-end, suspected-exposure, policy-revision, expiry, owner-direction | `gitea-site-admin` |
-| `cred-runner-registration` | `ci-runner-service` | `gitea-site-admin` | - | Issued by the site administrator to register the runner; stored on the runner host outside every job's filesystem. | `gitea-site-admin` | Unregister the runner and issue a new registration secret; the rotation is a consequential external effect. | suspected-exposure, policy-revision, expiry, owner-direction | `owner` |
+| `cred-ci-job-token` | `ci-job` | `external:gitea-actions` | - | Minted by Gitea Actions for one task and placed by the runner in the job environment; its effective permission is none on the governance repository and every other private repository (policy/ci-token-secret-policy.json); it is inert and never relied on. | `gitea-site-admin` | It ends with its task; on suspected exposure the dispatcher cancels the run and recreates the CI guest. | attempt-end, suspected-exposure, policy-revision, expiry, owner-direction | `gitea-site-admin` |
+| `cred-ci-runtime-token` | `ci-job` | `external:gitea-actions` | - | Minted by Gitea per task in the task context (gitea_runtime_token); treated as present in the job environment (act_runner, verified at Q-02.2.1); inert and never relied on. | `gitea-site-admin` | It ends with its task at the artifact routes and expires with the JWT; on suspected exposure the dispatcher cancels the run and recreates the CI guest. | attempt-end, suspected-exposure, policy-revision, expiry, owner-direction | `gitea-site-admin` |
+| `cred-runner-registration` | `ci-runner-service` | `gitea-site-admin` | `management-dispatcher` | Reset and read by the host-side Gitea-administration command, carried once in the dispatcher's memory over the management channel to the CI guest's register step, and reset again after registration; never at rest. | `gitea-site-admin` | Reset by the Gitea-administration command after every registration and on any trigger; the reset is the revocation. | suspected-exposure, policy-revision, owner-direction | `gitea-site-admin` |
+| `cred-runner-token` | `ci-runner-service` | `external:gitea-actions` | - | Issued by Gitea to the runner at registration; kept root-owned on the CI guest. | `gitea-site-admin` | Always at CI-guest destroy: the Gitea-administration command deletes the runner record (owner-only route) and Gitea refuses the token at its next poll; an ephemeral runner is deleted by Gitea when its task ends. | suspected-exposure, policy-revision, owner-direction | `gitea-site-admin` |
+| `cred-gitea-bot-ci` | `ci-lane-coordinator` | `gitea-site-admin` | - | Issued by the site administrator to aieh-bot-ci and held by the dispatcher on the host; never in the CI guest or a job; records carry fingerprints only. | `gitea-site-admin` | As the other bot tokens: rotated by gitea_roles.py rotate; the site administrator revokes it. | suspected-exposure, policy-revision, expiry, owner-direction | `ci-lane-coordinator` |
 | `cred-agent-server-session-key` | `management-dispatcher` | `guest-root` | - | Generated in the guest at provisioning; read by the operator login from its root:agent 0440 file during bootstrap (S-01.3.1); it is to reach only the dispatcher over a trusted channel (E-01.2.x). Records carry fingerprints only. | `guest-root` | Only guest recreate and provision revokes it, which ends every conversation. | suspected-exposure, policy-revision, owner-direction | `owner-os-account` |
 | `cred-verifier-read` | `authorization-verifier` | `gitea-site-admin` | - | Issued by the site administrator to the verifier's own identity; unreachable from code runners. | `gitea-site-admin` | The site administrator revokes and reissues it. | suspected-exposure, policy-revision, expiry, owner-direction | `gitea-site-admin` |
 | `cred-executor-identity` | `privileged-executor` | `owner` | - | Created by Owner act A4 at G-04.2.1: a service identity with no stored password, never in the Owner's credential store. | `owner` | An Owner elevated act during bootstrap; in the target, an Owner-only manifest that the executor applies. Receipt: effects-store. | suspected-exposure, policy-revision, expiry, owner-direction | `owner` |
@@ -213,10 +218,10 @@ which each operation they perform today moves to its planned principal.
 | `builder` | The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no management, Owner, admin or bot credential in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs). Note: Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran. | yes | S-01.3.2 | `evidence/S-01.3.2-job-daemon-and-management-access.md` |
 | `reviewer` | A dedicated Gitea bot account and token with read and review permission only, on no merge allowlist. Note: Failed in part at S-01.2.2. Shown: read permission on the fixture, on no merge allowlist; it submitted an approving review; its pushes were declined, its merges answered 405, its settings calls 403. Not realizable: Gitea 28.3.0 has no review-only scope (a review with read:repository answered 403, required=[write:repository]), and a read-permission collaborator can open a pull request from an existing branch (201; fd-gitea-reader-opens-pr). Neither reaches an Owner operation. Re-pointed to D-01.2 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): D-01.2 shows that the reader identity cannot open a PR, or records the residual as a limit with its reason (fd-gitea-reader-opens-pr). | no | D-01.2 | `evidence/S-01.2.2-segregated-credentials.md` |
 | `reviewer` | The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no management, Owner, admin or bot credential in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs). Note: Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran. | yes | S-01.3.2 | `evidence/S-01.3.2-job-daemon-and-management-access.md` |
-| `ci-job` | The Gitea Actions job token with restricted repository and workflow token maxima. Note: Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned). Re-pointed to Q-02.3.1, which sets the job-token maxima, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md). | no | Q-02.3.1 | - |
+| `ci-job` | The Gitea Actions job token, permissionless and inert: restricted mode and an all-none ceiling at the governance owner and repository, permissions: {} in the workflow, no cross-repository grant, no public repository, and no network path from the job (decision 0016, Proposed, section 5). Note: Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned). Re-pointed to Q-02.3.1, which sets the job-token maxima, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md). Q-02.1 (2026-11-10): Gitea 28.3.0 has the ceilings at source (G4 of policy/ci-token-secret-policy.json); Q-02.3.1 applies and reads them back. | no | Q-02.3.1 | - |
 | `ci-job` | A disposable container or VM on a dedicated runner host: no host-mode execution, host Docker socket, user home, Owner credential or release, signing or deployment secret. Note: Unknown at S-01.2.2: no CI runner is selected or pinned and Gitea Actions is off (fd-ci-runner-unpinned). Re-pointed to Q-02.2.2, which provisions and inspects the disposable CI job, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md). | no | Q-02.2.2 | - |
 | `ci-job` | The runner containment profile carries the job constraints of S-01.3.2: no engine socket or engine TCP endpoint reachable from a job; no management key, Owner, admin or bot token in its environment or readable filesystem; no privileged mode, added capability, device or host namespace; no host-path mount beyond the scoped workspace. Note: Declared at S-01.3.2 (provisioning.agent_server.jobs.ci), not verified: no CI runner exists. The profile is Q-02.2.1; Q-02.2.2 proves it and Q-02.3.2 attempts the engine socket from a hostile job. | no | Q-02.2.2 | - |
-| `ci-runner-service` | The runner's registration secret on the dedicated runner host, unreachable from the job filesystem. Note: Unknown at S-01.2.2: no CI runner is selected or pinned (fd-ci-runner-unpinned). Re-pointed to Q-02.3.2, whose hostile job attempts secret reads, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md). | no | Q-02.3.2 | - |
+| `ci-runner-service` | The runner's registration secret passes through the CI guest once, in memory, and is reset after registration; the runner's persistent token stays on the CI guest, root-owned outside every mount and unreachable from the job filesystem. Note: Unknown at S-01.2.2: no CI runner is selected or pinned (fd-ci-runner-unpinned). Re-pointed to Q-02.3.2, whose hostile job attempts secret reads, by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md). | no | Q-02.3.2 | - |
 | `management-dispatcher` | The sole holder of the Agent Server session key, on the trusted side; admission to the create and admin routes is limited to its identity and network (S-01.3.1). Note: Not realized at S-01.3.1: no dispatcher exists, and during bootstrap the Owner's account holds the key through the operator login. The admission half is verified (next row); sole custody of the key is decided with the dispatcher (E-01.2.x). Re-pointed to E-01.3.3 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): the dispatcher identity becomes the sole reader of the management key there. | no | E-01.3.3 | - |
 | `management-dispatcher` | Admission to the Agent Server's management API by key and by network: every key-gated route refuses a missing or wrong key (HTTP 401, WebSocket close 4001 or handshake 403); the server does not start without a valid key; the listener is on the guest loopback only and no conversation container reaches it, the guest itself or another container (container guard, icc off). The per-route allowlist of the dispatcher (routes.json) is policy for the dispatcher, not a server control. Note: Verified live on a disposable provisioned guest (guest.py admission-probe, before and after a guest restart): all 193 routes of the inventory, and connections from two conversation containers to every guest address. | yes | S-01.3.1 | `evidence/S-01.3.1-management-api-admission.md` |
 | `management-dispatcher` | Custodian of the standing bot credentials; delivers each agent role token per attempt into the attempt environment only, with fingerprints only in records. Note: Not verified at S-01.2.2: no dispatcher exists. Bootstrap custody observed instead: the Credential Manager entries "AIEH Gitea bot <role>" of the Owner's account, written by owner-os-account; records carry fingerprints only. Refined by decision 0013, point 7 (S-01.4): the attempt environment is the dispatcher's attempt context, never the conversation container; untrusted code has no network path to Gitea, proposals leave by exchange and the dispatcher pushes as the bot identity it holds custody of. Re-pointed to E-01.3.3 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): per-attempt role-token delivery and rotation are built and proved there. | no | E-01.3.3 | `evidence/S-01.2.2-segregated-credentials.md` |
@@ -238,11 +243,12 @@ which each operation they perform today moves to its planned principal.
 | `planner` | Its own Gitea bot identity and token: read the repositories in scope, push `work/*` proposal branches and open PRs whose writes are planning artefacts only. | none | Its Gitea bot account and token exist (S-01.2.2), in the Owner account's Credential Manager pending the dispatcher; no agent workload has run or held the token (decision 0003, C6). |
 | `builder` | Its own Gitea bot identity and token: read the repositories in scope, push `work/*` proposal branches and open PRs. | none | Its Gitea bot account and token exist (S-01.2.2), in the Owner account's Credential Manager pending the dispatcher; no agent workload has run or held the token (decision 0003, C6). |
 | `reviewer` | Its own Gitea bot identity and token: read the PR and diff and submit reviews as evidence. | none | Its Gitea bot account and token exist (S-01.2.2), in the Owner account's Credential Manager pending the dispatcher; no agent workload has run or held the token (decision 0003, C6). |
-| `ci-job` | The job token's repository context for its own run only. | none | No CI runner is selected or pinned, and no CI job has run. |
-| `ci-runner-service` | The registration secret, unreachable from jobs. | none | No CI runner is selected or pinned. |
+| `ci-job` | The governance workflow's job: no network path, no secret, and two inert task tokens; it reports nothing (the runner streams its log and the trusted lane posts the status). | none | No CI runner is selected or pinned, and no CI job has run. |
+| `ci-runner-service` | The runner token on the CI guest, unreachable from jobs; registration to the governance repository only. | none | No CI runner is selected or pinned. |
+| `ci-lane-coordinator` | Triggers the governance workflow and posts the required status context aieh/validation after verifying the run record; it merges nothing and holds no Owner-only route. | none | Not built. During bootstrap the Owner's account is to perform it through tools/guest.py, disclosed as every bootstrap operation is. |
 | `management-dispatcher` | Sole holder of the Agent Server session key; the Agent Server management operations; custodian and per-attempt deliverer of the standing bot credentials. It writes no effect receipt. Custodian of `cred-gitea-bot-planner`, `cred-gitea-bot-builder`, `cred-gitea-bot-reviewer`. | `owner-os-account` | No dispatcher exists. The Owner's account performs conversation create and runtime control through the operator login (see the sunset map). |
 | `integration-service` | Integration-store writes. Never the Owner approval credential or an effect receipt. | `owner-os-account` | The integration store stays in Owner-session custody during bootstrap (decision 0004, point 9). |
-| `authorization-verifier` | A read-only Gitea credential: reads the protected ref, the PR, merged_by, the exact blob and the policy. | none | Not built. Its read-only Gitea identity aieh-bot-verifier and token exist (S-01.2.2); no verifier has used them. |
+| `authorization-verifier` | A read-only Gitea credential: reads the protected ref, the PR, merged_by, the exact blob and the policy. Planned (decision 0016, Proposed, section 8.3; granted at Q-02.3.1): read on the governance repository and its Actions unit (runs, jobs, logs), to re-read the run record the CI reporter names, independently of it, before any promotion. | none | Not built. Its read-only Gitea identity aieh-bot-verifier and token exist (S-01.2.2); no verifier has used them. |
 | `privileged-executor` | The executor identity and target secrets, effect application and effect receipts. It issues nothing and writes nothing in Gitea. | none | Nothing live exists: no effects root, executor principal, service or scheduled task (decision 0004, Current facts). |
 | `inference-broker` | The provider credential and per-attempt inference access. | none | The inference endpoint class is deferred, and no plan leaf builds the broker. |
 | `release-job-environment` | Narrowly authorized release or deployment jobs in a separately credentialed environment, after verifying the protected revision. Invariant: Trusted side only: never ci-job or any agent role. Invariant: Its credential is of a privileged class. Invariant: Activation goes through op-effect-apply. Invariant: The signing identity is distinct from the executor's effect identity unless Q-02.4 decides otherwise. | none | Undecided (fd-release-job-principal); no release has been signed or deployed. |
@@ -514,6 +520,248 @@ Each cell lists the verdicts of the rows from the row domain to the column domai
 | `nm-ext-executor-targets` The executor to its allowlisted external targets | `td-privileged-effect` | `external:effect-targets` | allow | per operation kind | `external:effect-targets` | `cred-executor-target-secrets` | typed, allowlisted operation kinds; target and precondition recheck; one-time effect key (prevention, host) | planned | builds G-04.4.2, verify G-04.4.2 | no | planned: G-04.4.2 |
 | `nm-ext-gitea-offline` Gitea to the internet | `td-git-hosting` | `external:off-host` | deny | any | `external:off-host` | - | Gitea runs offline through its own egress-policy proxy (prevention, gitea) | observed | - | no | task gitea:verify; task gitea:authz (S-01.2.2 fixture) |
 | `nm-ext-owner-github` The Owner's push to the public repository | `td-owner` | `external:github` | allow | https | `external:github` | `cred-owner-github` | the publication-safety gate (pinned Gitleaks) before every commit and push (prevention, host) | observed | - | no | python -I -B tools/publication_gate.py verify |
+<!-- END GENERATED -->
+
+## Hostile-CI policy (Q-02.1)
+
+Plan leaf **Q-02.1**, "Define hostile-CI threat model and permission ceiling", as of
+2026-11-10 (baseline commit `93d49f6`). It inventories the Gitea runner's trust, the
+repository, fork and PR tokens, the secrets, the network and the privileged host surfaces, and
+specifies separate validation and trusted promotion lanes.
+
+- **Acceptance of this leaf:** no untrusted PR validation job has any necessary reason or
+  configuration path to production or Owner credentials; the CI runner's reachability to Gitea
+  and the job token's use are decided against decision 0013 point 7; every forward is an Owner
+  act.
+- **Machine-readable form:** the CI runner control profile
+  [`ci-runner-profile.json`](ci-runner-profile.json), the token and secret policy
+  [`ci-token-secret-policy.json`](ci-token-secret-policy.json) and the governance workflow's
+  source of record [`ci/workflows/validation.yml`](ci/workflows/validation.yml). The tables
+  below are rendered from the two JSON files, and
+  [`tools/check_ci_policy.py`](../tools/check_ci_policy.py) checks all three (`task
+  policy:ci-check`).
+- **Decision:** 0016, hostile-CI threat model, the validation and promotion lanes, and the CI
+  runner's reach to Gitea (Proposed; the Overseer commits the record under
+  [`decisions/`](../decisions/)). Both JSON files name it by id; the checker fails once its
+  record exists and is not linked.
+- **This policy opens nothing.** No runner, CI guest, forward, listener, Gitea setting, secret,
+  repository or workload exists because of it. Every act it needs is listed under
+  [Owner acts](#owner-acts) with the leaf that requests it.
+- **Evidence:** [`evidence/Q-02.1-hostile-ci-policy.md`](../evidence/Q-02.1-hostile-ci-policy.md):
+  the Gitea Actions facts read in the pinned source archive (not live), and the build.
+
+### The design in brief
+
+- **Two lanes.** The validation lane is the CI guest (`td-ci-runner-host`, contained) and the
+  disposable job containers in it (`td-untrusted-ci`, untrusted). It holds the runner token on
+  the guest and the two tokens Gitea mints per task in the job, nothing else. The promotion lane
+  is trusted: the reporter, the Owner's protected merge, the verifier and the executor. They
+  share only the exact revision: the SHA and the digest of the bundle that carried it.
+- **The runner reaches Gitea; the job reaches nothing.** The runner's only path off the CI guest
+  is the `ci-control` forward, a dispatcher-held SSH remote forward bound to the guest's
+  loopback, an Owner act. A job has no network path at all (decision 0013, point 7, unchanged):
+  the proposal arrives as a verified bundle staged into a read-only mount.
+- **The job token is permissionless and inert.** Gitea 28.3.0 has job-token ceilings: restricted
+  mode and an all-none ceiling at the governance owner and repository, with `permissions: {}`
+  in the workflow, leave it no permission on any private repository. Every public repository
+  stays readable whatever the ceiling, so none may exist.
+- **No secret or variable exists anywhere**, because Gitea delivers every owner and repository
+  secret to every task, and every variable, global ones included.
+- **The workflow is the governance repository's**, dispatched from its protected default branch
+  by `aieh-bot-ci`; Actions is disabled on every repository that receives proposals, so a
+  proposal's own workflows, scoped ones included, never run. The required context
+  `aieh/validation` is posted by the reporter only after it reads the run record.
+
+### How to read it
+
+- **Statuses:** `decided` (decision 0016 decides it; `verify_at` is the leaf that builds or
+  proves it), `planned` (a proposed value or step that the `verify_at` leaf fixes and proves)
+  and `observed` (committed evidence).
+- **Gitea facts** carry `verified: source` (the code at the pin says so, with the path and lines
+  in the archive the lock pins), `live` (evidence from the running instance; none yet) or
+  `false` (with the leaf that verifies them).
+- **The live check is not the checker's.** It is the host-side Gitea-administration command's
+  read-only `--gitea` mode (Gitea's database and the API as the site administrator), run from
+  Q-02.3.1; `check_ci_policy.py --live-report FILE` is the interface for its report and refuses
+  to run before then.
+
+### What the checker enforces
+
+`python -I -B tools/check_ci_policy.py` (`task policy:ci-check`) exits 0 only when:
+
+1. no validation lane holds a credential of owner, admin, executor or management authority, the
+   validation job holds exactly the two task tokens and the runner host exactly the runner
+   token, and the profile's lanes equal the token policy's credential-to-lane map;
+2. every inventory credential has a lane, and a credential held in a CI domain is in that
+   domain's lane;
+3. the validation job reaches nothing, and each task token's reach is none and is never relied
+   on;
+4. every runner-configuration invariant is declared at its decided value, and any profile
+   variant's declared `config.yaml` (`provisioning.ci_runner.config`) satisfies them;
+5. every workflow under `policy/ci/workflows/` obeys decision 0016 section 7.3, read in a strict
+   YAML subset;
+6. Actions is enabled on the governance repository only, no repository is public, the token
+   mode is restricted with an all-none ceiling, no cross-repository grant, secret or variable
+   exists, and the governance protections are complete;
+7. the filtering proxy admits exactly the runner RPC, and the registration token is reset after
+   every registration (or the disclosed fallback is in force);
+8. every Owner act names its requesting leaf, an observed one cites its approval verbatim, and
+   every forward and host listener names an Owner act;
+9. every fact verified at source names its paths and lines in the archive the lock pins, and the
+   revocation rows equal the role-token matrix's;
+10. every inventory, matrix, role, plan-leaf and decision id resolves and every statement carries
+    a status and a `verify_at` leaf;
+11. no machine path appears, this block equals `--render`, and the profile's `checks` name
+    exactly the codes the checker emits.
+
+`--list` prints the lanes, the Owner acts and the facts; `--render` prints the generated block.
+The negative cases are in
+[`tools/tests/test_check_ci_policy.py`](../tools/tests/test_check_ci_policy.py).
+
+<!-- BEGIN GENERATED: python -I -B tools/check_ci_policy.py --render -->
+### Lanes
+
+| Lane | Domains | Holds | Reaches | Status | Verify at |
+|---|---|---|---|---|---|
+| `validation-job` Validation lane: the disposable job container | `td-untrusted-ci` | `cred-ci-job-token`, `cred-ci-runtime-token` | - | decided | Q-02.2.2, Q-02.3.2 |
+| `validation-runner-host` Validation lane: the CI guest and its runner | `td-ci-runner-host` | `cred-runner-token` | `ci-r1` | decided | Q-02.2.1, Q-02.2.2 |
+| `trusted-lane` Promotion lane (trusted) | `td-owner`, `td-management`, `td-privileged-effect`, `td-git-hosting` | every credential mapped to trusted-lane in the token policy | `ci-r3`, `ci-r4` | decided | Q-02.4, Q-03.2 |
+
+### Credential-to-lane map
+
+| Credential | Lane | Reason |
+|---|---|---|
+| `cred-uac-consent` | trusted-lane | The Owner's interactive consent. |
+| `cred-owner-github` | trusted-lane | The Owner's publication credential. |
+| `cred-owner-provider-login` | none | The host agent sessions' provider login; no part of CI. |
+| `cred-guest-ssh-key` | trusted-lane | The dispatcher's management channel to a guest; never inside the guest's jobs. |
+| `cred-guest-host-keys` | none | The execution guest's own host keys; the CI guest's host keys are its own, guest-local. |
+| `cred-agent-server-session-key` | none | The execution guest's management key; the CI guest runs no Agent Server. |
+| `cred-oh-secret-key` | none | The execution guest's Agent Server secret. |
+| `cred-conversation-keys` | none | Conversation containers of the execution guest. |
+| `cred-moby-docker-group` | none | The execution guest's docker group; the CI guest's runner user is in its own guest's docker group, inside the VM boundary. |
+| `cred-gitea-owner-account` | trusted-lane | The Owner's merge authority. |
+| `cred-gitea-admin` | trusted-lane | Held by the Gitea-administration command only. |
+| `cred-gitea-bot-builder` | trusted-lane | Dispatcher custody; pushes proposals from the host. |
+| `cred-gitea-bot-planner` | trusted-lane | Dispatcher custody. |
+| `cred-gitea-bot-reviewer` | trusted-lane | Dispatcher custody. |
+| `cred-gitea-bot-ci` | trusted-lane | The reporter: dispatches the governance workflow and posts aieh/validation. |
+| `cred-ci-job-token` | validation-job | Minted per task into the job: inert and permissionless. |
+| `cred-ci-runtime-token` | validation-job | Minted per task; treated as present in the job: inert. |
+| `cred-runner-token` | validation-runner-host | The runner's persistent token on the CI guest, never in a job. |
+| `cred-runner-registration` | trusted-lane | Standing in Gitea's database; operated by the administration command; reset after every registration. |
+| `cred-verifier-read` | trusted-lane | The verifier re-reads the run record before any promotion. |
+| `cred-executor-identity` | trusted-lane | The promotion lane's effects; reachable from no CI domain. |
+| `cred-executor-target-secrets` | trusted-lane | The promotion lane's effects. |
+| `cred-llm-provider-key` | none | Inference only; no part of CI. |
+| `cred-owner-ui-session` | trusted-lane | The Owner's own session. |
+| `cred-conversation-runtime-access` | none | Conversation access of the Owner UI; no part of CI. |
+
+### Task tokens
+
+| Token | Effective permission | Reach | Relied on | Lifetime | Status |
+|---|---|---|---|---|---|
+| `cred-ci-job-token` The job token (GITHUB_TOKEN and GITEA_TOKEN) | governance_repository: none; other_private_repositories: none; public_repositories: read | none | no | One task: valid while the task is running or cancelling (G3). | decided |
+| `cred-ci-runtime-token` The runtime JWT (gitea_runtime_token; expected in the job as ACTIONS_RUNTIME_TOKEN) | artifact_routes: upload for its own job, but no path to them; cache_server: write, but the cache server is disabled | none | no | One task, and the JWT is valid from issue for 1 h plus ENDLESS_TASK_TIMEOUT (4 h at the default) (G8). | decided |
+
+### Runner configuration invariants
+
+| `config.yaml` path | Rule | Value | Status |
+|---|---|---|---|
+| `runner.labels` | labels | - | decided |
+| `runner.envs` | must_be_empty | - | decided |
+| `runner.env_file` | must_be_empty | - | decided |
+| `runner.capacity` | must_equal | 1 | decided |
+| `runner.timeout` | must_be_set | - | decided |
+| `cache.enabled` | must_equal | false | decided |
+| `container.privileged` | must_equal | false | decided |
+| `container.docker_host` | must_equal | "-" | decided |
+| `container.valid_volumes` | must_be_empty | - | decided |
+| `container.network` | must_be_empty | - | decided |
+| `container.enable_ipv6` | must_equal | false | decided |
+| `container.force_pull` | must_equal | false | decided |
+| `container.force_rebuild` | must_equal | false | decided |
+| `container.options` | options | - | decided |
+
+Declared `container.options` (planned, verify at Q-02.2.1): `--volume=/home/agent/exchange:/aieh/exchange:ro`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--user=1001:1001`, `--pids-limit=512`, `--memory=4g`, `--cpus=2`, `--ulimit=core=0`. Label: `aieh-validation` on pinned by digest (docker://<image>@sha256:<64 hex>) at Q-02.2.1.
+
+### Gitea-side configuration
+
+| Repository | Role | Private | Actions | Status | Verify at |
+|---|---|---|---|---|---|
+| `aieh-governance/quality-workflows` | governance | yes | enabled | planned | Q-02.3.1 |
+| `aieh-authz-fixture/authz` | proposal | yes | disabled | planned | Q-02.3.1 |
+| every other repository | proposal | yes | disabled | decided | Q-02.3.1 |
+
+| Ceiling at | Mode | Maximum per unit | Cross-repository grants |
+|---|---|---|---|
+| `aieh-governance` | restricted | none on 8 units | [] |
+| `aieh-governance/quality-workflows` | restricted | none on 8 units | [] |
+
+Secrets and variables: repository_secrets: 0; owner_secrets: 0; repository_variables: 0; owner_variables: 0; instance_variables: 0. Public repositories: 0.
+
+### Reach
+
+| Reach | From | To | Kind | Class | Credentials | Owner act | Status | Verify at |
+|---|---|---|---|---|---|---|---|---|
+| `ci-r1` The runner process to Gitea's runner RPC over the dispatcher-held remote forward bound to the CI guest's loopback (endpoint ci-control); never a job. | `td-ci-runner-host` | `gitea-server` | forward | ci-control | `cred-runner-token` | A-1 | decided | Q-02.2.2 |
+| `ci-r2` A job reaches no Gitea, host, execution guest, resolver or internet: the egress guard (empty allowlist), the container guard, icc off, SLIRP restrict=on and the loopback-bound forward. GITHUB_SERVER_URL, GITHUB_API_URL and the runtime URLs inside a job name the container's own loopback. | `td-untrusted-ci` | `nothing` | none | - | - | - | decided | Q-02.2.2, Q-02.3.2 |
+| `ci-r3` The dispatcher stages the verified bundle into the CI guest's exchange over the existing management and exchange classes (loopback hostfwd). | `td-management` | `ci-runner-host` | existing | management | `cred-guest-ssh-key` | - | decided | Q-02.2.2 |
+| `ci-r4` The reporter (aieh-bot-ci) dispatches the governance workflow and posts aieh/validation over host loopback. | `td-management` | `gitea-server` | existing | dispatcher-as-bot | `cred-gitea-bot-ci` | - | decided | Q-02.3.1 |
+| `ci-r5` Gitea never connects to a runner or a job: the runner polls (G2). | `td-git-hosting` | `td-ci-runner-host` | none | - | - | - | decided | Q-02.2.2 |
+| `ci-r6` The optional host-side filtering proxy on 127.0.0.1 as the forward's target (proxy). | `td-management` | `gitea-server` | listener | ci-control | - | A-4 | planned | Q-02.2.1 |
+
+Filtering proxy (planned, Owner act A-4), allowed: POST `/api/actions/ping.v1.PingService/*`; POST `/api/actions/runner.v1.RunnerService/Register` (provisioning window only); POST `/api/actions/runner.v1.RunnerService/Declare`; POST `/api/actions/runner.v1.RunnerService/FetchTask`; POST `/api/actions/runner.v1.RunnerService/UpdateTask`; POST `/api/actions/runner.v1.RunnerService/UpdateLog`. Denied: `/api/actions_pipeline/*`, `/twirp/github.actions.results.api.v1.ArtifactService/*`, `/api/v1/*`, `git smart HTTP`, `the web`, `everything else`.
+
+### Owner acts
+
+| Act | What | Class | Requested at | Status |
+|---|---|---|---|---|
+| A-1 | Open the ci-control guest-to-host path: the dispatcher-held ssh -R 127.0.0.1:13300:127.0.0.1:<target> from a CI guest, with the CI seed's sshd directives. | Owner act (op-guest-boundary-change; guest network) | Q-02.2.2 | planned |
+| A-2 | Place repository content in a CI guest: the exchange push of proposal bundles (a fixture first; real repository content at the first real consumer). | Owner act (the standing authorization excludes repository content) | Q-02.2.2 | planned |
+| A-3 | Run an untrusted workload in a CI guest: the first validation job, then Q-02.3.2's hostile job. | Owner act (the standing authorization excludes untrusted workloads) | Q-02.2.2 | planned |
+| A-4 | The host-side filtering proxy listener on 127.0.0.1 (proxy allowlist). | Owner act (a host listener; the decision 0015 precedent) | Q-02.2.1 | planned |
+| C-1 | Enable Gitea Actions instance-wide (ENABLED = true, DEFAULT_ACTIONS_URL = self, a restart through the lifecycle contract) to serve the governance repository only, and apply the token configuration (restricted mode, all-none ceilings, no cross-repository grants, no public repository). | Owner confirmation (a configuration change of the trusted computing base) | Q-02.3.1 | planned |
+| C-2 | Create the private governance repository and the aieh-bot-ci identity; set the protections; operate the registration token by the reset-read-deliver-reset procedure; run the live check's two read-only oracles. | Owner confirmation of the product shape, performed by the harness | Q-02.3.1 | planned |
+| C-3 | A CI guest variant beside the execution guest: its composition (Moby, act_runner, the job image; no Agent Server), its ceilings and its lifetime (shared with a persistent runner, or per validation with an ephemeral runner). | Owner confirmation (a new guest composition and footprint) | Q-02.2.1 | planned |
+
+### Gitea Actions facts at the pin
+
+| Fact | Verified | Where (path:lines at the pin) | Live at |
+|---|---|---|---|
+| G1: Actions is off on the host instance ([actions] ENABLED = false, observed) although the code default is on; it is also a per-repository unit; with the unit off globally or on the repository no workflow is detected, scoped workflows included. DEFAULT_ACTIONS_URL (github or self) names where the runner fetches uses: actions. SKIP_WORKFLOW_STRINGS skip push and pull-request runs. | at source | `modules/setting/actions.go:27-50`; `models/repo/repo_unit_actions.go:71-85`; `services/actions/notifier_helper.go:138-147,280-297`; `services/actions/context.go:114` | Q-02.3.1 |
+| G2: The runner registers with a registration token scoped to the instance, an owner or one repository, which stays active after registration; the CLI and API return the latest active token; only the web settings' reset invalidates it. The runner then holds a persistent token (salted hash) and long-polls FetchTask and pushes Declare, UpdateTask and UpdateLog over Connect RPC under /api/actions/ (ping.v1.PingService and runner.v1.RunnerService only). Gitea never connects to a runner; a job never reports. An ephemeral runner is deleted when its task ends. | at source | `routers/api/actions/runner/runner.go:42-110,140,166,218,286`; `routers/api/actions/runner/interceptor.go:35-90`; `routers/api/actions/actions.go:14-24`; `models/actions/runner_token.go:71-97`; `routers/private/actions.go:21-50`; `routers/api/v1/shared/runners.go:28-37`; `routers/web/shared/actions/runners.go:271-288`; `routers/web/web.go:498-506`; `cmd/actions.go:15-50`; `models/actions/runner.go:64,370-383`; `models/actions/task.go:453-457`; `services/actions/cleanup.go:144-154` | Q-02.3.1 |
+| G3: The job token is minted per task (20 random bytes as 40 hex characters, salted hash), delivered as GITHUB_TOKEN and GITEA_TOKEN and as the context's token, valid while the task is running or cancelling, and authenticates as the Actions pseudo-user with the task id. | at source | `models/actions/task.go:139,186-230`; `models/actions/utils.go:21-27`; `models/secret/secret.go:163-164`; `services/actions/task.go:203`; `services/auth/oauth2.go:135-137`; `services/auth/basic.go:119-123`; `models/user/user_system.go:50-69` | Q-02.3.1 |
+| G4: A configurable token ceiling exists: per repository and per owner a mode (permissive: write on all units; restricted: read on Code, Packages and Releases), a per-unit MaxTokenPermissions and, per owner, AllowedCrossRepoIDs; a workflow's permissions: block is honoured and clamped; the default with nothing configured is permissive. Another repository is reachable only read-clamped through a cross-repository grant; every public repository is readable by every job token whatever the ceiling. Enforced for the API and git smart HTTP alike. | at source | `models/repo/repo_unit_actions.go:15-69,78-84,140-150`; `models/actions/config.go:18-74`; `models/actions/token_permissions.go:15-59`; `services/actions/permission_parser.go:18-80`; `services/actions/token_permission_design.md:5-68`; `models/perm/access/repo_permission.go:264-280,282-398,411-415`; `routers/web/repo/githttp.go:190`; `modules/util/util.go:283-289` | Q-02.3.1 |
+| G5: Every secret of the repository and of its owner is decrypted and delivered to every task of a run, except for fork pull requests (tokens only) unless the event is pull_request_target; called workflow jobs get only inherited or mapped secrets. Variables (instance-global, owner and repository) are delivered to every task, fork pull requests included. | at source | `models/secret/secret.go:160-240`; `models/actions/variable.go:139-174`; `services/actions/task.go:143-148` | Q-02.3.1 |
+| G6: Workflow definitions come from the pushed commit for push, the head ref for pull_request and the base branch for pull_request_target. A fork PR by an author without Actions write needs approval on every run until that author has a merged pull request; restricted users always. | at source | `services/actions/notifier_helper.go:104-105,156-187,224-251,521-560` | Q-02.3.1 |
+| G7: Job results become commit statuses by the Actions pseudo-user with context '<workflow name, else file> / <job> (<event>)', scoped runs prefixed '<source repository>: ' (imitable); required checks match contexts by glob, not creators; posting a status needs write on Code. | at source | `modules/actions/workflows.go:146-166`; `services/actions/commit_status.go:188-201,323-331`; `services/pull/commit_status.go:26-70`; `models/git/protected_branch.go:55`; `routers/api/v1/api.go:1553-1555` | Q-02.3.1 |
+| G8: Artifacts are uploaded by the job over /api/actions_pipeline/* (runtime JWT, or the job token as a Bearer fallback) and /twirp/github.actions.results.api.v1.ArtifactService/*, mounted only when Actions is enabled. The runtime JWT is in the task context, HS256, scoped to the run and job with cache write, valid 1 h plus ENDLESS_TASK_TIMEOUT. Logs are uploaded by the runner. | at source | `routers/init.go:197-207`; `routers/api/actions/artifacts.go:150-180`; `routers/api/actions/artifactsv4.go:124`; `services/actions/auth.go:41-70`; `services/actions/task.go:187-204`; `custom/conf/app.example.ini:3094-3098` | Q-02.3.1 |
+| G9: Listing or writing secrets and variables and every runner route need the repository owner or a site administrator; user-level secrets have no list route; workflow dispatch needs write on Actions, accepts any branch or tag as ref and returns the run id only with return_run_details=true; runs, jobs (with runner_id), logs and artifacts are readable with read on Actions; the run record exposes event, path, head_branch, head_sha, status, conclusion, actor and trigger_actor, not the dispatch inputs nor a scoped-run marker. | at source | `routers/api/v1/api.go:111-139,430-437,1045-1071,1190-1210,1331-1345,1422-1446,1811,1931`; `routers/api/v1/repo/action.go:1158-1203`; `services/actions/workflow.go:64-118`; `modules/structs/repo_actions.go:106-140,205-243`; `services/convert/convert.go:263-340,475-536,744-767` | Q-02.3.1 |
+| G10: Scoped workflows exist: a source repository registered for an owner or the instance, per-workflow Required and status Patterns; content from the source repository's default branch; the run is created in the consuming repository with its ceiling, secrets and variables, only where the consumer's Actions unit is enabled; a consumer may opt out per workflow. | at source | `models/actions/scoped_workflow.go:18-48`; `modules/setting/actions.go:40,53`; `services/actions/notifier_helper.go:146,373-391,684-790`; `services/actions/commit_status.go:188-201`; `models/repo/repo_unit_actions.go:73-75,103-124` | Q-02.3.1 |
+| A1: act_runner's config.yaml keys (labels and backends, envs and env_file, capacity, timeout, cache.enabled, container.privileged, network, options, valid_volumes, docker_host, force_pull, host.workdir_parent), register --ephemeral, the tokens and runtime URLs it places in the job environment, and NoSkipCheckout, as the Architect recalls them. act_runner is not pinned; nothing was fetched. | no | - | Q-02.2.1 |
+
+### Checks
+
+| Check | Codes | What |
+|---|---|---|
+| `ci-lanes` | `LANE_PRIVILEGED`, `LANE_JOB_CREDENTIALS`, `LANE_RUNNER_CREDENTIALS`, `LANE_HOLDS_MISMATCH` | No validation lane holds an owner, admin, executor or management credential; the job holds exactly the two task tokens and the runner host exactly the runner token; the profile's lanes equal the token policy's map. |
+| `ci-lane-map` | `LANE_MAP_INCOMPLETE`, `LANE_MAP_MISMATCH` | Every inventory credential has exactly one lane, and a credential held in a CI domain is in that domain's lane. |
+| `ci-job-reach` | `JOB_REACH` | The validation job reaches nothing, and every task token's reach is none and is never relied on. |
+| `ci-task-tokens` | `TOKEN_ROW` | Each task token row names an inventory credential of the validation job with a permissionless effective permission on the governance repository. |
+| `ci-runner-config` | `RUNNER_RULE_MISSING`, `RUNNER_RULE_WEAK`, `RUNNER_CONFIG` | Every runner-configuration invariant is declared at its decided value, and a profile variant's declared config.yaml satisfies them. |
+| `ci-workflow` | `WORKFLOW_MISSING`, `WORKFLOW_SYNTAX`, `WORKFLOW_SCHEMA`, `WORKFLOW_TRIGGER`, `WORKFLOW_PERMISSIONS`, `WORKFLOW_USES`, `WORKFLOW_SECRETS`, `WORKFLOW_RUNS_ON`, `WORKFLOW_CONTAINER`, `WORKFLOW_INTERPOLATION`, `WORKFLOW_FIRST_STEPS`, `WORKFLOW_ALLOWLIST` | Every workflow under policy/ci/workflows obeys decision 0016 section 7.3. |
+| `ci-gitea-scope` | `GITEA_ACTIONS_SCOPE`, `GITEA_PUBLIC_REPO`, `GITEA_PROTECTION` | Actions is enabled on the governance repository only, no repository is public, and the governance protections are complete. |
+| `ci-gitea-ceiling` | `GITEA_TOKEN_MODE`, `GITEA_CEILING`, `GITEA_CROSS_REPO` | Restricted mode and an all-none ceiling at the governance owner and repository; no cross-repository grant anywhere. |
+| `ci-gitea-secrets` | `GITEA_SECRETS` | No Actions secret or variable is allowed anywhere. |
+| `ci-proxy` | `PROXY_ALLOWLIST` | The filtering proxy admits exactly the runner RPC, Register only in the provisioning window. |
+| `ci-registration` | `REGISTRATION_RESET` | The registration procedure resets the token after registration, unless the disclosed fallback is in force. |
+| `ci-owner-acts` | `OWNER_ACT` | Every Owner act names its requesting leaf, and an observed one cites its bootstrap-log approval verbatim. |
+| `ci-forward-owner-act` | `FORWARD_OWNER_ACT` | Every forward and host listener names an Owner act. |
+| `ci-facts` | `FACT_UNSUPPORTED`, `FACT_ARCHIVE` | A fact verified at source names its paths and lines in the archive the lock pins; a live one cites evidence; an unverified one names its leaf. |
+| `ci-revocation` | `REVOCATION_MISMATCH` | The revocation rows equal the role-token matrix's. |
+| `ci-refs` | `SCHEMA`, `DANGLING_REF`, `DECISION_UNLINKED`, `STATUS_INVALID`, `LINK_INVALID`, `LINK_MISSING`, `ANCHOR_MISSING` | Every inventory, matrix, role, plan-leaf and decision id resolves, and every statement carries a status and a verify_at leaf. |
+| `ci-publication` | `MACHINE_PATH`, `README_STALE`, `CHECKS_STALE` | No machine path appears; the README's block equals --render; this list names every code the checker emits. |
 <!-- END GENERATED -->
 
 ## Test budgets (F-09.1)

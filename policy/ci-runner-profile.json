@@ -1,0 +1,252 @@
+{
+  "schema": "ai-engineering-harness/policy/ci-runner-profile/v1",
+  "plan_leaf": "Q-02.1",
+  "title": "CI runner control profile: the validation and promotion lanes, the runner's placement and configuration, its reach to Gitea, the Gitea-side configuration and the governance workflow",
+  "as_of": "2026-11-10",
+  "baseline_commit": "93d49f6",
+  "token_policy": "policy/ci-token-secret-policy.json",
+  "inventory": "security/inventory.json",
+  "network_matrix": "policy/network-matrix.json",
+  "role_tokens": "policy/role-tokens.json",
+  "readme": "policy/README.md",
+  "checker": "tools/check_ci_policy.py",
+  "decision": {
+    "id": "0016",
+    "record": null,
+    "note": "Hostile-CI threat model, the validation and promotion lanes, and the CI runner's reach to Gitea: the Architect's draft, revision 2, reviewed by the Overseer and Proposed. The Overseer commits it under decisions/; until then this profile names it by id, and the checker fails once a decisions/0016-*.md exists that this entry does not link."
+  },
+  "relies_on_decisions": ["0003", "0006", "0007", "0009", "0010", "0013", "0014"],
+  "statuses": {
+    "decided": "Decided by decision 0016 (Proposed); the leaf named in verify_at builds or proves it.",
+    "planned": "A proposed value or step that the leaf named in verify_at fixes and proves.",
+    "observed": "Shown by committed evidence."
+  },
+  "acceptance": [
+    {"clause": "No untrusted PR validation job has any necessary reason or configuration path to production/Owner credentials.", "checks": ["ci-lanes", "ci-lane-map", "ci-job-reach", "ci-task-tokens", "ci-runner-config", "ci-workflow", "ci-gitea-secrets"]},
+    {"clause": "The CI runner's reachability to Gitea and the job token's use are decided against decision 0013 point 7.", "checks": ["ci-job-reach", "ci-task-tokens", "ci-gitea-ceiling", "ci-proxy"]},
+    {"clause": "Every forward is an Owner act.", "checks": ["ci-forward-owner-act", "ci-owner-acts"]}
+  ],
+  "lanes": [
+    {
+      "id": "validation-job",
+      "name": "Validation lane: the disposable job container",
+      "domains": ["td-untrusted-ci"],
+      "executes": "Untrusted proposal content at an exact revision, cloned from a staged and verified bundle, after the governance workflow's first three steps.",
+      "holds": ["cred-ci-job-token", "cred-ci-runtime-token"],
+      "reaches": [],
+      "produces": "Log lines and a conclusion, streamed by the runner. No status, no artifact, no merge, no effect.",
+      "status": "decided",
+      "verify_at": ["Q-02.2.2", "Q-02.3.2"]
+    },
+    {
+      "id": "validation-runner-host",
+      "name": "Validation lane: the CI guest and its runner",
+      "domains": ["td-ci-runner-host"],
+      "executes": "act_runner (pinned at Q-02.2.1) and Moby, launching each job as a disposable container under the declared configuration.",
+      "holds": ["cred-runner-token"],
+      "reaches": ["ci-r1"],
+      "produces": "The run record's log and conclusion, over the runner RPC only.",
+      "status": "decided",
+      "verify_at": ["Q-02.2.1", "Q-02.2.2"]
+    },
+    {
+      "id": "trusted-lane",
+      "name": "Promotion lane (trusted)",
+      "domains": ["td-owner", "td-management", "td-privileged-effect", "td-git-hosting"],
+      "executes": "Staging the bundle, dispatching the governance workflow, reading the run record, posting aieh/validation, the protected merge (an Owner act), the independent verification and the privileged effects. No step of it is a Gitea Actions job on the validation runner; no Actions context ever holds a promotion credential.",
+      "holds": "every credential mapped to trusted-lane in the token policy",
+      "reaches": ["ci-r3", "ci-r4"],
+      "produces": "The required status context, the merge and any effect, each under Owner authorization.",
+      "status": "decided",
+      "verify_at": ["Q-02.4", "Q-03.2"]
+    }
+  ],
+  "shared_object": "The exact revision: the proposal SHA and the sha256 of the bundle that carried it. The promotion lane reads Gitea's run record and never consumes a file a job wrote.",
+  "placement": {
+    "runner": "act_runner, unpinned (fd-ci-runner-unpinned): pinned at Q-02.2.1 as a new component resolution (the Linux amd64 release binary with its checksum, and one job image by digest and image id).",
+    "host": "A dedicated disposable CI guest: a CI variant of profiles/strong-windows-qemu-whpx (same provider, accelerator, image, seed pattern, guards, lifecycle verbs and P1 to P12 contract), provisioned by the decision 0006 pattern with Moby, the runner and the job image, and without the Agent Server.",
+    "never": ["the Owner host", "the execution guest"],
+    "ceilings": {"vcpus": 4, "memory_gib": 6, "root_gib": 20, "scratch_gib": 40, "status": "planned", "verify_at": "Q-02.2.1", "owner_act": "C-3"},
+    "lifetimes": [
+      {"mode": "shared", "runner": "persistent", "detail": "Reused for successive jobs within a session; recreated at every policy or pin revision, after any failed containment probe, when the runner is deleted and at least at each unit boundary; the runner is deleted at destroy."},
+      {"mode": "per-validation", "runner": "ephemeral", "detail": "One guest per validation; the runner record and its token die with the single task (G2)."}
+    ],
+    "lifetime_choice": {"status": "planned", "verify_at": "Q-02.2.1", "owner_act": "C-3", "notes": "The Owner chooses at C-3."},
+    "runner_user": "A dedicated guest service user in the CI guest's docker group (root-equivalent inside the CI guest only); the agent login stays out of the docker group (P6).",
+    "status": "decided",
+    "verify_at": ["Q-02.2.1", "Q-02.2.2"]
+  },
+  "runner_config": {
+    "profile_key": "provisioning.ci_runner.config",
+    "label": {"name": "aieh-validation", "scheme": "docker", "image": null, "image_rule": "pinned by digest (docker://<image>@sha256:<64 hex>) at Q-02.2.1"},
+    "rules": [
+      {"path": "runner.labels", "rule": "labels", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "runner.envs", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "runner.env_file", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "runner.capacity", "rule": "must_equal", "value": 1, "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "runner.timeout", "rule": "must_be_set", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "cache.enabled", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.privileged", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.docker_host", "rule": "must_equal", "value": "-", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.valid_volumes", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.network", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Empty: one network per job, behind the guards (br-+); never host."},
+      {"path": "container.enable_ipv6", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.force_pull", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.force_rebuild", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.options", "rule": "options", "status": "decided", "verify_at": "Q-02.2.1"}
+    ],
+    "options": {
+      "declared": [
+        "--volume=/home/agent/exchange:/aieh/exchange:ro",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--user=1001:1001",
+        "--pids-limit=512",
+        "--memory=4g",
+        "--cpus=2",
+        "--ulimit=core=0"
+      ],
+      "exchange_mount": "--volume=/home/agent/exchange:/aieh/exchange:ro",
+      "status": "planned",
+      "verify_at": "Q-02.2.1",
+      "notes": "The option names are decided; the user id, the limits and the mount's guest path are proposals that Q-02.2.1 fixes with the profile variant and the job image."
+    },
+    "status": "decided",
+    "verify_at": ["Q-02.2.1", "Q-02.2.2"]
+  },
+  "registration": {
+    "scope": "aieh-governance/quality-workflows",
+    "performer": "The host-side Gitea-administration command (the gitea_roles.py class), which holds the site-administrator credential; never the dispatcher or the CI guest.",
+    "procedure": [
+      {"step": "reset", "detail": "Reset the governance repository's registration token through the web settings route (POST /{owner}/{repo}/settings/actions/runners/reset_registration_token) under a site-administrator web session (the F-06.1 sign-in flow, with CSRF); every older token for the scope is invalidated."},
+      {"step": "read", "detail": "Read the fresh token with gitea actions generate-runner-token --scope <org>/<repo> into memory, never to a log or file."},
+      {"step": "deliver", "detail": "Hand it to the dispatcher in memory for one delivery over the management channel to the CI guest's provisioning step."},
+      {"step": "register", "detail": "act_runner register in the CI guest (ephemeral for a per-validation guest); the guest keeps only the runner token."},
+      {"step": "reset", "detail": "Reset again immediately after a successful registration or a failed delivery: the delivered value is dead before any job runs."}
+    ],
+    "fallback": {"in_force": false, "detail": "If the Overseer declines the web-route automation: the token stays active between provisionings, is read at each one and is reset on revision or exposure; disclosed as a standing management secret.", "disclosure": "ci-d2"},
+    "status": "decided",
+    "verify_at": "Q-02.2.2",
+    "owner_act": "C-2"
+  },
+  "gitea": {
+    "instance": {
+      "actions_enabled": true,
+      "default_actions_url": "self",
+      "today": {"actions_enabled": false, "status": "observed", "evidence": ["evidence/F-06.1-gitea-loopback.md"]},
+      "status": "planned",
+      "verify_at": "Q-02.3.1",
+      "owner_act": "C-1"
+    },
+    "repositories": [
+      {"repository": "aieh-governance/quality-workflows", "role": "governance", "private": true, "actions_enabled": true, "protections": {"every_ref_push_protected": true, "main_owner_only_merge": true, "admin_override_blocked": true}, "status": "planned", "verify_at": "Q-02.3.1", "owner_act": "C-2"},
+      {"repository": "aieh-authz-fixture/authz", "role": "proposal", "private": true, "actions_enabled": false, "status": "planned", "verify_at": "Q-02.3.1"}
+    ],
+    "every_other_repository": {"private": true, "actions_enabled": false, "status": "decided", "verify_at": "Q-02.3.1", "notes": "Every repository that receives proposals (the integration repository, the fixture, any planning repository) has Actions disabled: a proposal's workflows never run, and no scoped workflow runs there either (G10)."},
+    "public_repositories": [],
+    "secrets": {"repository_secrets": [], "owner_secrets": [], "repository_variables": [], "owner_variables": [], "instance_variables": [], "status": "decided", "verify_at": "Q-02.3.1"},
+    "live_check": {"performer": "The host-side Gitea-administration command's --gitea mode, read-only: Gitea's database and the API as the site administrator (decision 0016 section 6.6). Not this checker's; never run by Q-02.1.", "report_interface": "tools/check_ci_policy.py --live-report FILE (an interface only until Q-02.3.1)", "status": "planned", "verify_at": "Q-02.3.1", "owner_act": "C-2"}
+  },
+  "reach": [
+    {"id": "ci-r1", "from": "td-ci-runner-host", "to": "gitea-server", "kind": "forward", "class": "ci-control", "path": "The runner process to Gitea's runner RPC over the dispatcher-held remote forward bound to the CI guest's loopback (endpoint ci-control); never a job.", "credentials": ["cred-runner-token"], "owner_act": "A-1", "basis": "Decision 0013 point 7 stays as written: the runner is pinned upstream software operated by the harness in a contained domain, not untrusted code.", "status": "decided", "verify_at": "Q-02.2.2"},
+    {"id": "ci-r2", "from": "td-untrusted-ci", "to": "nothing", "kind": "none", "path": "A job reaches no Gitea, host, execution guest, resolver or internet: the egress guard (empty allowlist), the container guard, icc off, SLIRP restrict=on and the loopback-bound forward. GITHUB_SERVER_URL, GITHUB_API_URL and the runtime URLs inside a job name the container's own loopback.", "credentials": [], "basis": "Decision 0013 point 7: untrusted code has no network path to Gitea.", "status": "decided", "verify_at": ["Q-02.2.2", "Q-02.3.2"]},
+    {"id": "ci-r3", "from": "td-management", "to": "ci-runner-host", "kind": "existing", "class": "management", "path": "The dispatcher stages the verified bundle into the CI guest's exchange over the existing management and exchange classes (loopback hostfwd).", "credentials": ["cred-guest-ssh-key"], "status": "decided", "verify_at": "Q-02.2.2"},
+    {"id": "ci-r4", "from": "td-management", "to": "gitea-server", "kind": "existing", "class": "dispatcher-as-bot", "path": "The reporter (aieh-bot-ci) dispatches the governance workflow and posts aieh/validation over host loopback.", "credentials": ["cred-gitea-bot-ci"], "status": "decided", "verify_at": "Q-02.3.1"},
+    {"id": "ci-r5", "from": "td-git-hosting", "to": "td-ci-runner-host", "kind": "none", "path": "Gitea never connects to a runner or a job: the runner polls (G2).", "credentials": [], "status": "decided", "verify_at": "Q-02.2.2"},
+    {"id": "ci-r6", "from": "td-management", "to": "gitea-server", "kind": "listener", "class": "ci-control", "path": "The optional host-side filtering proxy on 127.0.0.1 as the forward's target (proxy).", "credentials": [], "owner_act": "A-4", "status": "planned", "verify_at": "Q-02.2.1"}
+  ],
+  "endpoint": {
+    "class": "ci-control",
+    "description": "The CI runner's control channel to Gitea's runner RPC, reachable from the CI guest's own processes only, never from a job container.",
+    "forward": "ssh -N -R 127.0.0.1:13300:127.0.0.1:<target> held by the dispatcher inside the qualified management channel, with ExitOnForwardFailure=yes, keepalives, the per-instance key and the profile's client options",
+    "bind": "127.0.0.1:13300 on the CI guest",
+    "targets": ["127.0.0.1:13300 (Gitea)", "127.0.0.1:<proxy port> (the filtering proxy, R1)"],
+    "sshd_directives": ["AllowTcpForwarding remote", "GatewayPorts clientspecified", "PermitListen 127.0.0.1:13300"],
+    "runner_instance_url": "http://127.0.0.1:13300",
+    "lifetime": "Only while a validation session is open; recorded beside the launch record (pid, bind, target, instance); re-established idempotently; the runner's poll fails closed while it is down.",
+    "p7_class": {"status": "planned", "owner": "the Overseer, as contract owner", "at": "Q-02.2.1", "notes": "Profiles P7 gains the class with the CI profile variant; Q-02.1 records it only."},
+    "owner_act": "A-1",
+    "status": "decided",
+    "verify_at": "Q-02.2.2"
+  },
+  "proxy": {
+    "adoption": "Overseer ruling R1 (2026-11-10): the host-side filtering proxy is the planned target of the ci-control forward; owned code built at Q-02.2.1; its listener is Owner act A-4. If A-4 is refused, disclosure ci-d3 stands with Gitea's whole HTTP surface.",
+    "allow": [
+      {"method": "POST", "path": "/api/actions/ping.v1.PingService/*"},
+      {"method": "POST", "path": "/api/actions/runner.v1.RunnerService/Register", "window": "provisioning"},
+      {"method": "POST", "path": "/api/actions/runner.v1.RunnerService/Declare"},
+      {"method": "POST", "path": "/api/actions/runner.v1.RunnerService/FetchTask"},
+      {"method": "POST", "path": "/api/actions/runner.v1.RunnerService/UpdateTask"},
+      {"method": "POST", "path": "/api/actions/runner.v1.RunnerService/UpdateLog"}
+    ],
+    "deny": ["/api/actions_pipeline/*", "/twirp/github.actions.results.api.v1.ArtifactService/*", "/api/v1/*", "git smart HTTP", "the web", "everything else"],
+    "owner_act": "A-4",
+    "status": "planned",
+    "verify_at": "Q-02.2.1"
+  },
+  "workflow": {
+    "source_of_record": "policy/ci/workflows/validation.yml",
+    "directory": "policy/ci/workflows",
+    "runtime_home": "aieh-governance/quality-workflows, mirrored by the dispatcher's push to its protected default branch; the trusted lane records the commit and blob sha it dispatched.",
+    "dispatch": "workflow_dispatch with ref the protected default branch and return_run_details=true, by aieh-bot-ci only.",
+    "runs_on": "aieh-validation",
+    "inputs": ["repository", "sha", "bundle_sha256"],
+    "input_env": {"repository": "AIEH_REPOSITORY", "sha": "AIEH_SHA", "bundle_sha256": "AIEH_BUNDLE_SHA256"},
+    "input_patterns": {"sha": "^[0-9a-f]{40}$", "bundle_sha256": "^[0-9a-f]{64}$", "repository": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "allowed_repositories": [],
+    "allowlist_env": "AIEH_ALLOWED_REPOSITORIES",
+    "first_steps": ["validate-inputs", "verify-bundle", "checkout"],
+    "allowed_repositories_note": "Empty: every validation fails closed until a leaf adds a repository (the fixture at Q-02.2.2, the integration repository at its first real consumer).",
+    "status": "decided",
+    "verify_at": ["Q-02.1", "Q-02.2.2"]
+  },
+  "matrix_edits": [
+    {"edge": "nm-runner-gitea", "planned": "allow, status decided, class ci-control, credential cred-runner-token, Owner act", "owner": "the Overseer, as matrix owner", "at": "Q-02.2.1"},
+    {"edge": "nm-ci-git-hosting", "planned": "deny, status decided, by decision 0016 and decision 0013 point 7", "owner": "the Overseer, as matrix owner", "at": "Q-02.2.1"},
+    {"edge": "nm-management-runner", "planned": "allow over the management and exchange classes: the bundle staging", "owner": "the Overseer, as matrix owner", "at": "Q-02.2.1"},
+    {"edge": "nm-gitea-runner", "planned": "stays deny: the runner polls", "owner": "the Overseer, as matrix owner", "at": "Q-02.2.1"}
+  ],
+  "owner_acts": [
+    {"id": "A-1", "act": "Open the ci-control guest-to-host path: the dispatcher-held ssh -R 127.0.0.1:13300:127.0.0.1:<target> from a CI guest, with the CI seed's sshd directives.", "class": "Owner act (op-guest-boundary-change; guest network)", "requested_at": "Q-02.2.2", "status": "planned"},
+    {"id": "A-2", "act": "Place repository content in a CI guest: the exchange push of proposal bundles (a fixture first; real repository content at the first real consumer).", "class": "Owner act (the standing authorization excludes repository content)", "requested_at": "Q-02.2.2", "status": "planned"},
+    {"id": "A-3", "act": "Run an untrusted workload in a CI guest: the first validation job, then Q-02.3.2's hostile job.", "class": "Owner act (the standing authorization excludes untrusted workloads)", "requested_at": "Q-02.2.2", "status": "planned"},
+    {"id": "A-4", "act": "The host-side filtering proxy listener on 127.0.0.1 (proxy allowlist).", "class": "Owner act (a host listener; the decision 0015 precedent)", "requested_at": "Q-02.2.1", "status": "planned"},
+    {"id": "C-1", "act": "Enable Gitea Actions instance-wide (ENABLED = true, DEFAULT_ACTIONS_URL = self, a restart through the lifecycle contract) to serve the governance repository only, and apply the token configuration (restricted mode, all-none ceilings, no cross-repository grants, no public repository).", "class": "Owner confirmation (a configuration change of the trusted computing base)", "requested_at": "Q-02.3.1", "status": "planned"},
+    {"id": "C-2", "act": "Create the private governance repository and the aieh-bot-ci identity; set the protections; operate the registration token by the reset-read-deliver-reset procedure; run the live check's two read-only oracles.", "class": "Owner confirmation of the product shape, performed by the harness", "requested_at": "Q-02.3.1", "status": "planned"},
+    {"id": "C-3", "act": "A CI guest variant beside the execution guest: its composition (Moby, act_runner, the job image; no Agent Server), its ceilings and its lifetime (shared with a persistent runner, or per validation with an ephemeral runner).", "class": "Owner confirmation (a new guest composition and footprint)", "requested_at": "Q-02.2.1", "status": "planned"}
+  ],
+  "checks": [
+    {"id": "ci-lanes", "codes": ["LANE_PRIVILEGED", "LANE_JOB_CREDENTIALS", "LANE_RUNNER_CREDENTIALS", "LANE_HOLDS_MISMATCH"], "what": "No validation lane holds an owner, admin, executor or management credential; the job holds exactly the two task tokens and the runner host exactly the runner token; the profile's lanes equal the token policy's map."},
+    {"id": "ci-lane-map", "codes": ["LANE_MAP_INCOMPLETE", "LANE_MAP_MISMATCH"], "what": "Every inventory credential has exactly one lane, and a credential held in a CI domain is in that domain's lane."},
+    {"id": "ci-job-reach", "codes": ["JOB_REACH"], "what": "The validation job reaches nothing, and every task token's reach is none and is never relied on."},
+    {"id": "ci-task-tokens", "codes": ["TOKEN_ROW"], "what": "Each task token row names an inventory credential of the validation job with a permissionless effective permission on the governance repository."},
+    {"id": "ci-runner-config", "codes": ["RUNNER_RULE_MISSING", "RUNNER_RULE_WEAK", "RUNNER_CONFIG"], "what": "Every runner-configuration invariant is declared at its decided value, and a profile variant's declared config.yaml satisfies them."},
+    {"id": "ci-workflow", "codes": ["WORKFLOW_MISSING", "WORKFLOW_SYNTAX", "WORKFLOW_SCHEMA", "WORKFLOW_TRIGGER", "WORKFLOW_PERMISSIONS", "WORKFLOW_USES", "WORKFLOW_SECRETS", "WORKFLOW_RUNS_ON", "WORKFLOW_CONTAINER", "WORKFLOW_INTERPOLATION", "WORKFLOW_FIRST_STEPS", "WORKFLOW_ALLOWLIST"], "what": "Every workflow under policy/ci/workflows obeys decision 0016 section 7.3."},
+    {"id": "ci-gitea-scope", "codes": ["GITEA_ACTIONS_SCOPE", "GITEA_PUBLIC_REPO", "GITEA_PROTECTION"], "what": "Actions is enabled on the governance repository only, no repository is public, and the governance protections are complete."},
+    {"id": "ci-gitea-ceiling", "codes": ["GITEA_TOKEN_MODE", "GITEA_CEILING", "GITEA_CROSS_REPO"], "what": "Restricted mode and an all-none ceiling at the governance owner and repository; no cross-repository grant anywhere."},
+    {"id": "ci-gitea-secrets", "codes": ["GITEA_SECRETS"], "what": "No Actions secret or variable is allowed anywhere."},
+    {"id": "ci-proxy", "codes": ["PROXY_ALLOWLIST"], "what": "The filtering proxy admits exactly the runner RPC, Register only in the provisioning window."},
+    {"id": "ci-registration", "codes": ["REGISTRATION_RESET"], "what": "The registration procedure resets the token after registration, unless the disclosed fallback is in force."},
+    {"id": "ci-owner-acts", "codes": ["OWNER_ACT"], "what": "Every Owner act names its requesting leaf, and an observed one cites its bootstrap-log approval verbatim."},
+    {"id": "ci-forward-owner-act", "codes": ["FORWARD_OWNER_ACT"], "what": "Every forward and host listener names an Owner act."},
+    {"id": "ci-facts", "codes": ["FACT_UNSUPPORTED", "FACT_ARCHIVE"], "what": "A fact verified at source names its paths and lines in the archive the lock pins; a live one cites evidence; an unverified one names its leaf."},
+    {"id": "ci-revocation", "codes": ["REVOCATION_MISMATCH"], "what": "The revocation rows equal the role-token matrix's."},
+    {"id": "ci-refs", "codes": ["SCHEMA", "DANGLING_REF", "DECISION_UNLINKED", "STATUS_INVALID","LINK_INVALID", "LINK_MISSING", "ANCHOR_MISSING"], "what": "Every inventory, matrix, role, plan-leaf and decision id resolves, and every statement carries a status and a verify_at leaf."},
+    {"id": "ci-publication", "codes": ["MACHINE_PATH", "README_STALE", "CHECKS_STALE"], "what": "No machine path appears; the README's block equals --render; this list names every code the checker emits."}
+  ],
+  "sources": [
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+    "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#Q-02.1",
+    "decisions/0006-guest-provisioning-channel-and-image-conformance.md",
+    "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+    "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+    "evidence/F-06.1-gitea-loopback.md",
+    "evidence/S-01.2.2-segregated-credentials.md",
+    "evidence/S-01.4-network-matrix.md",
+    "evidence/Q-02.1-hostile-ci-policy.md",
+    "profiles/strong-windows-qemu-whpx/profile.json"
+  ]
+}

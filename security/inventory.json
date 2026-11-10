@@ -127,9 +127,9 @@
       "id": "td-ci-runner-host",
       "name": "CI runner host",
       "trust": "contained",
-      "description": "A dedicated runner host, not the trusted management host, whose runner service registers with Gitea and launches disposable job environments.",
+      "description": "A dedicated, disposable CI guest of the strong tier (a CI variant of the QEMU profile; never the Owner host or the execution guest) whose runner service registers with Gitea and launches disposable job containers; its only path off the guest is the ci-control forward to Gitea's runner RPC, an Owner act (decision 0016 (Proposed)).",
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline", "policy/ci-runner-profile.json"],
       "findings": ["fd-ci-runner-unpinned"]
     }
   ],
@@ -389,13 +389,14 @@
       "owner_authority": false,
       "independently_isolated": true,
       "identity": {
-        "planned": "The runner daemon on the dedicated runner host. Its registration secret stays unreachable from the job filesystem.",
+        "planned": "act_runner (pinned at Q-02.2.1) in a dedicated disposable CI guest, as a dedicated guest service user in that guest's docker group (root-equivalent inside the CI guest only). It registers once to the governance repository with a registration token delivered in memory and reset before and after, then holds only its persistent runner token, root-owned outside every mount and unreachable from the job filesystem. It polls Gitea's runner RPC over the ci-control forward and launches each job as a disposable container (decision 0016 (Proposed)).",
         "observed": null
       },
       "status": "planned",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
-        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "policy/ci-runner-profile.json"
       ],
       "findings": ["fd-ci-runner-unpinned"]
     },
@@ -702,6 +703,22 @@
       "findings": ["fd-gitea-version-docs", "fd-gitea-reader-opens-pr", "fd-bootstrap-shared-identity"]
     },
     {
+      "id": "cred-gitea-bot-ci",
+      "name": "CI reporter's Gitea bot token (aieh-bot-ci)",
+      "authority": "scoped",
+      "issuer": "gitea-site-admin",
+      "holder": "management-dispatcher",
+      "manager": "management-dispatcher",
+      "readable_by": [],
+      "storage": "Planned: the dispatcher's custody on the host, as the other bot tokens; never in the CI guest or a job; records carry fingerprints only.",
+      "scope": "Write collaborator of the governance repository and of each integration repository, whose ** protection denies it every push: triggers the governance workflow's workflow_dispatch (write on Actions) and posts aieh/validation on the proposal SHA (write on Code). Token scope write:repository only.",
+      "lifetime": "Gitea 28.3.0 has no token lifetime; rotated by gitea_roles.py rotate as the other bot tokens.",
+      "rotation_revocation_owner": "management-dispatcher",
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "policy/ci-token-secret-policy.json"],
+      "findings": ["fd-gitea-version-docs"]
+    },
+    {
       "id": "cred-ci-job-token",
       "name": "CI job token (GITEA_TOKEN)",
       "authority": "scoped",
@@ -709,28 +726,60 @@
       "holder": "ci-job",
       "manager": "ci-runner-service",
       "readable_by": [],
-      "storage": "The job environment, with restricted repository and workflow token maxima.",
-      "scope": "The consuming repository's job context; no protected merge, deploy or executor access.",
-      "lifetime": "One job.",
+      "storage": "Minted by Gitea per task (40 hex characters, salted hash); delivered to the runner as GITHUB_TOKEN and GITEA_TOKEN and placed by the runner in the job environment. It authenticates as the Actions pseudo-user bound to the task.",
+      "scope": "Effective permission: none on every unit of the governance repository (restricted mode, all-none ceiling at owner and repository, permissions: {}); none on every other private repository (no AllowedCrossRepoIDs, no CollaborativeOwnerIDs); read on every public repository of the instance (irreducible; none exists by policy); accepted as a Bearer fallback by the v3 artifact route for its own task. Reach from the validation job: none (no network path). Relied on: never (decision 0016 (Proposed), section 5.3).",
+      "lifetime": "One task: valid while the task is running or cancelling.",
       "rotation_revocation_owner": "gitea-site-admin",
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline", "policy/ci-token-secret-policy.json"],
+      "findings": ["fd-ci-runner-unpinned", "fd-ci-public-read-status-context"]
+    },
+    {
+      "id": "cred-ci-runtime-token",
+      "name": "CI runtime token (gitea_runtime_token; expected as ACTIONS_RUNTIME_TOKEN)",
+      "authority": "scoped",
+      "issuer": "external:gitea-actions",
+      "holder": "ci-job",
+      "manager": "ci-runner-service",
+      "readable_by": [],
+      "storage": "A JWT Gitea mints per task in the task context (HS256 with the instance's general token signing secret). Whether act_runner places it in the job environment is verified at Q-02.2.1; the lane treats it as present either way. Never recorded.",
+      "scope": "Actions.Results:<run>:<job> plus cache write: accepted by the v3 and v4 artifact routes and by act_runner's cache server. Inert: no network path, the artifact routes denied by the filtering proxy, the cache server disabled. Relied on: never.",
+      "lifetime": "One task; the JWT is valid from issue for 1 h plus ENDLESS_TASK_TIMEOUT (4 h at the default).",
+      "rotation_revocation_owner": "gitea-site-admin",
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline", "policy/ci-token-secret-policy.json"],
       "findings": ["fd-ci-runner-unpinned"]
     },
     {
       "id": "cred-runner-registration",
-      "name": "CI runner registration secret",
+      "name": "CI runner registration token",
       "authority": "management",
       "issuer": "gitea-site-admin",
+      "holder": "gitea-site-admin",
+      "manager": "gitea-site-admin",
+      "readable_by": ["management-dispatcher", "ci-runner-service"],
+      "storage": "The active row for the governance repository's scope in Gitea's database: it stays active after a registration until reset (Gitea 28.3.0). Never a file, a record, a log or the Owner's credential store. The host-side Gitea-administration command resets and reads it; the dispatcher carries it in memory once to the CI guest's register step; it is reset again after registration (decision 0016 (Proposed), section 6.3).",
+      "scope": "Register a runner for the governance repository only.",
+      "lifetime": "From reset to reset: minutes per provisioning.",
+      "rotation_revocation_owner": "gitea-site-admin",
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "policy/ci-token-secret-policy.json"],
+      "findings": ["fd-ci-runner-unpinned", "fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "cred-runner-token",
+      "name": "CI runner token",
+      "authority": "scoped",
+      "issuer": "external:gitea-actions",
       "holder": "ci-runner-service",
       "manager": "ci-runner-service",
       "readable_by": [],
-      "storage": "The runner host, unreachable from the job filesystem.",
-      "scope": "Register the runner and receive jobs.",
-      "lifetime": "Not defined yet.",
-      "rotation_revocation_owner": "owner",
+      "storage": "The runner's persistent token, issued by Gitea at registration (salted hash in Gitea's database); root-owned on the CI guest, outside every mount; never in a job.",
+      "scope": "Poll and report the governance repository's tasks over the runner RPC (FetchTask, UpdateTask, UpdateLog) through the ci-control forward.",
+      "lifetime": "Until the runner record is deleted (always at CI-guest destroy); for an ephemeral runner, until its single task ends.",
+      "rotation_revocation_owner": "gitea-site-admin",
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline", "policy/ci-token-secret-policy.json"],
       "findings": ["fd-ci-runner-unpinned"]
     },
     {
@@ -1212,13 +1261,13 @@
     },
     {
       "id": "ci-runner-host",
-      "name": "Dedicated CI runner host",
+      "name": "Dedicated CI guest (runner host)",
       "kind": "host",
       "custodian": "ci-runner-service",
-      "location": "Not the trusted management host; untrusted jobs in disposable containers or VMs; no host-mode execution or broad container socket.",
-      "credentials": ["cred-runner-registration", "cred-ci-job-token"],
+      "location": "A dedicated disposable CI guest of the strong tier, not the trusted management host and not the execution guest: act_runner and Moby, no Agent Server; untrusted jobs as disposable containers with no network path; no host-mode execution, engine socket or host path (decision 0016 (Proposed)).",
+      "credentials": ["cred-runner-token", "cred-runner-registration", "cred-ci-job-token", "cred-ci-runtime-token"],
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline", "policy/ci-runner-profile.json"],
       "findings": ["fd-ci-runner-unpinned"]
     },
     {
@@ -1599,29 +1648,60 @@
     {
       "id": "op-ci-untrusted-job",
       "name": "Execute a pull-request CI job",
-      "mechanism": "A Gitea Actions job on the dedicated runner host",
+      "mechanism": "The governance workflow's job, dispatched by the trusted lane, as a disposable container in the CI guest; it reaches nothing and its two task tokens are inert",
       "principal": "ci-job",
       "owner_only": false,
-      "credentials": ["cred-ci-job-token"],
+      "credentials": ["cred-ci-job-token", "cred-ci-runtime-token"],
       "assets": ["ci-runner-host"],
       "status": "planned",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
-        "profiles/strong-windows-qemu-whpx/profile.json"
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "policy/ci-runner-profile.json"
       ],
       "findings": ["fd-ci-runner-unpinned"]
     },
     {
       "id": "op-ci-runner-registration",
       "name": "Register a runner and receive jobs",
-      "mechanism": "The runner service with its registration secret",
+      "mechanism": "act_runner register with the registration token delivered once in memory (reset before and after), then FetchTask, UpdateTask and UpdateLog with its persistent runner token over the ci-control forward",
       "principal": "ci-runner-service",
       "owner_only": false,
-      "credentials": ["cred-runner-registration"],
+      "credentials": ["cred-runner-registration", "cred-runner-token"],
       "assets": ["ci-runner-host", "gitea-server"],
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"],
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline", "policy/ci-runner-profile.json"],
       "findings": ["fd-ci-runner-unpinned"]
+    },
+    {
+      "id": "op-ci-dispatch",
+      "name": "Dispatch a validation and report its result",
+      "mechanism": "Stage the verified bundle into the CI guest's exchange, trigger the governance workflow's workflow_dispatch from its protected default branch with return_run_details=true, read the run record it returned and post aieh/validation on the proposal SHA (fail closed)",
+      "principal": "management-dispatcher",
+      "owner_only": false,
+      "credentials": ["cred-gitea-bot-ci"],
+      "assets": ["repo-gitea-policy", "gitea-server", "ci-runner-host"],
+      "performed_via": "Not performed yet. During bootstrap the Owner's account is to perform it through tools/guest.py, disclosed as every bootstrap operation is.",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "policy/ci-runner-profile.json"
+      ],
+      "findings": ["fd-ci-runner-unpinned"]
+    },
+    {
+      "id": "op-ci-administration",
+      "name": "Administer the CI lane in Gitea",
+      "mechanism": "The host-side Gitea-administration command: the registration token's reset-read-deliver-reset, runner deletion, the Actions token ceilings and unit states, and the read-only live check (Gitea's database and the API as the site administrator)",
+      "principal": "gitea-site-admin",
+      "owner_only": false,
+      "credentials": ["cred-gitea-admin", "cred-runner-registration"],
+      "assets": ["gitea-server", "repo-gitea-policy"],
+      "performed_via": "Not performed yet. During bootstrap the Owner's account is to perform it, as it performs op-gitea-administration.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "policy/ci-runner-profile.json"],
+      "findings": ["fd-ci-runner-unpinned", "fd-bootstrap-shared-identity"]
     },
     {
       "id": "op-release-signing-deploy",
@@ -1882,13 +1962,14 @@
       "id": "fd-ci-runner-unpinned",
       "kind": "unknown",
       "title": "No CI runner is selected or pinned",
-      "detail": "composition/ pins Gitea but no runner. The runner's identity, its dedicated host, its isolation of jobs and the job-token maxima are planned only. S-01.4 records the CI edges as planned in the network matrix (policy/network-matrix.json): the runner host to Gitea and Gitea's job token are not reachable today (no runner exists; Gitea binds host 127.0.0.1 only). Constraint carried: Gitea is loopback-only, a guestfwd chardev is one stream, and P7 enumerates no endpoint class for a runner, so the runner's reachability to Gitea needs a decided class and an Owner act (Q-02.1, Q-02.2.1). Untrusted code has no network class to Gitea (decision 0013, point 7), so a CI job's use of its job token against Gitea (checkout, statuses) is to be reconciled there too.",
-      "refs": ["ci-job", "ci-runner-service", "ci-runner-host", "cred-ci-job-token", "cred-runner-registration"],
+      "detail": "composition/ pins Gitea but no runner. The runner's class is decided by decision 0016 (Proposed; policy/ci-runner-profile.json): act_runner in a dedicated disposable CI guest, its only path off the guest the ci-control forward to Gitea's runner RPC (an Owner act); the validation job reaches nothing, and its two task tokens are inert and permissionless (decision 0013, point 7, unchanged). Still open: the pinned runner binary and job image, the CI profile variant, the P7 ci-control class and the matrix edits (Q-02.2.1), and the act_runner facts the profile relies on (A1 of policy/ci-token-secret-policy.json).",
+      "refs": ["ci-job", "ci-runner-service", "ci-runner-host", "cred-ci-job-token", "cred-runner-registration", "cred-runner-token", "cred-ci-runtime-token"],
       "citations": [
         "composition/candidates.json",
-        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "policy/ci-runner-profile.json"
       ],
-      "carried_to": ["Q-02.1", "Q-02.2.1"]
+      "carried_to": ["Q-02.2.1", "Q-02.2.2"]
     },
     {
       "id": "fd-gitea-reader-opens-pr",
@@ -1900,18 +1981,28 @@
       "carried_to": ["D-01.2"]
     },
     {
+      "id": "fd-ci-public-read-status-context",
+      "kind": "limit",
+      "title": "A Gitea job token reads every public repository, and a status context is forgeable by any writer on Code",
+      "detail": "At the pin (Q-02.1 step 1, source-level): the Actions user's individual read is added after every ceiling, so every job token reads every public repository of the instance; the lane's policy is that no public repository exists, and the live check reports any that does. Required status checks match contexts by glob, not creators, so any holder of write on Code can post aieh/validation; every such holder is a trusted-side custodian, and the promotion lane trusts the run record the verifier re-reads, not the status.",
+      "refs": ["cred-ci-job-token", "ci-job", "gitea-server"],
+      "citations": ["evidence/Q-02.1-hostile-ci-policy.md", "policy/ci-token-secret-policy.json"],
+      "carried_to": ["Q-02.3.1", "Q-03.2"]
+    },
+    {
       "id": "fd-gitea-version-docs",
       "kind": "unknown",
       "title": "Gitea bot and token behaviour is unverified at the pinned version",
-      "detail": "The blueprint's SEC-02 qualification cites Gitea 28 token-only bot accounts and audit logging and names 28.2.0 as its baseline; composition/ pins 28.3.0. Observed on the running 28.3.0 instance at S-01.2.2: the Bot account type (no password), the restricted flag (a public repository is invisible to a restricted account), categorical token scopes (read: and write: of activitypub, issue, misc, notification, organization, package, repository, user and admin, plus all), no token lifetime, self-revocation through DELETE /api/v1/token, the site administrator listing and revoking another account's token, sudo refused to non-administrators, the reverse-proxy user header ignored, reviews needing write:repository, and branch protection (push and merge allowlists, force-push and deletion denied, the administrator's merge override blocked). Still unverified: audit logging (off by default).",
+      "detail": "The blueprint's SEC-02 qualification cites Gitea 28 token-only bot accounts and audit logging and names 28.2.0 as its baseline; composition/ pins 28.3.0. Observed on the running 28.3.0 instance at S-01.2.2: the Bot account type (no password), the restricted flag (a public repository is invisible to a restricted account), categorical token scopes (read: and write: of activitypub, issue, misc, notification, organization, package, repository, user and admin, plus all), no token lifetime, self-revocation through DELETE /api/v1/token, the site administrator listing and revoking another account's token, sudo refused to non-administrators, the reverse-proxy user header ignored, reviews needing write:repository, and branch protection (push and merge allowlists, force-push and deletion denied, the administrator's merge override blocked). Still unverified: audit logging (off by default). Read at source in gitea-src-28.3.0 at Q-02.1, not live: the Actions facts G1 to G10 of policy/ci-token-secret-policy.json (the configurable token ceilings, the registration token active until reset, every owner and repository secret delivered to every task, the status contexts, the owner-only Actions secret, variable and runner routes, scoped workflows); live verification is Q-02.3.1's.",
       "refs": ["gitea-server", "gitea-site-admin", "cred-gitea-bot-planner", "cred-gitea-bot-builder", "cred-gitea-bot-reviewer", "cred-verifier-read"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
         "composition/candidates.json",
         "composition/compatibility-matrix.md",
-        "evidence/S-01.2.2-segregated-credentials.md"
+        "evidence/S-01.2.2-segregated-credentials.md",
+        "evidence/Q-02.1-hostile-ci-policy.md"
       ],
-      "carried_to": ["G-03.1"]
+      "carried_to": ["G-03.1", "Q-02.3.1"]
     },
     {
       "id": "fd-owner-ui-access",

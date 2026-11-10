@@ -1,0 +1,91 @@
+# The governance validation workflow: its source of record (plan leaf Q-02.1, decision 0016,
+# Proposed, sections 4.2 and 7). Its runtime home is the protected governance repository
+# aieh-governance/quality-workflows (Q-02.3.1); the trusted lane dispatches it from that
+# repository's protected default branch, and tools/check_ci_policy.py checks this file
+# against policy/ci-runner-profile.json. Editing it is a governance change.
+#
+# The job reaches nothing: it has no network path, no secret and a permissionless token. The
+# proposal arrives as a git bundle staged by the dispatcher into the read-only exchange mount.
+# The first three steps pin it to the dispatched SHA before any repository command runs.
+# Expressions appear only in the job's env block; no run text interpolates anything.
+name: aieh-validation
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: The proposal repository, owner/name, one of the declared allowlist
+        required: true
+        type: string
+      sha:
+        description: The proposal commit, 40 lower-case hexadecimal characters
+        required: true
+        type: string
+      bundle_sha256:
+        description: The sha256 of the staged git bundle, 64 lower-case hexadecimal characters
+        required: true
+        type: string
+permissions: {}
+jobs:
+  validate:
+    runs-on: aieh-validation
+    timeout-minutes: 60
+    env:
+      AIEH_REPOSITORY: ${{ inputs.repository }}
+      AIEH_SHA: ${{ inputs.sha }}
+      AIEH_BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+      AIEH_EXCHANGE: /aieh/exchange
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - id: validate-inputs
+        name: Validate the dispatch inputs
+        shell: bash
+        env:
+          AIEH_ALLOWED_REPOSITORIES: ""
+        run: |
+          set -euo pipefail
+          [[ "$AIEH_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha is not 40 lower-case hex characters" >&2; exit 1; }
+          [[ "$AIEH_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "bundle_sha256 is not 64 lower-case hex characters" >&2; exit 1; }
+          [[ "$AIEH_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "repository is not owner/name" >&2; exit 1; }
+          allowed=0
+          for name in $AIEH_ALLOWED_REPOSITORIES; do
+            if [ "$name" = "$AIEH_REPOSITORY" ]; then allowed=1; fi
+          done
+          [ "$allowed" = 1 ] || { echo "repository is not in the declared allowlist" >&2; exit 1; }
+      - id: verify-bundle
+        name: Verify the staged bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$AIEH_EXCHANGE/validation/$AIEH_BUNDLE_SHA256.bundle"
+          [ -f "$bundle" ] || { echo "no staged bundle" >&2; exit 1; }
+          actual="$(sha256sum "$bundle" | cut -d ' ' -f 1)"
+          [ "$actual" = "$AIEH_BUNDLE_SHA256" ] || { echo "bundle digest mismatch" >&2; exit 1; }
+          verify="$(mktemp -d)"
+          git init --quiet --bare "$verify"
+          git -C "$verify" bundle verify --quiet "$bundle"
+          rm -rf "$verify"
+      - id: checkout
+        name: Clone the bundle and check out the dispatched SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$AIEH_EXCHANGE/validation/$AIEH_BUNDLE_SHA256.bundle"
+          rm -rf proposal
+          git clone --quiet --no-checkout "$bundle" proposal
+          git -C proposal -c advice.detachedHead=false checkout --quiet --detach "$AIEH_SHA"
+          [ "$(git -C proposal rev-parse HEAD)" = "$AIEH_SHA" ] || { echo "HEAD is not the dispatched SHA" >&2; exit 1; }
+      - id: quality
+        name: Run the repository's quality commands
+        shell: bash
+        working-directory: proposal
+        run: |
+          # Until Q-01.x defines them: the AGENTS.md command list, with the tools set from the
+          # pinned job image (Q-02.2.1): the job has no network, so nothing is installed here.
+          set -euo pipefail
+          python3 -I -B tools/check_prereqs.py --tier basic
+          python3 -I tools/verify_seed.py
+          python3 -I tools/verify_seed.py --baseline seed
+          for suite in tools/tests integrations/store/tests integrations/effects/tests integrations/planning/tests integrations/lineage/tests integrations/owner/tests integrations/paths/tests integrations/platform/tests integrations/credentials/tests integrations/gitea/tests integrations/dispatch/tests integrations/repository/tests; do
+            python3 -I -B -m unittest discover -s "$suite" -v
+          done
