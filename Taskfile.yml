@@ -357,7 +357,7 @@ tasks:
   # recorder (plan leaf P-04.1, decision 0008; integrations/owner/README.md). The recorder commits
   # in process through the repository-access module (decision 0014), so it needs the tools venv.
   owner:test:
-    desc: "Run the Owner decision recorder tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/owner/tests -v): the shared owner-decision/v1 record and statement verdicts, the recorder's edits of proposal.md and .openspec.yaml, and prepare and record on throwaway fixture repositories (the lineage objective resolver round trip, the id kept on re-recording, every refusal with its code and remedy; synthetic statements only)"
+    desc: "Run the Owner decision recorder tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/owner/tests -v): the shared owner-decision/v1 record and statement verdicts, the recorder's edits of proposal.md and .openspec.yaml, and prepare and record on throwaway fixture repositories (the lineage objective resolver round trip, the id kept on re-recording, every refusal with its code and remedy; synthetic statements only); the authorization recorder (P-04.2) against a fake Gitea, in memory and over an in-process loopback HTTP server (one merge per recorded decision, every refusal with its code, the lost answer resolved by reading); the live exercise on the S-01.2.2 fixture skips unless AIEH_AUTHZ_RECORDER_LIVE=1"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
@@ -373,6 +373,15 @@ tasks:
       PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/owner/acceptance_recorder.py {{.CLI_ARGS}}'
+
+  owner:authorize:
+    desc: "The Owner authorization recorder (<tools python> -I -B integrations/owner/authorization_recorder.py <command>; plan leaf P-04.2), run only in the main session on an Owner decision: pass -- prepare OWNER/NAME PULL [--expires-in-minutes N] to write the challenge to show the Owner to the recorder's state, -- record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION to record the Owner's statement and merge the challenged head as aieh-owner, or -- resolve --challenge NONCE to resolve an unknown outcome by reading (never merging); exit 2 on a refusal, 1 on a failed or unknown outcome"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/owner/authorization_recorder.py {{.CLI_ARGS}}'
 
   # Managed data root (plan leaf F-07.1, decision 0009): the shared path resolver, its
   # configuration and the Python tools venv (integrations/paths/README.md).

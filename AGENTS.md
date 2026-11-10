@@ -103,7 +103,8 @@ unless adaptation is necessary.
   hooks:verify` find it the same way). So do the planning and lineage
   commands (`task planning:create`, `planning:resolve`, `planning:readiness`,
   `lineage:resolve`, `lineage:trace`, `lineage:example`), the acceptance
-  recorder (`owner:accept`) and the guest and Gitea commands that read a
+  recorder (`owner:accept`), the authorization recorder (`owner:authorize`)
+  and the guest and Gitea commands that read a
   repository (`task guest:create`,
   `guest:create-canaries`, `guest:create-provisioned`, `guest:recreate`,
   `guest:netprobe`, `guest:smoke`, `guest:push`, `gitea:verify`,

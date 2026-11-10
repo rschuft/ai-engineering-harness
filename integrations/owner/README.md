@@ -1,33 +1,44 @@
 # Owner decisions
 
 Plan group P-04, "Record Owner decisions": Owner decisions are recorded by deterministic, non-model
-recorders in one shared Owner decision-record shape. This directory holds that shape and the first
-recorder:
+recorders in one shared Owner decision-record shape. This directory holds that shape and the two
+recorders:
 
-- the **Owner decision record** (`owner-decision/v1`, [`owner_decision.py`](owner_decision.py)),
-  shared with the Owner authorization recorder of plan leaf P-04.2 (not built here);
+- the **Owner decision record** (`owner-decision/v1`, [`owner_decision.py`](owner_decision.py));
 - the **acceptance recorder** (plan leaf P-04.1,
   [`acceptance_recorder.py`](acceptance_recorder.py)): it records the Owner's acceptance of an
   Objective item of an intent-driven OpenSpec change and mints the outcome id, in the form of
-  [decision 0008](../../decisions/0008-outcome-identity-assignment-form-and-record.md).
+  [decision 0008](../../decisions/0008-outcome-identity-assignment-form-and-record.md);
+- the **Owner authorization recorder** (plan leaf P-04.2,
+  [`authorization_recorder.py`](authorization_recorder.py); decision 0012 as proposed): it records
+  the Owner's authorization of one exact operation manifest and merges it into the protected branch
+  as `aieh-owner` (below).
 
 Standard library only, plus the shared repository-access module (Dulwich, from the Python tools set;
 [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)) and
-the lineage objective resolver. Nothing here launches a process, uses the network, reads a
-credential or touches the managed data root.
+the lineage objective resolver. The acceptance recorder launches no process, uses no network, reads
+no credential and does not touch the managed data root. The authorization recorder launches no
+process either; it talks to the managed Gitea on host loopback, reads the one credential it is
+custodian of, and keeps its state and receipts under the managed data root (below).
 
 ## Files
 
 | Path | What |
 |---|---|
-| `owner_decision.py` | The shared record: its fields, the kinds, the `accept-objective` subject, `statement_verdict` and `check_record` |
+| `owner_decision.py` | The shared record: its fields, the kinds, the `accept-objective` and `authorize-operation` subjects, `statement_verdict` and `check_record` |
 | `acceptance_recorder.py` | `prepare` and `record`, the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
+| `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy, the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
 | `tests/test_recorder_edits.py` | The recorder's edits, byte for byte, line endings included; every code has a remedy (unit) |
 | `tests/test_acceptance_recorder.py` | `prepare` and `record` on throwaway fixture repositories: the resolver round trip, the id kept on re-recording, the shared shape, every refusal; the command line (integration) |
 | `tests/test_live_openspec.py` | Live, skipped unless `AIEH_OPENSPEC` names the pinned OpenSpec 1.16.0: `validate --strict` accepts a change holding `owner-decisions/` and `x-outcomes`, `archive --yes` moves the decision record with the change byte for byte, and the outcome resolves at its archived path (e2e) |
 | `tests/owner_fixture.py` | The fixture project repository (two changes from the P-01.2 recording) and the example record; `--record` rewrites it |
 | `tests/fixtures/accept-objective.decision.json` | The example decision record (synthetic statement, fixed clock, nonce and ids) |
+| `tests/fake_gitea.py` | A fake Gitea 28.3.0 (the slice the authorization recorder uses, as read in the pinned source), callable in memory or served by an in-process HTTP server on 127.0.0.1 that can drop an answer; and a fixture credential provider |
+| `tests/authz_support.py` | The authorization recorder's per-test fixture: a fake Gitea, a fixture provider, the recorder's state and an integration store of its own, a fixed clock |
+| `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the command line (unit) |
+| `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; every bot token refused; no token minted; a lost answer resolved by reading (integration) |
+| `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture, skipped unless `AIEH_AUTHZ_RECORDER_LIVE=1` and `AIEH_AUTHZ_RECORDER_APPROVAL` name an Owner-approved run (e2e) |
 
 ## The Owner decision record (`owner-decision/v1`)
 
@@ -37,8 +48,8 @@ One JSON object per decision, with exactly these fields in this order:
 |---|---|
 | `format` | `owner-decision/v1` |
 | `decisionId` | a random UUID, version 4, canonical lower-case text |
-| `kind` | `accept-objective` (P-04.1); `authorize-operation` is reserved for P-04.2, which defines its subject (until then a record of that kind is refused) |
-| `subject` | what was decided on; for `accept-objective`: `change`, `item` (`O<n>`), `outcome` (the outcome id), `revision` (the commit the summary was shown at) and `proposal` (the sha256 of the change's `proposal.md` there) |
+| `kind` | `accept-objective` (P-04.1) or `authorize-operation` (P-04.2) |
+| `subject` | what was decided on; for `accept-objective`: `change`, `item` (`O<n>`), `outcome` (the outcome id), `revision` (the commit the summary was shown at) and `proposal` (the sha256 of the change's `proposal.md` there); for `authorize-operation`: `repository` (`owner/name`), `pull`, `base` (the protected branch), `head` (the exact head), `manifest` (`operations/<operation>.json`), `digest` (`sha256:` of its blob), `operation`, and what the manifest declares: `operationKind`, `target` and `expiresAt` |
 | `shown` | what the recorder presented before the decision: `summary` (the text shown), `nonce` (32 lower-case hex digits) and `expiresAt` (the challenge's expiry) |
 | `statement` | the decision as stated: `text` (verbatim), `attributedTo` (`owner`), `channel` (a lower-case token, such as `main-session`) and `reference` (where the statement is kept) |
 | `recordedBy` | who ran the recorder: `owner`, `agent:<id>` or `person:<id>` |
@@ -135,6 +146,87 @@ exit 2), and changes nothing: the branch, the work tree and the index are as the
 | `RESOLUTION_FAILED` | the new commit's outcome does not resolve as declared; nothing was committed |
 | `PROJECT_UNAVAILABLE`, `GIT_FAILED` | not a work tree with a commit, or Dulwich is not importable; the repository could not be read |
 
+## The Owner authorization recorder (plan leaf P-04.2)
+
+The record of an Owner authorization is a merge commit on the protected branch of the authorization
+repository, merged by the Gitea account `aieh-owner`; the Owner's act is a recorded decision, never a
+Gitea operation (decision 0012 as proposed). The recorder is the sole custodian of
+`cred-gitea-owner-account`: it reads the credential provider entry `AIEH Gitea owner` by name, into
+memory, for each command (`integrations/credentials`, plan leaf F-06.3), and authenticates by HTTP
+basic authentication over one keep-alive connection to the managed Gitea on 127.0.0.1. It refuses an
+entry that names another account or holds anything token-shaped, never sends a token, never mints
+one, never uses `sudo`, `force_merge` or auto-merge, and makes merge commits only: its session can
+make only its fixed reads and one merge call, whose body is exactly `Do: merge`, the title, the
+message, `head_commit_id` and no branch deletion. It has no agent-callable or MCP surface: it is run
+only in the main session on an Owner decision.
+
+1. **`prepare OWNER/NAME PULL`** reads the pull request as `aieh-owner` and writes a challenge
+   (`owner-authorization-challenge/v1`) to the recorder's own state,
+   `<state>/owner-authorization/challenges/<nonce>.json`: the operation, the pull request, its
+   exact head, the manifest's digest and what it declares, the summary to show the Owner (the
+   manifest itself included), a random nonce and its expiry (30 minutes by default, at most a day).
+2. **`record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION`** refuses (below) unless
+   every check holds, then writes the Owner decision record (kind `authorize-operation`) to
+   `<state>/owner-authorization/decisions/<decisionId>.json` and, before anything is sent, a
+   write-ahead receipt of its own append-only kind in the integration store
+   (`owner-authorization/v1/<nonce>`, format `aieh-owner-authorization/1`, holding the decision, the
+   approved head, the digest, the trailers and the merge call; never the effects store). It merges
+   with `Do: merge` and `head_commit_id` and the trailers `AIEH-Decision-Id`,
+   `AIEH-Decision-Channel`, `AIEH-Approved-Head`, `AIEH-Manifest-Digest`, `AIEH-Statement-Ref` and
+   `AIEH-Recorder: authorization-recorder/1` in the message, then reads back the protected ref (the
+   merge commit), its parents (the approved head second), the trailers, the manifest digest at the
+   merge and `merged_by`. The receipt ends `confirmed`, `failed` (Gitea refused; nothing merged) or
+   `unknown` (the answer was lost, or a 5xx, or the read-back disagreed).
+3. **`resolve --challenge NONCE`** resolves an `unknown` receipt **by reading**, never by merging:
+   `confirmed` when the pull request was merged by `aieh-owner` with this decision's trailers,
+   approved head and digest; `failed` when it was merged otherwise, closed, or is still open and
+   unmerged 15 minutes after the merge was sent; otherwise it stays `unknown`.
+
+`merged_by: aieh-owner` is shown as "merged under Owner authority by the recorder on decision
+<id>", never as merged by the Owner. The admitted channel is `main-session` (the bootstrap channel):
+the Owner's verbatim reply in the main-session conversation after the challenge is shown,
+transcribed by the Overseer and logged with the decision id. It proves a declared decision bound to
+an exact revision, not an authenticated Owner.
+
+**The manifest.** The recorder reads four fields of `operations/<id>.json`, a UTF-8 JSON object of
+at most 64 KiB: `operation` (equal to the file's id), `kind` (a lower-case token), `target` (one
+line) and `expiresAt` (`YYYY-MM-DDTHH:MM:SSZ`). Other fields are allowed: the typed manifest is
+plan leaf G-04.1.1's.
+
+**What the policy check can see.** Gitea 28.3.0 serves branch protection rules
+(`GET /repos/{owner}/{repo}/branch_protections`) to repository and site administrators only
+(`reqToken(), reqAdmin()` in `routers/api/v1/api.go`), and `aieh-owner` is neither. The recorder
+therefore compares what a write collaborator can read with the expected policy of the repository
+(`Policy`; the S-01.2.2 fixture `aieh-authz-fixture/authz` is the one admitted repository, its
+expectation derived from `gitea_roles.protection_rules()`): the repository is private, not archived,
+with its default branch, allowing merge commits, and `aieh-owner` holds write but not admin; the
+protected branch is protected, `aieh-owner` cannot push to it but can merge, with the rule's required
+approvals and no status checks. It cannot see who else is on the merge or push allowlists, force
+push, `block_admin_merge_override`, `block_on_outdated_branch`, the approvals allowlist or the
+rule's name (`Policy.unobservable`).
+
+### Refusals
+
+`authorization-recorder: CODE: detail. Remedy: ...`; exit 2 when nothing was sent to Gitea's merge,
+1 for a failed or unknown outcome.
+
+| Code | Refused when |
+|---|---|
+| `CHALLENGE_MISSING`, `CHALLENGE_INVALID`, `CHALLENGE_UNKNOWN` | no challenge; not a nonce, or a malformed state file; a nonce this recorder did not issue (not in its state) |
+| `CHALLENGE_EXPIRED`, `CHALLENGE_CONSUMED` | the challenge's expiry has passed; a receipt already exists for the nonce (a replay) |
+| `STATEMENT_MISSING`, `STATEMENT_MODEL_AUTHORED`, `STATEMENT_NOT_OWNER`, `STATEMENT_INVALID` | the statement verdicts of the shared record |
+| `STATEMENT_OPERATION_MISSING`, `CHANNEL_NOT_ADMITTED` | the statement does not name the operation id; its channel is not admitted |
+| `RECORDED_BY_INVALID`, `REPOSITORY_NOT_ADMITTED` | `--recorded-by` is not an attribution; no expected policy for the repository |
+| `CREDENTIAL_MISSING`, `CREDENTIAL_REFUSED`, `CREDENTIAL_REJECTED` | no entry; an entry naming another account (a bot) or holding a token-shaped or empty secret, refused before anything is sent; Gitea refuses the password |
+| `IDENTITY_NOT_OWNER`, `OWNER_IS_ADMIN`, `OWNER_HAS_TOKEN` | the credential signs in as another account; `aieh-owner` is an administrator; it holds a token |
+| `POLICY_DRIFT` | the repository or the protected branch differs from the expected policy |
+| `PULL_NOT_FOUND`, `PULL_NOT_OPEN`, `PULL_BASE_WRONG`, `PULL_AUTHOR_OWNER` | no such pull request; not open; not from a branch of the repository into the protected branch; opened by `aieh-owner` |
+| `MANIFEST_NOT_SINGLE`, `MANIFEST_INVALID`, `MANIFEST_EXPIRED` | not exactly one added `operations/<id>.json`; the four fields above; the manifest's expiry has passed |
+| `HEAD_STALE`, `DIGEST_CHANGED` | the head is not the challenged one (the recorder's check, or Gitea's 409 to `head_commit_id`); the digest is not the challenged one |
+| `OPERATION_NOT_NEW`, `PULL_NOT_MERGEABLE` | the manifest is on the protected branch already or the operation has a receipt that is not failed; Gitea does not report the pull request mergeable |
+| `MERGE_REFUSED`, `OUTCOME_UNKNOWN` | Gitea refused the merge (405 and others; receipt failed); the answer was lost or did not read back (receipt unknown; run `resolve`) |
+| `GITEA_UNAVAILABLE`, `RECEIPT_MISSING` | Gitea did not answer a read; `resolve` for a nonce without a receipt |
+
 ## Commands
 
 From the repository root, under the tools interpreter (`<tools python>` is what
@@ -149,6 +241,26 @@ From the repository root, under the tools interpreter (`<tools python>` is what
 ```
 
 `task owner:accept -- prepare ...` and `task owner:accept -- record ...` run the first two.
+
+The authorization recorder, only in the main session on an Owner decision:
+
+```
+<tools python> -I -B integrations/owner/authorization_recorder.py prepare OWNER/NAME PULL [--expires-in-minutes N]
+<tools python> -I -B integrations/owner/authorization_recorder.py record --challenge NONCE --statement statement.json \
+    --recorded-by agent:<id>
+<tools python> -I -B integrations/owner/authorization_recorder.py resolve --challenge NONCE
+```
+
+`task owner:authorize -- prepare ...` (and `record`, `resolve`) run them. `--port` names the Gitea
+port; by default the managed Gitea's host record gives it.
+
+The live exercise on the S-01.2.2 fixture is an Owner-approved act, never run by default
+(`test_live_authorization.py` lists what it reads, writes and leaves):
+
+```
+AIEH_AUTHZ_RECORDER_LIVE=1 AIEH_AUTHZ_RECORDER_APPROVAL=<scheme:reference> \
+    <tools python> -I -B -m unittest discover -s integrations/owner/tests -p test_live_authorization.py -v
+```
 `statement.json` is `{"text": ..., "attributedTo": "owner", "channel": ..., "reference": ...}`.
 
 ## Not yet verified
@@ -161,3 +273,13 @@ From the repository root, under the tools interpreter (`<tools python>` is what
   would write CRLF; git's and the module's `status` report them clean (tested on a fixture).
   Filter drivers and `working-tree-encoding` on these paths: not tested.
 - Task itself (the targets' commands were run directly), Linux and macOS.
+- The authorization recorder against a real Gitea: it has run against the fake Gitea of
+  `tests/fake_gitea.py` only (in memory and over loopback HTTP), with a fixture credential provider
+  and synthetic statements. Not yet observed on Gitea 28.3.0: the 409 to a stale `head_commit_id`,
+  the trailers kept in the merge commit as written, a merge by basic authentication as `aieh-owner`,
+  the read-back fields (`merged_by`, `merge_commit_sha`, the raw file at a commit, the branch view's
+  protection fields, `status_check_contexts` as an empty list), and the audit log's events. The live
+  exercise (`test_live_authorization.py`) is opt-in and has not run.
+- Any real Owner authorization; the statement's attribution against its source (as above).
+- The protection rule itself: `aieh-owner` cannot read it in Gitea 28.3.0, so the allowlists of other
+  accounts and the override flags are not compared before a merge (`Policy.unobservable`).

@@ -5,8 +5,9 @@ One record is written for each Owner decision a deterministic, non-model recorde
 
 - ``accept-objective``: the acceptance recorder (plan leaf P-04.1, ``acceptance_recorder.py``),
   the Owner's acceptance of an Objective item of an intent-driven OpenSpec change (decision 0008);
-- ``authorize-operation``: reserved for the Owner authorization recorder (plan leaf P-04.2), which
-  defines its own subject. It is not built here, so a record of that kind is refused until it is.
+- ``authorize-operation``: the Owner authorization recorder (plan leaf P-04.2,
+  ``authorization_recorder.py``), the Owner's authorization of one exact operation manifest on a
+  pull request into a protected authorization branch (decision 0012).
 
 Fields, in this order (``FIELDS``):
 
@@ -37,9 +38,14 @@ FORMAT = 'owner-decision/v1'
 FIELDS = ('format', 'decisionId', 'kind', 'subject', 'shown', 'statement', 'recordedBy', 'recordedAt')
 SHOWN_FIELDS = ('summary', 'nonce', 'expiresAt')
 STATEMENT_FIELDS = ('text', 'attributedTo', 'channel', 'reference')
-# The subject of each kind this module validates. P-04.2 adds 'authorize-operation' with its own.
+# The subject of each kind this module validates.
 SUBJECT_FIELDS = {
     'accept-objective': ('change', 'item', 'outcome', 'revision', 'proposal'),
+    # The operation manifest operations/<operation>.json on pull request <pull> of <repository> into
+    # <base>, at head <head>, with the sha256 of its blob (<digest>), and what the manifest declares:
+    # its kind, its target and its expiry.
+    'authorize-operation': ('repository', 'pull', 'base', 'head', 'manifest', 'digest', 'operation',
+                            'operationKind', 'target', 'expiresAt'),
 }
 KINDS = ('accept-objective', 'authorize-operation')
 
@@ -55,6 +61,13 @@ COMMIT = re.compile(r'^[0-9a-f]{40}$')
 SHA256 = re.compile(r'^[0-9a-f]{64}$')
 CHANGE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 OBJECTIVE_ITEM = re.compile(r'^O[1-9][0-9]*$')
+# authorize-operation: a Gitea repository (owner/name), a branch name, an operation id (the file name of
+# its manifest, operations/<id>.json), the manifest blob's digest and a declared kind.
+REPOSITORY = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$')
+BRANCH = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$')
+OPERATION = re.compile(r'^[a-z0-9][a-z0-9-]{0,127}$')
+DIGEST = re.compile(r'^sha256:[0-9a-f]{64}$')
+OPERATION_KIND = re.compile(r'^[a-z][a-z0-9.-]{0,63}$')
 # Reference schemes whose records an agent writes: an engineering conversation of the OpenHands
 # Agent Server (the lineage `attempt` kind) is a model's own transcript, never an Owner statement.
 MODEL_SCHEMES = ('openhands',)
@@ -127,8 +140,6 @@ def check_record(record):
     kind = record.get('kind')
     if kind not in KINDS:
         problems.append(f'kind must be one of {", ".join(KINDS)}')
-    elif kind not in SUBJECT_FIELDS:
-        problems.append(f'kind {kind} has no subject defined yet (plan leaf P-04.2)')
     else:
         problems.extend(_subject_problems(kind, record.get('subject')))
     shown = record.get('shown')
@@ -172,6 +183,39 @@ def _subject_problems(kind, subject):
             problems.append('subject.revision must be a full commit id')
         if not isinstance(subject['proposal'], str) or not SHA256.match(subject['proposal']):
             problems.append('subject.proposal must be a sha256')
+    if kind == 'authorize-operation':
+        problems.extend(operation_subject_problems(subject))
+    return problems
+
+
+def operation_subject_problems(subject):
+    """The problems of an ``authorize-operation`` subject's values (its fields are checked by the
+    caller)."""
+    problems = []
+    repository = subject['repository']
+    if not isinstance(repository, str) or not REPOSITORY.match(repository) or '..' in repository:
+        problems.append('subject.repository must be a Gitea repository, owner/name')
+    pull = subject['pull']
+    if isinstance(pull, bool) or not isinstance(pull, int) or pull < 1:
+        problems.append('subject.pull must be a pull request number')
+    if not isinstance(subject['base'], str) or not BRANCH.match(subject['base']) or '..' in subject['base']:
+        problems.append('subject.base must be a branch name')
+    if not isinstance(subject['head'], str) or not COMMIT.match(subject['head']):
+        problems.append('subject.head must be a full commit id')
+    operation = subject['operation']
+    if not isinstance(operation, str) or not OPERATION.match(operation):
+        problems.append('subject.operation must be an operation id (lower-case letters, digits and hyphens)')
+    elif subject['manifest'] != f'operations/{operation}.json':
+        problems.append('subject.manifest must be operations/<operation>.json')
+    if not isinstance(subject['digest'], str) or not DIGEST.match(subject['digest']):
+        problems.append('subject.digest must be sha256:<64 hex digits>')
+    if not isinstance(subject['operationKind'], str) or not OPERATION_KIND.match(subject['operationKind']):
+        problems.append('subject.operationKind must be a lower-case token')
+    target = subject['target']
+    if not isinstance(target, str) or not target.strip() or target.splitlines() != [target]:
+        problems.append('subject.target must be one line of text')
+    if not isinstance(subject['expiresAt'], str) or not TIMESTAMP.match(subject['expiresAt']):
+        problems.append('subject.expiresAt must be YYYY-MM-DDTHH:MM:SSZ')
     return problems
 
 
