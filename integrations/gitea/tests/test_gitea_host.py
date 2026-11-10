@@ -9,6 +9,7 @@ port in a temporary root, only when AIEH_GITEA_BINARY names a copy of the pinned
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import importlib.util
 import io
@@ -16,6 +17,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -51,26 +53,130 @@ SECRETS = {name: f'{name.lower()}-fixture-value' for name in G.SECRET_NAMES}
 windows_only = unittest.skipUnless(WINDOWS, 'Windows process, job and socket APIs')
 
 
+def make_root(tmp):
+    """A managed root below TMP resolved through AIEH_DATA_ROOT (never the real LOCALAPPDATA root),
+    initialized, with Gitea's directories."""
+    env = {'AIEH_DATA_ROOT': str(tmp / 'root')}
+    if WINDOWS:
+        env['LOCALAPPDATA'] = str(tmp / 'lad')
+    else:
+        env['HOME'] = str(tmp / 'home')
+    res = P.resolve(env, config={})
+    lay = G.layout(res)
+    P.init(res)
+    G.ensure_dirs(res, lay)
+    return res, lay
+
+
+def acquire_fake(tmp, res, lay):
+    source = tmp / 'source.exe'
+    source.write_bytes(FAKE_BINARY)
+    return G.acquire(res, lay, FAKE_PIN, from_file=source)
+
+
+def tree_state(top):
+    """Every entry below TOP by its path relative to TOP: ('dir', mode), ('file', mode, its bytes), or
+    ('other', mode) for anything else (a link or a junction, which no starting state holds)."""
+    state, pending = {}, [Path(top)]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                info = os.lstat(entry.path)
+                rel, mode = Path(entry.path).relative_to(top).as_posix(), stat.S_IMODE(info.st_mode)
+                if entry.is_junction() or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                    state[rel] = ('other', mode)
+                elif stat.S_ISDIR(info.st_mode):
+                    state[rel] = ('dir', mode)
+                    pending.append(Path(entry.path))
+                else:
+                    state[rel] = ('file', mode, Path(entry.path).read_bytes())
+    return state
+
+
+def _writable_retry(func, target, _exc):
+    os.chmod(target, stat.S_IREAD | stat.S_IWRITE)
+    func(target)
+
+
+def restore(top, state):
+    """Make the tree below TOP equal STATE (a tree_state): remove every entry STATE does not hold as
+    it is (children first), then write back every directory and file that is missing or differs
+    (parents first), with its bytes and permission bits."""
+    current = tree_state(top)
+    for rel in sorted(current, reverse=True):  # 'a/b' sorts after 'a'
+        kind, want = current[rel][0], state.get(rel)
+        if want is not None and want[0] == kind != 'other':
+            continue
+        path = top / rel
+        if kind == 'dir':
+            shutil.rmtree(path, onexc=_writable_retry)
+        elif kind == 'file':
+            os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+            path.unlink()
+        else:  # a link or a junction: removed itself, never what it points to
+            try:
+                path.unlink()
+            except (IsADirectoryError, PermissionError):
+                os.rmdir(path)
+    for rel, want in sorted(state.items()):
+        have, path = current.get(rel), top / rel
+        if have == want:
+            continue
+        if want[0] == 'dir':
+            if have is None or have[0] != 'dir':
+                path.mkdir()
+            os.chmod(path, want[1])
+        elif want[0] == 'file':
+            if have is not None and have[0] == 'file':
+                os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+            path.write_bytes(want[2])
+            os.chmod(path, want[1])
+        else:
+            raise AssertionError(f'{path}: a starting state holds no {want[0]} entry')
+
+
+SHARED = {}  # the module's managed roots (setUpModule), one per starting state, shared by the Root tests
+
+
+def setUpModule():
+    """The Root tests' two starting states, each built once in a temporary directory of its own (F-09.3:
+    a shared fixture): 'initialized' (the root and Gitea's directories) and 'configured' (also the fake
+    asset acquired and app.ini written, as TestIdentities, TestFinalizeCredentials and
+    TestVerifyCheckoutScan start)."""
+    for start in ('initialized', 'configured'):
+        tmp = Path(tempfile.mkdtemp(prefix='gh-'))
+        SHARED[start] = {'tmp': tmp}
+        res, lay = make_root(tmp)
+        if start == 'configured':
+            acquire_fake(tmp, res, lay)
+            G.configure(res, lay, FAKE_PIN, 13300, run=FakeRun())
+        SHARED[start].update(res=res, resolution=copy.deepcopy(res), state=tree_state(tmp))
+
+
+def tearDownModule():
+    for shared in SHARED.values():
+        shutil.rmtree(shared['tmp'], onexc=_writable_retry)
+    SHARED.clear()
+
+
 class Root(unittest.TestCase):
-    """A temporary managed root resolved through AIEH_DATA_ROOT; never the real LOCALAPPDATA root."""
+    """The module's managed root for START (setUpModule), resolved through AIEH_DATA_ROOT; never the real
+    LOCALAPPDATA root. setUp restores the root's whole temporary directory to the state setUpModule
+    recorded (what an earlier test added is removed, what it changed or removed is written back), then
+    checks every directory and file, with its bytes and permission bits, and the resolution equal to
+    that state: each test starts from what a fresh root built the same way gives."""
+    START = 'initialized'
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix='gh-'))
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        env = {'AIEH_DATA_ROOT': str(self.tmp / 'root')}
-        if WINDOWS:
-            env['LOCALAPPDATA'] = str(self.tmp / 'lad')
-        else:
-            env['HOME'] = str(self.tmp / 'home')
-        self.res = P.resolve(env, config={})
+        shared = SHARED[self.START]
+        self.tmp, self.res = shared['tmp'], shared['res']
+        restore(self.tmp, shared['state'])
+        self.assertEqual(tree_state(self.tmp), shared['state'], 'the shared root was not restored')
+        self.assertEqual(self.res, shared['resolution'], 'a test changed the shared resolution')
         self.lay = G.layout(self.res)
-        P.init(self.res)
-        G.ensure_dirs(self.res, self.lay)
 
     def acquire_fake(self):
-        source = self.tmp / 'source.exe'
-        source.write_bytes(FAKE_BINARY)
-        return G.acquire(self.res, self.lay, FAKE_PIN, from_file=source)
+        return acquire_fake(self.tmp, self.res, self.lay)
 
 
 class FakeRun:
@@ -313,10 +419,10 @@ class TestVerifiedBinary(Root):
 
 
 class TestIdentities(Root):
+    START = 'configured'
+
     def setUp(self):
         super().setUp()
-        self.acquire_fake()
-        G.configure(self.res, self.lay, FAKE_PIN, 13300, run=FakeRun())
         patcher = mock.patch.object(G, 'healthy', return_value=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -518,11 +624,10 @@ class TestCredentialProvider(unittest.TestCase):
 
 class TestFinalizeCredentials(Root):
     TEMP = {G.SITE_ADMIN: 'Temp-site-admin-Pw-9876543210', G.OWNER: 'Temp-owner-Pw-9876543210'}
+    START = 'configured'
 
     def setUp(self):
         super().setUp()
-        self.acquire_fake()
-        G.configure(self.res, self.lay, FAKE_PIN, 13300, run=FakeRun())
         self.events = []
         self.provider = MemoryProvider({G.CRED_TARGETS[u]: (u, p) for u, p in self.TEMP.items()}, self.events)
         self.receipts = FakeReceipts()
@@ -948,11 +1053,10 @@ class TestSecretScans(unittest.TestCase):
 
 class TestVerifyCheckoutScan(Root):
     """Review finding 3: verify's checkout check fails on an incomplete scan, with the paths visible."""
+    START = 'configured'
 
     def setUp(self):
         super().setUp()
-        self.acquire_fake()
-        G.configure(self.res, self.lay, FAKE_PIN, 13300, run=FakeRun())
         gitea = {'pid': 41, 'image': str(self.lay.binary), 'in_supervisor_job_at_start': True,
                  'listeners': [{'proto': 'tcp', 'address': G.LOOPBACK, 'port': 13300, 'pid': 41}],
                  'token': {'elevated': False}}
@@ -1057,20 +1161,37 @@ SUPERVISOR = textwrap.dedent('''
 
 @windows_only
 class TestJobObject(unittest.TestCase):
-    """The mechanism: a kill-on-close job held by the supervisor ends its child when the supervisor ends."""
+    """The mechanism: a kill-on-close job held by the supervisor ends its child when the supervisor ends.
+    Each test acts on a supervisor of its own (with the job or without it), started with the others in
+    setUpClass so that the three launches overlap; the class cleanups end whatever outlives its test."""
     category = 'integration'
+    MODES = {'test_hard_kill_of_the_supervisor_ends_the_child': 'job',
+             'test_clean_exit_of_the_supervisor_ends_the_child': 'job',
+             'test_control_without_the_job_the_child_survives': 'none'}
+
+    @classmethod
+    def setUpClass(cls):
+        script = Path(tempfile.mkdtemp(prefix='gh-')) / 'supervisor.py'
+        cls.addClassCleanup(shutil.rmtree, script.parent, ignore_errors=True)
+        script.write_text(SUPERVISOR, encoding='utf-8')
+        started = {}
+        for test, mode in cls.MODES.items():
+            sup = subprocess.Popen([sys.executable, '-I', '-B', str(script), str(HERE.parent / 'gitea_host.py'), mode],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+            cls.addClassCleanup(sup.stdout.close)
+            cls.addClassCleanup(lambda sup=sup: sup.stdin.closed or sup.stdin.close())
+            cls.addClassCleanup(lambda sup=sup: sup.poll() is None and sup.kill())
+            started[test] = sup
+        cls.pairs = {}
+        for test, sup in started.items():
+            child = G.Proc(int(sup.stdout.readline()))
+            cls.addClassCleanup(lambda child=child: child.alive() and child.terminate())
+            cls.pairs[test] = (sup, child)
 
     def start(self, mode):
-        script = Path(tempfile.mkdtemp(prefix='gh-')) / 'supervisor.py'
-        self.addCleanup(shutil.rmtree, script.parent, ignore_errors=True)
-        script.write_text(SUPERVISOR, encoding='utf-8')
-        sup = subprocess.Popen([sys.executable, '-I', '-B', str(script), str(HERE.parent / 'gitea_host.py'), mode],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
-        self.addCleanup(sup.stdout.close)
-        self.addCleanup(lambda: sup.stdin.closed or sup.stdin.close())
-        self.addCleanup(lambda: sup.poll() is None and sup.kill())
-        child = G.Proc(int(sup.stdout.readline()))
-        self.addCleanup(lambda: child.alive() and child.terminate())
+        self.assertEqual(self.MODES[self._testMethodName], mode)
+        sup, child = self.pairs[self._testMethodName]
         self.assertTrue(child.alive())
         return sup, child
 
@@ -1169,6 +1290,11 @@ class TestLive(Root):
     up again, a hard kill of the supervisor, and recover of an interrupted restart (plan leaves F-06.1 and
     F-06.2)."""
     category = 'e2e'
+
+    def setUp(self):  # a root of its own, never the shared one: the live Gitea writes and holds files in it
+        self.tmp = Path(tempfile.mkdtemp(prefix='gh-'))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.res, self.lay = make_root(self.tmp)
 
     def test_lifecycle(self):
         port = next(p for p in range(23300, 23400) if not G.port_in_use(p))
