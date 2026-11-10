@@ -60,29 +60,67 @@ class FakeRun:
         return SimpleNamespace(returncode=0, stdout=out, stderr=b'')
 
 
+SHARED = {}  # the module's one managed root (setUpModule), shared by the Root classes
+
+
+def setUpModule():
+    """One temporary managed root for the module, with the fake asset acquired, app.ini written and a
+    SQLite database (F-09.3: a shared fixture)."""
+    tmp = Path(tempfile.mkdtemp(prefix='gl-'))
+    env = {'AIEH_DATA_ROOT': str(tmp / 'root')}
+    env['LOCALAPPDATA' if WINDOWS else 'HOME'] = str(tmp / 'home')
+    res = P.resolve(env, config={})
+    lay = G.layout(res)
+    SHARED.update(tmp=tmp, res=res, lay=lay)
+    P.init(res)
+    G.ensure_dirs(res, lay)
+    source = tmp / 'source.exe'
+    source.write_bytes(FAKE_BINARY)
+    G.acquire(res, lay, FAKE_PIN, from_file=source)
+    G.configure(res, lay, FAKE_PIN, 13300, run=FakeRun())
+    db = sqlite3.connect(lay.db)
+    with db:
+        db.execute('create table t (v text)')
+        db.execute("insert into t values ('before')")
+    db.close()
+    SHARED['snapshot'] = {path: path.read_bytes() for path in (lay.host_record, lay.config, lay.db)}
+    SHARED['added'] = (lay.run / 'transitions', lay.home / 'backups', G.layout(res, NEXT).asset_dir, lay.run_record)
+
+
+def tearDownModule():
+    if 'tmp' in SHARED:
+        shutil.rmtree(SHARED['tmp'], ignore_errors=True)
+
+
 class Root(unittest.TestCase):
-    """A temporary managed root with the fake asset acquired and app.ini written."""
+    """The module's managed root, with live, healthy and pin faked. setUp puts back every file a test may
+    change and removes everything a test may add, so each test starts from the same state."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp, cls.res, cls.lay = SHARED['tmp'], SHARED['res'], SHARED['lay']
+        cls.snapshot, cls.added = SHARED['snapshot'], SHARED['added']
+        cls.patchers = [mock.patch.object(G, 'live', return_value=None),
+                        mock.patch.object(G, 'healthy', return_value=False),
+                        mock.patch.object(G, 'pin', side_effect=fake_pin)]
+        for patcher in cls.patchers:
+            patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        for patcher in cls.patchers:
+            patcher.stop()
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix='gl-'))
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        env = {'AIEH_DATA_ROOT': str(self.tmp / 'root')}
-        env['LOCALAPPDATA' if WINDOWS else 'HOME'] = str(self.tmp / 'home')
-        self.res = P.resolve(env, config={})
-        self.lay = G.layout(self.res)
-        P.init(self.res)
-        G.ensure_dirs(self.res, self.lay)
-        source = self.tmp / 'source.exe'
-        source.write_bytes(FAKE_BINARY)
-        G.acquire(self.res, self.lay, FAKE_PIN, from_file=source)
-        G.configure(self.res, self.lay, FAKE_PIN, 13300, run=FakeRun())
-        for name, value in (('live', None), ('healthy', False)):
-            patcher = mock.patch.object(G, name, return_value=value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        patcher = mock.patch.object(G, 'pin', side_effect=fake_pin)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for path, data in self.snapshot.items():
+            path.write_bytes(data)
+        for path in self.added:
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+        for child in self.lay.tmp.iterdir():
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
 
     def host_record(self):
         return json.loads(self.lay.host_record.read_text(encoding='utf-8'))
@@ -201,10 +239,6 @@ class TestInspect(Root):
 class TestOperations(Root):
     def setUp(self):
         super().setUp()
-        with sqlite3.connect(self.lay.db) as db:
-            db.execute('create table t (v text)')
-            db.execute("insert into t values ('before')")
-        db.close()
         self.ops = G.GiteaOperations(self.res)
 
     def rows(self):
