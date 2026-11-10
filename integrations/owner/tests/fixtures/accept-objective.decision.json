@@ -1,0 +1,25 @@
+{
+  "format": "owner-decision/v1",
+  "decisionId": "9e8d7c6b-5a49-4382-a716-5f4e3d2c1b0a",
+  "kind": "accept-objective",
+  "subject": {
+    "change": "qual-05-api-rate-limiting",
+    "item": "O1",
+    "outcome": "0d1f2e3c-4b5a-4c6d-8e7f-001122334455",
+    "revision": "87dbd99874664470c68fa978a077d38ac3d3ef83",
+    "proposal": "befa0824244d36569718cff8416cbf8fa7c5c65bca01cfd22d44d2cc7ebb1002"
+  },
+  "shown": {
+    "summary": "Owner decision: accept an objective (accept-objective).\nChange: openspec/changes/qual-05-api-rate-limiting at 87dbd99874664470c68fa978a077d38ac3d3ef83\nObjective O1: No single client can make the public API unavailable or degraded for other clients by the volume of requests it sends.\nAttributed to: owner; source: Q1\nCurrent authority: proposed\nOutcome: none yet; recording this acceptance mints its id.\nAcceptance criteria citing O1:\n- AC1 (proposed): While a single client sends requests at an abusive rate to the public API, requests from other clients continue to succeed within the normal error rate and latency (thresholds to be set per CL3).\n- AC2 (proposed): A client that exceeds its allowed rate receives a defined, documented rejection response for the excess requests, and the API stays responsive (response format per CL4).\n- AC3 (proposed): Clients whose request rate is within normal usage of the public API are not rejected by the rate limiting (normal usage per CL2 and CL3).\nProposal sha256: befa0824244d36569718cff8416cbf8fa7c5c65bca01cfd22d44d2cc7ebb1002",
+    "nonce": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+    "expiresAt": "2026-11-10T13:00:00Z"
+  },
+  "statement": {
+    "text": "SYNTHETIC FIXTURE, not an Owner decision: I accept O1 as written.",
+    "attributedTo": "owner",
+    "channel": "main-session",
+    "reference": "conversation:fixture-owner/message-2"
+  },
+  "recordedBy": "agent:fixture-transcriber",
+  "recordedAt": "2026-11-10T12:05:00Z"
+}

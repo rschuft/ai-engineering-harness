@@ -244,13 +244,15 @@ class RequiredTargets(unittest.TestCase):
 
     def test_the_commands_that_read_a_repository_run_under_the_tools_interpreter(self):
         # The planning and lineage commands read the project repository through the shared
-        # repository-access module (Dulwich; plan leaf F-10.3, decision 0014 section 9).
+        # repository-access module (Dulwich; plan leaf F-10.3, decision 0014 section 9); the acceptance
+        # recorder also commits through it (plan leaf P-04.1).
         for name, script in (('planning:create', 'integrations/planning/planning_adapter.py create'),
                              ('planning:resolve', 'integrations/planning/planning_adapter.py resolve'),
                              ('planning:readiness', 'integrations/planning/planning_readiness.py'),
                              ('lineage:resolve', 'integrations/lineage/lineage_resolve.py resolve'),
                              ('lineage:trace', 'integrations/lineage/lineage_trace.py trace'),
-                             ('lineage:example', 'integrations/lineage/tests/lineage_example.py')):
+                             ('lineage:example', 'integrations/lineage/tests/lineage_example.py'),
+                             ('owner:accept', 'integrations/owner/acceptance_recorder.py')):
             with self.subTest(target=name):
                 self.assertEqual(self.variables(name), TOOLS_VARS)
                 (command,) = self.commands(name)

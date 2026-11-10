@@ -24,12 +24,16 @@ answer is computed in this process from the repository's own files.
   and sent as HTTP Basic or ``Authorization: token`` to the remote's origin only; no credential
   helper, no ssh, no git configuration, no process. A push refuses a repository with client
   hooks (decision 0014 section 6).
+- The commit write (decision 0014 sections 6 and 8; first needed by plan leaf P-04.1):
+  ``Repository.write_commit(files, message, identity=, expected_head=)`` builds the commit as
+  objects plus a compare-and-set update of the branch, runs no hook (a repository with client hooks
+  is refused) and brings the work tree and the index to it.
 
 Errors (decision 0014 section 3): ``RepositoryError`` with a stable ``code``
 (``REVISION_INVALID``, ``OBJECT_NAME_INVALID``, ``GIT_FAILED``, ``EXPORT_REFUSED``,
 ``BUNDLE_INVALID``, ``FILTER_UNSUPPORTED``, ``ATTRIBUTES_UNSUPPORTED``, ``REPLACE_REFS_UNSUPPORTED``;
 the transports' ``PUSH_REFUSED``, ``PUSH_REJECTED``, ``REMOTE_REFUSED``, ``REMOTE_FAILED`` and
-``HOOKS_UNSUPPORTED``), and ``CannotRun`` (``NOT_A_WORK_TREE``,
+``HOOKS_UNSUPPORTED``; the commit's ``COMMIT_REFUSED`` and ``HOOKS_UNSUPPORTED``), and ``CannotRun`` (``NOT_A_WORK_TREE``,
 ``NOT_A_REPOSITORY``, ``REPOSITORY_NEEDS_DULWICH``). "No such object" and an ambiguous
 abbreviation answer ``None``.
 
@@ -44,6 +48,7 @@ import os
 import re
 import stat
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -77,6 +82,8 @@ _WINDOWS_RESERVED = frozenset({'con', 'prn', 'aux', 'nul', 'conin$', 'conout$',
                                *(f'com{i}' for i in '123456789¹²³'),
                                *(f'lpt{i}' for i in '123456789¹²³')})
 _WINDOWS_INVALID = frozenset('<>:"|?*\\')
+# git's identity (ident.c): "Name <email>", neither part holding '<', '>', NUL or a line break.
+IDENTITY = re.compile(r'[^<>\n\r\0]*[^<>\s\0][^<>\n\r\0]* <[^<>\s\0]+>')
 
 # Commit expected (rev-parse X^{commit}, X~N, X^N): commits, and tags that peel to one.
 _COMMIT, _COMMITTISH, _TREEISH = 'commit', 'committish', 'treeish'
@@ -879,6 +886,12 @@ def _date_gap(name):
     return RepositoryError('REVISION_INVALID', f'{name!r} does not resolve without git reading the text after its '
                            'last @{ as a reflog date, the @{<date>} gap (decision 0014 section 2)',
                            gap='the reflog date @{<date>} (git fallback)')
+
+
+def _now_and_offset():
+    """(seconds since the epoch, the local offset east of UTC in seconds) now."""
+    now = time.time()
+    return int(now), time.localtime(now).tm_gmtoff
 
 
 def _parse(type_num, data, oid, object_format):
@@ -2108,6 +2121,210 @@ class Repository:
                                   + (f'; remote: {remote_text}' if remote_text else ''), ref=dst, reason=error,
                                   remote=remote_text)
         return RefUpdate(dst, seen.get('old'), new)
+
+    # -- writes (decision 0014 sections 6 and 8: the commit, first needed by plan leaf P-04.1)
+
+    def write_commit(self, files, message, *, identity, expected_head, when=None, check=None):
+        """Commit FILES ({repository-relative path: bytes}: regular, non-executable files, each
+        added or replaced) on the branch HEAD names, as writing them into the work tree and running
+        ``git commit --only -- <paths>`` would, with author and committer IDENTITY (``Name
+        <email>``) at WHEN ((seconds since the epoch, offset east of UTC in seconds); now and the
+        local offset when None) and MESSAGE. Returns the new commit id. This is decision 0014's
+        ``commit`` write; it is named apart from ``commit(revision)``, the read.
+
+        Built as objects plus a compare-and-set update of the branch, never through a porcelain
+        (section 6): the blobs, trees and the commit are written first; then CHECK(commit id), when
+        given, may refuse by raising, and nothing visible has changed; then the branch moves only if
+        it still holds EXPECTED_HEAD (its reflog and HEAD's get a ``commit:`` line, as git writes
+        them); then each file is written into the work tree as its blob's bytes (no end-of-line
+        conversion; ``status`` answers it clean under any ``core.autocrlf``) and its index entry is
+        set from the written file. The index's cache-tree and the other optional extensions git
+        rebuilds (untracked cache, fsmonitor, offset tables) are dropped, so that none goes stale;
+        resolve-undo is kept.
+
+        Refused before anything is written: ``HOOKS_UNSUPPORTED`` when the repository has a client
+        hook (git would run ``pre-commit`` and ``commit-msg``; this module runs none); and
+        ``COMMIT_REFUSED`` (``details['reason']``) when HEAD is not a branch with a commit
+        (``head``), the branch does not hold EXPECTED_HEAD (``head-moved``, also when it moves
+        before the update), ``commit.gpgSign`` is set (``signing``), the repository is not SHA-1
+        (``object-format``), the index has unmerged entries or an extension git requires to be
+        understood, such as a split or sparse index (``index``), a path has local changes in the
+        index or the work tree, or is an untracked or ignored file, or a directory or a symbolic
+        link leads to it (``local-changes``), a file or a directory is in the way of a path
+        (``path-conflict``), or nothing would change (``nothing-to-commit``). A path outside the
+        repository-relative grammar, or a name the work tree cannot hold, is
+        ``OBJECT_NAME_INVALID``. A failure after the branch moved is ``GIT_FAILED`` with
+        ``details['committed']``: the commit is made, the work tree or the index is not brought to
+        it."""
+        d = dulwich_modules()
+        if not isinstance(files, dict) or not files:
+            raise ValueError('files must be a non-empty {path: bytes} mapping')
+        changes = {}
+        for path, data in files.items():
+            _check_path(path)
+            for part in path.split('/'):
+                why = _unsafe_component(part)
+                if why:
+                    raise RepositoryError('OBJECT_NAME_INVALID', f'{path}: {why}', path=path)
+            if not isinstance(data, bytes):
+                raise ValueError(f'{path}: the content must be bytes')
+            changes[path] = data
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError('message must be non-empty text')
+        if not isinstance(identity, str) or not IDENTITY.fullmatch(identity):
+            raise ValueError('identity must be "Name <email>"')
+        if not isinstance(expected_head, str) or not re.fullmatch(r'[0-9a-f]{40}', expected_head):
+            raise ValueError('expected_head must be a full commit id')
+        self._require_work_tree()
+
+        def refuse(reason, text, **details):
+            return RepositoryError('COMMIT_REFUSED', f'{text}; nothing was written', reason=reason, **details)
+
+        hooks = self.client_hooks()
+        if hooks is not None:
+            raise RepositoryError('HOOKS_UNSUPPORTED', f'the repository has a client hook ({hooks}); git would run '
+                                  'it before a commit and this module runs none, so it does not commit', hook=hooks)
+        if self._hexsz != 40:
+            raise refuse('object-format', f'the repository uses {self.object_format} object ids; this module '
+                         'commits only in SHA-1 repositories')
+        if self._config_bool(b'commit', b'gpgsign', False):
+            raise refuse('signing', 'commit.gpgSign is set: git would sign the commit and this module does not')
+        head = self.head()
+        if head.ref is None or not head.ref.startswith('refs/heads/') or head.commit is None:
+            raise refuse('head', 'HEAD does not name a branch with a commit')
+        if head.commit != expected_head:
+            raise refuse('head-moved', f'{head.ref} is at {head.commit}, not {expected_head}', ref=head.ref,
+                         current=head.commit)
+        index = self._index()
+        kept_extensions = self._writable_index_extensions(index, refuse)
+        head_tree = self._to_tree(head.commit)
+        root = self.root
+        for path in sorted(changes):
+            entry = self._tree_entry(head_tree, path)
+            full = os.path.join(root, *path.split('/'))
+            if _has_symlink_leading_path(root, path) or os.path.islink(full):
+                raise refuse('local-changes', f'a symbolic link leads to {path}', path=path)
+            if entry is None:
+                if os.path.lexists(full):
+                    raise refuse('local-changes', f'{path} exists in the work tree but not in HEAD', path=path)
+            elif entry[1] & _S_IFMT != _S_IFREG:
+                raise refuse('path-conflict', f'{path} is not a regular file in HEAD', path=path)
+        dirty = self.status(paths=sorted(changes), untracked='no')
+        if dirty:
+            raise refuse('local-changes', f'{dirty[0].path} has local changes ({dirty[0].xy.strip()})',
+                         path=dirty[0].path)
+        blobs = {path: d.objects.Blob.from_string(data) for path, data in changes.items()}
+        new_objects = list(blobs.values())
+        nested = {tuple(path.encode('utf-8').split(b'/')): (_S_IFREG | 0o644, blob.id)
+                  for path, blob in blobs.items()}
+        tree = self._tree_with(head_tree, nested, new_objects, refuse)
+        if tree == head_tree:
+            raise refuse('nothing-to-commit', 'every file already has this content in HEAD')
+        timestamp, offset = when if when is not None else _now_and_offset()
+        author = identity.encode('utf-8')
+        commit = d.objects.Commit()
+        commit.tree = tree.encode('ascii')
+        commit.parents = [head.commit.encode('ascii')]
+        commit.author = commit.committer = author
+        commit.author_time = commit.commit_time = int(timestamp)
+        commit.author_timezone = commit.commit_timezone = int(offset)
+        commit.message = (message if message.endswith('\n') else message + '\n').encode('utf-8')
+        new_objects.append(commit)
+        oid = commit.id.decode('ascii')
+        try:
+            for obj in new_objects:
+                self._dul.object_store.add_object(obj)
+        except Exception as exc:
+            raise RepositoryError('GIT_FAILED', f'cannot write the commit objects: {type(exc).__name__}: {exc}') \
+                from None
+        if check is not None:
+            check(oid)
+        subject = message.strip().splitlines()[0].encode('utf-8')
+        reflog = b'commit: ' + subject
+        failure = None
+        try:
+            moved = self._dul.refs.set_if_equals(head.ref.encode('utf-8'), expected_head.encode('ascii'),
+                                                 oid.encode('ascii'), committer=author, timestamp=int(timestamp),
+                                                 timezone=int(offset), message=reflog)
+        except Exception as exc:
+            failure = f'{type(exc).__name__}: {exc}'
+        self._packed = None
+        if failure is not None:
+            raise RepositoryError('GIT_FAILED', f'cannot update {head.ref}: {failure}')
+        if not moved:
+            raise refuse('head-moved', f'{head.ref} moved before the update', ref=head.ref)
+        try:
+            with open(os.path.join(self.controldir, 'logs', 'HEAD'), 'ab') as handle:
+                handle.write(d.reflog.format_reflog_line(expected_head.encode('ascii'), oid.encode('ascii'), author,
+                                                         int(timestamp), int(offset), reflog) + b'\n')
+            for path, data in changes.items():
+                full = os.path.join(root, *path.split('/'))
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, 'wb') as handle:
+                    handle.write(data)
+            index = self._index()
+            self._writable_index_extensions(index, refuse)
+            for path, blob in blobs.items():
+                full = os.path.join(root, *path.split('/'))
+                index[path.encode('utf-8')] = d.index.index_entry_from_stat(os.lstat(full), blob.id,
+                                                                            mode=_S_IFREG | 0o644)
+            index._extensions = kept_extensions
+            index.write()
+        except Exception as exc:
+            failure = f'{type(exc).__name__}: {exc}'
+        if failure is not None:
+            raise RepositoryError('GIT_FAILED', f'the commit {oid} is made on {head.ref}, but the work tree or the '
+                                  f'index was not brought to it: {failure}', committed=oid)
+        return oid
+
+    def _writable_index_extensions(self, index, refuse):
+        """The index extensions a commit keeps (resolve-undo), or COMMIT_REFUSED ``index`` for an
+        index this module must not rewrite: unmerged entries, or an extension git must understand
+        (a signature starting with a lower-case letter: a split or sparse index). Every other
+        optional extension (cache-tree, untracked cache, fsmonitor, offset tables) is dropped:
+        git rebuilds them, and a stale one would mislead it. The extensions are read through
+        Dulwich's ``Index._extensions`` (pin-sensitive: Dulwich 1.2.21 writes them back as read)."""
+        if index.has_conflicts():
+            raise refuse('index', 'the index has unmerged entries')
+        extensions = getattr(index, '_extensions', None)
+        if extensions is None:
+            raise refuse('index', 'the index extensions cannot be read')
+        kept = []
+        for extension in extensions:
+            signature = bytes(extension.signature)
+            if signature[:1].islower():
+                raise refuse('index', f'the index has the extension {signature.decode("ascii", "replace")}, which '
+                             'this module does not maintain')
+            if signature == b'REUC':
+                kept.append(extension)
+        return kept
+
+    def _tree_with(self, tree_oid, changes, new_objects, refuse):
+        """The id of the tree TREE_OID (None: an empty tree) with CHANGES ({tuple of name bytes:
+        (mode, blob id bytes)}) applied; each new tree is appended to NEW_OBJECTS."""
+        d = dulwich_modules()
+        tree = d.objects.Tree()
+        if tree_oid is not None:
+            for name, mode, oid in self._tree_items(tree_oid):
+                tree.add(name.encode('utf-8', 'surrogateescape'), mode, oid.encode('ascii'))
+        nested = {}
+        for parts, value in changes.items():
+            if len(parts) == 1:
+                tree.add(parts[0], *value)
+            else:
+                nested.setdefault(parts[0], {})[parts[1:]] = value
+        for name, sub in sorted(nested.items()):
+            try:
+                mode, oid = tree[name]
+            except KeyError:
+                mode, oid = None, None
+            if oid is not None and mode & _S_IFMT != _S_IFDIR:
+                raise refuse('path-conflict', f'{name.decode("utf-8", "surrogateescape")} is a file in HEAD, in the '
+                             'way of a path below it')
+            sub_id = self._tree_with(None if oid is None else oid.decode('ascii'), sub, new_objects, refuse)
+            tree.add(name, _S_IFDIR, sub_id.encode('ascii'))
+        new_objects.append(tree)
+        return tree.id.decode('ascii')
 
 
 def _sanitize_remote(data, limit=600):

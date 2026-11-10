@@ -32,9 +32,9 @@ verifies the seed in both modes, with the standard library only and offline. It 
 the hash-locked Python tools set (`task tools:install`: PyYAML, Dulwich, urllib3 and keyring, wheels only,
 under the [managed data root](#managed-data-root); it downloads from PyPI once per lock and
 reuses the verified wheels afterwards), and runs, under that set's interpreter, the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests, the managed data root tests, the lifecycle contract and platform adapter tests, the credential provider tests, the host Gitea tests, the dispatch input resolution and create admission tests and the repository-access contract tests. The tests run serially; the whole of `setup` took 156 s from PowerShell on the verification host at F-10.1, with the tools set already downloaded ([Testing](#testing) has the measurements). Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests, the Owner decision recorder tests, the managed data root tests, the lifecycle contract and platform adapter tests, the credential provider tests, the host Gitea tests, the dispatch input resolution and create admission tests and the repository-access contract tests. The tests run serially; the whole of `setup` took 156 s from PowerShell on the verification host at F-10.1, with the tools set already downloaded ([Testing](#testing) has the measurements). Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the fifteen commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the sixteen commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
@@ -46,6 +46,7 @@ python -I -B integrations/paths/tools_install.py
 <tools python> -I -B -m unittest discover -s integrations/effects/tests -v
 <tools python> -I -B -m unittest discover -s integrations/planning/tests -v
 <tools python> -I -B -m unittest discover -s integrations/lineage/tests -v
+<tools python> -I -B -m unittest discover -s integrations/owner/tests -v
 <tools python> -I -B -m unittest discover -s integrations/paths/tests -v
 <tools python> -I -B -m unittest discover -s integrations/platform/tests -v
 <tools python> -I -B -m unittest discover -s integrations/credentials/tests -v
@@ -139,6 +140,7 @@ network.
 | Credential provider: keyring (Secret Service, macOS Keychain) | kept off the Windows provider (never instantiated there). Installed in the tools set and exercised in process ([F-06.3](../evidence/F-06.3-credential-provider.md)): the provider contract suite with an in-process backend, the cross-read across processes with a test-only backend, and `SecretService.Keyring()` and `macOS.Keyring()` instantiated explicitly and refused as not viable on Windows | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
 | Credential provider factory, its refusals and `credentials:doctor` | PASS: Credential Manager chosen without importing keyring; `NO_CREDENTIAL_PROVIDER` for every unqualified case; keyring's own selection and configuration shown ignored; `doctor` reports the provider and its viability and touches no entry ([F-06.3](../evidence/F-06.3-credential-provider.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
 | `credentials:test` | PASS under the tools venv ([F-06.3](../evidence/F-06.3-credential-provider.md)) | not yet verified (F-06.4) | not yet verified (F-06.4) | not yet verified (F-06.5) |
+| The acceptance recorder (`owner:accept`) and `owner:test` | PASS on throwaway fixture repositories with synthetic statements, under the tools venv ([P-04.1](../evidence/P-04.1-acceptance-recorder.md)); no real Owner acceptance recorded; not run under Task | not yet verified | not yet verified | not yet verified |
 
 The host-service rows follow the lifecycle contract of plan leaf F-06.2 (draft decision 0011): one row
 per verb and per credential provider. A platform counts as supported only with its own evidence
@@ -190,14 +192,14 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the thirteen commands in [Quick start](#quick-start) | yes (PyPI, once per lock: `tools:install`) | Supported setup command: the basic-tier checks (offline), then `tools:install` and `test` under the tools interpreter. |
+| `setup` | the sixteen commands in [Quick start](#quick-start) | yes (PyPI, once per lock: `tools:install`) | Supported setup command: the basic-tier checks (offline), then `tools:install` and `test` under the tools interpreter. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK`, then `dev:install`, `test:all` and `hooks:verify` | yes | Full qualification smoke run, and the release run of the tests: the parallel runner, the Owner host's Vitest tests when Node.js 24 or later is present, and the gate's nested whole-tool-suite rerun. Needs the [publication-safety gate](#publication-safety-gate) installed. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `paths:test`, `platform:test`, `credentials:test`, `gitea:test`, `dispatch:test` and `repository:test`, each of which runs under `<tools python>` too (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, managed data root tests, lifecycle contract and platform adapter tests, host Gitea tests, dispatch resolution and admission tests and repository-access contract tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
+| `test` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `owner:test`, `paths:test`, `platform:test`, `credentials:test`, `gitea:test`, `dispatch:test` and `repository:test`, each of which runs under `<tools python>` too (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, Owner decision recorder tests, managed data root tests, lifecycle contract and platform adapter tests, host Gitea tests, dispatch resolution and admission tests and repository-access contract tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
 | `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `<tools python> -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially, under the tools interpreter, and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `test:categories [-- --list]` | `python -I -B tools/test_profile.py categories [--list]` | no | Checks that every test class declares a valid category. Imports the test modules; runs no test. |
 | `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, and the Python tools set: PyYAML, Dulwich, urllib3 and keyring with its closure, with the tools lock's hashes, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
@@ -225,6 +227,8 @@ Only what is listed as verified has been exercised.
 | `lineage:resolve -- REF ... [--current] [--project <repo>] [--backlog <cmd>] [--repo NAME=<dir>] [--effects-root <dir>]` | `<tools python> -I -B integrations/lineage/lineage_resolve.py resolve REF ... [options]` | no | Resolves references read-only and prints one JSON resolution each. Exit 0 when all resolved, 1 on any other outcome or a malformed reference, 2 could not run. Since F-10.3 it reads the repository through the shared repository-access module (Dulwich), so the target runs it under the tools interpreter, as the test targets do; under an interpreter without Dulwich it fails with `REPOSITORY_NEEDS_DULWICH`. |
 | `lineage:trace -- OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | `<tools python> -I -B integrations/lineage/lineage_trace.py trace OUTCOME --project <repo> [--backlog <cmd>] [--store <db>]` | no | Projects the lineage of one outcome id read-only (statement, objective, design, task, attempt), with the real authorities only, and prints the `lineage-projection/v1` JSON. Exit 0 complete, 1 the projection carries uncertainty, 2 could not run. Since F-10.3 it reads the repository through the shared repository-access module (Dulwich), so the target runs it under the tools interpreter, as the test targets do; under an interpreter without Dulwich it fails with `REPOSITORY_NEEDS_DULWICH`. |
 | `lineage:example [-- --record]` | `<tools python> -I -B integrations/lineage/tests/lineage_example.py [--record]` | no | Rebuilds the lineage projection example offline (sample authorities and real registry) and prints each verdict; `--record` rewrites `integrations/lineage/examples/`. Since F-10.3 it reads the repository through the shared repository-access module (Dulwich), so the target runs it under the tools interpreter, as the test targets do; under an interpreter without Dulwich it fails with `REPOSITORY_NEEDS_DULWICH`. |
+| `owner:test` | `<tools python> -I -B -m unittest discover -s integrations/owner/tests -v` | no | [Owner decisions](#owner-decisions) tests (P-04.1): the shared `owner-decision/v1` record and statement verdicts, the recorder's edits of `proposal.md` and `.openspec.yaml`, and `prepare` and `record` on throwaway fixture repositories (the lineage objective resolver round trip, the id kept on re-recording, every refusal with its code and remedy); synthetic statements only. |
+| `owner:accept -- prepare --project <repo> --change <name> --item O<n> [--expires-in-minutes N] [--out <file>]` (or `-- record --project <repo> --challenge <file> --statement <file> --recorded-by <attribution> --identity '<Name <email>>' [--amend]`) | `<tools python> -I -B integrations/owner/acceptance_recorder.py prepare\|record ...` | no | The [acceptance recorder](#owner-decisions): `prepare` prints the challenge to show the Owner and writes nothing; `record` records the Owner's statement, mints or keeps the outcome id and commits in the project repository, in process. Exit 0 done, 2 refused (a stable code and its remedy). **Not yet verified** on a real project or with a real Owner acceptance. |
 | `paths:test` | `<tools python> -I -B -m unittest discover -s integrations/paths/tests -v` | no | [Managed data root](#managed-data-root) tests: every refusal code, the platform defaults by injection, both adapters, the legacy table, `example_config.yml`, asset records. The `config.yml` tests skip, counted, when PyYAML is not importable. |
 | `paths:show [-- --format sh\|ps1]` | `python -I -B integrations/paths/aieh_paths.py show [--format json\|sh\|ps1]` | no | Prints the managed data root and its categories (`aieh-paths/v1` JSON, or shell assignments). Creates nothing. Exit 2 on a refusal, with its code and remedy. |
 | `paths:init` | `python -I -B integrations/paths/aieh_paths.py init` | no | Creates the managed data root, its `persistent/`, `ephemeral/` and `assets/` directories and its `aieh-root.json` marker. Idempotent. |
@@ -1172,7 +1176,10 @@ forward: ignore rules and attributes are decided as git decides them, not by Dul
 status applies git's size rule (the module's README). Since F-10.6 it also has smart-HTTP
 transports (`ls_remote`, a bare `clone` and `Repository.push`, with an in-memory credential and
 no credential helper), qualified against the host Gitea, and the resolver reads the source
-tags through them (R11).
+tags through them (R11). Since P-04.1 it has its one write to history, `Repository.write_commit`,
+for the [acceptance recorder](#owner-decisions): objects plus a compare-and-set update of the
+branch, no hook (a repository with client hooks is refused, decision 0014 section 6), no process,
+with the work tree and the index brought to the commit.
 
 **Launch census guard.** `tools/tests/test_launch_census.py` (F-10.5) parses every tracked
 `*.py` file (the index, read through the module, so no git is launched) and passes only when the
@@ -1305,6 +1312,28 @@ labelled sample authorities in `lineage_samples.py`, which the command line neve
 The example projections are in `integrations/lineage/examples/`. Live statement and attempt
 authorities, and the shape of a real dispatcher's reservation intent, are **not yet
 verified** (see the [lineage README](../integrations/lineage/README.md#lineage-traversal-p-032)).
+
+## Owner decisions
+
+Plan group P-04 records the Owner's decisions through deterministic, non-model recorders in one
+shared record shape, `owner-decision/v1` (`integrations/owner/owner_decision.py`): `decisionId`,
+`kind`, `subject`, `shown` (the summary presented, its nonce and expiry), `statement` (the text
+verbatim, `attributedTo: owner`, the channel and the reference), `recordedBy` and `recordedAt`.
+Plan leaf P-04.1 adds the first recorder, the acceptance recorder
+([`integrations/owner/`](../integrations/owner/README.md); `task owner:accept`). `prepare` shows
+the Owner what is being accepted; `record` refuses, each with a stable code and its remedy, a
+missing acceptance, one authored by a model, a statement attributed to anyone but the Owner,
+re-minting and a stale, expired or replayed challenge; otherwise it writes the decision record
+into the change's `owner-decisions/`, sets the Objective item's authority and acceptance, mints
+the outcome id once and declares it under `x-outcomes`
+([decision 0008](../decisions/0008-outcome-identity-assignment-form-and-record.md)), checks that
+the new outcome resolves through the lineage objective resolver, and commits in process through
+the [repository-access module](#repository-access)'s commit write, which runs no hook and so
+refuses a repository with client hooks (decision 0014 section 6). The attribution is declared by
+whoever transcribed the statement, not authenticated. It has run on throwaway fixture repositories
+with synthetic statements only; a real acceptance, OpenSpec on a change holding the records, and
+every host but Windows 11 are **not yet verified**. The Owner authorization recorder (P-04.2) is
+not built.
 
 ## Owner host
 
@@ -1465,7 +1494,7 @@ Directories exist only when they hold real content.
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`); the [containment cases](#containment-cases) (`containment-cases.json`) | S-01.1, S-02.1 |
 | `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`); the [test budgets](#testing) (`test-budgets.json`) | S-01.2.1, G-01.1, F-09.1 |
-| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/`; `dispatch/`: the trusted dispatch input resolver, the approved-input manifest's schema check, the create admission before the OpenHands create, its synthetic `examples/` and `tests/`; `repository/`: the shared [repository-access](#repository-access) module over Dulwich and its differential contract suite with its golden corpus in `tests/fixtures/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1, E-01.2.1, E-01.2.2, F-10.2 |
+| `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/`; `dispatch/`: the trusted dispatch input resolver, the approved-input manifest's schema check, the create admission before the OpenHands create, its synthetic `examples/` and `tests/`; `repository/`: the shared [repository-access](#repository-access) module over Dulwich and its differential contract suite with its golden corpus in `tests/fixtures/`; `owner/`: the shared Owner decision record, the [acceptance recorder](#owner-decisions) and their `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1, E-01.2.1, E-01.2.2, F-10.2, P-04.1 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
 | `docs/` | This guide | contributor onboarding |

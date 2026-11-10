@@ -20,6 +20,7 @@ testpaths = [
     "integrations/effects/tests",
     "integrations/planning/tests",
     "integrations/lineage/tests",
+    "integrations/owner/tests",
     "integrations/paths/tests",
     "integrations/platform/tests",
     "integrations/credentials/tests",

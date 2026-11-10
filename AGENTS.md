@@ -102,8 +102,9 @@ unless adaptation is necessary.
   test:profile`, `task test:budget` and the gate's tests in `task
   hooks:verify` find it the same way). So do the planning and lineage
   commands (`task planning:create`, `planning:resolve`, `planning:readiness`,
-  `lineage:resolve`, `lineage:trace`, `lineage:example`) and the guest and
-  Gitea commands that read a repository (`task guest:create`,
+  `lineage:resolve`, `lineage:trace`, `lineage:example`), the acceptance
+  recorder (`owner:accept`) and the guest and Gitea commands that read a
+  repository (`task guest:create`,
   `guest:create-canaries`, `guest:create-provisioned`, `guest:recreate`,
   `guest:netprobe`, `guest:smoke`, `guest:push`, `gitea:verify`,
   `gitea:finalize-credentials`), which read it through Dulwich. A suite that
@@ -119,6 +120,7 @@ unless adaptation is necessary.
   <tools python> -I -B -m unittest discover -s integrations/effects/tests -v
   <tools python> -I -B -m unittest discover -s integrations/planning/tests -v
   <tools python> -I -B -m unittest discover -s integrations/lineage/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/owner/tests -v
   <tools python> -I -B -m unittest discover -s integrations/paths/tests -v
   <tools python> -I -B -m unittest discover -s integrations/platform/tests -v
   <tools python> -I -B -m unittest discover -s integrations/credentials/tests -v

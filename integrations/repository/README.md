@@ -2,12 +2,12 @@
 
 The shared repository-access module for AI Engineering's own Python components (plan leaf F-10.2,
 [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md),
-Accepted): read-only access to git repositories over
+Accepted): access to git repositories over
 [Dulwich](https://www.dulwich.io/) 1.2.21, pinned in the Python tools set
 ([`composition/lock/python/tools-requirements.txt`](../../composition/lock/python/tools-requirements.txt)),
 the smart-HTTP transports (F-10.6: `ls_remote`, a bare `clone` and `push`; see
-[Transports](#transports-f-106)), and the differential contract suite that holds it to git's
-answers.
+[Transports](#transports-f-106)), the commit write (P-04.1; see [Commits](#commits-p-041)), and
+the differential contract suite that holds it to git's answers. Every other call only reads.
 
 - [`repository_access.py`](repository_access.py): the module. It launches **no process**; every
   answer comes from the repository's own files, or from the remote over HTTP, in the calling
@@ -56,7 +56,8 @@ with ra.open_repository(path, config='repository') as repo:   # config: 'host', 
 | `ls_remote(url, credential=None, *, names=None)` | `git ls-remote <url> [<name> <name>^{}]` | F-10.6. Module function. See [Transports](#transports-f-106). |
 | `clone(url, destination, credential=None)` | `git clone --bare` | F-10.6. Module function. |
 | `push(url, refspec, credential=None)` | `git push <url> <refspec>` | F-10.6. Returns `RefUpdate(name, old, new)`. |
-| `client_hooks()` | | The first client hook git would run (`core.hooksPath`, or a non-sample file under `hooks/`), or `None`; `push` refuses when there is one. |
+| `client_hooks()` | | The first client hook git would run (`core.hooksPath`, or a non-sample file under `hooks/`), or `None`; `push` and `write_commit` refuse when there is one. |
+| `write_commit(files, message, *, identity, expected_head, when=None, check=None)` | writing the files, then `git commit --only -- <paths>` | P-04.1 (decision 0014's `commit` write). See [Commits](#commits-p-041). Returns the new commit id. |
 
 Paths and names are `str`; the repository's bytes are decoded as UTF-8 (undecodable bytes with
 `surrogateescape`).
@@ -164,7 +165,8 @@ Local mechanics decided here (0014 leaves them open):
 | `PUSH_REJECTED` | `RepositoryError` | Local (F-10.6, the plan's code): the reference update was rejected, by the server (`ng <ref> <reason>`, such as Gitea's protected branch: `pre-receive hook declined`; `details`: `ref`, `reason`, `remote`, the server's messages), or before anything is sent by git's own client-side rules (`reason`: `non-fast-forward`, `fetch first`, `already exists` for a tag, `remote ref does not exist` for a deletion), or because the source names no object. |
 | `REMOTE_REFUSED` | `RepositoryError` | Local (F-10.6): the server refused `ls_remote` or `clone` with HTTP 401 or 403 (`details['status']`). |
 | `REMOTE_FAILED` | `RepositoryError` | Local (F-10.6): any other transport failure: another HTTP status (`details['status']`; 404 for a repository the server does not have), a connection or protocol error. A failed `clone` leaves no directory. |
-| `HOOKS_UNSUPPORTED` | `RepositoryError` | Local (F-10.6; decision 0014 section 6): `push` in a repository with a client hook (`details['hook']`), before any network access. |
+| `HOOKS_UNSUPPORTED` | `RepositoryError` | Local (F-10.6; decision 0014 section 6): `push` or `write_commit` in a repository with a client hook (`details['hook']`), before any network access or write. |
+| `COMMIT_REFUSED` | `RepositoryError` | Local (P-04.1): `write_commit` refused before anything visible changed (`details['reason']`: `head`, `head-moved`, `signing`, `object-format`, `index`, `local-changes`, `path-conflict`, `nothing-to-commit`). |
 | `NOT_A_WORK_TREE`, `NOT_A_REPOSITORY` | `CannotRun` | The work-tree check. |
 | `REPOSITORY_NEEDS_DULWICH` | `CannotRun` | Dulwich is not importable by the running interpreter; the message names `task tools:install` and the interpreter `tools_install.py --python` prints. |
 
@@ -344,6 +346,45 @@ because Dulwich reports a 403 as an untyped protocol error). It also sets urllib
 Dulwich's pool manager. At every Dulwich or urllib3 pin change, `test_repository_transport.py`,
 `OracleTransport` and `task gitea:transport` are the check that this still holds.
 
+## Commits (P-04.1)
+
+`write_commit(files, message, *, identity, expected_head, when=None, check=None)` is the module's
+one write to a repository's history (decision 0014 sections 6 and 8: "writes (`commit`) are added by
+the leaves that first need them"; the acceptance recorder, `integrations/owner/`, is the first and
+only caller). `files` maps repository-relative paths to bytes (regular, non-executable files, added
+or replaced). It answers as writing the files and running `git commit --only -- <paths>` with author
+and committer `identity` (`Name <email>`) at `when` (seconds, offset; now when `None`), except that
+no hook runs:
+
+- **Refused before anything is written:** `HOOKS_UNSUPPORTED` when the repository has a client
+  hook (git would run `pre-commit` and `commit-msg`); `COMMIT_REFUSED` when HEAD is not a branch
+  with a commit (`head`), the branch does not hold `expected_head` (`head-moved`), `commit.gpgSign`
+  is set (`signing`; the module does not sign), the repository is SHA-256 (`object-format`), the
+  index has unmerged entries or an extension git requires to be understood (`index`; Dulwich 1.2.21
+  cannot read git's split or sparse index at all, which is `GIT_FAILED`), a path has local changes
+  in the index or the work tree, is an untracked or ignored file, or has a symbolic link on its way
+  (`local-changes`), a file or a directory is in the way (`path-conflict`), or nothing would change
+  (`nothing-to-commit`); `OBJECT_NAME_INVALID` for a path outside the repository-relative grammar or
+  a name the work tree cannot hold (`.git`, Windows device names).
+- **Objects, then a compare-and-set:** the blobs, trees and the commit are written as loose
+  objects (every tree read on the way is verified, as every read is); then `check(commit id)`, when
+  given, may refuse by raising, and nothing visible has changed (the recorder resolves the new
+  outcome there); then the branch moves only if it still holds `expected_head` (Dulwich's
+  `set_if_equals` under the reference's lock file; `head-moved` otherwise), and the branch's and
+  HEAD's reflogs get a `commit: <subject>` line, as git writes them.
+- **The checkout follows:** each file is written into the work tree as its blob's bytes (no
+  end-of-line conversion; under `core.autocrlf=true`, where git's checkout writes CRLF, `status`
+  answers it clean) and its index entry is set from the written file. The index's optional
+  extensions that git rebuilds (cache-tree, untracked cache, fsmonitor, offset tables) are dropped
+  so that none goes stale; resolve-undo is kept. Without this, git's cache-tree would make the next
+  `git commit` write the old trees back. A failure after the branch moved is `GIT_FAILED` with
+  `details['committed']`.
+
+Pin-sensitive: the extensions are read through Dulwich's `Index._extensions`, which Dulwich 1.2.21
+writes back as read. Proof: [`tests/test_repository_commit.py`](tests/test_repository_commit.py)
+(git, which builds the fixture, is the oracle: `fsck --strict`, `status`, the reflog, and a later
+`git commit` that keeps the change; no process is launched by the write).
+
 ## Bundles
 
 `write_bundle(refs, destination)` writes a complete bundle (version 2, or 3 with
@@ -433,6 +474,9 @@ expectations are.
   authenticated HTTPS remote (GitHub was read anonymously), protocol v0/v1 servers for
   `ls_remote` (Gitea and GitHub answered protocol v2), SHA-256 remotes, and pushes larger than
   Dulwich's 1 MiB post buffer (sent chunked).
+- `write_commit`: SHA-256 repositories and signing (refused), executable files and symbolic links
+  (not written), paths under filter drivers or `working-tree-encoding`, `core.logAllRefUpdates=false`
+  (the reflogs are written regardless), concurrent writers other than the compare-and-set itself.
 - Reftable repositories, replacing objects (refused), split or sparse indexes, submodule status,
   intent-to-add entries, `working-tree-encoding`, filter drivers (refused), and `status` under
   `host` with user or system attribute files.

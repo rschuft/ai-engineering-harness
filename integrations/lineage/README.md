@@ -355,8 +355,10 @@ identical in both: they are asserted by records, not by the authorities.
   cross-branch lookup (`check_active_branches`) on an exported commit, and repositories large
   enough for the per-resolution export to matter.
 - The `ambiguous` work outcome against the live Backlog.md (it refuses to list instead).
-- The outcome id's acceptance recorder: no plan leaf owns it yet (decision 0008,
-  Consequences), so declarations exist only in the tests' throwaway repositories.
+- The outcome id's acceptance recorder is built by plan leaf P-04.1
+  ([`integrations/owner/`](../owner/README.md)) and has run on throwaway fixture repositories
+  only: no Owner acceptance has been recorded with it, so declarations exist only in the tests'
+  throwaway repositories.
 - The traversal against live statement and attempt authorities: none exists, so every
   full-chain run rests on the sample authorities, and the real registry answers
   `authority-unavailable` for both.

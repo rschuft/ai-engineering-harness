@@ -84,7 +84,7 @@ tasks:
   # is not installed. PYTHON is overridden with it for this target; each suite target it calls
   # resolves it the same way, so that it also runs under the tools interpreter when run alone.
   test:
-    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the managed data root tests (paths:test), the lifecycle contract and platform adapter tests (platform:test), the credential provider tests (credentials:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test) and the repository-access contract tests (repository:test)"
+    desc: "Under the python-tools interpreter (<tools python>: tools_install.py --python; needs tools:install): run the tool tests (<tools python> -I -B -m unittest discover -s tools/tests -v), then the integration store tests (store:test), the effects store tests (effects:test), the planning adapter tests (planning:test), the lineage tests (lineage:test), the Owner decision recorder tests (owner:test), the managed data root tests (paths:test), the lifecycle contract and platform adapter tests (platform:test), the credential provider tests (credentials:test), the host Gitea tests (gitea:test), the dispatch input resolution and create admission tests (dispatch:test) and the repository-access contract tests (repository:test)"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
@@ -95,6 +95,7 @@ tasks:
       - task: effects:test
       - task: planning:test
       - task: lineage:test
+      - task: owner:test
       - task: paths:test
       - task: platform:test
       - task: credentials:test
@@ -347,6 +348,27 @@ tasks:
       PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/lineage/tests/lineage_example.py {{.CLI_ARGS}}'
+
+  # Owner decisions (plan group P-04): the shared Owner decision record and the acceptance
+  # recorder (plan leaf P-04.1, decision 0008; integrations/owner/README.md). The recorder commits
+  # in process through the repository-access module (decision 0014), so it needs the tools venv.
+  owner:test:
+    desc: "Run the Owner decision recorder tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/owner/tests -v): the shared owner-decision/v1 record and statement verdicts, the recorder's edits of proposal.md and .openspec.yaml, and prepare and record on throwaway fixture repositories (the lineage objective resolver round trip, the id kept on re-recording, every refusal with its code and remedy; synthetic statements only)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/owner/tests -v'
+
+  owner:accept:
+    desc: "The acceptance recorder (<tools python> -I -B integrations/owner/acceptance_recorder.py <command>): pass -- prepare --project DIR --change NAME --item O<n> [--expires-in-minutes N] [--out FILE] to print the challenge to show the Owner (writes nothing), or -- record --project DIR --challenge FILE --statement FILE --recorded-by ATTRIBUTION --identity 'Name <email>' [--amend] to record the Owner's statement, mint or keep the outcome id and commit; exit 2 on a refusal, with its code and remedy"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/owner/acceptance_recorder.py {{.CLI_ARGS}}'
 
   # Managed data root (plan leaf F-07.1, decision 0009): the shared path resolver, its
   # configuration and the Python tools venv (integrations/paths/README.md).

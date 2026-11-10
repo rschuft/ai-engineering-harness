@@ -141,7 +141,7 @@
         "evidence/P-01.2-intent-skill-qualification.md (the accepted objective recorded as O1 with acceptance conversation:qual-02/message-2)"
       ],
       "open": [
-        "The acceptance recorder (sets the item's authority and acceptance, mints the id, writes the declaration, commits) has no owning plan leaf; until it exists, Owner acceptances are recorded by hand in this form (decision 0008, Consequences).",
+        "The acceptance recorder (sets the item's authority and acceptance, mints the id, writes the declaration, commits) is built by plan leaf P-04.1 (integrations/owner/acceptance_recorder.py) and has run on throwaway fixture repositories only; no Owner acceptance has been recorded with it.",
         "Supersession links between outcomes are not defined (K-03.3.2).",
         "Acceptance references of scheme decision: have no lineage kind; one is added when a traversal needs it."
       ]
