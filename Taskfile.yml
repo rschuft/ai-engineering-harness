@@ -485,6 +485,17 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v'
 
+  gitea:transport:
+    desc: "Live qualification of the repository module's transports against the running Gitea (plan leaf F-10.6), opt-in through AIEH_GITEA_TRANSPORT=1 (<tools python> -I -B -m unittest discover -s integrations/gitea/tests -p test_transport_live.py -v): each bot's push matrix of gitea:authz replayed through the module, and a module clone checked by git fsck --strict; reads the bot tokens from Credential Manager into memory; adds one commit to builder's and planner's proposal branches, as gitea:authz does"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    env:
+      AIEH_GITEA_TRANSPORT: '1'
+    cmds:
+      - '{{.PYTHON}} -I -B -m unittest discover -s integrations/gitea/tests -p test_transport_live.py -v'
+
   # Owner host (plan leaf U-01.1): the React shell in apps/owner-host. These targets need
   # the component tier (Node.js >= 24, npm >= 11), so they are not part of setup or test.
   owner-host:install:

@@ -19,11 +19,17 @@ answer is computed in this process from the repository's own files.
   and ``pack_trailer``. Ignore rules and attributes are decided by the module as git decides
   them (``_Excludes``, ``_Attributes``), not by Dulwich's ``IgnoreFilterManager`` and
   ``GitAttributes`` (F-10.4).
+- The smart-HTTP transports (F-10.6): ``ls_remote(url)``, ``clone(url, destination)`` (a bare
+  clone) and ``Repository.push(url, refspec, credential)``, with a ``Credential`` held in memory
+  and sent as HTTP Basic or ``Authorization: token`` to the remote's origin only; no credential
+  helper, no ssh, no git configuration, no process. A push refuses a repository with client
+  hooks (decision 0014 section 6).
 
 Errors (decision 0014 section 3): ``RepositoryError`` with a stable ``code``
 (``REVISION_INVALID``, ``OBJECT_NAME_INVALID``, ``GIT_FAILED``, ``EXPORT_REFUSED``,
-``BUNDLE_INVALID``, ``FILTER_UNSUPPORTED``, ``ATTRIBUTES_UNSUPPORTED``, ``REPLACE_REFS_UNSUPPORTED``), and
-``CannotRun`` (``NOT_A_WORK_TREE``,
+``BUNDLE_INVALID``, ``FILTER_UNSUPPORTED``, ``ATTRIBUTES_UNSUPPORTED``, ``REPLACE_REFS_UNSUPPORTED``;
+the transports' ``PUSH_REFUSED``, ``PUSH_REJECTED``, ``REMOTE_REFUSED``, ``REMOTE_FAILED`` and
+``HOOKS_UNSUPPORTED``), and ``CannotRun`` (``NOT_A_WORK_TREE``,
 ``NOT_A_REPOSITORY``, ``REPOSITORY_NEEDS_DULWICH``). "No such object" and an ambiguous
 abbreviation answer ``None``.
 
@@ -618,6 +624,245 @@ def open_repository(path, *, config, work_tree=True, ceilings=None):
         repo.close()
         raise CannotRun('NOT_A_WORK_TREE', f'not a git working tree: {path}')
     return Repository(repo, config, None if repo.bare else location)
+
+
+# ---------------------------------------------------------------------------- transports (F-10.6)
+
+CREDENTIAL_SCHEMES = ('basic', 'token')
+TRANSPORT_TIMEOUT_S = 60  # connect and read, per request: a ceiling that bounds a hang
+_REMOTE_REFUSED_STATUSES = (401, 403)
+_T = None
+
+
+@dataclass(frozen=True)
+class Credential:
+    """A credential held in memory and sent only in the ``Authorization`` header of a request to
+    the remote's own origin: HTTP Basic (``scheme='basic'``: USERNAME and SECRET) or
+    ``Authorization: token <SECRET>`` (``scheme='token'``). Never a URL, a configuration entry, a
+    credential helper or a process argument. ``repr`` and ``str`` never show the secret."""
+    username: str
+    secret: str
+    scheme: str = 'basic'
+
+    def __post_init__(self):
+        if self.scheme not in CREDENTIAL_SCHEMES:
+            raise ValueError(f'scheme must be one of {CREDENTIAL_SCHEMES}')
+        for name in ('username', 'secret'):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value or _CONTROL.search(value):
+                raise ValueError(f'the credential {name} must be non-empty text without control characters')
+        if ':' in self.username:
+            raise ValueError('a basic-auth username cannot hold ":"')
+
+    def __repr__(self):
+        return f'Credential(username={self.username!r}, scheme={self.scheme!r}, secret=<hidden>)'
+
+    __str__ = __repr__
+
+    def authorization(self):
+        """The ``Authorization`` header value."""
+        if self.scheme == 'token':
+            return 'token ' + self.secret
+        import base64
+        return 'Basic ' + base64.b64encode(f'{self.username}:{self.secret}'.encode('utf-8')).decode('ascii')
+
+
+@dataclass(frozen=True)
+class RefUpdate:
+    """One reference update ``push`` made (or found already made): the remote reference NAME
+    from OLD (None: it did not exist) to NEW (None: deleted)."""
+    name: str
+    old: str | None
+    new: str | None
+
+
+class _HttpStatus(Exception):
+    def __init__(self, status, url):
+        super().__init__(f'HTTP {status} from {url}')
+        self.status = status
+
+
+class _Rejected(Exception):
+    pass
+
+
+def _transport_modules():
+    """Dulwich's HTTP client, imported on first transport use (CannotRun REPOSITORY_NEEDS_DULWICH
+    without Dulwich), and the module's transport class over it."""
+    global _T
+    if _T is None:
+        d = dulwich_modules()
+        try:
+            from dulwich import client, protocol
+        except ImportError as exc:
+            raise CannotRun('REPOSITORY_NEEDS_DULWICH',
+                            f'Dulwich is not importable by {sys.executable} ({exc}); {TOOLS_INSTALL_HINT}') from None
+        ns = type('Transport', (), {})()
+        ns.client, ns.protocol, ns.d = client, protocol, d
+        ns.Transport = _transport_class(client.Urllib3HttpGitClient)
+        _T = ns
+    return _T
+
+
+def _origin(url):
+    """(scheme, host, port) of URL, with the scheme's default port made explicit."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    return (parts.scheme.lower(), (parts.hostname or '').lower(),
+            parts.port or {'http': 80, 'https': 443}.get(parts.scheme.lower()))
+
+
+def _transport_class(base):
+    class Transport(base):
+        """Dulwich's urllib3 smart-HTTP client with no git configuration (so no
+        ``http.extraHeader``, credential helper, ``insteadOf`` or ``sslVerify``) and the
+        module's credential: its ``Authorization`` header goes only to the remote's origin; a
+        redirect elsewhere carries none. Every non-200 answer becomes ``_HttpStatus``."""
+
+        def __init__(self, base_url, credential):
+            import urllib3
+            self._aieh_authorization = None if credential is None else credential.authorization()
+            self._aieh_origin = _origin(base_url)
+            super().__init__(base_url, config=None, timeout=TRANSPORT_TIMEOUT_S)
+            # One attempt per request, as git makes (urllib3 would retry a failed connection or
+            # read three times); redirects are still followed.
+            self.pool_manager.connection_pool_kw['retries'] = urllib3.util.Retry(
+                total=None, connect=0, read=0, status=0, other=0, redirect=5)
+
+        def _http_request(self, url, headers=None, data=None, raise_for_status=True):
+            headers = dict(headers or {})
+            if self._aieh_authorization is not None and _origin(url) == self._aieh_origin:
+                headers['Authorization'] = self._aieh_authorization
+            resp, read = super()._http_request(url, headers, data, raise_for_status=False)
+            if raise_for_status and resp.status != 200:
+                status = resp.status
+                resp.close()
+                raise _HttpStatus(status, url)
+            return resp, read
+
+    return Transport
+
+
+def _remote(url, credential):
+    """The module's client for the smart-HTTP URL, and the path on it."""
+    from urllib.parse import urlsplit
+    if not isinstance(url, str) or _CONTROL.search(url):
+        raise ValueError('the remote URL must be text without control characters')
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in ('http', 'https') or not parts.hostname:
+        raise ValueError(f'only http and https remotes are supported (no ssh, git, file or local paths): {url!r}')
+    if parts.username is not None or parts.password is not None:
+        raise ValueError('the remote URL must not hold credentials: pass a Credential, held in memory')
+    if parts.query or parts.fragment:
+        raise ValueError('the remote URL must have no query or fragment')
+    if credential is not None and not isinstance(credential, Credential):
+        raise ValueError('credential must be a Credential or None')
+    t = _transport_modules()
+    netloc = parts.netloc
+    return t, t.Transport(f'{parts.scheme.lower()}://{netloc}/', credential), parts.path or '/'
+
+
+def _remote_failure(what, url, exc, refused_code):
+    """The RepositoryError for EXC raised while talking to URL."""
+    if isinstance(exc, RepositoryError):
+        return exc
+    if isinstance(exc, _HttpStatus):
+        if exc.status in _REMOTE_REFUSED_STATUSES:
+            return RepositoryError(refused_code, f'{what} {url}: the server refused the request (HTTP {exc.status})',
+                                   status=exc.status)
+        return RepositoryError('REMOTE_FAILED', f'{what} {url}: HTTP {exc.status}', status=exc.status)
+    return RepositoryError('REMOTE_FAILED', f'{what} {url}: {type(exc).__name__}: {exc}')
+
+
+def _as_text(value):
+    return value.decode('utf-8', 'surrogateescape') if isinstance(value, bytes) else value
+
+
+def ls_remote(url, credential=None, *, names=None):
+    """The references of the smart-HTTP remote URL, as ``git ls-remote URL`` lists them:
+    ``{name: object id}`` in the server's order, with each annotated tag's peeled commit under
+    ``<tag>^{}``; an unborn HEAD is left out. NAMES, full reference names, keeps only those (and
+    their ``^{}`` entries) and asks the server for no others. CREDENTIAL (a ``Credential``) is
+    sent to the URL's origin only. ``REMOTE_REFUSED`` (HTTP 401 or 403), ``REMOTE_FAILED``
+    (anything else). Launches no process."""
+    if names is not None:
+        if isinstance(names, str) or not all(isinstance(n, str) and n.startswith('refs/') and refname_valid(n)
+                                              for n in names):
+            raise ValueError('names must be a list of full reference names')
+    t, client, path = _remote(url, credential)
+    prefixes = None if names is None else [n.encode('utf-8') for n in names]
+    failure = None
+    try:
+        result = client.get_refs(path, ref_prefix=prefixes)
+    except Exception as exc:
+        failure = _remote_failure('ls-remote', url, exc, 'REMOTE_REFUSED')
+    if failure is not None:
+        raise failure
+    wanted = None if names is None else set(names)
+    refs = {}
+    for name, oid in result.refs.items():
+        if oid is None:
+            continue
+        text = _as_text(name)
+        if wanted is not None and text.removesuffix('^{}') not in wanted:
+            continue
+        refs[text] = _as_text(oid)
+    return refs
+
+
+def clone(url, destination, credential=None):
+    """``git clone --bare URL DESTINATION`` over smart HTTP: a new bare repository holding the
+    remote's branches (``refs/heads/*``) and tags (``refs/tags/*``) under their own names, HEAD
+    pointing where the remote's HEAD points, and ``remote.origin.url`` (no credential in it).
+    DESTINATION must not exist (its parent must). No git configuration is read and no hook
+    runs. Returns ``{name: object id}`` of the references written. ``REMOTE_REFUSED`` (HTTP 401
+    or 403), ``REMOTE_FAILED`` (anything else; DESTINATION is removed). Launches no process."""
+    t, client, path = _remote(url, credential)
+    dest = os.path.abspath(os.fspath(destination))
+    if os.path.lexists(dest):
+        raise ValueError(f'{dest} exists; clone makes a new repository')
+    if not os.path.isdir(os.path.dirname(dest)):
+        raise ValueError(f'the parent of {dest} is not a directory')
+    d = t.d
+    keep = (b'refs/heads/', b'refs/tags/')
+    failure, target, written = None, None, {}
+    try:
+        target = d.repo.Repo.init_bare(dest, mkdir=True, config=d.config.StackedConfig([]),
+                                       default_branch=b'master')
+
+        def wants(refs, depth=None):
+            return sorted({oid for name, oid in refs.items()
+                           if oid is not None and name.startswith(keep) and not name.endswith(b'^{}')
+                           and oid not in target.object_store})
+
+        result = client.fetch(path, target, determine_wants=wants, ref_prefix=[b'HEAD', *keep])
+        for name, oid in result.refs.items():
+            if oid is not None and name.startswith(keep) and not name.endswith(b'^{}'):
+                target.refs[name] = oid
+                written[_as_text(name)] = _as_text(oid)
+        head = result.symrefs.get(b'HEAD')
+        if head is not None and head.startswith(b'refs/heads/'):
+            target.refs.set_symbolic_ref(b'HEAD', head)
+        elif result.refs.get(b'HEAD') is not None:
+            target.refs[b'HEAD'] = result.refs[b'HEAD']
+        config = target.get_config()
+        config.set((b'remote', b'origin'), b'url', url.encode('utf-8'))
+        config.write_to_path()
+    except Exception as exc:
+        failure = _remote_failure('clone', url, exc, 'REMOTE_REFUSED')
+    finally:
+        if target is not None:
+            target.close()
+    if failure is not None:
+        import shutil
+
+        def retry(func, path, _exc):
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        if os.path.lexists(dest):
+            shutil.rmtree(dest, onexc=retry)
+        raise failure
+    return written
 
 
 # ---------------------------------------------------------------------------- the repository
@@ -1749,6 +1994,129 @@ class Repository:
         header = parse_bundle_header(dest)
         header['pack_trailer'] = pack_trailer(dest, header)
         return header
+
+    # -- transports (F-10.6)
+
+    def client_hooks(self):
+        """The first client hook git would run for this repository, or None: ``core.hooksPath``
+        set (in the repository's own configuration or the policy's), or a file under
+        ``<common directory>/hooks/`` that is not a ``.sample`` (decision 0014 section 6)."""
+        for config in (self._dul.get_config(), self._config()):
+            try:
+                value = config.get((b'core',), b'hooksPath')
+            except KeyError:
+                continue
+            if value is not None:
+                return f'core.hooksPath={_as_text(value)}'
+        base = os.path.join(self.commondir, 'hooks')
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            return None
+        for name in names:
+            if not name.endswith('.sample') and os.path.isfile(os.path.join(base, name)):
+                return f'hooks/{name}'
+        return None
+
+    def _fast_forward(self, old, new):
+        """git's ref_newer: both peel to commits and OLD is NEW or one of its ancestors."""
+        old, new = self._commit_reference(old), self._commit_reference(new)
+        if old is None or new is None:
+            return False
+        seen, todo = {new}, [new]
+        while todo:
+            oid = todo.pop()
+            if oid == old:
+                return True
+            for parent in self._parents(oid) or ():
+                if parent not in seen:
+                    seen.add(parent)
+                    todo.append(parent)
+        return False
+
+    def push(self, url, refspec, credential=None):
+        """``git push URL REFSPEC`` over smart HTTP, with CREDENTIAL (a ``Credential`` held in
+        memory, sent to the URL's origin only) and no credential helper, ssh or process.
+        REFSPEC is ``[+]<src>:<dst>``: SRC a preserved object name (empty to delete DST), DST a
+        full reference name, ``+`` to force. As git: an update that is not a fast-forward (or
+        that replaces an existing tag) is refused without ``+``, before anything is sent; so is
+        deleting a reference the remote does not have. Nothing local is written (no
+        remote-tracking reference). Returns a ``RefUpdate``.
+
+        Refused before any network access: ``HOOKS_UNSUPPORTED`` when the repository has client
+        hooks (git would run ``pre-push``; a Dulwich push runs none). Then ``PUSH_REFUSED`` (the
+        server answered HTTP 401 or 403), ``PUSH_REJECTED`` (the update was rejected: by the
+        rules above, or by the server, e.g. a protected branch), ``REMOTE_FAILED`` (anything
+        else)."""
+        if not isinstance(refspec, str) or refspec.count(':') != 1:
+            raise ValueError('refspec must be [+]<src>:<dst> with a full destination reference name')
+        force = refspec.startswith('+')
+        src, dst = refspec[force:].split(':')
+        if not dst.startswith('refs/') or not refname_valid(dst):
+            raise ValueError(f'the destination must be a full reference name: {dst!r}')
+        hooks = self.client_hooks()
+        if hooks is not None:
+            raise RepositoryError('HOOKS_UNSUPPORTED', f'the repository has a client hook ({hooks}); git would run '
+                                  'it before a push and this module runs none, so it does not push', hook=hooks)
+        new = None
+        if src:
+            new = self.object_id(src)
+            if new is None:
+                raise RepositoryError('PUSH_REJECTED', f'{src} names no object of this repository', ref=dst)
+        t, client, path = _remote(url, credential)
+        zero = '0' * self._hexsz
+        dst_b = dst.encode('utf-8')
+        seen = {}
+        messages = []
+
+        def update_refs(remote):
+            old = remote.get(dst_b)
+            seen['old'] = None if old is None else _as_text(old)
+            if new is None:
+                if old is None:
+                    raise _Rejected('remote ref does not exist')
+                return {dst_b: zero.encode('ascii')}
+            if old is not None and _as_text(old) != new and not force:
+                if dst.startswith('refs/tags/'):
+                    raise _Rejected('already exists')
+                if self._kind(_as_text(old)) is None:
+                    raise _Rejected('fetch first')
+                if not self._fast_forward(_as_text(old), new):
+                    raise _Rejected('non-fast-forward')
+            return {dst_b: new.encode('ascii')}
+
+        def pack_data(have, want, *, ofs_delta=False, progress=None):
+            return self._dul.generate_pack_data(set(have), set(want), progress=progress, ofs_delta=ofs_delta)
+
+        failure, result = None, None
+        try:
+            result = client.send_pack(path, update_refs, generate_pack_data=pack_data, progress=messages.append)
+        except _Rejected as exc:
+            failure = RepositoryError('PUSH_REJECTED', f'{dst}: rejected ({exc}), nothing sent', ref=dst,
+                                      reason=str(exc))
+        except t.client.SendPackError as exc:
+            failure = RepositoryError('PUSH_REJECTED', f'{dst}: the remote did not unpack the objects '
+                                      f'({_as_text(exc.args[0]) if exc.args else exc})', ref=dst)
+        except Exception as exc:
+            failure = _remote_failure('push to', url, exc, 'PUSH_REFUSED')
+        if failure is not None:
+            raise failure
+        error = (result.ref_status or {}).get(dst_b)
+        if error is not None:
+            remote_text = _sanitize_remote(b''.join(messages))
+            raise RepositoryError('PUSH_REJECTED', f'{dst}: the remote rejected the update ({error})'
+                                  + (f'; remote: {remote_text}' if remote_text else ''), ref=dst, reason=error,
+                                  remote=remote_text)
+        return RefUpdate(dst, seen.get('old'), new)
+
+
+def _sanitize_remote(data, limit=600):
+    """The remote's progress messages as one line of printable text, at most LIMIT characters
+    (its tail)."""
+    text = data.decode('utf-8', 'replace')
+    text = ' '.join(part.strip() for part in re.split(r'[\r\n]+', text) if part.strip())
+    text = _CONTROL.sub('?', text)
+    return text[-limit:]
 
 
 class _PackData:

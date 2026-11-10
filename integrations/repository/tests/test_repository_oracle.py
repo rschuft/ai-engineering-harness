@@ -275,5 +275,52 @@ class OracleBundles(unittest.TestCase):
                 self.assertTrue(ra.pack_trailer(own, theirs)['ok'])
 
 
+class OracleTransport(unittest.TestCase):
+    """git agrees with the transports (F-10.6) over the local smart-HTTP server of
+    ``test_repository_transport``: ``git ls-remote`` lists what ``ls_remote`` lists, and
+    ``git fsck --strict`` accepts the module's clone and the served repository after a module
+    push. git gets the test credential as an ``http.extraHeader`` in its own environment."""
+
+    def setUp(self):
+        import test_repository_transport as tt
+        self.tt = tt
+        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-oracle-transport-'))
+        self.addCleanup(rc.rmtree, self.tmp)
+        self.remote, self.local_path, self.ids = tt.served(self.tmp, on_disk=True)
+        self.addCleanup(tt.stop_golden)
+        self.addCleanup(tt.stop_server)
+        self.addCleanup(self.remote.close)
+
+    def git(self, *args):
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith('GIT_')}
+        env.update(rc.GIT_ENV, GIT_TERMINAL_PROMPT='0', GIT_CEILING_DIRECTORIES=str(self.tmp), GIT_CONFIG_COUNT='2',
+                   GIT_CONFIG_KEY_0='http.extraHeader',
+                   GIT_CONFIG_VALUE_0='Authorization: ' + self.tt.TOKEN.authorization(),
+                   GIT_CONFIG_KEY_1='credential.helper', GIT_CONFIG_VALUE_1='')
+        result = subprocess.run(['git', *args], capture_output=True, stdin=subprocess.DEVNULL, env=env,
+                                timeout=rc.WAIT_CEILING_S)
+        return result.returncode, result.stdout.decode('utf-8'), result.stderr.decode('utf-8', 'replace')
+
+    def test_ls_remote_clone_and_push_are_gits(self):
+        code, out, err = self.git('ls-remote', self.remote.url)
+        self.assertEqual(code, 0, err)
+        listed = dict(reversed(line.split('\t')) for line in out.splitlines())
+        self.assertEqual(ra.ls_remote(self.remote.url, self.tt.TOKEN), listed)
+        clone = self.tmp / 'clone.git'
+        written = ra.clone(self.remote.url, clone, self.tt.TOKEN)
+        code, out, err = self.git('--git-dir', str(clone), 'fsck', '--strict', '--no-progress')
+        self.assertEqual((code, out, err), (0, '', ''))
+        code, out, err = self.git('--git-dir', str(clone), 'for-each-ref', '--format=%(refname) %(objectname)')
+        self.assertEqual(dict(line.split(' ') for line in out.splitlines()), written)
+        with ra.open_repository(self.local_path, config='repository', work_tree=False, ceilings=[self.tmp]) as r:
+            r.push(self.remote.url, 'HEAD:refs/heads/main', self.tt.TOKEN)
+            r.push(self.remote.url, f'+{self.ids["orphan"].decode()}:refs/heads/side', self.tt.BASIC)
+        code, out, err = self.git('--git-dir', str(self.remote.path), 'fsck', '--strict', '--no-progress')
+        self.assertEqual((code, out, err), (0, '', ''))
+        code, out, err = self.git('ls-remote', self.remote.url, 'refs/heads/main', 'refs/heads/side')
+        self.assertEqual(out.splitlines(), [f'{self.ids["c3"].decode()}\trefs/heads/main',
+                                            f'{self.ids["orphan"].decode()}\trefs/heads/side'])
+
+
 if __name__ == '__main__':
     unittest.main()

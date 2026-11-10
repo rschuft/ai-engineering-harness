@@ -5,10 +5,13 @@ The shared repository-access module for AI Engineering's own Python components (
 Accepted): read-only access to git repositories over
 [Dulwich](https://www.dulwich.io/) 1.2.21, pinned in the Python tools set
 ([`composition/lock/python/tools-requirements.txt`](../../composition/lock/python/tools-requirements.txt)),
-and the differential contract suite that holds it to git's answers.
+the smart-HTTP transports (F-10.6: `ls_remote`, a bare `clone` and `push`; see
+[Transports](#transports-f-106)), and the differential contract suite that holds it to git's
+answers.
 
 - [`repository_access.py`](repository_access.py): the module. It launches **no process**; every
-  answer comes from the repository's own files, in the calling process.
+  answer comes from the repository's own files, or from the remote over HTTP, in the calling
+  process.
 - [`tests/`](tests/): the contract suite. The recorded half runs without git; the git-oracle half
   asks git again where git is on `PATH`.
 
@@ -50,6 +53,10 @@ with ra.open_repository(path, config='repository') as repo:   # config: 'host', 
 | `write_bundle(refs, destination)` | `git bundle create` | A complete bundle (no prerequisites) of full reference names; see [Bundles](#bundles). |
 | `parse_bundle_header(path)`, `pack_trailer(path, header)` | the bundle format | Module functions: the checks `tools/guest.py` makes today, here for F-10.4 to switch it over (`BUNDLE_INVALID` where it raises `Refused`). |
 | `config_sources` | | The configuration files read, in reading order. |
+| `ls_remote(url, credential=None, *, names=None)` | `git ls-remote <url> [<name> <name>^{}]` | F-10.6. Module function. See [Transports](#transports-f-106). |
+| `clone(url, destination, credential=None)` | `git clone --bare` | F-10.6. Module function. |
+| `push(url, refspec, credential=None)` | `git push <url> <refspec>` | F-10.6. Returns `RefUpdate(name, old, new)`. |
+| `client_hooks()` | | The first client hook git would run (`core.hooksPath`, or a non-sample file under `hooks/`), or `None`; `push` refuses when there is one. |
 
 Paths and names are `str`; the repository's bytes are decoded as UTF-8 (undecodable bytes with
 `surrogateescape`).
@@ -153,6 +160,11 @@ Local mechanics decided here (0014 leaves them open):
 | `FILTER_UNSUPPORTED` | `RepositoryError` | Local: `status` meets a path git would pass through a configured filter driver (a process, such as Git LFS) or a `working-tree-encoding`. |
 | `ATTRIBUTES_UNSUPPORTED` | `RepositoryError` | Local: `status` under a policy whose attribute file outside the repository (below) sets an attribute status consults or defines a macro (`details`: `path`, `line`, `attribute`), or cannot be read. |
 | `REPLACE_REFS_UNSUPPORTED` | `RepositoryError` | Local: an object read in a repository whose replace references git would apply. |
+| `PUSH_REFUSED` | `RepositoryError` | Local (F-10.6, the plan's code): the server refused a push with HTTP 401 or 403 (`details['status']`), the answer git reports as `The requested URL returned error: 403`. Nothing was updated. |
+| `PUSH_REJECTED` | `RepositoryError` | Local (F-10.6, the plan's code): the reference update was rejected, by the server (`ng <ref> <reason>`, such as Gitea's protected branch: `pre-receive hook declined`; `details`: `ref`, `reason`, `remote`, the server's messages), or before anything is sent by git's own client-side rules (`reason`: `non-fast-forward`, `fetch first`, `already exists` for a tag, `remote ref does not exist` for a deletion), or because the source names no object. |
+| `REMOTE_REFUSED` | `RepositoryError` | Local (F-10.6): the server refused `ls_remote` or `clone` with HTTP 401 or 403 (`details['status']`). |
+| `REMOTE_FAILED` | `RepositoryError` | Local (F-10.6): any other transport failure: another HTTP status (`details['status']`; 404 for a repository the server does not have), a connection or protocol error. A failed `clone` leaves no directory. |
+| `HOOKS_UNSUPPORTED` | `RepositoryError` | Local (F-10.6; decision 0014 section 6): `push` in a repository with a client hook (`details['hook']`), before any network access. |
 | `NOT_A_WORK_TREE`, `NOT_A_REPOSITORY` | `CannotRun` | The work-tree check. |
 | `REPOSITORY_NEEDS_DULWICH` | `CannotRun` | Dulwich is not importable by the running interpreter; the message names `task tools:install` and the interpreter `tools_install.py --python` prints. |
 
@@ -275,6 +287,53 @@ Local mechanics: renames are not detected (`--no-renames`), `paths` are literal
 (`:(literal)`), a submodule is not inspected (an existing directory for a gitlink is unchanged),
 and intent-to-add entries are not distinguished.
 
+## Transports (F-10.6)
+
+Smart HTTP only (`http`, `https`), over Dulwich's urllib3 client, for the D-01.1 bot push (decision
+0014 section 1, "Future uses") and R11's tag resolution:
+
+```python
+cred = ra.Credential('aieh-builder-bot', token, scheme='basic')    # or scheme='token'
+ra.ls_remote(url, cred, names=['refs/tags/v1'])   # {'refs/tags/v1': <tag id>, 'refs/tags/v1^{}': <commit>}
+ra.clone(url, new_directory, cred)                # git clone --bare
+with ra.open_repository(path, config='repository', work_tree=False) as repo:
+    repo.push(url, 'HEAD:refs/heads/work/x', cred)   # RefUpdate(name, old, new)
+```
+
+- **The credential** (`Credential(username, secret, scheme)`) is held in memory and sent only as
+  the `Authorization` header (`Basic <user:secret>`, or `token <secret>`) of requests to the
+  URL's own origin (scheme, host and port); a redirect elsewhere carries none (urllib3 also strips
+  it on a cross-host redirect). Its `repr` hides the secret. No credential helper runs, no ssh,
+  no process: G13 is not a gap for this flow. A URL holding credentials, a query or a fragment,
+  and any scheme but `http` and `https`, are `ValueError` before any access.
+- **No git configuration** is read by a transport (no `http.extraHeader`, `credential.helper`,
+  `url.<base>.insteadOf`, `http.sslVerify`, `http.proxy`). TLS is verified against the system's
+  certificates. Dulwich's proxy environment (`https_proxy`, `http_proxy`, `all_proxy`, `no_proxy`)
+  applies, as git's does. Each request is made once (urllib3's default would retry a failed
+  connection or read three times; git does not), with a 60-second connect and read ceiling.
+- **`ls_remote`** lists as `git ls-remote`: the server's order, each annotated tag's peeled commit
+  under `<tag>^{}`, an unborn HEAD left out. `names` asks the server only for those full names
+  (protocol v2 `ref-prefix`) and keeps exactly them.
+- **`clone`** is `git clone --bare`: branches and tags under their own names, HEAD where the
+  remote's points, `remote.origin.url` (no credential), no configuration read to create it.
+  `git fsck --strict` accepts it (`OracleTransport`; live against Gitea in
+  `integrations/gitea/tests/test_transport_live.py`).
+- **`push`** takes `[+]<src>:<dst>` (`src` a preserved object name, empty to delete; `dst` a full
+  reference name). It applies git's client-side rules before sending anything: without `+`, an
+  update that is not a fast-forward (git's `ref_newer`: both peel to commits, the old one is an
+  ancestor) is `non-fast-forward`, an old value this repository lacks is `fetch first`, an existing
+  tag is `already exists`; deleting a missing reference is refused. An update already made sends
+  nothing and succeeds. Nothing local is written (no remote-tracking reference). It refuses a
+  repository with client hooks (`HOOKS_UNSUPPORTED`, decision 0014 section 6: git would run
+  `pre-push`, a Dulwich push runs none), reading `core.hooksPath` from the repository's own
+  configuration and from the policy's. The pack has no deltas (Dulwich's writer, as for bundles).
+
+Proof: `test_repository_transport.py` (a local smart-HTTP server, Dulwich's `web` application
+under `wsgiref`, in process, answering 401 and 403 and declining a protected branch; process
+creation patched to fail), `OracleTransport` (git's `ls-remote` and `fsck --strict` agree), and the
+live matrix against the host Gitea, `task gitea:transport`
+([`evidence/F-10.6-transports.md`](../../evidence/F-10.6-transports.md)).
+
 ## Bundles
 
 `write_bundle(refs, destination)` writes a complete bundle (version 2, or 3 with
@@ -359,6 +418,10 @@ expectations are.
 - The system files on macOS installations with another prefix (Homebrew's
   `$(brew --prefix)/etc/gitconfig`, Xcode's git), and Git for Windows installed without its
   registry entry (portable): the module then reads no system file.
+- Transports (F-10.6): a proxy, a redirect (only the origin rule is tested, by a stand-in), an
+  authenticated HTTPS remote (GitHub was read anonymously), protocol v0/v1 servers for
+  `ls_remote` (Gitea and GitHub answered protocol v2), SHA-256 remotes, and pushes larger than
+  Dulwich's 1 MiB post buffer (sent chunked).
 - Reftable repositories, replacing objects (refused), split or sparse indexes, submodule status,
   intent-to-add entries, `working-tree-encoding`, filter drivers (refused), and `status` under
   `host` with user or system attribute files.
