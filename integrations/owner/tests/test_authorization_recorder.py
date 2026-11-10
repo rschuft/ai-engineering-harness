@@ -31,11 +31,13 @@ SERVER = None
 
 def setUpModule():
     global SERVER
+    su.start()
     SERVER = fg.Server()
 
 
 def tearDownModule():
     SERVER.close()
+    su.stop()
 
 
 class OverHttp(su.Fixture):

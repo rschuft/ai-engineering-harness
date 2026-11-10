@@ -60,22 +60,34 @@ def owner_entry():
     return {AR.OWNER_ENTRY: (AR.OWNER, fg.PASSWORD)}
 
 
+_SHARED = []
+
+
+def start():
+    """setUpModule of a test module: one temporary directory and one migrated integration store for the
+    module."""
+    tmp = tempfile.TemporaryDirectory(prefix='aieh-authz-')
+    golden = Path(tmp.name) / 'golden.sqlite'
+    IS.open_store(golden).close()
+    _SHARED.append((tmp, golden))
+
+
+def stop():
+    """tearDownModule of a test module."""
+    _SHARED.pop()[0].cleanup()
+
+
 class Fixture(unittest.TestCase):
-    """One temporary directory and one migrated integration store per class; a copy of it, a state
-    directory and a fixture provider per test. Subclasses set ``self.http`` and ``self.port``."""
+    """A directory per class in the module's temporary directory (start); a copy of the module's migrated
+    integration store, a state directory and a fixture provider per test. Subclasses give the fake Gitea
+    (gitea_for_test)."""
 
     @classmethod
     def setUpClass(cls):
-        cls._tmp = tempfile.TemporaryDirectory(prefix='aieh-authz-')
-        cls.root = Path(cls._tmp.name)
-        golden = cls.root / 'golden.sqlite'
-        IS.open_store(golden).close()
-        cls.golden = golden
+        tmp, cls.golden = _SHARED[-1]
+        cls.root = Path(tmp.name) / cls.__name__
+        cls.root.mkdir()
         cls.serial = 0
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._tmp.cleanup()
 
     def gitea_for_test(self):
         """(http callable, port, FakeGitea) of this test."""

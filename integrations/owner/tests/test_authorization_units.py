@@ -32,6 +32,14 @@ SUBJECT = {'repository': fg.REPOSITORY, 'pull': 3, 'base': 'main', 'head': 'a' *
            'operationKind': 'example-effect', 'target': 'example-target', 'expiresAt': su.EXPIRES}
 
 
+def setUpModule():
+    su.start()
+
+
+def tearDownModule():
+    su.stop()
+
+
 def decision(**subject):
     return {'format': D.FORMAT, 'decisionId': '1f0e2d3c-4b5a-4968-8776-0123456789ab', 'kind': AR.KIND,
             'subject': {**SUBJECT, **subject},
