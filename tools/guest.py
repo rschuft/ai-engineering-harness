@@ -52,6 +52,17 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                STATE/provision/<lock sha256>/ with a staged.json manifest; a staged
                directory is re-verified and reused. No guest is involved and nothing
                downloaded is unpacked or run on the host except crane.
+    image-inspect  read only (S-03.3; the Owner's decision (e) of 2026-11-10): the stage of
+               the profile's provision lock is re-verified as create --provision does, then
+               the docker-archive's config and layers are read as data. The gzip layers are
+               streamed (each re-hashed against the lock) and applied in order as a union
+               view (whiteouts and opaque directories honoured); for each --path: present or
+               absent, type, mode, owner, size, the layer that last wrote it, symlink and
+               hard-link targets (resolved inside the image root, bounded hops), the sha256
+               of the regular file it resolves to, a directory's children and, for
+               PATH#key#key, that field of a JSON file; also the config's runtime fields and
+               the history lines naming acp, claude, codex or node. Nothing is extracted,
+               run or written.
     provision  guest side of provisioning (F-04.1b; decision 0006): for an instance made
                with create --provision (whose seed carries the manifest of the verified
                stage and the single-use root step), re-verify the stage, SFTP the .deb
@@ -120,6 +131,8 @@ never defaulted, contract sections 4 and 11):
                                           --canaries DIR --durable DIR [--durable DIR ...]
                                           [--out FILE]
     python -I -B tools/guest.py provision-fetch --profile PROFILE --state-dir STATE
+    python -I -B tools/guest.py image-inspect --profile PROFILE --state-dir STATE
+                                          --path PATH[#key#key] [--path ...]
     python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision
     python -I -B tools/guest.py provision --profile PROFILE --state-dir STATE --name NAME
     python -I -B tools/guest.py conversation-smoke --profile PROFILE --state-dir STATE --name NAME
@@ -5443,6 +5456,396 @@ def provision_fetch(ctx, opener=None, crane=None):
                    'seconds': round(time.time() - t0, 1)})
     write_stamped_record(root / 'records', 'provision-fetch', result)
     return result
+
+
+# ---------------------------------------------------------------- image-inspect (S-03.3)
+#
+# The Owner's decision (e) of 2026-11-10 (evidence/bootstrap-log.md, "Owner decisions on
+# OA-05 and OA-12"): verify whether the exact pinned image contains the ACP adapters,
+# without assuming the Dockerfile's defaults. Read only: the stage of the profile's lock is
+# located and re-verified exactly as create --provision does, then the docker-archive's
+# manifest, config and layers are read as data. Gzip layers are streamed (each re-hashed
+# against the lock while read), applied in order as a union view (OCI/AUFS whiteouts and
+# opaque directories honoured), and only the requested paths are reported. Nothing is
+# extracted, nothing from the image is run, nothing is written.
+
+IMAGE_INSPECT_MAX_PATHS = 64
+IMAGE_INSPECT_MAX_HOPS = 40                 # symlinks followed per path (Linux MAXSYMLINKS)
+IMAGE_INSPECT_MAX_CHILDREN = 200
+IMAGE_INSPECT_MAX_JSON = 4 << 20            # a JSON file read for a field selector
+IMAGE_INSPECT_MAX_VALUE = 4000              # characters of a reported field value
+IMAGE_INSPECT_MAX_HISTORY = 400             # characters of a reported created_by line
+IMAGE_INSPECT_STEP_CHARS = 160              # characters of each layer's created_by
+IMAGE_INSPECT_KEYWORDS = re.compile(r'acp|claude|codex|node', re.IGNORECASE)
+IMAGE_WHITEOUT = '.wh.'
+IMAGE_OPAQUE = '.wh..wh..opq'
+_TAR_KINDS = ((tarfile.REGTYPE, 'file'), (tarfile.AREGTYPE, 'file'), (tarfile.CONTTYPE, 'file'),
+              (tarfile.DIRTYPE, 'dir'), (tarfile.SYMTYPE, 'symlink'), (tarfile.CHRTYPE, 'char'),
+              (tarfile.BLKTYPE, 'block'), (tarfile.FIFOTYPE, 'fifo'),
+              (tarfile.GNUTYPE_SPARSE, 'file'))
+_TAR_KIND = dict(_TAR_KINDS)
+
+
+class _ImageNode:
+    """One path of the union view: what the last layer to write it recorded."""
+    __slots__ = ('kind', 'mode', 'uid', 'gid', 'size', 'target', 'layer', 'src', 'hardlink')
+
+    def __init__(self, kind, mode, uid, gid, size, target, layer, src, hardlink=None):
+        self.kind, self.mode, self.uid, self.gid = kind, mode, uid, gid
+        self.size, self.target, self.layer, self.src = size, target, layer, src
+        self.hardlink = hardlink
+
+
+class _HashingReader:
+    """A layer member read once, front to back, hashed as it goes."""
+
+    def __init__(self, raw):
+        self.raw, self.digest, self.count = raw, hashlib.sha256(), 0
+
+    def read(self, size=-1):
+        data = self.raw.read(size)
+        self.digest.update(data)
+        self.count += len(data)
+        return data
+
+    def drain(self):
+        for _ in iter(lambda: self.read(1 << 20), b''):
+            pass
+
+
+def image_member_path(name, where):
+    """A layer member name as a '/'-free-rooted path ('' is the root); '..' refuses."""
+    parts = [p for p in name.replace('\\', '/').split('/') if p not in ('', '.')]
+    if '..' in parts:
+        raise Refused('IMAGE_FORMAT', f'{where}: member {name!r} leaves the image root')
+    return '/'.join(parts)
+
+
+def parse_image_path_spec(spec):
+    """'PATH' or 'PATH#key#key...': an absolute image path and an optional JSON field."""
+    if not isinstance(spec, str) or '\0' in spec or len(spec) > 4096:
+        raise Refused('REFUSED', f'--path {spec!r} is not a usable path')
+    path, *selector = spec.split('#')
+    if not path.startswith('/') or any(not k for k in selector):
+        raise Refused('REFUSED', f'--path {spec!r}: needs an absolute path and non-empty '
+                      'field keys (PATH or PATH#key#key)')
+    return {'spec': spec, 'path': path, 'selector': selector}
+
+
+class ImageView:
+    """The union filesystem of a docker-archive's layers, metadata only."""
+
+    def __init__(self):
+        self.nodes = {'': _ImageNode('dir', 0o755, 0, 0, 0, None, None, None)}
+        self.children = {'': set()}
+        self.anomalies = []
+        self.anomaly_count = 0
+
+    def _anomaly(self, text):
+        self.anomaly_count += 1
+        if len(self.anomalies) < 20:
+            self.anomalies.append(text)
+
+    def _remove(self, path):
+        node = self.nodes.pop(path, None)
+        if node is None:
+            return
+        if node.kind == 'dir':
+            for child in list(self.children.pop(path, ())):
+                self._remove(f'{path}/{child}' if path else child)
+        parent, _, base = path.rpartition('/')
+        self.children.get(parent, set()).discard(base)
+
+    def _ensure_parents(self, path, layer):
+        parent = ''
+        for part in path.split('/')[:-1]:
+            here = f'{parent}/{part}' if parent else part
+            node = self.nodes.get(here)
+            if node is not None and node.kind != 'dir':
+                # BuildKit diffs never write through a lower non-directory; the overlay2
+                # graph driver would shadow it with a directory, which is what is applied
+                self._anomaly(f'layer {layer}: {here} is a {node.kind} below {path}')
+                self._remove(here)
+                node = None
+            if node is None:
+                self.nodes[here] = _ImageNode('dir', 0o755, 0, 0, 0, None, layer, None)
+                self.children[here] = set()
+                self.children[parent].add(part)
+            parent = here
+
+    def _put(self, path, node):
+        self._ensure_parents(path, node.layer)
+        old = self.nodes.get(path)
+        if old is not None and not (old.kind == 'dir' and node.kind == 'dir'):
+            self._remove(path)
+        self.nodes[path] = node
+        if node.kind == 'dir':
+            self.children.setdefault(path, set())
+        parent, _, base = path.rpartition('/')
+        self.children[parent].add(base)
+
+    def apply_layer(self, layer, entries):
+        """entries: [(ordinal, path, TarInfo-like)] of one layer, in archive order.
+        Whiteouts and opaque markers act on the lower layers only, so they are applied
+        first; then the entries in order (a hard link sees earlier entries of its layer)."""
+        for _ordinal, path, _info in entries:
+            parent, _, base = path.rpartition('/')
+            if base == IMAGE_OPAQUE:
+                node = self.nodes.get(parent)
+                if node is not None and node.kind == 'dir':
+                    for child in list(self.children.get(parent, ())):
+                        self._remove(f'{parent}/{child}' if parent else child)
+            elif base.startswith(IMAGE_WHITEOUT) and not base.startswith(IMAGE_WHITEOUT * 2):
+                self._remove(f'{parent}/{base[len(IMAGE_WHITEOUT):]}' if parent
+                             else base[len(IMAGE_WHITEOUT):])
+        for ordinal, path, info in entries:
+            base = path.rpartition('/')[2]
+            if not path or base.startswith(IMAGE_WHITEOUT):
+                continue                      # the root itself, whiteouts and AUFS metadata
+            if info.type == tarfile.LNKTYPE:
+                target = image_member_path(info.linkname, f'layer {layer}')
+                linked = self.nodes.get(target)
+                if linked is None or linked.kind == 'dir':
+                    self._anomaly(f'layer {layer}: hard link {path} -> {target} has no target')
+                    continue
+                self._put(path, _ImageNode(linked.kind, linked.mode, linked.uid, linked.gid,
+                                           linked.size, linked.target, layer, linked.src,
+                                           hardlink='/' + target))
+                continue
+            kind = _TAR_KIND.get(info.type)
+            if kind is None:
+                self._anomaly(f'layer {layer}: {path} has tar type {info.type!r}; skipped')
+                continue
+            self._put(path, _ImageNode(kind, info.mode & 0o7777, info.uid, info.gid,
+                                       info.size if kind == 'file' else 0,
+                                       info.linkname if kind == 'symlink' else None,
+                                       layer, (layer, ordinal) if kind == 'file' else None))
+
+    def resolve(self, path, follow_last=True):
+        """Resolve inside the image root: (resolved path or None, node or None, hops, error).
+        A symlink chain is followed for at most IMAGE_INSPECT_MAX_HOPS hops; '..' above
+        the root and an over-long chain are refused, never clamped or followed outside."""
+        stack = [p for p in reversed(path.split('/'))]
+        cur, hops = '', []
+        while stack:
+            comp = stack.pop()
+            if comp in ('', '.'):
+                continue
+            if comp == '..':
+                if not cur:
+                    return None, None, hops, 'escapes the image root'
+                cur = cur.rpartition('/')[0]
+                continue
+            here = f'{cur}/{comp}' if cur else comp
+            node = self.nodes.get(here)
+            if node is None:
+                return None, None, hops, None
+            last = not any(p not in ('', '.') for p in stack)
+            if node.kind == 'symlink' and (follow_last or not last):
+                if len(hops) >= IMAGE_INSPECT_MAX_HOPS:
+                    return None, None, hops, f'more than {IMAGE_INSPECT_MAX_HOPS} symlink hops'
+                hops.append({'path': '/' + here, 'target': node.target})
+                if node.target.startswith('/'):
+                    cur = ''
+                stack.extend(reversed(node.target.split('/')))
+                continue
+            if not last and node.kind != 'dir':
+                return None, None, hops, None
+            cur = here
+        return cur, self.nodes[cur], hops, None
+
+
+def _node_fields(node):
+    out = {'type': node.kind, 'mode': f'{node.mode:04o}', 'uid': node.uid, 'gid': node.gid,
+           'size': node.size, 'layer': node.layer}
+    if node.hardlink:
+        out['hardlink_to'] = node.hardlink
+    return out
+
+
+def _json_field(data, selector):
+    try:
+        value = json.loads(data.decode('utf-8'))
+    except (UnicodeDecodeError, ValueError) as exc:
+        return {'field_error': f'not JSON ({exc.__class__.__name__})'}
+    for key in selector:
+        if isinstance(value, dict) and key in value:
+            value = value[key]
+        elif isinstance(value, list) and key.isdigit() and int(key) < len(value):
+            value = value[int(key)]
+        else:
+            return {'field_error': f'no field {"#".join(selector)}'}
+    text = json.dumps(value, sort_keys=True)
+    if len(text) > IMAGE_INSPECT_MAX_VALUE:
+        return {'field': '#'.join(selector), 'value_truncated': text[:IMAGE_INSPECT_MAX_VALUE]}
+    return {'field': '#'.join(selector), 'value': value}
+
+
+def _layer_stream(tf, member, locked, index, consume):
+    """Stream one layer member as a tar (gzip or plain), call consume(ordinal, TarInfo,
+    tarfile) per entry, and check the member's bytes against its locked digest and size."""
+    reader = _HashingReader(tf.extractfile(member))
+    try:
+        with tarfile.open(fileobj=reader, mode='r|*') as layer_tf:
+            for ordinal, info in enumerate(layer_tf):
+                consume(ordinal, info, layer_tf)
+                layer_tf.members = []         # stream mode would keep every TarInfo
+    except (tarfile.TarError, EOFError, zlib.error) as exc:
+        raise Refused('IMAGE_FORMAT', f'layer {index}: not a gzip or plain tar stream ({exc})') \
+            from exc
+    reader.drain()
+    got = ('sha256:' + reader.digest.hexdigest(), reader.count)
+    if got != (locked['digest'], locked['size']):
+        raise Refused('IMAGE_MISMATCH', f'layer {index}: read {got[0]} ({got[1]} bytes); the '
+                      f'lock says {locked["digest"]} ({locked["size"]} bytes)')
+
+
+def read_image_archive(handle, image, specs):
+    """Report the requested paths of a docker-archive (an open binary file) whose config and
+    layers must match the locked image; see the section comment."""
+    with tarfile.open(fileobj=handle, mode='r:') as tf:
+        by_name = {m.name: m for m in tf.getmembers()}
+        try:
+            entries = json.loads(tf.extractfile(by_name['manifest.json']).read())
+            config_name, layer_names = entries[0]['Config'], entries[0]['Layers']
+            if len(entries) != 1 or not isinstance(layer_names, list):
+                raise ValueError('manifest.json is not one image with a layer list')
+            members = [by_name[n] for n in layer_names]
+            config_bytes = tf.extractfile(by_name[config_name]).read()
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise Refused('IMAGE_FORMAT', f'not a single-image docker-archive ({exc!r})') from exc
+        config_digest = 'sha256:' + hashlib.sha256(config_bytes).hexdigest()
+        if config_digest != image['config_digest']:
+            raise Refused('IMAGE_MISMATCH', f'config is {config_digest}; the lock says '
+                          f'{image["config_digest"]}')
+        if len(members) != len(image['layers']):
+            raise Refused('IMAGE_MISMATCH', f'{len(members)} layers; the lock has '
+                          f'{len(image["layers"])}')
+        config = json.loads(config_bytes)
+        view = ImageView()
+        for index, member in enumerate(members):
+            batch = []
+            _layer_stream(tf, member, image['layers'][index], index,
+                          lambda o, info, _tf: batch.append(
+                              (o, image_member_path(info.name, f'layer {index}'), info)))
+            view.apply_layer(index, batch)
+        reports, wanted = [], {}
+        for spec in specs:
+            reports.append(_image_path_report(view, spec, wanted))
+        contents = {}
+        for index in sorted({src[0] for src in wanted}):
+            def keep(ordinal, info, layer_tf, index=index):
+                if (index, ordinal) not in wanted:
+                    return
+                handle_ = layer_tf.extractfile(info)
+                digest, kept = hashlib.sha256(), []
+                for block in iter(lambda: handle_.read(1 << 20), b''):
+                    digest.update(block)
+                    if wanted[(index, ordinal)] and sum(map(len, kept)) <= IMAGE_INSPECT_MAX_JSON:
+                        kept.append(block)
+                contents[(index, ordinal)] = (digest.hexdigest(), b''.join(kept))
+            _layer_stream(tf, members[index], image['layers'][index], index, keep)
+    for report in reports:
+        src = report.pop('_src', None)
+        if src is None:
+            continue
+        if src not in contents:
+            raise Refused('IMAGE_FORMAT', f'layer {src[0]} entry {src[1]} was not met again')
+        sha, data = contents[src]
+        report['sha256'] = sha
+        if report.get('_selector'):
+            selector = report.pop('_selector')
+            report.update(_json_field(data, selector) if len(data) <= IMAGE_INSPECT_MAX_JSON
+                          else {'field_error': 'larger than the JSON read bound'})
+    return {'config': image_config_summary(config, len(members)), 'paths': reports,
+            'anomalies': {'count': view.anomaly_count, 'examples': view.anomalies},
+            'nodes': len(view.nodes)}
+
+
+def _image_path_report(view, spec, wanted):
+    report = {'path': spec['path']}
+    if spec['selector']:
+        report['selector'] = '#'.join(spec['selector'])
+    _, entry, hops, error = view.resolve(spec['path'], follow_last=False)
+    if error:
+        return dict(report, present=False, refused=error, links=hops)
+    if entry is None:
+        return dict(report, present=False, links=hops) if hops else dict(report, present=False)
+    report.update(present=True, **_node_fields(entry))
+    if entry.kind == 'symlink':
+        report['link_target'] = entry.target
+    final_path, final, hops, error = view.resolve(spec['path'], follow_last=True)
+    if hops:
+        report['links'] = hops
+    if error:
+        report['refused'] = error
+        return report
+    if final is None:
+        report['dangling'] = True
+        return report
+    if hops:
+        report['real_path'] = '/' + final_path
+    if final is not entry:
+        report['resolved'] = dict(path='/' + final_path, **_node_fields(final))
+    if final.kind == 'dir':
+        names = sorted(view.children.get(final_path, ()))
+        report['children_total'] = len(names)
+        report['children'] = names[:IMAGE_INSPECT_MAX_CHILDREN]
+    elif final.kind == 'file':
+        report['_src'] = final.src
+        wanted[final.src] = wanted.get(final.src, False) or bool(spec['selector'])
+        if spec['selector']:
+            report['_selector'] = spec['selector']
+    if spec['selector'] and final.kind != 'file':
+        report['field_error'] = f'resolves to a {final.kind}, not a file'
+    return report
+
+
+def image_config_summary(config, layer_count):
+    """The config's runtime fields, the Env entries that name PATH or a keyword, and the
+    history lines whose created_by names a keyword, each with the layer it made."""
+    inner = config.get('config') or {}
+    env = [e for e in inner.get('Env') or [] if isinstance(e, str) and
+           (e.startswith('PATH=') or IMAGE_INSPECT_KEYWORDS.search(e.split('=', 1)[0]))]
+    history, layer, lines, steps = config.get('history') or [], 0, [], []
+    for position, step in enumerate(history):
+        created = str(step.get('created_by', ''))
+        empty = bool(step.get('empty_layer'))
+        if not empty:
+            steps.append(created[:IMAGE_INSPECT_STEP_CHARS])
+        if IMAGE_INSPECT_KEYWORDS.search(created):
+            lines.append({'history': position, 'layer': None if empty else layer,
+                          'created_by': created[:IMAGE_INSPECT_MAX_HISTORY],
+                          'truncated': len(created) > IMAGE_INSPECT_MAX_HISTORY})
+        layer += 0 if empty else 1
+    return {'user': inner.get('User'), 'entrypoint': inner.get('Entrypoint'),
+            'cmd': inner.get('Cmd'), 'working_dir': inner.get('WorkingDir'), 'env': env,
+            'history_total': len(history), 'history_layers': layer,
+            'history_layers_match': layer == layer_count, 'history_matches': lines,
+            'layer_steps': steps if layer == layer_count else None}
+
+
+def image_inspect(ctx, path_specs):
+    """image-inspect: the requested paths of the staged, re-verified agent-server image."""
+    t0 = time.time()
+    specs = [parse_image_path_spec(s) for s in path_specs]
+    if not specs or len(specs) > IMAGE_INSPECT_MAX_PATHS:
+        raise Refused('REFUSED', f'image-inspect needs 1 to {IMAGE_INSPECT_MAX_PATHS} --path')
+    lock, lock_rel, lock_sha = provision_lock(ctx)
+    items = provision_items(lock)
+    image = provision_image(lock)
+    staged_dir = Path(ctx.state_dir) / 'provision' / lock_sha
+    _plain_dir(staged_dir)
+    if not staged_dir.is_dir():
+        raise Refused('REFUSED', f'{staged_dir}: no stage for this lock; run provision-fetch')
+    verified = verify_staged(staged_dir, lock_sha, items, image)
+    with open(staged_dir / 'image' / PROVISION_IMAGE_ARCHIVE, 'rb') as handle:
+        read = read_image_archive(handle, image, specs)
+    return dict(read, operation='image-inspect', result='inspected', labels=labels(ctx.profile),
+                lock={'path': lock_rel, 'sha256': lock_sha},
+                image={k: image.get(k) for k in ('repository', 'index_digest', 'manifest_digest',
+                                                  'config_digest')},
+                verify=verified, seconds=round(time.time() - t0, 1))
 
 
 # ---------------------------------------------------------------- provision (F-04.1b)
@@ -12570,12 +12973,16 @@ def main(argv=None):
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
-               'job-access-probe', 'containment-probe', 'drill'):
+               'job-access-probe', 'containment-probe', 'drill', 'image-inspect'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
-        if op not in ('preflight', 'provision-fetch'):
+        if op not in ('preflight', 'provision-fetch', 'image-inspect'):
             p.add_argument('--name', required=True)
+        if op == 'image-inspect':
+            p.add_argument('--path', action='append', required=True,
+                           help='an absolute path in the image, optionally #key#key to report '
+                                'that field of a JSON file (repeatable)')
         if op in ('create', 'inspect', 'recreate', 'conversation-smoke'):
             p.add_argument('--canaries', help='a canary set written by the canaries operation')
         if op == 'conversation-smoke':
@@ -12666,6 +13073,8 @@ def main(argv=None):
             result = preflight(ctx)
         elif op == 'provision-fetch':
             result = provision_fetch(ctx)
+        elif op == 'image-inspect':
+            result = image_inspect(ctx, args.path)
         elif op == 'create':
             if args.egress_falsification and not args.provision:
                 raise Refused('REFUSED', '--egress-falsification needs --provision')
