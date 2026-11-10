@@ -12,6 +12,8 @@ listings and the work-tree check. The documented gap forms are refused before an
 access; damaged objects fail visibly; the configuration policy is explicit and observable; no
 process is launched. The git-oracle half (``test_repository_oracle.py``) asks git again.
 """
+import contextlib
+import errno
 import gc
 import hashlib
 import os
@@ -392,21 +394,69 @@ class RecordedCases(unittest.TestCase):
 
 
 class Ceilings(unittest.TestCase):
-    """git's ceiling directories (GIT_CEILING_DIRECTORIES): the upward search never examines a
-    ceiling or anything above it; the start directory is always examined."""
+    """git's ceiling directories (GIT_CEILING_DIRECTORIES): the upward repository search never
+    probes a ceiling or anything above it; the start directory is always examined.
+
+    What is observed is the search's own probes (decision 0014 section 8). Canonicalizing a path
+    (``os.path.realpath``, of the start and of each ceiling, as git resolves its ceilings to real
+    paths) looks up every ancestor's metadata on POSIX; that lookup is not a probe of the search
+    and is not observed. The forced-POSIX tests show the exclusion on every platform, and the
+    positive control shows the observation still sees the search's probes. Those three touch no
+    path above the corpus's temporary root (the stock two leave canonicalization to the
+    platform): a probe there is recorded and answered "absent" without reaching the disk."""
 
     PROBES = ('isfile', 'isdir', 'exists', 'islink')
+    CALLS = ((os, 'stat'), (os, 'lstat'), (os, 'scandir'), (os, 'listdir'))
+
+    @staticmethod
+    def key(path):
+        """PATH as the observation compares it: absolute and case-normalized, lexically."""
+        return os.path.normcase(os.path.abspath(os.fsdecode(path)))
+
+    @classmethod
+    def within(cls, path, top):
+        """Whether PATH is the directory TOP (a key) or below it."""
+        path = cls.key(path)
+        return path == top or path.startswith(top.rstrip(os.sep) + os.sep)
 
     def touched(self, call):
-        """Every path a file-system probe received while CALL ran, and CALL's outcome."""
+        """Every path the file-system probes received while CALL ran, and CALL's outcome.
+        Recording is suspended while ``os.path.realpath`` runs (canonicalization's own metadata
+        lookups) and only then: every other probe is recorded. A probe of a path outside the
+        corpus's temporary root is recorded and answered "absent" (False, or FileNotFoundError)
+        without touching the disk."""
         import builtins
-        seen, patches = [], []
+        boundary = self.key(os.path.realpath(rc.corpus().parent))
+        seen, patches, canonicalizing = [], [], [0]
+
+        def observed(real, absent):
+            def probe(*args, **kwargs):
+                path = args[0] if args else None
+                if canonicalizing[0] or not isinstance(path, (str, bytes, os.PathLike)):
+                    return real(*args, **kwargs)
+                seen.append(path)
+                if not self.within(path, boundary):
+                    return absent(path)
+                return real(*args, **kwargs)
+            return probe
+
+        def missing(path):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), os.fsdecode(path))
+
+        canonicalize = os.path.realpath
+
+        def realpath(*args, **kwargs):
+            canonicalizing[0] += 1
+            try:
+                return canonicalize(*args, **kwargs)
+            finally:
+                canonicalizing[0] -= 1
+
+        patches.append(mock.patch.object(os.path, 'realpath', realpath))
         for name in self.PROBES:
-            real = getattr(os.path, name)
-            patches.append(mock.patch.object(os.path, name, side_effect=lambda p, _r=real: (seen.append(p), _r(p))[1]))
-        for module, name in ((os, 'stat'), (os, 'lstat'), (os, 'scandir'), (os, 'listdir'), (builtins, 'open')):
-            real = getattr(module, name)
-            patches.append(mock.patch.object(module, name, side_effect=lambda p, *a, _r=real, **k: (seen.append(p), _r(p, *a, **k))[1]))
+            patches.append(mock.patch.object(os.path, name, observed(getattr(os.path, name), lambda p: False)))
+        for module, name in (*self.CALLS, (builtins, 'open')):
+            patches.append(mock.patch.object(module, name, observed(getattr(module, name), missing)))
         for patch in patches:
             patch.start()
         try:
@@ -416,13 +466,51 @@ class Ceilings(unittest.TestCase):
         finally:
             for patch in reversed(patches):
                 patch.stop()
-        return [os.path.normcase(os.path.realpath(os.fspath(p))) for p in seen if isinstance(p, (str, os.PathLike))], outcome
+        return [self.key(p) for p in seen], outcome
 
     def below(self, paths, top):
-        top = os.path.normcase(os.path.realpath(top))
-        return [p for p in paths if p != top and not p.startswith(top + os.sep)]
+        """The PATHS outside the directory TOP."""
+        top = self.key(os.path.realpath(top))
+        return [p for p in paths if not self.within(p, top)]
 
-    def test_no_path_above_the_ceiling_is_touched(self):
+    @contextlib.contextmanager
+    def posix_canonicalization(self):
+        """``os.path.realpath`` computed as POSIX computes it, on every platform: a port of
+        CPython's posixpath loop, one ``os.lstat`` per component prefix (never the anchor), looked
+        up on the os module at call time, so that the observation meets canonicalization's
+        metadata lookups as on Linux. The port follows no links (the corpus path holds none).
+        Beneath the observation, ``os.lstat`` answers a path outside the corpus's temporary root
+        with a synthetic directory without touching the disk; the context yields the list of
+        those answers."""
+        boundary = self.key(rc.corpus().parent)
+        disk_lstat, looked_up = os.lstat, []
+        directory = os.stat_result((stat.S_IFDIR | 0o755,) + (0,) * 9)
+
+        def lstat(path, *args, **kwargs):
+            if isinstance(path, (str, bytes, os.PathLike)) and not self.within(path, boundary):
+                looked_up.append(path)
+                return directory
+            return disk_lstat(path, *args, **kwargs)
+
+        def realpath(filename, *, strict=False):
+            path = Path(os.path.abspath(os.fspath(filename)))
+            current = path.anchor
+            for name in path.parts[1:]:
+                current = os.path.join(current, name)
+                try:
+                    st = os.lstat(current)
+                except OSError:
+                    if strict:
+                        raise
+                    continue
+                if stat.S_ISLNK(st.st_mode):
+                    raise AssertionError(f'the port follows no links: {current}')
+            return current
+
+        with mock.patch.object(os, 'lstat', lstat), mock.patch.object(os.path, 'realpath', realpath):
+            yield looked_up
+
+    def check_no_path_above_the_ceiling(self):
         root = rc.corpus()
         paths, outcome = self.touched(lambda: ra.open_repository(root / 'not a repo', config='repository',
                                                                  ceilings=rc.ceilings()))
@@ -436,12 +524,42 @@ class Ceilings(unittest.TestCase):
         self.assertEqual(outcome, 'NOT_A_WORK_TREE')
         self.assertEqual(self.below(paths, root), [])
 
+    def check_a_ceiling_hides_a_repository(self, start, ceiling):
+        paths, outcome = self.touched(lambda: ra.open_repository(start, config='repository', ceilings=ceiling))
+        self.assertEqual(outcome, 'NOT_A_WORK_TREE')
+        self.assertTrue(paths)
+        self.assertEqual(self.below(paths, start), [])
+
+    def test_no_path_above_the_ceiling_is_touched(self):
+        self.check_no_path_above_the_ceiling()
+
+    def test_no_path_above_the_ceiling_is_touched_under_posix_canonicalization(self):
+        with self.posix_canonicalization() as looked_up:
+            self.check_no_path_above_the_ceiling()
+        self.assertTrue(looked_up)  # canonicalization looked up the ancestors, as on Linux
+
+    def test_a_ceiling_between_the_start_and_a_repository_hides_it_under_posix_canonicalization(self):
+        root = rc.corpus()
+        with self.posix_canonicalization() as looked_up:
+            self.check_a_ceiling_hides_a_repository(root / 'repo one' / 'docs', [str(root / 'repo one')])
+        self.assertTrue(looked_up)
+
+    def test_without_a_ceiling_the_search_probes_up_to_the_file_systems_root(self):
+        # the positive control: the observation records the search's probes above the corpus's
+        # temporary root (each answered "absent", so none touches the disk)
+        root = rc.corpus()
+        with self.posix_canonicalization():
+            paths, outcome = self.touched(lambda: ra.open_repository(root / 'not a repo', config='repository',
+                                                                     ceilings=[]))
+            top = Path(os.path.realpath(root.parent))
+        self.assertEqual(outcome, 'NOT_A_WORK_TREE')
+        above = {p for p in paths if not self.within(p, self.key(top))}
+        self.assertEqual(above, {self.key(ancestor / name) for ancestor in top.parents for name in ('.git', 'HEAD')})
+
     def test_a_ceiling_between_the_start_and_a_repository_hides_it(self):
         root = rc.corpus()
         start, ceiling = root / 'repo one' / 'docs', [str(root / 'repo one')]
-        paths, outcome = self.touched(lambda: ra.open_repository(start, config='repository', ceilings=ceiling))
-        self.assertEqual(outcome, 'NOT_A_WORK_TREE')
-        self.assertEqual(self.below(paths, start), [])
+        self.check_a_ceiling_hides_a_repository(start, ceiling)
         # the start directory itself is examined even when it is the ceiling
         with ra.open_repository(root / 'repo one', config='repository', ceilings=ceiling) as r:
             self.assertEqual(Path(r.root).resolve(), (root / 'repo one').resolve())

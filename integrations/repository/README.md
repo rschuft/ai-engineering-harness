@@ -65,16 +65,25 @@ Paths and names are `str`; the repository's bytes are decoded as UTF-8 (undecoda
 ## Discovery
 
 `open_repository` finds the repository as git does, from `path` upwards. **Ceilings** (F-10.4)
-have git's `GIT_CEILING_DIRECTORIES` semantics: the search never moves up into a ceiling or above
-it, so nothing there is examined (`path` itself always is, even when it is a ceiling); the
-longest ceiling that is a proper ancestor of `path` applies. `ceilings=None` (the default, every
-product call site) reads them from `GIT_CEILING_DIRECTORIES` (`os.pathsep`-separated; empty and
-relative entries skipped), as git does, so that without it the search goes up to the file
-system's root. Ceilings are compared as real paths: git's rule that entries after an empty one
+have git's `GIT_CEILING_DIRECTORIES` semantics: the upward search never moves up into a ceiling
+or above it, so it probes nothing there (`path` itself is always examined, even when it is a
+ceiling); the longest ceiling that is a proper ancestor of `path` applies. `ceilings=None` (the
+default, every product call site) reads them from `GIT_CEILING_DIRECTORIES`
+(`os.pathsep`-separated; empty and relative entries skipped), as git does, so that without it the
+search goes up to the file system's root. Ceilings are compared as real paths: `path` and each
+ceiling are canonicalized first (`os.path.realpath`), as git resolves its ceilings to real paths,
+and on POSIX that canonicalization looks up the metadata of every ancestor (one `lstat` per path
+component); that lookup is not a probe of the search. git's rule that entries after an empty one
 are not resolved is not implemented. Every test that opens a corpus repository or a
 non-repository passes its temporary root as a ceiling, and the git oracle sets
-`GIT_CEILING_DIRECTORIES` likewise, so no test examines its temporary root's parent, the home
-directory or the drive root (`Ceilings`, `OracleAgreement.test_ceilings_are_gits`).
+`GIT_CEILING_DIRECTORIES` likewise, so no test's search probes its temporary root's parent, the
+home directory or the drive root (`Ceilings`, `OracleAgreement.test_ceilings_are_gits`).
+`Ceilings` observes the search's probes, not canonicalization's lookups, on every platform (its
+forced-POSIX tests replace `os.path.realpath` with a port of the POSIX computation), and its
+positive control shows that without a ceiling the probes above the temporary root are observed;
+those tests touch no path above their temporary root (a probe there is answered without reaching
+the disk). (Corrected 2026-11-10 after the F-10.5 Linux run: this section said that nothing at
+or above a ceiling "is examined", which over-claimed on POSIX.)
 
 ## The revision grammar (decision 0014 section 2)
 

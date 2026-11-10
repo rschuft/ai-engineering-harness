@@ -565,7 +565,10 @@ def discover(path, ceilings=()):
     """('worktree', root) or ('gitdir', directory) for the repository PATH is in, as git's
     discovery walks up from it; None outside any repository. CEILINGS are git's ceiling
     directories (``GIT_CEILING_DIRECTORIES``): the walk never moves up into one of them or above
-    it, so nothing there is examined (PATH itself is, even when it is a ceiling)."""
+    it, so the search probes nothing there (PATH itself is examined, even when it is a ceiling).
+    PATH and each ceiling are first canonicalized (``os.path.realpath``), as git resolves its
+    ceilings to real paths; on POSIX that looks up every ancestor's metadata (one ``lstat`` per
+    component), which is not a probe of the search."""
     start = os.path.realpath(os.fspath(path))
     if not os.path.isdir(start):
         return None
