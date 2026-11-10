@@ -239,10 +239,10 @@ def stop_golden():
         rmtree(_GOLDEN.pop()[0])
 
 
-def served(tmp, on_disk=False):
-    """The served remote (in memory, or on disk under TMP), a copy of the golden local repository
-    in TMP, and their object ids."""
-    remote = Remote(tmp / 'remote.git' if on_disk else None)
+def served(path=None):
+    """The served remote (in memory, or a bare repository at PATH on disk) and the object ids of
+    the remote and of the golden local repository."""
+    remote = Remote(path)
     r = remote.repo
     ids = dict(golden()[2])
     assert history(r) == {k: ids[k] for k in ('c1', 'c2', 'tag')}
@@ -251,24 +251,33 @@ def served(tmp, on_disk=False):
     r.refs[b'refs/tags/light'] = ids['c1']
     r.refs[b'refs/tags/v1'] = ids['tag']
     r.refs.set_symbolic_ref(b'HEAD', b'refs/heads/main')
-    local_path = tmp / 'local.git'
-    shutil.copytree(golden()[1], local_path)
-    return remote, local_path, ids
+    return remote, ids
+
+
+def local_copy(destination):
+    """A copy of the golden local repository at DESTINATION."""
+    shutil.copytree(golden()[1], destination)
+    return destination
 
 
 class TransportCase(unittest.TestCase):
-    """The ``served`` fixture, with process creation and Dulwich's user and system configuration
+    """A fresh served remote per test; one copy of the golden local repository per class (a push
+    writes nothing locally); process creation and Dulwich's user and system configuration
     patched to fail."""
 
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix='aieh-transport-'))
+        cls.addClassCleanup(rmtree, cls.tmp)
+        cls.local = ra.open_repository(local_copy(cls.tmp / 'local.git'), config='repository', work_tree=False,
+                                       ceilings=[cls.tmp])
+        cls.addClassCleanup(cls.local.close)
+
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-transport-'))
-        self.addCleanup(rmtree, self.tmp)
-        self.remote, local_path, ids = served(self.tmp)
+        self.remote, ids = served()
         self.addCleanup(self.remote.close)
         for name, oid in ids.items():
             setattr(self, name, oid)
-        self.local = ra.open_repository(local_path, config='repository', work_tree=False, ceilings=[self.tmp])
-        self.addCleanup(self.local.close)
         from dulwich.config import StackedConfig
         for patch in (mock.patch.object(subprocess, 'Popen', side_effect=AssertionError('a process was launched')),
                       mock.patch.object(StackedConfig, 'default_backends',
@@ -478,18 +487,20 @@ class Push(TransportCase):
         self.assertEqual(self.remote.requests, [])
 
     def test_client_hooks_are_refused_before_any_access(self):
-        hooks = Path(self.local.commondir) / 'hooks'
+        path = local_copy(self.tmp / 'hooked.git')
+        hooks = path / 'hooks'
         hooks.mkdir(exist_ok=True)
         (hooks / 'pre-push.sample').write_text('#!/bin/sh\n', encoding='utf-8')
-        self.assertIsNone(self.local.client_hooks())
-        (hooks / 'pre-push').write_text('#!/bin/sh\nexit 1\n', encoding='utf-8')
-        error = self.expect('HOOKS_UNSUPPORTED', self.local.push, self.remote.url, 'HEAD:refs/heads/main', BASIC)
-        self.assertEqual(error.details['hook'], 'hooks/pre-push')
+        with ra.open_repository(path, config='repository', work_tree=False, ceilings=[self.tmp]) as repo:
+            self.assertIsNone(repo.client_hooks())
+            (hooks / 'pre-push').write_text('#!/bin/sh\nexit 1\n', encoding='utf-8')
+            error = self.expect('HOOKS_UNSUPPORTED', repo.push, self.remote.url, 'HEAD:refs/heads/main', BASIC)
+            self.assertEqual(error.details['hook'], 'hooks/pre-push')
         (hooks / 'pre-push').unlink()
-        config = Path(self.local.commondir) / 'config'
+        config = path / 'config'
         config.write_text(config.read_text(encoding='utf-8') + '[core]\n\thooksPath = elsewhere\n', encoding='utf-8')
         for policy in ('none', 'repository'):
-            with self.subTest(policy=policy), ra.open_repository(self.local.commondir, config=policy, work_tree=False,
+            with self.subTest(policy=policy), ra.open_repository(path, config=policy, work_tree=False,
                                                                  ceilings=[self.tmp]) as repo:
                 error = self.expect('HOOKS_UNSUPPORTED', repo.push, self.remote.url, 'HEAD:refs/heads/main', BASIC)
                 self.assertEqual(error.details['hook'], 'core.hooksPath=elsewhere')
@@ -515,7 +526,7 @@ class Push(TransportCase):
 
 class Clone(TransportCase):
     def test_a_bare_clone(self):
-        destination = self.tmp / 'clone.git'
+        destination = self.tmp / f'{self._testMethodName}.git'
         written = ra.clone(self.remote.url, destination, TOKEN)
         self.assertEqual(written, {'refs/heads/main': self.c2.decode(), 'refs/heads/protected': self.c2.decode(),
                                    'refs/tags/light': self.c1.decode(), 'refs/tags/v1': self.tag.decode()})
@@ -531,7 +542,7 @@ class Clone(TransportCase):
         self.assertEqual(self.headers(), {TOKEN.authorization()})
 
     def test_refused_and_failed_leave_nothing(self):
-        destination = self.tmp / 'clone.git'
+        destination = self.tmp / f'{self._testMethodName}.git'
         self.expect('REMOTE_REFUSED', ra.clone, self.remote.url, destination)
         self.assertFalse(destination.exists())
         self.expect('REMOTE_FAILED', ra.clone, self.remote.url.replace('repo.git', 'none.git'), destination, BASIC)

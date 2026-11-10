@@ -286,7 +286,8 @@ class OracleTransport(unittest.TestCase):
         self.tt = tt
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-repo-oracle-transport-'))
         self.addCleanup(rc.rmtree, self.tmp)
-        self.remote, self.local_path, self.ids = tt.served(self.tmp, on_disk=True)
+        self.remote, self.ids = tt.served(self.tmp / 'remote.git')
+        self.local_path = tt.local_copy(self.tmp / 'local.git')
         self.addCleanup(tt.stop_golden)
         self.addCleanup(tt.stop_server)
         self.addCleanup(self.remote.close)
@@ -308,18 +309,17 @@ class OracleTransport(unittest.TestCase):
         self.assertEqual(ra.ls_remote(self.remote.url, self.tt.TOKEN), listed)
         clone = self.tmp / 'clone.git'
         written = ra.clone(self.remote.url, clone, self.tt.TOKEN)
+        self.assertEqual(written, {k: v for k, v in listed.items() if k.startswith(('refs/heads/', 'refs/tags/'))
+                                   and not k.endswith('^{}')})
         code, out, err = self.git('--git-dir', str(clone), 'fsck', '--strict', '--no-progress')
         self.assertEqual((code, out, err), (0, '', ''))
-        code, out, err = self.git('--git-dir', str(clone), 'for-each-ref', '--format=%(refname) %(objectname)')
-        self.assertEqual(dict(line.split(' ') for line in out.splitlines()), written)
         with ra.open_repository(self.local_path, config='repository', work_tree=False, ceilings=[self.tmp]) as r:
             r.push(self.remote.url, 'HEAD:refs/heads/main', self.tt.TOKEN)
             r.push(self.remote.url, f'+{self.ids["orphan"].decode()}:refs/heads/side', self.tt.BASIC)
         code, out, err = self.git('--git-dir', str(self.remote.path), 'fsck', '--strict', '--no-progress')
         self.assertEqual((code, out, err), (0, '', ''))
-        code, out, err = self.git('ls-remote', self.remote.url, 'refs/heads/main', 'refs/heads/side')
-        self.assertEqual(out.splitlines(), [f'{self.ids["c3"].decode()}\trefs/heads/main',
-                                            f'{self.ids["orphan"].decode()}\trefs/heads/side'])
+        refs = self.remote.refs()
+        self.assertEqual((refs[b'refs/heads/main'], refs[b'refs/heads/side']), (self.ids['c3'], self.ids['orphan']))
 
 
 if __name__ == '__main__':
