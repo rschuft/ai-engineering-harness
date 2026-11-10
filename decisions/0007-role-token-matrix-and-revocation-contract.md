@@ -114,6 +114,8 @@ The matrix is [`policy/role-tokens.json`](../policy/role-tokens.json), its recor
   - inference access (no owning leaf).
 
 ## Owner confirmation
+**Status: resolved** (Overseer reconciliation, 2026-11-09; see "Resolution" below). The text as accepted on 2026-11-07 follows unchanged.
+
 Pending. It is not needed before a Gitea instance exists.
 1. During bootstrap, the Owner personally holds the Gitea site-administrator credential
    and a separate, non-administrator Gitea Owner account for protected merges.
@@ -122,6 +124,20 @@ Pending. It is not needed before a Gitea instance exists.
    Owner authorization.
 3. Plan gaps to route: no leaf installs Gitea, and no leaf builds the inference broker or
    provides model access.
+
+**Resolution** (Overseer reconciliation, 2026-11-09, Owner-action queue item OA-R2 in
+`evidence/bootstrap-log.md`). It records Owner decisions already on record, and adds none:
+1. Resolved by the Owner's identity decision, which F-06.1 applied ("Identities, per the
+   Owner's decision (resolving 0007 Owner confirmation 1)", the F-06.1 row of the bootstrap
+   log; `evidence/F-06.1-gitea-loopback.md` section 7). There are two Gitea accounts:
+   `aieh-site-admin` (administrator) and `aieh-owner` (not an administrator). Their final
+   passwords are set by S-01.2.2's automated finalization (`63e2628`;
+   `evidence/F-06.1-gitea-loopback.md` section 8), so no sign-in by the Owner is needed.
+2. Resolved by "2026-11-07: Owner decisions on three plan gaps", item (1) (bootstrap log,
+   Decisions): Gitea runs on host loopback from the pinned binary, under the managed data
+   root, as the current Windows user, not elevated. That instance is F-06.1.
+3. Resolved by the same entry, items (2) to (4): the inference-broker design leaf, the plan
+   amendment, and the acceptance-recorder leaf.
 
 ## Evidence
 - The Architect's gate G consultation for S-01.2.1 (2026-11-07), as accepted by the
