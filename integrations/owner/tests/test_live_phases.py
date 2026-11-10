@@ -19,6 +19,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 CATEGORY = 'unit'
 
@@ -133,6 +134,17 @@ class Prepare(Phases):
         self.assertIn('409', stale['expectedOutcome'])
         self.assertEqual(authorize['protectionAtPrepare']['verdict'], 'verified')
 
+    def test_an_approval_of_another_commit_fails_the_phase(self):
+        def http(port, path, **kw):
+            status, headers, data = self.gitea(port, path, **kw)
+            if path.endswith('/reviews'):
+                data = json.dumps({**json.loads(data), 'commit_id': '0' * 40}).encode()
+            return status, headers, data
+
+        with self.assertRaisesRegex(AssertionError, 'the approval is of 0{40}, not the head'):
+            L.prepare_phase(self.live()._replace(http=http), {})
+        self.assertFalse((self.run_dir / L.PRESENTATION).exists())
+
     def test_a_used_run_directory_is_refused_before_anything(self):
         (self.run_dir / 'left-over.txt').write_text('x', encoding='utf-8')
         with self.assertRaises(L.PhaseRefused) as caught:
@@ -199,10 +211,11 @@ class RecordRefusals(Phases):
         with self.assertRaises(L.PhaseRefused) as caught:
             L.record_phase(self.live(), said, {})
         self.assertEqual(caught.exception.code, 'PRESENTATION_MISSING')
-        (self.run_dir / L.PRESENTATION).write_text('{"format": "other"}', encoding='utf-8')
-        with self.assertRaises(L.PhaseRefused) as caught:
-            L.record_phase(self.live(), said, {})
-        self.assertEqual(caught.exception.code, 'PRESENTATION_INVALID')
+        for damaged in ('{"format": "other"}', '[]', '{'):
+            with self.subTest(presentation=damaged), self.assertRaises(L.PhaseRefused) as caught:
+                (self.run_dir / L.PRESENTATION).write_text(damaged, encoding='utf-8')
+                L.record_phase(self.live(), said, {})
+            self.assertEqual(caught.exception.code, 'PRESENTATION_INVALID')
         (self.run_dir / L.PRESENTATION).unlink()
         presentation, _ = self.prepared()
         said = self.statement_file(self.synthetic(*self.operations(presentation)))
@@ -210,7 +223,14 @@ class RecordRefusals(Phases):
         with self.assertRaises(L.PhaseRefused) as caught:
             L.record_phase(self.live(su.FakeVerifier()), said, {})
         self.assertEqual(caught.exception.code, 'VERIFIER_CHANGED')
+        self.assertIn('was not available, and one is available now', str(caught.exception))
         self.assertEqual(len(self.gitea.requests), before)
+        # a presentation saying a verifier was available, recorded without one
+        (self.run_dir / L.PRESENTATION).write_text(json.dumps({**presentation, 'verifier': {'available': True}}),
+                                                   encoding='utf-8')
+        with self.assertRaises(L.PhaseRefused) as caught:
+            L.record_phase(self.live(), said, {})
+        self.assertIn('was available, and one is not available now', str(caught.exception))
 
 
 class Record(Phases):
@@ -247,6 +267,27 @@ class Record(Phases):
                          [stale['approvedHead'], authorize['approvedHead']])
         self.assertEqual(observed['cleanup'], {stale['pull']: 201})
         self.assertEqual(self.gitea.pulls[stale['pull']]['state'], 'closed')
+
+    def test_a_stale_head_control_that_cannot_move_the_head_sends_no_merge_and_stops(self):
+        verifier = su.FakeVerifier()
+        presentation, _ = self.prepared(verifier)
+        authorize, stale = presentation['challenges']
+        self.gitea.protection[stale['branch']] = {}  # the builder can no longer push to B's branch
+        with self.assertRaisesRegex(AssertionError, 'the stale-head control'):
+            L.record_phase(self.live(verifier), self.statement_file(self.synthetic(*self.operations(presentation))),
+                           {})
+        self.assertEqual(self.gitea.merge_count(), 0)  # B's merge was never sent; A was not reached
+        self.assertEqual(self.gitea.head(stale['pull']), stale['approvedHead'])
+        with su.IS.open_store(self.run_dir / L.RECORDER_DIR / 'integration.sqlite') as store:
+            self.assertEqual(L._receipt(store, stale['nonce']), 'unknown')
+            self.assertIsNone(L._receipt(store, authorize['nonce']))
+
+    def test_a_merge_without_a_verifier_is_a_security_failure(self):
+        presentation, _ = self.prepared()
+        path = self.statement_file(self.synthetic(*self.operations(presentation)))
+        with mock.patch.object(L.AR, 'record', return_value={'merge': 'as if it had merged'}), \
+                self.assertRaisesRegex(L.SecurityFailure, '^SECURITY FAILURE: the recorder merged live-'):
+            L.record_phase(self.live(), path, {})
 
     def test_only_the_named_operations_are_recorded(self):
         verifier = su.FakeVerifier()

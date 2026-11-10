@@ -437,10 +437,10 @@ def record_phase(live, statement_path, observed):
     statement = read_statement(statement_path)
     authorized = authorized_challenges(statement, presentation['challenges'])
     if presentation['verifier'].get('available') is not (live.verifier is not None):
-        raise PhaseRefused('VERIFIER_CHANGED', 'the presentation said a protection verifier was '
-                           + ('' if presentation['verifier'].get('available') else 'not ')
-                           + 'available and now it is ' + ('' if live.verifier is not None else 'not')
-                           + ': the Owner saw other expected outcomes; run phase prepare again')
+        said, now = presentation['verifier'].get('available'), live.verifier is not None
+        raise PhaseRefused('VERIFIER_CHANGED', f'the presentation says a protection verifier was '
+                           f'{"" if said else "not "}available, and one is {"" if now else "not "}available now: '
+                           'the Owner saw other expected outcomes; run phase prepare again')
     observed['authorized'] = [c['operation'] for c in authorized]
     main_before = _main_head(live)
     observed['mainBefore'] = main_before
