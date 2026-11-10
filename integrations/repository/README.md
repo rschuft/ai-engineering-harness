@@ -307,8 +307,8 @@ with ra.open_repository(path, config='repository', work_tree=False) as repo:
   no process: G13 is not a gap for this flow. A URL holding credentials, a query or a fragment,
   and any scheme but `http` and `https`, are `ValueError` before any access.
 - **No git configuration** is read by a transport (no `http.extraHeader`, `credential.helper`,
-  `url.<base>.insteadOf`, `http.sslVerify`, `http.proxy`). TLS is verified against the system's
-  certificates. Dulwich's proxy environment (`https_proxy`, `http_proxy`, `all_proxy`, `no_proxy`)
+  `url.<base>.insteadOf`, `http.sslVerify`, `http.proxy`). TLS certificate verification stays on
+  (Dulwich's default, `CERT_REQUIRED`). Dulwich's proxy environment (`https_proxy`, `http_proxy`, `all_proxy`, `no_proxy`)
   applies, as git's does. Each request is made once (urllib3's default would retry a failed
   connection or read three times; git does not), with a 60-second connect and read ceiling.
 - **`ls_remote`** lists as `git ls-remote`: the server's order, each annotated tag's peeled commit
