@@ -8,6 +8,47 @@ names the exact revision and the evidence the verdict rests on. Status values:
 PASS, FAIL, UNKNOWN, BLOCKED. Parent (Medium/Large) contracts are evaluated
 separately and never inferred from a child passing.
 
+## Owner actions
+
+The durable queue of everything that needs the Owner's own authority: a decision, an
+approval, or an external act. Owner direction of 2026-11-09 (verbatim under Decisions). It is
+part of this log, not a separate task system, and moves into the adopted Work system with
+the log.
+- The Overseer adds an item when an obligation arises, and reconciles the queue at every
+  checkpoint and handoff.
+- Every Overseer report carries a "Needs Owner" section listing the pending items.
+- Silence is never approval.
+- When work reaches a gate that needs an item, that operation stops, and the exact decision
+  is presented with its implications; unrelated ready work continues.
+- An item closes only with its resolution and a link to the evidence.
+
+When an item blocks:
+- **Now:** an accepted or ready leaf cannot complete without it.
+- **Future gate:** it is needed only when the named leaf is reached.
+- **None:** it blocks nothing.
+
+### Pending
+
+| Id | Origin | Action requested | Why Owner authority | Evidence and prepared artifact | Blocks | Status |
+|---|---|---|---|---|---|---|
+| OA-01 | E-01.4.3; E-01.2.2c finding F-15 | File the upstream report to BerriAI/litellm on the start-up import race (`import litellm` fails when the cost-map retry thread logs during import), and give the Overseer its reference (URL). | A public post on an external project, made under the Owner's account and identity: a publication outside this repository. | Ready to paste: [E-01.4.3 evidence, section 9](E-01.4.3-start-race.md), "To BerriAI/litellm". | **Now:** E-01.4.3 closes only when an upstream report reference is recorded (OA-04). | Pending (actionable now) |
+| OA-02 | E-01.4.3 findings F-1, F-2 | File the companion note to OpenHands/software-agent-sdk: the 1.60.1 binary bundles litellm 1.105.1, and `LITELLM_LOCAL_MODEL_COST_MAP` cannot reach conversation containers. Give the Overseer its reference. | As OA-01. | Ready to paste: [E-01.4.3 evidence, section 9](E-01.4.3-start-race.md), "To OpenHands/software-agent-sdk". | None (recommended; OA-01 alone closes E-01.4.3). | Pending (actionable now) |
+| OA-03 | E-01.2.2c finding F-2; limit `fd-outer-server-local-recovery` (`security/inventory.json`, decision 0001's version line) | File an upstream report to OpenHands: at every start, the 1.60.1 outer server resumes stored conversations whose status is `running` in its own process (with a stored `working_dir`, it creates that host path). Give the Overseer its reference. | As OA-01. | Facts: [E-01.2.2c evidence](E-01.2.2c-fix-requalification.md), finding F-2, and the compensating quiesce control. **No ready-to-paste draft yet:** the Overseer has it prepared in the next builder dispatch and links it here. | None now (the local quiesce control compensates; the limit is reconsidered at R-01.2). | Pending (draft in preparation) |
+| OA-04 | E-01.4.3 acceptance clause | No separate act: E-01.4.3's acceptance needs "the upstream report reference is recorded". It closes when OA-01's reference is recorded here and in the E-01.4.3 row. | It follows OA-01. | [E-01.4.3 row](#leaves) | **Now:** E-01.4.3 only; it blocks no other work. | Pending (on OA-01) |
+| OA-05 | F-10.5; decision 0014 section 8 and "Owner confirmation" | Approve, for one run, carrying the repository's test content into the disposable Linux verification guest, to run the Dulwich contract suite there. | Repository content in a guest is outside the extended guest authorization of 2026-11-07 ("no repository content"); decision 0014 requires a per-run approval. | To be presented at the F-10.5 dispatch, with the exact run (the guest, what is copied, network none, destruction after). | **Future gate:** F-10.5. Without it, F-10.5 records Linux as not verified and does not pass, so the F-10 group does not pass. | Pending (future-gated; not yet requested) |
+| OA-06 | Decisions 0004 and 0010 (act A4); F-05.1 limits | Create the executor principal and the effects-store custody root (act A4). | A privileged host act: account, elevation and custody of the privileged-effect store. | [Decision 0004](../decisions/0004-privileged-effect-store-custody-and-restore-semantics.md), [0010](../decisions/0010-effects-store-placement-and-governance-threat-model.md). | **Future gate:** G-04.2.1 (and the effects CLI success path). | Pending (future-gated; requested at G-04.2.1, not before) |
+| OA-07 | Decision 0013; the S-01.4 and F-04.2 rows | Approve each host-to-guest forward (the Owner UI, the dispatch path) at the leaf that first needs it. | Decision 0013: no host-to-guest path is open without a recorded Owner approval. | [Decision 0013](../decisions/0013-owner-ui-session-access-and-management-key-custody.md). | **Future gate:** U-01.2 and E-01.3.x, as each is reached. | Pending (future-gated; requested per forward) |
+| OA-08 | F-10.2 finding F-2 | Optional housekeeping: delete two directories of synthetic test data left in the user temp directory, `aieh-repo-corpus-9o7tj36r` and `aieh-repo-corpus-_ifrtu9s`. | The builder's deletion was refused by the session's permission classifier. Agents do not route a refused act through another agent. | [F-10.2 evidence](F-10.2-repository-module.md). The directories hold synthetic repositories only. | None. | Pending (optional) |
+
+### Resolved (reconciled 2026-11-09)
+
+| Id | Origin | Action | Resolution and evidence |
+|---|---|---|---|
+| OA-R1 | F-03.2 host acts A1-A3 | A1: enable the Windows Hypervisor Platform and restart. A2: install the pinned QEMU. A3: create the guest-state directory. | Done 2026-11-06, under Decisions: "Owner host acts", "A1 complete", "A2 done". The F-03.1 row's "pending" text predates them. |
+| OA-R2 | Decision 0007, "Owner confirmation" 1-3 | (1) The Owner holds the Gitea site-administrator credential and a separate Owner account. (2) Where Gitea runs. (3) Routing the plan gaps. | (1) The Owner's identity decision (F-06.1, S-01.2.2 rows). (2) and (3): "2026-11-07: Owner decisions on three plan gaps" (Gitea on host loopback). The section in decision 0007 still reads "Pending"; that text is stale. |
+| OA-R3 | F-06.1 | The Owner's first Gitea sign-in and the credential finish step. | Superseded by automated finalization, S-01.2.2 `63e2628` ([F-06.1 evidence section 8](F-06.1-gitea-loopback.md)); no Owner sign-in is needed. |
+| OA-R4 | M-3; the Agent Server start-up race | Approve the M-3 wording reconciliation, and give the race an owner. | Owner decision 2026-11-09 (Decisions). M-3 done `01842b5`; the race was given leaf E-01.4.3 (`ab0def1`). |
+
 ## Bootstrap
 
 - **2026-11-05: seed bootstrap (not a plan task).** Commit `13197dd`. Archive
@@ -178,6 +219,9 @@ push never implies parent acceptance.
   - **Done: wording fix forward `f8d81e8`** (F-10.1 finding F-1): the `tools_install.py` docstring and `integrations/paths/README.md` now name PyYAML, Dulwich and urllib3.
 
 - **2026-11-06: A2 done (QEMU 11.1.3 installed, not run).** The first pass stopped before extraction, as the Owner's conditions require, and found two problems. (1) The F-03.2.1a lock pinned both `sqlite` and `sqlite3`, which conflict: 66 of their shared files differ. This was a defect introduced by F-03.2.1a, whose dependency resolution ignored provides, conflicts and replaces. (2) Four packages contain hardlinks inside the same package. Fix-forward `bccf9e6`: `tools/msys2_lock.py` re-resolves the closure from the signed `ucrt64.db` using libalpm rules (23 tests). The result is 159 packages, with `sqlite3` replaced by `sqlite`, no remaining conflict and 0 overlapping paths; the lock's sha256 is `69e08336...df879`. Overseer decision: hardlinks are written as plain copies after checking each target stays inside the same package. Installed result: 158 packages extracted (`iso-codes` symlinks refused), and all 45,742 files verified against their archive hashes, with 0 mismatched, 0 missing and 0 extra. No links or reparse points on disk. Nothing executed or elevated. The Overseer independently re-hashed the three pinned binaries, re-counted the files and links, and re-ran the strict profile check. The restart that completes A1 is still pending.
+
+- **2026-11-09: Owner direction on Owner-action tracking**, verbatim: "Owner direction: Ensure obligations requiring my attention cannot disappear into the autonomous execution transcript. Use the existing bootstrap progress records, and eventually the adopted Work system, to maintain a durable Owner-action queue. Do not create a competing task system or database. Each outstanding action must record: Stable identifier and originating task or finding; Exact decision, approval, or external action requested; Why Owner authority is required; Supporting evidence and any prepared artifact; Whether it blocks a task now or only at a future gate; Pending/resolved status and resolution evidence. Reconcile the existing outstanding obligations, including: The three upstream issue reports; E-01.4.3's missing upstream report references; F-10.5's per-act Linux guest authorization; Any other unresolved Owner actions already in the record. At every Overseer checkpoint or handoff, explicitly surface a concise "Needs Owner" section showing outstanding actions, even when work continues autonomously. Distinguish actionable-now items from future-gated items. Do not block unrelated ready work for outstanding actions. Never interpret silence as approval. When a gate requiring Owner authorization is reached, stop that specific operation and present the exact decision needed, with its implications. Once an action is completed, record its resolution and link the evidence before closing it. Treat this as a correction to the existing oversight and reporting process, not a new implementation workstream. Continue the current Builder and autonomous execution."
+  - **Overseer disposition:** the queue is the [Owner actions](#owner-actions) section of this log. It holds 8 pending items (OA-01 to OA-08) and 4 reconciled as resolved (OA-R1 to OA-R4), found by reading the Leaves rows, the Decisions entries and every decision record's status and Owner-confirmation section. No plan, task or other file was created.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
