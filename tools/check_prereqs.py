@@ -5,7 +5,10 @@
 
 basic       Python >= 3.12 (CPython), git, and the seed revision in this clone's
             history (needed by `verify_seed.py --baseline seed`). Task is an
-            optional convenience and is only reported.
+            optional convenience and is only reported, and so is the Python
+            tools venv (the product runtime, installed by `task tools:install`
+            after this tier): located as `tools_install.py --python` locates
+            it, without importing Dulwich or launching anything.
 components  The resolver's own prerequisite check (composition/resolve.py):
             CPython 3.12 with pip >= 23.1, Node.js >= 24 with npm >= 11.
             Registry network access is required but not probed here. The
@@ -69,7 +72,23 @@ def basic():
         task = shutil.which('task')
         task_version = output([task, '--version']) if task else None
     print(f'[INFO] task: {task_version or "not found"} (optional; pinned {PINNED_TASK_VERSION})')
+    print(tools_venv_info())
     return ok
+
+
+def tools_venv_info():
+    """An INFO line on the python-tools venv, the product runtime (decision 0014 section 9): its
+    interpreter for the current lock, located as `tools_install.py --python` locates it. It creates
+    nothing, launches nothing and imports no Dulwich; it is information, never a basic-tier check."""
+    what = 'the product runtime: Dulwich, urllib3 and PyYAML; task test runs under it'
+    try:
+        tools = load('aieh_tools_install', ROOT / 'integrations' / 'paths' / 'tools_install.py')
+        python = tools.installed_python(tools.paths.resolve(config={}))
+    except Exception as exc:  # noqa: BLE001 - information only: report why, never fail the tier
+        return f'[INFO] tools venv: cannot be located ({type(exc).__name__}: {exc}); {what}'
+    if python is None:
+        return f'[INFO] tools venv: not installed for the current lock (task tools:install); {what}'
+    return f'[INFO] tools venv: {python} ({what})'
 
 
 def components():

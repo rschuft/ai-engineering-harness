@@ -71,6 +71,7 @@ hash-checked and installed into that directory.
 |---|---|---|
 | Basic development | CPython ≥ 3.12 and git, in a full (non-shallow) clone. [Task](#task) 3.54.0 is an optional convenience. | Seed verification (`check_prereqs.py --tier basic`, `verify_seed.py` in both modes) and the [publication-safety gate](#publication-safety-gate): standard library only, offline. Editing docs and tools. |
 | Python tools set | The basic tier, plus HTTPS access to PyPI (pypi.org, files.pythonhosted.org) once per lock for `task tools:install`, which `task setup` runs. | `task test` and `task setup`'s tests, which run under the set's interpreter; `config.yml` (PyYAML); the Python components' repository operations (Dulwich 1.2.21 and urllib3 2.8.0, plan group F-10). |
+| Product runtime: the tools venv | The Python tools set installed for the current lock (`task tools:install`). `check_prereqs.py --tier basic` reports its interpreter, or that it is not installed, as information only. | The Python components read and write git repositories in process over Dulwich, through the shared [repository-access module](#repository-access): planning, lineage and dispatch, the guest exchange push and checkout snapshots, the Gitea checkout listing, the test profiler's revision stamp and the resolver's source tags. Their targets run under `<tools python>`; under an interpreter without Dulwich they stop with `REPOSITORY_NEEDS_DULWICH`, with no git fallback. git is launched only at the sites [decision 0014](../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md) section 1 retains (the exchange verifier, the publication-safety gate, the basic-tier checks and the test fixtures), held by the [launch census guard](#repository-access). |
 | Component verification | The Python tools set (its interpreter, CPython **3.12** with pip ≥ 23.1, runs the resolver; its Dulwich reads the source tags, F-10.6), Node.js ≥ 24 with npm ≥ 11, and HTTPS access to the registries listed in [`composition/lock/README.md`](../composition/lock/README.md). git is not needed by the resolver. | `composition/resolve.py` (`task resolve`, `task qualify`). |
 | Optional inventory | A resolver work directory from `task resolve` or `task qualify`, plus network access to PyPI (metadata) and GitHub and the image registries (SBOM). The SBOM scan downloads its pinned Syft 1.57.0 and Grant 0.7.0 archives itself and checks their sha256 before running them; only Windows x86_64 archives are pinned. Syft and Grant are **not** host prerequisites. | `task inventory`, `task sbom`. |
 
@@ -78,7 +79,8 @@ Later milestones need more tools and environments than these tiers cover, such
 as managed execution guests and the services that run in them, Gitea, scanner
 tooling such as Grype. Dulwich, for the Python components' Git operations, is pinned in the
 Python tools set (plan leaf F-10.1); the shared [repository-access module](#repository-access) is
-built over it (F-10.2), and no component uses that module yet (F-10.3 onwards). The
+built over it (F-10.2), and the components of the product-runtime row use it (F-10.3, F-10.4,
+F-10.6). The
 Windows reference guest profile has its own provider prerequisites in
 [`profiles/strong-windows-qemu-whpx/PREREQUISITES.md`](../profiles/strong-windows-qemu-whpx/PREREQUISITES.md).
 This guide does not record whether any of them is verified. That is recorded in
@@ -111,6 +113,8 @@ network.
 | Task 3.54.0 | release zip, sha256 verified, run from a directory outside the checkout | release tarball, sha256 verified, run from `/tmp` | not yet verified | not yet verified |
 | `task setup` | PASS. Since F-10.1 (`tools:install`, then the tests under the tools interpreter) its commands PASS, rendered from the Taskfile and run from PowerShell and Git Bash; not yet run under Task | PASS before F-10.1 (under Python 3.14.4); not yet verified since | not yet verified | not yet verified |
 | `task tools:install`, `task dev:install` (Dulwich 1.2.21, urllib3 2.8.0) | PASS: hash-locked, wheels only; Dulwich from its `cp312-cp312-win_amd64` wheel | not yet verified | not yet verified | not yet verified |
+| Dulwich repository access: the differential contract suite (`repository:test`) | PASS: every test, the git-oracle half included (git 2.52.0.windows.1), under the tools venv | not yet verified | pending: one run in the disposable Debian 13 verification guest (profile `strong-windows-qemu-whpx`), which needs the Owner's approval for that run ([decision 0014](../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md) section 8) | not yet verified |
+| Dulwich in the components (planning, lineage, dispatch, the guest exchange push and snapshots, the Gitea listing, the resolver's source tags) and the launch census guard | PASS (`task test` under the tools venv; git launched only at the retained sites) | not yet verified | not yet verified | not yet verified |
 | The four raw setup commands | PASS | PASS (under Python 3.14.4) | not yet verified | not yet verified |
 | Node.js / npm | 24.19.0 / 11.17.0 | 22.22.1 / 9.2.0: below the component tier | not yet verified | not yet verified |
 | `task qualify` (resolver) | PASS: 348 checks, 0 failed, digests equal to the F-01.2 record; about 4 minutes | not met: no CPython 3.12 and no pip; Node 22, npm 9 | not yet verified | not yet verified |
@@ -1132,7 +1136,23 @@ the inventory snapshots (R7, R8, under `host`), the Gitea checkout listing (R9) 
 profiler's revision stamp (R10, `null` with its reason when unavailable) use it too; the
 exchange verifier (R6) keeps git (decision 0014 section 7). F-10.4 also repaired the module
 forward: ignore rules and attributes are decided as git decides them, not by Dulwich, and
-status applies git's size rule (the module's README).
+status applies git's size rule (the module's README). Since F-10.6 it also has smart-HTTP
+transports (`ls_remote`, a bare `clone` and `Repository.push`, with an in-memory credential and
+no credential helper), qualified against the host Gitea, and the resolver reads the source
+tags through them (R11).
+
+**Launch census guard.** `tools/tests/test_launch_census.py` (F-10.5) parses every tracked
+`*.py` file (the index, read through the module, so no git is launched) and passes only when the
+git launch sites it finds equal the retained list of decision 0014 section 1, each named with
+its row: R6 (the exchange verifier's `run_git`), H1 (the publication-safety gate's `git`), B1
+(`verify_seed.py --baseline`), B2 (`check_prereqs.py --tier basic`) and T (the test fixtures and
+the git oracle). A new launch site fails it, and so does a retained site that disappears; a test
+proves both on an in-memory copy of the tracked sources with an injected
+`subprocess.run(['git', ...])`. It follows the standard library's launchers through imports,
+aliases and injectable parameters, and the tree's own launcher wrappers (`run_tree`,
+`ProcessTree`, `check_prereqs.output`) to their callers. Its docstring lists what static
+analysis cannot see: a launcher or a program computed at run time, git launched by a child
+process or inside a guest, and code outside tracked `*.py` files.
 
 `task repository:test` runs its differential contract suite under the tools interpreter: the
 recorded half compares the module with git's answers recorded over a committed, git-built
@@ -1172,7 +1192,9 @@ outside the checkout. Backlog.md runs without install scripts: npm installs its
 platform package from `optionalDependencies`. The offline tests use a fake Backlog.md
 and run under the tools interpreter (Dulwich; git builds their fixture repositories and is
 their oracle). The adapter reads the repository in process (F-10.3) and starts Backlog.md and
-OpenSpec as process trees; OpenSpec reads an export of the revision's blob bytes. The live
+OpenSpec as process trees; OpenSpec reads an export of the revision's blob bytes. It launches
+no git, and needs the [product runtime](#tool-tiers): the `planning:` targets run under the
+tools interpreter, and without Dulwich the adapter stops with `REPOSITORY_NEEDS_DULWICH`. The live
 tests (`AIEH_BACKLOG`, `AIEH_OPENSPEC`) regenerate the
 committed two-task capture in `integrations/planning/tests/fixtures/two-task/` and
 compare it with the recorded one. They ran on Windows 11 x86_64 only; other hosts,
@@ -1214,7 +1236,7 @@ and adapter exist:
 |---|---|---|---|
 | `design` | OpenSpec (git) | P-02.1 pointer resolution | implemented; offline tests |
 | `work` | Backlog.md | `task view --json`, `task list --json` (P-02) | implemented; offline, and live with `AIEH_BACKLOG` |
-| `commit` | Git | the P-02.1 repository access (in process, as `git rev-parse` and `cat-file` answer) in a registered clone | implemented; offline tests |
+| `commit` | Git | the shared repository-access module (in process over Dulwich, as `git rev-parse` and `cat-file` answer) in a registered clone | implemented; offline tests |
 | `effect-receipt` | effects store | F-05.2 read methods | implemented on fixtures only |
 | `objective` | OpenSpec | the outcome id declared under `x-outcomes` in the declaring change's `.openspec.yaml`, cross-checked against its intent record ([decision 0008](../decisions/0008-outcome-identity-assignment-form-and-record.md), Proposed) | implemented; offline, and live with `AIEH_OPENSPEC` (`validate --strict`, `archive`) |
 | `conversation`, `message` | Owner conversation store | none | authority unavailable (U-02.1); **not yet verified** |
@@ -1228,6 +1250,13 @@ byte. No message store exists yet, so only the anchor and its check are implemen
 resolution of effect receipts, which needs the store's custody identity (G-04.2.x), every
 host but Windows 11 x86_64, and every kind marked unavailable or unsettled are **not yet
 verified**.
+
+The resolvers and the traversal read every repository through the shared
+[repository-access module](#repository-access), in process (F-10.3), and launch no git. They
+need the [product runtime](#tool-tiers): the `lineage:` targets run under the tools
+interpreter. Without Dulwich a resolution that needs a repository is `authority-unavailable`
+(`PROJECT_UNAVAILABLE`, decision 0014 section 3), and the lineage tests fail, naming
+`REPOSITORY_NEEDS_DULWICH`; none skips.
 
 Plan leaf P-03.2 adds `lineage_trace.py`: a read-only traversal from one outcome id
 through the Owner's statements, the declaring change's design, the Backlog.md tasks that

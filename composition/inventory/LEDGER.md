@@ -179,7 +179,7 @@ None of these is resolved. Items 1–8 are what F-01.1 flagged plus what this in
 ## Reproduce
 
 ```
-python -I composition/resolve.py --work <W>                                   # lock resolution + host install
+<tools python> -I -B composition/resolve.py --work <W>                        # lock resolution + host install; <tools python>: tools_install.py --python
 python -I composition/inventory/metadata_inventory.py --resolved <W>          # component metadata inventory
 python -I composition/inventory/scan.py --resolved <W> --tools <T> --out <O>  # Syft SBOMs + Grant (optional)
 ```
