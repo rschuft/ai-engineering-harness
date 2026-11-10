@@ -131,6 +131,16 @@ password is on any command line.
 `verify`'s `no_gitea_secret_in_checkout` check fails in the same way on a file it could not read; its
 `checkout_scan` output names the unreadable and absent paths.
 
+The checkout's file list (`checkout_files`) is the list `git ls-files --cached --others
+--exclude-standard` gives, read in process by the shared repository-access module
+([`integrations/repository/`](../repository/README.md), decision 0014 row R9: its `listing`, under the
+`host` configuration policy, so the excludes file git reads for this checkout applies); no git is
+launched. The module's contract suite and `TestCheckoutFiles` hold it equal to git's listing on this
+checkout and on an ignore-rule corpus, and never a strict subset of it, so the scan misses no file git
+would list. A checkout that cannot be listed (not a work tree, no Dulwich in the interpreter) fails with
+`CHECKOUT_UNLISTED` (exit 1), never as an empty scan; `verify` and `finalize-credentials` therefore run
+under the tools interpreter (`task gitea:verify`, `task gitea:finalize-credentials`).
+
 **Why this mechanism.** `gitea admin user change-password --password` would put a password on a
 command line, so it is not used. The web flow is Gitea's own supported forced change. It needs no
 token and no administrator. A password is never on a command line, in an environment, in a log or

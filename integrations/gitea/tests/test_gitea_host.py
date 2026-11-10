@@ -957,6 +957,46 @@ class TestCheckoutFiles(unittest.TestCase):
         self.assertIn('integrations/gitea/gitea_host.py', names)
         self.assertNotIn('config.yml', names)
 
+    def test_the_listing_of_this_checkout_is_gits(self):
+        """decision 0014 row R9: the module's listing, under the host policy, is the path set of
+        git ls-files -z --cached --others --exclude-standard (git asked as the oracle)."""
+        try:
+            git = subprocess.run(['git', '-C', str(REPO), 'ls-files', '-z', '--cached', '--others',
+                                  '--exclude-standard'], capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+        except FileNotFoundError:
+            self.skipTest('git is not on PATH: the oracle comparison needs it')
+        self.assertEqual(git.returncode, 0, git.stderr)
+        theirs = [name for name in git.stdout.decode('utf-8').split('\0') if name]
+        # A nested repository is listed as 'dir/'; checkout_files returns paths, which drop the '/'.
+        mine = [p.relative_to(REPO).as_posix() for p in G.checkout_files(REPO)]
+        self.assertEqual(len(mine), len(set(mine)))
+        self.assertEqual(set(mine), {name.rstrip('/') for name in theirs})
+
+    def test_never_a_strict_subset_of_gits_on_the_ignore_rule_corpus(self):
+        """Negation, directory patterns, **, nested .gitignore files, info/exclude and a
+        core.excludesFile, from the repository module's contract corpus with git's recorded
+        listing: a path git lists and the scan does not would go unscanned."""
+        corpus = _load('repository_corpus', REPO / 'integrations' / 'repository' / 'tests' / 'repository_corpus.py')
+        root = corpus.corpus()
+        env = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'XDG_CONFIG_HOME': str(root / 'xdg empty')}
+        cases = {name: data for name, data in corpus.expected()['cases'].items() if name.startswith('ignore ')}
+        self.assertEqual(len(cases), 10)
+        with mock.patch.dict(os.environ, env):
+            for name, data in sorted(cases.items()):
+                (git,) = [want for cached, others, exclude, want in data['listing'] if cached and others and exclude]
+                with self.subTest(case=name):
+                    listed = G.checkout_files(root / name)
+                    mine = {p.relative_to(root / name).as_posix() for p in listed}
+                    theirs = {path.rstrip('/') for path in git}
+                    self.assertEqual(theirs - mine, set())
+                    self.assertEqual(mine, theirs)
+
+    def test_an_unlistable_checkout_is_a_failure_never_an_empty_scan(self):
+        with tempfile.TemporaryDirectory(prefix='aieh-gitea-unlisted-') as tmp:
+            with self.assertRaises(G.GiteaError) as caught:
+                G.checkout_files(Path(tmp))
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('CHECKOUT_UNLISTED', False))
+
 
 SUPERVISOR = textwrap.dedent('''
     import importlib.util, subprocess, sys, time

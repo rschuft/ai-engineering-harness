@@ -101,9 +101,12 @@ unless adaptation is necessary.
   test:profile`, `task test:budget` and the gate's tests in `task
   hooks:verify` find it the same way). So do the planning and lineage
   commands (`task planning:create`, `planning:resolve`, `planning:readiness`,
-  `lineage:resolve`, `lineage:trace`, `lineage:example`), which read the
-  repository through Dulwich. A suite that needs Dulwich fails without it,
-  naming `task tools:install`; it never skips:
+  `lineage:resolve`, `lineage:trace`, `lineage:example`) and the guest and
+  Gitea commands that read a repository (`task guest:create`,
+  `guest:create-canaries`, `guest:create-provisioned`, `guest:recreate`,
+  `guest:netprobe`, `guest:smoke`, `guest:push`, `gitea:verify`,
+  `gitea:finalize-credentials`), which read it through Dulwich. A suite that
+  needs Dulwich fails without it, naming `task tools:install`; it never skips:
 
   ```
   python -I -B tools/check_prereqs.py --tier basic

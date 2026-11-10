@@ -211,6 +211,26 @@ class RequiredTargets(unittest.TestCase):
                 (command,) = self.commands(name)
                 self.assertTrue(command.startswith(f"- '{{{{.PYTHON}}}} -I -B {script}"), command)
 
+    def test_the_guest_and_gitea_commands_that_read_a_repository_run_under_the_tools_interpreter(self):
+        # Rows R5, R7, R8 and R9 of decision 0014 (plan leaf F-10.4): create and recreate record
+        # the profile revision (smoke and netprobe create too), smoke takes the inventory
+        # snapshots, push writes the exchange bundle, gitea:verify and finalize-credentials
+        # list the checkout; all through the shared repository-access module (Dulwich).
+        for name, script in (('guest:create', 'tools/guest.py create'),
+                             ('guest:create-canaries', 'tools/guest.py create'),
+                             ('guest:create-provisioned', 'tools/guest.py create'),
+                             ('guest:recreate', 'tools/guest.py recreate'),
+                             ('guest:netprobe', 'tools/guest.py netprobe'),
+                             ('guest:smoke', 'tools/guest.py smoke'),
+                             ('guest:push', 'tools/guest.py exchange-push'),
+                             ('gitea:verify', 'integrations/gitea/gitea_host.py verify'),
+                             ('gitea:finalize-credentials', 'integrations/gitea/gitea_host.py finalize-credentials')):
+            with self.subTest(target=name):
+                self.assertEqual(self.variables(name), TOOLS_VARS)
+                (command,) = self.commands(name)
+                self.assertTrue(command.startswith(f"- '{{{{.PYTHON}}}} -I -B {script}"), command)
+                self.assertIn('(<tools python> -I -B ', self.targets[name][0])
+
     def test_hooks_verify_runs_the_gate_plain_and_its_tests_under_the_tools_interpreter(self):
         self.assertEqual(self.variables('hooks:verify'), TOOLS_VARS[:2])
         self.assertEqual(self.commands('hooks:verify'), [

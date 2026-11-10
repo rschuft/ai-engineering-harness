@@ -171,6 +171,28 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def _load_repository_access():
+    """The shared repository-access module (integrations/repository, decision 0014), loaded by
+    path once per process: the standard library at import, Dulwich only when a repository is
+    opened (CannotRun REPOSITORY_NEEDS_DULWICH without it)."""
+    module = sys.modules.get('repository_access')
+    if module is None:
+        path = REPO / 'integrations' / 'repository' / 'repository_access.py'
+        spec = importlib.util.spec_from_file_location('repository_access', path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['repository_access'] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['repository_access']
+            raise
+    return module
+
+
+repository_access = _load_repository_access()
+INVENTORY_FORMAT = 'repo-inventory/2'
 LAUNCH_SCHEMA = 'ai-engineering-harness/profiles/launch-record/v1'
 INSPECT_SCHEMA = 'ai-engineering-harness/profiles/inspect-record/v1'
 SMOKE_SCHEMA = 'ai-engineering-harness/profiles/smoke-record/v1'
@@ -547,20 +569,29 @@ def host_principal():
 
 
 def profile_revision(repo):
-    """git rev-parse HEAD; refuse when profiles/ has uncommitted changes."""
-    def git(*args):
-        return subprocess.run(['git', '-C', str(repo), *args], capture_output=True,
-                              text=True, check=False)
-    head = git('rev-parse', 'HEAD')
-    if head.returncode != 0:
-        raise Refused('REFUSED', f'git rev-parse HEAD failed: {head.stderr.strip()}')
-    status = git('status', '--porcelain', '--untracked-files=all', '--', 'profiles')
-    if status.returncode != 0:
-        raise Refused('REFUSED', f'git status failed: {status.stderr.strip()}')
-    if status.stdout.strip():
+    """The checkout's HEAD; refuse when profiles/ has uncommitted changes (tracked or untracked),
+    as ``git rev-parse HEAD`` and ``git status --porcelain --untracked-files=all -- profiles``
+    answer. Read in process by the shared repository-access module under the ``host``
+    configuration policy (decision 0014 sections 1 and 5, row R7: the configuration git would
+    read for this checkout, recorded in ``config_sources``); a status the module cannot give as
+    git does (ATTRIBUTES_UNSUPPORTED, FILTER_UNSUPPORTED) refuses."""
+    ra = repository_access
+    try:
+        with ra.open_repository(repo, config='host') as opened:
+            head = opened.head().commit
+            dirty = opened.status(['profiles'], 'all') if head is not None else []
+            sources = [posix(source) for source in opened.config_sources]
+    except (ra.RepositoryError, ra.CannotRun) as exc:
+        raise Refused('REFUSED', f'{repo}: the profile revision cannot be read: {exc.code}: '
+                      f'{exc.message}') from None
+    if head is None:
+        raise Refused('REFUSED', f'{repo}: HEAD names no commit')
+    if dirty:
         raise Refused('REFUSED', 'profiles/ has uncommitted changes; create records the '
-                      'profile revision and refuses a dirty profile', status.stdout.splitlines())
-    return {'kind': 'git-revision', 'head': head.stdout.strip(), 'profiles_clean': True}
+                      'profile revision and refuses a dirty profile',
+                      [f'{entry.xy} {entry.path}' for entry in dirty])
+    return {'kind': 'git-revision', 'head': head, 'profiles_clean': True, 'config_policy': 'host',
+            'config_sources': sources}
 
 
 # ---------------------------------------------------------------- processes (Windows)
@@ -937,11 +968,15 @@ def sftp_quote(path):
 # ---------------------------------------------------------------- git (host side)
 
 
+# The host git serves the exchange verifier alone (verify_pulled_bundle, row R6 of decision
+# 0014): git stays the integrity authority of bundles pulled from the guest (section 7).
+
+
 def git_binary():
     path = shutil.which('git')
     if not path:
-        raise Refused('REFUSED', 'git not found on PATH (the exchange builds and verifies '
-                      'bundles with the host git)')
+        raise Refused('REFUSED', 'git not found on PATH (the exchange verifies pulled bundles '
+                      'with the host git)')
     return path
 
 
@@ -977,62 +1012,21 @@ def git_ok(args, home, repo=None, what=None):
     return result.stdout.strip()
 
 
-BUNDLE_SIGNATURES = {b'# v2 git bundle\n': 2, b'# v3 git bundle\n': 3}
-BUNDLE_REF = re.compile(r'([0-9a-f]{40}|[0-9a-f]{64}) (refs/\S+|HEAD)')
-BUNDLE_HEADER_MAX = 1 << 20
-
-
 def parse_bundle_header(path):
-    """The header of a git bundle file (gitformat-bundle): version, capabilities,
-    prerequisites and references. Anything else is refused."""
-    with open(path, 'rb') as handle:
-        first = handle.readline(64)
-        if first not in BUNDLE_SIGNATURES:
-            raise Refused('BUNDLE', f'{path}: not a v2 or v3 git bundle')
-        out = {'version': BUNDLE_SIGNATURES[first], 'capabilities': [],
-               'prerequisites': [], 'refs': []}
-        total = len(first)
-        while True:
-            line = handle.readline(4096)
-            total += len(line)
-            if not line or not line.endswith(b'\n') or total > BUNDLE_HEADER_MAX:
-                raise Refused('BUNDLE', f'{path}: bundle header not terminated')
-            if line == b'\n':
-                out['pack_offset'] = total
-                return out
-            try:
-                text = line[:-1].decode('ascii')
-            except UnicodeDecodeError as exc:
-                raise Refused('BUNDLE', f'{path}: non-ASCII header line') from exc
-            if text.startswith('@') and out['version'] == 3:
-                out['capabilities'].append(text[1:])
-            elif text.startswith('-'):
-                out['prerequisites'].append(text[1:].split(' ', 1)[0])
-            else:
-                match = BUNDLE_REF.fullmatch(text)
-                if not match:
-                    raise Refused('BUNDLE', f'{path}: unparsable header line {text!r}')
-                out['refs'].append([match.group(1), match.group(2)])
+    """The header of a git bundle file (gitformat-bundle): version, capabilities, prerequisites,
+    references and where the pack starts; anything else is refused (BUNDLE). The shared
+    module's parser (decision 0014 section 8), with this tool's refusal."""
+    try:
+        return repository_access.parse_bundle_header(path)
+    except repository_access.RepositoryError as exc:
+        raise Refused('BUNDLE', exc.message) from None
 
 
 def pack_trailer(path, header):
-    """The bundle's packfile checksum, recomputed: the pack starts with 'PACK' after the
-    header and ends with the hash of everything before the trailer (SHA-1, or SHA-256
-    when the v3 header says object-format=sha256)."""
-    sha256 = 'object-format=sha256' in header.get('capabilities', [])
-    size = 32 if sha256 else 20
-    digest = hashlib.sha256() if sha256 else hashlib.sha1()
-    with open(path, 'rb') as handle:
-        handle.seek(header['pack_offset'])
-        magic = handle.read(4)
-        digest.update(magic)
-        tail = b''
-        for block in iter(lambda: handle.read(1 << 20), b''):
-            data = tail + block
-            digest.update(data[:-size])
-            tail = data[-size:]
-    ok = magic == b'PACK' and len(tail) == size and digest.digest() == tail
-    return {'ok': ok, 'algorithm': 'sha256' if sha256 else 'sha1', 'trailer': tail.hex()}
+    """The bundle's packfile checksum, recomputed (the shared module's ``pack_trailer``): the
+    pack starts with 'PACK' after the header and ends with the hash of everything before the
+    trailer (SHA-1, or SHA-256 when the v3 header says object-format=sha256)."""
+    return repository_access.pack_trailer(path, header)
 
 
 # ---------------------------------------------------------------- exchange
@@ -1091,37 +1085,75 @@ def check_exchange_name(name, pattern, what):
     return name
 
 
+def count_commits(opened, commit, limit):
+    """The commits reachable from COMMIT (``git rev-list --count``), walked through the module's
+    ``<commit>^<n>`` parents; the walk stops once it passes LIMIT (the count is then LIMIT + 1)."""
+    seen, stack = set(), [commit]
+    while stack and len(seen) <= limit:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        number = 1
+        while (parent := opened.commit(f'{current}^{number}')) is not None:
+            stack.append(parent)
+            number += 1
+    return len(seen)
+
+
 def exchange_push(ctx, name, repo, ref, bundle_name=None):
-    """exchange push: one local branch as a complete git bundle, bounded and verified."""
+    """exchange push: one local branch as a complete git bundle, bounded and verified.
+
+    The bundle is written in process by the shared repository-access module (decision 0014
+    row R5, ``write_bundle``) under the ``repository`` configuration policy; no git is launched.
+    The branch resolves as ``git rev-parse --verify --quiet --symbolic-full-name`` (``full_name``)
+    and must be one refs/heads/ branch; its header (exactly that branch at its commit, no
+    prerequisites), the bounds and the recomputed pack trailer are checked here, in Python.
+    The pulled side keeps git as the integrity authority (``verify_pulled_bundle``)."""
     t0 = time.time()
+    ra = repository_access
     idir, record = running_instance(ctx, name)
     ex = exchange_config(ctx.profile)
     bounds = ex.get('push') or {}
     outbound = staging_dir(ctx, name, 'outbound')
-    home = staging_dir(ctx, name, 'git-home')
     repo = Path(repo).resolve()
     if inside(repo, ctx.state_dir):
         raise Refused('REFUSED', f'{repo} is inside the state directory')
-    git_ok(['rev-parse', '--git-dir'], home, repo, f'{repo}: not a git repository;')
     if not isinstance(ref, str) or not ref or ref.startswith('-'):
         raise Refused('REFUSED', f'{ref!r} is not a branch name')
-    full = run_git(['rev-parse', '--verify', '--quiet', '--symbolic-full-name', ref], home,
-                   repo).stdout.strip()
-    if not re.fullmatch(r'refs/heads/[^\s]+', full):
-        raise Refused('REFUSED', f'{ref!r} is not a local branch (resolved to {full!r}); '
-                      'exchange push sends exactly one refs/heads/ branch')
-    commit = git_ok(['rev-parse', '--verify', f'{full}^{{commit}}'], home, repo)
-    commits = int(git_ok(['rev-list', '--count', full], home, repo))
-    if commits > bounds.get('max_commits', 0):
-        raise Refused('BOUNDS', f'{full} has {commits} commits; exchange.push.max_commits is '
-                      f'{bounds.get("max_commits")}')
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dt%H%M%Sz')
-    bname = check_exchange_name(bundle_name or f'{name}-{stamp}-{commit[:12]}.bundle',
-                                bounds.get('name_pattern', r'^$'), 'bundle name')
-    local = outbound / bname
-    if os.path.lexists(local):
-        raise Refused('REFUSED', f'{local} exists; a bundle is never overwritten')
-    git_ok(['bundle', 'create', '--quiet', str(local), full], home, repo, 'git bundle create')
+    try:
+        opened = ra.open_repository(repo, config='repository', work_tree=False)
+    except ra.CannotRun as exc:
+        raise Refused('EXCHANGE', f'{repo}: not a git repository; {exc.code}: {exc.message}') from None
+    except ra.RepositoryError as exc:
+        raise Refused('EXCHANGE', f'{repo}: {exc.code}: {exc.message}') from None
+    with opened:
+        try:
+            full = opened.full_name(ref) or ''
+        except ra.RepositoryError as exc:
+            raise Refused('REFUSED', f'{ref!r} is not a branch name ({exc.code})') from None
+        if not re.fullmatch(r'refs/heads/[^\s]+', full):
+            raise Refused('REFUSED', f'{ref!r} is not a local branch (resolved to {full!r}); '
+                          'exchange push sends exactly one refs/heads/ branch')
+        try:
+            commit = opened.commit(full)
+            if commit is None:
+                raise Refused('EXCHANGE', f'{full} names no commit')
+            limit = bounds.get('max_commits', 0)
+            commits = count_commits(opened, commit, limit)
+            if commits > limit:
+                raise Refused('BOUNDS', f'{full} has more than {limit} commits; '
+                              f'exchange.push.max_commits is {bounds.get("max_commits")}')
+            stamp = datetime.now(timezone.utc).strftime('%Y%m%dt%H%M%Sz')
+            bname = check_exchange_name(bundle_name or f'{name}-{stamp}-{commit[:12]}.bundle',
+                                        bounds.get('name_pattern', r'^$'), 'bundle name')
+            local = outbound / bname
+            if os.path.lexists(local):
+                raise Refused('REFUSED', f'{local} exists; a bundle is never overwritten')
+            opened.write_bundle([full], local)
+            sources = [posix(source) for source in opened.config_sources]
+        except ra.RepositoryError as exc:
+            raise Refused('EXCHANGE', f'{repo}: {exc.code}: {exc.message}') from None
     try:
         size = local.stat().st_size
         if size > bounds.get('max_bytes', 0):
@@ -1134,7 +1166,6 @@ def exchange_push(ctx, name, repo, ref, bundle_name=None):
                           f'prerequisites: {header}')
         if not pack_trailer(local, header)['ok']:
             raise Refused('BUNDLE', f'{local}: pack checksum mismatch')
-        git_ok(['bundle', 'verify', '--quiet', str(local)], home, repo, 'git bundle verify')
     except Refused:
         local.unlink()
         raise
@@ -1151,7 +1182,8 @@ def exchange_push(ctx, name, repo, ref, bundle_name=None):
         raise Refused('EXCHANGE', f'sftp push failed: {transfer["stderr"]}', transfer)
     landed = guest_file_state(ssh, guest_path)
     result = {'operation': 'exchange-push', 'labels': labels(ctx.profile), 'instance': name,
-              'source': {'ref': full, 'commit': commit, 'commits': commits},
+              'source': {'ref': full, 'commit': commit, 'commits': commits,
+                         'config_policy': 'repository', 'config_sources': sources},
               'bundle': {'name': bname, 'host_path': str(local), 'bytes': size,
                          'sha256': digest, 'header': header},
               'guest': {'path': guest_path, 'state': list(landed) if isinstance(landed, tuple)
@@ -1171,7 +1203,13 @@ def verify_pulled_bundle(ctx, name, path):
 
     The repository first fetches every bundle this instance was pushed (the possible
     prerequisites), then ``git bundle verify``, fetches the bundle's references under
-    refs/pulled/ and checks each one, then ``git fsck --strict``.
+    refs/pulled/ and checks each one (``rev-parse --verify``), then ``git fsck --strict``.
+
+    Git stays the integrity authority here (decision 0014 section 7, row R6): Dulwich has no
+    strict or connectivity fsck (hard gap G6; its ``porcelain.fsck`` checks objects one by one
+    and crashed on a corrupt pack) and no ``bundle verify`` (G7). Every git step above is kept,
+    in this order; a Dulwich walk may only be added before or after them, never instead of one.
+    ``run_git`` and ``git_env`` serve this verifier alone.
     """
     home = staging_dir(ctx, name, 'git-home')
     header = parse_bundle_header(path)
@@ -3675,21 +3713,37 @@ def tree_inventory(root, volatile=()):
     return dict(sorted(out.items()))
 
 
-def repo_inventory(repo):
-    """The checkout: HEAD, tracked-file status and the index listing's digest (git with no
-    global configuration, so the run's environment cannot change what it reports)."""
-    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull)
+def index_rendering(entries):
+    """The canonical rendering of a checkout's index (repo-inventory/2): one line per entry,
+    ``<mode> <object id> <stage><TAB><path>`` (the mode in octal as git prints it, the path as
+    raw UTF-8, never quoted), the lines sorted by their bytes, each ending in LF."""
+    lines = sorted(f'{entry.mode:06o} {entry.oid} {entry.stage}\t{entry.path}'.encode('utf-8', 'surrogateescape')
+                   for entry in entries)
+    return b''.join(line + b'\n' for line in lines)
 
-    def git(*args):
-        return subprocess.run(['git', '-C', str(repo), *args], capture_output=True,
-                              check=False, env=env, timeout=300)
-    head, status, files = git('rev-parse', 'HEAD'), \
-        git('status', '--porcelain=v2', '--untracked-files=no'), git('ls-files', '-s')
-    return {'path': posix(repo), 'head': head.stdout.decode().strip(),
-            'status_porcelain_v2': status.stdout.decode('utf-8', 'replace').splitlines(),
-            'ls_files_s_sha256': hashlib.sha256(files.stdout).hexdigest(),
-            'ls_files_count': len(files.stdout.splitlines()),
-            'rc': [head.returncode, status.returncode, files.returncode]}
+
+def repo_inventory(repo):
+    """The checkout (repo-inventory/2): HEAD, the tracked changes and the index's digest, read
+    in process by the shared repository-access module under the ``host`` configuration policy
+    (decision 0014 row R8 and section 5; ``config_sources`` lists the files read). The index
+    digest is the sha256 of ``index_rendering``; ``changed`` lists each tracked change as
+    ``"XY path"`` (``git status --porcelain=v1 --untracked-files=no``, the path unquoted), sorted.
+    A failure is recorded in ``error`` with the fields it left unknown as None, never raised."""
+    ra = repository_access
+    out = {'format': INVENTORY_FORMAT, 'path': posix(repo), 'head': None, 'changed': None,
+           'index_sha256': None, 'index_count': None, 'config_policy': 'host', 'config_sources': None,
+           'error': None}
+    try:
+        with ra.open_repository(repo, config='host') as opened:
+            out['head'] = opened.head().commit
+            entries = opened.index_entries()
+            out['index_sha256'] = hashlib.sha256(index_rendering(entries)).hexdigest()
+            out['index_count'] = len(entries)
+            out['changed'] = sorted(f'{entry.xy} {entry.path}' for entry in opened.status(None, 'no'))
+            out['config_sources'] = [posix(source) for source in opened.config_sources]
+    except (ra.RepositoryError, ra.CannotRun) as exc:
+        out['error'] = f'{exc.code}: {exc.message}'
+    return out
 
 
 def state_inventory(ctx):

@@ -14,8 +14,13 @@ and the differential contract suite that holds it to git's answers.
 
 **Callers.** Since F-10.3 the planning adapter's `Git`
 ([`integrations/planning/`](../planning/README.md)) is a facade over it, under the `repository`
-policy, for the planning, lineage and dispatch components; F-10.4 migrates the exchange push, the
-snapshots and the listing (decision 0014 section 1).
+policy, for the planning, lineage and dispatch components. Since F-10.4 (decision 0014 section 1):
+`tools/guest.py`'s exchange push (R5: `full_name`, the `^<n>` parents for the commit count and
+`write_bundle`, under `repository`; the header, bounds and pack trailer checked by the caller, the
+verifier R6 keeping git), its profile revision and inventory snapshots (R7, R8: `head`, `status`,
+`index_entries`, under `host`), `integrations/gitea/gitea_host.py`'s checkout listing (R9:
+`listing(cached, others, exclude_standard)`, under `host`) and `tools/test_profile.py`'s revision
+stamp (R10, under `host`). Each loads the module by path.
 
 ## Use
 

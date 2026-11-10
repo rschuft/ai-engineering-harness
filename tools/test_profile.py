@@ -619,20 +619,46 @@ def outcomes_digest(pairs):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def git_revision():
+def _repository_access():
+    """The shared repository-access module (integrations/repository, decision 0014), loaded by
+    path once per process (the standard library at import, Dulwich when a repository opens)."""
+    module = sys.modules.get('repository_access')
+    if module is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'repository_access', REPO / 'integrations' / 'repository' / 'repository_access.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['repository_access'] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['repository_access']
+            raise
+    return module
+
+
+def git_revision(repo=REPO):
+    """(revision, dirty, reason) of the checkout: HEAD and whether a tracked file differs, as
+    ``git rev-parse HEAD`` and ``git status --porcelain --untracked-files=no`` answer, read in
+    process by the shared repository-access module under the ``host`` configuration policy
+    (decision 0014 row R10). When the module cannot answer (no Dulwich in this interpreter, not a
+    work tree, a status it cannot give as git does) revision and dirty are None and reason says
+    why; otherwise reason is None."""
     try:
-        proc = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO, capture_output=True,
-                              text=True, timeout=60)
-        status = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'],
-                                cwd=REPO, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return None, None
-    if proc.returncode != 0:
-        return None, None
-    return proc.stdout.strip(), bool(status.stdout.strip())
+        ra = _repository_access()
+    except (OSError, ImportError) as exc:
+        return None, None, f'the repository-access module cannot be loaded: {exc}'
+    try:
+        with ra.open_repository(repo, config='host') as opened:
+            head = opened.head().commit
+            if head is None:
+                return None, None, 'HEAD names no commit'
+            return head, bool(opened.status(None, 'no')), None
+    except (ra.RepositoryError, ra.CannotRun) as exc:
+        return None, None, f'{exc.code}: {exc.message}'
 
 
-def build_profile(runs_data, suites, revision=None, dirty=None):
+def build_profile(runs_data, suites, revision=None, dirty=None, revision_reason=None):
     """Combine the children's data from every run into one profile (pure: launches nothing)."""
     nruns = len(runs_data)
     problems = []
@@ -739,6 +765,7 @@ def build_profile(runs_data, suites, revision=None, dirty=None):
         'schema': PROFILE_SCHEMA,
         'revision': revision,
         'dirty': dirty,
+        'revision_reason': revision_reason,
         'measured': time.strftime('%Y-%m-%d', time.gmtime()),
         'host': {'system': platform.system(), 'release': platform.release(),
                  'machine': platform.machine(), 'cpus': os.cpu_count(),
@@ -830,8 +857,8 @@ def run_profile(runs, suites, workdir):
             print(f'run {r}/{runs} {name}: {run[name]["tests_run"]} tests, '
                   f'{run[name]["wall"]:.1f} s', file=sys.stderr, flush=True)
         runs_data.append(run)
-    revision, dirty = git_revision()
-    return build_profile(runs_data, suites, revision, dirty)
+    revision, dirty, reason = git_revision()
+    return build_profile(runs_data, suites, revision, dirty, reason)
 
 
 def check_categories(suites, workdir):

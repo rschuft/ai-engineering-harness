@@ -285,6 +285,34 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(small['outcomes_digest'], profile['outcomes_digest'])
 
 
+class RevisionTests(unittest.TestCase):
+    """git_revision (decision 0014 row R10): the checkout's HEAD and dirtiness read in process by
+    the shared repository-access module, or None with the reason."""
+
+    def test_the_revision_is_read_without_a_process(self):
+        refuse = AssertionError('a process was launched')
+        with mock.patch.object(subprocess, 'Popen', side_effect=refuse):
+            revision, dirty, reason = tp.git_revision()
+        self.assertRegex(revision, r'^[0-9a-f]{40}$')
+        self.assertIsInstance(dirty, bool)
+        self.assertIsNone(reason)
+
+    def test_unavailable_is_none_with_its_reason(self):
+        revision, dirty, reason = tp.git_revision(REPO / '.git')
+        self.assertEqual((revision, dirty), (None, None))
+        self.assertTrue(reason.startswith('NOT_A_WORK_TREE: '), reason)
+        ra = tp._repository_access()
+        with mock.patch.dict(sys.modules, {'dulwich': None}), mock.patch.object(ra, '_D', None):
+            revision, dirty, reason = tp.git_revision()
+        self.assertEqual((revision, dirty), (None, None))
+        self.assertTrue(reason.startswith('REPOSITORY_NEEDS_DULWICH: '), reason)
+
+    def test_the_profile_records_the_reason(self):
+        profile = tp.build_profile([], [], None, None, 'NOT_A_WORK_TREE: x')
+        self.assertEqual((profile['revision'], profile['dirty'], profile['revision_reason']),
+                         (None, None, 'NOT_A_WORK_TREE: x'))
+
+
 FIXTURE_SUITE = '''\
 import subprocess, sys, tempfile, unittest
 

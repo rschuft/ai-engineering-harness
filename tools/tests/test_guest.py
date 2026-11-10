@@ -330,6 +330,18 @@ class Refusals(TempState):
             with self.assertRaises(guest.Refused):
                 guest.profile_revision(repo)
 
+    def test_profile_revision_records_its_configuration(self):
+        repo = self.tmp / 'repo'
+        head = fixture_repo(repo)
+        revision = guest.profile_revision(repo)
+        self.assertEqual((revision['head'], revision['profiles_clean'], revision['config_policy']),
+                         (head, True, 'host'))
+        self.assertEqual(os.path.normcase(revision['config_sources'][0]),
+                         os.path.normcase(guest.posix(Path(repo).resolve() / '.git' / 'config')))
+        with self.assertRaises(guest.Refused) as caught:
+            guest.profile_revision(self.tmp / 'not a repository')
+        self.assertIn('NOT_A_WORK_TREE', str(caught.exception))
+
 
 # ---------------------------------------------------------------- destroy
 
@@ -1527,6 +1539,74 @@ class Exchange(TempState):
         self.assertEqual(result['bundle']['header']['prerequisites'], [self.head])
         self.assertEqual(result['bundle']['prerequisite_sources'], [pushed['bundle']['name']])
 
+    def git_verbs(self, call):
+        """CALL() with every process launch recorded: the git verbs launched ('bundle verify'
+        for a bundle subcommand), and any other program."""
+        verbs, real = [], subprocess.Popen
+
+        def spy(argv, *args, **kwargs):
+            words = [str(a) for a in argv]
+            if os.path.basename(words[0]).lower().removesuffix('.exe') == 'git':
+                rest, i = words[1:], 0
+                while i < len(rest) and rest[i] in ('-c', '-C'):
+                    i += 2
+                verb = rest[i]
+                verbs.append(f'{verb} {rest[i + 1]}' if verb == 'bundle' else verb)
+            else:
+                verbs.append(words[0])
+            return real(argv, *args, **kwargs)
+        with mock.patch.object(guest.subprocess, 'Popen', side_effect=spy):
+            result = call()
+        return result, verbs
+
+    def test_push_launches_no_git_and_pull_only_the_verifiers_verbs(self):
+        """decision 0014: the push is written in process (row R5); the pull verifies with git
+        (row R6, section 7): init, fetch, bundle verify, the per-reference rev-parse, fsck."""
+        pushed, verbs = self.git_verbs(self.push)
+        self.assertEqual(verbs, [])
+        pulled, verbs = self.git_verbs(lambda: guest.exchange_pull(self.context, 'abc', pushed['bundle']['name']))
+        self.assertTrue(pulled['bundle']['verified'])
+        self.assertEqual(verbs, ['init', 'bundle verify', 'fetch', 'rev-parse', 'fsck'])
+        self.assertEqual(set(verbs), guest_verifier_verbs())
+
+    def test_the_incremental_pull_launches_only_the_verifiers_verbs(self):
+        self.push()
+        env = dict(os.environ, **GIT_TEST_ENV)
+        (self.repo / 'file9.txt').write_text('candidate\n', encoding='ascii')
+        for args in (('add', 'file9.txt'), ('commit', '-q', '-m', 'candidate')):
+            subprocess.run(['git', '-C', str(self.repo), *args], check=True, env=env, capture_output=True)
+        inc = self.tmp / 'inc.bundle'
+        subprocess.run(['git', '-C', str(self.repo), 'bundle', 'create', '-q', str(inc), f'{self.head}..main'],
+                       check=True, env=env, capture_output=True)
+        self.guest_files['/home/agent/exchange/candidate.bundle'] = inc.read_bytes()
+        result, verbs = self.git_verbs(lambda: guest.exchange_pull(self.context, 'abc', 'candidate.bundle'))
+        self.assertTrue(result['bundle']['verified'])
+        self.assertEqual(verbs, ['init', 'fetch', 'bundle verify', 'fetch', 'rev-parse', 'fsck'])
+        self.assertEqual(set(verbs), guest_verifier_verbs())
+
+    def test_a_dulwich_written_bundle_passes_git_bundle_verify(self):
+        pushed = self.push()
+        path = pushed['bundle']['host_path']
+        env = dict(os.environ, **GIT_TEST_ENV)
+        verify = subprocess.run(['git', '-C', str(self.repo), 'bundle', 'verify', '--quiet', path],
+                                capture_output=True, env=env)
+        self.assertEqual(verify.returncode, 0, verify.stderr)
+        heads = subprocess.run(['git', 'bundle', 'list-heads', path], capture_output=True, env=env, text=True)
+        self.assertEqual(heads.stdout.split(), [self.head, 'refs/heads/main'])
+        self.assertEqual(pushed['source']['config_policy'], 'repository')
+        self.assertEqual(os.path.normcase(pushed['source']['config_sources'][0]),
+                         os.path.normcase(guest.posix(self.repo.resolve() / '.git' / 'config')))
+
+    def test_push_resolves_head_and_refuses_a_branch_a_tag_shadows(self):
+        self.assertEqual(self.push(ref='HEAD')['bundle']['header']['refs'], [[self.head, 'refs/heads/main']])
+        self.assertEqual(self.push(ref='refs/heads/main', bundle_name='full.bundle')['source']['ref'],
+                         'refs/heads/main')
+        tag = self.repo / '.git' / 'refs' / 'tags' / 'main'
+        tag.write_text(self.head + '\n', encoding='ascii')
+        with self.assertRaises(guest.Refused) as caught:
+            self.push(ref='main', bundle_name='shadowed.bundle')
+        self.assertEqual(caught.exception.code, 'REFUSED')
+
     def test_bundle_header_parser(self):
         pushed = self.push()
         header = guest.parse_bundle_header(pushed['bundle']['host_path'])
@@ -1556,6 +1636,11 @@ class Exchange(TempState):
         self.assertEqual(argv[argv.index('-i') + 1], str(self.idir / 'ssh' / 'id_ed25519'))
         self.assertEqual(argv[-5:], ['-P', '2222', '-b', 'batch.txt', 'agent@127.0.0.1'])
         self.assertNotIn('-p', argv)
+
+
+def guest_verifier_verbs():
+    """The git verbs of the exchange verifier (decision 0014 section 7): exactly these."""
+    return {'init', 'fetch', 'bundle verify', 'rev-parse', 'fsck'}
 
 
 class ProfileCheckerLoad(unittest.TestCase):
@@ -2742,10 +2827,48 @@ class Inventory(TempState):
         repo = self.tmp / 'repo'
         head = fixture_repo(repo)
         inv = guest.repo_inventory(repo)
-        self.assertEqual((inv['head'], inv['status_porcelain_v2'], inv['rc']), (head, [], [0, 0, 0]))
-        self.assertEqual(inv['ls_files_count'], 2)
+        self.assertEqual((inv['format'], inv['head'], inv['changed'], inv['error']),
+                         ('repo-inventory/2', head, [], None))
+        self.assertEqual(inv['index_count'], 2)
+        # The canonical rendering (repo-inventory/2), computed here from the fixture's content.
+        # _build_fixture_repo writes text files (os.linesep endings), which git stores as written.
+        blobs = [hashlib.sha1(b'blob %d\0' % len(d) + d).hexdigest()
+                 for d in (f'synthetic fixture {i}{os.linesep}'.encode('ascii') for i in range(2))]
+        rendering = ''.join(sorted(f'100644 {oid} 0\tfile{i}.txt\n' for i, oid in enumerate(blobs))).encode()
+        self.assertEqual(inv['index_sha256'], hashlib.sha256(rendering).hexdigest())
         (repo / 'file0.txt').write_text('edited\n', encoding='ascii')
-        self.assertNotEqual(guest.repo_inventory(repo)['status_porcelain_v2'], [])
+        self.assertEqual(guest.repo_inventory(repo)['changed'], [' M file0.txt'])
+
+    def test_repository_inventory_records_its_configuration_and_never_raises(self):
+        repo = self.tmp / 'repo'
+        fixture_repo(repo)
+        inv = guest.repo_inventory(repo)
+        self.assertEqual(inv['config_policy'], 'host')
+        self.assertEqual(os.path.normcase(inv['config_sources'][0]),
+                         os.path.normcase(guest.posix(Path(repo).resolve() / '.git' / 'config')))
+        missing = guest.repo_inventory(self.tmp / 'not a repository')
+        self.assertEqual((missing['head'], missing['index_sha256'], missing['changed']), (None, None, None))
+        self.assertTrue(missing['error'].startswith('NOT_A_WORK_TREE'), missing['error'])
+
+    def test_index_rendering_is_sorted_raw_utf8_lf(self):
+        entry = guest.repository_access.IndexEntry
+        rows = [entry(0o100755, 'b' * 40, 0, 'z ü\tx'), entry(0o100644, 'a' * 40, 2, 'a"b'),
+                entry(0o120000, 'c' * 40, 0, 'a')]
+        self.assertEqual(guest.index_rendering(rows),
+                         f'100644 {"a" * 40} 2\ta"b\n100755 {"b" * 40} 0\tz ü\tx\n120000 {"c" * 40} 0\ta\n'
+                         .encode('utf-8'))
+
+    def test_no_reader_of_the_first_inventory_format_remains(self):
+        """repo-inventory/2 replaced the first format's fields; nothing reads them any more
+        (inventories are compared within one smoke run)."""
+        old = ('ls_files_s' + '_sha256', 'status_porcelain' + '_v2', 'ls_files' + '_count')
+        readers = []
+        for top in ('tools', 'integrations'):
+            for path in sorted((REPO / top).rglob('*.py')):
+                text = path.read_text(encoding='utf-8')
+                if any(name in text for name in old):
+                    readers.append(path.relative_to(REPO).as_posix())
+        self.assertEqual(readers, [])
 
 
 # ---------------------------------------------------------------- F-03.4: smoke orchestration

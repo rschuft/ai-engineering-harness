@@ -96,6 +96,25 @@ def _load_paths():
 paths = _load_paths()
 
 
+def _load_repository_access():
+    """The shared repository-access module (integrations/repository, decision 0014), loaded by
+    path once per process: the standard library at import, Dulwich only when a repository is
+    opened."""
+    if (module := sys.modules.get('repository_access')) is None:
+        spec = importlib.util.spec_from_file_location('repository_access',
+                                                      REPO / 'integrations' / 'repository' / 'repository_access.py')
+        module = sys.modules['repository_access'] = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['repository_access']
+            raise
+    return module
+
+
+repository_access = _load_repository_access()
+
+
 class GiteaError(Exception):
     """A refusal (exit 2) or a failure (exit 1) with a stable code."""
 
@@ -989,10 +1008,19 @@ def contains_secret(root: Path, needles: list[bytes], skip: Iterable[Path] = ())
 
 
 def checkout_files(repo: Path) -> list[Path]:
-    """Tracked and untracked, not ignored files of the checkout (git's own listing)."""
-    result = subprocess.run(['git', '-C', str(repo), 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
-    return [repo / name for name in result.stdout.decode('utf-8').split('\0') if name]
+    """Tracked and untracked, not ignored files of the checkout, as ``git ls-files -z --cached
+    --others --exclude-standard`` lists them: the shared repository-access module's ``listing``
+    (decision 0014 row R9), in process, under the ``host`` configuration policy (the excludes
+    file git would read for this checkout). Its contract suite holds the listing equal to git's
+    and never a strict subset of it, so the secret-leak scan misses no file git would list. A
+    checkout that cannot be listed is the failure CHECKOUT_UNLISTED, never an empty scan."""
+    ra = repository_access
+    try:
+        with ra.open_repository(repo, config='host') as opened:
+            names = opened.listing(cached=True, others=True, exclude_standard=True)
+    except (ra.RepositoryError, ra.CannotRun) as exc:
+        raise GiteaError('CHECKOUT_UNLISTED', f'{repo}: {exc.code}: {exc.message}', refusal=False) from None
+    return [repo / name for name in names]
 
 
 def files_containing(files: Iterable[Path], needles: list[bytes]) -> dict:

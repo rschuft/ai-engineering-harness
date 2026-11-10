@@ -448,7 +448,11 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py status'
 
   gitea:verify:
-    desc: "Run the F-06.1 proof set against the running instance: pin, loopback-only listeners, no elevation, the kill-on-close job, resolver paths outside the checkout, refused sign-up and anonymous API, no Gitea secret in the checkout; exit 1 on any failed check (python -I -B integrations/gitea/gitea_host.py verify)"
+    desc: "Run the F-06.1 proof set against the running instance: pin, loopback-only listeners, no elevation, the kill-on-close job, resolver paths outside the checkout, refused sign-up and anonymous API, no Gitea secret in the checkout; exit 1 on any failed check (<tools python> -I -B integrations/gitea/gitea_host.py verify)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py verify'
 
@@ -458,7 +462,11 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py identities'
 
   gitea:finalize-credentials:
-    desc: "Owner directive of 2026-11-07, no Owner sign-in: replace both temporary passwords with harness-held final ones (generated, stored in the credential provider first, set through Gitea's forced change), revoke every token of both accounts, verify, delete the temporary entries, and check no password is in the managed root, the checkout or the output (python -I -B integrations/gitea/gitea_host.py finalize-credentials)"
+    desc: "Owner directive of 2026-11-07, no Owner sign-in: replace both temporary passwords with harness-held final ones (generated, stored in the credential provider first, set through Gitea's forced change), revoke every token of both accounts, verify, delete the temporary entries, and check no password is in the managed root, the checkout or the output (<tools python> -I -B integrations/gitea/gitea_host.py finalize-credentials)"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_host.py finalize-credentials'
 
@@ -558,6 +566,10 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/qualify_intent_skill.py {{.CLI_ARGS}}'
 
+  # The targets that read the checkout or a repository through the shared repository-access
+  # module (Dulwich, decision 0014: create and recreate record the profile revision, smoke
+  # takes the inventory snapshots, push writes the exchange bundle) run under the tools
+  # interpreter, as gitea:verify and gitea:finalize-credentials (the checkout listing) do.
   # Execution-guest lifecycle (plan leaf F-03.2.2; tools/guest.py). PROFILE and
   # STATE_DIR are always named, never defaulted (profiles/README.md sections 4 and 11).
   guest:preflight:
@@ -568,9 +580,13 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py preflight --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}"'
 
   guest:create:
-    desc: Create and boot a disposable guest, then wait until it is ready (python -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME)
+    desc: Create and boot a disposable guest, then wait until it is ready (<tools python> -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME)
     requires:
       vars: [PROFILE, STATE_DIR, NAME]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py create --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
 
@@ -596,9 +612,13 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py exec --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" -- {{.CLI_ARGS}}'
 
   guest:push:
-    desc: "Exchange push: one local branch of REPO as a bounded git bundle, by SFTP into the guest's exchange directory (python -I -B tools/guest.py exchange-push --profile PROFILE --state-dir STATE_DIR --name NAME --repo REPO --ref REF)"
+    desc: "Exchange push: one local branch of REPO as a bounded git bundle, by SFTP into the guest's exchange directory (<tools python> -I -B tools/guest.py exchange-push --profile PROFILE --state-dir STATE_DIR --name NAME --repo REPO --ref REF)"
     requires:
       vars: [PROFILE, STATE_DIR, NAME, REPO, REF]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py exchange-push --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --repo "{{.REPO}}" --ref "{{.REF}}"'
 
@@ -617,9 +637,13 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py canaries --out "{{.OUT}}"'
 
   guest:create-canaries:
-    desc: create, with a canary set planted in the launching process first (python -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME --canaries CANARIES)
+    desc: create, with a canary set planted in the launching process first (<tools python> -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME --canaries CANARIES)
     requires:
       vars: [PROFILE, STATE_DIR, NAME, CANARIES]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py create --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}"'
 
@@ -631,9 +655,13 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py check-surfaces --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}"'
 
   guest:netprobe:
-    desc: "TEST-ONLY network validation for profiles P7 (F-03.3.2; decision 0003, Owner authorization: network validation): a disposable guest with the pinned root probe and one test guestfwd to a 127.0.0.1 listener; exit 0 only on PASS (python -I -B tools/guest.py netprobe --profile PROFILE --state-dir STATE_DIR --name NAME)"
+    desc: "TEST-ONLY network validation for profiles P7 (F-03.3.2; decision 0003, Owner authorization: network validation): a disposable guest with the pinned root probe and one test guestfwd to a 127.0.0.1 listener; exit 0 only on PASS (<tools python> -I -B tools/guest.py netprobe --profile PROFILE --state-dir STATE_DIR --name NAME)"
     requires:
       vars: [PROFILE, STATE_DIR, NAME]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py netprobe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
 
@@ -652,16 +680,24 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py destroy --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
 
   guest:recreate:
-    desc: destroy, then create with the same name and profile (python -I -B tools/guest.py recreate --profile PROFILE --state-dir STATE_DIR --name NAME)
+    desc: destroy, then create with the same name and profile (<tools python> -I -B tools/guest.py recreate --profile PROFILE --state-dir STATE_DIR --name NAME)
     requires:
       vars: [PROFILE, STATE_DIR, NAME]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py recreate --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}"'
 
   guest:smoke:
-    desc: "Provision/inspect/teardown smoke test (F-03.4, profiles P10) on a fresh instance name: preflight, create, inspect, stop, start, inspect, forced stop, recreate, inspect, destroy, with inspect-record and durable-source inventory comparisons; exit 0 only on PASS (python -I -B tools/guest.py smoke --profile PROFILE --state-dir STATE_DIR --name NAME --canaries CANARIES --durable DURABLE [-- --durable DIR --out FILE])"
+    desc: "Provision/inspect/teardown smoke test (F-03.4, profiles P10) on a fresh instance name: preflight, create, inspect, stop, start, inspect, forced stop, recreate, inspect, destroy, with inspect-record and durable-source inventory comparisons; exit 0 only on PASS (<tools python> -I -B tools/guest.py smoke --profile PROFILE --state-dir STATE_DIR --name NAME --canaries CANARIES --durable DURABLE [-- --durable DIR --out FILE])"
     requires:
       vars: [PROFILE, STATE_DIR, NAME, CANARIES, DURABLE]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py smoke --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --canaries "{{.CANARIES}}" --durable "{{.DURABLE}}" {{.CLI_ARGS}}'
 
@@ -673,9 +709,13 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py provision-fetch --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}"'
 
   guest:create-provisioned:
-    desc: "create with --provision (F-04.1b): re-verify the provision-fetch stage and seed its manifest, so the guest's single-use root step can install Moby and the image (python -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME --provision)"
+    desc: "create with --provision (F-04.1b): re-verify the provision-fetch stage and seed its manifest, so the guest's single-use root step can install Moby and the image (<tools python> -I -B tools/guest.py create --profile PROFILE --state-dir STATE_DIR --name NAME --provision)"
     requires:
       vars: [PROFILE, STATE_DIR, NAME]
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py create --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --provision'
 
