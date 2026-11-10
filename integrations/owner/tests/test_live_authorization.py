@@ -1,48 +1,88 @@
-"""The Owner authorization recorder on the live S-01.2.2 fixture (plan leaf P-04.2): opt-in, never by default.
+"""The Owner authorization recorder on the live S-01.2.2 fixture (plan leaf P-04.2): opt-in, never by default,
+in two separately invoked phases with the Owner's own decision between them (Owner decision OA-14).
 
-It runs only with AIEH_AUTHZ_RECORDER_LIVE=1 and AIEH_AUTHZ_RECORDER_APPROVAL=<scheme:reference> (where
-the Owner's approval of this exercise is kept), on Windows, while the managed Gitea answers and the
-Credential Manager entries "AIEH Gitea owner" and "AIEH Gitea bot <role>" (all four roles) exist.
-Otherwise it skips with its reason: the ordinary suites never read a credential or write to Gitea.
+The exercise never constructs, defaults, templates or paraphrases an Owner statement. The Owner sees the
+exact operations the recorder challenged (phase ``prepare``), decides, and his reply, written verbatim
+into a statement file by the Overseer, is what phase ``record`` reads. A general approval to run this test
+authorizes no operation.
 
-What it does, on aieh-authz-fixture/authz only (expected outcomes stated in advance):
+Each phase runs only on Windows, while the managed Gitea answers and the Credential Manager entries
+"AIEH Gitea owner" and "AIEH Gitea bot <role>" (all four roles) exist; otherwise it skips with its reason.
+Without AIEH_AUTHZ_RECORDER_LIVE set to a phase it skips: the ordinary suites never read a credential or
+write to Gitea. Each phase is an Owner-approved act. On aieh-authz-fixture/authz only:
+
+**Phase prepare** (``AIEH_AUTHZ_RECORDER_LIVE=prepare``, ``AIEH_AUTHZ_RECORDER_RUN_DIR=<an existing,
+empty directory>``):
 
 1. As aieh-bot-builder (its token): two proposal branches work/authz-recorder-<stamp>-a and -b, each
-   adding one manifest operations/<id>.json, and a pull request for each into main.
-2. As aieh-bot-reviewer (its token): one approving review of each pull request (main requires one).
-3. The recorder (the real credential provider: it reads "AIEH Gitea owner" into memory; its own state
-   and its integration store in a temporary directory, never the managed root's), pull request A:
-   ``prepare``, then ``record`` with a statement attributed to the Owner that names the operation id and
-   cites AIEH_AUTHZ_RECORDER_APPROVAL. Expected: exactly one merge commit on main with the base and the
-   approved head as parents, the six trailers exactly as written, the manifest digest at the merge,
-   merged_by aieh-owner, the receipt confirmed, and aieh-owner still holding zero tokens.
-4. Pull request B: ``prepare``; then, after the recorder's checks and before its merge call, the builder
-   pushes one more commit to branch B. Expected: Gitea answers 409 to the merge with the challenged
-   head_commit_id, nothing is merged, the receipt is failed with HEAD_STALE.
-5. Each of the four bot tokens: the same merge call on pull request B (Do: merge, head_commit_id of its
-   current head). Expected: 403 or 405 each; main unchanged.
-6. Cleanup: the builder closes pull request B. The merge commit of A stays on the fixture's main (a
-   protected branch: only a site administrator could rewrite it), and the two work/ branches stay
-   (protected branches cannot be deleted). The temporary state and store are removed after step 7.
-7. Inspection: the password of aieh-owner (read once more from its entry, in memory) is searched for,
-   as UTF-8 and UTF-16LE, in every file of the managed data root, every file git lists in the
-   checkout, the exercise's temporary state and store, and this process's environment (inherited from
-   the session that runs it). Expected: found nowhere, nothing unreadable. Guest and job environments
-   are not reachable from the host and are not scanned here.
+   adding one manifest operations/<id>.json (kind ``fixture-no-op``; it expires in 24 hours), and a pull
+   request for each into main. As aieh-bot-reviewer: one approving review of each (main requires one).
+2. Negative controls, which need no Owner authority: each of the four bot tokens attempts the merge of
+   each pull request (``Do: merge`` with its ``head_commit_id``). Expected: refused (403 or 405) every time
+   and main unchanged. **Any successful bot merge, or main moving, is a SECURITY FAILURE**: the test fails
+   naming it and stops; no further step runs and no presentation is written.
+3. The recorder's real ``prepare`` for each pull request (the real credential provider: it reads "AIEH
+   Gitea owner" into memory; its own state and integration store under ``<run dir>/recorder``). It
+   issues the one-time challenge (expiring in 180 minutes) and asks the protection verifier, if one is
+   configured (none is until OA-16's mechanism is built: decision 0012 point 6).
+4. The presentation, written to the run directory as ``presentation.json`` and ``presentation.txt``: per
+   challenge the repository, the pull request, the base, the approved head, the manifest path and its
+   digest, the operation id, kind, target and expiry, the challenge nonce and its expiry, the effects the
+   merge will have, the expected outcome and the recorder's own summary; which pull request is the
+   stale-head control (pull request B: expected refusal, Gitea's 409); whether a protection verifier was
+   available; the bot controls' statuses. Nothing is merged in this phase.
+5. The custody inspection (below). Then the phase stops.
+
+**Between the phases, the Owner.** The Overseer presents the presentation to the Owner. Only if the
+Owner then authorizes, in his own words, naming the operation id(s) he authorizes, does the Overseer
+write that reply verbatim into a statement file ``{text, attributedTo: "owner", channel: "main-session",
+reference}`` (the recorder's statement form) and run phase record. Authorizing B is authorizing an
+attempt that the exercise makes stale on purpose.
+
+**Phase record** (``AIEH_AUTHZ_RECORDER_LIVE=record``, the same ``AIEH_AUTHZ_RECORDER_RUN_DIR``,
+``AIEH_AUTHZ_RECORDER_STATEMENT=<the statement file>``):
+
+1. The statement is read from the file exactly as written and validated with the recorder's own
+   statement checks (attribution to the Owner, not model-authored, admitted channel, the operation id
+   named). It refuses before anything is read from Gitea or the credential provider when the file is
+   missing, empty or not JSON, model-authored or not the Owner's, or names none of the challenged
+   operations. Only the challenges whose operation id the statement names are recorded.
+2. ``record`` for each authorized challenge, with the protection verifier available to this run. **With
+   none available (the presentation records it, and that is the state until OA-16), every record is
+   refused ``PROTECTION_UNVERIFIED`` before anything is sent: nothing is merged, no receipt is written;
+   that is the expected outcome.** With a verifier: A gives exactly one merge commit on main with main's
+   head and the approved head as parents, the six trailers as written, the manifest digest at the merge,
+   merged_by aieh-owner and the receipt confirmed; for B the builder pushes one commit to its branch
+   after the recorder's checks and before its merge call (a hook on the recorder's merge call), Gitea
+   answers 409, nothing is merged and the receipt is failed with HEAD_STALE. A presentation that says a
+   verifier was available when none is now (or the reverse) is refused: the Owner saw other outcomes.
+3. Read-backs: main's head as expected; aieh-owner still holds zero tokens (the recorder's identity
+   check). Cleanup: the builder closes every pull request of the run that is still open. A merge commit
+   stays on the fixture's main (a protected branch: only a site administrator could rewrite it) and the
+   work/ branches stay (protected branches cannot be deleted).
+4. The custody inspection.
+
+**The custody inspection** (each phase): the password of aieh-owner (read once more from its entry, in
+memory) is searched for, as UTF-8 and UTF-16LE, in every file of the managed data root, every file git
+lists in the checkout, the run directory, and this process's environment (inherited from the session
+that runs it). Expected: found nowhere, nothing unreadable. Guest and job environments are not reachable
+from the host and are not scanned here. The run directory stays for the record; its owner removes it.
 
 AIEH_AUTHZ_RECORDER_REPORT, when set, names a JSON file that receives the observations (statuses, commit
-ids, trailers, receipt states; never a credential).
+ids, receipt states; never a credential). The phase plumbing is tested offline against the fake Gitea in
+test_live_phases.py.
 """
 from __future__ import annotations
 
 import base64
 import datetime
+import hashlib
 import json
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 CATEGORY = 'e2e'
 
@@ -53,17 +93,421 @@ import authz_support as su  # noqa: E402
 AR = su.AR
 R = AR.roles
 G = AR.host
-OPT_IN = os.environ.get('AIEH_AUTHZ_RECORDER_LIVE') == '1'
-APPROVAL = os.environ.get('AIEH_AUTHZ_RECORDER_APPROVAL', '')
+PHASES = ('prepare', 'record')
+PHASE = os.environ.get('AIEH_AUTHZ_RECORDER_LIVE', '')
+RUN_DIR = os.environ.get('AIEH_AUTHZ_RECORDER_RUN_DIR')
+STATEMENT = os.environ.get('AIEH_AUTHZ_RECORDER_STATEMENT')
 REPORT = os.environ.get('AIEH_AUTHZ_RECORDER_REPORT')
 REPOSITORY = f'{R.FIXTURE_ORG}/{R.FIXTURE_REPO}'
+PRESENTATION_FORMAT = 'aieh-authz-live-presentation/1'
+PRESENTATION, PRESENTATION_TEXT, RECORDER_DIR = 'presentation.json', 'presentation.txt', 'recorder'
+CHALLENGE_MINUTES = 180
+MANIFEST_HOURS = 24
+KIND = 'fixture-no-op'
+RECORDED_BY = 'agent:live-exercise'
+AUTHORIZE, STALE = 'authorize', 'stale-head-control'
+BOT_REFUSALS = (403, 405)
+CHALLENGE_KEYS = ('role', 'repository', 'pull', 'base', 'branch', 'approvedHead', 'manifest', 'manifestDigest',
+                  'operation', 'kind', 'target', 'operationExpiresAt', 'nonce', 'challengeExpiresAt',
+                  'protectionAtPrepare', 'effects', 'expectedOutcome', 'summary')
+
+
+class SecurityFailure(AssertionError):
+    """A bot merged, or the protected branch moved, without Owner authority: the exercise stops here."""
+
+    def __init__(self, detail):
+        super().__init__(f'SECURITY FAILURE: {detail}')
+
+
+class PhaseRefused(AssertionError):
+    """The phase refused before acting (a stable code and its detail)."""
+
+    def __init__(self, code, detail):
+        self.code = code
+        super().__init__(f'{code}: {detail}')
+
+
+class Live(NamedTuple):
+    """What a phase runs against: the Gitea port (HTTP None is host loopback; a callable with
+    gitea_host.http_get's signature stands in for it offline), the credential provider, the run directory,
+    the clock, the protection verifier available to this run (None until OA-16's mechanism is built) with
+    a note saying why, and the custody inspection (None offline)."""
+    port: int
+    provider: object
+    run_dir: Path
+    http: Callable | None = None
+    now: Callable = AR.utc_now
+    verifier: Callable | None = None
+    verifier_note: str = AR.NO_VERIFIER
+    inspect: Callable | None = None
+
+
+def available_verifier():
+    """(verifier, note): the protection verifier this exercise can configure. None until the mechanism of
+    decision 0012 point 6 (Owner action OA-16) is built and qualified."""
+    return None, AR.NO_VERIFIER
+
+
+def expect(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def _timestamp(moment):
+    return AR.timestamp(moment)
+
+
+def _bot(live, role):
+    token = R.read_token(live.provider, role)
+    if token is None:
+        raise PhaseRefused('CREDENTIAL_MISSING', f'no credential provider entry {R.target(role)!r}')
+    return R.Api(live.port, token, live.http)
+
+
+def _main_head(live):
+    status, body = _bot(live, 'verifier').call('GET', f'/repos/{REPOSITORY}/branches/{R.DEFAULT_BRANCH}')
+    expect(status == 200 and isinstance(body, dict), f'GET the protected branch answered {status}')
+    return body['commit']['id']
+
+
+def _pull(live, number):
+    status, body = _bot(live, 'verifier').call('GET', f'/repos/{REPOSITORY}/pulls/{number}')
+    expect(status == 200 and isinstance(body, dict), f'GET pull request {number} answered {status}')
+    return body
+
+
+def _open_store(live):
+    root = Path(live.run_dir) / RECORDER_DIR
+    root.mkdir(exist_ok=True)
+    return su.IS.open_store(root / 'integration.sqlite')
+
+
+def _context(live, store):
+    return AR.Context(Path(live.run_dir) / RECORDER_DIR / 'state', store, live.provider, live.port, http=live.http,
+                      now=live.now, verifier=live.verifier)
+
+
+def _inspect(live, observed):
+    if live.inspect is None:
+        observed['inspection'] = 'not run (offline)'
+        return
+    observed['inspection'] = inspection = live.inspect(live.provider, Path(live.run_dir))
+    expect(inspection['found'] == [] and inspection['unreadable'] == [], f'custody inspection: {inspection}')
+
+
+# ---------------------------------------------------------------------------- phase prepare
+
+
+def prepare_phase(live, observed):
+    """Proposals, approvals, the bot controls, the recorder's challenges and the presentation; no merge."""
+    run_dir = Path(live.run_dir)
+    if not run_dir.is_dir() or any(run_dir.iterdir()):
+        raise PhaseRefused('RUN_DIR_NOT_EMPTY', f'{run_dir} must be an existing, empty directory')
+    now = live.now()
+    stamp = now.strftime('%Y%m%dt%H%M%Sz')
+    bots = {role: _bot(live, role) for role in R.ROLES}
+    main_before = _main_head(live)
+    observed['mainBefore'] = main_before
+    proposals = []
+    for role, suffix in ((AUTHORIZE, 'a'), (STALE, 'b')):
+        operation, branch = f'live-{stamp}-{suffix}', f'work/authz-recorder-{stamp}-{suffix}'
+        manifest = su.manifest(operation, kind=KIND, target=f'{REPOSITORY} (live recorder exercise; no effect)',
+                               expiresAt=_timestamp(now + datetime.timedelta(hours=MANIFEST_HOURS)))
+        status, body = bots['builder'].call('POST', f'/repos/{REPOSITORY}/contents/operations/{operation}.json', {
+            'content': base64.b64encode(manifest).decode('ascii'), 'message': f'Propose operation {operation}',
+            'branch': R.DEFAULT_BRANCH, 'new_branch': branch})
+        expect(status == 201, f'the builder\'s proposal {operation} answered {status}: {body}')
+        status, pull = bots['builder'].call('POST', f'/repos/{REPOSITORY}/pulls', {
+            'head': branch, 'base': R.DEFAULT_BRANCH, 'title': f'Live recorder exercise: {operation}'})
+        expect(status == 201 and isinstance(pull, dict), f'opening the pull request answered {status}: {pull}')
+        head = pull['head']['sha']
+        status, review = bots['reviewer'].call('POST', f'/repos/{REPOSITORY}/pulls/{pull["number"]}/reviews',
+                                               {'event': 'APPROVED', 'body': 'live recorder exercise'})
+        expect(status == 200, f'the reviewer\'s approval answered {status}: {review}')
+        reviewed = review.get('commit_id') if isinstance(review, dict) else None
+        expect(reviewed in (None, head), f'the approval is of {reviewed}, not the head {head}')
+        proposals.append({'role': role, 'operation': operation, 'branch': branch, 'pull': pull['number'],
+                          'head': head, 'manifest': manifest})
+    observed['proposals'] = [{k: v for k, v in p.items() if k != 'manifest'} for p in proposals]
+    # negative controls: every bot token's merge of every proposal must be refused
+    observed['botMerges'] = controls = {}
+    for proposal in proposals:
+        for role, api in bots.items():
+            status, _ = api.call('POST', f'/repos/{REPOSITORY}/pulls/{proposal["pull"]}/merge',
+                                 {'Do': 'merge', 'head_commit_id': proposal['head']})
+            controls[f'{role} on #{proposal["pull"]}'] = status
+            if 200 <= status < 300:
+                raise SecurityFailure(f'the {role} bot\'s merge of pull request #{proposal["pull"]} answered {status}')
+    main_after = _main_head(live)
+    merged = [p['pull'] for p in proposals if _pull(live, p['pull']).get('merged')]
+    if main_after != main_before or merged:
+        raise SecurityFailure(f'after the bot controls main is at {main_after} (was {main_before}) and pull '
+                              f'request(s) {merged} are merged')
+    unexpected = {k: s for k, s in controls.items() if s not in BOT_REFUSALS}
+    expect(not unexpected, f'a bot merge was refused, but not with 403 or 405: {unexpected}')
+    # the recorder's real prepare: one challenge per proposal
+    store = _open_store(live)
+    try:
+        ctx = _context(live, store)
+        challenges = [AR.prepare(ctx, REPOSITORY, p['pull'], expires_in_minutes=CHALLENGE_MINUTES) for p in proposals]
+    finally:
+        store.close()
+    for proposal, challenge in zip(proposals, challenges):
+        expect(challenge['subject']['head'] == proposal['head'], f'pull request #{proposal["pull"]} moved')
+        expect(challenge['subject']['digest'] == 'sha256:' + hashlib.sha256(proposal['manifest']).hexdigest(),
+               'the challenged digest is not the proposed manifest\'s')
+    presentation = presentation_of(live, now, main_before, proposals, challenges, controls)
+    (run_dir / PRESENTATION).write_text(json.dumps(presentation, indent=2, ensure_ascii=False) + '\n',
+                                        encoding='utf-8', newline='\n')
+    (run_dir / PRESENTATION_TEXT).write_text(presentation_text(presentation), encoding='utf-8', newline='\n')
+    observed['challenges'] = [{'operation': c['operation'], 'nonce': c['nonce']} for c in presentation['challenges']]
+    _inspect(live, observed)
+    return presentation
+
+
+def _effects(c):
+    base, head = c['base'], c['approvedHead']
+    effects = [
+        f'a merge commit on {base} of {c["repository"]}, made by aieh-owner (Do: merge, head_commit_id {head}), '
+        f'with {base}\'s head at the merge as first parent and {head} as second, carrying the six AIEH-* trailers',
+        f'{c["manifest"]} ({c["manifestDigest"]}) added to {base}; nothing else changes on {base}',
+        f'pull request #{c["pull"]} closed as merged; branch {c["branch"]} stays (protected: it cannot be deleted)',
+        f'the Owner decision record and the receipt {AR.RECEIPT_PREFIX}{c["nonce"]} in this run\'s recorder state '
+        'and store',
+        f'nothing acts on the operation: its kind {KIND} is a fixture no-op']
+    if c['role'] == STALE:
+        effects.append('intended: none of the above. The exercise pushes one commit to its branch after the '
+                       'recorder\'s checks and before its merge call, so Gitea refuses the merge (409)')
+    return effects
+
+
+def _expected(c, verifier):
+    if verifier is None:
+        outcome = ('refused PROTECTION_UNVERIFIED before anything is sent: nothing is merged and no receipt is '
+                   'written (no protection verifier exists until OA-16; decision 0012 point 6)')
+        if c['role'] == STALE:
+            outcome += '; with a verifier it is the stale-head control: Gitea answers 409, HEAD_STALE, receipt failed'
+        return outcome
+    if c['role'] == STALE:
+        return ('the stale-head control: the exercise moves the head after the recorder\'s checks; Gitea answers '
+                '409, HEAD_STALE, nothing is merged, the receipt is failed')
+    return 'one merge commit as above, read back; the receipt is confirmed; aieh-owner holds zero tokens'
+
+
+def presentation_of(live, now, main_head, proposals, challenges, controls):
+    """What the Owner is shown: the recorder's challenges, their effects and expected outcomes."""
+    shown = []
+    for proposal, challenge in zip(proposals, challenges):
+        subject = challenge['subject']
+        c = {'role': proposal['role'], 'repository': subject['repository'], 'pull': subject['pull'],
+             'base': subject['base'], 'branch': proposal['branch'], 'approvedHead': subject['head'],
+             'manifest': subject['manifest'], 'manifestDigest': subject['digest'], 'operation': subject['operation'],
+             'kind': subject['operationKind'], 'target': subject['target'], 'operationExpiresAt': subject['expiresAt'],
+             'nonce': challenge['shown']['nonce'], 'challengeExpiresAt': challenge['shown']['expiresAt'],
+             'protectionAtPrepare': challenge['protection']}
+        c.update(effects=_effects(c), expectedOutcome=_expected(c, live.verifier),
+                 summary=challenge['shown']['summary'])
+        shown.append({key: c[key] for key in CHALLENGE_KEYS})
+    return {
+        'format': PRESENTATION_FORMAT, 'preparedAt': _timestamp(now), 'repository': REPOSITORY,
+        'base': R.DEFAULT_BRANCH, 'mainHead': main_head,
+        'verifier': {'available': live.verifier is not None, 'note': live.verifier_note},
+        'staleHeadControl': next(c['pull'] for c in shown if c['role'] == STALE),
+        'recorder': {'state': f'{RECORDER_DIR}/state', 'store': f'{RECORDER_DIR}/integration.sqlite'},
+        'botMerges': {'statuses': dict(controls), 'expected': 'each refused (403 or 405); any success is a SECURITY '
+                                                               'FAILURE', 'mainUnchanged': True},
+        'challenges': shown,
+        'ownerAction': 'Nothing is merged unless the Owner, having seen this, replies in his own words naming the '
+                       'operation id(s) he authorizes. The Overseer writes that reply verbatim into a statement file '
+                       '{text, attributedTo: owner, channel: main-session, reference} and runs phase record with '
+                       'AIEH_AUTHZ_RECORDER_STATEMENT naming it. The exercise never writes a statement.'}
+
+
+def presentation_text(p):
+    lines = [f'Live authorization recorder exercise, prepared {p["preparedAt"]}', '',
+             f'Repository {p["repository"]}, protected branch {p["base"]} at {p["mainHead"]}.',
+             'Protection verifier: ' + ('available' if p['verifier']['available'] else 'NONE')
+             + f' ({p["verifier"]["note"]}).',
+             f'Bot merge controls (each must be refused): {p["botMerges"]["statuses"]}.', '']
+    for c in p['challenges']:
+        role = 'THE STALE-HEAD CONTROL (expected refusal: 409)' if c['role'] == STALE else 'to authorize'
+        lines += [f'== Pull request #{c["pull"]}: {role}',
+                  f'Operation {c["operation"]} (kind {c["kind"]}); target: {c["target"]}; the manifest expires at '
+                  f'{c["operationExpiresAt"]}.',
+                  f'Manifest {c["manifest"]}, {c["manifestDigest"]}, at the approved head {c["approvedHead"]} '
+                  f'(branch {c["branch"]} into {c["base"]}).',
+                  f'Challenge nonce {c["nonce"]}, expires at {c["challengeExpiresAt"]}.',
+                  f'Protection verifier at prepare: {c["protectionAtPrepare"]["verdict"]}.',
+                  'Effects of the merge:', *(f'  - {e}' for e in c['effects']),
+                  f'Expected outcome: {c["expectedOutcome"]}.', 'The recorder\'s summary:', c['summary'], '']
+    lines += [p['ownerAction'], '']
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------- phase record
+
+
+def load_presentation(run_dir):
+    path = Path(run_dir) / PRESENTATION
+    try:
+        presentation = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        raise PhaseRefused('PRESENTATION_MISSING', f'{path} does not exist: run phase prepare first') from None
+    except (OSError, ValueError) as exc:
+        raise PhaseRefused('PRESENTATION_INVALID', f'{path}: {type(exc).__name__}') from None
+    if not isinstance(presentation, dict):
+        presentation = {}
+    challenges = presentation.get('challenges')
+    if presentation.get('format') != PRESENTATION_FORMAT or not isinstance(challenges, list) or not challenges \
+            or any(not isinstance(c, dict) or tuple(c) != CHALLENGE_KEYS for c in challenges) \
+            or not isinstance(presentation.get('verifier'), dict):
+        raise PhaseRefused('PRESENTATION_INVALID', f'{path} is not a {PRESENTATION_FORMAT} presentation')
+    return presentation
+
+
+def read_statement(path):
+    """The Owner's statement exactly as written in the file at PATH (the recorder's statement JSON)."""
+    if not path:
+        raise PhaseRefused('STATEMENT_MISSING', 'AIEH_AUTHZ_RECORDER_STATEMENT names no file: the Owner\'s own '
+                           'reply, written verbatim, is required')
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise PhaseRefused('STATEMENT_MISSING', f'{path}: {type(exc).__name__}') from None
+    if not raw.strip():
+        raise PhaseRefused('STATEMENT_MISSING', f'{path} is empty')
+    try:
+        return json.loads(raw.decode('utf-8'))
+    except (UnicodeDecodeError, ValueError):
+        raise PhaseRefused('STATEMENT_INVALID', f'{path} is not UTF-8 JSON') from None
+
+
+def authorized_challenges(statement, challenges):
+    """The challenges whose operation the statement authorizes, by the recorder's own statement checks;
+    refused when the statement is not the Owner's or names none of them."""
+    named = []
+    for challenge in challenges:
+        try:
+            AR._check_statement(statement, challenge['operation'])
+        except AR.RecorderError as exc:
+            if exc.code != 'STATEMENT_OPERATION_MISSING':
+                raise PhaseRefused(exc.code, exc.detail) from None
+        else:
+            named.append(challenge)
+    if not named:
+        raise PhaseRefused('STATEMENT_OPERATION_MISSING', 'the statement names none of the challenged operations '
+                           f'{[c["operation"] for c in challenges]}')
+    return named
+
+
+def _record_stale(live, ctx, challenge, statement):
+    """record with the head moved after the recorder's checks and before its merge call."""
+    original, moved = AR.Gitea.merge, []
+
+    def move_then_merge(session, path, body):
+        status, _ = _bot(live, 'builder').call('POST', f'/repos/{REPOSITORY}/contents/operations/'
+                                               f'{challenge["operation"]}.txt', {
+            'content': base64.b64encode(b'moved after the recorder\'s checks\n').decode('ascii'),
+            'message': 'Move the head after the checks', 'branch': challenge['branch']})
+        moved.append(status)
+        if status != 201:  # never send the merge of an unmoved head: an unknown outcome, nothing merged
+            raise ConnectionAbortedError(f'the stale-head control could not move the head ({status})')
+        return original(session, path, body)
+
+    AR.Gitea.merge = move_then_merge
+    try:
+        return AR.record(ctx, challenge['nonce'], statement, recorded_by=RECORDED_BY), moved
+    except AR.RecorderError as exc:
+        return exc, moved
+    finally:
+        AR.Gitea.merge = original
+
+
+def _receipt(store, nonce):
+    reservation = store.get(AR.RECEIPT_PREFIX + nonce)
+    return None if reservation is None else reservation.state
+
+
+def record_phase(live, statement_path, observed):
+    """The Owner's statement, read as written; record for each challenge it authorizes; the read-backs,
+    the cleanup and the custody inspection."""
+    presentation = load_presentation(live.run_dir)
+    statement = read_statement(statement_path)
+    authorized = authorized_challenges(statement, presentation['challenges'])
+    if presentation['verifier'].get('available') is not (live.verifier is not None):
+        raise PhaseRefused('VERIFIER_CHANGED', 'the presentation said a protection verifier was '
+                           + ('' if presentation['verifier'].get('available') else 'not ')
+                           + 'available and now it is ' + ('' if live.verifier is not None else 'not')
+                           + ': the Owner saw other expected outcomes; run phase prepare again')
+    observed['authorized'] = [c['operation'] for c in authorized]
+    main_before = _main_head(live)
+    observed['mainBefore'] = main_before
+    outcomes = observed['outcomes'] = {}
+    store = _open_store(live)
+    try:
+        ctx = _context(live, store)
+        merged_commit = None
+        for c in authorized:
+            if live.verifier is None:
+                try:
+                    AR.record(ctx, c['nonce'], statement, recorded_by=RECORDED_BY)
+                except AR.RecorderError as exc:
+                    outcomes[c['operation']] = {'code': exc.code, 'refusal': exc.refusal,
+                                                'receipt': _receipt(store, c['nonce'])}
+                else:
+                    raise SecurityFailure(f'the recorder merged {c["operation"]} with no protection verifier')
+                expect(outcomes[c['operation']] == {'code': 'PROTECTION_UNVERIFIED', 'refusal': True, 'receipt': None},
+                       f'{c["operation"]}: expected PROTECTION_UNVERIFIED and nothing sent, got '
+                       f'{outcomes[c["operation"]]}')
+            elif c['role'] == STALE:
+                result, moved = _record_stale(live, ctx, c, statement)
+                code = getattr(result, 'code', None)
+                outcomes[c['operation']] = {'code': code, 'moved': moved, 'receipt': _receipt(store, c['nonce']),
+                                            'detail': getattr(result, 'detail', None)}
+                expect(moved == [201] and code == 'HEAD_STALE' and '409' in result.detail
+                       and outcomes[c['operation']]['receipt'] == 'failed',
+                       f'the stale-head control: {outcomes[c["operation"]]}')
+            else:
+                at_merge = _main_head(live)
+                result = AR.record(ctx, c['nonce'], statement, recorded_by=RECORDED_BY)
+                merged_commit = result['merge']['mergeCommit']
+                outcomes[c['operation']] = {'merge': result['merge'], 'receipt': result['receipt'],
+                                            'protection': result['protection'],
+                                            'decision': result['decision']['decisionId']}
+                expect(result['receipt']['state'] == 'confirmed', f'{c["operation"]}: {result["receipt"]}')
+                expect(result['merge']['parents'] == [at_merge, c['approvedHead']], f'parents {result["merge"]}')
+                expect(result['merge']['trailers'] == AR.trailers(result['decision'], c['approvedHead'],
+                                                                  c['manifestDigest']), 'the trailers')
+                expect(_main_head(live) == merged_commit, 'main is not at the merge commit')
+        # read-backs
+        main_after = observed['mainAfter'] = _main_head(live)
+        expect(main_after == (merged_commit or main_before), f'main is at {main_after}')
+        merged_pulls = {c['pull'] for c in authorized if 'merge' in outcomes[c['operation']]}
+        for c in presentation['challenges']:
+            if c not in authorized:
+                outcomes[c['operation']] = {'code': None, 'note': 'not authorized by the statement: not recorded'}
+            merged = _pull(live, c['pull']).get('merged') is True
+            expect(merged is (c['pull'] in merged_pulls), f'pull request #{c["pull"]}: merged {merged}')
+        AR.open_session(ctx).close()  # zero tokens on aieh-owner (the recorder's identity check)
+    finally:
+        store.close()
+    cleanup = observed['cleanup'] = {}
+    for c in presentation['challenges']:
+        if _pull(live, c['pull']).get('state') == 'open':
+            status, _ = _bot(live, 'builder').call('PATCH', f'/repos/{REPOSITORY}/pulls/{c["pull"]}', {'state': 'closed'})
+            cleanup[c['pull']] = status
+            expect(status == 201, f'closing pull request #{c["pull"]} answered {status}')
+    _inspect(live, observed)
+    return observed
+
+
+# ---------------------------------------------------------------------------- the live test
 
 
 def _live():
-    if not OPT_IN:
-        return None, 'the live recorder exercise is opt-in: AIEH_AUTHZ_RECORDER_LIVE=1 (an Owner-approved act)'
-    if not AR.D.REFERENCE.match(APPROVAL):
-        return None, 'AIEH_AUTHZ_RECORDER_APPROVAL must name where the Owner approved this exercise (scheme:ref)'
+    if PHASE not in PHASES:
+        return None, ('the live recorder exercise is opt-in and runs in two phases, each an Owner-approved act: '
+                      'AIEH_AUTHZ_RECORDER_LIVE=prepare, then (after the Owner\'s own reply) =record')
     if os.name != 'nt':
         return None, 'the credentials are in Windows Credential Manager'
     try:
@@ -74,10 +518,9 @@ def _live():
     if not G.healthy(port):
         return None, 'Gitea is not running (task gitea:up)'
     provider = G.credential_provider()
-    tokens = {role: R.read_token(provider, role) for role in R.ROLES}
-    if missing := sorted(role for role, token in tokens.items() if token is None):
+    if missing := sorted(role for role in R.ROLES if R.read_token(provider, role) is None):
         return None, f'no Credential Manager entry for {missing}'
-    return (port, provider, tokens), None
+    return (port, provider), None
 
 
 class LiveExercise(unittest.TestCase):
@@ -86,114 +529,31 @@ class LiveExercise(unittest.TestCase):
         found, reason = _live()
         if found is None:
             raise unittest.SkipTest(reason)
-        cls.port, cls.provider, cls.tokens = found
-        cls._tmp = tempfile.TemporaryDirectory(prefix='aieh-authz-live-')
-        cls.root = Path(cls._tmp.name)
-        cls.observed = {}
+        cls.port, cls.provider = found
+        cls.observed = {'phase': PHASE}
 
     @classmethod
     def tearDownClass(cls):
         if REPORT:
             Path(REPORT).write_text(json.dumps(cls.observed, indent=1, default=str) + '\n', encoding='utf-8')
-        cls._tmp.cleanup()
 
-    def bot(self, role):
-        return R.Api(self.port, self.tokens[role])
-
-    def propose(self, branch, operation):
-        manifest = su.manifest(operation, target='aieh-authz-fixture (live recorder exercise; no effect)',
-                               expiresAt=(datetime.datetime.now(datetime.timezone.utc)
-                                          + datetime.timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ'))
-        status, body = self.bot('builder').call('POST', f'/repos/{REPOSITORY}/contents/operations/{operation}.json', {
-            'content': base64.b64encode(manifest).decode('ascii'), 'message': f'Propose operation {operation}',
-            'branch': R.DEFAULT_BRANCH, 'new_branch': branch})
-        self.assertEqual(status, 201, body)
-        status, pull = self.bot('builder').call('POST', f'/repos/{REPOSITORY}/pulls', {
-            'head': branch, 'base': R.DEFAULT_BRANCH, 'title': f'Live recorder exercise: {operation}'})
-        self.assertEqual(status, 201, pull)
-        status, review = self.bot('reviewer').call('POST', f'/repos/{REPOSITORY}/pulls/{pull["number"]}/reviews',
-                                                   {'event': 'APPROVED', 'body': 'live recorder exercise'})
-        self.assertEqual(status, 200, review)
-        return pull['number']
-
-    def main_head(self):
-        status, body = self.bot('verifier').call('GET', f'/repos/{REPOSITORY}/branches/{R.DEFAULT_BRANCH}')
-        self.assertEqual(status, 200, body)
-        return body['commit']['id']
-
-    def test_one_recorded_decision_one_merge_then_409_and_bot_refusals(self):
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dt%H%M%Sz')
-        store = su.IS.open_store(self.root / 'integration.sqlite')
-        self.addCleanup(store.close)
-        ctx = AR.Context(self.root / 'state', store, self.provider, self.port)
-        # A: one recorded decision, one merge
-        op_a = f'live-{stamp}-a'
-        pull_a = self.propose(f'work/authz-recorder-{stamp}-a', op_a)
-        before = self.main_head()
-        challenge = AR.prepare(ctx, REPOSITORY, pull_a)
-        said = {'text': f'Live exercise approved by the Owner ({APPROVAL}): authorize fixture operation {op_a}.',
-                'attributedTo': 'owner', 'channel': 'main-session', 'reference': APPROVAL}
-        result = AR.record(ctx, challenge['shown']['nonce'], said, recorded_by='agent:live-exercise')
-        after = self.main_head()
-        self.observed['A'] = {'pull': pull_a, 'before': before, 'after': after, 'merge': result['merge'],
-                              'receipt': result['receipt'], 'decision': result['decision']['decisionId']}
-        self.assertEqual(result['merge']['mergeCommit'], after)
-        self.assertEqual(result['merge']['parents'], [before, challenge['subject']['head']])
-        self.assertEqual(result['merge']['trailers'], AR.trailers(result['decision'], challenge['subject']['head'],
-                                                                  challenge['subject']['digest']))
-        self.assertEqual(result['receipt']['state'], 'confirmed')
-        session = AR.open_session(ctx)  # zero tokens on aieh-owner afterwards (the identity check)
-        session.close()
-        # B: the head moves after the checks; Gitea answers 409
-        op_b = f'live-{stamp}-b'
-        branch_b = f'work/authz-recorder-{stamp}-b'
-        pull_b = self.propose(branch_b, op_b)
-        challenge_b = AR.prepare(ctx, REPOSITORY, pull_b)
-        read = AR.read_proposal
-
-        def then_move_the_head(*args, **kw):
-            proposal = read(*args, **kw)
-            status, body = self.bot('builder').call('POST', f'/repos/{REPOSITORY}/contents/operations/{op_b}.txt', {
-                'content': base64.b64encode(b'moved after the checks\n').decode('ascii'),
-                'message': 'Move the head after the checks', 'branch': branch_b})
-            self.assertEqual(status, 201, body)
-            return proposal
-
-        AR.read_proposal = then_move_the_head
-        try:
-            with self.assertRaises(AR.RecorderError) as caught:
-                AR.record(ctx, challenge_b['shown']['nonce'], {**said, 'text': said['text'].replace(op_a, op_b)},
-                          recorded_by='agent:live-exercise')
-        finally:
-            AR.read_proposal = read
-        self.observed['B'] = {'pull': pull_b, 'code': caught.exception.code, 'detail': caught.exception.detail,
-                              'main': self.main_head()}
-        self.assertEqual(caught.exception.code, 'HEAD_STALE')
-        self.assertIn('409', caught.exception.detail)
-        self.assertEqual(self.main_head(), after)
-        # every bot token, on the merge itself
-        status, pr = self.bot('verifier').call('GET', f'/repos/{REPOSITORY}/pulls/{pull_b}')
-        bots = {}
-        for role in R.ROLES:
-            status, body = self.bot(role).call('POST', f'/repos/{REPOSITORY}/pulls/{pull_b}/merge',
-                                               {'Do': 'merge', 'head_commit_id': pr['head']['sha']})
-            bots[role] = status
-        self.observed['bots'] = bots
-        self.assertTrue(all(status in (403, 405) for status in bots.values()), bots)
-        self.assertEqual(self.main_head(), after)
-        status, _ = self.bot('builder').call('PATCH', f'/repos/{REPOSITORY}/pulls/{pull_b}', {'state': 'closed'})
-        self.observed['cleanup'] = {'close_b': status}
-        # the inspection: the Owner credential is in its provider entry only
-        self.observed['inspection'] = inspection = inspect_custody(self.provider, self.root)
-        self.assertEqual(inspection['found'], [], inspection)
-        self.assertEqual(inspection['unreadable'], [], inspection)
+    def test_phase(self):
+        if not RUN_DIR:
+            raise PhaseRefused('RUN_DIR_MISSING', 'AIEH_AUTHZ_RECORDER_RUN_DIR must name the run directory')
+        verifier, note = available_verifier()
+        live = Live(self.port, self.provider, Path(RUN_DIR), verifier=verifier, verifier_note=note,
+                    inspect=inspect_custody)
+        if PHASE == 'prepare':
+            prepare_phase(live, self.observed)
+        else:
+            record_phase(live, STATEMENT, self.observed)
 
 
-def inspect_custody(provider, scratch):
+def inspect_custody(provider, run_dir):
     """Where aieh-owner's password is, besides its provider entry: every file of the managed data root (the
-    recorder's state and the integration store included), every file git lists in the checkout, this
-    exercise's temporary state and store, and the environment of this process (which inherits the
-    session's). File names only; the password is held in memory for the scan and dropped."""
+    managed recorder state and integration store included), every file git lists in the checkout, the run
+    directory (this exercise's recorder state and store) and the environment of this process (which
+    inherits the session's). File names only; the password is held in memory for the scan and dropped."""
     entry = provider.get(AR.OWNER_ENTRY)
     needles = [entry[1].encode('utf-8')]
     del entry
@@ -201,15 +561,15 @@ def inspect_custody(provider, scratch):
         root = G.paths.resolve().root
         managed = G.contains_secret(Path(str(root)), needles)
         checkout = G.files_containing(G.checkout_files(su.REPO), needles)
-        temporary = G.contains_secret(Path(scratch), needles)
+        run = G.contains_secret(Path(run_dir), needles)
         environment = [name for name, value in os.environ.items()
                        if any(n in value.encode('utf-8', 'replace') for n in needles)]
     finally:
         needles.clear()
-    return {'found': managed['found'] + checkout['found'] + temporary['found'] + environment,
-            'unreadable': managed['unreadable'] + checkout['unreadable'] + temporary['unreadable'],
+    return {'found': managed['found'] + checkout['found'] + run['found'] + environment,
+            'unreadable': managed['unreadable'] + checkout['unreadable'] + run['unreadable'],
             'scanned': {'managed root': 'every file', 'checkout': 'git ls-files --cached --others --exclude-standard',
-                        'temporary state and store': 'every file', 'environment': 'this process'}}
+                        'run directory': 'every file', 'environment': 'this process'}}
 
 
 if __name__ == '__main__':

@@ -9,7 +9,10 @@ user_can_merge); a pull request, its files, raw files at a commit and a commit w
 message; and ``POST /pulls/{index}/merge`` (``Do``, ``merge_title_field``, ``merge_message_field``,
 ``head_commit_id``): 405 for a caller outside the merge allowlist or a merge style the repository does not
 allow, 409 "head out of date" when ``head_commit_id`` is not the head, otherwise a merge commit with the
-base and the head as parents and the message title, a blank line, then the message.
+base and the head as parents and the message title, a blank line, then the message. For the live
+exercise's phase plumbing (test_live_phases.py) it also takes a bot's proposal: ``POST /contents/{path}``
+(a file on a new or existing branch; 403 on the protected branch), ``POST /pulls``, ``POST
+/pulls/{index}/reviews`` and ``PATCH /pulls/{index}`` (closing).
 
 It is callable in memory (``fake(port, path, method=..., body=..., headers=..., timeout=...)``, the
 signature of gitea_host.http_get) and served over host loopback by ``Server`` (one in-process
@@ -167,6 +170,10 @@ class FakeGitea:
                     'user_can_push': doer in rule['push_whitelist'] if rule else True,
                     'user_can_merge': doer in rule['merge_whitelist'] if rule else True}
             return self.reply(200, view)
+        if method == 'POST' and route.startswith(f'{repo}/contents/'):
+            return self.create_file(route[len(f'{repo}/contents/'):], doer, json.loads(body) if body else {})
+        if method == 'POST' and route == f'{repo}/pulls':
+            return self.open_pull(doer, json.loads(body) if body else {})
         if route.startswith(f'{repo}/pulls/'):
             rest = route[len(f'{repo}/pulls/'):].split('/')
             number = int(rest[0]) if rest[0].isdigit() else None
@@ -174,6 +181,16 @@ class FakeGitea:
                 return self.reply(404, {'message': 'pull request not found'})
             if method == 'GET' and len(rest) == 1:
                 return self.reply(200, self.pull_view(number))
+            if method == 'PATCH' and len(rest) == 1:
+                form = json.loads(body) if body else {}
+                if form.get('state') == 'closed' and not self.pulls[number]['merged']:
+                    self.pulls[number]['state'] = 'closed'
+                return self.reply(201, self.pull_view(number))
+            if method == 'POST' and rest[1:] == ['reviews']:
+                form = json.loads(body) if body else {}
+                self.pulls[number].setdefault('reviews', []).append((doer, form.get('event'), self.head(number)))
+                return self.reply(200, {'state': form.get('event'), 'user': {'login': doer},
+                                        'commit_id': self.head(number)})
             if method == 'GET' and rest[1:] == ['files']:
                 return self.reply(200, self.files(number))
             if method == 'POST' and rest[1:] == ['merge']:
@@ -192,6 +209,35 @@ class FakeGitea:
             return self.reply(200, {'sha': commit_id, 'commit': {'message': commit['message']},
                                     'parents': [{'sha': p} for p in commit['parents']]})
         return self.reply(404, {'message': f'no route {method} {route}'})
+
+    def create_file(self, file_path, doer, form):
+        """POST /contents/{path} (a bot's proposal): a commit adding the file on BRANCH, or on NEW_BRANCH made
+        from BRANCH. The protected branch takes no push (the fixture's rule), so it answers 403 there."""
+        path = urllib.parse.unquote(file_path)
+        source, target = form.get('branch') or 'main', form.get('new_branch') or form.get('branch') or 'main'
+        if source not in self.branches or (form.get('new_branch') and target in self.branches):
+            return self.reply(422, {'message': 'branch missing or already there'})
+        if target in self.protection:
+            return self.reply(403, {'message': 'not allowed to push to the protected branch'})
+        head = self.branches[source]
+        if path in self.commits[head]['tree']:
+            return self.reply(422, {'message': 'repository file already exists'})
+        content = base64.b64decode(form.get('content', ''))
+        self.branches[target] = self.commit([head], {**self.commits[head]['tree'], path: content},
+                                            form.get('message') or f'Add {path}')
+        return self.reply(201, {'content': {'path': path}, 'commit': {'sha': self.branches[target]}})
+
+    def open_pull(self, doer, form):
+        """POST /pulls by a bot: from HEAD (a branch of the repository) into BASE."""
+        head, base = form.get('head'), form.get('base')
+        if head not in self.branches or base != 'main':
+            return self.reply(422, {'message': 'head or base missing'})
+        number = len(self.pulls) + 1
+        self.pulls[number] = {'state': 'open', 'title': form.get('title') or '', 'user': doer, 'base': base,
+                              'head_ref': head, 'base_at_open': self.branches[base], 'merged': False,
+                              'merged_by': None, 'merge_commit_sha': None, 'mergeable': True,
+                              'head_repo': REPOSITORY}
+        return self.reply(201, self.pull_view(number))
 
     def pull_view(self, number):
         pr = self.pulls[number]
