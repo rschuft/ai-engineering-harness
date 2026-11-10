@@ -519,7 +519,7 @@ Each cell lists the verdicts of the rows from the row domain to the column domai
 | `nm-ext-lan-host` The LAN to the harness's host listeners | `external:lan` | `td-owner` | deny | tcp, udp | `external:lan` | - | every harness host listener binds 127.0.0.1 only (prevention, host) | observed | - | no | guest.py host-census (every harness host listener on 127.0.0.1, by PID) |
 | `nm-ext-ci-egress` A CI job to the internet Findings: `fd-ci-runner-unpinned`. | `td-untrusted-ci` | `external:off-host` | deny | any | `external:off-host` | - | the runner containment profile's network policy (prevention, host) | planned | builds Q-02.2.1, verify Q-02.3.2 | no | planned: Q-02.3.2 |
 | `nm-ext-runner-egress` The CI runner host to the internet Findings: `fd-ci-runner-unpinned`. | `td-ci-runner-host` | `external:off-host` | deny | any | `external:off-host` | - | the runner host's network policy, decided with the runner (prevention, host) | planned | builds Q-02.2.1, verify Q-02.2.2 | no | planned: Q-02.2.1 |
-| `nm-ext-broker-provider` The inference broker to the model provider Findings: `fd-acp-provider-auth`. | `td-management` | `external:model-provider` | allow | https | `external:model-provider` | `cred-llm-provider-key` | the provider credential stays with the broker; it never enters the guest (prevention, host) | planned | builds S-03.2, verify S-03.2 | yes | planned: S-03.2 |
+| `nm-ext-broker-provider` The inference broker to the model provider Findings: `fd-acp-provider-auth`. | `td-management` | `external:model-provider` | allow | https | `external:model-provider` | `cred-llm-provider-key` | the provider credential stays with the broker; it never enters the guest (prevention, host) | planned | builds S-03.3, verify S-03.3 | yes | planned: S-03.3 |
 | `nm-ext-executor-targets` The executor to its allowlisted external targets | `td-privileged-effect` | `external:effect-targets` | allow | per operation kind | `external:effect-targets` | `cred-executor-target-secrets` | typed, allowlisted operation kinds; target and precondition recheck; one-time effect key (prevention, host) | planned | builds G-04.4.2, verify G-04.4.2 | no | planned: G-04.4.2 |
 | `nm-ext-gitea-offline` Gitea to the internet | `td-git-hosting` | `external:off-host` | deny | any | `external:off-host` | - | Gitea runs offline through its own egress-policy proxy (prevention, gitea) | observed | - | no | task gitea:verify; task gitea:authz (S-01.2.2 fixture) |
 | `nm-ext-owner-github` The Owner's push to the public repository | `td-owner` | `external:github` | allow | https | `external:github` | `cred-owner-github` | the publication-safety gate (pinned Gitleaks) before every commit and push (prevention, host) | observed | - | no | python -I -B tools/publication_gate.py verify |
@@ -785,7 +785,7 @@ hook. Changing the file is a reviewed change with the profile that justifies it
   `#quality-pipeline`, `#agent-skills`, `#containment-architecture`,
   `#integration-contracts`, `#decisions`.
 - Plan: S-01.2.1, S-01.2.2, S-01.3.1, S-01.3.2, S-01.4, Q-02.1, Q-02.2.1, Q-02.2.2, Q-02.3.2,
-  Q-02.4, D-01.1, D-01.2, E-01.3.1, E-01.3.2, U-01.2, S-03.2, G-04.2.1.
+  Q-02.4, D-01.1, D-01.2, E-01.3.1, E-01.3.2, U-01.2, S-03.2, S-03.3, G-04.2.1.
 - Decisions: [0003](../decisions/0003-execution-guest-providers-and-isolation-contract.md),
   [0004](../decisions/0004-privileged-effect-store-custody-and-restore-semantics.md)
   (Owner clarifications 5 and 7),

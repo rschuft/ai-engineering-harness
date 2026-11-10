@@ -2074,7 +2074,7 @@
         "profiles/README.md",
         "policy/role-tokens.json"
       ],
-      "carried_to": ["S-03.1", "S-03.2"]
+      "carried_to": ["S-03.1", "S-03.2", "S-03.3"]
     }
   ]
 }

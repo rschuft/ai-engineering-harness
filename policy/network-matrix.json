@@ -3709,14 +3709,14 @@
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
       ],
-      "builds_at": "S-03.2",
-      "verify_at": "S-03.2",
+      "builds_at": "S-03.3",
+      "verify_at": "S-03.3",
       "owner_act": true,
       "findings": [
         "fd-acp-provider-auth"
       ],
       "inspection": [
-        "planned: S-03.2"
+        "planned: S-03.3"
       ]
     },
     {
