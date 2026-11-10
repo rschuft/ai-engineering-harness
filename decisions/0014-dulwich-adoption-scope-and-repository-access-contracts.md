@@ -1,6 +1,6 @@
 # 0014 - Dulwich adoption scope, the repository-access contracts, and the retained Git CLI
 
-Status: Accepted (Overseer) at the completion of F-10.2, 2026-11-09, as amended by the F-10.2 findings (sections 2, 3, 5 and 10). Architect draft of 2026-11-09 with the Overseer's rulings of 2026-11-09, implementing the Owner's architectural direction of 2026-11-08. The F-10.2 differential contract suite (`integrations/repository/tests/`, evidence `evidence/F-10.2-repository-module.md`) proves the contracts of sections 2 to 5 on Windows; the other platforms are bounded by section 8.
+Status: Accepted (Overseer) at the completion of F-10.2, 2026-11-09, as amended by the F-10.2 findings (sections 2, 3, 5 and 10) and at the completion of F-10.4, 2026-11-09 (sections 1, 8 and 10). Architect draft of 2026-11-09 with the Overseer's rulings of 2026-11-09, implementing the Owner's architectural direction of 2026-11-08. The F-10.2 differential contract suite (`integrations/repository/tests/`, evidence `evidence/F-10.2-repository-module.md`) proves the contracts of sections 2 to 5 on Windows; the other platforms are bounded by section 8.
 
 **Authority:** the Owner's architectural direction of 2026-11-08 on Dulwich (verbatim in `evidence/bootstrap-log.md`, Decisions): adopt Dulwich as the preferred Git implementation for Python components; eliminate the external Git executable dependency where possible; one implementation across Windows, Linux and macOS; no unnecessary subprocess creation and management; simpler installation, testing and maintenance; preserve Git behaviour (paths containing spaces, repository integrity, revision resolution, failure semantics); cross-platform contract tests, measured performance and parity; retain the Git CLI only where a documented compatibility gap justifies it; no silent deferral. This record grants no authority of its own: it applies that direction within blueprint decision card SHIP-02 ("ADOPT Dulwich within Python adapters"), the Repository API policy and `#integration-contracts` ("Our Python adapters require no Git executable. Respect capabilities of pinned Dulwich version"), and SHIP-03 (the release-time licence gate). Where this record and those sources disagree, they govern and this record is the defect.
 
@@ -47,7 +47,7 @@ Three questions had no accepted answer: which rows migrate and which retain git,
 | R3 file lists | migrate | probe: same answers, spaces and non-ASCII included |
 | R4 archive export | migrate | the blob-bytes export contract (section 4) resolves G3 |
 | R5 exchange push (bundle creation) | migrate | no gap: a Dulwich-written bundle passed `git bundle verify` (probe); the header, pack trailer and bounds are already checked in Python |
-| R6 exchange pull verification (`init --bare`, `fetch`, `bundle verify`, `fsck --strict`) | **retain git** | **hard gap G6** (no strict or connectivity fsck; `porcelain.fsck` crashed on a corrupt pack) and G7 (no `bundle verify`). Git stays the integrity authority; see section 7. |
+| R6 exchange pull verification (`init --bare`, `fetch`, `bundle verify`, `rev-parse` for the per-reference check, `fsck --strict`) | **retain git** | **hard gap G6** (no strict or connectivity fsck; `porcelain.fsck` crashed on a corrupt pack) and G7 (no `bundle verify`). Git stays the integrity authority; see section 7. |
 | R7, R8 profile revision and checkout inventory | migrate | parity differences G11 (rendering) and G12 (configuration), resolved by sections 5 and 8 |
 | R9 checkout listing for the secret-leak scan | migrate | probe: the same 537 paths; an ignore-rule corpus test keeps it a superset-or-equal of git's listing |
 | R10 profile revision stamp (development tooling) | migrate | through the shared module; an unavailable module records `null` with its reason |
@@ -145,6 +145,7 @@ Evidence records carry `config_sources`, the files actually read. The exchange u
 
 ### 8. Structure
 - **One shared repository-access module**, `integrations/repository/` (Python, the standard library plus Dulwich), behind a narrow interface: open and work-tree check, `commit(revision)`, `object_kind(name)`, `blob(commit, path)`, `files(commit, directory)`, `export_tree`, `head()`, `status(paths, untracked)`, `index_entries()`, `listing(cached, others, exclude_standard)`, bundle header parsing, the pack trailer and `write_bundle`.
+  - Added at F-10.4: `full_name(name)` (git's `rev-parse --symbolic-full-name`), and git's ceiling directories for the upward repository search (`open_repository(..., ceilings=)`, otherwise `GIT_CEILING_DIRECTORIES` as git reads it; `ceiling_directories()`). Without a ceiling the search goes up to the file system's root, as git's does; tests and harness callers that open a path which may lie outside a repository pass a ceiling at their own root (the path boundary).
   - Transports (`ls_remote`, `push`) and writes (`commit`) are added by the leaves that first need them, and never elsewhere.
   - The module is owned by the blueprint's "Repository <-> integration" contract and is a replaceable adapter like the others.
   - The planning adapter's `Git` becomes a thin facade over it, so that lineage, dispatch and readiness keep their calls and codes. `tools/guest.py` loads it by path, as it loads other modules.
@@ -204,6 +205,9 @@ Governing rule: a difference from git is either implemented equal to git or fail
   - At F-10.2 the baseline median is 152.1 s.
   - Interleaved single runs in the same period gave 150.5 s at the repair, and 151.2 s and 149.6 s at the commit before it. The repair adds nothing measurable; the rise from 145.0 s earlier in the leaf appears in suites whose code did not change (host drift).
   - The criterion is evaluated at the F-10 group gate (F-10.5), after F-10.3 and F-10.4 remove the product git launches. F-10.3 reports the serial total from both shells.
+- **Settled at F-10.4:**
+  - R6's retained launches are `init --bare`, `fetch`, `bundle verify`, `rev-parse` (the per-reference comparison with the bundle header) and `fsck --strict`. The plan's F-10.4 action names the per-reference check; its proof clause omits `rev-parse`. The verifier's set is asserted by test (`evidence/F-10.4-exchange-snapshots-listing.md`).
+  - `write_bundle` writes a pack without deltas (Dulwich 1.2.21's default). On this repository the bundle is 3.1 times git's and the push 2.4 times slower (2.7 s against 1.1 s). Dulwich's `deltify=True` did not finish within 600 s on the same 273 commits, so it is not used. Consequence: the exchange's `max_bytes` bound (256 MiB) is reached at about a third of the history git could carry. The bound is unchanged; a repository approaching it is a reason to revisit the writer, not to raise the bound.
 
 ## Owner confirmation
 None is needed for acceptance. The one Owner act this record requires is the per-run approval of the Linux guest run at F-10.5 (section 8); without it the leaf records Linux as not verified and does not pass.
