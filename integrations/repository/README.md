@@ -428,7 +428,8 @@ expectations are.
 - The system files on macOS installations with another prefix (Homebrew's
   `$(brew --prefix)/etc/gitconfig`, Xcode's git), and Git for Windows installed without its
   registry entry (portable): the module then reads no system file.
-- Transports (F-10.6): a proxy, a redirect (only the origin rule is tested, by a stand-in), an
+- Transports (F-10.6): a proxy, a scheme or host redirect from a real server (a port change is
+  tested end to end; scheme and host changes through a stand-in for urllib3's pool), an
   authenticated HTTPS remote (GitHub was read anonymously), protocol v0/v1 servers for
   `ls_remote` (Gitea and GitHub answered protocol v2), SHA-256 remotes, and pushes larger than
   Dulwich's 1 MiB post buffer (sent chunked).
