@@ -60,6 +60,32 @@ def owner_entry():
     return {AR.OWNER_ENTRY: (AR.OWNER, fg.PASSWORD)}
 
 
+# A fake protection verifier's answers (the seam of decision 0012 point 6; no real check stands behind them).
+VERIFIED = AR.ProtectionVerdict('verified', 'fake verifier: every rule as declared', 'sha256:' + 'c' * 64)
+DRIFT = AR.ProtectionVerdict('drift', 'fake verifier: main.enable_bypass_allowlist is true', 'sha256:' + 'd' * 64)
+UNVERIFIED = AR.ProtectionVerdict('unverified', 'fake verifier: the rules could not be read')
+
+
+class FakeVerifier:
+    """A fake protection verifier: answers ANSWERS in turn, then DEFAULT; an exception in the list is raised.
+    ``calls`` lists (repository, base, phase); ``on_call`` (when set) runs first, with the phase."""
+
+    def __init__(self, *answers, default=VERIFIED):
+        self.answers, self.default, self.calls, self.on_call = list(answers), default, [], None
+
+    def __call__(self, repository, base, phase):
+        self.calls.append((repository, base, phase))
+        if self.on_call is not None:
+            self.on_call(phase)
+        answer = self.answers.pop(0) if self.answers else self.default
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def phases(self):
+        return [phase for _repository, _base, phase in self.calls]
+
+
 _SHARED = []
 
 
@@ -103,11 +129,13 @@ class Fixture(unittest.TestCase):
         self.http, self.port, self.gitea = self.gitea_for_test()
         self.provider = fg.FixtureProvider(owner_entry())
         self.now = NOW
+        self.verifier = FakeVerifier()
         self.ctx = self.context()
 
     def context(self, **changes):
+        """The test's context; its protection verifier is the fake (``verified`` unless the test scripts it)."""
         fields = dict(state_dir=self.dir / 'state', store=self.store, provider=self.provider, port=self.port,
-                      http=self.http, now=lambda: self.now)
+                      http=self.http, now=lambda: self.now, verifier=self.verifier)
         fields.update(changes)
         return AR.Context(**fields)
 

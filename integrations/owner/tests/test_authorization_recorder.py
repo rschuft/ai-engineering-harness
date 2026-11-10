@@ -160,6 +160,7 @@ class AlteredDigest(OverHttp):
         number, challenge = self.ready()
         nonce = challenge['shown']['nonce']
         path = self.dir / 'state' / 'challenges' / f'{nonce}.json'
+        challenge = json.loads(path.read_text(encoding='utf-8'))
         challenge['subject']['digest'] = 'sha256:' + '0' * 64
         path.write_text(json.dumps(challenge, indent=2) + '\n', encoding='utf-8', newline='\n')
         self.assertRefused('DIGEST_CHANGED', self.record, nonce)
@@ -271,6 +272,136 @@ class PolicyDrift(OverHttp):
                 self.assertNoMerge()
                 self.assertEqual(self.gitea.requests_by('POST'), [])
                 self.assertTrue(error.detail)
+
+
+class ProtectionVerifier(OverHttp):
+    """Fail closed (decision 0012 point 6, Owner decision OA-15a): record merges only on a ``verified``
+    answer of the protection verifier, asked as the last read before the receipt is reserved and the merge
+    is sent; drift, unverified, an exception, a malformed answer and no verifier at all refuse with nothing
+    sent; the answer after the merge brackets it. The verifier here is a fake (authz_support.FakeVerifier)."""
+
+    def assertNothingSent(self):
+        self.assertNoMerge()
+        self.assertEqual(self.gitea.requests_by('POST'), [])
+        self.assertEqual(self.receipts(), {})
+        self.assertFalse((self.dir / 'state' / 'decisions').exists())
+
+    def test_no_verifier_refuses_and_sends_nothing(self):
+        number, challenge = self.ready()
+        nonce = challenge['shown']['nonce']
+        self.ctx = self.context(verifier=None)
+        error = self.assertRefused('PROTECTION_UNVERIFIED', self.record, nonce)
+        self.assertEqual(error.detail, AR.NO_VERIFIER)
+        self.assertIn('decision 0012 point 6', error.remedy)
+        self.assertIn('OA-16', error.remedy)
+        self.assertNothingSent()
+        # the challenge is not consumed: the same challenge merges once a verifier answers verified
+        self.ctx = self.context()
+        self.assertEqual(self.record(nonce)['receipt']['state'], 'confirmed')
+        self.assertEqual(self.gitea.merge_count(), 1)
+
+    def test_each_refusing_answer_sends_nothing(self):
+        cases = {
+            'drift': ('PROTECTION_DRIFT', su.DRIFT),
+            'unverified': ('PROTECTION_UNVERIFIED', su.UNVERIFIED),
+            'exception': ('PROTECTION_UNVERIFIED', TimeoutError('the check timed out')),
+            'malformed': ('PROTECTION_UNVERIFIED', {'status': 'verified', 'detail': 'a dict'}),
+        }
+        for name, (code, answer) in cases.items():
+            with self.subTest(answer=name):
+                operation = f'op-{name}'
+                number = self.propose(operation, branch=f'work/{name}')
+                nonce = self.prepare(number)['shown']['nonce']
+                self.verifier.answers = [answer]
+                error = self.assertRefused(code, self.record, nonce, su.statement(operation))
+                self.assertEqual(self.verifier.phases()[-1], 'before-merge')
+                if name == 'exception':
+                    self.assertIn('TimeoutError', error.detail)
+                    self.assertNotIn('timed out', error.detail)
+                if name == 'drift':
+                    self.assertIn(su.DRIFT.detail, error.detail)
+                self.assertNothingSent()
+        self.assertNotIn('after-merge', self.verifier.phases())
+
+    def test_the_verifier_is_the_last_read_before_the_receipt_and_the_merge(self):
+        number, challenge = self.ready()
+        nonce = challenge['shown']['nonce']
+        key = AR.RECEIPT_PREFIX + nonce
+        seen = []
+        self.verifier.calls.clear()
+        self.verifier.on_call = lambda phase: seen.append((phase, len(self.gitea.requests), self.receipts()))
+        result = self.record(nonce)
+        self.assertEqual(self.verifier.calls, [(fg.REPOSITORY, 'main', 'before-merge'),
+                                               (fg.REPOSITORY, 'main', 'after-merge')])
+        (_, count, receipts), (_, after_count, after_receipts) = seen
+        self.assertEqual(receipts, {})
+        sent = self.gitea.requests[count]  # the request right after the check is the merge
+        self.assertEqual((sent['method'], sent['path']), ('POST', f'/api/v1/repos/{fg.REPOSITORY}/pulls/{number}/merge'))
+        self.assertEqual(after_count, len(self.gitea.requests))  # asked again after the read-back
+        self.assertEqual(after_receipts, {nonce: ('dispatched', ['reserved', 'dispatched'])})
+        answer = {'verdict': 'verified', 'detail': su.VERIFIED.detail, 'digest': su.VERIFIED.digest}
+        intent = json.loads(self.store.get(key).intent_json)
+        self.assertEqual(intent['protection'], {'before': answer})
+        confirmed = json.loads(self.store.events(key)[-1].detail_json)
+        self.assertEqual(confirmed['protection'], {'before': answer, 'after': answer, 'equal': True})
+        self.assertEqual(result['protection'], confirmed['protection'])
+        self.assertEqual(self.receipts(), {nonce: ('confirmed', ['reserved', 'dispatched', 'confirmed'])})
+
+    def test_a_different_answer_after_the_merge_is_disclosed_and_the_receipt_stays_confirmed(self):
+        afters = {'digest': AR.ProtectionVerdict('verified', 'fake verifier: changed', 'sha256:' + 'e' * 64),
+                  'drift': su.DRIFT, 'exception': OSError('the rules are gone'), 'malformed': None}
+        for name, after in afters.items():
+            with self.subTest(after=name):
+                self.gitea = SERVER.reset()
+                self.base = self.gitea.branches['main']
+                operation = f'op-after-{name}'
+                number, challenge = self.ready(operation, branch=f'work/after-{name}')
+                nonce = challenge['shown']['nonce']
+                self.verifier.answers = [su.VERIFIED, after]
+                result = self.record(nonce, su.statement(operation))
+                self.assertEqual(self.gitea.merge_count(), 1)
+                self.assertEqual(result['receipt']['state'], 'confirmed')
+                protection = result['protection']
+                self.assertEqual((protection['equal'], protection['code']), (False, 'PROTECTION_CHANGED_AFTER_MERGE'))
+                self.assertEqual(protection['disclosure'], AR.DISCLOSURES['PROTECTION_CHANGED_AFTER_MERGE'])
+                self.assertEqual(protection['before']['verdict'], 'verified')
+                self.assertEqual(protection['after']['verdict'], 'drift' if name == 'drift' else
+                                 'verified' if name == 'digest' else 'unverified')
+                detail = json.loads(self.store.events(AR.RECEIPT_PREFIX + nonce)[-1].detail_json)
+                self.assertEqual(detail['protection'], protection)
+                self.assertEqual(self.receipts()[nonce], ('confirmed', ['reserved', 'dispatched', 'confirmed']))
+
+    def test_prepare_reports_the_answer_and_refuses_nothing_on_it(self):
+        reports = {}
+        for name, verifier, answer in (('none', None, None), ('drift', self.verifier, su.DRIFT),
+                                       ('verified', self.verifier, su.VERIFIED)):
+            with self.subTest(verifier=name):
+                self.verifier.answers = [answer] if answer else []
+                self.ctx = self.context(verifier=verifier)
+                number = self.propose(f'op-{name}', branch=f'work/{name}')
+                challenge = self.prepare(number)
+                reports[name] = challenge['protection']
+                saved = json.loads((self.dir / 'state' / 'challenges' / f'{challenge["shown"]["nonce"]}.json')
+                                   .read_text(encoding='utf-8'))
+                self.assertEqual(list(saved), ['format', 'kind', 'subject', 'shown'])
+        self.assertEqual((reports['none']['verdict'], reports['none']['code'], reports['none']['detail']),
+                         ('unverified', 'PROTECTION_UNVERIFIED', AR.NO_VERIFIER))
+        self.assertIn('record refuses with PROTECTION_UNVERIFIED', reports['none']['note'])
+        self.assertEqual((reports['drift']['verdict'], reports['drift']['code']), ('drift', 'PROTECTION_DRIFT'))
+        self.assertEqual(reports['verified'], {'verdict': 'verified', 'detail': su.VERIFIED.detail,
+                                               'digest': su.VERIFIED.digest})
+        self.assertEqual(self.verifier.phases(), ['prepare', 'prepare'])
+        self.assertEqual(self.gitea.requests_by('POST'), [])
+
+    def test_an_earlier_refusal_never_asks_the_verifier(self):
+        number, challenge = self.ready()
+        nonce = challenge['shown']['nonce']
+        self.verifier.calls.clear()
+        self.assertRefused('STATEMENT_OPERATION_MISSING', self.record, nonce, su.statement(text='Yes.'))
+        self.gitea.protection['main']['required_approvals'] = 0
+        self.assertRefused('POLICY_DRIFT', self.record, nonce)
+        self.assertEqual(self.verifier.calls, [])
+        self.assertNothingSent()
 
 
 class OwnerIdentity(OverHttp):

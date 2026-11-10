@@ -117,6 +117,69 @@ class PolicyComparison(unittest.TestCase):
         self.assertIs(rule['enable_push'], False)
 
 
+class ProtectionSeam(InMemory):
+    """The protection verifier's seam (decision 0012 point 6): only a well-formed ProtectionVerdict counts;
+    anything else is unverified, and only verified passes."""
+
+    def answer(self, verifier):
+        return AR.check_protection(self.context(verifier=verifier), fg.REPOSITORY, 'main', 'before-merge')
+
+    def test_only_a_well_formed_verdict_counts(self):
+        malformed = {
+            'None': None, 'a dict': {'status': 'verified', 'detail': 'x'}, 'a tuple': ('verified', 'x', None),
+            'an unknown status': AR.ProtectionVerdict('ok', 'x'),
+            'a status of another case': AR.ProtectionVerdict('Verified', 'x'),
+            'a detail that is no text': AR.ProtectionVerdict('verified', None),
+            'a short digest': AR.ProtectionVerdict('verified', 'x', 'sha256:abc'),
+            'a digest without its algorithm': AR.ProtectionVerdict('verified', 'x', 'c' * 64),
+            'a digest that is no text': AR.ProtectionVerdict('verified', 'x', b'sha256:' + b'c' * 64),
+        }
+        for name, answer in malformed.items():
+            with self.subTest(answer=name):
+                got = self.answer(lambda *args, answer=answer: answer)
+                self.assertEqual((got['verdict'], got['digest']), ('unverified', None))
+                self.assertIn('not a well-formed ProtectionVerdict', got['detail'])
+                self.assertRaises(AR.RecorderError, AR.require_verified, got)
+        for status in AR.PROTECTION_VERDICTS:
+            with self.subTest(status=status):
+                got = self.answer(lambda *args, status=status: AR.ProtectionVerdict(status, 'd' * 600))
+                self.assertEqual((got['verdict'], len(got['detail']), got['digest']), (status, 500, None))
+        self.assertEqual(self.answer(None), {'verdict': 'unverified', 'detail': AR.NO_VERIFIER, 'digest': None})
+
+    def test_an_exception_is_unverified_and_its_text_is_not_repeated(self):
+        def raising(*args):
+            raise RuntimeError('a message that might hold anything')
+
+        got = self.answer(raising)
+        self.assertEqual(got, {'verdict': 'unverified', 'detail': 'the protection verifier raised RuntimeError',
+                               'digest': None})
+
+    def test_the_verdicts_and_their_codes(self):
+        verdict = lambda status: {'verdict': status, 'detail': 'd', 'digest': None}  # noqa: E731
+        self.assertIsNone(AR.require_verified(verdict('verified')))
+        self.assertIsNone(AR.protection_code(verdict('verified')))
+        for status, code in (('drift', 'PROTECTION_DRIFT'), ('unverified', 'PROTECTION_UNVERIFIED'),
+                             ('anything else', 'PROTECTION_UNVERIFIED')):
+            with self.subTest(status=status):
+                self.assertEqual(AR.protection_code(verdict(status)), code)
+                self.assertRefused(code, AR.require_verified, verdict(status))
+
+    def test_the_bracket(self):
+        one = {'verdict': 'verified', 'detail': 'a', 'digest': 'sha256:' + 'c' * 64}
+        self.assertEqual(AR.bracket(one, {**one, 'detail': 'b'}), {'before': one, 'after': {**one, 'detail': 'b'},
+                                                                   'equal': True})
+        for change in ({'digest': None}, {'verdict': 'drift'}, {'digest': 'sha256:' + 'e' * 64}):
+            with self.subTest(change=change):
+                got = AR.bracket(one, {**one, **change})
+                self.assertEqual((got['equal'], got['code']), (False, 'PROTECTION_CHANGED_AFTER_MERGE'))
+
+    def test_a_verifier_must_be_callable(self):
+        number = self.propose()
+        with self.assertRaises(ValueError):
+            AR.prepare(self.context(verifier='verified'), fg.REPOSITORY, number)
+        self.assertEqual(self.gitea.requests, [])
+
+
 class Session(InMemory):
     def test_the_session_makes_only_its_fixed_calls(self):
         session = AR.open_session(self.ctx)
@@ -383,6 +446,12 @@ class Codes(unittest.TestCase):
         self.assertNotIn('generate-access-token', self.SOURCE)
         self.assertNotIn("'POST', '/users", self.SOURCE)
 
+    def test_a_disclosure_is_no_refusal(self):
+        self.assertEqual(set(AR.DISCLOSURES), {'PROTECTION_CHANGED_AFTER_MERGE'})
+        self.assertEqual(set(AR.DISCLOSURES) & set(AR.REMEDIES), set())
+        self.assertNotIn("RecorderError('PROTECTION_CHANGED_AFTER_MERGE'", self.SOURCE)
+        self.assertLessEqual({'PROTECTION_UNVERIFIED', 'PROTECTION_DRIFT'}, set(AR.REMEDIES))
+
 
 class ManagedRootNeverReached(InMemory):
     """A fixture context never reaches the managed data root, its integration store or the platform's
@@ -425,6 +494,7 @@ class ManagedRootNeverReached(InMemory):
             with AR.managed_context(None, guard) as ctx:
                 self.assertEqual((ctx.port, ctx.state_dir, ctx.store), (3456, self.dir / 'managed-state', self.store))
                 self.assertIsInstance(ctx.provider, AR.contract.WatchedProvider)
+                self.assertIsNone(ctx.verifier)  # fail closed: no protection verifier until OA-16's is built
                 ctx.provider.get(AR.OWNER_ENTRY)
             with AR.managed_context(4567) as ctx:
                 self.assertEqual(ctx.port, 4567)
@@ -480,6 +550,36 @@ class CommandLine(InMemory):
         self.assertEqual(code, 2)
         self.assertIn('STATEMENT_INVALID', err)
         self.secrets_absent(out, err)
+
+    def test_without_a_verifier_prepare_reports_and_record_refuses(self):
+        self.verifier = None  # as the managed context: no protection verifier
+        number = self.propose()
+        code, out, err = self.main('prepare', fg.REPOSITORY, str(number))
+        self.assertEqual((code, err), (0, ''))
+        prepared = json.loads(out)
+        self.assertEqual(prepared['protection']['code'], 'PROTECTION_UNVERIFIED')
+        said = self.dir / 'statement.json'
+        said.write_text(json.dumps(su.statement()), encoding='utf-8')
+        code, out, err = self.main('record', '--challenge', prepared['shown']['nonce'], '--statement', str(said),
+                                   '--recorded-by', su.RECORDED_BY)
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('PROTECTION_UNVERIFIED', err)
+        self.assertIn('OA-16', err)
+        self.assertEqual(self.gitea.requests_by('POST'), [])
+        self.assertEqual(AR._receipts(self.store), {})
+
+    def test_a_disclosure_is_said_and_the_command_succeeds(self):
+        number = self.propose()
+        nonce = json.loads(self.main('prepare', fg.REPOSITORY, str(number))[1])['shown']['nonce']
+        said = self.dir / 'statement.json'
+        said.write_text(json.dumps(su.statement()), encoding='utf-8')
+        self.verifier.answers = [su.VERIFIED, su.DRIFT]
+        code, out, err = self.main('record', '--challenge', nonce, '--statement', str(said),
+                                   '--recorded-by', su.RECORDED_BY)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)['receipt']['state'], 'confirmed')
+        self.assertIn('PROTECTION_CHANGED_AFTER_MERGE (not a refusal)', err)
+        self.assertEqual(self.gitea.merge_count(), 1)
 
     def test_an_exposed_secret_fails_the_command(self):
         number = self.propose()

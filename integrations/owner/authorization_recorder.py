@@ -34,7 +34,9 @@ In two steps, as the Owner sees them:
    - policy: what aieh-owner can observe of the repository and the protected branch is as expected
      (``Policy``; see "What the policy check can see" below);
    - identity: the credential authenticates as aieh-owner, a non-administrator holding zero tokens;
-   - single use: no receipt exists for the nonce.
+   - single use: no receipt exists for the nonce;
+   - protection: the protection verifier answers ``verified`` (see "The protection verifier" below),
+     asked as the last read before the receipt is reserved and the merge is sent.
 
    It then writes the Owner decision record (``owner_decision.py``, kind ``authorize-operation``) and,
    before anything is sent, a write-ahead receipt of its own append-only kind in the integration store
@@ -59,6 +61,24 @@ permission (``GET /repos/{owner}/{repo}``), and the protected branch's view (``G
 branches/{branch}``: protected, required approvals, status checks, whether aieh-owner can push and can
 merge). The rule's allowlists of other accounts and its override flags (``Policy.unobservable``) are not
 compared here.
+
+**The protection verifier (fail closed).** Decision 0012 point 6 (Owner decision OA-15a): the recorder
+does not merge unless every security-relevant protection rule is verified by a narrowly scoped, trusted,
+read-only check immediately before the merge. That check's mechanism is undecided (Owner action OA-16),
+so the recorder calls it through a mechanism-neutral seam: ``Context.verifier``, a callable
+``verifier(repository, base, phase)`` returning a ``ProtectionVerdict`` (``verified``, ``drift`` or
+``unverified``, a detail, and optionally the sha256 digest of what it observed). It is given no
+credential, session or state of the recorder. ``record`` asks it (phase ``before-merge``) as the last read
+before the receipt is reserved and the merge is sent, and refuses unless the answer is ``verified``:
+``drift`` is ``PROTECTION_DRIFT``; ``unverified``, an exception, a malformed answer or **no verifier
+configured** is ``PROTECTION_UNVERIFIED``; in each case nothing is sent and no receipt is written. After
+the read-back it asks once more (phase ``after-merge``); both answers go into the receipt (``protection``
+in the intent and in the confirmed detail, additively), and an answer that differs from the first is
+recorded as the disclosure ``PROTECTION_CHANGED_AFTER_MERGE`` (``DISCLOSURES``): the merge stands and the
+receipt stays confirmed. ``prepare`` asks it too (phase ``prepare``) and reports the answer; it refuses
+nothing on it, since it sends nothing. The command line's context (``managed_context``) configures **no
+verifier**, so the command line refuses every merge until OA-16's mechanism is built and qualified. The
+observable checks above stay, as an additional layer.
 
 Usage (from the repository root, under the tools interpreter):
 
@@ -163,6 +183,14 @@ REMEDIES = {
                        'investigate how they were made',
     'POLICY_DRIFT': 'the repository or the protected branch differs from the expected policy: restore the policy '
                     'as site administration, then prepare again',
+    'PROTECTION_UNVERIFIED': 'the recorder does not merge until every security-relevant protection rule is verified '
+                             'by a trusted read-only check (decision 0012 point 6); its mechanism is Owner action '
+                             'OA-16, and the command line configures none until it is built and qualified. Nothing '
+                             'was sent: configure the qualified protection verifier, or repair what kept it from '
+                             'verifying, then record again on an unexpired challenge',
+    'PROTECTION_DRIFT': 'a protection rule differs from its declaration: restore it as site administration (task '
+                        'gitea:roles -- fixture for the authorization fixture), then record again on an unexpired '
+                        'challenge',
     'GITEA_UNAVAILABLE': 'start Gitea (task gitea:up) and check its answers, then rerun',
     'PULL_NOT_FOUND': 'name an open pull request of the repository',
     'PULL_NOT_OPEN': 'only an open pull request is authorized: open a new one with a new operation manifest',
@@ -184,6 +212,14 @@ REMEDIES = {
     'OUTCOME_UNKNOWN': 'the merge\'s answer was lost or did not read back as recorded: run resolve, which reads '
                        'the pull request and never merges again',
     'RECEIPT_MISSING': 'no receipt exists for this challenge: nothing was recorded or sent',
+}
+
+# Codes recorded in a receipt's detail that are no refusal: the merge stands and the receipt stays confirmed.
+DISCLOSURES = {
+    'PROTECTION_CHANGED_AFTER_MERGE': 'the protection verifier answered differently after the merge than '
+                                      'immediately before it: the merge stands and the receipt is confirmed, but a '
+                                      'protection rule changed (or could no longer be verified) across it; '
+                                      'investigate the change as site administration (decision 0012 point 6)',
 }
 
 
@@ -264,6 +300,55 @@ def policy_drift(policy, repository_view, branch_view):
     return drift
 
 
+# ---------------------------------------------------------------------------- the protection verifier
+
+PROTECTION_VERDICTS = ('verified', 'drift', 'unverified')
+PROTECTION_PHASES = ('prepare', 'before-merge', 'after-merge')
+NO_VERIFIER = ('no protection verifier is configured: the trusted read-only check of every security-relevant '
+               'protection rule (decision 0012 point 6) is not built yet (Owner action OA-16)')
+
+
+class ProtectionVerdict(NamedTuple):
+    """A protection verifier's answer: STATUS is one of PROTECTION_VERDICTS, DETAIL says what it found, and
+    DIGEST (``sha256:<64 hex>`` or None) identifies what it observed, so two answers can be compared."""
+    status: str
+    detail: str
+    digest: str | None = None
+
+
+def check_protection(ctx, repository, base, phase):
+    """The verifier's answer for PHASE as {verdict, detail, digest}; never raises for the verifier: no
+    verifier, an exception or a malformed answer is ``unverified``."""
+    if ctx.verifier is None:
+        return {'verdict': 'unverified', 'detail': NO_VERIFIER, 'digest': None}
+    try:
+        answer = ctx.verifier(repository, base, phase)
+    except Exception as exc:  # noqa: BLE001 - whatever the mechanism raises is an unverified answer
+        return {'verdict': 'unverified', 'detail': f'the protection verifier raised {type(exc).__name__}',
+                'digest': None}
+    if not isinstance(answer, ProtectionVerdict) or answer.status not in PROTECTION_VERDICTS \
+            or not isinstance(answer.detail, str) \
+            or not (answer.digest is None or (isinstance(answer.digest, str) and D.DIGEST.match(answer.digest))):
+        return {'verdict': 'unverified', 'detail': f'the protection verifier answered {type(answer).__name__}, not a '
+                                                   'well-formed ProtectionVerdict', 'digest': None}
+    return {'verdict': answer.status, 'detail': answer.detail[:500], 'digest': answer.digest}
+
+
+def protection_code(verdict):
+    """The refusal code of a verdict that is not ``verified`` (None when it is)."""
+    if verdict['verdict'] == 'verified':
+        return None
+    return 'PROTECTION_DRIFT' if verdict['verdict'] == 'drift' else 'PROTECTION_UNVERIFIED'
+
+
+def require_verified(verdict):
+    """Refuse (nothing sent) unless the verdict is ``verified``."""
+    if verdict['verdict'] == 'drift':
+        raise RecorderError('PROTECTION_DRIFT', f'the protection verifier found drift: {verdict["detail"]}')
+    if verdict['verdict'] != 'verified':
+        raise RecorderError('PROTECTION_UNVERIFIED', verdict['detail'])
+
+
 # ---------------------------------------------------------------------------- context
 
 
@@ -272,7 +357,9 @@ class Context(NamedTuple):
     credential provider, and the Gitea it talks to (host loopback, PORT). A test passes its own state
     directory, an integration store of its own and a fixture provider; only main() builds the managed
     context (managed_context). HTTP None is one keep-alive connection to 127.0.0.1:PORT per command; a
-    callable with gitea_host.http_get's signature stands in for it in tests."""
+    callable with gitea_host.http_get's signature stands in for it in tests. VERIFIER is the protection
+    verifier (see "The protection verifier" above); None, as in the managed context until OA-16's
+    mechanism is built, makes record refuse every merge with PROTECTION_UNVERIFIED."""
     state_dir: Path
     store: object
     provider: object
@@ -280,6 +367,7 @@ class Context(NamedTuple):
     http: Callable | None = None
     now: Callable = utc_now
     policies: dict | None = None
+    verifier: Callable | None = None
 
 
 def _check_context(ctx):
@@ -287,13 +375,17 @@ def _check_context(ctx):
         raise ValueError('a context needs its own state directory, its own integration store and a provider')
     if not isinstance(ctx.port, int) or isinstance(ctx.port, bool) or not 0 < ctx.port < 65536:
         raise ValueError('a context needs the Gitea port')
+    if ctx.verifier is not None and not callable(ctx.verifier):
+        raise ValueError('a context\'s protection verifier is a callable or None')
 
 
 @contextlib.contextmanager
 def managed_context(port=None, guard=None):
     """The command line's context: the recorder's state under <state>/owner-authorization of the managed
     data root, the integration store at its managed location (decision 0009), the platform's credential
-    provider (held by GUARD for the I7 scan) and the managed Gitea's port from its host record."""
+    provider (held by GUARD for the I7 scan) and the managed Gitea's port from its host record. It
+    configures no protection verifier: the mechanism of decision 0012 point 6 is undecided (OA-16), so
+    record refuses with PROTECTION_UNVERIFIED and merges nothing."""
     res = host.paths.resolve()
     if port is None:
         port = host.read_host_record(host.layout(res))['port']
@@ -613,7 +705,8 @@ def _challenge_path(ctx, nonce):
 
 def prepare(ctx, repository, pull, *, expires_in_minutes=DEFAULT_EXPIRY_MINUTES, nonce=None):
     """Write a challenge for authorizing pull request PULL of REPOSITORY to the recorder's own state and
-    return it. Nothing is merged; nothing is written to Gitea."""
+    return it, with the protection verifier's answer under ``protection`` (reported, not written to the
+    challenge: record asks again before the merge). Nothing is merged; nothing is written to Gitea."""
     _check_context(ctx)
     if not isinstance(expires_in_minutes, int) or not 1 <= expires_in_minutes <= MAX_EXPIRY_MINUTES:
         raise ValueError(f'expires_in_minutes must be 1 to {MAX_EXPIRY_MINUTES}')
@@ -629,6 +722,10 @@ def prepare(ctx, repository, pull, *, expires_in_minutes=DEFAULT_EXPIRY_MINUTES,
         session.close()
     check_new_operation(ctx.store, repository, proposal.operation)
     check_unexpired(now, proposal.declared)
+    protection = check_protection(ctx, repository, policy.base, 'prepare')
+    if (code := protection_code(protection)) is not None:
+        protection = {**protection, 'code': code, 'note': f'record refuses with {code} unless the verifier answers '
+                                                          'verified immediately before the merge'}
     nonce = nonce or secrets.token_hex(16)
     expires = timestamp(now + datetime.timedelta(minutes=expires_in_minutes))
     challenge = {'format': CHALLENGE_FORMAT, 'kind': KIND,
@@ -642,7 +739,7 @@ def prepare(ctx, repository, pull, *, expires_in_minutes=DEFAULT_EXPIRY_MINUTES,
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'x', encoding='utf-8', newline='\n') as handle:
         handle.write(json.dumps(challenge, indent=2, ensure_ascii=False) + '\n')
-    return challenge
+    return {**challenge, 'protection': protection}
 
 
 # ---------------------------------------------------------------------------- record
@@ -723,8 +820,9 @@ def _receipt_key(nonce):
 
 def record(ctx, nonce, statement, *, recorded_by, new_decision_id=None):
     """Record the Owner's STATEMENT on challenge NONCE and merge the challenged head as aieh-owner. Returns
-    the decision, the receipt and the read-back; raises RecorderError on a refusal (nothing sent), a refusal
-    by Gitea (receipt failed) or an unknown outcome (receipt unknown)."""
+    the decision, the receipt, the read-back and the protection answers around the merge; raises
+    RecorderError on a refusal (nothing sent: PROTECTION_UNVERIFIED unless the verifier answers verified),
+    a refusal by Gitea (receipt failed) or an unknown outcome (receipt unknown)."""
     _check_context(ctx)
     challenge = load_challenge(ctx, nonce)
     subject, shown = challenge['subject'], challenge['shown']
@@ -763,12 +861,16 @@ def record(ctx, nonce, statement, *, recorded_by, new_decision_id=None):
             raise ValueError(f'the decision record is malformed: {problems[0]}')
         values = trailers(decision, subject['head'], subject['digest'])
         title, body = merge_message(decision, values)
+        # The protection verifier: the last read before the receipt is reserved and the merge is sent.
+        before = check_protection(ctx, repository, policy.base, 'before-merge')
+        require_verified(before)
         intent = {'format': RECEIPT_FORMAT, 'recorder': RECORDER, 'decision': decision, 'repository': repository,
                   'pull': subject['pull'], 'base': policy.base, 'baseHead': base_head, 'operation': subject['operation'],
                   'approvedHead': subject['head'], 'manifest': subject['manifest'], 'digest': subject['digest'],
                   'trailers': values, 'merge': {'Do': 'merge', 'head_commit_id': subject['head']},
                   'credential': {'id': CREDENTIAL, 'entry': OWNER_ENTRY, 'user': OWNER,
-                                 'method': 'HTTP basic authentication, in memory, for this command'}}
+                                 'method': 'HTTP basic authentication, in memory, for this command'},
+                  'protection': {'before': before}}
         key = _receipt_key(nonce)
         try:
             reserved = ctx.store.reserve(key, intent, actor=RECORDER)
@@ -809,12 +911,23 @@ def record(ctx, nonce, statement, *, recorded_by, new_decision_id=None):
                                  detail={'code': exc.code, 'detail': exc.detail[:300]}, expected_from='dispatched')
             raise RecorderError('OUTCOME_UNKNOWN', f'merged (200), but the read-back failed: {exc.code}: '
                                 f'{exc.detail}', refusal=False, receipt=key) from None
-        ctx.store.transition(key, 'confirmed', actor=RECORDER, reason='merged and read back', detail=readback,
-                             expected_from='dispatched')
+        protection = bracket(before, check_protection(ctx, repository, policy.base, 'after-merge'))
+        ctx.store.transition(key, 'confirmed', actor=RECORDER, reason='merged and read back',
+                             detail={**readback, 'protection': protection}, expected_from='dispatched')
     finally:
         session.close()
     return {'decision': decision, 'receipt': _receipt_report(ctx.store, key), 'merge': readback,
-            'display': display(decision['decisionId'])}
+            'protection': protection, 'display': display(decision['decisionId'])}
+
+
+def bracket(before, after):
+    """The protection answers around the merge: equal when the verdict and the digest are the same; when they
+    differ, the disclosure PROTECTION_CHANGED_AFTER_MERGE (the merge stands; no refusal)."""
+    equal = (after['verdict'], after['digest']) == (before['verdict'], before['digest'])
+    out = {'before': before, 'after': after, 'equal': equal}
+    if not equal:
+        out.update(code='PROTECTION_CHANGED_AFTER_MERGE', disclosure=DISCLOSURES['PROTECTION_CHANGED_AFTER_MERGE'])
+    return out
 
 
 def _write_decision(ctx, decision):
@@ -981,6 +1094,9 @@ def main(argv=None, out=None, err=None, context=None):
         message, code = f'authorization-recorder: {exc}\n', 2 if exc.refusal else 1
     except (host.GiteaError, host.paths.PathsError, ValueError) as exc:
         message, code = f'authorization-recorder: {exc}\n', 2
+    disclosed = (result or {}).get('protection', {}).get('code') if args.command == 'record' else None
+    if disclosed is not None:  # the merge stands (exit 0); the disclosure is said, not only kept in the receipt
+        message = f'authorization-recorder: {disclosed} (not a refusal): {DISCLOSURES[disclosed]}.\n'
     text = '' if result is None else json.dumps(result, indent=2, ensure_ascii=False) + '\n'
     # I7: commit ids are token-shaped, so the scan looks for the secrets the command held (its password).
     guard.scan_text('report', text, token_shape=False)
