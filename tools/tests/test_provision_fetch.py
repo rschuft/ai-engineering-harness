@@ -14,6 +14,7 @@ import io
 import json
 import os
 import shutil
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -25,9 +26,11 @@ REPO = Path(__file__).resolve().parents[2]
 PROFILE_NAME = 'strong-windows-qemu-whpx'
 PROFILE_DIR = REPO / 'profiles' / PROFILE_NAME
 
-_spec = importlib.util.spec_from_file_location('guest', REPO / 'tools' / 'guest.py')
-guest = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(guest)
+# Shared compiled code for the modules loaded from files (plan leaf F-09): module_code.load is
+# spec_from_file_location and exec_module, with each file compiled once per process.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_code  # noqa: E402
+guest = module_code.load('guest', REPO / 'tools' / 'guest.py')
 
 _cspec = importlib.util.spec_from_file_location('check_profile', REPO / 'tools' / 'check_profile.py')
 check_profile = importlib.util.module_from_spec(_cspec)

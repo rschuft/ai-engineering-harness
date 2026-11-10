@@ -15,14 +15,15 @@ from pathlib import Path
 import ast
 import base64
 import copy
+import functools
 import hashlib
-import importlib.util
 import json
 import os
 import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -34,11 +35,11 @@ PROFILE_NAME = 'strong-windows-qemu-whpx'
 PROFILE_DIR = REPO / 'profiles' / PROFILE_NAME
 
 
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+# Shared compiled code for the modules loaded from files (plan leaf F-09): module_code.load is
+# spec_from_file_location and exec_module, with each file compiled once per process.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_code  # noqa: E402
+_load = module_code.load
 
 
 fetch_tests = _load('aieh_test_provision_fetch', REPO / 'tools' / 'tests' / 'test_provision_fetch.py')
@@ -272,8 +273,15 @@ class AgentServerSeed(unittest.TestCase):
         self.assertIn("write_secret_file(AS_SECRETS", SCRIPT)
 
 
+@functools.cache
+def script_tree():
+    """SCRIPT's syntax tree, parsed once per process (plan leaf F-09): the helpers below and
+    their callers only read its nodes (walk, unparse, compile), never change them."""
+    return ast.parse(SCRIPT)
+
+
 def script_function(name):
-    return next(n for n in ast.parse(SCRIPT).body if isinstance(n, ast.FunctionDef)
+    return next(n for n in script_tree().body if isinstance(n, ast.FunctionDef)
                 and n.name == name)
 
 
@@ -281,7 +289,7 @@ def script_functions(*names):
     """The named functions of the seeded script, executed (only those, as text) in a
     namespace with the modules they use; the script itself is Linux- and root-only."""
     namespace = {'json': json, 're': re, 'os': os, 'hashlib': hashlib}
-    for node in ast.parse(SCRIPT).body:
+    for node in script_tree().body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
                 isinstance(node.targets[0], ast.Name):
             try:

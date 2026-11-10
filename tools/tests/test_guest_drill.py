@@ -13,7 +13,6 @@ from pathlib import Path
 import contextlib
 import copy
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -30,11 +29,11 @@ REPO = Path(__file__).resolve().parents[2]
 PROFILE_DIR = REPO / 'profiles' / 'strong-windows-qemu-whpx'
 
 
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+# Shared compiled code for the modules loaded from files (plan leaf F-09): module_code.load is
+# spec_from_file_location and exec_module, with each file compiled once per process.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_code  # noqa: E402
+_load = module_code.load
 
 
 guest = _load('guest', REPO / 'tools' / 'guest.py')

@@ -35,9 +35,11 @@ CATEGORY = 'unit'
 REPO = Path(__file__).resolve().parents[2]
 PROFILE_DIR = REPO / 'profiles' / 'strong-windows-qemu-whpx'
 
-_spec = importlib.util.spec_from_file_location('guest', REPO / 'tools' / 'guest.py')
-guest = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(guest)
+# Shared compiled code for the modules loaded from files (plan leaf F-09): module_code.load is
+# spec_from_file_location and exec_module, with each file compiled once per process.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_code  # noqa: E402
+guest = module_code.load('guest', REPO / 'tools' / 'guest.py')
 
 PROFILE = json.loads((PROFILE_DIR / 'profile.json').read_text(encoding='utf-8'))
 PORTS = {'ssh': 40001, 'qmp': 40002}
@@ -4192,7 +4194,10 @@ class ApiProbe(unittest.TestCase):
                 self.reply(201, {'id': body.get('conversation_id')})
 
         self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        # serve_forever polls for shutdown every poll_interval (0.5 s by default); each test
+        # shuts the server down, and would wait up to that long for it (plan leaf F-09).
+        thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.05},
+                                  daemon=True)
         thread.start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
