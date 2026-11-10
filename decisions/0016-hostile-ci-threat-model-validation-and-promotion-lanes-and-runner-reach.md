@@ -251,3 +251,41 @@ Pending, not requested by Q-02.1: section 10's acts are requested by Q-02.2.1, Q
 - The CI guest's footprint beside the execution guest on this host (the profile's ceilings caveat); the time cost of per-validation guest recreation with ephemeral registration.
 - `exchange push` into a guest that is not the execution guest, and a read-only bind of `/home/agent/exchange` into a job container (ownership and the non-root job user's read access).
 - That a write collaborator's `write:repository` token satisfies `reqRepoWriter(unit.TypeActions)` for the dispatch and `reqRepoWriter(unit.TypeCode)` for the status post under the fixture's `**` protection (statuses and dispatches are not pushes; expected yes), and that `return_run_details=true` is honoured as a query parameter on a JSON dispatch.
+
+## Owner direction (2026-11-10; dated note, the accepted text above is unchanged)
+
+The Owner's feedback on this design, after an independent review of `origin/main` at `93d49f6`
+(verbatim in `evidence/bootstrap-log.md`, Decisions, 2026-11-10):
+
+> The detection and correction of the incorrect pinned Gitea assumptions is appropriate. Retain
+> source-verified security semantics rather than assumptions.
+>
+> In particular, do not qualify a live CI runner while its registration token remains reusable and an
+> effective reset/revocation mechanism is unverified.
+>
+> If automated token reset is unavailable, preserve it as an explicit blocking condition at the live
+> provisioning gate and present the required alternative or Owner act.
+>
+> Verify that job-token restrictions, absence of secrets, network isolation and the separation between
+> the runner and untrusted jobs are independently enforced.
+>
+> Do not treat accepting decision 0016 as authorization to execute its privileged or network-changing acts.
+
+Its effect on this record, as the Overseer applies it:
+
+1. **Section 6.3's fallback is no longer a path to a live runner.** A live runner is registered (Q-02.2.2)
+   only after the reset of section 6.3 step 1 and step 4 is verified live to invalidate the delivered
+   value (the negative probe Q-02.2.2 already names: the delivered value refused by `Register`). If the
+   web-route reset cannot be automated or does not invalidate the value, Q-02.2.2 stops at that gate and
+   presents the alternative (an ephemeral-runner design, or a reset performed as an Owner act); residual 2's
+   "standing between provisionings" form is not admitted for a live runner. The policy file's allowance for
+   a declared fallback (`tools/check_ci_policy.py`, "unless the fallback is declared and disclosed") is
+   narrowed accordingly at Q-02.2.1.
+2. **Independent enforcement** is what the dependants prove, each control on its own evidence: the job-token
+   ceiling read back by the database oracle and refused by Gitea's own permission computation (Q-02.3.1,
+   Q-02.3.2); the absence of secrets and variables by both oracles (Q-02.3.1); network isolation by the
+   in-job probes with guard counters (Q-02.2.2, Q-02.3.2); the runner and job separation by `docker inspect`
+   of the effective job configuration and the fingerprint search (Q-02.2.2). No control is accepted on
+   another's evidence.
+3. **Acceptance authorizes no act.** Every act and confirmation of section 10 stays unauthorized until the
+   Owner answers it at the leaf that requests it (Owner-action queue OA-13).

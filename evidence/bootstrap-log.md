@@ -38,24 +38,24 @@ what it blocks, and its status.
 
 | Id | Origin | Act needed | Why Owner authority | Evidence and prepared material | Blocks | Status |
 |---|---|---|---|---|---|---|
-| OA-02 | E-01.4.3 findings F-1, F-2 | Filing the OpenHands companion note to OpenHands/software-agent-sdk is **authorized** (2026-11-09). This session has no authenticated GitHub tool. Either file the prepared text yourself and send the URL, or make an authenticated GitHub tool available to the session (for example, the GitHub CLI installed and logged in by you), and the Overseer files it. | An external publication under the Owner's identity; the authorization covers this note only. | Ready to file, revised for accuracy: [E-01.4.3 evidence, section 13](E-01.4.3-start-race.md). The section 9 companion draft is superseded. Duplicate check done: none found. | None (informational). | Pending: authorized, filing tool missing |
-| OA-09 | F-10.6 finding (ruling R5) | Authorize, or decline, filing the upstream report to jelmer/dulwich: `Urllib3HttpGitClient(extra_headers=...)` stores the headers but never sends them (1.2.21). If authorized, it is filed as OA-02 is (by you, or by the Overseer once an authenticated GitHub tool is available). | An external publication under the Owner's identity. | Ready to file: [F-10.6 evidence, "Upstream report: Dulwich `extra_headers`"](F-10.6-transports.md). Duplicate check done: none found (closest: #1769, #882, #2201, all about other paths). | None: the module works around it, and the transport tests check the workaround at every pin change. | Pending: awaiting authorization |
-| OA-03 | E-01.2.2c finding F-2; limit `fd-outer-server-local-recovery` | **Authorize or decline filing** the ready report to OpenHands/software-agent-sdk, and **choose the route**: GitHub's private vulnerability report (recommended by the preparer: the repository's security policy page offers "Report a vulnerability"; whether private reporting is enabled was not confirmed), or a public issue (the text is written to be safe in public). If authorized, it is filed as OA-02 is (by you, or by the Overseer once an authenticated GitHub tool is available). | An external publication under the Owner's identity, with security relevance; the route is the Owner's choice. | Ready: [OA-03 report](OA-03-openhands-resume-report.md) (`787f41b`): evidence review (observed, read from upstream source at `v1.60.1`, and our own deployment choices kept apart), the code path, unchanged at v1.60.2, v1.61.0 and `main`, and a duplicate check of 19 queries (none equivalent; closest #4893, #5128, #5626). Overseer spot-check of the cited upstream lines: confirmed. Framing: resume itself is intended crash recovery; the question is that Docker-backed records are hydrated in the outer process (stored module imports, host `working_dir` creation, the lease), with no switch. | None (the local quiesce control compensates; the limit is reconsidered at R-01.2). | Pending: ready, awaiting authorization and route |
-| OA-05 | F-10.5; decision 0014 section 8 | **Approve or decline one run**, exactly as presented: the repository-access contract suite (8 repository files, 446,127 bytes, archive sha256 `6ba67720…ee00`, plus the pure Dulwich 1.2.21 and urllib3 2.8.0 wheels from the lock) in one new disposable guest `f105-linux` (profile `strong-windows-qemu-whpx`), no guest network, no host share, no guestfwd, no new host port, no credential; only the test report (at most 1 MiB) comes back; the guest is destroyed in every outcome, and destruction verified. | Repository content in a guest is outside the extended guest authorization of 2026-11-07; decision 0014 requires a per-run approval. | [The exact plan](F-10.5-oa05-guest-run-plan.md): operation, content with digests, destination, isolation with profile fields, resources (8 vCPUs, 16 GiB, thin disks under the guest-state root, about 1-2 minutes), teardown, failure handling, expected result. The script is ready and has not run. | **Now:** F-10.5 and the F-10 group pass only with the Linux run. | Pending: presented 2026-11-10, awaiting approval |
-| OA-10 | F-06.3 proof (the provider contract suite's Windows leg; the throwaway-name cross-read test) | **Approve or decline one run** of the prepared real-store cross-read test against your Windows Credential Manager: `AIEH_CREDENTIALS_REAL_STORE=1 <tools python> -I -B -m unittest discover -s integrations/credentials/tests -p test_crossread.py -v`. It writes exactly one generic credential named `AIEH test cross-read ` plus 32 random hex digits (user `aieh-test-cross-read`, a random value that protects nothing), has a separate process read it back by name (printing the user and the value's fingerprint, never the value), deletes it, and checks it absent from a second process and from the test itself; on any failure its cleanup deletes the entry. It never enumerates the store and touches no other entry; an I7 scan of every child's output follows. | A write to the Owner's own credential store: until now the live store was only read, by the product's existing live-test code. | The test `TestCrossReadRealStore` in `integrations/credentials/tests/test_crossread.py` (committed in the F-06.3 commits; Overseer read of the code: the act is as described); [F-06.3 evidence](F-06.3-credential-provider.md). Not run. | **Now:** F-06.3 passes, and decision 0011 is committed, only with this run (its dependants F-06.4, F-06.5, F-06.6, E-01.3.3, S-03.2 and U-03.1 wait on F-06.3). | Pending: presented 2026-11-10, awaiting approval |
-| OA-11 | F-06.3 finding 1 (a draft's test run; introduced-by an uncommitted draft) | **Approve or decline removing** one stray file our own test run created in the managed data root on 2026-11-10: `<managed root>\persistent\state\integration\integration.sqlite` (and, only if present, its `-wal`, `-shm` and `-journal` files of the same name, and the `integration` directory if it is then empty). Before removing anything the Overseer would open it read-only once and confirm that it holds only the synthetic receipts of that run (by the code, 5: 4 confirmed and 1 failed, fingerprints of the test fake's tokens, no real token); anything else stops the act and is reported. | A deletion in the protected managed root, which only the product's own operations otherwise touch. | [F-06.3 evidence](F-06.3-credential-provider.md), finding 1. The cause is fixed in the committed code (a caller that passes its own context must pass its own receipt store; test `test_a_fixture_context_never_reaches_the_managed_store`), and an Overseer run of the credentials, gitea and platform suites with the data root redirected to an empty directory wrote nothing there. | **Future:** F-07.2, whose copy of the integration store into that directory would meet this file; and any read of the managed integration store, whose receipts would claim acts that never happened. | Pending: awaiting approval |
-| OA-12 | S-03.1 (plan leaf; the Owner's 2026-11-07 decision "Model access: design it now") | **Authorize or refuse, per act**, the model-access design of Proposed decision 0015: the provider and model names, a dedicated provider-capped key and budgets (choices); A1 the provider key in one Credential Manager entry, typed by the Owner into a harness command; A2 a host broker as the Owner's account with two `127.0.0.1` listeners; A3 one guest-to-host path, an SSH remote port forward in the existing management channel to `172.17.0.1:<port>` in the guest; A4 the guest composition relaxed to exactly that address and port (sshd forwarding, one container-guard allow; optionally Moby `dns`); A5 the broker's egress to exactly one provider origin; A6 one first model call, fixed prompt, no repository content, one disposable guest. | A credential, a host service and ports, the first guest-to-host path, host egress and model usage billed to the Owner: product, security and spending authority; beyond the standing guest authorization (no LLM or model credential, no guestfwd). | [Authorization request](S-03.1-owner-authorization-request.md) (complete on its own); [decision 0015](../decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md) (Proposed; Architect design reviewed by the Overseer). Nothing performed. | **Now:** S-03.1's proof (authorized or refused by the Owner before any model run); S-03.2 and its dependants (E-03.2.2, K-02.2) wait on the answer. Unrelated work continues. | Pending: presented 2026-11-10, awaiting the Owner's answer |
+| OA-02 | E-01.4.3 findings F-1, F-2 | Filing the OpenHands companion note to OpenHands/software-agent-sdk is **authorized** (2026-11-09). This session has no authenticated GitHub tool. Either file the prepared text yourself and send the URL, or make an authenticated GitHub tool available to the session (for example, the GitHub CLI installed and logged in by you), and the Overseer files it. | An external publication under the Owner's identity; the authorization covers this note only. | Ready to file, revised for accuracy: [E-01.4.3 evidence, section 13](E-01.4.3-start-race.md). The section 9 companion draft is superseded. Duplicate check done: none found. | None (informational). | Pending: authorized (Owner, 2026-11-09; the authorization stands, Owner, 2026-11-10); no authenticated filing tool in this session; nonblocking |
+| OA-09 | F-10.6 finding (ruling R5) | Authorize, or decline, filing the upstream report to jelmer/dulwich: `Urllib3HttpGitClient(extra_headers=...)` stores the headers but never sends them (1.2.21). If authorized, it is filed as OA-02 is (by you, or by the Overseer once an authenticated GitHub tool is available). | An external publication under the Owner's identity. | Ready to file: [F-10.6 evidence, "Upstream report: Dulwich `extra_headers`"](F-10.6-transports.md). Duplicate check done: none found (closest: #1769, #882, #2201, all about other paths). | None: the module works around it, and the transport tests check the workaround at every pin change. | Pending: **authorized** (Owner, 2026-11-10). Rechecked 2026-11-10: no matching upstream report (issue and pull-request searches `Urllib3HttpGitClient`, `extra headers`, `extraHeader`); the reproduction re-run on dulwich 1.2.21 (the latest release): the server received no header; still present on upstream `main` at `5b6e39c` (the argument stored, never read). Filing waits only for an authenticated GitHub tool |
+| OA-03 | E-01.2.2c finding F-2; limit `fd-outer-server-local-recovery` | **Authorize or decline filing** the ready report to OpenHands/software-agent-sdk, and **choose the route**: GitHub's private vulnerability report (recommended by the preparer: the repository's security policy page offers "Report a vulnerability"; whether private reporting is enabled was not confirmed), or a public issue (the text is written to be safe in public). If authorized, it is filed as OA-02 is (by you, or by the Overseer once an authenticated GitHub tool is available). | An external publication under the Owner's identity, with security relevance; the route is the Owner's choice. | Ready: [OA-03 report](OA-03-openhands-resume-report.md) (`787f41b`): evidence review (observed, read from upstream source at `v1.60.1`, and our own deployment choices kept apart), the code path, unchanged at v1.60.2, v1.61.0 and `main`, and a duplicate check of 19 queries (none equivalent; closest #4893, #5128, #5626). Overseer spot-check of the cited upstream lines: confirmed. Framing: resume itself is intended crash recovery; the question is that Docker-backed records are hydrated in the outer process (stored module imports, host `working_dir` creation, the lease), with no switch. | None (the local quiesce control compensates; the limit is reconsidered at R-01.2). | Pending: **authorized for GitHub private vulnerability reporting only** (Owner, 2026-11-10). Private reporting is enabled on OpenHands/software-agent-sdk (GitHub API, 2026-11-10). Blocker: no authenticated GitHub tool in this session; the Owner may file the prepared text himself from the repository's Security tab ("Report a vulnerability"). Never posted publicly without a separate Owner decision |
 
 ### 2. Awaiting preparation
 
-None pending.
+| Id | Origin | Act needed | Why Owner authority | Evidence and prepared material | Blocks | Status |
+|---|---|---|---|---|---|---|
+| OA-05 | F-10.5; decision 0014 section 8 | **Approve or decline one run**, exactly as presented: the repository-access contract suite (8 repository files, 446,127 bytes, archive sha256 `6ba67720…ee00`, plus the pure Dulwich 1.2.21 and urllib3 2.8.0 wheels from the lock) in one new disposable guest `f105-linux` (profile `strong-windows-qemu-whpx`), no guest network, no host share, no guestfwd, no new host port, no credential; only the test report (at most 1 MiB) comes back; the guest is destroyed in every outcome, and destruction verified. | Repository content in a guest is outside the extended guest authorization of 2026-11-07; decision 0014 requires a per-run approval. | [The exact plan](F-10.5-oa05-guest-run-plan.md): operation, content with digests, destination, isolation with profile fields, resources (8 vCPUs, 16 GiB, thin disks under the guest-state root, about 1-2 minutes), teardown, failure handling, expected result. The script is ready and has not run. | **Now:** F-10.5 and the F-10 group pass only with the Linux run. | **Revised approval required** (Owner, 2026-11-10): the conditional approval of 2026-11-10 was bound to the exact content, and the payload changed. Stopped at the payload check, before any act: 2 of the 8 files changed after the plan's commit (`composition/lock/python/tools-requirements.txt` at F-06.3; `integrations/repository/repository_access.py` at P-04.1); the other 6 match. Nothing has run. A revised plan (the exact revision and file hashes, the new archive and runner digests, the updated Windows reference, isolation, limits, transfer and teardown confirmed unchanged, and the limits of what a Linux run establishes) is in preparation, for the Owner's approval before any run |
+| OA-12 | S-03.1 (plan leaf; the Owner's 2026-11-07 decision "Model access: design it now") | **Authorize or refuse, per act**, the model-access design of Proposed decision 0015: the provider and model names, a dedicated provider-capped key and budgets (choices); A1 the provider key in one Credential Manager entry, typed by the Owner into a harness command; A2 a host broker as the Owner's account with two `127.0.0.1` listeners; A3 one guest-to-host path, an SSH remote port forward in the existing management channel to `172.17.0.1:<port>` in the guest; A4 the guest composition relaxed to exactly that address and port (sshd forwarding, one container-guard allow; optionally Moby `dns`); A5 the broker's egress to exactly one provider origin; A6 one first model call, fixed prompt, no repository content, one disposable guest. | A credential, a host service and ports, the first guest-to-host path, host egress and model usage billed to the Owner: product, security and spending authority; beyond the standing guest authorization (no LLM or model credential, no guestfwd). | [Authorization request](S-03.1-owner-authorization-request.md) (complete on its own); [decision 0015](../decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md) (Proposed; Architect design reviewed by the Overseer). Nothing performed. | **Now:** S-03.1's proof (authorized or refused by the Owner before any model run); S-03.2 and its dependants (E-03.2.2, K-02.2) wait on the answer. Unrelated work continues. | **Held** (Owner architectural correction, 2026-11-10): L1, L2, A2, A3, A4 and A6 are held; no model is downloaded or launched, no service started, no guest networking changed, no model call made. The default engineering implementation and review path is an ACP coding provider (Claude Code and Codex the initial candidates); local inference stays a candidate for Knowledge, Conversation, auxiliary processing and optional local coding experiments. An Architect review of the coding-provider path against S-03, decision 0015 and the plan is pending; its consequences come back to the Owner. Before the hold: **local-first selected as the preferred architecture** for the initial inference qualification (Owner, 2026-11-10); **nothing authorized**. Discovery ([evidence](S-03.1-local-model-discovery.md)) and the evaluation of the installed model done: `gemma4-uncensored:latest` is not proposed (weights differ from the official tag, no license, a safety-override system prompt). **Presented 2026-11-10:** [the local-first request](S-03.1-local-first-authorization-request.md) (L1 start `ollama serve` on loopback, L2 pull the pinned official `gemma4:e2b-it-q4_K_M`, A2, A3, A4, A6; A1 and A5 unnecessary), awaiting the Owner's answer per act. The [cloud request](S-03.1-owner-authorization-request.md) stays the alternative |
 
 ### 3. Future authorization
 
 | Id | Origin | Act needed at the gate | Why Owner authority | What will be presented | Gate | Status |
 |---|---|---|---|---|---|---|
-| OA-06 | Decisions [0004](../decisions/0004-privileged-effect-store-custody-and-restore-semantics.md) and [0010](../decisions/0010-effects-store-placement-and-governance-threat-model.md) (act A4); the F-05.1 limits | The privileged host act A4: create the executor principal and the effects-store custody root. | A privileged host act: account, elevation and custody. | The precise privileged operation and its effects. **Not authorized** (Owner, 2026-11-09). | G-04.2.1 (and the effects CLI success path). | Pending (future) |
-| OA-07 | [Decision 0013](../decisions/0013-owner-ui-session-access-and-management-key-custody.md); the S-01.4 and F-04.2 rows | An approval for each distinct host-to-guest connection (the Owner UI, the dispatch path). | Decision 0013: no host-to-guest path opens without a recorded Owner approval. | Each connection, separately, at the leaf that first needs it. **Not authorized** (Owner, 2026-11-09). | U-01.2 and E-01.3.x, as each is reached. | Pending (future) |
+| OA-06 | Decisions [0004](../decisions/0004-privileged-effect-store-custody-and-restore-semantics.md) and [0010](../decisions/0010-effects-store-placement-and-governance-threat-model.md) (act A4); the F-05.1 limits | The privileged host act A4: create the executor principal and the effects-store custody root. | A privileged host act: account, elevation and custody. | The precise privileged operation and its effects. **Not authorized** (Owner, 2026-11-09). | G-04.2.1 (and the effects CLI success path). | Pending (future); reserved for its gate (Owner, 2026-11-09 and 2026-11-10) |
+| OA-07 | [Decision 0013](../decisions/0013-owner-ui-session-access-and-management-key-custody.md); the S-01.4 and F-04.2 rows | An approval for each distinct host-to-guest connection (the Owner UI, the dispatch path). | Decision 0013: no host-to-guest path opens without a recorded Owner approval. | Each connection, separately, at the leaf that first needs it. **Not authorized** (Owner, 2026-11-09). | U-01.2 and E-01.3.x, as each is reached. | Pending (future); reserved for its gate (Owner, 2026-11-09 and 2026-11-10) |
+| OA-13 | [Decision 0016](../decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md), section 10 | The CI lane's acts and confirmations, each separately: A-1 the `ci-control` forward; A-2 repository content in a CI guest; A-3 an untrusted workload there; A-4 the filtering proxy's host listener; C-1 enabling Gitea Actions for the governance repository only, with the token ceilings; C-2 the governance repository, `aieh-bot-ci`, the registration-token procedure and the live check; C-3 the CI guest variant, its ceilings and lifetime | Guest network, repository content and untrusted workloads beyond the standing guest authorization; a host listener; a configuration change of Gitea, the trusted computing base | Each act with what stays unauthorized, in the 0003 procedure. **Owner direction (2026-11-10):** no live CI runner is qualified while its registration token remains reusable and an effective reset or revocation is unverified; if the automated reset is unavailable, that is a blocking condition at the live provisioning gate, presented with the required alternative or Owner act. Accepting decision 0016 authorizes none of its acts | Q-02.2.1 (C-3, A-4), Q-02.2.2 (A-1, A-2, A-3, C-2's registration), Q-02.3.1 (C-1, C-2) | Pending (future); **not authorized** (Owner, 2026-11-10) |
 
 ### 4. Optional housekeeping
 
@@ -65,6 +65,8 @@ None pending.
 
 | Id | Origin | Act | Resolution and evidence |
 |---|---|---|---|
+| OA-11 | F-06.3 finding 1 | Remove the stray `<managed root>\persistent\state\integration\integration.sqlite` (and sidecars; the directory if empty), after a read-only check. Approved conditionally by the Owner, 2026-11-10. | **Done 2026-11-10.** No sidecars existed. The read-only check (immutable SQLite open) found exactly the five synthetic receipts (`MemoryProvider`; four confirmed, one failed), their 15 events and the schema's reference rows; nothing else. The file (sha256 `4fcc5516...6737`, re-checked) was removed, then the empty `integration` directory. [Evidence](OA-10-OA-11-owner-acts-2026-11-10.md). |
+| OA-10 | F-06.3 proof (the throwaway-name cross-read test) | One run of the real-store cross-read test against the Owner's Windows Credential Manager. Approved by the Owner, 2026-11-10. | **Done 2026-11-10, once, PASS** at `867381b`: one throwaway entry written, read back by name from a separate process (fingerprint only), deleted, absent from a separate process and from the test; I7 clean; no other entry read, written, deleted or enumerated. [Evidence](OA-10-OA-11-owner-acts-2026-11-10.md). F-06.3 passes and decision 0011 is accepted. |
 | OA-01 (with OA-04, merged) | E-01.4.3; E-01.2.2c finding F-15 | File the litellm import-race report and record its reference. Authorized by the Owner, 2026-11-09. | **Closed 2026-11-09, no filing needed:** an equivalent upstream record exists. [BerriAI/litellm#48292](https://github.com/BerriAI/litellm/pull/48292) (merged 2026-10-25) describes the same offline start-up `ImportError` and fixes it in litellm 1.105.5 (on PyPI); [#46711](https://github.com/BerriAI/litellm/pull/46711) is the fix on main; [#46142](https://github.com/BerriAI/litellm/issues/46142) is a related symptom. Per the authorization ("record its URL and add relevant new evidence only when appropriate"), the URL is recorded and nothing is added: the fix needs nothing from our evidence. Duplicate check and review: [E-01.4.3 evidence, section 13](E-01.4.3-start-race.md). The receipt closes E-01.4.3 (its row). |
 | OA-08 | F-10.2 finding F-2 | Delete the two synthetic corpus directories `aieh-repo-corpus-9o7tj36r` and `aieh-repo-corpus-_ifrtu9s` from the user temp directory. Authorized by the Owner, 2026-11-09. | **Done 2026-11-09 by the Overseer**, after checking that: both lay directly in the user temp directory, which is not a reparse point; neither was a link or reparse point, with 0 reparse points inside (590 entries and 43,615 bytes each); the layout matched the F-10.2 corpus generator (`ROOT_NAME = 'a b ü'`; the bare, damaged, SHA-256 and work-tree test repositories); and no process command line referenced them. Exactly these two paths were removed; both now report absent. |
 | OA-R1 | F-03.2 host acts A1-A3 | A1: enable the Windows Hypervisor Platform and restart. A2: install the pinned QEMU. A3: create the guest-state directory. | Done 2026-11-06, under Decisions: "Owner host acts", "A1 complete", "A2 done". The F-03.1 row's "pending" text predates them. |
@@ -137,7 +139,7 @@ push never implies parent acceptance.
 | F-10.6 Qualify Dulwich transports against the host Gitea: push, auth, ls-remote | **PASS (2026-11-09)**, qualified: Windows only (Linux at F-10.5); no target ran under Task (rendered); the full `task resolve` not run (its source-tag stage only) | slice 1 `0921d30`; transports `a934980`, `93781f9`; rulings `ab07a9f`, `53584ef`; budgets `836368c`; evidence `0ab555c`, `10d4402`, `b5627b6`; decision 0014 amended at acceptance | [Evidence](F-10.6-transports.md). The module gains `ls_remote`, a bare `clone` and `Repository.push` over smart HTTP with an in-memory `Credential` (no helper, no ssh, **0 launches** in every transport test). **Matrix:** all 24 rows of the `test_authorization_live` matrix equal, git against the module, for builder, planner, reviewer and verifier (pre-receive refusals give `PUSH_REJECTED`, 403 gives `PUSH_REFUSED`); the module allowed nothing git refused; anonymous push 401 gives `PUSH_REFUSED`. Fixture residue: commits on `work/authz-builder` and `work/authz-planner` only, as the git suite leaves. A module clone over HTTP passes `git fsck --strict`. **G14 established:** the eight locked tags (tag id and peeled commit) equal the lock; **R11 migrated** (`53584ef`): the resolver's source tags run on the module, 8 of 8 verified, 0 launches, the lock unchanged byte for byte; without Dulwich it fails with `REPOSITORY_NEEDS_DULWICH`, no git fallback. Token scan by fingerprint (never by value): 0 matches over 109 files; the gate found no secret.<br>**Slice 1** (`0921d30`, test-only, unrelated-but-detected from F-10.4): 4 planning and 5 lineage tests bound discovery at their temporary root; a stat guard shows 0 examinations outside a temporary root in both suites (1,231 and 2,039 examinations).<br>**STOP (budget) and rulings:** the repository wall 6.46 s over its 6.24 s limit (Overseer measurement; serial 147.3 s). R1: the transport and oracle tests are required work, so by explicit Overseer ruling only the repository wall rises, 4.8 to 5.9 s (the `propose` value from a quiet three-run Git Bash profile); R2: migrate R11 (decision 0014 section 1 settled it; the dispatch had under-scoped the paths); R3: codes `REMOTE_REFUSED`, `REMOTE_FAILED`, `HOOKS_UNSUPPORTED` accepted (decision 0014 section 10); R4: a redirect to another origin (scheme, host or port) must carry no credential: 16 subtests and an end-to-end loopback test, a mutation fails 17; urllib3 2.8.0 already strips it, no module change; R5: Dulwich 1.2.21 never sends `extra_headers` (reproduced; worked around in the module, pin-sensitive): duplicate check found none, ready-to-file draft in the evidence (Owner action OA-09).<br>**Overseer verification:** `verify_seed` PASS (165/136); basic prerequisites PASS; counters-only budget PASS; `test:budget` from Git Bash on a quiet host (Disk Cleanup had run and exited) **PASS**, serial 142.1 s, repository 5.8 s, contract 19.9 s. Builder: nine suites OK; conformance PASS (1,782 ids, 1,776 run); `hooks:verify` rendered PASS; `prereqs:components` PASS; `gitea:authz` 18 OK; `gitea:transport` 2 OK.<br>**Carried:** the lock's informational `resolver` string and the command line in `composition/inventory/LEDGER.md` still read `python -I composition/resolve.py` (next lock change; F-10.5's documentation). Not verified: Linux, macOS, proxies, authenticated HTTPS remotes, SHA-256 remotes, v0/v1 servers, pushes above 1 MiB, real cross-scheme or cross-host redirects. |
 | F-10.5 Cross-platform contract run, launch census guard, documentation and evidence | **IN PROGRESS (2026-11-10)**: everything but the Linux guest run is done and verified; the leaf and the F-10 group wait on Owner action OA-05 | `f219724`, cost repair `6ab2cbc`, budgets `b09bd62` (counters only), evidence `5088899` | [Evidence](F-10-dulwich-migration.md); [OA-05 plan](F-10.5-oa05-guest-run-plan.md). **Census guard** `tools/tests/test_launch_census.py` (12 tests, AST over the tracked sources read through the module): 35 allowlisted sites, each on a retained row of decision 0014 (R6 `guest.py:run_git`; H1 the gate; B1 `verify_seed`; B2 `check_prereqs`; T 30 test sites in 13 files); it fails on an injected launch, a new launching module and a removed site (in memory, no product file edited); no site outside 0014's list. Docs: the tools-venv tier row, Dulwich verification rows (Windows PASS, Linux pending, macOS not yet verified); README component status only (no leaf status); `check_prereqs` INFO line (stdlib, offline, no Dulwich import); the LEDGER resolver line. **F-10 group, evaluated:** in-process operations, parity, integrity, grammar, codes, performance (11.0x), census and no-skip clauses met on Windows; Linux open (OA-05); macOS not yet verified.<br>**Fix forward:** the census cost made the contract wall fail (22.21 s against 21.97 s, introduced-by `f219724`); `6ab2cbc` cut it to 1.0 s, no wall changed. **Overseer verification:** `verify_seed` PASS (165); the census and `check_prereqs` tests OK; `test:budget` from Git Bash on a quiet host **PASS**, serial 142.6 s, contract 21.1 s (96% of its limit: a busy host can fail it). Builder: nine suites OK; conformance PASS (1,799 ids, 1,793 run); `test:all` PASS; `hooks:verify` rendered PASS; PowerShell 152.5 s (recorded only).<br>**Process note:** against the dispatch, the builder tried to run the OA-05 script without `--approved` to check its refusal; the session's permission guard blocked it and nothing ran. Corrected in the next dispatch. |
 | F-06.2 Host-service lifecycle contract and the Windows adapter | **PASS (2026-11-10)**, Windows only (Linux F-06.4, macOS F-06.5); decision 0011 stays drafted until F-06.3 completes, as the plan sets | inventory fix `5e8b031`; contract and adapter `8a87d7d`; fixture repair `05130af`; budgets `593409a` (counters and the new `platform` suite only); evidence `204561b`; README fix `c015e6a` | [Evidence](F-06.2-platform-windows.md). `integrations/platform/` holds `platform_contract.py` and `platform_windows.py`, and `gitea_host.py` reaches every Windows call through the adapter (of 426 lines removed from `gitea_host.py`, 297 moved verbatim, 20 stayed elsewhere and 65 are the intended changes). Verbs: install, up, down, restart, status, inspect, verify; provision, rotate, retire; upgrade, recover, uninstall. Records: `aieh-platform/1`, `aieh-asset/1`, `aieh-gitea-host/1` with the optional `platform.asset_key`, `aieh-service-run/1` (still reads `aieh-gitea-run/1`), `aieh-readiness/1` (carries its platform), `aieh-service-transition/1`. The nine new refusal codes each carry a remedy, and existing messages are unchanged (each covered by a named test). **Proof:** live `gitea:verify` (19/19) and `gitea:status` byte-identical at `13f2329`, `8a87d7d` and `593409a`; the live instance is the same Gitea process throughout. An I7 no-exposure scan follows every live act (status, inspect, verify, `verify --readiness`, `gitea:authz` 18 OK with 284 probes); the live lifecycle test ran on a fixture instance in a temporary root (install through recover, a supervisor kill included; 14.6 s). Never run live: down, restart, upgrade, recover, uninstall and every credential act.<br>**Fix forward:** the new tests put the gitea suite over its wall limit (3.46 s against 3.25 s, introduced-by `8a87d7d`); `05130af` repaired it, and no wall changed. The `fd-outer-server-local-recovery` wording, in the inventory (`5e8b031`) and the security README, is corrected to match OA-03: imports and registrations come before the lease claim, and the directory creation and `git init` after it (introduced-by `e17ac2b`).<br>**Overseer verification:** `verify_seed` PASS (165/136); `cmp` of the captured before and after outputs shows them identical; live status running, with the same process; `test:budget` from Git Bash on a quiet host **PASS**, serial 142.4 s, contract 20.9 s (95% of its limit), gitea 3.1 s against 3.25 s. Builder: ten suites OK (platform 40, gitea 121 with 8 opt-in skips); pytest 1,844 passed; `hooks:verify` rendered PASS; PowerShell 150.8 s, recorded only (repository 7.78 s over its limit there, as at F-10.5).<br>**Overseer ruling (sequencing):** the plan's F-06.2 action lists the whole verb set, so the upgrade, recover and uninstall verbs and the transition record are F-06.2's code. F-06.6 keeps its full proof: the disposable-instance rehearsal (a real cross-version upgrade needs a second pinned version), reboot or sign-out behaviour, and the inspection of the egress proxy. Semantics chosen within the accepted design and recorded in the evidence: uninstall empties `ephemeral/tmp/gitea/` only; upgrade backups go in `persistent/gitea/backups/<transition id>/`; retire covers role bots only. **Not verified:** Linux, macOS, keyring; a real upgrade; retire against a running Gitea; `CREDENTIAL_PROVIDER_LOCKED` and `SUPERVISION_UNAVAILABLE` from real OS failures. **Carried:** the gitea suite has little wall headroom, so its next test is likely to need a wall re-proposal by ruling. |
-| F-06.3 Credential provider adoption (keyring for POSIX; Windows provider kept; fail closed) | **IN PROGRESS (2026-11-10)**: everything but the real-store cross-read is done and verified on Windows; the leaf and decision 0011's commit wait on Owner action OA-10 | provider, factory, receipts, pins `437a578`; budgets `c3e9c0f` (counters and the new `credentials` suite only); evidence `28b7d0b` | [Evidence](F-06.3-credential-provider.md). `integrations/credentials/credential_provider.py`: the ctypes Credential Manager provider moved (methods AST-identical to `f6e82bc`), `KeyringProvider` instantiating `SecretService.Keyring()` or `macOS.Keyring()` by name with a viable `.priority`, and a fail-closed factory: Windows never imports keyring, anything else refuses `NO_CREDENTIAL_PROVIDER`, and `get_keyring()`, a keyringrc, `PYTHON_KEYRING_BACKEND`, the CLI and keyrings.alt are shown ignored by test; `doctor` reports the provider (Windows: `windows-credential-manager`, viable). **Overseer ruling:** keyring is installed in the tools set on every platform and is never the Windows provider (decision 0011 draft: "keyring kept off the Windows provider"); keyring 25.7.0 and its dependencies copied byte for byte from the F-01.2 locks into the tools and dev locks, with their `sys_platform` markers; `tools:install` installed them wheels-only. Every rotate and retire act (`gitea_roles`, and `finalize-credentials` as rotate) writes an integration-store receipt, fingerprints only, and reads it back (`CREDENTIAL_RECEIPT_UNREAD` otherwise); fixtures only. Live acts: `gitea:status`/`verify` byte-identical before and after (stdout and stderr), `gitea:authz` 18 OK, `gitea:roles -- status` (read-only, by code read first) four entries present; I7 clean after each; no live entry written, deleted or enumerated.<br>**Fix forward (introduced-by an uncommitted draft):** one test run wrote 5 synthetic receipts into the real managed root's integration store; fixed before the commit (a fixture context must bring its own store). The file remains: Owner action OA-11. **Process note:** the builder also ran `dev:install` (the product's installer; the dev lock mirrors the tools set), which the dispatch did not list.<br>**Overseer verification:** `verify_seed` PASS (165/136); `cmp` of the before and after captures identical; the credentials, gitea and platform suites run with `AIEH_DATA_ROOT` redirected to an empty directory wrote nothing there; read of the prepared real-store test; `test:budget` from Git Bash on a quiet host **PASS**, serial 143.8 s, contract 21.0 s, gitea 3.2 s against 3.25 s. Builder: eleven suites OK (credentials 51 with the opt-in skip); pytest 1,904 passed; `hooks:verify` PASS.<br>**Carried:** keyring 25.7.0's `macOS.Keyring` cannot look an entry up by name alone, so the factory refuses it: F-06.5 needs a decision on entry lookup. The gitea suite's wall has almost no headroom. **Not verified:** the real-store cross-read (OA-10); Secret Service and Keychain on real hosts (F-06.4, F-06.5); receipts against the live Gitea; `CREDENTIAL_PROVIDER_LOCKED` from a real session. |
+| F-06.3 Credential provider adoption (keyring for POSIX; Windows provider kept; fail closed) | **PASS (2026-11-10)**, Windows; the real-store cross-read ran once under Owner action OA-10 ([evidence](OA-10-OA-11-owner-acts-2026-11-10.md)); decision 0011 accepted | provider, factory, receipts, pins `437a578`; budgets `c3e9c0f` (counters and the new `credentials` suite only); evidence `28b7d0b` | [Evidence](F-06.3-credential-provider.md). `integrations/credentials/credential_provider.py`: the ctypes Credential Manager provider moved (methods AST-identical to `f6e82bc`), `KeyringProvider` instantiating `SecretService.Keyring()` or `macOS.Keyring()` by name with a viable `.priority`, and a fail-closed factory: Windows never imports keyring, anything else refuses `NO_CREDENTIAL_PROVIDER`, and `get_keyring()`, a keyringrc, `PYTHON_KEYRING_BACKEND`, the CLI and keyrings.alt are shown ignored by test; `doctor` reports the provider (Windows: `windows-credential-manager`, viable). **Overseer ruling:** keyring is installed in the tools set on every platform and is never the Windows provider (decision 0011 draft: "keyring kept off the Windows provider"); keyring 25.7.0 and its dependencies copied byte for byte from the F-01.2 locks into the tools and dev locks, with their `sys_platform` markers; `tools:install` installed them wheels-only. Every rotate and retire act (`gitea_roles`, and `finalize-credentials` as rotate) writes an integration-store receipt, fingerprints only, and reads it back (`CREDENTIAL_RECEIPT_UNREAD` otherwise); fixtures only. Live acts: `gitea:status`/`verify` byte-identical before and after (stdout and stderr), `gitea:authz` 18 OK, `gitea:roles -- status` (read-only, by code read first) four entries present; I7 clean after each; no live entry written, deleted or enumerated.<br>**Fix forward (introduced-by an uncommitted draft):** one test run wrote 5 synthetic receipts into the real managed root's integration store; fixed before the commit (a fixture context must bring its own store). The file remains: Owner action OA-11. **Process note:** the builder also ran `dev:install` (the product's installer; the dev lock mirrors the tools set), which the dispatch did not list.<br>**Overseer verification:** `verify_seed` PASS (165/136); `cmp` of the before and after captures identical; the credentials, gitea and platform suites run with `AIEH_DATA_ROOT` redirected to an empty directory wrote nothing there; read of the prepared real-store test; `test:budget` from Git Bash on a quiet host **PASS**, serial 143.8 s, contract 21.0 s, gitea 3.2 s against 3.25 s. Builder: eleven suites OK (credentials 51 with the opt-in skip); pytest 1,904 passed; `hooks:verify` PASS.<br>**Carried:** keyring 25.7.0's `macOS.Keyring` cannot look an entry up by name alone, so the factory refuses it: F-06.5 needs a decision on entry lookup. The gitea suite's wall has almost no headroom. **Real-store cross-read (OA-10, 2026-11-10, one run at `867381b`):** PASS: write, separate-process read by name (fingerprint only), delete, absence from a separate process and from the test, I7 clean; no other entry touched. **Not verified:** Secret Service and Keychain on real hosts (F-06.4, F-06.5); receipts against the live Gitea; `CREDENTIAL_PROVIDER_LOCKED` from a real session. |
 | P-04.1 Record Owner acceptance and mint outcome identity | **PASS (2026-11-10)**, on fixtures, Windows; no real acceptance recorded anywhere | recorder, shared record and `write_commit` `5e205f3`; budgets `43d3724` (counters and the new `owner` suite only); evidence `c0bb1df`; OpenSpec check `d415eb3`; decision 0014 amended at acceptance | [Evidence](P-04.1-acceptance-recorder.md). `integrations/owner/`: `owner_decision.py` (the shared Owner decision record `owner-decision/v1`: `decisionId` uuid4, `kind`, `subject`, `shown` {summary, nonce, expiresAt}, `statement` {text, attributedTo, channel, reference}, `recordedBy`, `recordedAt`; `authorize-operation` named and refused until P-04.2) and `acceptance_recorder.py` (`task owner:accept`: sets the item's authority and acceptance, mints the outcome UUID into `x-outcomes`, writes the record and commits in process). Refusals with stable codes and remedies, each tested with the branch, work tree and index unchanged: a missing acceptance, one authored by a model (`agent:` attribution or an `openhands:` reference), a statement not attributed to the Owner, re-minting (the uuid generator never called), and the challenge, name and reference refusals. **Proof:** a recorded acceptance resolves through the lineage objective resolver (unresolved at the previous commit); the recorder runs that check before the branch moves; `--amend` keeps the id and the earlier pinned reading still resolves. OpenSpec 1.16.0 (locked npm install in a throwaway directory): `validate --strict` accepts a change holding the record, `archive` moves `owner-decisions/` and `.openspec.yaml` byte-identical, and the resolver resolves the archived change (opt-in test `test_live_openspec.py`).<br>**Repository module:** P-04.1 is the first write, `Repository.write_commit` (decision 0014 sections 6 and 8): hooks refused before any write, a compare-and-set branch update, no launch; the census guard green with no new site. Exposed-by P-04.1 and repaired: Dulwich writes stale index extensions back, so the next `git commit` would revert the change; the write drops them (pin-sensitive, decision 0014 section 10).<br>**Overseer rulings** (the shared shape and the Owner-attribution rule are what the accepted Owner-authority design binds for P-04.1; the rest is the recorder's own form): the record lives at `openspec/changes/<change>/owner-decisions/<decisionId>.json` in the recording commit, so it moves with the change; a leading `format` field is kept, and decision 0012 lists it when committed at P-04.2; the challenge is stateless (`prepare`/`record`, single use detected from the committed records, 60-minute default expiry, 7 days at most), and the Owner's statement need not repeat the nonce. P-04.2's stricter authenticity rules (its own challenge state, a statement naming the operation id) are for merges and stay its own; the item's `acceptance` is the statement's reference; `--amend` is required to re-record; commit trailers `AIEH-Decision-Id`, `AIEH-Outcome-Id`, `AIEH-Recorder`. The recorder checks what the transcriber declares; it does not authenticate the Owner (the accepted bootstrap channel).<br>**Overseer verification:** `verify_seed` PASS (165/136); the owner and repository suites with `AIEH_DATA_ROOT` redirected to an empty directory OK and the directory still empty; census OK; `test:budget` from Git Bash on a quiet host **PASS**, serial 147.5 s, contract 21.0 s. Builder: every suite OK; pytest 1,948 passed; `hooks:verify` PASS.<br>**Carried:** the serial total is close to the 150 s gate; the next leaf adding tests needs test-runtime work first (Overseer decision). **Not verified:** a real acceptance or project repository; the statement against a conversation store (U-02.x); three recorder codes without a trigger test; Linux and macOS. |
 | F-09 runtime headroom (Overseer slice under the Owner's 2026-11-08 test wall-clock directive; F-09 patterns, no new leaf) | **PASS (2026-11-10)**: serial median 147.9 to 137.2 s (builder), 137.5 s (Overseer); test code, fixtures and budgets only | gate fixtures `49e8010`; `guest.py` compiled once `c5132f4`; checker fuzz copies and verifier golden repository `cb5a751`; verifier baseline launches `98bb781`; budgets and baseline at `98bb781` `50e834a` (counters, and walls that fell only); evidence `6a70893` | [Evidence](F-09-runtime-headroom-2026-11-10.md). Opened because the serial total stood 2.5 s under the 150 s gate after P-04.1. Savings: the gate's fail-closed tests 5.5 s (the timeout test waits the gate's shortest accepted timeout, 1 s, and now asserts `timed out after 1s`; one pinned stub scanner runs each behaviour, so one golden repository pair serves all five), checker fuzz copies 1.6 s (re-parse instead of deep copy), `guest.py` compiled once per process 1.4 s (`tools/tests/module_code.py`, a new module per load, its own 3 tests), the API probe server's shutdown poll 0.9 s, the gate golden pair 0.5 s (relative origin URL, empty init template), the seeded script's syntax tree parsed once 0.5 s, the verifier's baseline tests 0.3 s. Launches 1,236 to 1,158; tests +3. No assertion removed, no test skipped, no product, integrity-tracked or record file touched.<br>**Equivalence:** the 1,973 unittest ids common to before and after have identical outcomes; pytest conformance serial and xdist PASS (1,976 ids); `-m "not e2e"` identical serially and under xdist; 12 of 12 mutations killed in a throwaway clone. Walls that fell: tools 77.5 to 71.1, lineage 18.1 to 14.0, dispatch 5.0 to 4.6, planning 12.1 to 12.0, unit 23.8 to 22.3; none rose. **Fix forward (introduced-by an uncommitted draft):** an empty init template in the owner fixture broke a hooks-refusal test, because the repository module reads hooks and `info/exclude`; reverted there and kept only for repositories git alone reads.<br>**Overseer rulings:** the ~135 s target was the Overseer's, not the Owner's gate; 12.5 s of headroom suffices for the next leaves. Both remaining options are declined: pointing `test_guest`'s Smoke and Inventory tests at a fixture repository changes what they inventory (the real checkout), and sharing one allowlist across the `WithRealScanner` pairs changes security tests' inputs. **Overseer verification:** `verify_seed` PASS both modes (165/136); all 12 suites OK with `AIEH_DATA_ROOT` redirected to an empty directory, still empty after; read of the budget and test diffs; `test:budget` from Git Bash on a quiet host (no `cleanmgr` before or after) **PASS**, serial 137.5 s, contract 21.0 s. Builder: `hooks:verify` PASS.<br>**Unrelated but detected (carried):** `task test:categories` fails under the plain interpreter it uses, because `test_credential_provider` imports keyring, which only the tools interpreter has; it passes under the tools interpreter. **Remaining structural costs:** the real-scanner gate tests 15.1 s, crash-matrix workers 7.9 s, the netprobe listener 6.7 s, the verifier 8.1 s, checker fuzz 7.8 s, the batch launcher's ceilings 3.4 s. **Not verified:** PowerShell timings; POSIX hosts. |
 | F-03.1 Select managed-VM providers and isolation contract | PASS (2026-11-06), specification only; pushed | `39912fd` | `profiles/README.md` (contract: strong and trusted-workload tiers, properties P1-P12 with inspection methods, lifecycle, disclose-and-refuse with `TIER_UNAVAILABLE`, no nested virtualization assumed, remote-Linux minimum contract, Owner conditions C1-C7, version floors and pin rule), `profiles/matrix.md` (every non-unverified cell cited), `profiles/properties.json`. For each OS a non-nested strong path is specified: Windows QEMU+WHPX (reference, Owner W1) or remote Incus; Linux Incus VM; macOS Lima. The Builder validator passes; the Overseer re-ran it and checked coverage. Five sources did not fully confirm decision 0003; the corrections are recorded as current facts there. **Every runtime claim is UNKNOWN.** Host acts A1-A3 are pending separate Owner approval. | F-03 (Large): not evaluated until F-03.4. |
@@ -268,6 +270,385 @@ push never implies parent acceptance.
 - **2026-11-10: [0015](../decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md) Proposed** at S-03.1 (Architect, gates B and G; reviewed by the Overseer). Inference broker placement, provider-credential custody and the guest `inference` endpoint. It authorizes nothing; Owner action OA-12 carries the acts it needs.
 
 - **2026-11-10: [0016](../decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md) Accepted (Overseer)** at the completion of Q-02.1 (Architect, gates B, C and G; revision 2 at gate A after the source-level check contradicted the first draft). The hostile-CI threat model, the validation and promotion lanes, and the CI runner's reach to Gitea; it decides the item decision 0013 left open. Rulings R1 (filtering proxy adopted) and R2 (registration-token reset procedure). It authorizes nothing; each act is requested by the leaf that first needs it.
+
+- **2026-11-10: Owner decisions on the Owner-action queue and feedback on the Q-02.1 CI design**, after an independent review of `origin/main` at `93d49f6`, verbatim:
+
+  ```text
+  Owner decisions following independent review of origin/main
+  at 93d49f6 and the current Owner-action queue.
+
+  Continue autonomous execution and do not interrupt the
+  running Q-02.1 Builder.
+
+  AUTHORIZED NOW
+
+  OA-10 — APPROVED.
+
+  Authorize exactly one execution of the prepared
+  F-06.3 Windows Credential Manager cross-process test.
+
+  Use the described random, synthetic credential only.
+  Verify cross-process retrieval, deletion and absence.
+  Do not enumerate or modify any other credential.
+  Record the outcome and cleanup evidence.
+  If the operation differs from the prepared plan, stop.
+
+  OA-11 — APPROVED CONDITIONALLY.
+
+  Authorize removal of the exact stray integration.sqlite
+  file and its associated SQLite sidecars only after the
+  specified read-only verification establishes that the
+  database contains only the five synthetic receipts.
+
+  If anything unexpected is present, leave it unchanged.
+  Delete the integration directory only if empty.
+  Record the result.
+
+  OA-05 — APPROVED CONDITIONALLY FOR ONE RUN.
+
+  Authorize one F-10.5 Linux guest qualification using
+  the eight exact repository files, archive hash, two
+  locked wheels, runner hash, disposable guest, resource
+  limits, isolation and teardown conditions in
+  evidence/F-10.5-oa05-guest-run-plan.md.
+
+  The checkout has advanced beyond the plan's pinned HEAD.
+  You may update the script's checkout precondition to the
+  current clean revision ONLY IF every approved source-file
+  hash and the resulting archive digest remain identical.
+
+  Never reset or switch the active Builder's checkout.
+  If the payload changes, stop and present a revised plan.
+
+  One run only. No retries, guest network, new host port,
+  credential access or additional repository content.
+  Verify teardown independently.
+
+  Report explicitly that Linux git-oracle parity and the
+  native Linux Dulwich wheel remain unverified. Do not
+  represent this limited run as proving those properties.
+
+  OA-09 — APPROVED.
+
+  Authorize the prepared public Dulwich issue about
+  Urllib3HttpGitClient ignoring extra_headers.
+
+  Recheck for a matching upstream report and verify the
+  reproduction and affected version before publication.
+  Exclude private paths, credentials and unrelated data.
+  If no authenticated filing capability is available,
+  retain the authorization and prepared issue in the queue.
+
+  OA-03 — APPROVED FOR PRIVATE REPORTING ONLY.
+
+  Authorize filing the prepared OpenHands Docker-runtime
+  start-up recovery finding through GitHub's private
+  vulnerability-reporting mechanism, if available.
+
+  Preserve the distinction between observed behavior,
+  source-derived inference and unproven exploitability.
+  Do not claim demonstrated arbitrary code execution.
+
+  If private reporting is unavailable, do not post the
+  security-relevant details publicly without a separate
+  Owner decision. Keep the action pending and report
+  the exact blocker.
+
+  OA-02 — PREVIOUS AUTHORIZATION STANDS.
+
+  The OpenHands LiteLLM companion note remains authorized.
+  File when an appropriate authenticated tool is available,
+  or retain it as a pending nonblocking Owner obligation.
+  Do not access unrelated stored credentials to accomplish
+  filing.
+
+  NOT YET AUTHORIZED
+
+  OA-12 — DEFER EXECUTION AUTHORIZATION.
+
+  The host-side inference broker architecture is a
+  reasonable candidate, but this message does not authorize
+  A1 through A6, new network paths, provider credentials,
+  or model calls.
+
+  First perform read-only discovery of whether my existing
+  local Ollama installation can satisfy the initial
+  fixed-prompt qualification. Identify the exact available
+  model tags, the local endpoint, and which proposed acts
+  would become unnecessary when no provider key or external
+  egress is needed.
+
+  Present a concise local-first option and retain the
+  cloud-provider alternative. Do not silently select a
+  model, start a service, or weaken isolation.
+
+  OA-06 and OA-07 remain reserved for their specific gates.
+  The future Q-02 CI host and guest acts also remain
+  unauthorized.
+
+  Q-02.1 CI DESIGN FEEDBACK
+
+  The detection and correction of the incorrect pinned
+  Gitea assumptions is appropriate. Retain source-verified
+  security semantics rather than assumptions.
+
+  In particular, do not qualify a live CI runner while
+  its registration token remains reusable and an effective
+  reset/revocation mechanism is unverified.
+
+  If automated token reset is unavailable, preserve it as
+  an explicit blocking condition at the live provisioning
+  gate and present the required alternative or Owner act.
+
+  Verify that job-token restrictions, absence of secrets,
+  network isolation and the separation between the runner
+  and untrusted jobs are independently enforced.
+
+  Do not treat accepting decision 0016 as authorization
+  to execute its privileged or network-changing acts.
+
+  OWNER-ACTION RECORDS
+
+  Record each decision against the existing OA identifier.
+  Close only after verified execution and linked evidence.
+  Keep authorized-but-unperformed external filings visible.
+  Do not turn completion receipts into new Owner actions.
+
+  Continue unrelated eligible engineering work autonomously.
+  Never interpret silence as approval.
+  ```
+
+  - **Overseer disposition** (2026-11-10):
+    - The builder the message names had already finished: Q-02.1 passed and was pushed at `867381b` before the message arrived. The builder then running (test-runtime headroom) was not interrupted; the OA-05 run and the record commits waited for it, so that its timings and its checkout were not disturbed.
+    - OA-10: run once, PASS; closed ([evidence](OA-10-OA-11-owner-acts-2026-11-10.md)). F-06.3 passes; decision 0011 accepted.
+    - OA-11: the read-only check found only the five synthetic receipts; file and empty directory removed; closed ([evidence](OA-10-OA-11-owner-acts-2026-11-10.md)).
+    - OA-05: stopped at the payload check before any act (2 of the 8 files changed after the plan's commit); a revised plan will be presented. Nothing ran. When it runs, Linux git-oracle parity and the native Linux Dulwich wheel stay unverified, as the Owner directs.
+    - OA-09, OA-03, OA-02: no authenticated GitHub tool exists in this session (the GitHub CLI is not installed); no stored credential was accessed. OA-09 rechecked (no duplicate; reproduced on 1.2.21; present on `main`); OA-03's private route confirmed enabled. All three stay visible as authorized and pending.
+    - OA-12: execution deferred; the read-only Ollama discovery is done ([evidence](S-03.1-local-model-discovery.md)). Nothing was started or selected; the `ollama` command was not run, because on Windows it starts the app when no server runs.
+    - Q-02.1 feedback: recorded on decision 0016 as a dated Owner direction; the registration-token fallback of its section 6.3 is no longer a path to a live runner, and the policy file's fallback allowance is narrowed at Q-02.2.1. OA-13 lists the CI acts, none authorized.
+
+- **2026-11-10: Owner direction reconciling the execution results** (a second message the same day), verbatim:
+
+  ```text
+  Owner direction: Reconcile the latest execution results
+  and continue autonomous engineering.
+
+  Do not interrupt the active test-runtime Builder.
+
+  COMPLETED ACTIONS
+
+  OA-10 and OA-11 are accepted as completed based on the
+  reported verification and cleanup evidence.
+
+  Do not repeat either operation.
+
+  Ensure F-06.3, decision 0011, the cleanup evidence and
+  the Owner-action queue are committed and published
+  through the normal verification process.
+
+  OA-05 — REVISED APPROVAL REQUIRED
+
+  The original authorization was bound to exact content.
+  The two changed files invalidate that payload.
+
+  The previous approval does not authorize running a
+  different archive.
+
+  Prepare the revised plan with:
+  - Exact source revision and file hashes
+  - New archive and runner digests
+  - Updated Windows reference results
+  - Confirmation that guest isolation, resource limits,
+    transfer and teardown are unchanged
+  - Explicit limits on what the Linux run establishes
+
+  Present the revised plan for my approval before running.
+  Do not interrupt another Builder or reset its checkout.
+
+  UPSTREAM REPORTS
+
+  OA-02, OA-03 and OA-09 remain authorized as previously
+  recorded, with OA-03 restricted to private vulnerability
+  reporting.
+
+  Their absence of an authenticated filing mechanism is
+  not permission to access unrelated credentials.
+
+  Keep them visible as authorized-but-unperformed.
+  Continue unrelated engineering work.
+
+  OA-12 — LOCAL-FIRST MODEL ACCESS
+
+  I select local-first as the preferred architecture for
+  the initial inference qualification. This does not
+  authorize execution yet.
+
+  The existing Ollama discovery is sufficient; do not
+  repeat it.
+
+  Do not automatically adopt gemma4-uncensored:latest
+  because it is the only installed model.
+
+  Evaluate its exact digest, provenance, license and
+  configuration. A digest establishes identity, not trust.
+  Determine whether a verified upstream model would be
+  preferable for the initial qualification.
+
+  For local inference:
+  - A1, the cloud-provider key, is unnecessary.
+  - A5, cloud-provider egress, is unnecessary.
+  - A2, A3, A4 and A6 still require explicit approval.
+  - Starting the Ollama service is a separate host act.
+
+  Prepare one concrete, bounded authorization request for
+  the remaining acts, including the exact model, endpoint,
+  service startup effects, isolation changes and teardown.
+
+  No service startup, inference calls, new guest forwarding
+  or guest hardening relaxation is authorized by this message.
+
+  Preserve the cloud-provider design as an alternative.
+  Do not build a provider-specific dependency into the
+  semantic or inference-access contracts.
+
+  CI — Q-02 AND OA-13
+
+  Q-02.1 is complete. Do not reopen its accepted design
+  merely to repeat feedback.
+
+  Retain OA-13 and its future authorization gates.
+
+  The first live CI runner must not be qualified unless
+  registration-token reset or revocation is verified and
+  the other independently enforced security controls pass.
+
+  Do not accept an indefinitely reusable registration
+  token as a routine residual risk.
+
+  Decision 0016's acceptance does not authorize its
+  future host, guest, network or CI execution acts.
+
+  OWNER-ACTION QUEUE
+
+  Preserve the existing four-category presentation.
+  Reconcile every status with the actual committed evidence.
+
+  Close completed actions only once.
+  Do not manufacture additional approvals or duplicate
+  completion receipts.
+
+  Continue autonomous execution on other eligible work.
+  Silence never constitutes Owner authorization.
+  ```
+
+  - **Overseer disposition** (2026-11-10):
+    - OA-10 and OA-11: closed once each in the queue's Resolved table with [their evidence](OA-10-OA-11-owner-acts-2026-11-10.md); not repeated. F-06.3, decision 0011 and the queue committed and pushed after the publication gate and the path scan.
+    - OA-05: the conditional approval no longer covers the payload; status "revised approval required". The revised plan is prepared by a builder in a separate clone, never in another builder's checkout, and presented before any run.
+    - OA-02, OA-03 (private reporting only), OA-09: authorized and unperformed, visible in the queue; no credential accessed.
+    - OA-12: local-first recorded as the preferred architecture, unauthorized. The installed model was evaluated ([request](S-03.1-local-first-authorization-request.md), section 1) and is not proposed; the request presents the pinned official `gemma4:e2b-it-q4_K_M` and the acts L1, L2, A2, A3, A4, A6; the guest-facing contract is the provider-neutral OpenAI-compatible Chat Completions request; the cloud request stays the alternative.
+    - CI: Q-02.1 not reopened; OA-13 retained with the registration-token condition (decision 0016's dated Owner note).
+
+- **2026-11-10: Owner architectural correction: coding-provider agnosticism through ACP** (a third message the same day), verbatim:
+
+  ```text
+  Owner architectural correction: Preserve coding-provider
+  agnosticism through ACP.
+
+  Do not interrupt the current Builder.
+
+  I am concerned that S-03 and OA-12 are evolving toward
+  using local models directly through the OpenHands-native
+  agent as our default engineering execution capability.
+
+  That is not the intended coding architecture.
+
+  Our blueprint specifies Claude Code and Codex as preferred,
+  replaceable coding providers through ACP where supported.
+  OpenHands remains our selected session and execution
+  infrastructure, not necessarily the coding agent itself.
+
+  The pinned OpenHands SDK v1.60.1 already includes ACPAgent
+  and provider definitions for Claude Code and Codex.
+
+  DIRECTION
+
+  1. The default engineering implementation/review path
+     should use an ACP coding provider, with Claude Code
+     and Codex as the initial candidates.
+
+  2. OpenHands-native direct-LLM agents remain an optional
+     capability, not the implicit default coding provider.
+
+  3. Local Ollama inference remains a candidate for
+     Knowledge, Conversation, auxiliary processing, and
+     optional local coding experiments. It must not become
+     the coding-system foundation by implementation inertia.
+
+  4. Hold OA-12 execution authorizations (L1, L2, A2,
+     A3, A4, A6). Do not download or launch models,
+     start services, change guest networking, or make
+     model calls under this direction.
+
+  ARCHITECTURAL RECONCILIATION
+
+  Consult the Architect for one bounded review of:
+
+  - The blueprint's ACP coding-provider design.
+  - Pinned OpenHands SDK ACPAgent and provider registry.
+  - Current create template and E-01.3.1 dispatch contract.
+  - A-01.1, A-01.2 and E-03.1 provider materialization.
+  - S-03.1/S-03.2 and proposed decision 0015.
+  - Existing guest containment and credential rules.
+
+  Determine:
+
+  A. How OpenHands selects an ACP coding provider rather
+     than agent_kind=openhands for an implementation run.
+
+  B. How Claude Code and Codex authentication can work
+     without exposing unrestricted Owner credentials or
+     weakening guest isolation.
+
+  C. What provider networking is actually required, and
+     whether the proposed inference broker serves ACP
+     coding providers or only native direct-LLM consumers.
+
+  D. Whether S-03's model-access requirements should be
+     distinguished from coding-provider qualification,
+     with their existing task dependencies reconciled.
+
+  E. What minimal adapter and contract changes preserve
+     provider replaceability, authoritative Work, independent
+     review and execution evidence.
+
+  Do not create another orchestration layer or duplicate
+  the OpenHands SDK's existing ACP integration.
+
+  Do not assume ACP permission modes enforce isolation.
+  The process, filesystem, network and credential boundaries
+  must be independently qualified.
+
+  DELIVERABLE
+
+  Record a concise recommendation identifying the actual
+  coding-provider path, its credential and security
+  requirements, and necessary changes to proposed decision
+  0015 and the existing task plan.
+
+  Distinguish decisions already established by the blueprint
+  from implementation mechanisms that remain unverified.
+
+  Bring any consequential architectural change or new
+  Owner authorization back to me before proceeding.
+
+  Continue unrelated ready engineering work autonomously.
+  ```
+
+  - **Overseer disposition** (2026-11-10):
+    - OA-12's execution acts held; the local-first request is kept as presented and marked held; nothing started, pulled or called.
+    - The Architect review (A to E) is dispatched as one bounded consultation once the running test-runtime builder has returned (one subordinate at a time); its recommendation, and any change to decision 0015 or the plan, comes back to the Owner before anything proceeds on S-03.
+
+- **2026-11-10: [0011](../decisions/0011-host-service-lifecycle-contract-platform-adapters-and-credential-provider.md) Accepted (Overseer)** at the completion of F-06.2 (`f6e82bc`) and F-06.3 (the OA-10 run), as its draft set. Linux and macOS are accepted only at F-06.4 and F-06.5.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
