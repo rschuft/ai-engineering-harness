@@ -252,6 +252,24 @@ class References(unittest.TestCase):
         found, _ = codes(inv)
         self.assertIn('DANGLING_REF', found)
 
+    def test_unknown_planned_performer_fails(self):
+        for value in ('nobody', None, 7):
+            with self.subTest(value=value):
+                inv = fresh()
+                entry(inv, 'operations', 'op-protected-merge')['planned_performer'] = value
+                found, problems = codes(inv)
+                self.assertEqual(found, {'DANGLING_REF'}, '\n'.join(map(str, problems)))
+                self.assertIn(f'planned performer {value!r} does not exist', '\n'.join(map(str, problems)))
+
+    def test_committed_planned_performers_are_principals(self):
+        principals = {p['id'] for p in INVENTORY['principals']}
+        performers = {op['id']: op['planned_performer'] for op in INVENTORY['operations']
+                      if 'planned_performer' in op}
+        self.assertEqual(performers.get('op-protected-merge'), 'authorization-recorder')
+        self.assertLessEqual(set(performers.values()), principals)
+        found, problems = codes(fresh())
+        self.assertEqual(problems, [], '\n'.join(map(str, problems)))
+
     def test_dangling_operation_credential_fails(self):
         inv = fresh()
         entry(inv, 'operations', 'op-guest-exec')['credentials'].append('cred-missing')

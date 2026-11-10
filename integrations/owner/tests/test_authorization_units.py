@@ -337,8 +337,14 @@ class Resolve(InMemory):
         with self.assertRaises(RuntimeError):
             AR.record(self.context(http=crash_on_post), nonce, su.statement(), recorded_by=su.RECORDED_BY)
         self.assertEqual(AR._receipts(self.store)[nonce][0].state, 'dispatched')
-        self.assertEqual(AR.resolve(self.ctx, nonce)['receipt']['state'], 'unknown')
-        self.now = su.NOW + datetime.timedelta(minutes=AR.SETTLE_MINUTES)
+        first = AR.resolve(self.ctx, nonce)
+        self.assertEqual((first['receipt']['state'], first['changed']), ('unknown', True))
+        self.assertIn('until a read finds it merged or closed', first['detail'])
+        # Open and not merged stays unknown however long ago the merge was sent.
+        self.now = su.NOW + datetime.timedelta(days=365)
+        later = AR.resolve(self.ctx, nonce)
+        self.assertEqual((later['receipt']['events'], later['changed']), (['reserved', 'dispatched', 'unknown'], False))
+        self.gitea.pulls[number]['state'] = 'closed'
         result = AR.resolve(self.ctx, nonce)
         self.assertEqual(result['receipt']['events'], ['reserved', 'dispatched', 'unknown', 'failed'])
         self.assertEqual(self.gitea.merge_count(), 0)

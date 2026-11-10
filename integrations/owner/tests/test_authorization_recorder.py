@@ -410,9 +410,18 @@ class LostAnswer(OverHttp):
         self.gitea.on_merge = None
         early = AR.resolve(self.ctx, nonce)
         self.assertEqual((early['receipt']['state'], early['changed']), ('unknown', False))
-        self.now = su.NOW + datetime.timedelta(minutes=AR.SETTLE_MINUTES)
+        # Open and not merged stays unknown however long ago the merge was sent: no time makes it failed.
+        self.now = su.NOW + datetime.timedelta(days=30)
         late = AR.resolve(self.ctx, nonce)
-        self.assertEqual(late['receipt']['state'], 'failed')
+        self.assertEqual((late['receipt']['state'], late['changed']), ('unknown', False))
+        self.assertIn('until a read finds it merged or closed', late['detail'])
+        self.assertEqual(self.receipts()[nonce][1], ['reserved', 'dispatched', 'unknown'])
+        # Closed without being merged (an Owner or operator act outside the recorder) is a definitive read.
+        self.gitea.pulls[number]['state'] = 'closed'
+        closed = AR.resolve(self.ctx, nonce)
+        self.assertEqual((closed['receipt']['state'], closed['changed']), ('failed', True))
+        detail = json.loads(self.store.events(AR.RECEIPT_PREFIX + nonce)[-1].detail_json)
+        self.assertEqual(detail, {'code': 'NOT_MERGED', 'state': 'closed'})
         self.assertEqual(len(self.gitea.requests_by('POST')), 1)
         self.assertNoMerge()
         self.assertEqual(AR.resolve(self.ctx, nonce)['changed'], False)

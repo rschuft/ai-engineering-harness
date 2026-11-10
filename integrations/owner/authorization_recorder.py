@@ -127,7 +127,6 @@ MANIFEST_FIELDS = ('operation', 'kind', 'target', 'expiresAt')  # read here; the
 MANIFEST_MAX_BYTES = 64 * 1024
 DEFAULT_EXPIRY_MINUTES = 30
 MAX_EXPIRY_MINUTES = 24 * 60
-SETTLE_MINUTES = 15  # resolve: an unmerged, open pull request this long after dispatch was not merged
 TIMEOUT_S = 30.0
 TRAILERS = ('AIEH-Decision-Id', 'AIEH-Decision-Channel', 'AIEH-Approved-Head', 'AIEH-Manifest-Digest',
             'AIEH-Statement-Ref', 'AIEH-Recorder')
@@ -879,9 +878,11 @@ def read_back(session, intent, *, require_ref=True):
 
 def resolve(ctx, nonce):
     """Resolve the receipt of challenge NONCE by reading Gitea, never by merging: confirmed when the pull
-    request was merged by aieh-owner with this decision's trailers, approved head and digest; failed when it
-    was not (merged otherwise, closed, or still open SETTLE_MINUTES after dispatch); otherwise it stays
-    unknown. A receipt left reserved (nothing was sent) becomes failed."""
+    request was merged by aieh-owner with this decision's trailers, approved head and digest; failed only on a
+    definitive read that it was not (merged otherwise, or closed without being merged). An open, unmerged pull
+    request leaves the receipt unknown however long ago the merge was sent: the request may still be
+    completing on the server, and closing the pull request is an Owner or operator act outside the
+    recorder. A receipt left reserved (nothing was sent) becomes failed."""
     _check_context(ctx)
     if not isinstance(nonce, str) or not D.NONCE.match(nonce):
         raise RecorderError('CHALLENGE_INVALID', f'{nonce!r} is not a nonce')
@@ -895,12 +896,11 @@ def resolve(ctx, nonce):
         ctx.store.transition(key, 'failed', actor=RECORDER, reason='resolved: the merge was never sent',
                              detail={'code': 'NOT_SENT'}, expected_from='reserved')
         return {'receipt': _receipt_report(ctx.store, key), 'changed': True}
-    if reservation.state == 'dispatched':
+    changed = reservation.state == 'dispatched'
+    if changed:
         ctx.store.transition(key, 'unknown', actor=RECORDER, reason='resolved: the merge answer was never recorded',
                              detail={'code': 'OUTCOME_UNKNOWN', 'answer': 'not recorded'}, expected_from='dispatched')
     intent = json.loads(reservation.intent_json)
-    sent = next((json.loads(e.detail_json or '{}').get('sentAt') for e in ctx.store.events(key)
-                 if e.to_state == 'dispatched'), None)
     session = open_session(ctx)
     try:
         status, pr = session.get(f'/repos/{intent["repository"]}/pulls/{intent["pull"]}')
@@ -919,23 +919,14 @@ def resolve(ctx, nonce):
         elif pr.get('state') == 'closed':
             ctx.store.transition(key, 'failed', actor=RECORDER, reason='resolved by reading: closed, not merged',
                                  detail={'code': 'NOT_MERGED', 'state': 'closed'}, expected_from='unknown')
-        elif _settled(ctx.now(), sent):
-            ctx.store.transition(key, 'failed', actor=RECORDER, reason='resolved by reading: open and not merged',
-                                 detail={'code': 'NOT_MERGED', 'state': 'open', 'head': (pr.get('head') or {}).get('sha')},
-                                 expected_from='unknown')
         else:
-            return {'receipt': _receipt_report(ctx.store, key), 'changed': False,
-                    'detail': f'still unknown: the pull request is open and unmerged less than {SETTLE_MINUTES} '
-                              'minutes after the merge was sent; resolve again later'}
+            return {'receipt': _receipt_report(ctx.store, key), 'changed': changed,
+                    'detail': 'still unknown: the pull request is open and not merged, and the outcome stays unknown '
+                              'until a read finds it merged or closed (closing it is an Owner or operator act outside '
+                              'the recorder); resolve again then'}
     finally:
         session.close()
     return {'receipt': _receipt_report(ctx.store, key), 'changed': True}
-
-
-def _settled(now, sent):
-    """True when SENT (the recorded dispatch time) is at least SETTLE_MINUTES before NOW."""
-    moment = parse_timestamp(sent)
-    return moment is not None and now - moment >= datetime.timedelta(minutes=SETTLE_MINUTES)
 
 
 # ---------------------------------------------------------------------------- command line

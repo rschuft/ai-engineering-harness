@@ -5,7 +5,8 @@ assets and privileged operations of the harness, with every entry marked planned
 observed, unknown or conflict. ``security/README.md`` is its human-readable record.
 This checker enforces the leaf's acceptance mechanically:
 
-- every privileged operation names exactly one principal, and that principal exists;
+- every privileged operation names exactly one principal, and that principal exists; a
+  performer it names (``observed_performer``, ``planned_performer``) is a principal too;
 - no credential that an agent principal holds, manages or may read carries a
   privileged authority class (Owner, admin, executor or management), and no
   Owner-only operation uses a credential that an agent principal holds, manages or may
@@ -461,6 +462,8 @@ class Checker:
                 principal = self.ref(where, pid, principals, 'principal')
             if 'observed_performer' in o:
                 self.ref(where, o.get('observed_performer'), principals, 'observed performer')
+            if 'planned_performer' in o:
+                self.ref(where, o.get('planned_performer'), principals, 'planned performer')
             owner_only = o.get('owner_only')
             if not isinstance(owner_only, bool):
                 self.add('SCHEMA', where, 'owner_only must be true or false')
