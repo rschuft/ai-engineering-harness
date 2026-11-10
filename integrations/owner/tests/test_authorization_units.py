@@ -185,6 +185,7 @@ class Faults(InMemory):
         'tokens': ('/tokens', 'GITEA_UNAVAILABLE'),
         'repository': (f'/api/v1/repos/{fg.REPOSITORY}', 'GITEA_UNAVAILABLE'),
         'branch missing': ('/branches/main', 'POLICY_DRIFT'),
+        'branch unreadable': ('/branches/main', 'GITEA_UNAVAILABLE'),
         'pull': ('/pulls/1', 'GITEA_UNAVAILABLE'),
         'files': ('/pulls/1/files', 'GITEA_UNAVAILABLE'),
         'manifest at head': ('/raw/operations/op-0001.json?ref=', 'MANIFEST_INVALID'),
