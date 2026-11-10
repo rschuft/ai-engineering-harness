@@ -25,6 +25,7 @@ credential or touches the managed data root.
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
 | `tests/test_recorder_edits.py` | The recorder's edits, byte for byte, line endings included; every code has a remedy (unit) |
 | `tests/test_acceptance_recorder.py` | `prepare` and `record` on throwaway fixture repositories: the resolver round trip, the id kept on re-recording, the shared shape, every refusal; the command line (integration) |
+| `tests/test_live_openspec.py` | Live, skipped unless `AIEH_OPENSPEC` names the pinned OpenSpec 1.16.0: `validate --strict` accepts a change holding `owner-decisions/` and `x-outcomes`, `archive --yes` moves the decision record with the change byte for byte, and the outcome resolves at its archived path (e2e) |
 | `tests/owner_fixture.py` | The fixture project repository (two changes from the P-01.2 recording) and the example record; `--record` rewrites it |
 | `tests/fixtures/accept-objective.decision.json` | The example decision record (synthetic statement, fixed clock, nonce and ids) |
 
@@ -85,6 +86,10 @@ Two steps, as the Owner sees them:
    - before the branch moves, `outcome:<id>@<new commit>` must resolve through the lineage
      objective resolver with the declared change, item and acceptance; otherwise nothing visible
      changes (`RESOLUTION_FAILED`).
+
+   OpenSpec 1.16.0 accepts such a change (`validate --strict`), and `archive` moves the decision
+   records with it byte for byte; the outcome then resolves at its archived path
+   (`test_live_openspec.py`, opt-in).
 
    The commit message ends with the trailers `AIEH-Decision-Id`, `AIEH-Outcome-Id` and
    `AIEH-Recorder: acceptance-recorder/1`.
@@ -152,9 +157,6 @@ From the repository root, under the tools interpreter (`<tools python>` is what
   statements. No Owner acceptance has been recorded with it.
 - The statement's attribution against its source: the Owner conversation store (U-02.x) does not
   exist, so whether the referenced message is the Owner's is declared, not checked.
-- OpenSpec 1.16.0 on a change holding `owner-decisions/` (`openspec validate --strict`, `archive`):
-  not run. The decision records move with the change on archive by construction (the whole
-  folder moves), and the lineage resolver ignores them.
 - Under `core.autocrlf=true` the files are written as their blob bytes (LF), where git's checkout
   would write CRLF; git's and the module's `status` report them clean (tested on a fixture).
   Filter drivers and `working-tree-encoding` on these paths: not tested.

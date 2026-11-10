@@ -1331,8 +1331,9 @@ the new outcome resolves through the lineage objective resolver, and commits in 
 the [repository-access module](#repository-access)'s commit write, which runs no hook and so
 refuses a repository with client hooks (decision 0014 section 6). The attribution is declared by
 whoever transcribed the statement, not authenticated. It has run on throwaway fixture repositories
-with synthetic statements only; a real acceptance, OpenSpec on a change holding the records, and
-every host but Windows 11 are **not yet verified**. The Owner authorization recorder (P-04.2) is
+with synthetic statements only. OpenSpec 1.16.0 accepts a change holding the records
+(`validate --strict`) and `archive` moves them with it byte for byte (live, `AIEH_OPENSPEC`). A real
+acceptance and every host but Windows 11 are **not yet verified**. The Owner authorization recorder (P-04.2) is
 not built.
 
 ## Owner host
