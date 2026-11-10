@@ -1541,10 +1541,12 @@ class Exchange(TempState):
 
     def git_verbs(self, call):
         """CALL() with every process launch recorded: the git verbs launched ('bundle verify'
-        for a bundle subcommand), and any other program."""
-        verbs, real = [], subprocess.Popen
-
-        def spy(argv, *args, **kwargs):
+        for a bundle subcommand), and any other program. The real Popen is wrapped, so that the
+        test profiler still attributes each launch to the code that made it."""
+        with mock.patch.object(guest.subprocess, 'Popen', wraps=subprocess.Popen) as popen:
+            result = call()
+        verbs = []
+        for argv in (c.args[0] for c in popen.call_args_list):
             words = [str(a) for a in argv]
             if os.path.basename(words[0]).lower().removesuffix('.exe') == 'git':
                 rest, i = words[1:], 0
@@ -1554,9 +1556,6 @@ class Exchange(TempState):
                 verbs.append(f'{verb} {rest[i + 1]}' if verb == 'bundle' else verb)
             else:
                 verbs.append(words[0])
-            return real(argv, *args, **kwargs)
-        with mock.patch.object(guest.subprocess, 'Popen', side_effect=spy):
-            result = call()
         return result, verbs
 
     def test_push_launches_no_git_and_pull_only_the_verifiers_verbs(self):
