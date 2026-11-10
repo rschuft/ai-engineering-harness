@@ -179,8 +179,12 @@ only in the main session on an Owner decision.
    `unknown` (the answer was lost, or a 5xx, or the read-back disagreed).
 3. **`resolve --challenge NONCE`** resolves an `unknown` receipt **by reading**, never by merging:
    `confirmed` when the pull request was merged by `aieh-owner` with this decision's trailers,
-   approved head and digest; `failed` when it was merged otherwise, closed, or is still open and
-   unmerged 15 minutes after the merge was sent; otherwise it stays `unknown`.
+   approved head and digest; `failed` only on a definitive read: merged otherwise (not by
+   `aieh-owner`, or without this decision's trailers, approved head or digest) or closed without
+   being merged. An open, unmerged pull request leaves the receipt `unknown` however long ago the
+   merge was sent, since the request may still be completing on the server: the outcome stays
+   unknown until a read finds the pull request merged or closed, and closing it is an Owner or
+   operator act outside the recorder. A receipt left `reserved` (nothing was sent) becomes `failed`.
 
 `merged_by: aieh-owner` is shown as "merged under Owner authority by the recorder on decision
 <id>", never as merged by the Owner. The admitted channel is `main-session` (the bootstrap channel):
