@@ -45,6 +45,7 @@ allowlisted function is not a new site (the R6 verifier's verb set is asserted b
 from __future__ import annotations
 
 import ast
+import gc
 import importlib.util
 import re
 import sys
@@ -128,6 +129,10 @@ STDLIB = {
     'pty': {'spawn': 'argv'},
 }
 LAUNCH_NAMES = {name for functions in STDLIB.values() for name in functions}
+# Nodes that hold no call, binding or definition: the collector does not descend into them.
+LEAVES = {ast.Constant, ast.Name, ast.Load, ast.Store, ast.Del, ast.Pass, ast.Break, ast.Continue,
+          ast.Global, ast.Nonlocal, *ast.operator.__subclasses__(), *ast.unaryop.__subclasses__(),
+          *ast.cmpop.__subclasses__(), *ast.boolop.__subclasses__()}
 PATH_FUNCS = {'str', 'fspath', 'Path', 'PurePath', 'PurePosixPath', 'PureWindowsPath', 'abspath', 'realpath',
               'normpath', 'resolve', 'absolute'}
 GIT_NAMES = ('git', 'git.exe')
@@ -181,6 +186,7 @@ class ModuleInfo:
         self.local_defs = set()        # module-level function and class names
         self.memo = {}                 # program analysis results, (scope, expression, kind) ids
         self.stdlib = {}               # call id -> (label, result) of a standard-library launch, or None
+        self.by_name = {}              # callee name (a name or an attribute) -> [(scope, call)]
 
 
 class Collector(ast.NodeVisitor):
@@ -193,6 +199,8 @@ class Collector(ast.NodeVisitor):
         self.classes = []
 
     def visit(self, node):
+        if node.__class__ in LEAVES:
+            return None
         method = self._dispatch.get(node.__class__)
         if method is None:
             method = getattr(Collector, 'visit_' + node.__class__.__name__, Collector.generic_visit)
@@ -331,6 +339,10 @@ class Collector(ast.NodeVisitor):
 
     def visit_Call(self, node):
         self.info.calls.append((self.scope, node))
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if name is not None:
+            self.info.by_name.setdefault(name, []).append((self.scope, node))
         self.generic_visit(node)
 
 
@@ -340,16 +352,24 @@ class Census:
     def __init__(self, sources):
         self.infos = {}
         self.errors = {}
-        for path in sorted(sources):
-            info = parsed(path, sources[path])
-            if isinstance(info, str):
-                self.errors[path] = info
-            else:
-                self.infos[path] = info
-        self.wrappers = {}            # name -> {'param': index or name}; module-level functions and classes
-        self.methods = {}             # (path, class, method) -> param
-        self._find_wrappers()
-        self.sites = self._sites()
+        self.wrappers = {}            # name -> (position or None, name) of the argv parameter
+        self.methods = {}             # (path, class, method) -> the same
+        # The cyclic collector would scan the growing trees again and again while they are built
+        # (about 0.4 s of the 1.1 s parse on the verification host); nothing here needs it early.
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            for path in sorted(sources):
+                info = parsed(path, sources[path])
+                if isinstance(info, str):
+                    self.errors[path] = info
+                else:
+                    self.infos[path] = info
+            self._find_wrappers()
+            self.sites = self._sites()
+        finally:
+            if enabled:
+                gc.enable()
 
     # launcher resolution
     def stdlib_launcher(self, scope, func):
@@ -594,54 +614,65 @@ class Census:
             index -= 1
         return index, param.name
 
-    def _find_wrappers(self):
-        changed = True
-        while changed:
-            changed = False
-            for info in self.infos.values():
-                for scope, call in info.calls:
-                    if scope.node is info.tree or isinstance(scope.node, ast.ClassDef) or \
-                            not self._candidate(scope, call):
-                        continue
-                    found = self.launch(scope, call)
-                    if found is None or not isinstance(found[1], Param):
-                        continue
-                    ref = self._param_ref(scope, found[1])
-                    name = scope.node.name
-                    if scope.cls is not None:
-                        key = (info.path, scope.cls[0], name)
-                        if key not in self.methods:
-                            self.methods[key] = ref
-                            changed = True
-                        if name == '__init__' and scope.cls[0] not in self.wrappers:
-                            self.wrappers[scope.cls[0]] = ref
-                            changed = True
-                    elif scope.parent is not None and scope.parent.node is info.tree and name not in self.wrappers:
-                        self.wrappers[name] = ref
-                        changed = True
+    def _calls_named(self, names):
+        """Every (module, scope, call) whose callee is named one of NAMES (a name or an attribute)."""
+        for info in self.infos.values():
+            for name in names:
+                for scope, call in info.by_name.get(name, ()):
+                    yield info, scope, call
 
-    def _candidate(self, scope, call):
-        """Whether CALL can be a launch at all: a launcher's or a wrapper's name, or a bound name (a
-        cheap filter before the analysis; launch() decides)."""
-        func = call.func
-        if isinstance(func, ast.Attribute):
-            if isinstance(func.value, ast.Name) and func.value.id in SELF:
-                return any(key[2] == func.attr for key in self.methods)
-            return func.attr in LAUNCH_NAMES or func.attr in self.wrappers
-        if isinstance(func, ast.Name):
-            return func.id in LAUNCH_NAMES or func.id in self.wrappers or func.id in scope.module.functions \
-                or scope.lookup(func.id) is not None
-        return False
+    def _register(self, info, scope, param):
+        """Record the function of SCOPE as a wrapper; the names its callers use, when new."""
+        ref = self._param_ref(scope, param)
+        name, new = scope.node.name, []
+        if scope.cls is not None:
+            key = (info.path, scope.cls[0], name)
+            if key not in self.methods:
+                self.methods[key] = ref
+                new.append(name)
+            if name == '__init__' and scope.cls[0] not in self.wrappers:
+                self.wrappers[scope.cls[0]] = ref
+                new.append(scope.cls[0])
+        elif scope.parent is not None and scope.parent.node is info.tree and name not in self.wrappers:
+            self.wrappers[name] = ref
+            new.append(name)
+        return new
 
-    def _sites(self):
-        sites = {}
+    def _bound_calls(self):
+        """Calls of a name bound in the caller's scopes (an alias or a parameter of a launcher)."""
         for info in self.infos.values():
             for scope, call in info.calls:
-                if not self._candidate(scope, call):
+                if isinstance(call.func, ast.Name) and call.func.id not in LAUNCH_NAMES and \
+                        scope.lookup(call.func.id) is not None:
+                    yield info, scope, call
+
+    def _find_wrappers(self):
+        """A worklist: the launchers' calls first, then the calls of each newly found wrapper's name."""
+        work = list(self._calls_named(LAUNCH_NAMES | {n for i in self.infos.values() for n in i.functions})) + \
+            list(self._bound_calls())
+        while work:
+            names = []
+            for info, scope, call in work:
+                if scope.node is info.tree or isinstance(scope.node, ast.ClassDef):
                     continue
                 found = self.launch(scope, call)
-                if found is not None and found[1] is True:
-                    sites.setdefault((info.path, scope.qualname), []).append((call.lineno, found[0]))
+                if found is not None and isinstance(found[1], Param):
+                    names += self._register(info, scope, found[1])
+            work = list(self._calls_named(set(names)))
+
+    def _sites(self):
+        names = LAUNCH_NAMES | set(self.wrappers) | {key[2] for key in self.methods} | \
+            {n for i in self.infos.values() for n in i.functions}
+        sites, seen = {}, set()
+        for info, scope, call in [*self._calls_named(names), *self._bound_calls()]:
+            if id(call) in seen:
+                continue
+            seen.add(id(call))
+            found = self.launch(scope, call)
+            if found is not None and found[1] is True:
+                sites.setdefault((info.path, scope.qualname), []).append((call.lineno, found[0]))
+        for launches in sites.values():
+            launches.sort()
         return sites
 
 
@@ -675,9 +706,6 @@ def describe(sites, keys):
                      for path, name in keys)
 
 
-_TREE = {}
-
-
 def repository_access():
     module = sys.modules.get('repository_access')
     if module is None:
@@ -695,50 +723,102 @@ def repository_access():
 
 def tracked_python():
     """{path: text} of every tracked *.py file (the index, read in process), from the working tree."""
-    if 'sources' not in _TREE:
-        ra = repository_access()
-        with ra.open_repository(REPO, config='repository', work_tree=True, ceilings=[str(REPO.parent)]) as repo:
-            paths = sorted({e.path for e in repo.index_entries() if e.path.endswith('.py')})
-        sources = {}
-        for path in paths:
-            file = REPO / path
-            if file.is_file():
-                sources[path] = file.read_bytes().decode('utf-8')
-        _TREE['sources'] = sources
-    return _TREE['sources']
+    ra = repository_access()
+    with ra.open_repository(REPO, config='repository', work_tree=True, ceilings=[str(REPO.parent)]) as repo:
+        paths = sorted({e.path for e in repo.index_entries() if e.path.endswith('.py')})
+    sources = {}
+    for path in paths:
+        file = REPO / path
+        if file.is_file():
+            sources[path] = file.read_bytes().decode('utf-8')
+    return sources
 
 
-def tree_census():
-    if 'census' not in _TREE:
-        _TREE['census'] = Census(tracked_python())
-    return _TREE['census']
+def guard_failures(sites, errors, allowlist=None):
+    """The guard's verdict on a census: the messages that fail it, none when it passes."""
+    allowlist = ALLOWLIST if allowlist is None else allowlist
+    unexpected, missing = compare(sites, allowlist)
+    message = []
+    if errors:
+        message.append('tracked Python sources that do not parse (the census cannot read them):\n'
+                       + '\n'.join(f'  {path}: {why}' for path, why in sorted(errors.items())))
+    if unexpected:
+        message.append('git launch sites outside the retained list of decision 0014 section 1 (migrate '
+                       'them to integrations/repository, or record a documented gap first):\n'
+                       + describe(sites, unexpected))
+    if missing:
+        message.append('allowlisted sites the census no longer finds (remove them from ALLOWLIST):\n'
+                       + describe(sites, missing))
+    return message
+
+
+def release():
+    """Drop the parsed trees, breaking the scope cycles first, so that they are freed at once rather
+    than left for the cyclic collector to scan during later tests."""
+    for info in _PARSED.values():
+        if isinstance(info, ModuleInfo):
+            for container in (info.scopes, info.calls, info.returns, info.self_attrs, info.class_scopes,
+                              info.memo, info.stdlib, info.by_name):
+                container.clear()
+    _PARSED.clear()
+
+
+INJECTED = '''
+
+def injected_status(path):
+    return subprocess.run(['git', '-C', str(path), 'status'], capture_output=True)
+'''
+INJECTED_LINE = 4   # the subprocess.run line, counted from the end of the source it is appended to
+ADAPTER = 'integrations/planning/planning_adapter.py'
+NEWCOMER = 'integrations/newcomer/newcomer.py'
+GATE = 'tools/publication_gate.py'
+
+
+def injected(sources):
+    """The tracked sources, copied, with a git launch injected into a module that is not
+    allowlisted, a new module launching git, and the gate's retained site removed."""
+    sources = dict(sources)
+    sources[ADAPTER] = sources[ADAPTER] + INJECTED
+    sources[NEWCOMER] = 'import subprocess\n' + INJECTED
+    sources[GATE] = sources[GATE].replace("['git', *args]", "['true', *args]")
+    return sources
 
 
 class TreeCensus(unittest.TestCase):
-    """The tracked sources launch git only at the retained sites of decision 0014 section 1."""
+    """The tracked sources launch git only at the retained sites of decision 0014 section 1, and the
+    guard fails on an injected launch (the tracked sources, copied in memory, with an injected
+    subprocess.run(['git', ...]): no product file is edited). Both censuses are made once."""
     category = 'contract'
 
+    @classmethod
+    def setUpClass(cls):
+        cls.sources = tracked_python()
+        enabled = gc.isenabled()
+        gc.disable()                                   # see Census: the trees hold no cycle to collect
+        try:
+            census = Census(cls.sources)
+            cls.sites, cls.errors = census.sites, census.errors
+            cls.failures = guard_failures(census.sites, census.errors)
+            cls.injected_sources = injected(cls.sources)
+            census = Census(cls.injected_sources)
+            cls.injected_sites = census.sites
+            cls.injected_failures = guard_failures(census.sites, census.errors)
+            del census
+        finally:
+            release()
+            if enabled:
+                gc.enable()
+
     def test_every_git_launch_site_is_retained_and_every_retained_site_exists(self):
-        census = tree_census()
-        self.assertEqual(census.errors, {}, 'every tracked Python source parses')
-        unexpected, missing = compare(census.sites, ALLOWLIST)
-        message = []
-        if unexpected:
-            message.append('git launch sites outside the retained list of decision 0014 section 1 (migrate '
-                           'them to integrations/repository, or record a documented gap first):\n'
-                           + describe(census.sites, unexpected))
-        if missing:
-            message.append('allowlisted sites the census no longer finds (remove them from ALLOWLIST):\n'
-                           + describe(census.sites, missing))
-        self.assertFalse(message, '\n'.join(message))
+        self.assertFalse(self.failures, '\n'.join(self.failures))
 
     def test_the_census_reads_the_tracked_sources(self):
-        sources = tracked_python()
         expected = {'tools/guest.py', 'tools/publication_gate.py', 'tools/verify_seed.py', 'tools/check_prereqs.py',
-                    'integrations/repository/repository_access.py', 'integrations/planning/planning_adapter.py'}
-        self.assertEqual(expected - set(sources), set())
-        self.assertGreater(len(sources), 80)
-        self.assertFalse(any(p.startswith(('evidence/', 'decisions/')) for p in sources))
+                    'integrations/repository/repository_access.py', ADAPTER}
+        self.assertEqual(expected - set(self.sources), set())
+        self.assertGreater(len(self.sources), 80)
+        self.assertFalse(any(p.startswith(('evidence/', 'decisions/')) for p in self.sources))
+        self.assertEqual(self.errors, {})
 
     def test_each_allowlisted_site_names_a_retained_row_of_decision_0014(self):
         retained = retained_rows()
@@ -749,6 +829,21 @@ class TreeCensus(unittest.TestCase):
                 self.assertIn(row, retained, label)
                 is_test = '/tests/' in f'/{path}'
                 self.assertEqual(row == 'T', is_test, 'T is the test fixtures; product sites have their row')
+
+    def test_the_guard_fails_on_an_injected_launch_and_on_a_removed_site(self):
+        self.assertNotIn(ADAPTER, {p for p, _ in ALLOWLIST})
+        self.assertIn('\nimport subprocess\n', self.sources[ADAPTER])
+        self.assertEqual(self.sources[GATE].count("['git', *args]"), 1)
+        self.assertEqual(compare(self.injected_sites, ALLOWLIST),
+                         ([(NEWCOMER, 'injected_status'), (ADAPTER, 'injected_status')], [(GATE, 'git')]))
+        line = INJECTED_LINE + self.sources[ADAPTER].count('\n')
+        self.assertEqual(self.injected_sites[(ADAPTER, 'injected_status')], [(line, 'subprocess.run')])
+        # The guard's verdict on these sources fails, and names each site.
+        message = '\n'.join(self.injected_failures)
+        self.assertEqual(len(self.injected_failures), 2, message)
+        for site in (f'{ADAPTER}:injected_status (line {line}; via subprocess.run)',
+                     f'{NEWCOMER}:injected_status', f'{GATE}:git'):
+            self.assertIn(site, message)
 
 
 def retained_rows():
@@ -761,58 +856,6 @@ def retained_rows():
         if len(cells) >= 3 and 'retain git' in cells[1]:
             rows.add(re.sub(r'\*', '', cells[0]).split()[0])
     return rows
-
-
-INJECTED = '''
-
-def injected_status(path):
-    return subprocess.run(['git', '-C', str(path), 'status'], capture_output=True)
-'''
-INJECTED_LINE = 4   # the subprocess.run line, counted from the end of the source it is appended to
-
-
-class InjectedLaunch(unittest.TestCase):
-    """The guard fails on a git launch added to a module that is not allowlisted: the tracked sources,
-    copied in memory, with one injected function (no product file is edited)."""
-    category = 'contract'
-
-    def test_the_guard_fails_on_an_injected_launch_and_on_a_removed_site(self):
-        sources = dict(tracked_python())
-        adapter = 'integrations/planning/planning_adapter.py'
-        gate = 'tools/publication_gate.py'
-        self.assertNotIn(adapter, {p for p, _ in ALLOWLIST})
-        self.assertIn('\nimport subprocess\n', sources[adapter])
-        sources[adapter] = sources[adapter] + INJECTED                           # a non-allowlisted module
-        sources['integrations/newcomer/newcomer.py'] = 'import subprocess\n' + INJECTED   # a new module
-        self.assertEqual(sources[gate].count("['git', *args]"), 1)
-        sources[gate] = sources[gate].replace("['git', *args]", "['true', *args]")     # a retained site gone
-        census = Census(sources)
-        self.assertEqual(compare(census.sites, ALLOWLIST),
-                         ([('integrations/newcomer/newcomer.py', 'injected_status'), (adapter, 'injected_status')],
-                          [(gate, 'git')]))
-        self.assertEqual(census.sites[(adapter, 'injected_status')], [(INJECTED_LINE + sources[adapter][
-            :-len(INJECTED)].count('\n'), 'subprocess.run')])
-        # The guard test itself, run on these sources, fails and names each site.
-        result = run_guard(sources)
-        self.assertEqual(len(result.failures), 1, result.errors)
-        message = result.failures[0][1]
-        for site in (f'{adapter}:injected_status', 'integrations/newcomer/newcomer.py:injected_status',
-                     f'{gate}:git'):
-            self.assertIn(site, message)
-
-
-def run_guard(sources):
-    """The guard test (TreeCensus), run on SOURCES in place of the tracked tree: its unittest result."""
-    saved = dict(_TREE)
-    _TREE.clear()
-    _TREE['sources'] = sources
-    try:
-        result = unittest.TestResult()
-        TreeCensus('test_every_git_launch_site_is_retained_and_every_retained_site_exists').run(result)
-    finally:
-        _TREE.clear()
-        _TREE.update(saved)
-    return result
 
 
 def sites_of(source, path='pkg/mod.py', extra=None):
