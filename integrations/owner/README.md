@@ -27,18 +27,19 @@ custodian of, and keeps its state and receipts under the managed data root (belo
 |---|---|
 | `owner_decision.py` | The shared record: its fields, the kinds, the `accept-objective` and `authorize-operation` subjects, `statement_verdict` and `check_record` |
 | `acceptance_recorder.py` | `prepare` and `record`, the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
-| `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy, the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
+| `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy, the protection verifier's seam, the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
 | `tests/test_recorder_edits.py` | The recorder's edits, byte for byte, line endings included; every code has a remedy (unit) |
 | `tests/test_acceptance_recorder.py` | `prepare` and `record` on throwaway fixture repositories: the resolver round trip, the id kept on re-recording, the shared shape, every refusal; the command line (integration) |
 | `tests/test_live_openspec.py` | Live, skipped unless `AIEH_OPENSPEC` names the pinned OpenSpec 1.16.0: `validate --strict` accepts a change holding `owner-decisions/` and `x-outcomes`, `archive --yes` moves the decision record with the change byte for byte, and the outcome resolves at its archived path (e2e) |
 | `tests/owner_fixture.py` | The fixture project repository (two changes from the P-01.2 recording) and the example record; `--record` rewrites it |
 | `tests/fixtures/accept-objective.decision.json` | The example decision record (synthetic statement, fixed clock, nonce and ids) |
-| `tests/fake_gitea.py` | A fake Gitea 28.3.0 (the slice the authorization recorder uses, as read in the pinned source), callable in memory or served by an in-process HTTP server on 127.0.0.1 that can drop an answer; and a fixture credential provider |
-| `tests/authz_support.py` | The authorization recorder's per-test fixture: a fake Gitea, a fixture provider, the recorder's state and an integration store of its own, a fixed clock |
-| `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the command line (unit) |
-| `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; every bot token refused; no token minted; a lost answer resolved by reading (integration) |
-| `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture, skipped unless `AIEH_AUTHZ_RECORDER_LIVE=1` and `AIEH_AUTHZ_RECORDER_APPROVAL` name an Owner-approved run (e2e) |
+| `tests/fake_gitea.py` | A fake Gitea 28.3.0 (the slice the authorization recorder uses, as read in the pinned source, and a bot's proposal routes for the live exercise's phase plumbing), callable in memory or served by an in-process HTTP server on 127.0.0.1 that can drop an answer; and a fixture credential provider |
+| `tests/authz_support.py` | The authorization recorder's per-test fixture: a fake Gitea, a fixture provider, the recorder's state and an integration store of its own, a fixed clock, and a fake protection verifier (`verified` unless a test scripts it) |
+| `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the protection verifier's seam (only a well-formed verdict counts), the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the command line (unit) |
+| `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; fail closed on every protection answer but `verified` (no verifier included), the verifier the last read before the receipt and the merge, the bracket after it; every bot token refused; no token minted; a lost answer resolved by reading (integration) |
+| `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture in two phases with the Owner's own decision between them, each skipped unless `AIEH_AUTHZ_RECORDER_LIVE` names it (`prepare`, then `record`; e2e) |
+| `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: the presentation, the statement-file refusals, the expected outcome without a verifier, the stale-head control, the SECURITY FAILURE stop (unit) |
 
 ## The Owner decision record (`owner-decision/v1`)
 
@@ -165,8 +166,11 @@ only in the main session on an Owner decision.
    `<state>/owner-authorization/challenges/<nonce>.json`: the operation, the pull request, its
    exact head, the manifest's digest and what it declares, the summary to show the Owner (the
    manifest itself included), a random nonce and its expiry (30 minutes by default, at most a day).
+   It also asks the protection verifier and reports its answer under `protection` (not in the
+   challenge); it refuses nothing on it, since it sends nothing.
 2. **`record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION`** refuses (below) unless
-   every check holds, then writes the Owner decision record (kind `authorize-operation`) to
+   every check holds, the protection verifier's answer last (below), then writes the Owner decision
+   record (kind `authorize-operation`) to
    `<state>/owner-authorization/decisions/<decisionId>.json` and, before anything is sent, a
    write-ahead receipt of its own append-only kind in the integration store
    (`owner-authorization/v1/<nonce>`, format `aieh-owner-authorization/1`, holding the decision, the
@@ -175,8 +179,9 @@ only in the main session on an Owner decision.
    `AIEH-Decision-Channel`, `AIEH-Approved-Head`, `AIEH-Manifest-Digest`, `AIEH-Statement-Ref` and
    `AIEH-Recorder: authorization-recorder/1` in the message, then reads back the protected ref (the
    merge commit), its parents (the approved head second), the trailers, the manifest digest at the
-   merge and `merged_by`. The receipt ends `confirmed`, `failed` (Gitea refused; nothing merged) or
-   `unknown` (the answer was lost, or a 5xx, or the read-back disagreed).
+   merge and `merged_by`, and asks the protection verifier once more. The receipt ends `confirmed`,
+   `failed` (Gitea refused; nothing merged) or `unknown` (the answer was lost, or a 5xx, or the
+   read-back disagreed).
 3. **`resolve --challenge NONCE`** resolves an `unknown` receipt **by reading**, never by merging:
    `confirmed` when the pull request was merged by `aieh-owner` with this decision's trailers,
    approved head and digest; `failed` only on a definitive read: merged otherwise (not by
@@ -206,8 +211,36 @@ expectation derived from `gitea_roles.protection_rules()`): the repository is pr
 with its default branch, allowing merge commits, and `aieh-owner` holds write but not admin; the
 protected branch is protected, `aieh-owner` cannot push to it but can merge, with the rule's required
 approvals and no status checks. It cannot see who else is on the merge or push allowlists, force
-push, `block_admin_merge_override`, `block_on_outdated_branch`, the approvals allowlist or the
-rule's name (`Policy.unobservable`).
+push, `block_admin_merge_override`, `block_on_outdated_branch`, the approvals allowlist,
+`block_on_rejected_reviews`, the bypass allowlist (`enable_bypass_allowlist` and its users and teams,
+who may force-merge past every gate), `block_on_codeowner_reviews` or the rule's name
+(`Policy.unobservable`). These checks stay, as a layer beside the protection verifier.
+
+**The protection verifier (fail closed).** Decision 0012 point 6 (Owner decision OA-15a): the
+recorder does not merge unless every security-relevant protection rule is verified by a narrowly
+scoped, trusted, read-only check immediately before the merge, and a merge is refused when a
+required setting cannot be verified. That check's mechanism is undecided (Owner action OA-16), so the
+recorder calls it through a mechanism-neutral seam:
+
+- `Context.verifier` is a callable `verifier(repository, base, phase)` returning
+  `ProtectionVerdict(status, detail, digest=None)`: `status` one of `verified`, `drift`, `unverified`;
+  `digest` (`sha256:<64 hex>` or none) identifies what it observed. It is given no credential,
+  session or state of the recorder.
+- `record` asks it (phase `before-merge`) as the last read before the receipt is reserved and the
+  merge is sent, after every other check. `verified` goes on; `drift` refuses `PROTECTION_DRIFT`;
+  `unverified`, an exception (its type is recorded, never its text), a malformed answer or **no
+  verifier configured** refuses `PROTECTION_UNVERIFIED`. Each refusal sends nothing, writes no
+  receipt and no decision record, and leaves the challenge usable until it expires.
+- After the read-back it asks once more (phase `after-merge`). Both answers go into the receipt,
+  additively in format `aieh-owner-authorization/1`: `protection.before` in the intent, and
+  `protection` `{before, after, equal}` in the confirmed detail. An answer that differs from the
+  first (verdict or digest) adds `code: PROTECTION_CHANGED_AFTER_MERGE` and its disclosure: the merge
+  stands, the receipt stays `confirmed`, the command exits 0 and says so on standard error. It is a
+  disclosure (`DISCLOSURES`), not a refusal.
+- `prepare` asks it (phase `prepare`) and reports the answer.
+- The command line's context (`managed_context`) configures **no verifier**, so `task owner:authorize
+  -- record ...` refuses every merge with `PROTECTION_UNVERIFIED` until OA-16's mechanism is built
+  and qualified.
 
 ### Refusals
 
@@ -224,12 +257,16 @@ rule's name (`Policy.unobservable`).
 | `CREDENTIAL_MISSING`, `CREDENTIAL_REFUSED`, `CREDENTIAL_REJECTED` | no entry; an entry naming another account (a bot) or holding a token-shaped or empty secret, refused before anything is sent; Gitea refuses the password |
 | `IDENTITY_NOT_OWNER`, `OWNER_IS_ADMIN`, `OWNER_HAS_TOKEN` | the credential signs in as another account; `aieh-owner` is an administrator; it holds a token |
 | `POLICY_DRIFT` | the repository or the protected branch differs from the expected policy |
+| `PROTECTION_UNVERIFIED`, `PROTECTION_DRIFT` | the protection verifier did not answer `verified` before the merge: no verifier configured (the command line until OA-16), `unverified`, an exception or a malformed answer; or it found drift |
 | `PULL_NOT_FOUND`, `PULL_NOT_OPEN`, `PULL_BASE_WRONG`, `PULL_AUTHOR_OWNER` | no such pull request; not open; not from a branch of the repository into the protected branch; opened by `aieh-owner` |
 | `MANIFEST_NOT_SINGLE`, `MANIFEST_INVALID`, `MANIFEST_EXPIRED` | not exactly one added `operations/<id>.json`; the four fields above; the manifest's expiry has passed |
 | `HEAD_STALE`, `DIGEST_CHANGED` | the head is not the challenged one (the recorder's check, or Gitea's 409 to `head_commit_id`); the digest is not the challenged one |
 | `OPERATION_NOT_NEW`, `PULL_NOT_MERGEABLE` | the manifest is on the protected branch already or the operation has a receipt that is not failed; Gitea does not report the pull request mergeable |
 | `MERGE_REFUSED`, `OUTCOME_UNKNOWN` | Gitea refused the merge (405 and others; receipt failed); the answer was lost or did not read back (receipt unknown; run `resolve`) |
 | `GITEA_UNAVAILABLE`, `RECEIPT_MISSING` | Gitea did not answer a read; `resolve` for a nonce without a receipt |
+
+One code is a disclosure, not a refusal: `PROTECTION_CHANGED_AFTER_MERGE` in a confirmed receipt's
+detail, when the verifier's answer after the merge differs from its answer before it.
 
 ## Commands
 
@@ -258,13 +295,40 @@ The authorization recorder, only in the main session on an Owner decision:
 `task owner:authorize -- prepare ...` (and `record`, `resolve`) run them. `--port` names the Gitea
 port; by default the managed Gitea's host record gives it.
 
-The live exercise on the S-01.2.2 fixture is an Owner-approved act, never run by default
-(`test_live_authorization.py` lists what it reads, writes and leaves):
+The live exercise on the S-01.2.2 fixture runs in two phases, each an Owner-approved act and never
+run by default (`test_live_authorization.py` lists what each reads, writes and leaves). It never
+constructs an Owner statement (Owner decision OA-14):
 
 ```
-AIEH_AUTHZ_RECORDER_LIVE=1 AIEH_AUTHZ_RECORDER_APPROVAL=<scheme:reference> \
+AIEH_AUTHZ_RECORDER_LIVE=prepare AIEH_AUTHZ_RECORDER_RUN_DIR=<an existing, empty directory> \
+    <tools python> -I -B -m unittest discover -s integrations/owner/tests -p test_live_authorization.py -v
+AIEH_AUTHZ_RECORDER_LIVE=record AIEH_AUTHZ_RECORDER_RUN_DIR=<the same directory> \
+    AIEH_AUTHZ_RECORDER_STATEMENT=<the Owner's statement file> \
     <tools python> -I -B -m unittest discover -s integrations/owner/tests -p test_live_authorization.py -v
 ```
+
+1. **prepare**: the builder bot proposes two manifests (`operations/<id>.json`) and the reviewer bot
+   approves both; each bot token's merge of each must be refused (any success, or main moving, is a
+   **SECURITY FAILURE**: the test fails naming it and stops); the recorder's real `prepare` issues each
+   one-time challenge into the run directory's own recorder state (`<run dir>/recorder`); then
+   `presentation.json` and `presentation.txt` list, per challenge, the repository, the pull request,
+   the base, the approved head, the manifest and its digest, the operation id, kind, target and
+   expiry, the nonce and its expiry, the effects the merge will have, the expected outcome and the
+   recorder's own summary, and name the stale-head control (pull request B, expected refusal 409).
+   Nothing is merged.
+2. **The Owner, between the phases.** The Overseer presents the presentation. Only if the Owner then
+   authorizes in his own words, naming the operation id(s), does the Overseer write that reply
+   verbatim into the statement file (`{"text", "attributedTo": "owner", "channel": "main-session",
+   "reference"}`) and run phase record.
+3. **record**: the statement is read exactly as written and checked by the recorder's own statement
+   checks; a missing, empty or non-JSON file, a model-authored or non-Owner statement, or one naming
+   none of the challenged operations is refused before Gitea or the credential provider is touched.
+   `record` runs for each challenge the statement names (the stale-head control first: its head is
+   moved after the recorder's checks and before its merge call, so Gitea answers 409, `HEAD_STALE`,
+   receipt failed); then the read-backs, zero tokens on `aieh-owner`, closing every pull request left
+   open, and the custody inspection. **With no protection verifier (the state until OA-16), every
+   `record` is expected to refuse `PROTECTION_UNVERIFIED` and nothing is merged**; the presentation
+   records that no verifier was available and says so as the expected outcome.
 `statement.json` is `{"text": ..., "attributedTo": "owner", "channel": ..., "reference": ...}`.
 
 ## Not yet verified
@@ -286,4 +350,6 @@ AIEH_AUTHZ_RECORDER_LIVE=1 AIEH_AUTHZ_RECORDER_APPROVAL=<scheme:reference> \
   exercise (`test_live_authorization.py`) is opt-in and has not run.
 - Any real Owner authorization; the statement's attribution against its source (as above).
 - The protection rule itself: `aieh-owner` cannot read it in Gitea 28.3.0, so the allowlists of other
-  accounts and the override flags are not compared before a merge (`Policy.unobservable`).
+  accounts and the override flags are not compared by its own checks (`Policy.unobservable`). The
+  recorder fails closed on them (the protection verifier); no verifier exists until OA-16, so it
+  merges nothing. The two-phase live exercise has not run.
