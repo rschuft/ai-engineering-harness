@@ -23,7 +23,12 @@ What it does, on aieh-authz-fixture/authz only (expected outcomes stated in adva
    current head). Expected: 403 or 405 each; main unchanged.
 6. Cleanup: the builder closes pull request B. The merge commit of A stays on the fixture's main (a
    protected branch: only a site administrator could rewrite it), and the two work/ branches stay
-   (protected branches cannot be deleted). The temporary state and store are removed.
+   (protected branches cannot be deleted). The temporary state and store are removed after step 7.
+7. Inspection: the password of aieh-owner (read once more from its entry, in memory) is searched for,
+   as UTF-8 and UTF-16LE, in every file of the managed data root, every file git lists in the
+   checkout, the exercise's temporary state and store, and this process's environment (inherited from
+   the session that runs it). Expected: found nowhere, nothing unreadable. Guest and job environments
+   are not reachable from the host and are not scanned here.
 
 AIEH_AUTHZ_RECORDER_REPORT, when set, names a JSON file that receives the observations (statuses, commit
 ids, trailers, receipt states; never a credential).
@@ -178,6 +183,33 @@ class LiveExercise(unittest.TestCase):
         self.assertEqual(self.main_head(), after)
         status, _ = self.bot('builder').call('PATCH', f'/repos/{REPOSITORY}/pulls/{pull_b}', {'state': 'closed'})
         self.observed['cleanup'] = {'close_b': status}
+        # the inspection: the Owner credential is in its provider entry only
+        self.observed['inspection'] = inspection = inspect_custody(self.provider, self.root)
+        self.assertEqual(inspection['found'], [], inspection)
+        self.assertEqual(inspection['unreadable'], [], inspection)
+
+
+def inspect_custody(provider, scratch):
+    """Where aieh-owner's password is, besides its provider entry: every file of the managed data root (the
+    recorder's state and the integration store included), every file git lists in the checkout, this
+    exercise's temporary state and store, and the environment of this process (which inherits the
+    session's). File names only; the password is held in memory for the scan and dropped."""
+    entry = provider.get(AR.OWNER_ENTRY)
+    needles = [entry[1].encode('utf-8')]
+    del entry
+    try:
+        root = G.paths.resolve().root
+        managed = G.contains_secret(Path(str(root)), needles)
+        checkout = G.files_containing(G.checkout_files(su.REPO), needles)
+        temporary = G.contains_secret(Path(scratch), needles)
+        environment = [name for name, value in os.environ.items()
+                       if any(n in value.encode('utf-8', 'replace') for n in needles)]
+    finally:
+        needles.clear()
+    return {'found': managed['found'] + checkout['found'] + temporary['found'] + environment,
+            'unreadable': managed['unreadable'] + checkout['unreadable'] + temporary['unreadable'],
+            'scanned': {'managed root': 'every file', 'checkout': 'git ls-files --cached --others --exclude-standard',
+                        'temporary state and store': 'every file', 'environment': 'this process'}}
 
 
 if __name__ == '__main__':
