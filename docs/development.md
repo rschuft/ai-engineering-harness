@@ -1122,7 +1122,7 @@ delta specs. It does not check the content of a proposal; that is this checker's
 Plan leaf F-10.2 adds [`integrations/repository/`](../integrations/repository/README.md), the
 shared repository-access module of
 [decision 0014](../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
-(Accepted): read-only access to git repositories over Dulwich 1.2.21, from the Python tools set,
+(Accepted): access to git repositories over Dulwich 1.2.21, from the Python tools set,
 in the calling process. It launches no process. It holds the work-tree check, the preserved
 revision grammar (every form git resolves, refusing only 0014's gap forms with
 `REVISION_INVALID` before any access), object reads, file lists, `export_tree` (blob bytes),
