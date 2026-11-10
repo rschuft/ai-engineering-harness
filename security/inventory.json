@@ -248,6 +248,23 @@
       "evidence": ["evidence/S-01.2.2-segregated-credentials.md"]
     },
     {
+      "id": "authorization-recorder",
+      "name": "Owner authorization recorder",
+      "kind": "trusted-service",
+      "domain": "td-owner",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "A deterministic, non-model recorder, the sole custodian of cred-gitea-owner-account (decision 0012, Proposed). On a recorded Owner decision it merges one exact operation manifest into the protected authorization branch as aieh-owner: HTTP basic authentication with the password read from the credential provider into memory for each command; never a token, sudo, force_merge or auto-merge; merge commits only, with head_commit_id and the decision trailers; a write-ahead receipt in the integration store. It has no agent-callable or MCP surface and runs only in the main session on an Owner decision.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2"],
+      "findings": ["fd-bootstrap-shared-identity", "fd-owner-authorization-record"],
+      "notes": "Built at P-04.2 (integrations/owner/authorization_recorder.py, task owner:authorize) and exercised against a fake Gitea only; it has merged nothing on a real Gitea. During bootstrap it runs as a process of the Owner's Windows account, which the host-side bootstrap agents share (fd-bootstrap-shared-identity; decision 0010)."
+    },
+    {
       "id": "inference-broker",
       "name": "Inference broker",
       "kind": "trusted-service",
@@ -613,16 +630,16 @@
       "authority": "owner",
       "issuer": "gitea-site-admin",
       "holder": "owner",
-      "manager": "owner",
+      "manager": "authorization-recorder",
       "readable_by": [],
-      "storage": "The non-administrator Gitea account aieh-owner. Owner directive of 2026-11-07: the Owner never signs in to Gitea or opens Credential Manager. Its final password was generated and set by task gitea:finalize-credentials on 2026-11-07 through Gitea's own forced change and is held in the credential provider entry \"AIEH Gitea owner\"; the temporary entry is deleted and the account holds no token. It is not read by agents, bots or tests; how the Owner identity is used internally is to be decided. Never an Owner PAT or session inside agent workspaces or CI runners.",
+      "storage": "The non-administrator Gitea account aieh-owner. Owner directive of 2026-11-07: the Owner never signs in to Gitea or opens Credential Manager. Its final password was generated and set by task gitea:finalize-credentials on 2026-11-07 through Gitea's own forced change and is held in the credential provider entry \"AIEH Gitea owner\"; the temporary entry is deleted and the account holds no token. Its custodian is the authorization recorder (P-04.2; decision 0012, Proposed), which alone reads it, by name, into memory for each command, to merge as aieh-owner on a recorded Owner decision; it refuses an entry that names another account or holds a token. It is not read by agents, bots or tests (the recorder's tests use a fixture provider). Never an Owner PAT or session inside agent workspaces or CI runners.",
       "scope": "Merge allowlist of the protected authorization branch; review of exact operation manifests.",
       "lifetime": "Harness-held; rotated by rerunning credential finalization under the Owner's approval of 2026-11-07; no fixed lifetime yet.",
       "rotation_revocation_owner": "owner",
       "status": "observed",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
       "evidence": ["evidence/F-06.1-gitea-loopback.md", "evidence/S-01.2.2-segregated-credentials.md"],
-      "findings": ["fd-bootstrap-shared-identity"]
+      "findings": ["fd-bootstrap-shared-identity", "fd-owner-authorization-record"]
     },
     {
       "id": "cred-gitea-admin",
@@ -1605,8 +1622,11 @@
       "owner_only": true,
       "credentials": ["cred-gitea-owner-account"],
       "assets": ["repo-gitea-authorization", "gitea-server"],
+      "planned_performer": "authorization-recorder",
+      "performed_via": "Delegated: the authorization recorder (P-04.2; decision 0012, Proposed) performs the merge as aieh-owner on a recorded Owner decision; the Owner never operates Gitea. Not performed yet: no authorization repository exists, and the recorder has run against a fake Gitea only.",
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2"],
+      "findings": ["fd-owner-authorization-record"]
     },
     {
       "id": "op-gitea-administration",
@@ -1811,15 +1831,16 @@
     {
       "id": "fd-owner-authorization-record",
       "kind": "limit",
-      "title": "Owner authorization has no authenticated record yet",
-      "detail": "During bootstrap the Owner's decisions and authorizations reach the repository as records the Overseer writes (decisions/, evidence/bootstrap-log.md), committed from the Owner's account. The planned record is an Owner-only protected Gitea merge, verified by a read-only verifier (SEC-02). Gitea runs on host loopback (F-06.1), but no authorization repository or protected branch exists yet.",
-      "refs": ["owner", "op-policy-change", "op-protected-merge"],
+      "title": "Owner authorization is a recorded decision, not an authenticated one",
+      "detail": "Narrowed at P-04.2, not closed. An Owner authorization is now a recorded decision: the authorization recorder (decision 0012, Proposed) records the Owner's statement in the shared Owner decision record (kind authorize-operation), binds it to the exact head and manifest digest of the proposal, writes a write-ahead receipt to the integration store and merges as aieh-owner with the decision's trailers; merged_by aieh-owner means merged under Owner authority by the recorder, never by the Owner. What remains: in the bootstrap channel the statement is the Owner's verbatim reply in the main-session conversation, transcribed by the Overseer, which proves a declared decision bound to an exact revision, not an authenticated Owner (the target channel is an authenticated Owner host session); aieh-owner cannot read the branch protection rule in Gitea 28.3.0 (repository or site administrators only), so the other accounts on the allowlists and the override flags are not compared before a merge; processes of the Owner's account can reach the credential (decision 0010); no authorization repository, verifier or Owner authorization exists yet, and the recorder has run against a fake Gitea only. During bootstrap the Owner's other decisions still reach the repository as records the Overseer writes (decisions/, evidence/bootstrap-log.md).",
+      "refs": ["owner", "authorization-recorder", "cred-gitea-owner-account", "op-policy-change", "op-protected-merge"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority",
-        "evidence/bootstrap-log.md"
+        "evidence/bootstrap-log.md",
+        "integrations/owner/README.md"
       ],
-      "carried_to": ["G-04.x"]
+      "carried_to": ["G-03.1", "G-04.x"]
     },
     {
       "id": "fd-guest-login-name-and-key",
