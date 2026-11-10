@@ -73,8 +73,8 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
-| `python/tools-requirements.in` / `.txt` | The Python tools venv (`task tools:install`, part of `task setup`; F-07.1, [decision 0009](../../decisions/0009-managed-data-root-and-configuration-contract.md); F-10.1, [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)): `dulwich==1.2.21` and `urllib3==2.8.0`, for the Python components' repository operations, and `pyyaml==6.0.3`, for the optional `config.yml`, compiled universally for CPython 3.12. Not part of the component resolution. See [Tools lock](#tools-lock-f-071-f-101) and [`integrations/paths`](../../integrations/paths/README.md). | 3 direct, 3 pins |
-| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0` and `pytest-xdist==3.8.0`, and the tools set's `dulwich==1.2.21`, `pyyaml==6.0.3` and `urllib3==2.8.0`, compiled universally for CPython 3.12. Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 5 direct, 11 pins |
+| `python/tools-requirements.in` / `.txt` | The Python tools venv (`task tools:install`, part of `task setup`; F-07.1, [decision 0009](../../decisions/0009-managed-data-root-and-configuration-contract.md); F-10.1, [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)): `dulwich==1.2.21` and `urllib3==2.8.0`, for the Python components' repository operations, and `pyyaml==6.0.3`, for the optional `config.yml`, compiled universally for CPython 3.12; and `keyring==25.7.0`, the credential provider on Linux and macOS (F-06.3), with its closure copied from the per-target locks below, with `sys_platform` markers. Not part of the component resolution. See [Tools lock](#tools-lock-f-071-f-101) and [`integrations/paths`](../../integrations/paths/README.md). | 4 direct, 14 pins |
+| `python/dev-requirements.in` / `.txt` | The dev tools venv (`task dev:install`, F-09.2): `pytest>=9.0` and `pytest-xdist==3.8.0`, and the tools set's `dulwich==1.2.21`, `pyyaml==6.0.3` and `urllib3==2.8.0`, compiled universally for CPython 3.12, and its keyring closure (F-06.3). Not part of the component resolution. See [Dev tools lock](#dev-tools-lock-f-092). | 6 direct, 22 pins |
 | `python/windows-x86_64.txt` | The hash-locked closure for win_amd64, CPython 3.12. | 195 pins: 4 direct, 191 transitive |
 | `python/linux-x86_64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) x86_64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
 | `python/linux-aarch64.txt` | The hash-locked closure for manylinux (glibc ≥ 2.28) aarch64, CPython 3.12. | 194 pins: 4 direct, 190 transitive |
@@ -213,7 +213,44 @@ locally, and each hash equals both the lock and PyPI's JSON API, as do PyYAML's 
 
 The licence election is also recorded in `../candidates.json` (`dulwich`, `license_elected`) and
 in `../inventory/LEDGER.md`. A contract test in `tools/tests/test_pytest_conftest.py` keeps the
-tools lock to exactly these three pins, and the dev lock's blocks for them equal to it.
+tools lock to exactly these three pins and the keyring closure below, and the dev lock's blocks for them
+equal to it.
+
+### The keyring closure (F-06.3)
+
+On 2026-11-10 (plan leaf F-06.3; draft decision 0011 section 3) `keyring==25.7.0` was added to
+`python/tools-requirements.in`, and keyring and its dependencies were **copied** into
+`tools-requirements.txt` and `dev-requirements.txt`: each block byte for byte from the F-01.2
+per-target locks (`windows-x86_64.txt` for the packages every platform needs and for
+`pywin32-ctypes`, `linux-x86_64.txt` for the Linux-only ones), with the same version and the same
+hashes in the same order as every per-target lock that has the package. Nothing was resolved: these
+are the versions and digests the F-01.2 resolver already downloaded and checked for every locked
+target. Only each head line gained the `sys_platform` marker that keyring's own requirements give
+(`pywin32-ctypes` on win32; SecretStorage and jeepney on linux) and that SecretStorage's own
+requirements extend to `cryptography`, `cffi` and `pycparser`. These blocks are therefore not uv's
+output: regenerating the tools lock with the command in [Regenerating the lock](#regenerating-the-lock)
+would re-resolve keyring's transitive pins and is not the process for them; the rest of the file is as
+before, and a contract test (`test_the_keyring_closure_is_copied_from_the_component_locks`) keeps every
+block equal to its per-target lock's.
+
+| Package | Version | Marker | Licence (wheel metadata) | On Windows x86_64 |
+|---|---|---|---|---|
+| keyring | 25.7.0 | none | MIT | installed, `py3-none-any`; never instantiated by the harness on Windows |
+| jaraco.classes | 3.4.0 | none | MIT (classifier) | installed, `py3-none-any` |
+| jaraco.context | 6.1.2 | none | MIT | installed, `py3-none-any` |
+| jaraco.functools | 4.6.0 | none | MIT | installed, `py3-none-any` |
+| more-itertools | 11.2.1 | none | MIT | installed, `py3-none-any` |
+| pywin32-ctypes | 0.2.3 | `sys_platform == 'win32'` | BSD-3-Clause | installed, `py3-none-any` (keyring's Windows backend dependency; that backend is not used) |
+| SecretStorage | 3.5.0 | `sys_platform == 'linux'` | not read here (not installed on Windows) | skipped by its marker |
+| jeepney | 0.9.0 | `sys_platform == 'linux'` | not read here | skipped by its marker |
+| cryptography | 50.0.2 | `sys_platform == 'linux'` | not read here | skipped by its marker |
+| cffi | 2.1.1 | `sys_platform == 'linux'` | not read here | skipped by its marker |
+| pycparser | 3.12 | `sys_platform == 'linux'` | not read here | skipped by its marker |
+
+On CPython 3.12 keyring needs no `importlib_metadata` and jaraco.context no `backports.tarfile` (both
+only below 3.12). macOS needs none of the Linux packages: keyring's macOS backend uses ctypes on the
+Security framework. The Linux installation (including `cryptography` and `cffi`, which are platform
+wheels) and the macOS installation are **not yet verified** (F-06.4, F-06.5).
 
 ## Dev tools lock (F-09.2)
 

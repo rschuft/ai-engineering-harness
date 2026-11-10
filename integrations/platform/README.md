@@ -17,9 +17,9 @@ adapters follow in F-06.4 and F-06.5; until then the contract refuses them with
 | Path | What |
 |---|---|
 | `platform_contract.py` | The verbs, the records, the refusal codes and their remedies, adapter selection, the `CredentialProvider` interface, the write-ahead transition log and the transition verbs over a service's operations, and the I7 exposure guard |
-| `platform_windows.py` | The Windows adapter, extracted unchanged from F-06.1's `gitea_host.py`: the kill-on-close Job Object, process identity, the TCP and UDP tables, the process token, the read-only-shared binary handle, Credential Manager |
+| `platform_windows.py` | The Windows adapter, extracted unchanged from F-06.1's `gitea_host.py`: the kill-on-close Job Object, process identity, the TCP and UDP tables, the process token, the read-only-shared binary handle; it supplies Credential Manager through the credential factory of [`integrations/credentials/`](../credentials/README.md) (F-06.3) |
 | `tests/test_platform_contract.py` | The contract: verbs, formats, codes and remedies, asset keys, adapter selection, run and readiness records, versions, transitions and their orchestration over a fake service, the exposure guard (offline) |
-| `tests/test_platform_windows.py` | The Windows adapter's declarations and refusals with fakes; its listener, token and identity reads of the test process (Windows) |
+| `tests/test_platform_windows.py` | The Windows adapter's declarations and refusals with fakes, and the credential provider it supplies; its listener, token and identity reads of the test process (Windows) |
 
 ## Verbs
 
@@ -83,8 +83,10 @@ fingerprints only.
 - **Verified bytes:** a binary is hashed through a handle that shares read only, and the process starts
   while that handle is held.
 - **Credentials:** Credential Manager generic credentials (`CredWriteW`, `CredReadW`, `CredDeleteW`);
-  `ERROR_NO_SUCH_LOGON_SESSION` is `CREDENTIAL_PROVIDER_LOCKED`. F-06.3 moves the providers to
-  `integrations/credentials/`.
+  `ERROR_NO_SUCH_LOGON_SESSION` is `CREDENTIAL_PROVIDER_LOCKED`. Since F-06.3 the provider lives in
+  [`integrations/credentials/credential_provider.py`](../credentials/README.md), and the adapter's
+  `credential_provider()` returns what that module's fail-closed factory chooses for Windows; keyring is
+  never instantiated on Windows.
 
 ## Commands
 
@@ -96,4 +98,5 @@ fingerprints only.
 
 - Linux and macOS (F-06.4, F-06.5).
 - What ends the managed environment on a sign-out or a reboot (declared, rehearsed in F-06.6).
-- `CREDENTIAL_PROVIDER_LOCKED` in a real session without a credential store (fakes only).
+- `CREDENTIAL_PROVIDER_LOCKED` in a real session without a credential store (fakes only; F-06.3 maps
+  keyring's `KeyringLocked` to it too, with fakes only).

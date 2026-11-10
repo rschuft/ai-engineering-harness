@@ -15,7 +15,10 @@ Since plan leaf F-06.2, `gitea_host.py` composes the **host-service lifecycle co
 platform adapter of [`integrations/platform/`](../platform/README.md) (draft decision 0011): every process,
 Job Object, listener, token and Credential Manager call goes through the adapter, and the contract
 defines the verbs, the records and the refusal codes. Windows record:
-[`evidence/F-06.2-platform-windows.md`](../../evidence/F-06.2-platform-windows.md).
+[`evidence/F-06.2-platform-windows.md`](../../evidence/F-06.2-platform-windows.md). Since F-06.3 the
+credential provider is [`integrations/credentials/`](../credentials/README.md), which the adapter
+supplies through the harness's fail-closed factory
+([`evidence/F-06.3-credential-provider.md`](../../evidence/F-06.3-credential-provider.md)).
 
 ## Files
 
@@ -189,11 +192,22 @@ reads the Owner account's yet. How the Owner identity is used internally is stil
 bot, test or ordinary Builder or Reviewer context reads either entry.
 
 **The credential provider.** Callers reach credentials through `CredentialProvider` (`get`, `set`,
-`delete`, `exists`; the contract's interface). `WindowsCredentialProvider` implements it with Credential
-Manager (`CredWriteW`, `CredReadW`, `CredDeleteW`; secrets as UTF-16LE); since F-06.2 the Windows adapter
-supplies it, and a session without a credential store is refused with `CREDENTIAL_PROVIDER_LOCKED`. A
-cross-platform implementation can replace it through `credential_provider()` without its callers
-changing (F-06.3).
+`delete`, `exists`; the contract's interface) from `credential_provider()`. The provider is chosen by the
+harness's factory in [`integrations/credentials/`](../credentials/README.md) (F-06.3), which the
+adapter supplies: on Windows `WindowsCredentialProvider`, Credential Manager (`CredWriteW`, `CredReadW`,
+`CredDeleteW`; secrets as UTF-16LE), moved there unchanged and still importable from `gitea_host`; keyring
+is never instantiated on Windows. A session without a credential store is refused with
+`CREDENTIAL_PROVIDER_LOCKED`, and no qualified provider with `NO_CREDENTIAL_PROVIDER`.
+
+**Receipts of credential acts (F-06.3).** Every rotate or retire act writes an integration-store receipt
+(decision 0007 point 5: fingerprint, role, trigger, revoker, affected attempts; fingerprints only) and
+reads it back: `finalize-credentials` one per account, `gitea_roles.py rotate ROLE` and `retire ROLE` one
+per run, a resumed run included. The receipt is reserved before anything changes (without it the act does
+not start), marked dispatched before the upstream change, then confirmed with the outcome (failed when
+the harness observed that the change did not apply, unknown when the outcome is uncertain) and read back;
+an act whose receipt is not read back as written fails with `CREDENTIAL_RECEIPT_UNREAD`. The command line
+writes into `persistent/state/integration/integration.sqlite` of the managed root (the integration
+store's default location under decision 0009); a caller that passes its own context passes its own store.
 
 ## Role credentials (S-01.2.2)
 
@@ -237,9 +251,12 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
 - A real cross-version `upgrade` (one version is pinned), and the rehearsal of upgrade, recovery and
   uninstall on a disposable instance with a reboot or sign-out (F-06.6).
 - `retire` against the running Gitea (fakes only).
+- The receipts of credential acts against the running Gitea and the managed root's integration store
+  (fakes and a fixture store only, F-06.3).
 - Gitea's egress proxy beyond the 407 answer, and the effective `EGRESS_MODE` policy.
 - Gitea's audit logging (off by default).
-- A credential provider other than Windows Credential Manager.
+- A credential provider other than Windows Credential Manager on a real host (keyring's Secret Service
+  and Keychain backends: F-06.4, F-06.5).
 
 Live-verified on 2026-11-07: `finalize-credentials` on the real instance, with its token remediation and
 no-exposure scan ([F-06.1 section 8](../../evidence/F-06.1-gitea-loopback.md)); the fixture, the

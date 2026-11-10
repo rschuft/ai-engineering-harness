@@ -38,6 +38,7 @@ def _load(name, path):
 
 G = _load('aieh_gitea_host', HERE.parent / 'gitea_host.py')
 C, W, P = G.contract, G.windows, G.paths
+K = G.credentials  # integrations/credentials/credential_provider.py (plan leaf F-06.3)
 PIN = G.pin()
 FAKE_BINARY = b'not gitea, a fixture'
 FAKE_PIN = dict(PIN, sha256=hashlib.sha256(FAKE_BINARY).hexdigest())
@@ -130,9 +131,11 @@ class TestComposition(unittest.TestCase):
     def test_one_error_kind_and_the_moved_names(self):
         self.assertIs(G.GiteaError, C.LifecycleError)
         self.assertIs(G.CredentialProvider, C.CredentialProvider)
-        for name in ('Proc', 'KillOnCloseJob', 'CredentialStore', 'WindowsCredentialProvider',
-                     'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE'):
+        for name in ('Proc', 'KillOnCloseJob', 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE'):
             self.assertIs(getattr(G, name), getattr(W, name))
+        for name in ('CredentialStore', 'WindowsCredentialProvider'):  # moved on to integrations/credentials
+            self.assertIs(getattr(G, name), getattr(K, name))
+        self.assertIs(K.CredentialProvider, C.CredentialProvider)
         self.assertEqual(G.RUN_FORMAT, 'aieh-service-run/1')
         self.assertEqual((G.ASSET_NAME, G.asset_name('28.4.0')), ('gitea-28.3.0-windows-amd64.exe',
                                                                  'gitea-28.4.0-windows-amd64.exe'))
@@ -144,7 +147,7 @@ class TestComposition(unittest.TestCase):
     def test_the_adapter_and_its_credential_provider(self):
         self.assertIsInstance(G.platform(), W.WindowsAdapter)
         self.assertEqual(G.platform().asset_key, G.ASSET_KEY)
-        self.assertIsInstance(G.credential_provider(), W.WindowsCredentialProvider)
+        self.assertIsInstance(G.credential_provider(), K.WindowsCredentialProvider)
         guard = C.ExposureGuard()
         with mock.patch.object(G, 'ACT_GUARD', guard):  # inside an act every secret it handles is held
             provider = G.credential_provider()

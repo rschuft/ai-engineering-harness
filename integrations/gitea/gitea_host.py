@@ -27,8 +27,11 @@ which every access token of the account is revoked with the new credentials, the
 the temporary entry is deleted, and no password may appear in the managed root, the checkout or the
 output. No password is ever printed, logged, put on a command line or in an environment.
 
-Credentials are reached through CredentialProvider (get, set, delete, exists); its Windows
-implementation is Credential Manager (CredWriteW, CredReadW, CredDeleteW).
+Credentials are reached through CredentialProvider (get, set, delete, exists), which the harness's factory
+chooses (integrations/credentials/credential_provider.py, plan leaf F-06.3; through the platform adapter):
+on Windows Credential Manager (CredWriteW, CredReadW, CredDeleteW). Every rotate act (finalize-credentials,
+per account) writes an integration-store receipt, fingerprints only, and reads it back (decision 0007
+point 5): the store at <state>/integration/integration.sqlite of the managed root (decision 0009).
 
 The host-service lifecycle contract (plan leaf F-06.2, integrations/platform/platform_contract.py): this
 module composes the platform adapter (platform(): integrations/platform/platform_windows.py on Windows;
@@ -149,6 +152,7 @@ def _load_platform(name: str, file_name: str):
 
 contract = _load_platform('aieh_platform_contract', 'platform_contract.py')
 windows = _load_platform('aieh_platform_windows', 'platform_windows.py')
+credentials = windows.credentials  # integrations/credentials/credential_provider.py (F-06.3)
 RUN_FORMAT = contract.SERVICE_RUN_FORMAT  # aieh-service-run/1; readers also accept aieh-gitea-run/1
 
 # A refusal (exit 2) or a failure (exit 1) with a stable code: the contract's error, so that the adapter's
@@ -626,25 +630,61 @@ def status(res, lay: Layout, pinned: dict) -> dict:
 
 
 # ---------------------------------------------------------------- credentials
-# The interface is the contract's; the Windows Credential Manager provider is the adapter's
-# (integrations/platform/platform_windows.py). F-06.3 moves the providers to integrations/credentials.
+# The interface is the contract's; the providers and the factory that chooses one are
+# integrations/credentials/credential_provider.py (plan leaf F-06.3), which the adapter supplies.
 
 CredentialProvider = contract.CredentialProvider
-CredentialStore = windows.CredentialStore
-WindowsCredentialProvider = windows.WindowsCredentialProvider
+CredentialStore = credentials.CredentialStore
+WindowsCredentialProvider = credentials.WindowsCredentialProvider
 
 
 def credential_provider() -> CredentialProvider:
-    """The platform's credential provider, chosen by the harness (I6). Inside an act of main() every secret
-    it reads or writes is held by the act's exposure guard, for the I7 scan that follows the act."""
+    """The platform's credential provider, chosen by the harness's factory through the adapter (I6). Inside an
+    act of main() every secret it reads or writes is held by the act's exposure guard, for the I7 scan that
+    follows the act."""
     try:
         provider = platform().credential_provider()
     except GiteaError as exc:
         if exc.code != 'PLATFORM_UNSUPPORTED':
             raise
-        raise GiteaError('NO_CREDENTIAL_PROVIDER', 'only the Windows Credential Manager provider is implemented; '
-                         'the cross-platform provider is pending') from None
+        raise GiteaError('NO_CREDENTIAL_PROVIDER', 'the host service has no lifecycle adapter on this system yet '
+                         '(plan leaves F-06.4 and F-06.5), so no credential act runs here') from None
     return provider if ACT_GUARD is None else contract.WatchedProvider(provider, ACT_GUARD)
+
+
+def _load_integration_store():
+    if (module := sys.modules.get('integration_store')) is None:
+        spec = importlib.util.spec_from_file_location('integration_store',
+                                                      REPO / 'integrations' / 'store' / 'integration_store.py')
+        module = sys.modules['integration_store'] = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['integration_store']
+            raise
+    return module
+
+
+@contextlib.contextmanager
+def credential_receipts(res):
+    """The integration store that holds the credential acts' receipts (decision 0007 point 5), at its managed
+    location <state>/integration/integration.sqlite (decision 0009), opened for the act and closed after."""
+    store_module = _load_integration_store()
+    store = store_module.open_store(paths.ensure('state', res, 'integration') / 'integration.sqlite')
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+def act_receipt(store, verb: str, *, entry: str, user: str, role: str | None, before: str | None, provider,
+                trigger: str, revoker: str, actor: str):
+    """A credential act's receipt (credentials.ActReceipt), held by the act's exposure guard when main() runs
+    it."""
+    return credentials.ActReceipt(store, verb=verb, service=SERVICE, entry=entry, user=user, role=role,
+                                  fingerprint_before=None if before is None else contract.fingerprint(before),
+                                  provider=credentials.describe(provider)['provider'], trigger=trigger,
+                                  revoker=revoker, actor=actor, guard=ACT_GUARD)
 
 
 # ---------------------------------------------------------------- identities
@@ -926,17 +966,40 @@ def revoke_all_tokens(port: int, user: str, password: str, http: Callable = None
 
 
 def finalize_account(port: int, user: str, provider: CredentialProvider, http: Callable = None,
-                     connection: Callable = None, secrets_seen: list | None = None) -> dict:
+                     connection: Callable = None, secrets_seen: list | None = None, receipts=None) -> dict:
     """One account: a new random password, stored in its provider entry BEFORE Gitea is changed (so a crash
     never loses it), set through Gitea's forced change, then every token of the account revoked with the new
     credentials, then verified, then the temporary entry deleted. Reruns resume from any intermediate state.
     The token revocation fails closed on both paths (TOKENS_REMAIN, TOKEN_REVOCATION_UNVERIFIED) and no
     report is returned. A raise after the password change and before the temporary entry is deleted leaves
     both entries in place and the final password set in Gitea: a rerun finds the final entry, sees the
-    change already applied and revokes again, so it resumes there."""
+    change already applied and revokes again, so it resumes there.
+
+    The act is a rotate of the contract (temporary to final): its integration-store receipt (receipts, an open
+    integration store) is reserved before anything changes and confirmed and read back at the end, with
+    fingerprints only; a raise records it failed or unknown."""
     final_name, temp_name = FINAL_TARGETS[user], CRED_TARGETS[user]
     final_entry, temp_entry = provider.get(final_name), provider.get(temp_name)
     report = {'user': user, 'entry': final_name}
+    current = temp_entry or final_entry
+    receipt = act_receipt(receipts, 'rotate', entry=final_name, user=user, role=None,
+                          before=None if current is None else current[1], provider=provider,
+                          trigger='owner direction (Owner directive of 2026-11-07: the harness holds the final '
+                                  'password)', revoker='harness: gitea_host.py finalize-credentials',
+                          actor='gitea_host finalize-credentials')
+    del current
+    receipt.begin()
+    try:
+        report = _finalize_account(port, user, provider, http, connection, secrets_seen, report, final_name,
+                                   temp_name, final_entry, temp_entry, receipt)
+    except BaseException as exc:
+        receipt.abort(exc)
+        raise
+    return report
+
+
+def _finalize_account(port, user, provider, http, connection, secrets_seen, report, final_name, temp_name,
+                      final_entry, temp_entry, receipt) -> dict:
     if temp_entry is None:
         if final_entry is None:
             raise GiteaError('ENTRIES_MISSING', f'neither {temp_name!r} nor {final_name!r} exists; run identities')
@@ -944,11 +1007,13 @@ def finalize_account(port: int, user: str, provider: CredentialProvider, http: C
         if password_state(port, user, final, http) != 'valid':
             raise GiteaError('FINAL_PASSWORD_REJECTED', f'{user}: the stored final password does not authenticate',
                              refusal=False)
+        receipt.dispatched()
         report.update(state='already final', tokens=revoke_all_tokens(port, user, final, http))
     else:
         temp = temp_entry[1]
         if final_entry is None:
             final = secrets.token_urlsafe(FINAL_PASSWORD_BYTES)
+            receipt.dispatched()  # the first change: the final password stored before Gitea changes (I3)
             provider.set(final_name, user, final, f'Password of {user} on the AIEH Gitea (harness-held; set by task '
                                                   'gitea:finalize-credentials). Not for agents, bots or tests.')
             report['stored_before_change'] = True
@@ -957,6 +1022,8 @@ def finalize_account(port: int, user: str, provider: CredentialProvider, http: C
             report['stored_before_change'] = 'by an earlier run'
         if secrets_seen is not None:
             secrets_seen += [temp, final]
+        if receipt.state == 'reserved':
+            receipt.dispatched()
         if password_state(port, user, final, http) == 'valid':
             report['change'] = 'already applied by an earlier run'
         else:
@@ -980,23 +1047,33 @@ def finalize_account(port: int, user: str, provider: CredentialProvider, http: C
         raise GiteaError('ACCOUNT_ROLE_MISMATCH', f'{user}: is_admin is {report["is_admin"]}', refusal=False)
     if secrets_seen is not None and temp_entry is None:
         secrets_seen.append(final)
+    tokens = report.get('tokens') or {}
+    report['receipt'] = receipt.finish({'fingerprint_after': contract.fingerprint(final),
+                                        'state': report.get('state', 'finalized'),
+                                        'tokens_deleted': len(tokens.get('deleted') or []),
+                                        'temporary_entry_deleted': report.get('temporary_entry_deleted')})
     del final
     return report
 
 
 def finalize_credentials(res, lay: Layout, pinned: dict, provider: CredentialProvider | None = None,
-                         http: Callable = None, connection: Callable = None, repo: Path | None = None) -> dict:
+                         http: Callable = None, connection: Callable = None, repo: Path | None = None,
+                         receipts=None) -> dict:
     """Owner directive of 2026-11-07: the harness finishes the two human accounts' credential lifecycle itself.
     The site administrator first, then the Owner account; then no temporary or final password may appear in
     the managed root (its logs included), the checkout or this report: PASSWORD_FOUND on a hit, and
-    SECRET_SCAN_INCOMPLETE when a file or directory could not be searched (names only)."""
+    SECRET_SCAN_INCOMPLETE when a file or directory could not be searched (names only). Each account's act
+    writes its receipt into receipts (an open integration store), or into the managed one when none is given."""
     provider = provider or credential_provider()
     port = read_host_record(lay)['port']
     if not healthy(port):
         raise GiteaError('NOT_RUNNING', 'run up: the credentials are finalized against the running Gitea')
+    if receipts is None:
+        with credential_receipts(res) as store:
+            return finalize_credentials(res, lay, pinned, provider, http, connection, repo, receipts=store)
     seen: list[str] = []
     try:
-        report = {'accounts': [finalize_account(port, user, provider, http, connection, seen)
+        report = {'accounts': [finalize_account(port, user, provider, http, connection, seen, receipts)
                                for user in (SITE_ADMIN, OWNER)]}
         report['entries'] = {name: provider.exists(name) for name in (*FINAL_TARGETS.values(), *CRED_TARGETS.values())}
         needles = [s.encode('utf-8') for s in seen]

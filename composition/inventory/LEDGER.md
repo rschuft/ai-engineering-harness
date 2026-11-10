@@ -56,13 +56,18 @@ The managed-root tool sets that `task tools:install` and `task dev:install` inst
 not part of the resolver's run or of the inventory, SBOM and Grant outputs above. The Dulwich and
 urllib3 pins come from plan leaf F-10.1 and
 [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)
-(Proposed). Each is a PyPI release whose every file is hash-locked; no tag → commit mapping was
-resolved for it.
+(Proposed); keyring and its closure come from plan leaf F-06.3 (draft decision 0011), copied with their
+hashes from the F-01.2 per-target locks. Each is a PyPI release whose every file is hash-locked; no
+tag → commit mapping was resolved for it.
 
 | Package | Version | Declared licence (evidence) | Elected | Locked channels |
 |---|---|---|---|---|
 | Dulwich (`dulwich`) | 1.2.21 | `Apache-2.0 OR GPL-2.0-or-later` (PyPI `license_expression`; wheel METADATA `License-Expression`; licence file `COPYING`) | **Apache-2.0** (decision 0014 section 9), recorded for SHIP-03's release-time licence gate. Nothing is redistributed ([decision 0005](../../decisions/0005-distribution-model-upstream-download-no-redistribution.md)). | PyPI: all 64 files (wheels and sdist) by sha256; installed from the cp312 platform wheel (Windows x86_64 observed), never the sdist |
 | urllib3 (Dulwich's one runtime dependency on CPython 3.12) | 2.8.0 | MIT (PyPI `license_expression`; wheel METADATA) | not applicable | PyPI: the `py3-none-any` wheel and the sdist by sha256; installed from the wheel |
+| keyring (the credential provider on Linux and macOS; plan leaf F-06.3) | 25.7.0 | MIT (wheel METADATA `License-Expression`) | not applicable | PyPI: the `py3-none-any` wheel and the sdist by sha256, copied from the F-01.2 locks; installed from the wheel |
+| keyring's closure on every platform: jaraco.classes, jaraco.context, jaraco.functools, more-itertools | 3.4.0, 6.1.2, 4.6.0, 11.2.1 | MIT (wheel METADATA; jaraco.classes by classifier) | not applicable | as keyring |
+| keyring's closure on Windows: pywin32-ctypes | 0.2.3 | BSD-3-Clause (wheel METADATA) | not applicable | as keyring |
+| keyring's closure on Linux: SecretStorage, jeepney, cryptography, cffi, pycparser | 3.5.0, 0.9.0, 50.0.2, 2.1.1, 3.12 | not read in F-06.3 (not installed on the Windows host); to read at F-06.4 | not applicable | PyPI: every file by sha256, copied from the F-01.2 locks; not yet installed anywhere |
 
 The election records which licence the harness relies on. It is not a compliance verdict:
 **License compliance: NOT VERIFIED** applies here as everywhere in this ledger.

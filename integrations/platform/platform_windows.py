@@ -11,7 +11,9 @@ integrations/gitea/gitea_host.py of plan leaf F-06.1).
 - User identity: the process token's elevation, elevation type and integrity level.
 - Verified bytes: a binary is hashed through a handle that shares read only (no writer, rename or delete
   while it is held), and the process is started while that handle is held.
-- Credentials: Windows Credential Manager generic credentials (CredWriteW, CredReadW, CredDeleteW).
+- Credentials: Windows Credential Manager generic credentials (CredWriteW, CredReadW, CredDeleteW): the
+  provider lives in integrations/credentials/credential_provider.py (plan leaf F-06.3), and the adapter
+  supplies it through that module's factory.
 
 Everything goes through the standard library's ctypes; psutil is not used. The Windows API is loaded
 only when a function is called, so the module imports on any platform.
@@ -42,7 +44,22 @@ def _load_contract():
     return module
 
 
+def _load_credentials():
+    """The credential providers and their factory (integrations/credentials, plan leaf F-06.3)."""
+    if (module := sys.modules.get('aieh_credential_provider')) is None:
+        spec = importlib.util.spec_from_file_location('aieh_credential_provider',
+                                                      HERE.parent / 'credentials' / 'credential_provider.py')
+        module = sys.modules['aieh_credential_provider'] = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['aieh_credential_provider']
+            raise
+    return module
+
+
 contract = _load_contract()
+credentials = _load_credentials()
 LifecycleError = contract.LifecycleError
 
 
@@ -356,96 +373,6 @@ def locked_read(path: Path):
         yield stream
 
 
-# ---------------------------------------------------------------- Windows Credential Manager
-
-
-class CredentialStore:
-    """Generic credentials through CredWriteW / CredReadW / CredDeleteW (advapi32). Values are bytes in
-    memory; nothing here prints or logs them. ERROR_NO_SUCH_LOGON_SESSION (the session has no credential
-    store loaded, e.g. a network logon) is CREDENTIAL_PROVIDER_LOCKED."""
-    GENERIC, PERSIST_LOCAL_MACHINE, ERROR_NOT_FOUND = 1, 2, 1168
-    ERROR_NO_SUCH_LOGON_SESSION = 1312
-
-    def __init__(self):
-        import ctypes
-        from ctypes import wintypes
-
-        class Credential(ctypes.Structure):
-            _fields_ = [('Flags', wintypes.DWORD), ('Type', wintypes.DWORD), ('TargetName', wintypes.LPWSTR),
-                        ('Comment', wintypes.LPWSTR), ('LastWritten', wintypes.FILETIME),
-                        ('CredentialBlobSize', wintypes.DWORD), ('CredentialBlob', ctypes.POINTER(ctypes.c_ubyte)),
-                        ('Persist', wintypes.DWORD), ('AttributeCount', wintypes.DWORD),
-                        ('Attributes', wintypes.LPVOID), ('TargetAlias', wintypes.LPWSTR),
-                        ('UserName', wintypes.LPWSTR)]
-        self._ct, self._Credential = ctypes, Credential
-        adv = ctypes.WinDLL('advapi32', use_last_error=True)
-        adv.CredWriteW.argtypes = (ctypes.POINTER(Credential), wintypes.DWORD)
-        adv.CredReadW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                                  ctypes.POINTER(ctypes.POINTER(Credential)))
-        adv.CredDeleteW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD)
-        adv.CredFree.argtypes = (wintypes.LPVOID,)
-        self._adv = adv
-
-    def _locked(self, call: str, target: str, code: int) -> None:
-        if code == self.ERROR_NO_SUCH_LOGON_SESSION:
-            raise LifecycleError('CREDENTIAL_PROVIDER_LOCKED', f'{call}({target!r}) failed ({code}): this session '
-                                                               'has no credential store')
-
-    def write(self, target: str, user: str, secret: bytes, comment: str) -> None:
-        ct = self._ct
-        blob = (ct.c_ubyte * len(secret)).from_buffer_copy(secret)
-        cred = self._Credential(Type=self.GENERIC, TargetName=target, Comment=comment,
-                                CredentialBlobSize=len(secret), CredentialBlob=ct.cast(blob, ct.POINTER(ct.c_ubyte)),
-                                Persist=self.PERSIST_LOCAL_MACHINE, UserName=user)
-        ok = self._adv.CredWriteW(ct.byref(cred), 0)
-        ct.memset(blob, 0, len(secret))
-        if not ok:
-            code = ct.get_last_error()
-            self._locked('CredWriteW', target, code)
-            raise LifecycleError('CREDENTIAL_WRITE_FAILED', f'CredWriteW({target!r}) failed ({code})',
-                                 refusal=False)
-
-    def read(self, target: str) -> tuple[str, bytes] | None:
-        ct = self._ct
-        pointer = ct.POINTER(self._Credential)()
-        if not self._adv.CredReadW(target, self.GENERIC, 0, ct.byref(pointer)):
-            if (code := ct.get_last_error()) == self.ERROR_NOT_FOUND:
-                return None
-            self._locked('CredReadW', target, code)
-            raise LifecycleError('CREDENTIAL_READ_FAILED', f'CredReadW({target!r}) failed ({code})', refusal=False)
-        try:
-            cred = pointer.contents
-            return cred.UserName or '', ct.string_at(cred.CredentialBlob, cred.CredentialBlobSize)
-        finally:
-            self._adv.CredFree(pointer)
-
-    def delete(self, target: str) -> bool:
-        if self._adv.CredDeleteW(target, self.GENERIC, 0):
-            return True
-        if (code := self._ct.get_last_error()) == self.ERROR_NOT_FOUND:
-            return False
-        self._locked('CredDeleteW', target, code)
-        raise LifecycleError('CREDENTIAL_DELETE_FAILED', f'CredDeleteW({target!r}) failed ({code})', refusal=False)
-
-
-class WindowsCredentialProvider(contract.CredentialProvider):
-    """Windows Credential Manager generic credentials (CredentialStore); the secret is stored as UTF-16LE, as
-    the Credential Manager UI shows it."""
-
-    def __init__(self, store=None):
-        self.store = store or CredentialStore()
-
-    def get(self, name):
-        entry = self.store.read(name)
-        return None if entry is None else (entry[0], entry[1].decode('utf-16-le'))
-
-    def set(self, name, user, secret, comment=''):
-        self.store.write(name, user, secret.encode('utf-16-le'), comment)
-
-    def delete(self, name):
-        return self.store.delete(name)
-
-
 # ---------------------------------------------------------------- the adapter
 
 
@@ -501,4 +428,5 @@ class WindowsAdapter(contract.PlatformAdapter):
         return locked_read(path)
 
     def credential_provider(self):
-        return WindowsCredentialProvider()
+        """Credential Manager, through the harness's factory (integrations/credentials): keyring is not used."""
+        return credentials.select_provider(self.system)

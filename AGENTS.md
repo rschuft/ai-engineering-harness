@@ -93,8 +93,9 @@ unless adaptation is necessary.
   instead of `python` outside Windows.
 - Setup and verification: `task setup`, or the commands it wraps. The first
   three are the basic-tier checks (standard library, offline, seconds). The
-  fourth installs the hash-locked Python tools set (PyYAML, Dulwich, urllib3;
-  wheels only, under the managed data root; network to PyPI once per lock).
+  fourth installs the hash-locked Python tools set (PyYAML, Dulwich, urllib3,
+  keyring; wheels only, under the managed data root; network to PyPI once per
+  lock).
   The tests then run under that set's interpreter, `<tools python>`, which
   `python -I -B integrations/paths/tools_install.py --python` prints (`task
   test`, each per-suite target such as `task repository:test`, `task
@@ -120,6 +121,7 @@ unless adaptation is necessary.
   <tools python> -I -B -m unittest discover -s integrations/lineage/tests -v
   <tools python> -I -B -m unittest discover -s integrations/paths/tests -v
   <tools python> -I -B -m unittest discover -s integrations/platform/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/credentials/tests -v
   <tools python> -I -B -m unittest discover -s integrations/gitea/tests -v
   <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
   <tools python> -I -B -m unittest discover -s integrations/repository/tests -v

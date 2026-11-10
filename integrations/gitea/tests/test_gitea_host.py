@@ -43,6 +43,7 @@ def _load(name, path):
 
 G = _load('aieh_gitea_host', HERE.parent / 'gitea_host.py')
 P = G.paths
+FakeReceipts = _load('aieh_gitea_receipt_fakes', HERE / 'receipt_fakes.py').FakeReceipts
 PIN = G.pin()
 FAKE_BINARY = b'not gitea, a fixture'
 FAKE_PIN = dict(PIN, sha256=hashlib.sha256(FAKE_BINARY).hexdigest())
@@ -524,6 +525,7 @@ class TestFinalizeCredentials(Root):
         G.configure(self.res, self.lay, FAKE_PIN, 13300, run=FakeRun())
         self.events = []
         self.provider = MemoryProvider({G.CRED_TARGETS[u]: (u, p) for u, p in self.TEMP.items()}, self.events)
+        self.receipts = FakeReceipts()
         self.gitea = FakeAccounts(self.TEMP, tokens={G.SITE_ADMIN: [(7, 'aieh-s0122-fixture-20261107T175000Z')]})
         self.repo = self.tmp / 'repo'
         self.repo.mkdir()
@@ -532,10 +534,11 @@ class TestFinalizeCredentials(Root):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def finalize(self, gitea=None):
+    def finalize(self, gitea=None, receipts=None):
         gitea = gitea or self.gitea
         return G.finalize_credentials(self.res, self.lay, FAKE_PIN, provider=self.provider, http=gitea,
-                                      connection=gitea.connection, repo=self.repo)
+                                      connection=gitea.connection, repo=self.repo,
+                                      receipts=receipts or self.receipts)
 
     def finals(self):
         return {u: self.provider.get(G.FINAL_TARGETS[u]) for u in self.TEMP}
@@ -572,6 +575,39 @@ class TestFinalizeCredentials(Root):
         self.assertEqual(after[0], ('GET', f'/api/v1/users/{G.SITE_ADMIN}/tokens'))
         self.assertEqual(after[1], ('DELETE', f'/api/v1/users/{G.SITE_ADMIN}/tokens/7'))
 
+    def test_each_account_act_writes_its_receipt_and_reads_it_back(self):
+        """finalize-credentials is the contract's rotate of the two human accounts (plan leaf F-06.3): one
+        integration-store receipt per account, fingerprints only, read back; a rerun writes its own."""
+        report = self.finalize()
+        states = self.receipts.states()
+        self.assertEqual(list(states.values()), [['reserved', 'dispatched', 'confirmed']] * 2)
+        for account, user in zip(report['accounts'], (G.SITE_ADMIN, G.OWNER)):
+            key = account['receipt']['operation_key']
+            self.assertTrue(key.startswith(f'credential/gitea/rotate/{user}/'))
+            self.assertTrue(account['receipt']['read_back'])
+            intent = json.loads(self.receipts.get(key).intent_json)
+            self.assertEqual((intent['verb'], intent['entry'], intent['user'], intent['role']),
+                             ('rotate', G.FINAL_TARGETS[user], user, None))
+            self.assertEqual(intent['fingerprint_before'], G.contract.fingerprint(self.TEMP[user]))
+            detail = json.loads(self.receipts.events(key)[-1].detail_json)
+            self.assertEqual(detail['fingerprint_after'], G.contract.fingerprint(self.finals()[user][1]))
+        text = self.receipts.text()
+        for secret in [*self.TEMP.values(), *(f for _u, f in self.finals().values())]:
+            self.assertNotIn(secret, text)
+        self.finalize()  # already final: each account's rerun is an act with its own receipt
+        self.assertEqual(len(self.receipts.states()), 4)
+
+    def test_a_receipt_that_cannot_be_reserved_stops_the_act_before_any_change(self):
+        with self.assertRaises(OSError):
+            self.finalize(receipts=FakeReceipts(fail_reserve=True))
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.gitea.accounts[G.SITE_ADMIN]['password'], self.TEMP[G.SITE_ADMIN])
+
+    def test_a_receipt_not_read_back_as_written_fails_the_act(self):
+        with self.assertRaises(G.GiteaError) as caught:
+            self.finalize(receipts=FakeReceipts(corrupt_detail=True))
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('CREDENTIAL_RECEIPT_UNREAD', False))
+
     def test_a_failed_change_keeps_both_entries_and_a_rerun_completes(self):
         failing = FakeAccounts(self.TEMP, fail_change=True)
         with self.assertRaises(G.GiteaError) as caught:
@@ -580,6 +616,8 @@ class TestFinalizeCredentials(Root):
         stored = self.provider.get(G.FINAL_TARGETS[G.SITE_ADMIN])
         self.assertIsNotNone(stored)
         self.assertIsNotNone(self.provider.get(G.CRED_TARGETS[G.SITE_ADMIN]))
+        (key, states), = self.receipts.states().items()  # the failed act is recorded
+        self.assertEqual(states, ['reserved', 'dispatched', 'failed'])
         failing.fail_change = False
         report = self.finalize(failing)
         self.assertEqual(self.provider.get(G.FINAL_TARGETS[G.SITE_ADMIN]), stored)

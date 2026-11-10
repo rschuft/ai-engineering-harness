@@ -1,7 +1,8 @@
 """Tests of the Windows adapter of the host-service lifecycle contract (plan leaf F-06.2).
 
 The unit classes check what the adapter declares and its refusals with fakes: the supervision's flag
-checks, and Credential Manager's "no logon session" error as CREDENTIAL_PROVIDER_LOCKED (the real
+checks, and that it supplies the Credential Manager provider through the harness's factory (the provider and
+its error mapping moved to integrations/credentials in plan leaf F-06.3, whose tests cover them; the real
 Credential Manager is never called). The integration class reads this process's own listener, token and
 identity through the adapter, without launching anything; the Job Object itself is exercised against child
 processes by integrations/gitea/tests/test_gitea_host.py (TestJobObject), through the same code.
@@ -94,53 +95,11 @@ class TestSupervision(unittest.TestCase):
             self.assertIn('remedy:', str(caught.exception))
 
 
-class FakeAdvapi:
-    """advapi32's Cred* functions failing with a chosen last error; nothing reaches Credential Manager."""
-
-    def __init__(self, error):
-        self.error = error
-
-    def _fail(self, *args):
-        import ctypes
-        ctypes.set_last_error(self.error)
-        return 0
-
-    CredReadW = CredWriteW = CredDeleteW = _fail
-
-    def CredFree(self, pointer):
-        raise AssertionError('nothing to free')
-
-
 @windows_only
-class TestCredentialStoreErrors(unittest.TestCase):
-    def store(self, error):
-        store = W.CredentialStore()
-        store._adv = FakeAdvapi(error)
-        return store
-
-    def test_no_logon_session_is_the_provider_locked(self):
-        store = self.store(W.CredentialStore.ERROR_NO_SUCH_LOGON_SESSION)
-        for call in (lambda: store.read('AIEH synthetic'), lambda: store.write('AIEH synthetic', 'u', b'x', ''),
-                     lambda: store.delete('AIEH synthetic')):
-            with self.assertRaises(C.LifecycleError) as caught:
-                call()
-            self.assertEqual((caught.exception.code, caught.exception.refusal), ('CREDENTIAL_PROVIDER_LOCKED', True))
-
-    def test_not_found_and_other_errors_keep_their_meaning(self):
-        store = self.store(W.CredentialStore.ERROR_NOT_FOUND)
-        self.assertIsNone(store.read('AIEH synthetic'))
-        self.assertFalse(store.delete('AIEH synthetic'))
-        store = self.store(5)
-        for call, code in ((lambda: store.read('AIEH synthetic'), 'CREDENTIAL_READ_FAILED'),
-                           (lambda: store.write('AIEH synthetic', 'u', b'x', ''), 'CREDENTIAL_WRITE_FAILED'),
-                           (lambda: store.delete('AIEH synthetic'), 'CREDENTIAL_DELETE_FAILED')):
-            with self.assertRaises(C.LifecycleError) as caught:
-                call()
-            self.assertEqual((caught.exception.code, caught.exception.refusal), (code, False))
-
+class TestCredentialProvider(unittest.TestCase):
     def test_the_adapter_supplies_the_credential_manager_provider(self):
         provider = W.WindowsAdapter('AMD64').credential_provider()
-        self.assertIsInstance(provider, W.WindowsCredentialProvider)
+        self.assertIsInstance(provider, W.credentials.WindowsCredentialProvider)
         self.assertIsInstance(provider, C.CredentialProvider)
 
 

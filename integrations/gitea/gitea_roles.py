@@ -7,10 +7,11 @@ builder and the reviewer (cred-gitea-bot-*), and the authorization verifier's re
 Gitea's Bot type (`admin user create --user-type Bot --restricted`, no password: it cannot sign in
 interactively). Each role's token is minted with `admin user generate-access-token --raw --scopes ...`
 using the narrowest scopes Gitea 28.3.0 can express for the role; the CLI's standard output is captured
-in memory and written by CredWriteW (gitea_host.CredentialStore) into one generic Windows Credential
-Manager entry, `AIEH Gitea bot <role>`. A token is never printed, logged, written to a file or put on a
-command line; reports carry a fingerprint (a sha256 prefix) only. Entries are reached through
-gitea_host's CredentialProvider (Windows: Credential Manager).
+in memory and written by the credential provider into one entry, `AIEH Gitea bot <role>` (on Windows a
+generic Credential Manager entry, CredWriteW). A token is never printed, logged, written to a file or put on
+a command line; reports carry a fingerprint (a sha256 prefix) only. Entries are reached through
+gitea_host's CredentialProvider, which the harness's factory chooses
+(integrations/credentials/credential_provider.py, plan leaf F-06.3).
 
 The fixture is Gitea administration (op-gitea-administration): a disposable organization with one
 private repository, its collaborators and branch protection. Gitea's CLI cannot create organizations,
@@ -26,13 +27,18 @@ administration, and the report shows that the administrator holds none afterward
   python -I -B integrations/gitea/gitea_roles.py status         # entries, fingerprints, token checks
 
 These are the role credentials' realization of the lifecycle contract's credential verbs (plan leaf
-F-06.2): provision, rotate and retire. Every act ends with the I7 no-exposure scan of what it shows.
+F-06.2): provision, rotate and retire. Every act ends with the I7 no-exposure scan of what it shows. Every
+rotate and retire act writes an integration-store receipt (fingerprint, role, trigger, revoker, affected
+attempts: decision 0007 point 5; fingerprints only) into <state>/integration/integration.sqlite of the
+managed root, reserved before anything changes and read back at the end; an act without a receipt read back
+fails (CREDENTIAL_RECEIPT_UNREAD) (plan leaf F-06.3).
 
 Exit 0 done, 1 failed, 2 refused (a stable code). Windows only (Credential Manager).
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import importlib.util
@@ -379,51 +385,102 @@ def fixture(provider=None, run: Callable = subprocess.run, http: Callable = None
     return report
 
 
-def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
+TRIGGER = 'owner direction'  # decision 0007 point 5: a command-line act is the Owner's direction (bootstrap)
+
+
+def receipt_for(receipts, verb: str, role: str, provider, token: str | None):
+    """The act's integration-store receipt (gitea_host.act_receipt), reserved before anything changes."""
+    return host.act_receipt(receipts, verb, entry=target(role), user=ROLES[role]['user'], role=role, before=token,
+                            provider=provider, trigger=TRIGGER, revoker=f'harness: gitea_roles.py {verb} (the token '
+                            'revokes itself through DELETE /api/v1/token)', actor=f'gitea_roles {verb}').begin()
+
+
+@contextlib.contextmanager
+def receipt_store(receipts, ctx):
+    """receipts when given (an open integration store); else, for the command line's own context only, the
+    managed one, opened for the act. A given context (a fixture) without its own receipt store is refused, so
+    that a fixture act never writes into the managed root's store."""
+    if receipts is not None:
+        yield receipts
+        return
+    if ctx is not None:
+        raise ValueError('a given context needs its own receipt store (receipts=)')
+    with host.credential_receipts(host.paths.resolve()) as store:
+        yield store
+
+
+def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None,
+           receipts=None) -> dict:
     """The revocation contract once: revoke the role's token through DELETE /api/v1/token, prove its
-    next call fails closed, mint a new one and replace the entry, prove the new one works."""
+    next call fails closed, mint a new one and replace the entry, prove the new one works. The act's
+    integration-store receipt is reserved before the revocation and confirmed and read back at the end."""
     if role not in ROLES:
         raise GiteaError('ROLE_UNKNOWN', f'{role!r} is not one of {sorted(ROLES)}')
+    given = ctx
     lay, pinned, port, provider, cli = ctx or context(provider, run)
     old = read_token(provider, role)
     if old is None:
         raise GiteaError('ENTRY_MISSING', f'{target(role)!r} does not exist; run provision')
-    report = {'role': role, 'user': ROLES[role]['user'], 'entry': target(role), 'old_fingerprint': fingerprint(old),
-              'old_before': token_check(port, old, http)}
-    report['revocation'] = revoke_current(port, old, http)
-    report['old_on_repository_read'] = Api(port, old, http).call('GET', f'/repos/{FIXTURE_ORG}/{FIXTURE_REPO}')[0]
-    del old
-    if not report['revocation']['revoked']:
-        raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
-    new = cli.mint(ROLES[role]['user'], f'aieh-{role}-{now_stamp()}', ROLES[role]['scopes'])
-    store_token(provider, role, new, port)
-    report.update(new_fingerprint=fingerprint(new), new_check=token_check(port, new, http))
-    del new
+    with receipt_store(receipts, given) as store:
+        receipt = receipt_for(store, 'rotate', role, provider, old)
+        try:
+            report = {'role': role, 'user': ROLES[role]['user'], 'entry': target(role),
+                      'old_fingerprint': fingerprint(old), 'old_before': token_check(port, old, http)}
+            receipt.dispatched()
+            report['revocation'] = revoke_current(port, old, http)
+            report['old_on_repository_read'] = Api(port, old, http).call(
+                'GET', f'/repos/{FIXTURE_ORG}/{FIXTURE_REPO}')[0]
+            del old
+            if not report['revocation']['revoked']:
+                raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
+            new = cli.mint(ROLES[role]['user'], f'aieh-{role}-{now_stamp()}', ROLES[role]['scopes'])
+            store_token(provider, role, new, port)
+            report.update(new_fingerprint=fingerprint(new), new_check=token_check(port, new, http))
+            del new
+        except BaseException as exc:
+            receipt.abort(exc)
+            raise
+        report['receipt'] = receipt.finish({'fingerprint_after': report['new_fingerprint'], 'revoked': True,
+                                            'new_token_status': report['new_check']['status']})
     return report
 
 
-def retire(role: str, provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
+def retire(role: str, provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None,
+           receipts=None) -> dict:
     """The contract's retire: revoke the role's token through DELETE /api/v1/token, prove its next call fails
     closed, then delete its entry (never before the revocation is shown). It resumes: a token Gitea already
-    refuses is not revoked again, and a missing entry is reported as retired. The bot account is kept."""
+    refuses is not revoked again, and a missing entry is reported as retired. The bot account is kept. Every
+    run, a resumed one included, writes its integration-store receipt and reads it back."""
     if role not in ROLES:
         raise GiteaError('ROLE_UNKNOWN', f'{role!r} is not one of {sorted(ROLES)}')
+    given = ctx
     lay, pinned, port, provider, cli = ctx or context(provider, run)
     report = {'role': role, 'user': ROLES[role]['user'], 'entry': target(role)}
     token = read_token(provider, role)
-    if token is None:
-        report['state'] = 'retired (no entry: nothing to revoke)'
-        return report
-    report.update(fingerprint=fingerprint(token), before=token_check(port, token, http))
-    if report['before']['status'] == 401:
-        report['revocation'] = 'already refused by Gitea (an earlier run revoked it)'
-    else:
-        report['revocation'] = revoke_current(port, token, http)
-    del token
-    if isinstance(report['revocation'], dict) and not report['revocation']['revoked']:
-        raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
-    report['entry_deleted'] = provider.delete(target(role))
-    report['state'] = 'retired'
+    with receipt_store(receipts, given) as store:
+        receipt = receipt_for(store, 'retire', role, provider, token)
+        try:
+            if token is None:
+                report['state'] = 'retired (no entry: nothing to revoke)'
+            else:
+                report.update(fingerprint=fingerprint(token), before=token_check(port, token, http))
+                receipt.dispatched()
+                if report['before']['status'] == 401:
+                    report['revocation'] = 'already refused by Gitea (an earlier run revoked it)'
+                else:
+                    report['revocation'] = revoke_current(port, token, http)
+                del token
+                if isinstance(report['revocation'], dict) and not report['revocation']['revoked']:
+                    raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
+                report['entry_deleted'] = provider.delete(target(role))
+                report['state'] = 'retired'
+        except BaseException as exc:
+            receipt.abort(exc)
+            raise
+        revocation = report.get('revocation')
+        report['receipt'] = receipt.finish({'state': report['state'], 'entry_deleted': report.get('entry_deleted'),
+                                            'revocation': revocation if isinstance(revocation, str) or revocation
+                                            is None else 'revoked'})
     return report
 
 

@@ -17,6 +17,7 @@ import unittest
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 CATEGORY = 'unit'
 
@@ -34,6 +35,7 @@ def _load(name, path):
 
 G = _load('aieh_gitea_host', HERE.parent / 'gitea_host.py')
 R = _load('aieh_gitea_roles', HERE.parent / 'gitea_roles.py')
+FakeReceipts = _load('aieh_gitea_receipt_fakes', HERE / 'receipt_fakes.py').FakeReceipts
 PORT = 13300
 
 
@@ -174,6 +176,7 @@ class Base(unittest.TestCase):
         self.gitea, self.cli = FakeGitea(), FakeCli()
         self.store = MemoryProvider({G.FINAL_TARGETS[G.SITE_ADMIN]: (G.SITE_ADMIN, ADMIN_PASSWORD)})
         self.cli.gitea = self.gitea
+        self.receipts = FakeReceipts()
 
     def provision(self, **kwargs):
         return R.provision(http=self.gitea, ctx=ctx(self.cli, self.store), **kwargs)
@@ -297,7 +300,7 @@ class TestRotate(Base):
     def test_revoke_fail_closed_reissue(self):
         self.provision()
         old = self.store.get(R.target('builder'))[1]
-        report = R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store))
+        report = R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
         self.assertEqual(report['revocation'], {'delete_status': 204, 'next_call_status': 401, 'revoked': True})
         self.assertEqual(report['old_on_repository_read'], 401)
         self.assertNotIn(old, self.gitea.tokens)
@@ -309,10 +312,10 @@ class TestRotate(Base):
 
     def test_refusals(self):
         with self.assertRaises(G.GiteaError) as caught:
-            R.rotate('owner', http=self.gitea, ctx=ctx(self.cli, self.store))
+            R.rotate('owner', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
         self.assertEqual(caught.exception.code, 'ROLE_UNKNOWN')
         with self.assertRaises(G.GiteaError) as caught:
-            R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store))
+            R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
         self.assertEqual(caught.exception.code, 'ENTRY_MISSING')
 
     def test_entry_naming_another_account_refused(self):
@@ -333,7 +336,7 @@ class TestRetire(Base):
     """The contract's retire for a role credential (plan leaf F-06.2)."""
 
     def retire(self, role='builder'):
-        return R.retire(role, http=self.gitea, ctx=ctx(self.cli, self.store))
+        return R.retire(role, http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
 
     def test_revoke_prove_fail_closed_then_delete_the_entry(self):
         self.provision()
@@ -370,6 +373,104 @@ class TestRetire(Base):
         with self.assertRaises(G.GiteaError) as caught:
             self.retire('site-admin')
         self.assertEqual(caught.exception.code, 'ROLE_UNKNOWN')
+
+
+class TestActReceipts(Base):
+    """Every rotate or retire act writes an integration-store receipt, fingerprints only, and reads it back
+    (plan leaf F-06.3; decision 0007 point 5), here against the in-memory stand-in of the store."""
+
+    def setUp(self):
+        super().setUp()
+        self.provision()
+
+    def act(self, verb, role='builder', receipts=None):
+        return getattr(R, verb)(role, http=self.gitea, ctx=ctx(self.cli, self.store),
+                                receipts=receipts or self.receipts)
+
+    def only_receipt(self):
+        (key, states), = self.receipts.states().items()
+        return key, states, json.loads(self.receipts.get(key).intent_json), self.receipts.events(key)
+
+    def test_rotate_writes_its_receipt_and_reads_it_back(self):
+        old = self.store.get(R.target('builder'))[1]
+        report = self.act('rotate')
+        new = self.store.get(R.target('builder'))[1]
+        key, states, intent, events = self.only_receipt()
+        self.assertEqual(states, ['reserved', 'dispatched', 'confirmed'])
+        self.assertEqual(report['receipt'], {'operation_key': key, 'format': 'aieh-credential-act/1',
+                                             'state': 'confirmed', 'events': states, 'read_back': True})
+        self.assertTrue(key.startswith('credential/gitea/rotate/builder/'))
+        self.assertEqual((intent['verb'], intent['role'], intent['user'], intent['entry'], intent['trigger']),
+                         ('rotate', 'builder', R.ROLES['builder']['user'], R.target('builder'), 'owner direction'))
+        self.assertEqual(intent['fingerprint_before'], R.fingerprint(old))
+        self.assertEqual(intent['affected_attempts'], [])
+        self.assertIn('revoker', intent)
+        self.assertEqual(json.loads(events[-1].detail_json)['fingerprint_after'], R.fingerprint(new))
+        for secret in (old, new, ADMIN_PASSWORD):
+            self.assertNotIn(secret, self.receipts.text())
+        self.assertIsNone(re.search(r'[0-9a-f]{40}', self.receipts.text()))
+
+    def test_retire_and_its_resumed_runs_each_write_a_receipt(self):
+        old = self.store.get(R.target('builder'))[1]
+        self.act('retire')
+        self.act('retire')  # resumed: nothing left to revoke
+        receipts = list(self.receipts.states().values())
+        self.assertEqual(receipts, [['reserved', 'dispatched', 'confirmed']] * 2)
+        details = [json.loads(self.receipts.events(k)[-1].detail_json) for k in self.receipts.states()]
+        self.assertEqual([d['state'] for d in details], ['retired', 'retired (no entry: nothing to revoke)'])
+        intents = [json.loads(self.receipts.get(k).intent_json) for k in self.receipts.states()]
+        self.assertEqual([i['fingerprint_before'] for i in intents], [R.fingerprint(old), None])
+        self.assertNotIn(old, self.receipts.text())
+
+    def test_a_failed_revocation_is_recorded_failed(self):
+        self.gitea.fail_path = '/token'
+        for verb in ('rotate', 'retire'):
+            with self.subTest(verb=verb), self.assertRaises(G.GiteaError) as caught:
+                self.act(verb)
+            self.assertEqual(caught.exception.code, 'REVOCATION_FAILED')
+        self.assertEqual(list(self.receipts.states().values()), [['reserved', 'dispatched', 'failed']] * 2)
+        for key in self.receipts.states():
+            self.assertEqual(json.loads(self.receipts.events(key)[-1].detail_json), {'code': 'REVOCATION_FAILED'})
+
+    def test_a_mint_failure_after_the_revocation_is_recorded_failed(self):
+        self.cli.fail_mint = True
+        with self.assertRaises(G.GiteaError) as caught:
+            self.act('rotate')
+        self.assertEqual(caught.exception.code, 'TOKEN_MINT_FAILED')
+        self.assertEqual(list(self.receipts.states().values()), [['reserved', 'dispatched', 'failed']])
+
+    def test_an_uncertain_outcome_is_recorded_unknown(self):
+        def lost(port, path, method='GET', **kwargs):  # the connection drops on the revocation itself
+            if method == 'DELETE':
+                raise ConnectionResetError('the connection was reset')
+            return self.gitea(port, path, method=method, **kwargs)
+        with self.assertRaises(ConnectionResetError):
+            R.rotate('builder', http=lost, ctx=ctx(self.cli, self.store), receipts=self.receipts)
+        (key, states), = self.receipts.states().items()
+        self.assertEqual(states, ['reserved', 'dispatched', 'unknown'])
+        self.assertEqual(json.loads(self.receipts.events(key)[-1].detail_json), {'code': 'ConnectionResetError'})
+
+    def test_no_receipt_no_act(self):
+        before, requests = dict(self.store.entries), len(self.gitea.requests)
+        for verb in ('rotate', 'retire'):
+            with self.subTest(verb=verb), self.assertRaises(OSError):
+                self.act(verb, receipts=FakeReceipts(fail_reserve=True))
+        self.assertEqual(self.store.entries, before)
+        self.assertEqual(len(self.gitea.requests), requests)  # nothing was sent to Gitea
+
+    def test_a_receipt_not_read_back_as_written_fails_the_act(self):
+        for verb in ('rotate', 'retire'):
+            with self.subTest(verb=verb), self.assertRaises(G.GiteaError) as caught:
+                self.act(verb, role='planner' if verb == 'rotate' else 'reviewer',
+                         receipts=FakeReceipts(corrupt_detail=True))
+            self.assertEqual((caught.exception.code, caught.exception.refusal), ('CREDENTIAL_RECEIPT_UNREAD', False))
+
+    def test_a_fixture_context_never_reaches_the_managed_store(self):
+        with mock.patch.object(G, 'credential_receipts', side_effect=AssertionError('the managed store')):
+            for verb in ('rotate', 'retire'):
+                with self.subTest(verb=verb), self.assertRaises(ValueError):
+                    getattr(R, verb)('builder', http=self.gitea, ctx=ctx(self.cli, self.store))
+        self.assertIn(R.target('builder'), self.store.entries)
 
 
 class TestPolicy(unittest.TestCase):

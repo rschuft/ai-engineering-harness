@@ -1,4 +1,5 @@
 dulwich==1.2.21
+keyring==25.7.0
 pytest>=9.0
 pytest-xdist==3.8.0
 pyyaml==6.0.3
