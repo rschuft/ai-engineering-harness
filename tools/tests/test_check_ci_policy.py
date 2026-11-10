@@ -701,7 +701,9 @@ class FactsAndRecords(Base):
     def test_a_committed_decision_record_must_be_linked(self):
         inputs = copy.copy(INPUTS)
         inputs.decisions = dict(INPUTS.decisions, **{'0016': '0016-hostile-ci.md'})
-        self.assert_code('DECISION_UNLINKED', 'decision', inputs=inputs)
+        p, q = fresh()  # the committed files link the record; an unlinked entry is the subject
+        p['decision']['record'] = q['decision']['record'] = None
+        self.assert_code('DECISION_UNLINKED', 'decision', inputs=inputs, profile=p, policy=q)
 
     def test_every_statement_has_a_status_and_a_leaf(self):
         p, _ = fresh()
@@ -794,6 +796,7 @@ class Guards(Base):
         p['sources'] = []
         self.assert_code('STATUS_INVALID', 'profile.sources', profile=p)
         p, _ = fresh()
+        p['decision']['record'] = None  # only an unlinked decision needs a note
         p['decision']['note'] = ' '
         self.assert_code('SCHEMA', 'profile.decision', profile=p)
         p, _ = fresh()
