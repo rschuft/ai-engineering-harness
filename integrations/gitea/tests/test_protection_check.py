@@ -270,7 +270,8 @@ class Precedence(unittest.TestCase):
                  ('ma?n', 'ma/n', False), ('m[ai]in', 'main', True), ('m[!a]in', 'main', False),
                  ('{main,work}', 'work', True), ('{main,work}', 'other', False), ('a.b', 'aXb', False),
                  ('a\\*b', 'a*b', True), ('a\\*b', 'axb', False), ('v+1', 'v+1', True), ('a(b)', 'a(b)', True),
-                 ('re[^/]*', 're^x', True), ('x{a', 'xa', None), ('x[a', 'xa', None), ('x\\', 'x', None)]
+                 ('re[^/]*', 're^x', True), ('a[\\]]b', 'a]b', True), ('a[\\]]b', 'a\\b', False),
+                 ('a[[]b', 'a[b', True), ('x{a', 'xa', None), ('x[a', 'xa', None), ('x\\', 'x', None)]
         for pattern, branch, expected in cases:
             with self.subTest(pattern=pattern, branch=branch):
                 if expected is None:
@@ -336,6 +337,7 @@ class Unverified(Check):
         self.gitea.rule('work/*')['block_on_new_setting'] = False
         verdict = self.assertVerdict('unverified', 'VIEW_INVALID')
         self.assertIn('block_on_new_setting', verdict.detail)
+        self.assertIn("branch protection rule 'work/*' has field(s)", verdict.detail)
 
     def test_a_field_of_another_type(self):
         for field, value in (('enable_push', 'false'), ('priority', True), ('priority', '1'),
@@ -404,6 +406,8 @@ class Unverified(Check):
                     verdict = self.assertVerdict('unverified', 'READ_FAILED')
                     if fault == 'drop':
                         self.assertIn('the answer was lost (ConnectionResetError)', verdict.detail)
+                    if isinstance(fault, int):  # Gitea's message is part of the detail
+                        self.assertIn(f'answered {fault} (a fault of the fake ({fault}))', verdict.detail)
 
     def test_a_list_not_read_whole(self):
         for route in ('collaborators', 'keys'):
@@ -592,6 +596,21 @@ class Loopback(unittest.TestCase):
         self.httpd.close_each = True
         self.assertEqual(self.verify().status, 'verified')
         self.assertEqual(self.httpd.connections, 13)
+
+    def test_a_closed_session_holds_no_connection(self):
+        session = PC.AuditSession(self.port, PF.AUDIT_TOKEN, REPOSITORY, BASE)
+        self.assertEqual(session.get('/token')[0], 200)
+        self.assertIsNotNone(session._connection)
+        session.close()
+        self.assertIsNone(session._connection)
+
+    def test_a_lost_answer_on_a_new_connection_is_not_sent_again(self):
+        """Only a read on a connection the server closed while idle is sent once more; a fresh connection's
+        lost answer is unverified."""
+        self.httpd.gitea.faults['token'] = 'drop-once'
+        verdict = self.verify()
+        self.assertEqual((verdict.status, verdict.code), ('unverified', 'READ_FAILED'))
+        self.assertEqual(len(self.httpd.gitea.requests), 1)
 
     def test_a_lost_answer(self):
         self.httpd.gitea.faults['teams'] = 'drop'

@@ -185,6 +185,9 @@ class ProtectionGitea:
             return None
         if fault == 'drop':
             return DROP
+        if fault == 'drop-once':  # one lost answer, then the route answers again
+            del self.faults[route]
+            return DROP
         if fault == 'not-json':
             return 200, {'content-type': 'text/html'}, b'<html>not json</html>'
         if fault == 'wrong-kind':

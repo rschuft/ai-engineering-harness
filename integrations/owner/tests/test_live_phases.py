@@ -303,6 +303,16 @@ class Record(Phases):
                 self.assertEqual(self.gitea.merge_count(), 0)
                 self.assertEqual(self.gitea.branches['main'], presentation['mainHead'])
 
+    def test_a_refusal_other_than_the_protection_check_s_stops_the_phase(self):
+        verifier = su.FakeVerifier()
+        presentation, _ = self.prepared(verifier)
+        authorize, stale = presentation['challenges']
+        self.gitea.fail_routes['/merge'] = 405
+        with self.assertRaises(AR.RecorderError) as caught:
+            L.record_phase(self.live(verifier), self.statement_file(self.synthetic(authorize['operation'])), {})
+        self.assertEqual(caught.exception.code, 'MERGE_REFUSED')
+        self.assertEqual(self.gitea.merge_count(), 0)
+
     def test_a_stale_head_control_that_merges_is_a_security_failure(self):
         verifier = su.FakeVerifier()
         presentation, _ = self.prepared(verifier)
