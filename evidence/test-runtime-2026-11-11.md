@@ -249,3 +249,71 @@ category 82.7 → 82.4 s; every other wall kept, the owner wall at 4.6 s.
 - `python -I tools/verify_seed.py` and `--baseline seed`: PASS.
 - `python -I -B tools/publication_gate.py history origin/main..HEAD`: PASS, run after this
   section's commit, which changes this file only.
+
+## 8. Second pass at `a3cf0ab`, stopped under the Owner's direction (diagnostic only)
+
+Builder record of the afternoon of 2026-11-11. The pass started because `check --run` gave a serial
+median of 144.8 s at `a3cf0ab`. **The Owner then retired the 150 s serial ceiling and the per-suite
+wall, launch and `mkdtemp` budgets as blockers and directed the work stopped.** What follows is
+diagnostic information, not a target and not a budget: no budget or baseline file was changed, no
+`check --run` or budget profile was made after the changes, and the savings below are in-process
+timings of the affected test modules, not serial profiles.
+
+**Drift versus cause.** Interleaved single `tools/test_profile.py run` profiles of `f3da010` and
+`a3cf0ab` (a3, f3, three times), each in its own scratch clone (`git clone --no-hardlinks`, detached
+at the revision), each run in a kill-on-close job object with its own `TEMP` and an empty
+`AIEH_DATA_ROOT`, a run started only with Windows Disk Cleanup (`cleanmgr`) absent and repeated when
+it was present afterwards. (The dispatch asked for `git archive` exports; in an export without
+`.git` five tests fail or error, among them `test_launch_census.TreeCensus`'s `setUpClass`, so the
+census, one of the costs in question, would not have been measured. Clones were used instead.)
+
+| Suite | `f3da010` runs | median | `a3cf0ab` runs | median | change |
+|---|---|---|---|---|---|
+| tools | 78.25, 77.95, 78.44 | 78.25 | 80.14, 80.73, 81.17 | 80.73 | +2.48 |
+| dispatch | 6.00, 5.83, 5.93 | 5.93 | 8.80, 8.57, 8.57 | 8.57 | +2.64 |
+| planning | 11.21, 11.14, 11.14 | 11.14 | 11.56, 11.61, 11.55 | 11.56 | +0.42 |
+| lineage | 14.50, 14.26, 15.40 | 14.50 | 14.82, 15.36, 14.25 | 14.82 | +0.33 |
+| the nine others (sum of medians) | | 34.91 | | 35.09 | +0.18 |
+| **total** | 145.72, 143.74, 145.96 | **145.72** | 151.20, 151.00, 150.50 | **151.00** | **+5.28** |
+
+Tests 2467 and 2556; outcomes digests `c3bfbf3595b4` and `7df6849801a6`, the same in every run of
+each tree. **Cause:** +5.3 s, almost all of it the classes added since `f3da010` (5.0 s: the custody
+probe's `ProbeRun` 2.5 s; the dispatch suite's new classes 2.3 s, `test_attempt_tokens` and
+`test_guest_transport`; the control catalog's 0.2 s); the classes both trees have moved by +0.06 s
+in sum. **Drift:** the same `f3da010` that gave 133.8 s earlier today gave 145.7 s in this window,
+which followed a long Disk Cleanup run (about 15 minutes, its process reaching about 1 GB); the
+host, not the code, accounts for about 12 s of the 144.8 s.
+
+**The costliest tests at `a3cf0ab`** (one clean run; seconds): the publication gate's real-hook
+classes `WithRealScanner` 15.9 and `FailsClosed` 8.7 (per gated commit: the hook's shell, a Python
+start through the `python3` shim, the gate's own start, about 0.11 s of standard-library imports,
+and the pinned Gitleaks; product and hook cost); `test_check_containment_cases`'s type fuzzing
+3.5, `test_check_network_matrix`'s 2.5 and `test_check_ci_policy`'s 1.1 (checker evaluation;
+see the speedup below); `NetprobeListener` 4.8 and `ApiProbe` 2.6 (2 s refused connects and the
+decoy window, the property); `test_check_profile.Negative` 3.7; `test_verify_seed` 6.0
+(integrity hashing); `test_custody_probe.ProbeRun` 2.5; the launch census 1.6 (parsing 5.6 MB of
+tracked sources once: `tools/guest.py` alone takes 0.47 s to `ast.parse`, nothing is parsed twice).
+
+**Changes made and kept** (each committed with its tests passing; the tools suite run on the last
+commit: 1327 tests OK, 6 skipped, the same ids as `a3cf0ab` plus the two new tests):
+
+| Commit | Change | Measured (in process) |
+|---|---|---|
+| `7d02e72` | `test_custody_probe.FakeSweepSsh` launches each distinct (script text, outer admissions) sweep once per class and answers a repeat from the first run's result (the listeners answer by the request alone); 18 launches a run become 2 | `ProbeRun` 2.74 → 0.55 s |
+| `dedc6ae` | **Product, byte-identical:** `tools/check_security_inventory.py` gains `machine_path(text)` (the pattern's answer remembered per text) and `Checker.check_link` remembers each link's verdict on the shared `RepoFiles` (moved from the control catalog's checker, whose override is removed); the README checks of five checkers call `machine_path` | the six checker test modules 15.6 → 6.7 s |
+| `b9a8faf` | `test_check_profile.tree_digest` hashes each file read whole instead of through `check_profile.sha256_file`'s 1 MiB reads (the same mapping) | `Negative` 3.7 → 3.1 s |
+
+No assertion was weakened. The custody tests keep every assertion and still launch a real sweep for
+each distinct input; mutants (the key without the admissions, any remembered answer reused, a lost
+answer substituted) are killed, and the key without the script text survives because no test of
+the class sends a second script. The checker change was proven equivalent by running every
+`check` and `evaluate` call of the six checker test modules (2,096 calls, 6,431 problems) also
+on `a3cf0ab`'s checkers with a copy of the inputs: every problem list (code, location, message)
+was equal, and the comparison reports a difference when one message of the old copy is changed.
+New tests (`RememberedAnswers`) pin the remembered answers to the unremembered rule; mutants of the
+memo (a hit that replays nothing, a verdict kept without its problems, verdicts shared across trees,
+the memo keyed by the path alone, the answer keyed by length, no machine path ever found) are all
+killed. The profile digest equals the old one on the shared copy and after a write into it.
+
+**Not pursued (stopped):** other pure-Python checker costs, the dispatch suite's new per-class
+fixtures, and a serial before/after profile of these changes.
