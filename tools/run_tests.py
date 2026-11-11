@@ -34,6 +34,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 _RAN = re.compile(r'^Ran (\d+) tests? in ', re.MULTILINE)
+# unittest's verdict line; a test's own stdout, flushed when the suite's process exits, may follow it.
+_VERDICT = re.compile(r'^(?:OK|FAILED)(?: \(.*\))?$', re.MULTILINE)
 
 
 def _no_window():
@@ -61,10 +63,13 @@ def suite_argv(python, start_dir):
 
 
 def summary_line(text):
-    """'<N> tests, <last line>' from a suite's output, e.g. '12 tests, OK (skipped=1)'."""
+    """'<N> tests, <verdict>' from a suite's output, e.g. '12 tests, OK (skipped=1)': unittest's last
+    verdict line, else the last line of the output."""
     ran = _RAN.findall(text)
+    verdicts = _VERDICT.findall(text.replace(chr(13), ''))
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return f'{ran[-1] if ran else "?"} tests, {lines[-1] if lines else "no output"}'
+    last = verdicts[-1] if verdicts else lines[-1] if lines else 'no output'
+    return f'{ran[-1] if ran else "?"} tests, {last}'
 
 
 def _stop(started):

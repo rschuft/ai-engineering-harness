@@ -147,6 +147,13 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(rt.summary_line('a\nRan 12 tests in 1.0s\n\nOK (skipped=1)\n'), '12 tests, OK (skipped=1)')
         self.assertEqual(rt.summary_line('Ran 1 test in 0.0s\nOK\n'), '1 tests, OK')
         self.assertEqual(rt.summary_line(''), '? tests, no output')
+        # A test's own stdout, flushed when the suite's process exits, follows unittest's verdict.
+        self.assertEqual(rt.summary_line('Ran 3 tests in 1.0s\r\n\r\nOK (skipped=1)\r\n{\n  "a": 1\n}\n'),
+                         '3 tests, OK (skipped=1)')
+        self.assertEqual(rt.summary_line('Ran 3 tests in 1.0s\n\nFAILED (errors=2)\nprinted\n'),
+                         '3 tests, FAILED (errors=2)')
+        self.assertEqual(rt.summary_line('Traceback (most recent call last):\nSystemExit: 2\n'),
+                         '? tests, SystemExit: 2')
 
     def test_unknown_suites_and_bad_jobs_cannot_run(self):
         with mock.patch('sys.stderr', io.StringIO()) as err:
