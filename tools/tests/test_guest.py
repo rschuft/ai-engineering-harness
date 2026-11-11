@@ -10,6 +10,7 @@ Context point USERPROFILE and HOME at a directory that does not contain it.
 from pathlib import Path
 import atexit
 import base64
+import concurrent.futures
 import copy
 import hashlib
 import importlib.util
@@ -98,6 +99,17 @@ class TempState(unittest.TestCase):
 
     def ctx(self):
         return guest.Context(str(PROFILE_DIR), str(self.state))
+
+    def fixture_checkout_ctx(self):
+        """ctx() with a fixture repository (a copy of fixture_repo's, made on first use) as its
+        checkout, for tests of the inventories around a destroy or a recreate: the repository
+        inventory then reads two files rather than every file of this checkout (about 0.15 s an
+        inventory; plan leaf F-09). The repository inventory itself is tested on fixture_repo
+        (Inventory.test_repository_inventory)."""
+        repo = self.tmp / 'checkout'
+        if not repo.exists():
+            fixture_repo(repo)
+        return guest.Context(str(PROFILE_DIR), str(self.state), repo_root=str(repo))
 
 
 # ---------------------------------------------------------------- argv rendering
@@ -2060,8 +2072,13 @@ class NetprobeListener(unittest.TestCase):
         with socket.socket() as s:
             s.bind(('127.0.0.1', 0))
             closed = s.getsockname()[1]                                 # bound, not listening
-            self.assertEqual(NP.tcp('127.0.0.1', closed)['result'], 'refused')
-            self.assertEqual(NP.exchange('127.0.0.1', closed, 'guest')['result'], 'refused')
+            # A refused connect takes about 2 s on Windows (its SYN retries after the reset): the
+            # two clients make theirs at once, each on its own socket (plan leaf F-09).
+            with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                tcp = pool.submit(NP.tcp, '127.0.0.1', closed)
+                exchange = pool.submit(NP.exchange, '127.0.0.1', closed, 'guest')
+                self.assertEqual(tcp.result(30)['result'], 'refused')
+                self.assertEqual(exchange.result(30)['result'], 'refused')
         self.assertEqual(NP.exchange('127.0.0.1', self.ready['decoy_tcp'], 'guest')['result'],
                          'connected-no-exchange')
         self.stop()
@@ -2789,12 +2806,13 @@ class Inventory(TempState):
         self.assertIn('sha256', vol['nested/deeper/c.txt'])          # only top-level names
 
     def test_diff_detects_each_kind_of_change(self):
-        before = guest.inventory(self.ctx(), 'aa', [self.durable])
-        self.assertEqual(guest.diff_inventory(before, guest.inventory(self.ctx(), 'aa', [self.durable])), [])
+        ctx = self.fixture_checkout_ctx()
+        before = guest.inventory(ctx, 'aa', [self.durable])
+        self.assertEqual(guest.diff_inventory(before, guest.inventory(ctx, 'aa', [self.durable])), [])
         (self.durable / 'nested' / 'b.bin').write_bytes(b'changed')
         os.chmod(self.durable / 'read-only.txt', stat.S_IWRITE | stat.S_IREAD)
         (self.durable / 'new.txt').write_text('x')
-        after = guest.inventory(self.ctx(), 'aa', [self.durable])
+        after = guest.inventory(ctx, 'aa', [self.durable])
         paths = {d['path'] for d in guest.diff_inventory(before, after)}
         root = guest.posix(self.durable)
         self.assertIn(f'durable_roots/{root}/nested/b.bin/sha256', paths)
@@ -2813,14 +2831,15 @@ class Inventory(TempState):
     def test_destroy_leaves_every_other_source_unchanged(self):
         self.populate()
         roots = [self.durable]
-        before = guest.inventory(self.ctx(), 'aa', roots)
+        ctx = self.fixture_checkout_ctx()
+        before = guest.inventory(ctx, 'aa', roots)
         self.assertEqual(sorted(before['instances']), ['bb', 'sentinel_not.an-instance'])
         self.assertEqual(before['instances']['bb']['state'], {'instance': False})   # '{}' is no record
-        self.assertEqual(guest.destroy(self.ctx(), 'aa')['result'], 'destroyed')
-        self.assertEqual(guest.diff_inventory(before, guest.inventory(self.ctx(), 'aa', roots)), [])
+        self.assertEqual(guest.destroy(ctx, 'aa')['result'], 'destroyed')
+        self.assertEqual(guest.diff_inventory(before, guest.inventory(ctx, 'aa', roots)), [])
         # the same inventory sees a destroy that reaches a sibling
         (self.state / 'instances' / 'bb' / 'root.qcow2').unlink()
-        diff = guest.diff_inventory(before, guest.inventory(self.ctx(), 'aa', roots))
+        diff = guest.diff_inventory(before, guest.inventory(ctx, 'aa', roots))
         self.assertEqual([d['path'] for d in diff],
                          ['instances/bb/tree/./mtime_ns', 'instances/bb/tree/root.qcow2'])
 
@@ -2945,7 +2964,7 @@ class Smoke(TempState):
                 mock.patch.object(guest, 'inspect', self.fake_inspect), \
                 mock.patch.object(guest, 'stop', self.fake_stop), \
                 mock.patch.object(guest, 'start', self.fake_start):
-            return guest.smoke(self.ctx(), 'abc', str(self.canaries), [str(self.durable)], **kw)
+            return guest.smoke(self.fixture_checkout_ctx(), 'abc', str(self.canaries), [str(self.durable)], **kw)
 
     def test_pass_sequence_and_record(self):
         out_file = self.tmp / 'smoke.json'
