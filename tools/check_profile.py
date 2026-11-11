@@ -441,6 +441,13 @@ INFERENCE_OPTION = 'create --provision --inference'
 INFERENCE_SSHD_REPLACES = 'AllowTcpForwarding no'
 INFERENCE_SSHD_KEYS = ('allowtcpforwarding', 'gatewayports', 'permitlisten', 'permitopen')
 INFERENCE_FORBIDDEN_PORTS = (22, 53, 5355, 8000, 8001)
+# D-6 (S-03.3): the attempt token's environment name, admitted only by the inference composition, and the
+# shapes its value must and must not have: the registry's api_key_env_var
+# (integrations/dispatch/qualification/acp-registry-claude-code-1.60.1.json), inference_broker.TOKEN_SHAPE and
+# acp_qualification.PROVIDER_KEY_SHAPE (tools/tests/test_check_profile.py checks each against its source)
+INFERENCE_TOKEN_NAMES = ['ANTHROPIC_API_KEY']
+INFERENCE_TOKEN_SHAPE = 'aieh-inf-[A-Za-z0-9_-]{43}'
+INFERENCE_REFUSED_SHAPES = 'sk-(?:ant|proj)-|sk-[A-Za-z0-9_-]{20,}'
 # decision 0015 sections 4.1, 4.3 and 4.4 (S-03.2 slice 3): the forward session's record fields and
 # its ssh options. -N and -v are flags; each -o names one of the options below; ExitOnForwardFailure
 # must be yes and the two keepalives bounded integers.
@@ -627,8 +634,39 @@ def check_inference_composition(report, profile, root, comp, word, address, port
         report.fail(f'{label}.job_sweep: endpoint, name_lookup and rule required')
     if not isinstance(comp.get('inspection'), list) or not comp['inspection']:
         report.fail(f'{label}.inspection: the checks of decision 0015 section 4.5')
+    check_attempt_token_environment(report, profile, comp)
     check_repo_file(report, root, f'{label}.seed_overlay', comp.get('seed_overlay') or {})
     check_inference_states(report, profile, root, sshd, want)
+
+
+def check_attempt_token_environment(report, profile, comp):
+    """D-6 (S-03.3): the attempt token's environment name is admitted under the opt-in composition only,
+    exactly the registry's API key name, still credential-like by the job contract's pattern and never one of
+    jobs.environment.secret_names (so a guest without the composition keeps that contract exactly), with the
+    broker's token shape and the refused provider-key shapes stated as the code holds them."""
+    label = 'network.inference_composition.attempt_token_environment'
+    block = comp.get('attempt_token_environment')
+    if not isinstance(block, dict):
+        report.fail(f'{label}: required (D-6: the attempt token name in a qualification conversation)')
+        return
+    env = ((((profile.get('provisioning') or {}).get('agent_server') or {}).get('jobs') or {})
+           .get('environment') or {})
+    try:
+        pattern = re.compile(str(env.get('credential_name_pattern', '')), re.I)
+    except re.error:
+        pattern = None
+    names = block.get('names')
+    if names != INFERENCE_TOKEN_NAMES or pattern is None or not all(pattern.search(n) for n in names) or \
+            set(names) & set(env.get('secret_names') or []):
+        report.fail(f'{label}.names: exactly {INFERENCE_TOKEN_NAMES}, matched by jobs.environment.'
+                    'credential_name_pattern and not in jobs.environment.secret_names')
+    if block.get('value_shape') != INFERENCE_TOKEN_SHAPE:
+        report.fail(f'{label}.value_shape: must be the broker token shape {INFERENCE_TOKEN_SHAPE!r}')
+    if block.get('refused_shapes') != INFERENCE_REFUSED_SHAPES:
+        report.fail(f'{label}.refused_shapes: must be the provider-key shapes {INFERENCE_REFUSED_SHAPES!r}')
+    for key in ('admitted_when', 'rule'):
+        if not isinstance(block.get(key), str) or not block[key].strip():
+            report.fail(f'{label}.{key}: required')
 
 
 def forward_option_problems(options):

@@ -552,6 +552,55 @@ class Negative(unittest.TestCase):
         del self.qemu['network']['inference_composition']
         self.assertNotIn('inference', ' '.join(self.errors(self.qemu)))
 
+    def test_attempt_token_environment_d6(self):
+        """D-6 (S-03.3): the attempt token's name, gated under the opt-in composition; the job contract's own
+        secret names stay exactly the conversation keys."""
+        _, comp = self.inference()
+        block = comp['attempt_token_environment']
+        self.assertEqual(self.errors(self.qemu), [])
+        label = 'network.inference_composition.attempt_token_environment'
+        for key, value, fragment in (
+                ('names', ['OPENAI_API_KEY'], '.names'),
+                ('names', ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'], '.names'),
+                ('names', 'ANTHROPIC_API_KEY', '.names'),
+                ('value_shape', 'aieh-inf-.*', '.value_shape'),
+                ('refused_shapes', 'sk-ant-', '.refused_shapes'),
+                ('admitted_when', ' ', '.admitted_when: required'),
+                ('rule', None, '.rule: required')):
+            with self.subTest(key=key, value=value):
+                saved = copy.deepcopy(block[key])
+                block[key] = value
+                self.assertFails(self.qemu, label + fragment)
+                block[key] = saved
+        env = self.qemu['provisioning']['agent_server']['jobs']['environment']
+        saved = env['credential_name_pattern']
+        env['credential_name_pattern'] = 'DOCKER|TOKEN|SECRET|PASS'
+        self.assertFails(self.qemu, label + '.names')         # no longer credential-like: refused
+        env['credential_name_pattern'] = '(['
+        self.assertFails(self.qemu, label + '.names')
+        env['credential_name_pattern'] = saved
+        env['secret_names'] = ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0', 'ANTHROPIC_API_KEY']
+        self.assertFails(self.qemu, label + '.names')
+        self.assertFails(self.qemu, 'jobs.environment: secret_names are the conversation keys only')
+        env['secret_names'] = ['OH_SECRET_KEY', 'OH_SESSION_API_KEYS_0']
+        self.assertEqual(self.errors(self.qemu), [])
+        del comp['attempt_token_environment']
+        self.assertFails(self.qemu, label + ': required')
+        comp['attempt_token_environment'] = ['ANTHROPIC_API_KEY']
+        self.assertFails(self.qemu, label + ': required')
+
+    def test_attempt_token_constants_equal_their_sources(self):
+        """The checker's D-6 constants are the registry extract's API key name, the broker's token shape and the
+        provider-key shapes the qualification create refuses."""
+        spec =importlib.util.spec_from_file_location(
+            'aieh_dispatch_acp_qualification_cp', REPO / 'integrations' / 'dispatch' / 'acp_qualification.py')
+        acp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(acp)
+        extract = json.loads((REPO / acp.REGISTRY_PATH).read_text(encoding='utf-8'))
+        self.assertEqual(check_profile.INFERENCE_TOKEN_NAMES, [extract['facts']['api_key_env_var']['value']])
+        self.assertEqual(check_profile.INFERENCE_TOKEN_SHAPE, acp.broker.TOKEN_SHAPE.pattern)
+        self.assertEqual(check_profile.INFERENCE_REFUSED_SHAPES, acp.PROVIDER_KEY_SHAPE.pattern)
+
     def test_inference_forward_session_declarations(self):
         """S-03.2 slice 3: the record's fields, the forward's ssh options and its ceiling."""
         _, comp = self.inference()

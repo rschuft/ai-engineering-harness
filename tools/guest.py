@@ -6329,6 +6329,12 @@ def dispatch_transport():
     return _inference_module('aieh_dispatch_guest_transport', 'guest_transport.py', 'dispatch')
 
 
+def acp_qualification():
+    """integrations/dispatch/acp_qualification.py, the S-03.3 qualification create and its admission (it loads
+    the broker by path for its token and model grammars), loaded once."""
+    return _inference_module('aieh_dispatch_acp_qualification', 'acp_qualification.py', 'dispatch')
+
+
 def _inference_module(name, file, package='inference'):
     module = sys.modules.get(name)
     if module is None:
@@ -9584,6 +9590,20 @@ for d in sorted(os.listdir('/proc')):
         continue
     names = sorted({e.split(b'=', 1)[0].decode('latin-1') for e in data.split(bytes([0])) if e})
     envs[d] = {'comm': comm, 'names': [n for n in names if pattern.search(n)]}
+    token = spec.get('attempt_token')
+    if token:
+        # D-6: of an attempt token's admitted name, only whether its value has the token's shape and
+        # whether it has a provider key's; never the value
+        shapes = {}
+        for e in data.split(bytes([0])):
+            name, sep, value = e.partition(b'=')
+            name = name.decode('latin-1')
+            if sep and name in token['names']:
+                text = value.decode('latin-1')
+                shapes[name] = {'token': re.fullmatch(token['token_shape'], text) is not None,
+                                'provider_key': re.search(token['provider_key_shape'], text) is not None}
+        if shapes:
+            envs[d]['shapes'] = shapes
 out['process_environments'] = envs
 out['terminal_names'] = sorted(n for n in os.environ if pattern.search(n))
 files, setuid = [], []
@@ -10275,12 +10295,61 @@ def parse_token_fingerprints(values):
     return out
 
 
-def job_env_verdict(profile, server_user, data):
+def attempt_token_environment(profile, record):
+    """D-6: the admitted names of a broker attempt token in a job's process environments
+    (network.inference_composition.attempt_token_environment.names), for an instance created
+    with the inference composition only; () otherwise, so a guest without it keeps the job
+    contract exactly (jobs.environment.secret_names)."""
+    if not inference_opted(record):
+        return ()
+    block = inference_config(profile).get('attempt_token_environment')
+    names = block.get('names') if isinstance(block, dict) else None
+    if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+        return ()
+    return tuple(names)
+
+
+def attempt_token_spec(names):
+    """The job environment probe's attempt_token entry: the admitted names, the broker's token
+    shape and the provider-key shapes the qualification create refuses (acp_qualification)."""
+    acp = acp_qualification()
+    return {'names': list(names), 'token_shape': acp.broker.TOKEN_SHAPE.pattern,
+            'provider_key_shape': acp.PROVIDER_KEY_SHAPE.pattern}
+
+
+def attempt_token_admission(data, names):
+    """{pid: [name]} of the admitted names whose value had the attempt token's shape and no
+    provider key's ('admitted'), of those that did not ('not_token'), and of those holding a
+    provider key's shape ('provider_key'), from a job environment probe's process
+    environments (shapes only, never a value)."""
+    out = {'admitted': {}, 'not_token': {}, 'provider_key': {}}
+    for pid, entry in sorted((data.get('process_environments') or {}).items()):
+        shapes = entry.get('shapes') if isinstance(entry.get('shapes'), dict) else {}
+        for name in sorted(set(entry.get('names') or []) & set(names)):
+            shape = shapes.get(name) if isinstance(shapes.get(name), dict) else {}
+            if shape.get('provider_key') is not False:
+                if shape.get('provider_key') is True:
+                    out['provider_key'].setdefault(pid, []).append(name)
+                else:
+                    out['not_token'].setdefault(pid, []).append(name)
+            elif shape.get('token') is True:
+                out['admitted'].setdefault(pid, []).append(name)
+            else:
+                out['not_token'].setdefault(pid, []).append(name)
+    return out
+
+
+def job_env_verdict(profile, server_user, data, attempt_token_names=()):
     """The in-container view of one job against provisioning.agent_server.jobs.process and
-    .environment: (ok, problems, root_obtainable)."""
+    .environment: (ok, problems, root_obtainable). ``attempt_token_names`` (D-6; only for the
+    conversation whose admitted create carries a broker attempt token, on a guest with the
+    inference composition, attempt_token_environment): those names are admitted in a
+    process environment too, each only where its value had the broker's token shape and no
+    provider key's shape (the probe reports the shapes, never the value)."""
     jobs = jobs_config(profile)
     proc, env = jobs.get('process') or {}, jobs.get('environment') or {}
     secret_names = set(env.get('secret_names') or [])
+    admitted = attempt_token_admission(data, attempt_token_names)['admitted'] if attempt_token_names else {}
     problems = []
     me = data.get('self') or {}
     uid, gid = str(server_user.get('uid')), str(server_user.get('gid'))
@@ -10302,7 +10371,7 @@ def job_env_verdict(profile, server_user, data):
         problems.append({'check': 'terminal environment: no credential or engine name',
                          'observed': data.get('terminal_names')})
     extra = {pid: e.get('names') for pid, e in (data.get('process_environments') or {}).items()
-             if set(e.get('names') or []) - secret_names}
+             if set(e.get('names') or []) - secret_names - set(admitted.get(pid) or [])}
     if extra:
         problems.append({'check': 'process environments: only the conversation keys',
                          'observed': extra})

@@ -2497,7 +2497,7 @@
         "outcomes": [
           "only-own-keys"
         ],
-        "rule": "only the conversation's own two keys"
+        "rule": "only the conversation's own two keys (jobs.environment.secret_names; this catalogue's conversations carry no attempt token, so the D-6 admission of network.inference_composition.attempt_token_environment, for a conversation whose admitted create carries a broker attempt token on a guest with the inference composition, never applies here)"
       },
       "enforcement": [
         {

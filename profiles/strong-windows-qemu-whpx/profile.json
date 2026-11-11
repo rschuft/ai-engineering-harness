@@ -863,6 +863,15 @@
         "name_lookup": "one getaddrinfo of a public name through the container's resolv.conf: fails closed (no address)",
         "rule": "PASS: the endpoint answers 401 from every job, every edge and resolver target is refused (ECONNREFUSED: the container guard's reset or ICMP reject) and the guard's IPv4 refusal counters rise; a name lookup returns no address. STOP: an edge or resolver target connects or answers. Run by job-access-probe on an opted-in guest only."
       },
+      "attempt_token_environment": {
+        "names": [
+          "ANTHROPIC_API_KEY"
+        ],
+        "value_shape": "aieh-inf-[A-Za-z0-9_-]{43}",
+        "refused_shapes": "sk-(?:ant|proj)-|sk-[A-Za-z0-9_-]{20,}",
+        "admitted_when": "Only on a guest created with create --provision --inference, and only in the process environments of a conversation whose admitted create carries a broker attempt token: the S-03.3 qualification create (integrations/dispatch/acp_qualification.py), whose secrets put the token under the registry's API key name (integrations/dispatch/qualification/acp-registry-claude-code-1.60.1.json, api_key_env_var). Every other conversation, and every guest without the composition, keeps jobs.environment exactly (the conversation's own two keys).",
+        "rule": "D-6 (S-03.3 slice plan section 6; the Overseer's ruling on the S-03.3 row): the attempt token's name is a credential-like name (jobs.environment.credential_name_pattern matches it) admitted beside the conversation keys only where the job environment probe reports, by shape and never by value, that its value has the broker's token shape (value_shape, inference_broker.TOKEN_SHAPE) and no provider key's (refused_shapes, the shapes acp_qualification refuses); a name whose value has another shape, or a provider key's, is outside the contract (a provider-key shape is a stop condition of the qualification run). The token is never a provider key. Config.Env of the container never carries it (the create's secrets reach the ACP adapter's process environment only). tools/guest.py attempt_token_environment, job_env_verdict and acp-qualification; checked by tools/check_profile.py."
+      },
       "inspection": [
         "the sshd drop-in equals the declared text (the composed template's write_files entry) and sshd -T (root, boot facts) reports exactly the effective directives",
         "ss -ltnp (root, on-demand conversation facts): the endpoint is listened on by sshd exactly when a forward session is recorded, and by nothing otherwise; no other new listener",
