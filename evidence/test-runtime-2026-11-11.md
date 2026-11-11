@@ -10,12 +10,17 @@ under `decisions/`. The verdict is the Overseer's.
 - **Reached:** serial median **148.8 s → 135.9 s** (−12.9 s, −8.7%) on this host today: 14.1 s
   under 150 s. `check --run` at the budget commit: median 136.8 s (13.2 s under 150 s), every
   counter and test passing, one wall over: the owner suite's (5.22 s, limit 5.20 s; section 6).
+  After the Overseer's rulings (section 7: the owner wall raised by its new tests' measured cost,
+  the record writer's change): **`check --run` PASS** at `a01c960`, median 136.2 s (13.8 s under
+  150 s).
 - **Tests:** 2466 before and after; every run of both trees gave the same outcomes digest
   (`ce38af9f9c78`: the same test ids with the same outcomes). No test was removed, skipped or
   marked slow. Launches 1173 → 1148; `mkdtemp` 1077 → 1056.
 - **Commits** (on `730649f`): `79b75be`, `b2f0827`, `7efcad8`, `73c40a8`, `40a72d3`, `ed142a2`,
   `808d96c`, `7241e3f`, `1ed7903` (the changes, section 2), `abffaa5` (budgets and baseline
-  re-proposed at `1ed7903`), then this record.
+  re-proposed at `1ed7903`), `682f4b3` (this record); after the rulings `644ec49` (the record
+  writer), `85c2ac7` (the owner wall), `a01c960` (budgets re-proposed at `644ec49`), then this
+  record's update.
 - **Host:** Windows 11 x86_64, 32 logical processors, CPython 3.12.10 under the `python-tools`
   interpreter, Git for Windows 2.52.0. Every measurement ran from Git Bash with `TEMP` in a session
   scratch directory, `PYTHONDONTWRITEBYTECODE=1`, `AIEH_DATA_ROOT` an empty scratch directory, the
@@ -88,7 +93,9 @@ Not changed, with the reason:
   writes each record with `json.dump(..., indent=2)` into the file, which runs the pure-Python
   encoder chunk by chunk; 264 records a run, 3.4 s under `cProfile` in the tools suite
   (`ContainmentProbe` alone about 1.2 s of body). Writing `json.dumps(...)` in one call gives the
-  same bytes, much faster; it is a product change, so it is not made here.
+  same bytes, much faster; it is a product change, so it is not made here. **Corrected in section
+  7:** that estimate was `cProfile`'s per-call overhead; measured without a profiler the writer
+  takes about 0.5 s a run and one `json.dumps` saves about 0.07 s of it.
 
 ## 3. No assertion weakened
 
@@ -159,7 +166,7 @@ integration 1011 → 986), `mkdtemp` 1077 → 1056 (tools 563 → 542, unit 549 
   record's commit).
 - Every commit passed the pre-commit gate. No hook was bypassed.
 
-## 6. Open for the Overseer
+## 6. Open for the Overseer (as first reported; ruled in section 7)
 
 - **The owner wall fails `check --run` by 0.02 s** (median 5.22 s, limit 5.20 s; the dispatch
   measured 5.1 s at `0927e3b`). Its budget, 4.0 s, was set at `68a3bc2` for 113 tests; the suite has
@@ -174,3 +181,71 @@ integration 1011 → 986), `mkdtemp` 1077 → 1056 (tools 563 → 542, unit 549 
   host, which ran about 3 s slower than at `0927e3b` (148.8 s before against the dispatch's 145.7 s).
   The product finding in section 2 (`write_json_exclusive`, about 1 s or more in the tools suite)
   is the largest saving left that this slice may not take.
+
+## 7. The Overseer's rulings and their results
+
+**1. The owner wall** may rise only by the measured cost of the tests added since its budget was
+set (`68a3bc2`, 113 tests). The tests added since then, by id: test discovery of
+`integrations/owner/tests` at `68a3bc2` (114 ids) and at `644ec49` (127 ids), compared; 13 ids
+added, none removed. They came with the OA-16 slice (`20377ea`, `a63636e`). Their per-test medians
+come from `tools/test_profile.py run --runs 3` at `644ec49` (clean tree, `cleanmgr` absent before
+and after); a test's wall includes its `setUp` and cleanups:
+
+| Test (added since `68a3bc2`) | Median (s) |
+|---|---|
+| `test_authorization_recorder.ProtectionCheck.test_a_refused_statement_reads_neither_credential` | 0.013 |
+| `test_authorization_recorder.ProtectionCheck.test_a_rule_changed_across_the_merge_is_disclosed` | 0.030 |
+| `test_authorization_recorder.ProtectionCheck.test_drift_refuses_before_anything_is_sent_and_the_challenge_stays_usable` | 0.049 |
+| `test_authorization_recorder.ProtectionCheck.test_every_unverifiable_state_refuses_and_sends_nothing` | 0.176 |
+| `test_authorization_recorder.ProtectionCheck.test_verified_one_merge_by_aieh_owner_and_only_reads_by_the_auditor` | 0.036 |
+| `test_live_phases.Prepare.test_a_verifier_that_does_not_verify_at_prepare_sets_the_expected_outcome` | 0.018 |
+| `test_live_phases.Prepare.test_the_available_verifier_is_the_command_line_s_protection_check` | 0.003 |
+| `test_live_phases.ProtectionCheckEndToEnd.test_drift_refuses_the_record_and_nothing_is_merged` | 0.041 |
+| `test_live_phases.ProtectionCheckEndToEnd.test_verified_one_merge_and_the_stale_head_control` | 0.045 |
+| `test_live_phases.Record.test_a_refusal_other_than_the_protection_check_s_stops_the_phase` | 0.039 |
+| `test_live_phases.Record.test_a_stale_head_control_refused_by_the_protection_check_is_not_reached` | 0.033 |
+| `test_live_phases.Record.test_a_stale_head_control_that_merges_is_a_security_failure` | 0.025 |
+| `test_live_phases.Record.test_the_stale_head_control_records_the_refusal_it_observes` | 0.077 |
+| **Sum** | **0.585** |
+
+Arithmetic: 0.585 s rounded up to a tenth of a second is 0.6 s; the wall becomes 4.0 + 0.6 =
+**4.6 s** (`85c2ac7`), and its limit 4.6 × 1.3 = 5.98 s. The new class `ProtectionCheck` also has
+a class-level cost outside its tests (class median 0.343 s against 0.304 s in its tests); per the
+ruling it is not counted. The owner suite's median in that profile is 5.07 s and 5.10 s in the
+`check --run` below, so the raised wall covers the gap; it was not raised further.
+
+**2. The record writer** (`644ec49`, `tools/guest.py`): `write_json_exclusive` writes
+`json.dumps(data, indent=2, sort_keys=True) + '\n'` in one call inside the same exclusive create
+(mode `'x'`, UTF-8, LF); an existing name is still refused with `FileExistsError`. (One difference
+in a failure only: a value json cannot encode now leaves an empty file where the streamed form left
+the part written before the error; the exception is the same.) A new test,
+`StampedRecords.test_a_record_is_the_bytes_the_streaming_writer_wrote`, writes ten representative
+records both ways (empty and nested containers, unsorted keys, non-ASCII text from Latin-1 to an
+emoji with a no-break space and U+2028, quotes, backslashes and control characters, large and
+negative numbers, a bare string, `null`, the whole Windows profile) and compares the bytes, and
+checks that an existing record is refused and left as it was. Writer mutants run against it
+(`ensure_ascii=False`, `sort_keys=False`, `indent=1`, no final newline, overwriting, platform
+newlines) all fail it. **Measured saving:** across the guest test modules, without a profiler,
+238 records took 0.54 and 0.55 s in the writer before and 0.47 and 0.49 s after: about 0.07 s a
+run. A 105 KB record: 1.1-1.3 ms streamed, 1.0 ms in one call. Most of the writer's time is the
+pure-Python indented encoder, which `json.dumps` with `indent` also runs; the second or more
+estimated in section 2 was `cProfile`'s overhead. The tools suite's wall does not show the change
+(73.8 s in the three-run profile at `644ec49` against 73.6 s at `1ed7903`).
+
+**3.** `808d96c`'s wrong sentence is recorded in section 3; history is not rewritten.
+
+**Budgets** (`a01c960`, re-proposed from the three-run profile at `644ec49`, serial median 135.7 s):
+counters to the new baseline (tests 2466 → 2467, `mkdtemp` 1056 → 1057: the writer's test, in
+tools and unit); walls only fall: planning 10.5 → 10.3, lineage 14.0 → 13.9, the integration
+category 82.7 → 82.4 s; every other wall kept, the owner wall at 4.6 s.
+
+**Checks at the final code and budgets (`a01c960`):**
+
+- `tools/check_test_budget.py check --run` (three serial runs, `cleanmgr` absent before and after):
+  **PASS**. Serial median **136.2 s** (136.92, 136.17, 136.19): 13.8 s under 150 s. Tests 2467, all
+  passing or skipped as before (tools 1279 ok and 6 skipped; owner 125 ok and 2 skipped, median
+  5.10 s against a limit of 5.98 s); outcomes digest `c3bfbf3595b4` (it changes with the added
+  test). Every counter at its budget.
+- `python -I tools/verify_seed.py` and `--baseline seed`: PASS.
+- `python -I -B tools/publication_gate.py history origin/main..HEAD`: PASS, run after this
+  section's commit, which changes this file only.
