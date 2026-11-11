@@ -1410,7 +1410,7 @@
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-management", "conversation-container"],
       "observed_performer": "owner-os-account",
-      "performed_via": "tools/guest.py conversation-smoke: an API probe run as guest user agent reads the session key from its file (F-04.2).",
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; E-01.3.3, built offline, not yet verified live). The dispatcher order (dispatch) sends GET /server_info and the create. Before it: tools/guest.py conversation-smoke: an API probe run as guest user agent reads the session key from its file (F-04.2).",
       "status": "planned",
       "sources": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#execution-qualification",
@@ -1428,6 +1428,7 @@
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-management", "conversation-container"],
       "observed_performer": "owner-os-account",
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; E-01.3.3, built offline, not yet verified live). No dispatcher code sends this call yet. tools/guest.py probes keep their own API channel.",
       "status": "planned",
       "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
       "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
@@ -1442,6 +1443,7 @@
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-management", "conversation-container"],
       "observed_performer": "owner-os-account",
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; E-01.3.3, built offline, not yet verified live). No dispatcher code sends this call yet. tools/guest.py probes keep their own API channel.",
       "status": "planned",
       "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
       "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
@@ -1456,6 +1458,7 @@
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-management", "store-agent-server-scratch"],
       "observed_performer": "owner-os-account",
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; E-01.3.3, built offline, not yet verified live). No dispatcher code sends this call yet. tools/guest.py probes keep their own API channel.",
       "status": "planned",
       "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
       "evidence": ["evidence/F-04.2-conversation-lifecycle.md"],
@@ -1483,6 +1486,7 @@
       "credentials": ["cred-agent-server-session-key"],
       "assets": ["api-agent-server-management", "store-agent-server-scratch"],
       "observed_performer": "owner-os-account",
+      "performed_via": "On Work, only through the dispatch module: integrations/dispatch AgentServerClient (the pinned route allowlist) over guest_transport.GuestTransport, through tools/guest.py's GuestApi as the guest login agent, which reads the session key from its file in the guest only (decision 0013 point 1, bootstrap reading; E-01.3.3, built offline, not yet verified live). No dispatcher code sends this call yet. tools/guest.py probes keep their own API channel.",
       "status": "planned",
       "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-01.3.1"],
       "evidence": ["evidence/F-04.2-conversation-lifecycle.md", "evidence/F-04.1c-agent-server.md"],
@@ -1983,7 +1987,7 @@
       "id": "fd-guest-login-name-and-key",
       "kind": "limit",
       "title": "The operator login `agent` reads the management key; no agent workload has that login",
-      "detail": "Custody as of S-01.3.1. No dispatcher exists. During bootstrap the dispatcher's role is performed by the Owner's account through tools/guest.py, over the instance's host-loopback SSH forward with the per-instance key, as the operator login agent, which reads the session key from its root:agent 0440 file inside the guest (never on a command line). No agent workload ever has that login: an engineering agent runs in a conversation container as 999:989 in its own namespaces, holds no SSH key, cannot reach the guest's sshd (the container guard refuses it at every guest address), cannot reach the management listener, and its readable process environments hold only its own conversation keys (the outer key's fingerprint was absent from both containers, S-01.3.1). The name still collides with the engineering-agent role, and anyone given the login would hold the full management key. Moving the key to a separate guest identity (a dispatch group that agent is not in) is proposed to the Overseer, not done; whether the login keeps the key once a dispatcher exists is decided with the dispatcher (E-01.2.x). S-01.3.2: no job holds the login, its SSH key or the management key: the outer key's fingerprints are absent from every readable file and process environment of two conversation containers, and sshd, the management listener and the instance's host forwards refuse from them. Custody beyond bootstrap stays with E-01.2.2. S-01.4 (ruling R9): the session-key file stays where it is; the finding is carried to E-01.2.2 and E-01.3.1.",
+      "detail": "Custody as of S-01.3.1. No dispatcher exists. During bootstrap the dispatcher's role is performed by the Owner's account through tools/guest.py, over the instance's host-loopback SSH forward with the per-instance key, as the operator login agent, which reads the session key from its root:agent 0440 file inside the guest (never on a command line). No agent workload ever has that login: an engineering agent runs in a conversation container as 999:989 in its own namespaces, holds no SSH key, cannot reach the guest's sshd (the container guard refuses it at every guest address), cannot reach the management listener, and its readable process environments hold only its own conversation keys (the outer key's fingerprint was absent from both containers, S-01.3.1). The name still collides with the engineering-agent role, and anyone given the login would hold the full management key. Moving the key to a separate guest identity (a dispatch group that agent is not in) is proposed to the Overseer, not done; whether the login keeps the key once a dispatcher exists is decided with the dispatcher (E-01.2.x). S-01.3.2: no job holds the login, its SSH key or the management key: the outer key's fingerprints are absent from every readable file and process environment of two conversation containers, and sshd, the management listener and the instance's host forwards refuse from them. Custody beyond bootstrap stays with E-01.2.2. S-01.4 (ruling R9): the session-key file stays where it is; the finding is carried to E-01.2.2 and E-01.3.1. E-01.3.3 (2026-11-11, the Overseer's ruling F-2 on the architecture consultation): the bootstrap reading of decision 0013 point 1 applies as written. The dispatcher principal is the Owner's account acting through the dispatch module (integrations/dispatch/guest_transport.py) over tools/guest.py's GuestApi as agent; the key file stays root:agent 0440 (R9) and is read in the guest only, never on a command line or in the host process; the cut-over is the code path (op-as-* on Work only through the dispatch module); no seed, profile or guest-login change. The host copy of the key stays the leak scan's needle, disclosed under decision 0013 point 6. The separation of an operator login from the dispatcher's guest login is deferred to the first leaf that changes the seed for the Owner UI forward (OA-07, U-03.1), and the dispatcher's own host identity is a plan silence routed to the Owner (no leaf; carried_to names plan leaves only). Built offline; not yet verified live: the custody probe is prepared and unrun.",
       "refs": ["guest-login-agent", "cred-agent-server-session-key", "guest-session-key-file", "op-as-conversation-create"],
       "citations": [
         "evidence/S-01.3.1-management-api-admission.md",
@@ -1992,7 +1996,7 @@
         "evidence/F-04.1c-agent-server.md",
         "evidence/S-01.3.2-job-daemon-and-management-access.md"
       ],
-      "carried_to": ["E-01.3.3"]
+      "carried_to": ["E-01.3.3", "U-03.1"]
     },
     {
       "id": "fd-session-key-not-fine-grained",
