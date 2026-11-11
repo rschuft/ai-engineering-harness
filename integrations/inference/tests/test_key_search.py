@@ -443,7 +443,7 @@ class TestDisk(unittest.TestCase):
         # a report that would hold the key is withheld (here: the body given as a surface label)
         out, err = io.StringIO(), io.StringIO()
         self.enterContext(mock.patch.object(KS, 'CHUNK', SMALL))
-        code = KS.main(['search', '--expect-fingerprint', fp, '--surface', f'{body}=tree:{self.tmp}'],
+        code = KS.main(['search', '--expect-fingerprint', fp, f'--surface={body}=tree:{self.tmp}'],
                        Pipe(self.key.encode()), out, err)
         self.assertEqual((code, out.getvalue()), (1, ''))
         self.assertIn('OUTPUT_WITHHELD', err.getvalue())
