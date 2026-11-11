@@ -2,7 +2,7 @@
  "schema": "ai-engineering-harness/policy/test-budgets/v1",
  "description": "Enforceable test budgets (plan leaf F-09.1). Counters are exact: tests at least, launches and mkdtemp at most. wall_s is a median over wall.runs serial runs on the baseline host; a median passes up to wall_s x (1 + wall.tolerance), and never below wall_s + wall.min_slack_s. Checked by tools/check_test_budget.py (task test:budget) at every leaf acceptance and release, never in a hook.",
  "baseline": {
-  "revision": "d387901f00627107adde4a5e6b6096957a71756b",
+  "revision": "196a6bbd8acf13e3086314987255ce56d1ba3fd1",
   "measured": "2026-11-11",
   "runs": 3,
   "host": {
@@ -21,17 +21,17 @@
   "min_slack_s": 0.5
  },
  "total": {
-  "tests": 2480,
-  "launches": 1148,
-  "mkdtemp": 1068,
-  "wall_s": 133.8
+  "tests": 2523,
+  "launches": 1173,
+  "mkdtemp": 1100,
+  "wall_s": 138.7
  },
  "suites": {
   "tools": {
-   "tests": 1285,
-   "launches": 293,
-   "mkdtemp": 543,
-   "wall_s": 71.3
+   "tests": 1299,
+   "launches": 311,
+   "mkdtemp": 560,
+   "wall_s": 74.1
   },
   "store": {
    "tests": 84,
@@ -82,16 +82,16 @@
    "wall_s": 0.9
   },
   "gitea": {
-   "tests": 200,
+   "tests": 202,
    "launches": 4,
    "mkdtemp": 17,
    "wall_s": 2.4
   },
   "dispatch": {
-   "tests": 126,
-   "launches": 8,
-   "mkdtemp": 111,
-   "wall_s": 5.6
+   "tests": 153,
+   "launches": 15,
+   "mkdtemp": 126,
+   "wall_s": 7.7
   },
   "repository": {
    "tests": 106,
@@ -103,27 +103,27 @@
    "tests": 142,
    "launches": 0,
    "mkdtemp": 40,
-   "wall_s": 3.6
+   "wall_s": 3.3
   }
  },
  "categories": {
   "unit": {
-   "tests": 1537,
+   "tests": 1547,
    "launches": 0,
-   "mkdtemp": 529,
-   "wall_s": 24.4
+   "mkdtemp": 534,
+   "wall_s": 24.5
   },
   "contract": {
-   "tests": 346,
+   "tests": 353,
    "launches": 133,
    "mkdtemp": 81,
-   "wall_s": 17.0
+   "wall_s": 17.1
   },
   "integration": {
-   "tests": 579,
-   "launches": 986,
-   "mkdtemp": 457,
-   "wall_s": 81.1
+   "tests": 605,
+   "launches": 1011,
+   "mkdtemp": 484,
+   "wall_s": 85.9
   },
   "e2e": {
    "tests": 17,
