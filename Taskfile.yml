@@ -683,6 +683,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/check_ci_policy.py {{.CLI_ARGS}}'
 
+  policy:control-check:
+    desc: "Check the control catalog (G-01.1): python -I -B tools/check_control_catalog.py; pass -- --list to print each control's subject, profiles and enforcers, or -- --render for the generated block of policy/control-catalog.md"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/check_control_catalog.py {{.CLI_ARGS}}'
+
   intent:check:
     desc: "Check a proposal's intent record (P-01.1): python -I -B tools/check_intent_record.py PROPOSAL --source REF=FILE (pass each quote's source after --)"
     requires:

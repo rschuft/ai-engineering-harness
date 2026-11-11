@@ -1,0 +1,644 @@
+{
+  "schema": "ai-engineering-harness/policy/control-catalog/v1",
+  "plan_leaf": "G-01.1",
+  "title": "Minimal versioned control catalog: control definitions and applicability rules",
+  "as_of": "2026-11-11",
+  "baseline_commit": "f9cbe0b",
+  "inventory": "security/inventory.json",
+  "lineage_schema": "integrations/lineage/lineage_schema.json",
+  "readme": "policy/control-catalog.md",
+  "checker": "tools/check_control_catalog.py",
+  "statement": "A control is an attributable, versioned obligation with an applicability rule and a real enforcement point. This catalog defines controls; it is not evidence that any control is enforced. Until a control is linked to independently sourced evidence (plan leaf G-01.2), its assessment is unknown, and unknown never satisfies a control.",
+  "reference_form": "governance:<control id>@<full commit id of the admitted revision of this file>",
+  "authority": {
+    "principal": "owner",
+    "operation": "op-policy-change",
+    "note": "The Owner is the rule authority: control definitions, applicability and exceptions change only by an Owner policy change. An agent may propose a control or a stricter applicability, never adopt or weaken one."
+  },
+  "admission": {
+    "status": "proposed",
+    "performer": "owner",
+    "operation": "op-policy-change",
+    "repository": "repo-gitea-policy",
+    "realization": "Bootstrap: an Owner sign-off of an exact revision of this file, transcribed verbatim into evidence/bootstrap-log.md by the Overseer, as every Owner policy decision is today. Planned: the protected Gitea policy repository (repo-gitea-policy), where the catalog is promoted by the protected catalog merge of blueprint #sequence-maps governance step 04, which the M-5 reconciliation (2026-11-11) left unchanged. Decision 0012 does not cover catalog admission: the authorization recorder performs no catalog merge and gains no authority over it. No mechanism for that merge is decided.",
+    "sources": [
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#sequence-maps",
+      "decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md",
+      "evidence/bootstrap-log.md"
+    ]
+  },
+  "categories": {
+    "isolation": "Workload isolation: what an agent run can reach.",
+    "credentials": "Credential separation: which credentials an agent run can hold or read.",
+    "ci": "Mandatory CI: the required checks that gate a protected merge on the exact commit.",
+    "code-review": "Independent review of the exact change.",
+    "authorization": "Owner authorization of a consequential effect.",
+    "evidence": "Evidence integrity: what a control verdict may rest on.",
+    "recovery": "Recovery: durable state survives a change, and an unknown outcome is reconciled, never replayed."
+  },
+  "boundaries": {
+    "execution": "The execution boundary (blueprint #security, 3): OS, VM and container isolation, the restricted launcher and the credentials an attempt is given.",
+    "git-ci": "The Git and CI boundary (blueprint #security, 4): protected branches, required checks on the current head, merge restrictions and contained CI jobs.",
+    "effect": "The effect boundary (blueprint #security, 5): the Owner's protected authorization of an exact operation and the allowlisted executor that re-checks it.",
+    "evidence": "The evidence boundary (blueprint #security, 6): the independent resolution of evidence for an exact subject, revision and policy version."
+  },
+  "exception_classes": {
+    "prohibited": "No exception can be granted: the control is a non-waivable identity or containment invariant.",
+    "scoped": "A separately authorized, time-bounded exception may let work proceed under stated conditions; it never rewrites the failed or unknown assessment to passed.",
+    "unsettled": "The accepted records do not settle whether an exception may be granted; until they do, none can be (fail closed). Settled at the leaf named in exception_settled_at."
+  },
+  "exception_contract": {
+    "authority": "owner",
+    "fields": [
+      "control",
+      "target",
+      "reason",
+      "residual_risk",
+      "compensating_measures",
+      "expires_at"
+    ],
+    "rule": "An exception is bound to one control id, its target, the reason, the residual risk, the compensating measures and an expiry. Only the Owner grants one; an agent may propose one and never grants it. A waiver never overrides physical isolation or unauthorized credential access.",
+    "sources": [
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture"
+    ]
+  },
+  "classification_inputs": {
+    "repository-classification": "The classification of the repository the change or operation touches.",
+    "change-surface": "What the change touches (for example authentication, secrets, public networking, durable data or an execution boundary).",
+    "target-environment": "Where a change or operation takes effect.",
+    "risk": "The risk classification of the Work.",
+    "operation-type": "Whether the transition is an ordinary engineering change or a consequential effect that needs the Owner's authorization."
+  },
+  "profiles": [
+    {
+      "id": "baseline",
+      "name": "Baseline engineering",
+      "applies": "always",
+      "obligations": "Every attempt: isolated workspace, approved agent/skill digests, outcome/Work lineage. Every PR: protected CI checks, tested commit, review requirements by policy.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence"
+      ]
+    },
+    {
+      "id": "elevated",
+      "name": "Elevated-risk change",
+      "applies": {
+        "input": "change-surface",
+        "any_of": [
+          "auth",
+          "secrets",
+          "public-networking",
+          "durable-data",
+          "execution-boundary"
+        ]
+      },
+      "obligations": "Add scoped threat analysis, targeted adversarial tests, license/security assessment, enhanced isolation and independent security review when work touches auth, secrets, public networking, durable data or execution boundaries.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security"
+      ]
+    },
+    {
+      "id": "consequential",
+      "name": "Consequential operation",
+      "applies": {
+        "input": "operation-type",
+        "any_of": [
+          "consequential-effect"
+        ]
+      },
+      "obligations": "Add protected Owner authorization, exact effect digest, privilege-separated execution, data protection/rollback preconditions and independently observed outcome. Non-waivable identity and containment invariants still apply.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"
+      ]
+    }
+  ],
+  "resolution": {
+    "rule": "A control profile is resolved deterministically from repository classification, change surface, target environment, risk and operation type. Profiles are additive: baseline always applies, and every profile whose condition holds adds its controls.",
+    "unknown": "Unknown classification selects the safer profile or blocks the consequential transition: an input whose value is unknown counts as meeting every condition on it, and a transition whose operation type is unknown is not performed.",
+    "downgrade": "An agent may propose stricter checks or ask to resolve uncertainty, but cannot downgrade mandatory controls; trusted checks enforce the mandatory baseline controls even if agents omit them.",
+    "sources": [
+      "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence"
+    ]
+  },
+  "controls": [
+    {
+      "id": "EXEC-01",
+      "title": "Workload isolation",
+      "category": "isolation",
+      "purpose": "An agent run executes only inside an approved workload profile: no protected mount, administrative socket or unauthorized network is reachable from it, whatever its prompt or instructions say.",
+      "subject": {
+        "kinds": [
+          "attempt"
+        ],
+        "scope": "Every agent run (one engineering conversation), bound to the execution profile it ran under."
+      },
+      "applicability": {
+        "profiles": [
+          "baseline"
+        ],
+        "events": [
+          "every agent run",
+          "every change of an execution profile"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "execution",
+          "principal": "management-dispatcher",
+          "assets": [
+            "conversation-container",
+            "api-agent-server-management"
+          ],
+          "mechanism": "The restricted launcher starts only approved workload profiles and denies protected mounts, administrative sockets and unauthorized networks; the sandbox mount and permission manifest is the guard, not the agent prompt.",
+          "builds_at": [
+            "E-01.3.2",
+            "S-02.2"
+          ]
+        },
+        {
+          "boundary": "execution",
+          "principal": "guest-root",
+          "assets": [
+            "guest-execution-vm",
+            "guest-container-guard"
+          ],
+          "mechanism": "The execution guest is the VM boundary against untrusted agents, and its container egress guard refuses every forwarded connection from a container bridge (S-01.4).",
+          "builds_at": [
+            "S-01.4",
+            "S-02.2"
+          ]
+        }
+      ],
+      "exception": "prohibited",
+      "failure_effect": "Block execution for core boundaries. No exception allowing Owner secret access.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "decisions/0003-execution-guest-providers-and-isolation-contract.md",
+        "policy/network-matrix.json"
+      ]
+    },
+    {
+      "id": "SEC-EXEC-01",
+      "title": "Owner credentials out of agent reach",
+      "category": "credentials",
+      "purpose": "Agent execution cannot access Owner credentials: an agent run holds only its own role's scoped credentials and can read no Owner, administrator, executor or management credential.",
+      "subject": {
+        "kinds": [
+          "attempt"
+        ],
+        "scope": "Every agent run, with the credentials delivered to it."
+      },
+      "applicability": {
+        "profiles": [
+          "baseline"
+        ],
+        "events": [
+          "every agent run",
+          "every issuance of a role credential to an attempt"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "execution",
+          "principal": "management-dispatcher",
+          "assets": [
+            "conversation-container"
+          ],
+          "mechanism": "No Owner secrets or host home mounts: the dispatcher, sole custodian of the standing bot credentials, delivers each role token per attempt into its own attempt context, never into the conversation container (decision 0013 point 7).",
+          "builds_at": [
+            "E-01.3.3",
+            "E-01.3.2"
+          ]
+        },
+        {
+          "boundary": "git-ci",
+          "principal": "gitea-site-admin",
+          "assets": [
+            "gitea-server"
+          ],
+          "mechanism": "Each agent role's Gitea identity is a non-administrator Bot account whose token carries the role's narrowest scope; no agent identity holds an Owner, administrator or executor credential (policy/role-tokens.json).",
+          "builds_at": [
+            "S-01.2.2"
+          ]
+        }
+      ],
+      "exception": "prohibited",
+      "failure_effect": "Block execution: a waiver never overrides unauthorized credential access.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "decisions/0007-role-token-matrix-and-revocation-contract.md",
+        "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "policy/role-tokens.json"
+      ]
+    },
+    {
+      "id": "SDLC-01",
+      "title": "Code hygiene and tests",
+      "category": "ci",
+      "purpose": "The required lint, format, test, coverage and acceptance-mapping checks run independently against the exact pull-request commit, and a protected merge waits for all of them; absent checks fail closed.",
+      "subject": {
+        "kinds": [
+          "commit"
+        ],
+        "scope": "Every revision of a pull request to a protected branch."
+      },
+      "applicability": {
+        "profiles": [
+          "baseline"
+        ],
+        "events": [
+          "every pull-request revision"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "git-ci",
+          "principal": "gitea-site-admin",
+          "assets": [
+            "gitea-server"
+          ],
+          "mechanism": "Protected branch rules require the mandatory status checks on the current head, from centrally required workflows that a consuming repository cannot opt out of.",
+          "builds_at": [
+            "Q-03.1",
+            "Q-03.2",
+            "D-01.2"
+          ]
+        },
+        {
+          "boundary": "git-ci",
+          "principal": "ci-runner-service",
+          "assets": [
+            "ci-runner-host"
+          ],
+          "mechanism": "The required Gitea Actions jobs run in a disposable, contained job on the dedicated runner host, against the exact pull-request commit.",
+          "builds_at": [
+            "Q-02.2.2",
+            "Q-03.1"
+          ]
+        }
+      ],
+      "exception": "unsettled",
+      "exception_settled_at": "G-06.3.1",
+      "failure_effect": "Protected merge blocked; corrected revision must be retested.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
+        "decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md"
+      ]
+    },
+    {
+      "id": "SEC-PR-01",
+      "title": "Secrets and vulnerabilities",
+      "category": "ci",
+      "purpose": "The required secret, dependency and SBOM scans run against the exact commit, and their findings are triaged against a published risk policy before a protected merge or a release.",
+      "subject": {
+        "kinds": [
+          "commit"
+        ],
+        "scope": "Every revision of a pull request to a protected branch, every release candidate and every dependency change."
+      },
+      "applicability": {
+        "profiles": [
+          "baseline"
+        ],
+        "events": [
+          "every pull-request revision",
+          "every release",
+          "every dependency change",
+          "a scheduled rescan, as applicable"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "git-ci",
+          "principal": "gitea-site-admin",
+          "assets": [
+            "gitea-server"
+          ],
+          "mechanism": "The scans are required status checks of the protected branch; a material finding without a permitted scoped exception keeps the merge blocked.",
+          "builds_at": [
+            "G-02.2",
+            "Q-03.2"
+          ]
+        },
+        {
+          "boundary": "git-ci",
+          "principal": "ci-runner-service",
+          "assets": [
+            "ci-runner-host"
+          ],
+          "mechanism": "The pinned scanners run as required jobs in the contained CI job against the exact commit.",
+          "builds_at": [
+            "G-02.1"
+          ]
+        }
+      ],
+      "exception": "scoped",
+      "failure_effect": "Block material findings or request a permitted scoped exception.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline"
+      ]
+    },
+    {
+      "id": "REVIEW-01",
+      "title": "Independent challenge",
+      "category": "code-review",
+      "purpose": "A review independent of the author receives the immutable accepted goal and the exact diff; its approval counts only for the revision it reviewed.",
+      "subject": {
+        "kinds": [
+          "commit"
+        ],
+        "scope": "Every pull-request revision whose merge requires a review."
+      },
+      "applicability": {
+        "profiles": [
+          "baseline",
+          "elevated"
+        ],
+        "events": [
+          "every review the protected code-merge policy requires (decided at D-01.2)",
+          "every elevated-risk change: an independent security review"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "git-ci",
+          "principal": "gitea-site-admin",
+          "assets": [
+            "gitea-server"
+          ],
+          "mechanism": "Merge rules require the applicable approvals on the current head and dismiss stale approvals.",
+          "builds_at": [
+            "D-01.2",
+            "E-03.4"
+          ]
+        },
+        {
+          "boundary": "execution",
+          "principal": "management-dispatcher",
+          "assets": [
+            "conversation-container"
+          ],
+          "mechanism": "The reviewer runs in a session, runner or model and context separate from the builder's, under its own Bot identity, which can submit reviews and cannot merge.",
+          "builds_at": [
+            "E-03.2.1",
+            "E-03.2.2"
+          ]
+        }
+      ],
+      "exception": "unsettled",
+      "exception_settled_at": "G-06.3.1",
+      "failure_effect": "Return to same Work for rework; invalidate review on material revision change.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#workflow"
+      ]
+    },
+    {
+      "id": "AUTH-01",
+      "title": "Owner authority",
+      "category": "authorization",
+      "purpose": "A consequential effect happens only on the Owner's recorded authorization of the exact operation manifest, merged onto the protected authorization branch, and after the isolated executor has re-checked the exact target and digest.",
+      "subject": {
+        "kinds": [
+          "authorization"
+        ],
+        "scope": "Each consequential operation: one operation manifest on the protected authorization branch."
+      },
+      "applicability": {
+        "profiles": [
+          "consequential"
+        ],
+        "events": [
+          "each consequential effect"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "effect",
+          "principal": "gitea-site-admin",
+          "assets": [
+            "repo-gitea-authorization",
+            "gitea-server"
+          ],
+          "mechanism": "The protected authorization branch: no direct or force push, and only aieh-owner, the Owner's authority identity, is on its merge allowlist (decision 0012 point 3).",
+          "builds_at": [
+            "G-03.1",
+            "G-03.2"
+          ]
+        },
+        {
+          "boundary": "effect",
+          "principal": "authorization-recorder",
+          "assets": [
+            "repo-gitea-authorization"
+          ],
+          "mechanism": "Merges only on a fresh Owner decision bound to the exact head and manifest digest, after the fail-closed protection check (decision 0012 points 4 to 6).",
+          "builds_at": [
+            "P-04.2"
+          ]
+        },
+        {
+          "boundary": "effect",
+          "principal": "authorization-verifier",
+          "assets": [
+            "repo-gitea-authorization"
+          ],
+          "mechanism": "Reads the protected ref, merged_by, the trailers and the exact manifest blob; a protected-branch merge without a recorder trailer or receipt is an unrecorded merge (decision 0012 point 10).",
+          "builds_at": [
+            "G-04.3.1",
+            "G-04.3.2"
+          ]
+        },
+        {
+          "boundary": "effect",
+          "principal": "privileged-executor",
+          "assets": [
+            "store-effects"
+          ],
+          "mechanism": "A separate OS identity re-checks the current authorized revision, target and digest before acting, and never trusts a webhook payload.",
+          "builds_at": [
+            "G-04.2.1",
+            "G-04.4.1"
+          ]
+        }
+      ],
+      "exception": "unsettled",
+      "exception_settled_at": "G-06.3.1",
+      "failure_effect": "Block effect; stale or missing authorization never inferred from webhook.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md"
+      ]
+    },
+    {
+      "id": "ASSURE-01",
+      "title": "Evidence integrity",
+      "category": "evidence",
+      "purpose": "A control verdict rests only on independently sourced evidence whose source identity, content integrity, subject, freshness and allowed signer or runner are verified; anything that cannot be verified is unknown or stale, never satisfied.",
+      "subject": {
+        "kinds": [
+          "commit",
+          "review",
+          "ci",
+          "authorization",
+          "effect-receipt"
+        ],
+        "scope": "Each evidence reference that a control verdict relies on."
+      },
+      "applicability": {
+        "profiles": [
+          "baseline"
+        ],
+        "events": [
+          "each control verdict",
+          "each change of an evidence source a verdict relies on"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "evidence",
+          "principal": "integration-service",
+          "assets": [
+            "api-integration-service",
+            "store-integration"
+          ],
+          "mechanism": "The independent evidence resolver, keyed by source revision and observed subject, retrieves the native record, verifies subject, revision, hash, source identity and freshness, and leaves missing evidence unknown; it keeps no second evidence or Work database.",
+          "builds_at": [
+            "G-01.2",
+            "G-06.3.1",
+            "G-06.4"
+          ]
+        }
+      ],
+      "exception": "unsettled",
+      "exception_settled_at": "G-06.3.1",
+      "failure_effect": "Mark unknown/stale rather than asserting pass.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "integrations/lineage/lineage_schema.json"
+      ]
+    },
+    {
+      "id": "RECOVER-01",
+      "title": "Durable state recovery",
+      "category": "recovery",
+      "purpose": "A change or operation that can alter durable state (repositories, conversations, Work, Git history, credentials, operational records) proceeds only with a verified recovery option, and an unknown non-idempotent outcome stops for reconciliation and is never replayed.",
+      "subject": {
+        "kinds": [
+          "authorization",
+          "commit"
+        ],
+        "scope": "Each consequential operation, and each change whose change surface includes durable data."
+      },
+      "applicability": {
+        "profiles": [
+          "elevated",
+          "consequential"
+        ],
+        "events": [
+          "each consequential operation (preconditions such as recovery-available, data-compatible and backup-verified)",
+          "each change whose change surface is durable data (migration and data-health tests, a backup or recovery condition)"
+        ]
+      },
+      "enforcement": [
+        {
+          "boundary": "effect",
+          "principal": "privileged-executor",
+          "assets": [
+            "store-effects"
+          ],
+          "mechanism": "Checks the manifest's recovery preconditions and the actual target state before acting, persists its receipt, queries the actual target state after a crash and stops on an unknown non-idempotent effect.",
+          "builds_at": [
+            "G-04.4.2",
+            "G-04.5",
+            "R-02.4.2"
+          ]
+        },
+        {
+          "boundary": "git-ci",
+          "principal": "gitea-site-admin",
+          "assets": [
+            "gitea-server"
+          ],
+          "mechanism": "A change whose surface is durable data carries migration and data-health checks among the required checks on its exact commit.",
+          "builds_at": [
+            "Q-03.1",
+            "R-02.2.2"
+          ]
+        }
+      ],
+      "exception": "unsettled",
+      "exception_settled_at": "G-06.3.1",
+      "failure_effect": "Do not perform the change or operation; reconcile/restore when safe; an unknown outcome stays unknown until reconciled.",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#infrastructure-state",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#updates",
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "decisions/0004-privileged-effect-store-custody-and-restore-semantics.md"
+      ]
+    }
+  ],
+  "deferred_controls": [
+    {
+      "id": "AGENT-01",
+      "title": "Approved agent/skill",
+      "reason": "Outside the categories this leaf declares. Its definitions are admitted through the agent and skill catalog (governance steps 01 to 05; step 04, the protected catalog merge, is unchanged by M-5 and outside decision 0012).",
+      "leaves": [
+        "A-01.1",
+        "A-01.2"
+      ]
+    },
+    {
+      "id": "PLAN-01",
+      "title": "Intent/acceptance trace",
+      "reason": "Outside the categories this leaf declares; the trace it checks is the lineage projection (P-03.2) and the acceptance verdicts.",
+      "leaves": [
+        "G-05.1"
+      ]
+    },
+    {
+      "id": "REL-01",
+      "title": "Artifact and delivery",
+      "reason": "Outside the categories this leaf declares, and its subject, a release artifact, has no settled native identity in the lineage schema.",
+      "leaves": [
+        "R-01.1",
+        "R-02.2.1",
+        "R-05.4.2"
+      ]
+    }
+  ],
+  "oscal": {
+    "claim": "none",
+    "note": "A small local contract shaped so that a later OSCAL catalog export maps field by field; deliberately not claimed to be an OSCAL document, and no mapping to an external standard (such as NIST SSDF) is asserted.",
+    "fields": {
+      "id": "control id",
+      "title": "control title",
+      "category": "group id (the category groups the controls)",
+      "purpose": "part named statement",
+      "applicability": "part named applicability, with its profiles as props",
+      "enforcement": "implementation by-components (a component per enforcing principal)",
+      "sources": "links with rel reference"
+    }
+  },
+  "sources": [
+    "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#G-01.1",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#control-evidence",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+    "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security"
+  ]
+}
