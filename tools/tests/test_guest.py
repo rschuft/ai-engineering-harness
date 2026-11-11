@@ -211,6 +211,41 @@ class StampedRecords(unittest.TestCase):
                          [{'n': 1}, {'n': 2}, {'n': 3}])
         self.assertEqual(guest.latest_record(self.tmp, 'conversation-smoke'), {'n': 3})
 
+    def test_a_record_is_the_bytes_the_streaming_writer_wrote(self):
+        """write_json_exclusive writes one json.dumps (plan leaf F-09); each record's bytes equal
+        those of the form it replaced, json.dump streamed into the file with the same arguments,
+        and an existing name is still refused without being touched."""
+        def streamed(path, data):                       # the replaced form, verbatim
+            with open(path, 'x', encoding='utf-8', newline='\n') as handle:
+                json.dump(data, handle, indent=2, sort_keys=True)
+                handle.write('\n')
+
+        text = 'caf' + chr(0xe9) + ' ' + chr(0x6f22) + chr(0x5b57) + ' ' + chr(0x1f600) + chr(0xa0) + chr(0x2028)
+        records = [
+            {},
+            [],
+            {'z': 1, 'a': [3, 2, 1], 'm': {'y': None, 'b': True, 'x': False}},
+            {'text': text, text: [text, {'nested': {text: text}}]},
+            {'escapes': 'quote " backslash ' + chr(92) + ' newline ' + chr(10) + ' tab ' + chr(9) + ' nul ' + chr(0),
+             'numbers': [0, -1, 2 ** 70, 1.5, -0.0, 1e-07, 123456789.123], 'empty': {'list': [], 'dict': {}}},
+            [[[]], [{}], [[1, [2, [3, {'deep': [4]}]]]]],
+            'a bare string ' + text,
+            12.25,
+            None,
+            PROFILE,                                        # a large nested record (the profile, ~0.1 MB)
+        ]
+        for n, data in enumerate(records):
+            with self.subTest(record=n):
+                new, old = self.tmp / f'new-{n}.json', self.tmp / f'old-{n}.json'
+                guest.write_json_exclusive(new, data)
+                streamed(old, data)
+                self.assertEqual(new.read_bytes(), old.read_bytes())
+                self.assertEqual(json.loads(new.read_bytes().decode('utf-8')), data)
+        written = (self.tmp / 'new-2.json').read_bytes()
+        with self.assertRaises(FileExistsError):
+            guest.write_json_exclusive(self.tmp / 'new-2.json', {'other': 1})
+        self.assertEqual((self.tmp / 'new-2.json').read_bytes(), written)
+
 
 # ---------------------------------------------------------------- launch record
 

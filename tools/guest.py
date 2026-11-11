@@ -485,9 +485,10 @@ class Context:
 
 
 def write_json_exclusive(path, data):
+    # One json.dumps and one write: json.dump with indent runs the pure-Python encoder and hands
+    # the file each small chunk in turn (plan leaf F-09); the bytes are the same.
     with open(path, 'x', encoding='utf-8', newline='\n') as handle:
-        json.dump(data, handle, indent=2, sort_keys=True)
-        handle.write('\n')
+        handle.write(json.dumps(data, indent=2, sort_keys=True) + '\n')
 
 
 def write_stamped_record(records, operation, data):
