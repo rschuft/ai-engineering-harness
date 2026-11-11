@@ -13,14 +13,17 @@ This one standard-library file has two halves:
   container`` runs inside the conversation container as its user (through the inner server's bash route, as
   ``tools/guest.py``'s job probe does) and lists every process of the container's PID namespace (its parent,
   executable, the first path among its first arguments, its identity, capabilities, ``NoNewPrivs``, ``Seccomp``
-  and cgroup), the listening TCP sockets with their owner, and the container's own cgroup limits. ``collect host
+  and cgroup), the listening TCP sockets with their owner, its other TCP sockets (local and remote address and
+  port, state, owner: S-03.3 slice 5), and the container's own cgroup limits. ``collect host
   --pid N`` runs as the guest's root: every host process in the PID namespace of the container's init ``N``
   (``docker container inspect``'s ``State.Pid``), with its namespaced pid, cgroup and status, the limits of that
   cgroup, and any process outside the namespace whose parent is inside it. The output is one line,
   ``MARKER`` and canonical JSON. No command line argument value other than an absolute path is recorded, and no
   environment, file content or socket payload is read.
-* **Judgement** (``container_verdict``, ``host_verdict``, ``sets_verdict``), on the host, over those snapshots,
-  the inspected container and the before/after sets of containers and of outer and inner conversations.
+* **Judgement** (``container_verdict``, ``host_verdict``, ``network_verdict``, ``sets_verdict``), on the host,
+  over those snapshots, the inspected container, the container's connections against the one permitted
+  destination (the guest inference endpoint) and the before/after sets of containers and of outer and inner
+  conversations.
 
 The container view is taken from inside the boundary it judges; the host view is the independent one. The
 verdicts fail closed: a process whose status, parent or cgroup cannot be read, an ambiguous inner server, an
@@ -33,6 +36,7 @@ a running provider.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import sys
@@ -62,6 +66,15 @@ PROVIDER_ADAPTERS = {
     'claude-code': {'argv0': 'node', 'script': '/acp-node/bin/claude-agent-acp', 'exe': '/acp-node/bin/node'},
     'codex': {'argv0': 'node', 'script': '/acp-node/bin/codex-acp', 'exe': '/acp-node/bin/node'},
 }
+# The TCP states of /proc/net/tcp (include/net/tcp_states.h), LISTEN (0A) apart. A connection the container opened
+# that never left SYN_SENT was attempted, not reached (a refused or unanswered connect ends there); every other
+# state means the peer answered.
+TCP_STATES = {'01': 'ESTABLISHED', '02': 'SYN_SENT', '03': 'SYN_RECV', '04': 'FIN_WAIT1', '05': 'FIN_WAIT2',
+              '06': 'TIME_WAIT', '07': 'CLOSE', '08': 'CLOSE_WAIT', '09': 'LAST_ACK', '0B': 'CLOSING',
+              '0C': 'NEW_SYN_RECV'}
+ATTEMPT_STATES = frozenset({'SYN_SENT'})
+# CLOSE (or a code the table does not name) says neither: the network check fails on it without a stop.
+AMBIGUOUS_STATES = frozenset({'CLOSE'})
 DOCKER_MEMORY_UNITS = {'b': 1, 'k': 1024, 'm': 1024 ** 2, 'g': 1024 ** 3}
 CPU_PERIOD = 100000     # Moby's CFS period for --cpus (cgroup v2 cpu.max "<quota> <period>")
 
@@ -157,6 +170,22 @@ def parse_net_tcp(text: str) -> list:
             continue
         host, _, port = fields[1].partition(':')
         out.append({'inode': fields[9], 'address': _address(host), 'port': int(port, 16)})
+    return out
+
+
+def parse_net_connections(text: str) -> list:
+    """The other sockets of a /proc/net/tcp or tcp6 table (every state but LISTEN): [{inode, local, local_port,
+    remote, remote_port, state}], the state by its kernel name (TCP_STATES) or its hex code when unknown."""
+    out = []
+    for line in text.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 10 or fields[3] == '0A':
+            continue
+        local, _, lport = fields[1].partition(':')
+        remote, _, rport = fields[2].partition(':')
+        out.append({'inode': fields[9], 'local': _address(local), 'local_port': int(lport, 16),
+                    'remote': _address(remote), 'remote_port': int(rport, 16),
+                    'state': TCP_STATES.get(fields[3], fields[3])})
     return out
 
 
@@ -269,17 +298,21 @@ def collect(mode: str, *, fs=None, proc: str = '/proc', cgroup_root: str = '/sys
             else:
                 processes.append(record)
         owners, unreadable = _socket_owners(fs, proc, [p['pid'] for p in processes])
-        listeners = []
+        listeners, connections, unread = [], [], []
         for table in ('tcp', 'tcp6'):
             try:
-                rows = parse_net_tcp(_text(fs, f'{proc}/net/{table}'))
-            except OSError:
+                text = _text(fs, f'{proc}/net/{table}')
+            except OSError as exc:
+                unread.append({'table': table, 'error': _error(exc)})
                 continue
-            for row in rows:
+            for row in parse_net_tcp(text):
                 listeners.append({'address': row['address'], 'port': row['port'],
                                   'pids': owners.get(row['inode'], [])})
-        out.update(processes=processes, listeners=listeners, fd_unreadable=unreadable,
-                   limits=_limits(fs, cgroup_root))
+            for row in parse_net_connections(text):
+                inode = row.pop('inode')
+                connections.append(dict(row, pids=owners.get(inode, [])))
+        out.update(processes=processes, listeners=listeners, connections=connections, tables_unread=unread,
+                   fd_unreadable=unreadable, limits=_limits(fs, cgroup_root))
         return out
     if not isinstance(target_pid, int) or isinstance(target_pid, bool) or target_pid < 1:
         raise ContainmentError('TARGET_INVALID', 'host mode needs the container init pid (State.Pid)')
@@ -624,6 +657,61 @@ def host_verdict(snapshot, *, inspect: dict, container: dict, expected: dict) ->
     out['appeared'] = sorted(n for n in by_inner if n not in inside_pids)
     out['ok'] = all(c['ok'] for c in checks)
     return out
+
+
+def _host(address: str):
+    """``address`` as an ip_address, an IPv4-mapped IPv6 address as its IPv4 form; None when unparsable."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    return ip.ipv4_mapped if ip.version == 6 and ip.ipv4_mapped else ip
+
+
+def network_verdict(snapshot, *, endpoint, inner_port: int = INNER_PORT) -> dict:
+    """The TCP connections of a container snapshot (S-03.3 slice 5) against its one permitted destination: each is
+    to ``endpoint`` (the guest inference endpoint, ``(IPv4 address, port)``), on the container's loopback, or
+    inbound to the inner server's ``inner_port``. Any other connection whose peer answered (``reached``, every state
+    but SYN_SENT and CLOSE) fails the check and is listed in ``other_reached``, the run's stop condition; a
+    connect that never left SYN_SENT is ``attempted`` (refused or unanswered: recorded, the guards' counters judge
+    it); CLOSE or an unknown state, or a table that could not be read, fails the check without a stop."""
+    _check_snapshot(snapshot, 'container')
+    _require(isinstance(endpoint, (list, tuple)) and len(endpoint) == 2 and _host(str(endpoint[0])) is not None
+             and isinstance(endpoint[1], int) and not isinstance(endpoint[1], bool), 'EXPECTED_INVALID',
+             'endpoint: (IPv4 address, port)')
+    rows = snapshot.get('connections')
+    _require(isinstance(rows, list) and all(isinstance(r, dict) for r in rows), 'SNAPSHOT_INVALID',
+             'no connection list')
+    want = (_host(str(endpoint[0])), endpoint[1])
+    classified, reached, attempted, ambiguous = [], [], [], []
+    for row in rows:
+        remote, local = _host(str(row.get('remote'))), row.get('local_port')
+        state = row.get('state')
+        if remote is not None and remote.is_loopback:
+            kind = 'loopback'
+        elif local == inner_port:
+            kind = 'inbound to the inner server'
+        elif remote is not None and (remote, row.get('remote_port')) == want:
+            kind = 'the inference endpoint'
+        elif state in ATTEMPT_STATES:
+            kind = 'attempted'
+            attempted.append(row)
+        elif state in AMBIGUOUS_STATES or state not in TCP_STATES.values():
+            kind = 'ambiguous'
+            ambiguous.append(row)
+        else:
+            kind = 'reached'
+            reached.append(row)
+        classified.append(dict(row, kind=kind))
+    unread = [t for t in snapshot.get('tables_unread') or []
+              if not (t.get('table') == 'tcp6' and t.get('error') == 'FileNotFoundError')]
+    checks = []
+    _check(checks, 'network: no connection reached a destination other than the inference endpoint', not reached,
+           reached)
+    _check(checks, 'network: every connection state is known and the TCP tables were read', not ambiguous
+           and not unread, {'ambiguous': ambiguous, 'tables_unread': unread})
+    return {'format': VERDICT_FORMAT, 'vantage': 'network', 'checks': checks, 'connections': classified,
+            'other_reached': reached, 'attempted': attempted, 'ok': all(c['ok'] for c in checks)}
 
 
 def _id_set(value, what: str) -> set:

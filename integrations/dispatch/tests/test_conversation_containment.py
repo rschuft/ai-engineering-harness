@@ -907,7 +907,130 @@ class CommandLine(unittest.TestCase):
         tree = ast.parse((HERE.parent / 'conversation_containment.py').read_text(encoding='utf-8'))
         names = {a.name.split('.')[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
         names |= {n.module.split('.')[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-        self.assertEqual(names, {'__future__', 'argparse', 'json', 'os', 'sys'})
+        self.assertEqual(names, {'__future__', 'argparse', 'ipaddress', 'json', 'os', 'sys'})
+
+
+ENDPOINT = ('172.17.0.1', 8090)
+HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
+
+
+def tcp_row(local, remote, state, inode):
+    return f'   0: {local} {remote} {state} 00000000:00000000 00:00000000 00000000   999        0 {inode} 1\n'
+
+
+# 172.17.0.2 (the container) to 172.17.0.1:8090 (the endpoint), the outer server into the inner server's 8000,
+# and loopback; 1.1.1.1:443 in each state of interest
+TO_ENDPOINT = tcp_row('020011AC:C350', '010011AC:1F9A', '01', 6001)
+INBOUND = tcp_row('020011AC:1F40', '010011AC:D431', '01', 6002)
+ELSEWHERE = {state: tcp_row('020011AC:C351', '01010101:01BB', code, 6003)
+             for state, code in (('ESTABLISHED', '01'), ('SYN_SENT', '02'), ('TIME_WAIT', '06'),
+                                 ('CLOSE_WAIT', '08'), ('CLOSE', '07'), ('FIN_WAIT1', '04'))}
+
+
+def net_snapshot(*rows, tcp6=None):
+    fs = container_fs()
+    fs.files['/proc/net/tcp'] = (TCP + ''.join(rows)).encode()
+    if tcp6 is not None:
+        fs.files['/proc/net/tcp6'] = tcp6.encode()
+    fs.links['/proc/8/fd/7'] = 'socket:[6002]'
+    fs.links['/proc/21/fd/9'] = 'socket:[6001]'
+    fs.links['/proc/21/fd/10'] = 'socket:[6003]'
+    return container_snapshot(fs)
+
+
+class NetworkVerdict(unittest.TestCase):
+    """S-03.3 slice 5: the connections of the container view against its one permitted destination."""
+
+    def test_connection_table_and_owners(self):
+        self.assertEqual(CC.parse_net_connections(HEADER + TO_ENDPOINT + TCP.split('\n', 1)[1]),
+                         [{'inode': '6001', 'local': '172.17.0.2', 'local_port': 50000, 'remote': '172.17.0.1',
+                           'remote_port': 8090, 'state': 'ESTABLISHED'},
+                          {'inode': '5002', 'local': '127.0.0.1', 'local_port': 41394, 'remote': '127.0.0.1',
+                           'remote_port': 8000, 'state': 'ESTABLISHED'}])
+        self.assertEqual(CC.parse_net_connections(HEADER + tcp_row('0100007F:1', '0100007F:2', '0D', 1))[0]['state'],
+                         '0D')
+        self.assertEqual(CC.parse_net_connections('header\n   0: 0100007F:1F40 00000000:0000 01\n'), [])
+        snap = net_snapshot(TO_ENDPOINT, INBOUND)
+        self.assertIn({'local': '172.17.0.2', 'local_port': 50000, 'remote': '172.17.0.1', 'remote_port': 8090,
+                       'state': 'ESTABLISHED', 'pids': [21]}, snap['connections'])
+        self.assertIn({'local': '172.17.0.2', 'local_port': 8000, 'remote': '172.17.0.1', 'remote_port': 54321,
+                       'state': 'ESTABLISHED', 'pids': [8]}, snap['connections'])
+        self.assertEqual(snap['tables_unread'], [{'table': 'tcp6', 'error': 'FileNotFoundError'}])
+        self.assertNotIn('6001', json.dumps(snap['connections']))   # no inode is kept
+
+    def test_the_endpoint_loopback_and_inbound_pass(self):
+        verdict = CC.network_verdict(net_snapshot(TO_ENDPOINT, INBOUND), endpoint=ENDPOINT)
+        self.assertTrue(verdict['ok'], verdict['checks'])
+        self.assertEqual(sorted(c['kind'] for c in verdict['connections']),
+                         ['inbound to the inner server', 'loopback', 'the inference endpoint'])
+        self.assertEqual((verdict['other_reached'], verdict['attempted']), ([], []))
+        self.assertEqual(verdict['vantage'], 'network')
+        self.assertTrue(CC.network_verdict(net_snapshot(), endpoint=list(ENDPOINT))['ok'])
+
+    def test_any_other_destination_the_peer_answered_fails(self):
+        for state in ('ESTABLISHED', 'TIME_WAIT', 'CLOSE_WAIT', 'FIN_WAIT1'):
+            with self.subTest(state=state):
+                verdict = CC.network_verdict(net_snapshot(TO_ENDPOINT, ELSEWHERE[state]), endpoint=ENDPOINT)
+                self.assertFalse(verdict['ok'])
+                self.assertEqual([r['remote'] for r in verdict['other_reached']], ['1.1.1.1'])
+                self.assertEqual(failed(verdict), ['network'])
+                self.assertFalse(check(verdict, 'network: no connection reached')['ok'])
+                self.assertTrue(check(verdict, 'network: every connection state')['ok'])
+        # another port of the endpoint's address, or the endpoint's port elsewhere, is another destination
+        for row in (tcp_row('020011AC:C352', '010011AC:1F9B', '01', 6004),
+                    tcp_row('020011AC:C352', '0F02000A:1F9A', '01', 6004)):
+            with self.subTest(row=row):
+                self.assertEqual(len(CC.network_verdict(net_snapshot(row), endpoint=ENDPOINT)['other_reached']), 1)
+
+    def test_an_attempt_is_recorded_not_failed_and_close_is_ambiguous(self):
+        verdict = CC.network_verdict(net_snapshot(ELSEWHERE['SYN_SENT']), endpoint=ENDPOINT)
+        self.assertTrue(verdict['ok'])
+        self.assertEqual([r['state'] for r in verdict['attempted']], ['SYN_SENT'])
+        for row in (ELSEWHERE['CLOSE'], tcp_row('020011AC:C352', '01010101:01BB', '0D', 6005)):
+            with self.subTest(row=row):
+                verdict = CC.network_verdict(net_snapshot(row), endpoint=ENDPOINT)
+                self.assertFalse(verdict['ok'])
+                self.assertEqual(verdict['other_reached'], [])
+                self.assertFalse(check(verdict, 'network: every connection state')['ok'])
+
+    def test_ipv6_mapped_and_ipv6_loopback(self):
+        tcp6 = (HEADER + tcp_row('0000000000000000FFFF0000020011AC:C353', '0000000000000000FFFF0000010011AC:1F9A',
+                                 '01', 6006)
+                + tcp_row('00000000000000000000000001000000:C354', '00000000000000000000000001000000:1F40', '01',
+                          6007))
+        verdict = CC.network_verdict(net_snapshot(tcp6=tcp6), endpoint=ENDPOINT)
+        self.assertTrue(verdict['ok'], verdict['checks'])
+        self.assertEqual(sorted(c['kind'] for c in verdict['connections'] if c['local_port'] > 50000),
+                         ['loopback', 'the inference endpoint'])
+        self.assertEqual(net_snapshot(tcp6=tcp6)['tables_unread'], [])
+
+    def test_unread_tables(self):
+        fs = container_fs()
+        del fs.files['/proc/net/tcp']
+        verdict = CC.network_verdict(container_snapshot(fs), endpoint=ENDPOINT)
+        self.assertFalse(verdict['ok'])
+        self.assertEqual(check(verdict, 'network: every connection state')['observed']['tables_unread'],
+                         [{'table': 'tcp', 'error': 'FileNotFoundError'}])
+        fs = container_fs()
+        fs.denied.add('/proc/net/tcp6')
+        fs.files['/proc/net/tcp6'] = b''
+        self.assertFalse(CC.network_verdict(container_snapshot(fs), endpoint=ENDPOINT)['ok'])
+
+    def test_shapes(self):
+        snap = net_snapshot()
+        for endpoint in (None, ('172.17.0.1',), ('not an address', 8090), ('172.17.0.1', '8090'),
+                         ('172.17.0.1', True)):
+            with self.subTest(endpoint=endpoint), self.assertRaises(CC.ContainmentError) as cm:
+                CC.network_verdict(snap, endpoint=endpoint)
+            self.assertEqual(cm.exception.code, 'EXPECTED_INVALID')
+        for bad in (dict(snap, connections=None), dict(snap, connections=[1]), dict(snap, mode='host')):
+            with self.subTest(bad=bad), self.assertRaises(CC.ContainmentError) as cm:
+                CC.network_verdict(bad, endpoint=ENDPOINT)
+            self.assertEqual(cm.exception.code, 'SNAPSHOT_INVALID')
+        odd = dict(snap, connections=[{'local': 'x', 'local_port': 1, 'remote': 'not-an-ip', 'remote_port': 2,
+                                       'state': 'ESTABLISHED'}])
+        self.assertEqual(len(CC.network_verdict(odd, endpoint=ENDPOINT)['other_reached']), 1)
+        self.assertEqual(CC.network_verdict(snap, endpoint=ENDPOINT, inner_port=9)['ok'], True)
 
 
 if __name__ == '__main__':

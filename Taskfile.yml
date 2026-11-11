@@ -902,6 +902,13 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py job-access-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
 
+  guest:acp-qualification:
+    desc: "ACP qualification driver (S-03.3 slice 5; PREPARED, NOT RUN: every live step is an Owner act) on a running guest created with create --provision --inference, the forward held: reads one attempt token on standard input (inference_control.py issue --conversation-id a0333c00-0000-4000-8000-0000000ac0d1 ... | this target), admits and sends the pinned qualification create through the dispatcher's transport, sends one fixed prompt, observes the conversation container while the turn runs and after it (processes, connections, the job contract), reads the events and the sets of containers and conversations, searches for the provider key (off by default), revokes the token and deletes the conversation, under the decision rule fixed before any run; exit 0 only on PASS (python -I -B tools/guest.py acp-qualification --profile PROFILE --state-dir STATE_DIR --name NAME --attempt-token-stdin --prompt single|delegated --acp-model MODEL [-- --key-search synthetic --provider-key-fingerprint sha256:HEX16 | --key-search real --real-key-act ACT --out FILE])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, PROMPT, ACP_MODEL]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py acp-qualification --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --attempt-token-stdin --prompt "{{.PROMPT}}" --acp-model "{{.ACP_MODEL}}" {{.CLI_ARGS}}'
+
   guest:inference-forward:
     desc: "The inference forward session (S-03.2, decision 0015 sections 4.1, 4.3 and 4.4) of a guest created with create --provision --inference: start holds ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port> over the instance's hostfwd with the per-instance key (a detached holder writes <instance>/inference-forward.json while the session is held and removes it when the session ends; start is idempotent and replaces a stale record), status reads it, stop ends it; the broker's port comes from components.inference_broker and its control listener must report it first. Needs the Owner's acts A2, A3 and A4 (python -I -B tools/guest.py inference-forward --profile PROFILE --state-dir STATE_DIR --name NAME --action ACTION [-- --broker-port PORT])"
     requires:

@@ -1,0 +1,840 @@
+"""Tests for the prepared ACP qualification driver of plan leaf S-03.3, slice 5 (tools/guest.py acp-qualification;
+NOT RUN live).
+
+Run from the repository root:  python -I -B -m unittest discover -s tools/tests -v
+
+stdlib unittest; no QEMU, no guest, no ssh, no broker, no network, no provider key. The guest is replaced by fakes:
+the dispatcher's sealed API channel (the outer server, the inner server's conversations through the bash route, the
+event stream, the containment collector's and the job environment probe's output), the root facts, the broker's
+control listener, the forward session, inspect's P5 record and the guest-root vantage. The containment snapshots
+are slice 1's own synthetic trees (integrations/dispatch/tests/test_conversation_containment.py). Shown: the
+decision rule's PASS, FAIL and UNKNOWN (a lost answer is never PASS); a negative control for each stop condition;
+the key search modes (off by default; the real key read only under its act and only inside its step); the record
+never holds the attempt token or the key. D-6, the job contract's admission of the attempt token's name, is tested
+in test_attempt_token_contract.py.
+"""
+from pathlib import Path
+import base64
+import builtins
+import contextlib
+import http.server
+import io
+import json
+import re
+import sys
+import tempfile
+import threading
+import types
+import unittest
+from unittest import mock
+
+CATEGORY = 'unit'
+
+REPO = Path(__file__).resolve().parents[2]
+PROFILE_DIR = REPO / 'profiles' / 'strong-windows-qemu-whpx'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_code  # noqa: E402
+guest = module_code.load('guest', REPO / 'tools' / 'guest.py')
+tg = module_code.load('test_guest_fixtures', REPO / 'tools' / 'tests' / 'test_guest.py')
+tcc = module_code.load('test_conversation_containment_fixtures',
+                       REPO / 'integrations' / 'dispatch' / 'tests' / 'test_conversation_containment.py')
+d6 = module_code.load('test_attempt_token_contract_fixtures',
+                      REPO / 'tools' / 'tests' / 'test_attempt_token_contract.py')
+job_env, TOKEN_SHAPED = d6.job_env, d6.TOKEN_SHAPED
+CC = guest.containment()
+PROFILE = json.loads((PROFILE_DIR / 'profile.json').read_text(encoding='utf-8'))
+CID = guest.ACP_QUALIFICATION_CONVERSATION_ID
+HEX = CID.replace('-', '')
+TOKEN = 'aieh-inf-' + 'T' * 43
+TOKEN_FP = guest.inference_control().token_fingerprint(TOKEN)
+SYNTHETIC = 'aieh-qualification-synthetic-' + 'S' * 32
+SYNTHETIC_FP = guest.key_search().fingerprint(SYNTHETIC)
+REAL = 'sk-ant-api03-' + 'R' * 40
+REAL_FP = guest.key_search().fingerprint(REAL)
+MODEL = 'model-main'
+FAMILY = guest.ACP_QUALIFICATION_FAMILY
+RECORD = {'provisioning': {'image_id': tg.IMAGE_ID}, 'ports': {'ssh': 40022, 'qmp': 40023},
+          'inference': {'composition': 'inference'}}
+SERVER_USER = {'name': 'openhands', 'uid': 999, 'gid': 989}
+CHILD = 'c0000000-0000-4000-8000-0000000000c1'
+OTHER = 'b0000000-0000-4000-8000-0000000000b1'
+TO_ENDPOINT = tcc.tcp_row('020011AC:C350', '010011AC:1F9A', '01', 6001)
+TO_ELSEWHERE = tcc.tcp_row('020011AC:C351', '01010101:01BB', '01', 6003)
+
+
+def snapshot(processes=None, rows=()):
+    fs = tcc.container_fs(processes)
+    fs.files['/proc/net/tcp'] = (tcc.TCP + ''.join(rows)).encode()
+    return tcc.container_snapshot(fs)
+
+
+def host_snapshot(processes=None):
+    return tcc.host_snapshot(tcc.host_fs(processes))
+
+
+class FakeGuest:
+    """The outer server, the conversation's inner server and its container, as the sealed API channel and the root
+    facts see them. Each attribute is one fact a negative control changes."""
+
+    def __init__(self, test):
+        self.test = test
+        self.created = False
+        self.calls = []
+        self.statuses = ['running', 'finished']
+        self.during = snapshot(rows=[TO_ENDPOINT])
+        self.after = snapshot(rows=[TO_ENDPOINT])
+        self.env = job_env(TOKEN_SHAPED)
+        self.events = [[{'id': 'e1', 'kind': 'MessageEvent', 'source': 'user'},
+                        {'id': 'e2', 'kind': guest.ACP_TOOL_CALL_KIND, 'title': 'Task'}],
+                       [{'id': 'e3', 'kind': 'MessageEvent', 'source': 'agent'}]]
+        self.inner_before = [{'id': CID, 'parent_conversation_id': None}]
+        self.inner_after = [{'id': CID, 'parent_conversation_id': None}]
+        self.outer_extra = []          # outer conversations that appear after the prompt
+        self.create_status = 201
+        self.create_agent = {'kind': 'ACPAgent', 'acp_server': 'claude-code', 'acp_model': MODEL}
+        self.echo_token = False
+        self.lose = set()              # paths whose answer is lost
+        self.sent = False
+        self.container_problems = False
+        self.rejects = 3
+
+    def facts(self):
+        container = tg.conversation_container(hex_id=HEX)
+        container['State']['Pid'] = tcc.HOST_BASE + 1
+        return {'containers': [container] if self.created else [], 'server_user': dict(SERVER_USER),
+                'admission': {'iptables': [{'target': 'REJECT', 'packets': self.rejects}]}}
+
+    def answer(self, method, path, body):
+        self.calls.append((method, path))
+        if path in self.lose:
+            raise OSError('connection lost')
+        base = f'/api/conversations/{CID}'
+        if method == 'GET' and path == '/api/conversations/count':
+            return 200, 0 if not self.created else 1
+        if method == 'POST' and path == '/api/conversations':
+            self.test.assertEqual(body['agent_settings']['acp_command'], ['claude-agent-acp'])
+            self.test.assertEqual(body['secrets']['ANTHROPIC_API_KEY']['value'], TOKEN)
+            self.created = 200 <= self.create_status < 300
+            out = {'id': CID, 'agent': self.create_agent}
+            if self.echo_token:
+                out['secrets'] = {'ANTHROPIC_API_KEY': TOKEN}
+            return self.create_status, out
+        if method == 'GET' and path == '/api/conversations/search?limit=100':
+            ids = ([CID] if self.created else []) + (self.outer_extra if self.sent else [])
+            return 200, {'items': [{'id': i} for i in ids], 'next_page_id': None}
+        if method == 'POST' and path == base + '/events':
+            self.test.assertEqual(body['content'][0]['text'] in guest.ACP_QUALIFICATION_PROMPTS.values(), True)
+            self.sent = True
+            return 200, {'success': True}
+        if method == 'GET' and path == base:
+            status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            return 200, {'id': CID, 'execution_status': status, 'agent': self.create_agent}
+        if method == 'GET' and path.startswith(base + '/events/search?limit=100'):
+            index = int(path.split('page_id=p')[1]) if 'page_id=' in path else 0
+            nxt = f'p{index + 1}' if index + 1 < len(self.events) else None
+            return 200, {'items': self.events[index], 'next_page_id': nxt}
+        if method == 'GET' and path == base + '/agent_final_response':
+            return 200, {'response': 'ready'}
+        if method == 'POST' and path == base + '/bash/execute_bash_command':
+            return 200, {'exit_code': 0, 'stdout': self.run_script(body['command'])}
+        if method == 'DELETE' and path == base:
+            self.created = False
+            return 200, {'success': True}
+        raise AssertionError(f'unexpected request {method} {path}')
+
+    def run_script(self, command):
+        encoded = re.match(r'echo ([A-Za-z0-9+/=]+) \| base64 -d', command).group(1)
+        script = base64.b64decode(encoded).decode('utf-8')
+        if script.startswith('"""The containment observation'):
+            snap = self.after if self.test.turn_done else self.during
+            return 'noise\n' + CC.MARKER + json.dumps(snap) + '\n'
+        if script == guest.ACP_INNER_CONVERSATIONS:
+            rows = self.inner_after if self.test.turn_done else self.inner_before
+            return guest.JOB_MARKER + json.dumps({'key_present': True, 'status': 200, 'pages': 1,
+                                                  'key_occurrences': 0, 'items': rows}) + '\n'
+        if script == guest.JOB_ENV_PROBE:
+            return guest.JOB_MARKER + json.dumps(self.env) + '\n'
+        raise AssertionError('an unexpected script')
+
+    def api(self, requests, timeout=900, secret=None):
+        self.test.assertEqual(secret, TOKEN)            # every call is sealed with the token
+        (request,) = requests
+        status, body = self.answer(request['method'], request['path'], request.get('json'))
+        text = json.dumps(body)
+        sealed = text.count(secret)
+        body = json.loads(text.replace(secret, '<sealed secret redacted>'))
+        return {'responses': [{'status': status, 'body': body}], 'session_key_occurrences': 0,
+                'sealed_occurrences': sealed}
+
+
+class FakeBroker:
+    def __init__(self, source=guest.ACP_SYNTHETIC_SOURCE, fingerprint=SYNTHETIC_FP):
+        self.grant = {'state': 'live', 'family': FAMILY, 'models': [MODEL, 'model-small'], 'conversation_id': CID,
+                      'attempt_id': 'a' * 8, 'budget': {'requests': 20, 'tokens': 20000}, 'requests': 2,
+                      'refused': 0, 'usage': {'input': 10}}
+        self.family = {'id': FAMILY, 'status': 'provisional', 'ready': True, 'upstream': 'http://127.0.0.1:9',
+                       'models': [MODEL, 'model-small']}
+        self.key = {'fingerprint': fingerprint, 'source': source, 'provider': 'anthropic'}
+        self.calls = []
+
+    def call(self, method, *args):
+        self.calls.append((method,) + args)
+        if method == 'status':
+            return {'families': [self.family], 'provider_key': self.key}
+        if method == 'grant':
+            assert args == (TOKEN_FP,)
+            return dict(self.grant)
+        if method == 'revoke':
+            self.grant['state'] = 'revoked'
+            self.grant['revocation'] = {'trigger': args[1], 'revoker': args[2]}
+            return dict(self.grant)
+        raise AssertionError(method)
+
+
+def inspect_record(verdict='PASS'):
+    return {'properties': [{'property': 'profiles P5', 'checks': [
+        {'check': guest.INFERENCE_KEY_SEARCH_CHECK, 'observed': {'verdict': 'not-found'}, 'verdict': verdict}]}]}
+
+
+class DriverRun(unittest.TestCase):
+    """acp_qualification_run against the fakes."""
+
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp(prefix='aieh-acpq-'))
+        self.addCleanup(tg.remove_tree, self.state)
+        self.guest = FakeGuest(self)
+        self.broker = FakeBroker()
+        self.turn_done = False
+        self.inspected = []
+        self.real_reads = []
+
+    def wait(self, fetch, done, ceiling):
+        value = fetch()
+        while not done(value) and self.guest.statuses[0] != 'never':
+            value = fetch()
+        self.turn_done = done(value)
+        return value, done(value)
+
+    def run_driver(self, key_mode='synthetic', host=True, inspected='PASS', profile=PROFILE, record=RECORD,
+                   real_key_act=None, real_reader=None, **kw):
+        written = {}
+        ctx = types.SimpleNamespace(profile=profile, repo=REPO, instance_dir=lambda n: self.state / n)
+
+        def inspect_fn(fp, key):
+            self.inspected.append((fp, key))
+            return inspect_record(inspected)
+
+        def reader(fp):
+            self.real_reads.append(fp)
+            return REAL
+
+        args = dict(key_mode=key_mode, channels=lambda rec: (self.guest.api, self.guest.facts),
+                    broker=self.broker, forward=types.SimpleNamespace(status=lambda: {'held': True}),
+                    inspect_fn=inspect_fn, wait=self.wait, real_key_act=real_key_act,
+                    real_key_reader=real_reader or reader,
+                    host_vantage=(lambda rec, pid: host_snapshot()) if host is True else host)
+        if key_mode == 'synthetic':
+            args.update(provider_key=SYNTHETIC, provider_key_fingerprint=SYNTHETIC_FP)
+        args.update(kw)
+        with mock.patch.object(guest, 'running_instance', side_effect=lambda c, n: (None, record)), \
+                mock.patch.object(guest, 'write_record', side_effect=lambda i, op, out: written.update({op: out})), \
+                mock.patch.object(guest, 'log'):
+            out = guest.acp_qualification_run(ctx, 'g1', TOKEN, 'single', MODEL, **args)
+        self.assertEqual(written['acp-qualification']['result'], out['result'])
+        text = json.dumps(written, default=str)
+        for secret in (TOKEN, SYNTHETIC, REAL, TOKEN[len('aieh-inf-'):]):
+            self.assertNotIn(secret, text)
+        self.assertIn(TOKEN_FP, text)
+        return out
+
+    @staticmethod
+    def verdicts(out):
+        return [s['verdict'] for s in out['steps']]
+
+    def step(self, out, number):
+        found = [s for s in out['steps'] if s['step'].startswith(f'({number})')]
+        self.assertEqual(len(found), 1, number)
+        return found[0]
+
+    def stops(self, out):
+        return [s['stop'] for s in out['stop_conditions']]
+
+    def test_the_rule_passes_on_a_guest_that_holds_it(self):
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
+        self.assertEqual(self.verdicts(out), ['PASS'] * 13)
+        self.assertEqual(out['rule'], guest.ACP_QUALIFICATION_RULE)
+        self.assertEqual((out['schema'], out['operation'], out['plan_leaf']),
+                         (guest.ACP_QUALIFICATION_SCHEMA, 'acp-qualification', 'S-03.3'))
+        self.assertEqual(out['stop_conditions'], [])
+        self.assertEqual(out['attempt_token'], {'fingerprint': TOKEN_FP, 'redacted_from_record': 0})
+        # the create went through the dispatcher's transport, admitted: only its body's sha256 is recorded
+        create = [c for c in out['transport_calls'] if c['method'] == 'POST' and c['path'] == '/api/conversations']
+        self.assertEqual(len(create), 1)
+        self.assertRegex(create[0]['body_sha256'], r'^[0-9a-f]{64}$')
+        self.assertEqual(self.step(out, 2)['detail']['admission'], 'admitted (acp_qualification.check_create)')
+        # the order of the live acts: nothing but these calls, the turn between the prompt and the teardown
+        paths = [p for _, p in self.guest.calls]
+        self.assertLess(paths.index('/api/conversations'), paths.index(f'/api/conversations/{CID}/events'))
+        self.assertEqual(self.guest.calls[-2:], [('DELETE', f'/api/conversations/{CID}'),
+                                                 ('GET', '/api/conversations/count')])
+        self.assertFalse(any(p.endswith(guest.ACP_FORK_PATHS) for p in paths))
+        # the token revoked at attempt end, by the driver, after the search
+        self.assertEqual(self.broker.calls[-2:], [('grant', TOKEN_FP),
+                                                  ('revoke', TOKEN_FP, 'attempt end', guest.ACP_REVOKER)])
+        self.assertEqual(self.step(out, 12)['detail']['state'], 'revoked')
+        # the mechanisms are distinguished
+        mech = self.step(out, 9)['detail']['mechanisms']
+        self.assertEqual(mech["(a) the provider's own tools and sub-agents"]['acp_tool_call_events'], 1)
+        self.assertEqual(mech["(a) the provider's own tools and sub-agents"]['tool_call_titles'], ['Task'])
+        self.assertTrue(mech["(a) the provider's own tools and sub-agents"]['observed'])
+        self.assertEqual(mech["(b) an ACP session fork (ask_agent)"]['driver_called'], [])
+        self.assertEqual(mech["(c) the inner server's children route"], {'children': [], 'observed': False})
+        self.assertFalse(mech["(d) OpenHands' start_child_conversation tool"]['observed'])
+        self.assertEqual(self.step(out, 9)['detail']['events'], 3)
+        self.assertEqual(self.step(out, 9)['detail']['pages'], 2)
+        # D-6: the token's name admitted in the adapter's environment, by shape
+        self.assertEqual(self.step(out, 6)['detail']['admission']['admitted'], {'20': ['ANTHROPIC_API_KEY']})
+        # the synthetic key: inspect's P5 search and this run's answers in memory
+        self.assertEqual(self.inspected, [(SYNTHETIC_FP, SYNTHETIC)])
+        self.assertEqual(self.step(out, 11)['detail']['this_run_in_memory']['verdict'], 'not-found')
+        self.assertEqual(self.real_reads, [])
+        # the network view classified the endpoint connection
+        kinds = [c['kind'] for c in self.step(out, 5)['detail']['network']['connections']]
+        self.assertIn('the inference endpoint', kinds)
+
+    def test_children_route_is_classified_not_failed(self):
+        self.guest.inner_after = self.guest.inner_after + [{'id': CHILD, 'parent_conversation_id': CID}]
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'PASS')
+        mech = self.step(out, 9)['detail']['mechanisms']["(c) the inner server's children route"]
+        self.assertEqual(mech, {'children': [CHILD.replace('-', '')], 'observed': True})
+
+    def test_without_a_root_channel_and_with_the_search_off_the_run_is_unknown(self):
+        out = self.run_driver(key_mode='off', host=None)
+        self.assertEqual(out['result'], 'UNKNOWN')
+        self.assertEqual((self.step(out, 5)['verdict'], self.step(out, 8)['verdict'], self.step(out, 11)['verdict']),
+                         ('UNKNOWN', 'UNKNOWN', 'UNKNOWN'))
+        self.assertIn('no guest-root channel', self.step(out, 5)['detail']['host_vantage'])
+        self.assertEqual(self.step(out, 11)['detail']['mode'], 'off')
+        self.assertEqual(self.inspected, [])
+        self.assertEqual(self.real_reads, [])
+        self.assertEqual(self.step(out, 12)['verdict'], 'PASS')
+
+    def test_the_real_key_is_read_only_inside_its_step_under_its_act(self):
+        broker = FakeBroker(source='windows-credential-manager', fingerprint=REAL_FP)
+        self.broker = broker
+        out = self.run_driver(key_mode='real', real_key_act='OA-12 A1 and D-5')
+        self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict']) for s in out['steps']])
+        self.assertEqual(self.real_reads, [REAL_FP])
+        self.assertEqual(self.inspected, [(REAL_FP, REAL)])
+        self.assertEqual(self.step(out, 11)['detail']['real_key_act'], 'OA-12 A1 and D-5')
+        # a run that never got ready reads no key
+        self.setUp()
+        self.broker = FakeBroker(source='windows-credential-manager', fingerprint=REAL_FP)
+        self.broker.grant['conversation_id'] = OTHER
+        out = self.run_driver(key_mode='real', real_key_act='OA-12 A1')
+        self.assertEqual((out['result'], self.real_reads), ('FAIL', []))
+        self.assertEqual(self.step(out, 11)['skipped'], 'not reached (ready)')
+        self.assertEqual(self.step(out, 12)['verdict'], 'PASS')     # revoked all the same
+
+    def test_a_real_key_found_is_a_stop(self):
+        for leak in ('leak ' + REAL, base64.b64encode(REAL.encode()).decode()):
+            with self.subTest(leak=leak[:8]):
+                self.setUp()
+                self.broker = FakeBroker(source='windows-credential-manager', fingerprint=REAL_FP)
+                self.guest.events[1].append({'id': 'e9', 'kind': 'MessageEvent', 'text': leak})
+                out = self.run_driver(key_mode='real', real_key_act='OA-12 A1')
+                self.assertEqual((self.step(out, 11)['verdict'], out['result']), ('FAIL', 'FAIL'))
+                self.assertIn('a credential found in a recorded surface (the provider key)', self.stops(out))
+                self.assertEqual(self.step(out, 11)['detail']['this_run_in_memory']['verdict'], 'found')
+
+    def test_a_record_that_would_hold_the_key_is_not_written(self):
+        self.broker = FakeBroker(source='windows-credential-manager', fingerprint=REAL_FP)
+        self.guest.events[1].append({'id': 'e9', 'kind': guest.ACP_TOOL_CALL_KIND, 'title': REAL})
+        written = {}
+        with mock.patch.object(guest, 'running_instance', side_effect=lambda c, n: (None, RECORD)), \
+                mock.patch.object(guest, 'write_record', side_effect=lambda i, op, out: written.update({op: out})), \
+                mock.patch.object(guest, 'log'), self.assertRaisesRegex(guest.Refused, 'would hold the provider key'):
+            guest.acp_qualification_run(
+                types.SimpleNamespace(profile=PROFILE, repo=REPO, instance_dir=lambda n: self.state / n), 'g1',
+                TOKEN, 'single', MODEL, key_mode='real', real_key_act='A1',
+                channels=lambda rec: (self.guest.api, self.guest.facts), broker=self.broker,
+                forward=types.SimpleNamespace(status=lambda: {'held': True}),
+                inspect_fn=lambda fp, key: inspect_record(), wait=self.wait, real_key_reader=lambda fp: REAL,
+                host_vantage=lambda rec, pid: host_snapshot())
+        self.assertEqual(written, {})
+
+    def test_stop_a_process_outside_the_lineage(self):
+        entered = {**tcc.CONTAINER, 40: (0, '/usr/bin/bash', ['bash'])}
+        orphan = {**tcc.CONTAINER, 41: (1, '/usr/bin/sleep', ['sleep'])}
+        for name, processes in (('entered', entered), ('orphan', orphan)):
+            with self.subTest(name):
+                self.setUp()
+                self.guest.during = snapshot(processes, rows=[TO_ENDPOINT])
+                out = self.run_driver()
+                self.assertEqual(out['result'], 'FAIL')
+                self.assertTrue(any('outside the container\'s lineage' in s for s in self.stops(out)),
+                                self.stops(out))
+                self.assertEqual(self.step(out, 5)['verdict'], 'FAIL')
+                # the later steps are skipped; the search, the revocation and the teardown still run
+                self.assertEqual(self.step(out, 7).get('skipped'), 'a stop condition')
+                self.assertEqual([self.step(out, n)['verdict'] for n in (11, 12, 13)], ['PASS'] * 3)
+        self.setUp()
+        out = self.run_driver(host=lambda rec, pid: dict(host_snapshot(), outside_children=[
+            {'pid': 9999, 'ppid': tcc.HOST_BASE + 8, 'exe': '/x', 'argv0': 'x', 'script': None}]))
+        self.assertIn("a process outside the container's lineage (an escaped child)", self.stops(out))
+
+    def test_stop_an_unexpected_outer_conversation(self):
+        self.guest.outer_extra = [OTHER]
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertIn('an outer-server conversation that was not expected', self.stops(out))
+        self.assertEqual(self.step(out, 8)['verdict'], 'FAIL')
+        # at create: the outer server lists more than the qualification conversation
+        self.setUp()
+        self.guest.sent = True
+        self.guest.outer_extra = [OTHER]
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 2)['verdict'], 'FAIL')
+        self.assertIn('an outer-server conversation that was not expected', self.stops(out))
+
+    def test_stop_npx_or_npm(self):
+        for argv in (['npx', '-y', 'x'], ['node', '/usr/lib/node_modules/npm/bin/npm-cli.js']):
+            with self.subTest(argv=argv):
+                self.setUp()
+                self.guest.during = snapshot({**tcc.CONTAINER, 23: (20, '/usr/bin/node', argv)},
+                                             rows=[TO_ENDPOINT])
+                out = self.run_driver()
+                self.assertIn('an npx or npm process', self.stops(out))
+                self.assertEqual(out['result'], 'FAIL')
+
+    def test_stop_a_credential_in_a_recorded_surface(self):
+        # the attempt token echoed by the Agent Server
+        self.guest.echo_token = True
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertTrue(any('the attempt token echoed' in s for s in self.stops(out)))
+        self.assertEqual(out['token_echoes'][0]['occurrences'], 1)
+        # a provider-key shaped value in a process environment
+        self.setUp()
+        self.guest.env = job_env({'ANTHROPIC_API_KEY': {'token': False, 'provider_key': True}})
+        out = self.run_driver()
+        self.assertTrue(any('provider-key shaped value' in s for s in self.stops(out)))
+        self.assertEqual(self.step(out, 6)['verdict'], 'FAIL')
+        # the synthetic key found by inspect's P5 search, or in this run's answers
+        self.setUp()
+        out = self.run_driver(inspected='FAIL')
+        self.assertIn('a credential found in a recorded surface (the provider key)', self.stops(out))
+        self.assertEqual(self.step(out, 11)['verdict'], 'FAIL')
+        self.setUp()
+        self.guest.events[0].append({'id': 'e8', 'kind': 'MessageEvent', 'text': SYNTHETIC.encode().hex()})
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 11)['detail']['this_run_in_memory']['verdict'], 'found')
+        self.assertEqual(out['result'], 'FAIL')
+        # the management key in an answer
+        self.setUp()
+        original = self.guest.api
+
+        def leaky(requests, timeout=900, secret=None):
+            data = original(requests, timeout, secret)
+            if requests[0]['path'].endswith('/agent_final_response'):
+                data['session_key_occurrences'] = 1
+            return data
+        self.guest.api = leaky
+        out = self.run_driver()
+        self.assertTrue(any('the management key' in s for s in self.stops(out)))
+        self.assertEqual(self.step(out, 9)['verdict'], 'UNKNOWN')
+
+    def test_stop_another_network_destination(self):
+        self.guest.after = snapshot(rows=[TO_ENDPOINT, TO_ELSEWHERE])
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertIn("a connection reached a destination other than the broker's inference endpoint",
+                      self.stops(out))
+        self.assertEqual(self.step(out, 8)['verdict'], 'FAIL')
+        # an attempt that never connected is recorded, not a stop
+        self.setUp()
+        self.guest.during = snapshot(rows=[tcc.tcp_row('020011AC:C351', '01010101:01BB', '02', 6003)])
+        out = self.run_driver()
+        self.assertEqual(out['result'], 'PASS')
+        self.assertEqual(len(self.step(out, 5)['detail']['network']['attempted']), 1)
+
+    def test_fail_outcomes(self):
+        cases = {
+            'the turn ends in error': (lambda: setattr(self.guest, 'statuses', ['running', 'error']), 7),
+            'the create is refused by the server': (lambda: setattr(self.guest, 'create_status', 409), 2),
+            'another acp_server answers': (lambda: self.guest.create_agent.update(acp_server='codex'), 2),
+            'the broker admitted no request': (lambda: self.broker.grant.update(requests=0), 10),
+            'the native child tool appears': (lambda: self.guest.events[1].append(
+                {'id': 'e7', 'kind': 'ActionEvent', 'tool_name': 'start_child_conversation'}), 9),
+            'an inner conversation of another parent': (lambda: setattr(
+                self.guest, 'inner_after', self.guest.inner_before + [{'id': OTHER, 'parent_conversation_id': None}]),
+                8),
+            'the adapter is missing while the turn runs': (lambda: setattr(
+                self.guest, 'during', snapshot({k: v for k, v in tcc.CONTAINER.items() if k not in (20, 21, 22)},
+                                               rows=[TO_ENDPOINT])), 5),
+            'root is obtainable in the job': (lambda: self.guest.env.update(sudo={'rc': 0, 'out': ''}), 6),
+            'the token name holds another shape': (lambda: setattr(self.guest, 'env', job_env(
+                {'ANTHROPIC_API_KEY': {'token': False, 'provider_key': False}})), 6),
+            'a limit differs': (lambda: self.guest.during['limits'].update({'pids.max': 'max'}), 5),
+        }
+        for name, (change, number) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                change()
+                out = self.run_driver()
+                self.assertEqual(out['result'], 'FAIL', name)
+                self.assertEqual(self.step(out, number)['verdict'], 'FAIL', name)
+
+    def test_preconditions(self):
+        changes = {
+            'the forward is not held': lambda: None,
+            'the grant is revoked': lambda: self.broker.grant.update(state='revoked'),
+            'another conversation': lambda: self.broker.grant.update(conversation_id=OTHER),
+            'another family': lambda: self.broker.grant.update(family='openai-responses'),
+            'the family is not ready': lambda: self.broker.family.update(ready=False),
+            'the model is not in the grant': lambda: self.broker.grant.update(models=['model-small']),
+            'the model is not allowlisted': lambda: self.broker.family.update(models=['model-small']),
+            'the broker holds another key': lambda: self.broker.key.update(fingerprint='sha256:' + '0' * 16),
+            'the broker holds a real key': lambda: self.broker.key.update(source='windows-credential-manager'),
+            'a conversation exists': lambda: setattr(self.guest, 'created', True),
+        }
+        for name, change in changes.items():
+            with self.subTest(name):
+                self.setUp()
+                change()
+                held = name != 'the forward is not held'
+                out = self.run_driver(forward=types.SimpleNamespace(status=lambda: {'held': held}))
+                self.assertEqual((out['result'], self.step(out, 1)['verdict']), ('FAIL', 'FAIL'), name)
+                self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+                self.assertEqual(self.step(out, 2)['skipped'], 'not reached (ready)')
+                self.assertEqual(self.step(out, 12)['verdict'], 'PASS')
+                self.assertEqual(self.step(out, 13)['skipped'], 'not reached (created)')
+        # a real-key run needs a broker key from a credential provider
+        self.setUp()
+        out = self.run_driver(key_mode='real', real_key_act='A1')
+        self.assertEqual(self.step(out, 1)['verdict'], 'FAIL')
+
+    def test_admission_refuses_and_nothing_is_sent(self):
+        acp = guest.acp_qualification()
+        with mock.patch.object(acp, 'approved_model', side_effect=acp.QualificationRefused('MODEL_NOT_APPROVED', 'x')):
+            out = self.run_driver()
+        self.assertEqual(self.step(out, 2)['verdict'], 'FAIL')
+        self.assertEqual(self.step(out, 2)['detail']['admission']['code'], 'MODEL_NOT_APPROVED')
+        self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+        self.assertEqual(self.step(out, 13)['skipped'], 'not reached (created)')
+
+    def test_lost_answers_are_unknown_never_pass(self):
+        base = f'/api/conversations/{CID}'
+        for path, number in ((base + '/events/search?limit=100', 9), ('/api/conversations/search?limit=100', 3),
+                             (base + '/agent_final_response', 9)):
+            with self.subTest(path=path):
+                self.setUp()
+                self.guest.lose = {path}
+                out = self.run_driver()
+                self.assertEqual(self.step(out, number)['verdict'], 'UNKNOWN')
+                self.assertNotEqual(out['result'], 'PASS')
+        # the turn never ends within the ceiling
+        self.setUp()
+        self.guest.statuses = ['never']
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 7)['verdict'], out['result']), ('UNKNOWN', 'UNKNOWN'))
+        # an events page of another shape, or no event at all
+        self.setUp()
+        self.guest.events = [[]]
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 9)['verdict'], 'UNKNOWN')
+        # the broker's counters unreadable
+        self.setUp()
+        self.broker.grant['requests'] = None
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 10)['verdict'], 'UNKNOWN')
+        # inspect gave no key-search check
+        self.setUp()
+        out = self.run_driver(inspect_fn=lambda fp, key: {'properties': []})
+        self.assertEqual(self.step(out, 11)['verdict'], 'UNKNOWN')
+        # the token's name not observed: the gate was not exercised
+        self.setUp()
+        self.guest.env = job_env(names=())
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 6)['verdict'], 'UNKNOWN')
+        # the inner server's list unread
+        self.setUp()
+        self.guest.inner_before = None
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 3)['verdict'], 'UNKNOWN')
+        self.assertEqual(self.step(out, 4)['skipped'], 'not reached (before)')
+
+    def test_an_adapter_missed_after_the_turn_ended_is_unknown(self):
+        self.guest.statuses = ['finished']
+        gone = {k: v for k, v in tcc.CONTAINER.items() if k not in (20, 21, 22)}
+        self.guest.during = snapshot(gone, rows=[TO_ENDPOINT])
+        out = self.run_driver(host=lambda rec, pid: host_snapshot(gone))
+        self.assertEqual(self.step(out, 5)['verdict'], 'UNKNOWN')
+        self.assertEqual(self.step(out, 5)['detail']['execution_status_after_the_snapshot'], 'finished')
+
+    def test_an_events_stream_longer_than_the_bound(self):
+        self.guest.events = [[{'id': f'e{i}', 'kind': 'MessageEvent'}] for i in range(guest.ACP_EVENT_PAGES + 1)]
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 9)['verdict'], 'UNKNOWN')
+
+    def test_refusals_before_anything_runs(self):
+        ctx = types.SimpleNamespace(profile=PROFILE, repo=REPO, instance_dir=lambda n: self.state / n)
+        cases = [
+            (dict(prompt='other'), '--prompt'),
+            (dict(key_mode='maybe'), '--key-search'),
+            (dict(key_mode='synthetic'), 'needs the synthetic key'),
+            (dict(key_mode='synthetic', provider_key=SYNTHETIC, provider_key_fingerprint='x'), 'needs the synthetic'),
+            (dict(key_mode='off', provider_key=SYNTHETIC), 'synthetic only'),
+            (dict(key_mode='real'), 'needs --real-key-act'),
+            (dict(key_mode='real', real_key_act=' bad'), 'needs --real-key-act'),
+            (dict(key_mode='off', real_key_act='A1'), 'real only'),
+            (dict(token='not-a-token'), "broker's shape"),
+        ]
+        touched = mock.Mock(side_effect=AssertionError('the guest was reached'))
+        for kw, message in cases:
+            with self.subTest(kw=kw), mock.patch.object(guest, 'running_instance', touched), \
+                    self.assertRaisesRegex(guest.Refused, re.escape(message)):
+                args = dict(key_mode='off')
+                args.update(kw)
+                guest.acp_qualification_run(ctx, 'g1', args.pop('token', TOKEN), args.pop('prompt', 'single'),
+                                            MODEL, **args)
+        for record, message in (({'ports': {}}, 'was not created with --provision'),
+                                ({'provisioning': {}, 'ports': {}}, 'was not created with --provision'),
+                                ({'provisioning': {'x': 1}, 'ports': {}}, '--inference')):
+            with self.subTest(record=record), \
+                    mock.patch.object(guest, 'running_instance', return_value=(None, record)), \
+                    self.assertRaisesRegex(guest.Refused, re.escape(message)):
+                guest.acp_qualification_run(ctx, 'g1', TOKEN, 'single', MODEL)
+        for out_path in (str(REPO / 'x.json'), str(self.state / 'missing' / 'x.json'), str(self.state / 'g1' / 'x')):
+            with self.subTest(out_path=out_path), \
+                    mock.patch.object(guest, 'running_instance', return_value=(None, RECORD)), \
+                    self.assertRaisesRegex(guest.Refused, '--out'):
+                (self.state / 'g1').mkdir(exist_ok=True)
+                guest.acp_qualification_run(ctx, 'g1', TOKEN, 'single', MODEL, out_path=out_path)
+
+    def test_out_file_and_the_record_redaction(self):
+        target = self.state / 'record.json'
+        self.guest.echo_token = True
+        out = self.run_driver(out_path=str(target))
+        self.assertEqual(out['out'], str(target.resolve()))
+        data = json.loads(target.read_text(encoding='utf-8'))
+        self.assertEqual(data['result'], 'FAIL')
+        self.assertNotIn(TOKEN, target.read_text(encoding='utf-8'))
+        self.assertEqual(data['attempt_token']['fingerprint'], TOKEN_FP)
+
+    def test_default_seams_never_read_a_key_or_reach_a_root_channel(self):
+        """With no seam given: the host vantage is the gap (UNKNOWN), the real key reader is the gated one, the
+        provider factory is never called in a synthetic or off run."""
+        with self.assertRaisesRegex(guest.Refused, 'no guest-root channel'):
+            guest.no_host_vantage(RECORD, 1)
+        factory = mock.Mock(side_effect=AssertionError('the credential provider was read'))
+        with mock.patch.object(guest.inference_control().broker.credentials, 'select_provider', factory):
+            out = self.run_driver(key_mode='off', host=None, real_key_reader=None)
+            self.run_driver(real_key_reader=None)
+        factory.assert_not_called()
+        self.assertEqual(out['result'], 'UNKNOWN')
+
+    def test_the_prompts_and_the_reserved_ids_are_fixed(self):
+        self.assertEqual(sorted(guest.ACP_QUALIFICATION_PROMPTS), ['delegated', 'single'])
+        self.assertEqual(guest.ACP_QUALIFICATION_PROMPTS['single'], 'Reply with exactly one word: ready')
+        self.assertRegex(CID, r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$')
+        self.assertNotIn(CID, (guest.CUSTODY_CONVERSATION_ID, guest.JOB_PEER_CONVERSATION_ID, guest.PROBE_UUID))
+        for word in ('STOP', 'UNKNOWN', 'npx', 'outer-server conversation', 'recorded surface',
+                     'inference endpoint', 'lineage'):
+            self.assertIn(word, guest.ACP_QUALIFICATION_RULE)
+
+
+INNER_KEY = 'inner-session-key-' + 'K' * 32
+
+
+class InnerServer(http.server.ThreadingHTTPServer):
+    """A loopback stand-in for the conversation's inner server: GET /api/conversations/search pages, key-gated."""
+
+    def __init__(self):
+        server = self
+        self.pages, self.seen, self.status, self.echo = [], [], 200, False
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                server.seen.append((self.path, self.headers.get('X-Session-API-Key')))
+                index = int(self.path.split('page_id=p')[1]) if 'page_id=' in self.path else 0
+                if self.headers.get('X-Session-API-Key') != INNER_KEY:
+                    status, body = 401, {'detail': 'Unauthorized'}
+                else:
+                    nxt = f'p{index + 1}' if index + 1 < len(server.pages) else None
+                    status, body = server.status, {'items': server.pages[index], 'next_page_id': nxt}
+                    if server.echo:
+                        body['key'] = INNER_KEY
+                data = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        super().__init__(('127.0.0.1', 0), Handler)
+
+
+class InnerConversationsScript(unittest.TestCase):
+    """ACP_INNER_CONVERSATIONS itself, in this process: the key from an in-memory /proc/1/environ, the inner server a
+    loopback fake. Ids and parents only; the key never printed, its echoes counted."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = InnerServer()
+        cls.thread = threading.Thread(target=cls.server.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(10)
+
+    def setUp(self):
+        self.server.pages = [[{'id': CID, 'parent_conversation_id': None, 'title': 'x'}],
+                             [{'id': CHILD, 'parent_conversation_id': CID}, 'not an object']]
+        self.server.seen.clear()
+        self.server.status, self.server.echo = 200, False
+
+    def run_script(self, environ=b'OH_SESSION_API_KEYS_0=' + INNER_KEY.encode() + b'\0PATH=/bin\0'):
+        real_open = builtins.open
+
+        def fake_open(path, mode='r', *args, **kwargs):
+            if path == '/proc/1/environ':
+                if environ is None:
+                    raise PermissionError(path)
+                return io.BytesIO(environ)
+            return real_open(path, mode, *args, **kwargs)
+        printed = io.StringIO()
+        argv = ['probe', str(self.server.server_address[1])]
+        with mock.patch('builtins.open', fake_open), mock.patch.object(sys, 'argv', argv), \
+                contextlib.redirect_stdout(printed):
+            exec(compile(guest.ACP_INNER_CONVERSATIONS, 'ACP_INNER_CONVERSATIONS', 'exec'), {'__name__': '__probe__'})
+        self.assertNotIn(INNER_KEY, printed.getvalue())
+        return guest._job_json(printed.getvalue())
+
+    def test_pages_are_followed_and_only_ids_and_parents_kept(self):
+        out = self.run_script()
+        self.assertEqual(out, {'key_present': True, 'status': 200, 'pages': 2, 'key_occurrences': 0,
+                               'items': [{'id': CID, 'parent_conversation_id': None},
+                                         {'id': CHILD, 'parent_conversation_id': CID}]})
+        self.assertEqual([p for p, _ in self.server.seen],
+                         ['/api/conversations/search?limit=100', '/api/conversations/search?limit=100&page_id=p1'])
+        self.assertEqual({k for _, k in self.server.seen}, {INNER_KEY})
+
+    def test_no_key_no_request_and_failures_leave_items_unset(self):
+        out = self.run_script(environ=None)
+        self.assertEqual((out['key_present'], out['items'], out['error'], self.server.seen),
+                         (False, None, 'PermissionError', []))
+        out = self.run_script(environ=b'PATH=/bin\0')
+        self.assertEqual((out['key_present'], out['items'], out['pages']), (False, None, 0))
+        self.server.status = 500
+        out = self.run_script()
+        self.assertEqual((out['items'], out['status'], out['pages']), (None, 500, 1))
+        self.server.status, self.server.echo = 200, True
+        out = self.run_script()
+        self.assertEqual((out['key_occurrences'], out['pages']), (2, 2))
+        self.assertEqual(len(out['items']), 2)
+        # a refused connection (mocked: a closed loopback port costs seconds on Windows): named, nothing listed
+        with mock.patch('socket.create_connection', side_effect=ConnectionRefusedError()):
+            out = self.run_script()
+        self.assertEqual((out['items'], out['error'], out['pages']), (None, 'ConnectionRefusedError', 0))
+
+    def test_twenty_pages_at_most(self):
+        self.server.pages = [[{'id': CID}]] * 25
+        out = self.run_script()
+        self.assertEqual((out['pages'], out['items']), (20, None))
+
+
+class RealKeyReader(unittest.TestCase):
+    """read_real_provider_key: the entry the broker reads, checked against the running broker's fingerprint."""
+
+    def provider(self, entry=None, error=None):
+        provider = mock.Mock()
+        provider.get.side_effect = error or (lambda name: entry)
+        return lambda: provider
+
+    def test_reads_the_brokers_entry_and_checks_its_fingerprint(self):
+        factory = self.provider(('anthropic', REAL))
+        self.assertEqual(guest.read_real_provider_key(REAL_FP, factory), REAL)
+        factory().get.assert_called_once_with(guest.inference_control().broker.ENTRY)
+
+    def test_refusals_never_repeat_what_was_read(self):
+        for factory, code in ((self.provider(None), 'holds no provider key'),
+                              (self.provider(('anthropic', 7)), 'holds no provider key'),
+                              (self.provider(('anthropic', REAL)), 'FINGERPRINT_MISMATCH'),
+                              (self.provider(error=RuntimeError(REAL)), 'did not answer (RuntimeError)')):
+            with self.subTest(code=code), self.assertRaises(guest.Refused) as cm:
+                guest.read_real_provider_key('sha256:' + '0' * 16 if 'MISMATCH' in code else REAL_FP, factory)
+            self.assertIn(code, str(cm.exception))
+            self.assertNotIn(REAL, str(cm.exception))
+            self.assertEqual(cm.exception.code, 'REAL_KEY')
+
+
+class CommandLine(unittest.TestCase):
+    """guest.py acp-qualification: the token and the synthetic key from standard input, never argv."""
+
+    def run_main(self, argv, stdin_text):
+        seen = {}
+
+        def fake_run(ctx, name, token, prompt, model, key_mode, **kw):
+            seen.update(token=token, prompt=prompt, model=model, key_mode=key_mode, **kw)
+            return {'operation': 'acp-qualification', 'result': 'PASS'}
+        stdin = io.StringIO(stdin_text)
+        stdin.isatty = lambda: False
+        with mock.patch.object(guest, 'Context', return_value=types.SimpleNamespace()), \
+                mock.patch.object(guest, 'acp_qualification_run', side_effect=fake_run), \
+                mock.patch('sys.stdin', stdin), mock.patch('sys.stdout', io.StringIO()) as out, \
+                mock.patch('sys.stderr', io.StringIO()):
+            rc = guest.main(['acp-qualification', '--profile', 'p', '--state-dir', 's', '--name', 'g1'] + argv)
+        return rc, seen, out.getvalue()
+
+    def test_token_and_synthetic_key_from_stdin(self):
+        rc, seen, _ = self.run_main(['--attempt-token-stdin', '--prompt', 'single', '--acp-model', MODEL],
+                                    TOKEN + '\n')
+        self.assertEqual((rc, seen['token'], seen['key_mode'], seen['provider_key']), (0, TOKEN, 'off', None))
+        rc, seen, _ = self.run_main(['--attempt-token-stdin', '--prompt', 'delegated', '--acp-model', MODEL,
+                                     '--key-search', 'synthetic', f'--provider-key-fingerprint={SYNTHETIC_FP}'],
+                                    TOKEN + '\n' + SYNTHETIC + '\n')
+        self.assertEqual((rc, seen['provider_key'], seen['prompt']), (0, SYNTHETIC, 'delegated'))
+        rc, seen, _ = self.run_main(['--attempt-token-stdin', '--prompt', 'single', '--acp-model', MODEL,
+                                     '--key-search', 'real', '--real-key-act', 'OA-12 A1'], TOKEN + '\n')
+        self.assertEqual((rc, seen['provider_key'], seen['real_key_act']), (0, None, 'OA-12 A1'))
+
+    def test_refusals(self):
+        rc, seen, out = self.run_main(['--prompt', 'single', '--acp-model', MODEL], TOKEN + '\n')
+        self.assertEqual((rc, seen), (1, {}))
+        self.assertIn('needs --attempt-token-stdin', out)
+        rc, seen, out = self.run_main(['--attempt-token-stdin', '--prompt', 'single', '--acp-model', MODEL],
+                                      'sk-ant-api03-' + 'x' * 40 + '\n')
+        self.assertEqual((rc, seen), (1, {}))
+        self.assertNotIn('sk-ant', out)
+        rc, seen, out = self.run_main(['--attempt-token-stdin', '--prompt', 'single', '--acp-model', MODEL,
+                                       '--key-search', 'synthetic', f'--provider-key-fingerprint={SYNTHETIC_FP}'],
+                                      TOKEN + '\n' + REAL + '\n')
+        self.assertEqual((rc, seen), (1, {}))
+        self.assertNotIn(REAL, out)
+        for argv in (['--attempt-token-stdin', '--acp-model', MODEL],
+                     ['--attempt-token-stdin', '--prompt', 'any', '--acp-model', MODEL],
+                     ['--attempt-token-stdin', '--prompt', 'single'],
+                     ['--attempt-token-stdin', '--prompt', 'single', '--acp-model', MODEL, '--key-search', 'x']):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit) as cm:
+                self.run_main(argv, TOKEN + '\n')
+            self.assertEqual(cm.exception.code, 2)
+
+    def test_exit_code_follows_the_result(self):
+        with mock.patch.object(guest, 'Context', return_value=types.SimpleNamespace()), \
+                mock.patch.object(guest, 'acp_qualification_run',
+                                  return_value={'operation': 'acp-qualification', 'result': 'UNKNOWN'}), \
+                mock.patch('sys.stdin', io.StringIO(TOKEN + '\n')), mock.patch('sys.stdout', io.StringIO()):
+            self.assertEqual(guest.main(['acp-qualification', '--profile', 'p', '--state-dir', 's', '--name', 'g',
+                                         '--attempt-token-stdin', '--prompt', 'single', '--acp-model', MODEL]), 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

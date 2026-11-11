@@ -6335,6 +6335,12 @@ def acp_qualification():
     return _inference_module('aieh_dispatch_acp_qualification', 'acp_qualification.py', 'dispatch')
 
 
+def containment():
+    """integrations/dispatch/conversation_containment.py, S-03.3 slice 1's collector and verdicts (standard library
+    only; the same file is sent to the guest as the collector), loaded once."""
+    return _inference_module('aieh_dispatch_conversation_containment', 'conversation_containment.py', 'dispatch')
+
+
 def _inference_module(name, file, package='inference'):
     module = sys.modules.get(name)
     if module is None:
@@ -14476,7 +14482,8 @@ def attempt_deliveries_verdict(deliveries):
 
 
 def custody_verdict(steps, stop_conditions):
-    """The run's verdict under CUSTODY_PROBE_RULE from the steps' verdicts."""
+    """The run's verdict under CUSTODY_PROBE_RULE (and ACP_QUALIFICATION_RULE) from the steps' verdicts: FAIL on a
+    stop or a FAIL, else UNKNOWN unless every step passed."""
     verdicts = [s.get('verdict') for s in steps]
     if stop_conditions or 'FAIL' in verdicts:
         return 'FAIL'
@@ -14628,6 +14635,709 @@ def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, ins
         raise Refused('SECRET', 'the custody-probe record would hold the runtime credential: not written')
     memo.pop('credential', None)
     out['record'] = write_record(idir, 'custody-probe', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
+# ---------------------------------------------------------------- ACP qualification driver (S-03.3, slice 5)
+#
+# The live qualification of the first ACP coding provider (Claude Code) through the broker, PREPARED, NOT RUN
+# (evidence/S-03.3-slice-plan.md, slice 5; the leaf's proof as amended on 2026-11-11, OA-19). On one disposable
+# guest created with create --provision --inference, with the forward session held (A2, A3, A4) and one attempt
+# token issued for the reserved conversation through the existing pipe
+#   inference_control.py issue --conversation-id ACP_QUALIFICATION_CONVERSATION_ID ... | guest.py acp-qualification
+# it admits and sends the pinned qualification create (integrations/dispatch/acp_qualification.py) through the
+# dispatcher's transport (integrations/dispatch/guest_transport.py), sends one fixed prompt, observes the
+# conversation container while the turn runs and after it (integrations/dispatch/conversation_containment.py),
+# reads the conversation's events and the sets of containers and conversations, searches for the provider key,
+# revokes the token at attempt end (decision 0015 section 3.3) and deletes the conversation. One record, under
+# ACP_QUALIFICATION_RULE, fixed before any run.
+
+ACP_QUALIFICATION_SCHEMA = 'ai-engineering-harness/profiles/acp-qualification-record/v1'
+# reserved for the qualification create; the grant the token belongs to must be bound to it
+ACP_QUALIFICATION_CONVERSATION_ID = 'a0333c00-0000-4000-8000-0000000ac0d1'
+ACP_QUALIFICATION_FAMILY = 'anthropic-messages'     # the family whose auth the registry's ANTHROPIC_* names carry
+ACP_QUALIFICATION_PROVIDER = 'claude-code'
+# The fixed prompts, no repository content (A6). Whether the run asks for one delegated step is part of A6's
+# presentation (the leaf's notes): the Owner's act names one of these, never another text.
+ACP_QUALIFICATION_PROMPTS = {
+    'single': 'Reply with exactly one word: ready',
+    'delegated': 'Use exactly one sub-agent to answer this, then reply with exactly one word: ready',
+}
+ACP_KEY_MODES = ('off', 'synthetic', 'real')
+ACP_SYNTHETIC_SOURCE = 'stdin-qualification'        # the qualification launcher's provider (S-03.2 slice 4)
+ACP_REAL_KEY_ACT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 ._:()/-]{0,63}$')
+ACP_REVOKER = 'tools/guest.py acp-qualification (the dispatcher\'s role during bootstrap)'
+ACP_TURN_CEILING_S = 1800 + 120     # ACPAgentSettings.acp_prompt_timeout's default (1800 s) and a margin
+ACP_TURN_END = ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation')
+ACP_EVENT_PAGES = 50
+ACP_TOOL_CALL_KIND = 'ACPToolCallEvent'
+ACP_NATIVE_CHILD_TOOL = 'start_child_conversation'
+ACP_FORK_PATHS = ('/ask_agent', '/fork', '/children')
+ACP_ASSUMED = {
+    'message': 'POST /api/conversations/{id}/events with {"role": "user", "content": [{"type": "text", "text": '
+               '<prompt>}], "run": true} sends the prompt and starts the turn; the outer server proxies it to the '
+               'inner server (routes.json POST /api/conversations/{conversation_id}/{tail}, dispatcher value '
+               '"validation")',
+    'status': 'GET /api/conversations/{id} answers execution_status; a turn ends in one of ' + ', '.join(ACP_TURN_END),
+    'events': 'GET /api/conversations/{id}/events/search?limit=100[&page_id=P] answers {items, next_page_id}; each '
+              'item carries kind; an ACP tool call is kind ' + ACP_TOOL_CALL_KIND + ' (sdk/event/acp_tool_call.py) '
+              'with a title; a native tool call carries tool_name',
+    'inner': 'the inner server, inside the container at 127.0.0.1:8000 with the conversation\'s own key (read '
+             'there from /proc/1/environ, as job-access-probe\'s route sweep does, never sent out), answers GET '
+             '/api/conversations/search with items carrying id and parent_conversation_id',
+    'agent': 'the create answer and GET /api/conversations/{id} carry agent with kind and acp_server',
+}
+ACP_HOST_VANTAGE_GAP = ('no guest-root channel: slice 1\'s collect host needs root (the PID namespace link and '
+                        '/proc/<pid>/exe of the server user\'s processes), and a guest created with --inference has '
+                        'none (no --drill helper; the root facts reporter runs a fixed script). Recorded UNKNOWN, '
+                        'never PASS (finding F-6 of evidence/S-03.3-slice5-live-driver.md)')
+# Fixed before any run (plan leaf S-03.3; the slice plan sections 4 and 5; the dispatch for slice 5). Each step is
+# PASS, FAIL or UNKNOWN; a lost or unreadable answer is UNKNOWN, never PASS.
+ACP_QUALIFICATION_RULE = (
+    'PASS iff every step passes: (1) the opted-in guest holds the forward, the grant of the piped token is live, bound '
+    'to the reserved conversation, of the family anthropic-messages, which is ready, with the named model in the '
+    'grant and in the family\'s allowlist, the key-search mode matches the broker\'s provider key (synthetic: the '
+    'launcher\'s, by fingerprint), and the outer server holds no conversation and no conversation container; (2) the '
+    'pinned qualification create is admitted (acp_qualification.check_create) and created through the dispatcher\'s '
+    'transport: 2xx, exactly one new container of the declared shape, the outer server listing exactly that '
+    'conversation, the answer\'s acp_server claude-code when it names one; (3) the sets of containers and of outer '
+    'and inner conversations read before the turn; (4) the fixed prompt accepted (2xx); (5) while the turn runs, the '
+    'container view (every process a descendant of the inner server with the container\'s identity, no capability, '
+    'no_new_privs, seccomp and cgroup, the claude-code adapter its direct child, no npx or npm, the admitted caps), '
+    'its connections (none but to the inference endpoint, loopback or inbound to the inner server) and the guest-root '
+    'view (the inspected caps, every member in the cgroup, no escape, the adapter seen with the same executable) all '
+    'pass; an adapter missing only after the turn already ended is UNKNOWN; (6) the job contract in the qualification '
+    'conversation (D-6): every process environment carries no credential-like name but the conversation keys and '
+    'the attempt token\'s admitted name with a token-shaped value, no root, and that name observed; (7) the turn ends '
+    'finished within the ceiling; (8) after the turn the container view, its connections and the guest-root view '
+    'pass (the adapter no longer required) and the sets show no new container, no new outer conversation and every '
+    'new inner conversation a child of this one; (9) the events are read in full and classify the delegation '
+    'mechanisms (a) the provider\'s own processes and ACP tool calls, (b) an ACP session fork (never called by the '
+    'driver), (c) the inner server\'s children route, (d) the native start_child_conversation tool, which must be '
+    'absent; (10) the broker admitted at least one request of the grant (the base URL honoured); (11) the provider '
+    'key search (mode synthetic or real) finds the key nowhere: inspect\'s P5 search of the guest and the instance '
+    'files, and every Agent Server answer and container output of this run in memory, with valid positive controls '
+    '(mode off: UNKNOWN); (12) the token revoked at attempt end; (13) the conversation deleted, its container gone '
+    'and no outer conversation left. FAIL when a step observes a violation; otherwise UNKNOWN when a step is '
+    'UNKNOWN. STOP (FAIL; the later steps are skipped, the key search, the revocation and the teardown still run): '
+    'a process outside the container\'s lineage (an entered process, one outside the inner server\'s tree, an escaped '
+    'child); an outer-server conversation that was not expected; an npx or npm process; a credential found in a '
+    'recorded surface (the attempt token or the management key echoed in an Agent Server answer, a provider-key '
+    'shaped value in a process environment, the provider key found by the search); a connection that reached any '
+    'network destination other than the broker\'s inference endpoint.')
+
+# Run inside the qualification conversation's container: the inner server's conversations (id and parent only),
+# with the conversation's own key read from /proc/1/environ inside the container (never printed: its occurrences
+# are counted and removed). argv[1] is the inner port.
+ACP_INNER_CONVERSATIONS = r'''import http.client, json, sys, urllib.parse
+port = int(sys.argv[1])
+out = {'key_present': False, 'items': None, 'status': None, 'key_occurrences': 0, 'pages': 0}
+key = ''
+try:
+    for e in open('/proc/1/environ', 'rb').read().split(bytes([0])):
+        if e.startswith(b'OH_SESSION_API_KEYS_0='):
+            key = e.split(b'=', 1)[1].decode('ascii')
+except OSError as exc:
+    out['error'] = type(exc).__name__
+out['key_present'] = bool(key)
+items, page = [], None
+while key and out['pages'] < 20:
+    path = '/api/conversations/search?limit=100' + ('&page_id=' + urllib.parse.quote(str(page)) if page else '')
+    conn = http.client.HTTPConnection('127.0.0.1', port, timeout=30)
+    try:
+        conn.request('GET', path, headers={'X-Session-API-Key': key, 'Accept': 'application/json'})
+        resp = conn.getresponse()
+        text = resp.read(8 << 20).decode('utf-8', 'replace')
+        out['status'] = resp.status
+    except OSError as exc:
+        out['error'] = type(exc).__name__
+        break
+    finally:
+        conn.close()
+    out['pages'] += 1
+    out['key_occurrences'] += text.count(key)
+    text = text.replace(key, '')
+    try:
+        body = json.loads(text)
+    except ValueError:
+        break
+    if resp.status != 200 or not isinstance(body, dict) or not isinstance(body.get('items'), list):
+        break
+    items += [{'id': i.get('id'), 'parent_conversation_id': i.get('parent_conversation_id')}
+              for i in body['items'] if isinstance(i, dict)]
+    page = body.get('next_page_id')
+    if not page:
+        out['items'] = items
+        break
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+
+
+def _hex_id(value):
+    """A conversation id as 32 lower-case hex digits (hyphens removed); a value that is not one is refused."""
+    text = str(value or '').replace('-', '').lower()
+    if not re.fullmatch(r'[0-9a-f]{32}', text):
+        raise Refused('SETS', 'a conversation id that is not a UUID')
+    return text
+
+
+def no_host_vantage(record, state_pid):
+    """The guest-root vantage of slice 1 on a guest created with --inference: there is no root channel."""
+    raise Refused('HOST_VANTAGE', ACP_HOST_VANTAGE_GAP)
+
+
+def read_real_provider_key(expected, provider_factory=None):
+    """The real provider key for the key search (the slice plan's D-5), ONLY under the Owner's act that authorizes
+    it: from the credential provider entry the broker reads ("AIEH model provider", the same account,
+    credentials.select_provider), held in memory, never printed or written, and refused unless its fingerprint is
+    ``expected`` (the running broker's provider key). ``provider_factory`` stands in for the provider in tests."""
+    ic = inference_control()
+    ks = key_search()
+    factory = provider_factory or ic.broker.credentials.select_provider
+    try:
+        entry = factory().get(ic.broker.ENTRY)
+    except Exception as exc:  # any provider failure: its type only, never what it read
+        raise Refused('REAL_KEY', f'the credential provider did not answer ({type(exc).__name__})') from None
+    if not isinstance(entry, (tuple, list)) or len(entry) != 2 or not isinstance(entry[1], str):
+        raise Refused('REAL_KEY', 'the credential provider holds no provider key entry')
+    key = entry[1]
+    try:
+        ks.check_fingerprint(key, expected)
+    except ks.SearchError as exc:
+        raise Refused('REAL_KEY', f'{exc.code}: the entry is not the running broker\'s provider key') from None
+    return key
+
+
+def acp_expected(profile, server_user, provider):
+    """slice 1's expected values: the server user, the profile's job confinement and the admitted caps (the
+    configuration's: the qualification create sends no container override)."""
+    proc = jobs_config(profile).get('process') or {}
+    cfg = (provisioning_config(profile)['agent_server'].get('config') or {}).get('content') or {}
+    return {'uid': server_user.get('uid'), 'gid': server_user.get('gid'), 'capabilities': proc.get('capabilities'),
+            'no_new_privs': proc.get('no_new_privs'), 'seccomp': proc.get('seccomp'),
+            'limits': containment().expected_limits(cfg.get('conversation_container_memory'),
+                                                    cfg.get('conversation_container_cpus'),
+                                                    cfg.get('conversation_container_pids_limit')),
+            'provider': provider}
+
+
+def _failed_checks(verdict):
+    return [c['check'] for c in (verdict or {}).get('checks') or [] if not c.get('ok')]
+
+
+def acp_containment_stops(container_view, host_view, network_view):
+    """The stop conditions a containment observation shows: a process outside the container's lineage (entered,
+    outside the inner server's tree once the inner server is identified, an escaped child), an npx or npm process,
+    a connection that reached another destination."""
+    stops = []
+    checks = {c['check'].split(':', 1)[0]: c for c in (container_view or {}).get('checks') or []}
+    if not (checks.get('entered') or {}).get('ok', True):
+        stops.append({'stop': 'a process outside the container\'s lineage (entered from outside)',
+                      'observed': checks['entered'].get('observed')})
+    ancestry = checks.get('ancestry') or {}
+    if (checks.get('inner server') or {}).get('ok') and not ancestry.get('ok', True):
+        stops.append({'stop': 'a process outside the container\'s lineage (not a descendant of the inner server)',
+                      'observed': ancestry.get('observed')})
+    if not (checks.get('npx') or {}).get('ok', True):
+        stops.append({'stop': 'an npx or npm process', 'observed': checks['npx'].get('observed')})
+    for c in (host_view or {}).get('checks') or []:
+        if c['check'].startswith('no escape') and not c['ok']:
+            stops.append({'stop': 'a process outside the container\'s lineage (an escaped child)',
+                          'observed': c.get('observed')})
+    if (network_view or {}).get('other_reached'):
+        stops.append({'stop': 'a connection reached a destination other than the broker\'s inference endpoint',
+                      'observed': network_view['other_reached']})
+    return stops
+
+
+def acp_delegation(events, provider_during, provider_after, children, transport_calls):
+    """The four mechanisms of the slice plan section 2.4 as this run shows them, from the events, the provider's
+    process trees, the inner server's new conversations and the driver's own calls."""
+    tool_calls = [e for e in events if e.get('kind') == ACP_TOOL_CALL_KIND]
+    native = [e.get('id') for e in events
+              if e.get('tool_name') == ACP_NATIVE_CHILD_TOOL or
+              (e.get('kind') == ACP_TOOL_CALL_KIND and ACP_NATIVE_CHILD_TOOL in str(e.get('title') or ''))]
+    forks = [c for c in transport_calls if any(str(c.get('path', '')).endswith(p) or f'{p}?' in str(c.get('path'))
+                                               for p in ACP_FORK_PATHS)]
+    return {
+        '(a) the provider\'s own tools and sub-agents': {
+            'acp_tool_call_events': len(tool_calls),
+            'tool_call_titles': [str(e.get('title'))[:120] for e in tool_calls][:50],
+            'provider_processes': {'during': provider_during, 'after': provider_after},
+            'observed': bool(tool_calls) or max(len(provider_during or []), len(provider_after or [])) > 2},
+        '(b) an ACP session fork (ask_agent)': {
+            'driver_called': [c.get('path') for c in forks],
+            'observed': 'not separable: a fork runs inside the adapter process (slice plan section 2.4); the driver '
+                        'never calls ask_agent, fork or children'},
+        '(c) the inner server\'s children route': {'children': list(children), 'observed': bool(children)},
+        '(d) OpenHands\' start_child_conversation tool': {'events_naming_it': native, 'observed': bool(native)},
+    }
+
+
+def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode='off', provider_key=None,
+                          provider_key_fingerprint=None, real_key_act=None, out_path=None, channels=None,
+                          broker=None, forward=None, inspect_fn=None, host_vantage=None, real_key_reader=None,
+                          wait=None, turn_ceiling_s=ACP_TURN_CEILING_S):
+    """acp-qualification (plan leaf S-03.3, slice 5; PREPARED, NOT RUN) under ACP_QUALIFICATION_RULE, fixed before
+    any run. ``attempt_token`` comes from standard input (the inference_control.py issue pipe), never argv; records
+    carry its fingerprint only. ``key_mode``: off (the default: the key search step is UNKNOWN), synthetic (S-03.2's
+    synthetic key on standard input after the token, the launcher's, by ``provider_key_fingerprint``) or real (the
+    provider key read through the credential provider only inside the key search step, and only with
+    ``real_key_act`` naming the Owner's act that authorizes it). ``channels(record) -> (api, facts)``, ``broker``,
+    ``forward``, ``inspect_fn(fingerprint, key)``, ``host_vantage(record, state_pid)``, ``real_key_reader(fp)`` and
+    ``wait(fetch, done, ceiling)`` stand in for the guest, the broker and the clock in tests."""
+    if prompt not in ACP_QUALIFICATION_PROMPTS:
+        raise Refused('REFUSED', f'--prompt: one of {sorted(ACP_QUALIFICATION_PROMPTS)}')
+    if key_mode not in ACP_KEY_MODES:
+        raise Refused('REFUSED', f'--key-search: one of {list(ACP_KEY_MODES)}')
+    if key_mode == 'synthetic' and (provider_key is None or not GITEA_FINGERPRINT.match(
+            str(provider_key_fingerprint))):
+        raise Refused('REFUSED', '--key-search synthetic needs the synthetic key on standard input and '
+                      '--provider-key-fingerprint')
+    if key_mode != 'synthetic' and provider_key is not None:
+        raise Refused('REFUSED', 'a key on standard input is for --key-search synthetic only')
+    if key_mode == 'real' and not ACP_REAL_KEY_ACT.match(str(real_key_act or '')):
+        raise Refused('REFUSED', '--key-search real needs --real-key-act naming the Owner\'s act that authorizes '
+                      'reading the provider key (off by default)')
+    if key_mode != 'real' and real_key_act is not None:
+        raise Refused('REFUSED', '--real-key-act is for --key-search real only')
+    ic = inference_control()
+    try:
+        token_fp = ic.token_fingerprint(attempt_token)
+    except ic.ControlError:
+        raise Refused('REFUSED', 'the attempt token is not of the broker\'s shape') from None
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    if not inference_opted(record):
+        raise Refused('REFUSED', f'{name} was not created with create --provision --inference: the provider has '
+                      'no endpoint to reach')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    profile = ctx.profile
+    gt, cc = dispatch_transport(), containment()
+    broker = broker or BrokerAccess()
+    forward = forward or ForwardControl(ctx, name, broker)
+    host_vantage = host_vantage or no_host_vantage
+    real_key_reader = real_key_reader or read_real_provider_key
+    wait = wait or wait_until
+    inspect_fn = inspect_fn or (lambda fp, key: inspect(ctx, name, None, fp, key))
+    cid, hex_id = ACP_QUALIFICATION_CONVERSATION_ID, ACP_QUALIFICATION_CONVERSATION_ID.replace('-', '')
+    endpoint = inference_endpoint(profile)
+    collector = (Path(ctx.repo) / 'integrations' / 'dispatch' / 'conversation_containment.py').read_text(
+        encoding='utf-8')
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    api, facts = (channels or default_channels)(record)
+    steps, stop_conditions, memo = [], [], {'created': False, 'echoes': [], 'surfaces': []}
+    t0, started = time.time(), utc_now()
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError,
+              gt.TransportError, cc.ContainmentError)
+
+    def sealed(requests, timeout=900):
+        # every answer is scanned in the guest for the token (sealed) and kept in memory for the key search
+        data = api(requests, timeout=timeout, secret=attempt_token)
+        if isinstance(data, dict):
+            count = data.get('sealed_occurrences')
+            if count:
+                memo['echoes'].append({'requests': [f"{r.get('method')} {r.get('path')}" for r in requests],
+                                       'occurrences': count})
+            memo['surfaces'].append(('agent server answer: ' + ' '.join(
+                f"{r.get('method')} {str(r.get('path')).split('?')[0]}" for r in requests),
+                json.dumps(data, sort_keys=True, default=str).encode('utf-8')))
+        return data
+    transport = gt.GuestTransport(sealed, profile, api_login=GUEST_API_LOGIN)
+
+    def stop(what, **detail):
+        stop_conditions.append(dict({'stop': what}, **detail))
+
+    def call(method, path, body=None):
+        before = len(memo['echoes'])
+        try:
+            answer = transport(method, path, body)
+        except gt.TransportError as exc:
+            if exc.code == 'SECRET_IN_ANSWER':
+                stop('a credential found in a recorded surface (the management key in an Agent Server answer)',
+                     route=f'{method} {path}')
+            raise
+        if len(memo['echoes']) > before:
+            stop('a credential found in a recorded surface (the attempt token echoed in an Agent Server answer)',
+                 route=f'{method} {path}', occurrences=memo['echoes'][-1]['occurrences'])
+        return answer
+
+    def body_of(answer):
+        return answer.get('body') if isinstance(answer.get('body'), dict) else {}
+
+    def ok_status(answer):
+        return isinstance(answer.get('status'), int) and 200 <= answer['status'] < 300
+
+    def in_container(command, timeout=300):
+        answer = call('POST', f'/api/conversations/{cid}/bash/execute_bash_command',
+                      {'command': command, 'cwd': '/workspace', 'timeout': timeout})
+        body = body_of(answer)
+        if not ok_status(answer) or body.get('exit_code') is None:
+            raise Refused('CONTAINER', f'the command did not run in {cid} (HTTP {answer.get("status")})')
+        stdout = body.get('stdout') or ''
+        memo['surfaces'].append(('container output', stdout.encode('utf-8', 'surrogatepass')))
+        return stdout
+
+    def ours(report):
+        return [c for c in report.get('containers') or [] if conversation_hex(c) == hex_id]
+
+    def outer_ids():
+        answer = call('GET', '/api/conversations/search?limit=100')
+        body = body_of(answer)
+        if not ok_status(answer) or not isinstance(body.get('items'), list) or body.get('next_page_id'):
+            raise Refused('SETS', f'the outer server\'s conversation list was not read in one page '
+                          f'(HTTP {answer.get("status")})')
+        return sorted(_hex_id((i or {}).get('id')) for i in body['items'])
+
+    def inner_rows():
+        data = _job_json(in_container(container_python(ACP_INNER_CONVERSATIONS, str(cc.INNER_PORT)), 120))
+        memo.setdefault('inner_reads', []).append({k: data.get(k) for k in (
+            'key_present', 'status', 'pages', 'key_occurrences', 'error')})
+        if not isinstance(data.get('items'), list):
+            raise Refused('SETS', 'the inner server\'s conversations were not read')
+        return [{'id': _hex_id(i.get('id')), 'parent_conversation_id':
+                 None if i.get('parent_conversation_id') is None else _hex_id(i['parent_conversation_id'])}
+                for i in data['items']]
+
+    def sets_now(report):
+        return {'containers': sorted(str(c.get('Id')) for c in report.get('containers') or []),
+                'outer': outer_ids(), 'inner': inner_rows()}
+
+    def observe(report, phase, provider):
+        """slice 1's two vantages and the connections at one moment."""
+        mine = ours(report)
+        if len(mine) != 1:
+            raise Refused('CONTAINER', f'{len(mine)} containers for the qualification conversation')
+        expected = acp_expected(profile, report.get('server_user') or {}, provider)
+        snap = cc.parse_output(in_container(container_python(collector, 'collect container'), 300))
+        view = cc.container_verdict(snap, expected=expected)
+        tree = cc.container_verdict(snap, expected=dict(expected, provider=ACP_QUALIFICATION_PROVIDER))
+        net = cc.network_verdict(snap, endpoint=endpoint)
+        state_pid = ((mine[0].get('State') or {}).get('Pid'))
+        try:
+            host_snap = host_vantage(record, state_pid)
+            host = cc.host_verdict(host_snap, inspect=mine[0], container=snap, expected=expected)
+            host_gap = None
+        except Refused as exc:
+            host, host_gap = None, str(exc)
+        memo[f'provider_{phase}'] = [p.get('argv0') for p in tree.get('provider_tree') or []]
+        detail = {'container': {k: view.get(k) for k in ('checks', 'inner_server', 'adapters', 'provider_tree',
+                                                          'collector', 'outside_inner_server', 'process_count',
+                                                          'vanished', 'listeners')},
+                  'network': {k: net.get(k) for k in ('checks', 'connections', 'attempted', 'other_reached')},
+                  'host': None if host is None else {k: host.get(k) for k in (
+                      'checks', 'member_count', 'provider_seen', 'provider_vanished', 'appeared')},
+                  'host_vantage': 'guest root' if host is not None else host_gap,
+                  'container_guard_rejects': container_guard_rejects(report)}
+        stops = acp_containment_stops(view, host, net)
+        for s in stops:
+            stop(s['stop'], phase=phase, observed=s['observed'])
+        return view, host, net, detail, stops
+
+    def run(step, func, always=False, needs=()):
+        if not always and stop_conditions:
+            steps.append({'step': step, 'verdict': 'UNKNOWN', 'skipped': 'a stop condition'})
+            return
+        missing = [n for n in needs if not memo.get(n)]
+        if missing:
+            steps.append({'step': step, 'verdict': 'UNKNOWN', 'skipped': f'not reached ({", ".join(missing)})'})
+            return
+        s = time.time()
+        try:
+            verdict, detail = func()
+        except caught as exc:  # a lost answer is UNKNOWN, never PASS
+            verdict, detail = 'UNKNOWN', {'error': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}
+        steps.append({'step': step, 'verdict': verdict, 'seconds': round(time.time() - s, 1), 'detail': detail})
+        log(f'acp-qualification: {step}: {verdict}')
+        return verdict
+
+    def preconditions():
+        status, grant = broker.call('status'), broker.call('grant', token_fp)
+        family = next((f for f in status.get('families') or []
+                       if isinstance(f, dict) and f.get('id') == grant.get('family')), None) or {}
+        key = status.get('provider_key') if isinstance(status.get('provider_key'), dict) else {}
+        memo['family_models'] = list(family.get('models') or [])
+        memo['provider_key_fingerprint'] = key.get('fingerprint')
+        count = call('GET', '/api/conversations/count')
+        report = facts()
+        checks = {
+            'the forward session is held': forward.status().get('held') is True,
+            'the grant is live': grant.get('state') == 'live',
+            'the grant is bound to the reserved conversation': grant.get('conversation_id') == cid,
+            f'the grant\'s family is {ACP_QUALIFICATION_FAMILY}': grant.get('family') == ACP_QUALIFICATION_FAMILY,
+            'the family is ready': family.get('ready') is True,
+            'the model is in the grant and the family\'s allowlist':
+                acp_model in (grant.get('models') or []) and acp_model in memo['family_models'],
+            'the outer server holds no conversation': ok_status(count) and count.get('body') == 0,
+            'no conversation container': report.get('containers') == [],
+        }
+        if key_mode == 'synthetic':
+            checks['the broker holds the piped synthetic key'] = key.get('source') == ACP_SYNTHETIC_SOURCE and \
+                key.get('fingerprint') == provider_key_fingerprint
+        elif key_mode == 'real':
+            checks['the broker holds a provider key from a credential provider'] = \
+                bool(key.get('fingerprint')) and key.get('source') not in (None, ACP_SYNTHETIC_SOURCE)
+        detail = {'checks': checks, 'token_fingerprint': token_fp,
+                  'grant': {k: grant.get(k) for k in ('state', 'family', 'models', 'conversation_id', 'attempt_id',
+                                                      'budget', 'expires_at')},
+                  'family': {k: family.get(k) for k in ('id', 'status', 'ready', 'upstream', 'models', 'routes',
+                                                        'query')},
+                  'provider_key': {k: key.get(k) for k in ('fingerprint', 'source', 'provider')},
+                  'key_search': key_mode, 'real_key_act': real_key_act}
+        memo['ready'] = all(checks.values())
+        return ('PASS' if memo['ready'] else 'FAIL'), detail
+
+    def create_step():
+        acp = acp_qualification()
+        try:
+            body = acp.build_create(conversation_id=cid, attempt_token=attempt_token, acp_model=acp_model,
+                                    approved_models=memo['family_models'], profile=profile)
+        except acp.QualificationRefused as exc:
+            return 'FAIL', {'admission': exc.to_json()}
+        answer = call('POST', '/api/conversations', body)
+        detail = {'admission': 'admitted (acp_qualification.check_create)', 'status': answer.get('status'),
+                  'sent_body_sha256': transport.calls[-1].get('body_sha256')}
+        del body
+        if not ok_status(answer):
+            return 'FAIL', detail
+        memo['created'] = True
+        agent = body_of(answer).get('agent') if isinstance(body_of(answer).get('agent'), dict) else {}
+        detail['agent'] = {k: agent.get(k) for k in ('kind', 'acp_server', 'acp_model')}
+        report = facts()
+        mine = ours(report)
+        problems = container_problems(profile, record, report, mine[0])[0] if len(mine) == 1 else \
+            [{'check': 'one container for the qualification conversation', 'observed': len(mine)}]
+        outer = outer_ids()
+        detail.update(containers=len(report.get('containers') or []), container_problems=problems, outer=outer)
+        if outer != [hex_id]:
+            stop('an outer-server conversation that was not expected', observed=outer)
+        ok = len(report.get('containers') or []) == 1 and not problems and outer == [hex_id] and \
+            agent.get('acp_server') in (None, ACP_QUALIFICATION_PROVIDER)
+        return ('PASS' if ok else 'FAIL'), detail
+
+    def before_step():
+        report = facts()
+        memo['before'] = sets_now(report)
+        memo['rejects_before'] = container_guard_rejects(report)
+        return 'PASS', {'sets': memo['before'], 'inner_reads': memo.get('inner_reads'),
+                        'container_guard_rejects': memo['rejects_before']}
+
+    def prompt_step():
+        answer = call('POST', f'/api/conversations/{cid}/events',
+                      {'role': 'user', 'content': [{'type': 'text', 'text': ACP_QUALIFICATION_PROMPTS[prompt]}],
+                       'run': True})
+        memo['sent'] = ok_status(answer)
+        return ('PASS' if memo['sent'] else 'FAIL'), {'prompt': prompt, 'status': answer.get('status'),
+                                                      'assumed': ACP_ASSUMED['message']}
+
+    def execution_status():
+        answer = call('GET', f'/api/conversations/{cid}')
+        return answer, body_of(answer).get('execution_status')
+
+    def during_step():
+        report = facts()
+        view, host, net, detail, stops = observe(report, 'during', ACP_QUALIFICATION_PROVIDER)
+        _, status = execution_status()
+        detail['execution_status_after_the_snapshot'] = status
+        failed = _failed_checks(view) + _failed_checks(host) + _failed_checks(net)
+        # the adapter checks of both views (the guest root's cross-view needs the adapter too)
+        adapter_only = failed and all(c.startswith(('adapter', 'cross-view')) for c in failed)
+        if stops or (failed and not (adapter_only and status in ACP_TURN_END)):
+            return 'FAIL', detail
+        if failed or host is None:
+            return 'UNKNOWN', detail
+        return 'PASS', detail
+
+    def job_contract_step():
+        names = attempt_token_environment(profile, record)
+        report = facts()
+        user = report.get('server_user') or {}
+        jobs = jobs_config(profile)
+        spec = {'pattern': (jobs.get('environment') or {}).get('credential_name_pattern'),
+                'sockets': [str(p).replace('{uid}', str(user.get('uid'))) for p in jobs.get('engine_sockets') or []],
+                'timeout': JOB_CONNECT_S}
+        if names:
+            spec['attempt_token'] = attempt_token_spec(names)
+        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        data = _job_json(in_container(container_python(JOB_ENV_PROBE, arg), 300))
+        ok, problems, root = job_env_verdict(profile, user, data, attempt_token_names=names)
+        admission = attempt_token_admission(data, names)
+        if admission['provider_key']:
+            stop('a credential found in a recorded surface (a provider-key shaped value in a process environment)',
+                 pids=sorted(admission['provider_key']))
+        detail = {'admitted_names': list(names), 'admission': admission, 'problems': problems,
+                  'root_obtainable': root,
+                  'process_environments': {pid: e.get('names') for pid, e in
+                                           (data.get('process_environments') or {}).items() if e.get('names')},
+                  'terminal_names': data.get('terminal_names')}
+        if not ok or root or admission['provider_key'] or not names:
+            return 'FAIL', detail
+        return ('PASS' if admission['admitted'] else 'UNKNOWN'), detail
+
+    def turn_step():
+        last, met = wait(lambda: execution_status()[1], lambda s: s in ACP_TURN_END, turn_ceiling_s)
+        answer, status = execution_status()
+        agent = body_of(answer).get('agent') if isinstance(body_of(answer).get('agent'), dict) else {}
+        memo['turn_ended'] = met
+        detail = {'execution_status': status, 'within_ceiling': met, 'ceiling_s': turn_ceiling_s,
+                  'agent': {k: agent.get(k) for k in ('kind', 'acp_server', 'acp_model')},
+                  'assumed': ACP_ASSUMED['status']}
+        if not met:
+            return 'UNKNOWN', detail
+        return ('PASS' if status == 'finished' else 'FAIL'), detail
+
+    def after_step():
+        report = facts()
+        view, host, net, detail, stops = observe(report, 'after', None)
+        after = sets_now(report)
+        sets = cc.sets_verdict(memo['before'], after, conversation_id=hex_id)
+        memo['children'] = sets['delegation']['children_route']
+        if sets['delegation']['outer_new']:
+            stop('an outer-server conversation that was not expected', observed=sets['delegation']['outer_new'])
+        detail.update(sets={'after': after, 'checks': sets['checks'], 'delegation': sets['delegation']},
+                      container_guard_rejects={'before': memo.get('rejects_before'),
+                                               'after': container_guard_rejects(report)})
+        if stops or _failed_checks(view) or _failed_checks(host) or _failed_checks(net) or not sets['ok']:
+            return 'FAIL', detail
+        return ('UNKNOWN' if host is None else 'PASS'), detail
+
+    def events_step():
+        items, page, pages = [], None, 0
+        while True:
+            path = f'/api/conversations/{cid}/events/search?limit=100' + \
+                (f'&page_id={urllib.parse.quote(str(page))}' if page else '')
+            answer = call('GET', path)
+            body = body_of(answer)
+            if not ok_status(answer) or not isinstance(body.get('items'), list):
+                return 'UNKNOWN', {'reason': f'an events page was not read (HTTP {answer.get("status")})',
+                                   'pages': pages}
+            items += [e for e in body['items'] if isinstance(e, dict)]
+            pages += 1
+            page = body.get('next_page_id')
+            if not page:
+                break
+            if pages >= ACP_EVENT_PAGES:
+                return 'UNKNOWN', {'reason': f'more than {ACP_EVENT_PAGES} pages of events', 'events': len(items)}
+        final = call('GET', f'/api/conversations/{cid}/agent_final_response')
+        text = json.dumps(final.get('body'), sort_keys=True, default=str)
+        kinds = {}
+        for e in items:
+            kinds[str(e.get('kind'))] = kinds.get(str(e.get('kind')), 0) + 1
+        mechanisms = acp_delegation(items, memo.get('provider_during'), memo.get('provider_after'),
+                                    memo.get('children') or [], transport.calls)
+        detail = {'events': len(items), 'pages': pages, 'kinds': kinds, 'mechanisms': mechanisms,
+                  'agent_final_response': {'status': final.get('status'), 'bytes': len(text),
+                                           'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()},
+                  'assumed': ACP_ASSUMED['events']}
+        if mechanisms['(d) OpenHands\' start_child_conversation tool']['observed'] or \
+                mechanisms['(b) an ACP session fork (ask_agent)']['driver_called']:
+            return 'FAIL', detail
+        return ('PASS' if items else 'UNKNOWN'), detail
+
+    def broker_step():
+        grant = broker.call('grant', token_fp)
+        detail = {k: grant.get(k) for k in ('state', 'requests', 'refused', 'usage', 'budget')}
+        requests = grant.get('requests')
+        if isinstance(requests, bool) or not isinstance(requests, int):
+            return 'UNKNOWN', detail
+        return ('PASS' if requests >= 1 else 'FAIL'), detail
+
+    def key_step():
+        if key_mode == 'off':
+            return 'UNKNOWN', {'mode': 'off', 'reason': 'not run: the key search is off by default (--key-search '
+                                                        'synthetic or, under its own Owner act, real)'}
+        expected = memo.get('provider_key_fingerprint')
+        if key_mode == 'synthetic':
+            key = provider_key
+        else:
+            key = real_key_reader(expected)
+            memo['real_key'] = key
+        record_ = inspect_fn(expected, key)
+        checks = [c for p in (record_ or {}).get('properties') or [] for c in p.get('checks') or []
+                  if c.get('check') == INFERENCE_KEY_SEARCH_CHECK]
+        inspected = checks[0].get('verdict') if len(checks) == 1 else None
+        search = key_search().Search(key)
+        for label, data in memo['surfaces']:
+            search.capture(label, data)
+        search.controls()
+        report = search.report()
+        del key
+        detail = {'mode': key_mode, 'real_key_act': real_key_act, 'fingerprint': expected,
+                  'inspect_p5': {'verdict': inspected,
+                                 'observed': checks[0].get('observed') if len(checks) == 1 else None},
+                  'this_run_in_memory': key_search_summary(report)}
+        found = report['verdict'] == 'found' or inspected == 'FAIL'
+        if found:
+            stop('a credential found in a recorded surface (the provider key)')
+            return 'FAIL', detail
+        if inspected == 'PASS' and report['verdict'] == 'not-found':
+            return 'PASS', detail
+        return 'UNKNOWN', detail
+
+    def revoke_step():
+        grant = broker.call('grant', token_fp)
+        if grant.get('state') == 'live':
+            grant = broker.call('revoke', token_fp, 'attempt end', ACP_REVOKER)
+        return ('PASS' if grant.get('state') == 'revoked' else 'FAIL'), {
+            'token_fingerprint': token_fp, 'state': grant.get('state'), 'revocation': grant.get('revocation')}
+
+    def teardown_step():
+        answer = call('DELETE', f'/api/conversations/{cid}')
+        report = facts()
+        left = ours(report)
+        count = call('GET', '/api/conversations/count')
+        memo['deleted'] = answer.get('status')
+        ok = ok_status(answer) and not left and ok_status(count) and count.get('body') == 0
+        return ('PASS' if ok else 'FAIL'), {'delete': answer.get('status'), 'containers_left': len(left),
+                                            'outer_count_after': count.get('body')}
+
+    run('(1) preconditions: the opted-in guest, the forward, the grant, the family, nothing created yet',
+        preconditions)
+    run('(2) the qualification create, admitted and sent through the dispatcher\'s transport', create_step,
+        needs=('ready',))
+    try:
+        run('(3) the sets before the turn: containers, outer and inner conversations', before_step,
+            needs=('created',))
+        run('(4) the fixed prompt sent', prompt_step, needs=('created', 'before'))
+        run('(5) containment while the turn runs: the container view, its connections, the guest-root view',
+            during_step, needs=('sent',))
+        run('(6) the job contract in the qualification conversation (D-6)', job_contract_step, needs=('sent',))
+        run('(7) the turn ends', turn_step, needs=('sent',))
+        run('(8) containment after the turn, the network and the sets', after_step, needs=('sent', 'before'))
+        run('(9) the conversation\'s events: the delegation mechanisms (a) to (d)', events_step, needs=('sent',))
+        run('(10) the broker admitted the provider\'s requests under the token', broker_step, needs=('sent',))
+        run(f'(11) the provider key searched for ({key_mode})', key_step, always=True, needs=('ready',))
+    finally:
+        run('(12) revoke the attempt token at attempt end (decision 0015 section 3.3)', revoke_step, always=True)
+        run('(13) teardown: the conversation deleted, its container gone, no outer conversation left',
+            teardown_step, always=True, needs=('created',))
+    out = {'schema': ACP_QUALIFICATION_SCHEMA, 'operation': 'acp-qualification', 'plan_leaf': 'S-03.3',
+           'labels': labels(profile), 'profile': profile['name'], 'instance': name, 'conversation': cid,
+           'rule': ACP_QUALIFICATION_RULE, 'assumed': ACP_ASSUMED, 'prompt': {
+               'name': prompt, 'text': ACP_QUALIFICATION_PROMPTS[prompt]}, 'acp_model': acp_model,
+           'key_search': key_mode, 'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
+           'result': custody_verdict(steps, stop_conditions), 'stop_conditions': stop_conditions,
+           'transport_calls': transport.calls, 'token_echoes': memo['echoes'], 'steps': steps}
+    out = redact_secret(out, attempt_token, f'<attempt token {token_fp} redacted>')
+    out['attempt_token'] = {'fingerprint': token_fp, 'redacted_from_record': out.pop('redactions')}
+    for key in (provider_key, memo.pop('real_key', None)):
+        if key is not None and key_search().Search(key).holds(json.dumps(out, sort_keys=True, default=str)):
+            raise Refused('SECRET', 'the acp-qualification record would hold the provider key: not written')
+    out['record'] = write_record(idir, 'acp-qualification', out)
     if out_file is not None:
         write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
         out['out'] = str(out_file)
@@ -14795,7 +15505,7 @@ def main(argv=None):
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
                'job-access-probe', 'containment-probe', 'drill', 'image-inspect',
-               'inference-forward'):
+               'inference-forward', 'acp-qualification'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -14867,6 +15577,24 @@ def main(argv=None):
             p.add_argument('--provider-key-fingerprint',
                            help="S-03.2: sha256:<16 hex digits>, the broker start receipt's "
                                 'provider-key fingerprint; the key piped must be its key')
+        if op == 'acp-qualification':
+            p.add_argument('--attempt-token-stdin', action='store_true',
+                           help='S-03.3 (required): read the attempt token, issued by inference_control.py issue '
+                                'for the reserved conversation ' + ACP_QUALIFICATION_CONVERSATION_ID + ', from '
+                                'standard input, never argv; records carry its fingerprint only')
+            p.add_argument('--prompt', required=True, choices=sorted(ACP_QUALIFICATION_PROMPTS),
+                           help='the fixed prompt the Owner\'s act A6 names (no repository content)')
+            p.add_argument('--acp-model', required=True,
+                           help="the create's acp_model: one model of the grant and of the family's allowlist")
+            p.add_argument('--key-search', choices=ACP_KEY_MODES, default='off',
+                           help='off (default); synthetic: the synthetic key on the next line of standard input '
+                                '(needs --provider-key-fingerprint); real: the provider key through the '
+                                'credential provider, only with --real-key-act')
+            p.add_argument('--provider-key-fingerprint',
+                           help="synthetic: sha256:<16 hex digits>, the broker start receipt's provider key")
+            p.add_argument('--real-key-act',
+                           help="real: the Owner's act that authorizes reading the provider key for the search")
+            p.add_argument('--out', help='also write the record to this new file')
         if op == 'inference-forward':
             p.add_argument('--action', required=True, choices=FORWARD_ACTIONS,
                            help='decision 0015: start (idempotent), status or stop the SSH remote '
@@ -14982,6 +15710,16 @@ def main(argv=None):
                                       attempt_token=token, provider_key=key)
         elif op == 'inference-forward':
             result = inference_forward(ctx, args.name, args.action, args.broker_port)
+        elif op == 'acp-qualification':
+            if not args.attempt_token_stdin:
+                raise Refused('REFUSED', 'acp-qualification needs --attempt-token-stdin (the token from the '
+                              'inference_control.py issue pipe)')
+            token = read_attempt_token(sys.stdin)
+            key = read_provider_key(sys.stdin, args.provider_key_fingerprint) \
+                if args.key_search == 'synthetic' else None
+            result = acp_qualification_run(ctx, args.name, token, args.prompt, args.acp_model, args.key_search,
+                                           provider_key=key, provider_key_fingerprint=args.provider_key_fingerprint,
+                                           real_key_act=args.real_key_act, out_path=args.out)
         elif op == 'containment-probe':
             result = containment_probe(ctx, args.name, args.out, args.token_fingerprint,
                                        args.sensitivity,
@@ -15001,7 +15739,7 @@ def main(argv=None):
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if result.get('operation') in ('check-surfaces', 'netprobe', 'smoke', 'conversation-smoke',
                                    'admission-probe', 'job-access-probe', 'containment-probe',
-                                   'drill'):
+                                   'drill', 'acp-qualification'):
         return 0 if result.get('result') == 'PASS' else 1
     failed = result.get('result') in ('unavailable', 'not-ready') or \
         'FAIL' in (result.get('verdicts') or {}).values() or \
