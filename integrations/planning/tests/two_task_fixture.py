@@ -92,7 +92,11 @@ def git(repo, *args, env=None):
     # core.longpaths: a fixture path below a long TEMP can pass Windows' 260-character limit
     # (the archived qual-02 spec is 114 characters below the repository); git for Windows then
     # needs it to stat the file. Other platforms ignore the setting.
-    result = subprocess.run(['git', '-c', 'core.longpaths=true', '-C', str(repo), *args],
+    # maintenance.auto=false: a fixture commit does not start `git maintenance run --auto`, one
+    # more process per commit (about 30 ms here) whose thresholds a fixture never reaches; the
+    # commit and the repository are the same (plan leaf F-09).
+    result = subprocess.run(['git', '-c', 'core.longpaths=true', '-c', 'maintenance.auto=false',
+                             '-C', str(repo), *args],
                             capture_output=True, text=True,
                             encoding='utf-8', timeout=WAIT_CEILING_S, stdin=subprocess.DEVNULL,
                             env={**os.environ, **GIT_ENV, **(env or {})})

@@ -111,6 +111,12 @@ _golden_root = None
 _golden = {}
 
 
+def append_config(path, text):
+    """Append TEXT (whole sections, LF line ends, as git writes them) to the git config file PATH."""
+    with open(path, 'a', encoding='utf-8', newline='\n') as handle:
+        handle.write(text)
+
+
 def _golden_repositories(files):
     """(directory holding 'work' and 'origin.git', initial commit) for FILES ({path: bytes})."""
     global _golden_root
@@ -136,11 +142,15 @@ def _golden_repositories(files):
         subprocess.run(['git', 'init', '-q', '--template=', '-b', 'main', str(root)], env=env, check=True)
         subprocess.run(['git', 'init', '-q', '--template=', '--bare', '-b', 'main', str(remote)], env=env,
                        check=True)
-        # core.longpaths in both repositories' own configuration (fixture only; the copies keep
-        # it): under a long TEMP the bare origin's receive quarantine passes 260 characters.
-        for repository in (root, remote):
-            subprocess.run(['git', '-C', str(repository), 'config', 'core.longpaths', 'true'], env=env,
-                           check=True, capture_output=True, timeout=TIMEOUT)
+        # The fixture's own configuration, appended to the file `git init` wrote, as `git config`
+        # and `git remote add` would set it, without a launch each (plan leaf F-09); the copies
+        # keep it. core.longpaths in both repositories: under a long TEMP the bare origin's
+        # receive quarantine passes 260 characters. maintenance.auto=false in both: a commit or a
+        # receive does not start `git maintenance run --auto` (one more process each, whose
+        # thresholds these repositories never reach).
+        local = '[core]\n\tlongpaths = true\n[maintenance]\n\tauto = false\n'
+        append_config(remote / 'config', local)
+        append_config(root / '.git' / 'config', local)
         for rel, data in files.items():
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,11 +160,12 @@ def _golden_repositories(files):
         git('-c', f'core.hooksPath={no_hooks}', 'commit', '-q', '-m', 'add the gate')
         # A relative URL: every copy's 'origin' is its own bare repository beside its work tree,
         # as git resolves the path from the work tree it runs in (no set-url per copy; F-09).
-        git('remote', 'add', 'origin', '../origin.git')
+        append_config(root / '.git' / 'config',
+                      '[remote "origin"]\n\turl = ../origin.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n')
         git('-c', f'core.hooksPath={no_hooks}', 'push', '-q', 'origin', 'main')
-        git('config', 'core.hooksPath', '.githooks')
-        initial = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], env=env, check=True,
-                                 capture_output=True).stdout.decode('ascii').strip()
+        append_config(root / '.git' / 'config', '[core]\n\thooksPath = .githooks\n')
+        # The commit, from the loose ref git just wrote (as `git rev-parse HEAD` answers).
+        initial = (root / '.git' / 'refs' / 'heads' / 'main').read_text(encoding='ascii').strip()
         _golden[key] = (base, initial)
     return _golden[key]
 

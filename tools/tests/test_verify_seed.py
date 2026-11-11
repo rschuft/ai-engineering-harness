@@ -93,8 +93,10 @@ def rehash(root, rel):
 
 
 def git(root, *args):
-    return subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True,
-                          env=GIT_ENV, check=True).stdout.strip()
+    # maintenance.auto=false: a commit does not start `git maintenance run --auto` (one more
+    # process, whose thresholds these repositories never reach; plan leaf F-09).
+    return subprocess.run(['git', '-c', 'maintenance.auto=false', '-C', str(root), *args],
+                          capture_output=True, text=True, env=GIT_ENV, check=True).stdout.strip()
 
 
 def git_available():
