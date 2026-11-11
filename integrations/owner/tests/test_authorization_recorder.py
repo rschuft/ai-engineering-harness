@@ -10,8 +10,11 @@ integration-store receipt and the trailers; each of these is refused with its st
 a stale head (Gitea's 409, and the recorder's own check before it), an altered digest, a replayed or
 expired decision, a missing or non-Owner statement, a missing challenge, protection drift and a token on
 aieh-owner; no token is minted; every bot token is refused both as the recorder's input and for the
-merge; and a lost answer is resolved as unknown by reading, never by merging again. The fake Gitea, its
-password and its tokens are synthetic; every statement is synthetic and no Owner decision.
+merge; and a lost answer is resolved as unknown by reading, never by merging again. The command line's
+protection verifier (the protection check of Owner decision OA-16) runs here against the fake's protection
+auditor over the same loopback server: verified, drift, every unverifiable state, and a rule changed across
+the merge. The fake Gitea, its password and its tokens are synthetic; every statement is synthetic and no
+Owner decision.
 """
 import datetime
 import json
@@ -426,6 +429,97 @@ class OwnerIdentity(OverHttp):
         self.assertNoMerge()
 
 
+class ProtectionCheck(OverHttp):
+    """The command line's protection verifier (AR.protection_verifier: integrations/gitea/protection_check.py),
+    reading as the fake protection auditor with its own keep-alive connection to the same server."""
+
+    def setUp(self):
+        super().setUp()
+        self.provider.entries[AR.protection.ENTRY] = (fg.AUDITOR, fg.BOT_TOKENS[fg.AUDITOR])
+        self.verifier = AR.protection_verifier(self.provider, self.port)
+        self.ctx = self.context()
+
+    def assertNothingSent(self):
+        self.assertNoMerge()
+        self.assertEqual(self.gitea.requests_by('POST'), [])
+        self.assertEqual(self.receipts(), {})
+        self.assertFalse((self.dir / 'state' / 'decisions').exists())
+
+    def test_verified_one_merge_by_aieh_owner_and_only_reads_by_the_auditor(self):
+        number, challenge = self.ready()
+        self.assertEqual(challenge['protection']['verdict'], 'verified')
+        reads = len(self.provider.reads)
+        result = self.record(challenge['shown']['nonce'])
+        # the owner's entry first, then the auditor's, before the merge and after it; never the other way round
+        self.assertEqual(self.provider.reads[reads:], [AR.OWNER_ENTRY, AR.protection.ENTRY, AR.protection.ENTRY])
+        protection = result['protection']
+        self.assertEqual((protection['before']['verdict'], protection['equal']), ('verified', True))
+        self.assertTrue(protection['before']['detail'].startswith('VERIFIED: as declared: 3 rules x 34 fields'))
+        self.assertRegex(protection['before']['digest'], r'^sha256:[0-9a-f]{64}$')
+        self.assertEqual(challenge['protection']['digest'], protection['before']['digest'])
+        self.assertEqual(self.gitea.merge_count(), 1)
+        posts = self.gitea.requests_by('POST')
+        self.assertEqual([(r['auth'], r['doer']) for r in posts], [('basic', AR.OWNER)])  # the merge, as aieh-owner
+        audit = self.gitea.audit.requests
+        self.assertEqual(len(audit), 3 * 13)  # prepare, before and after the merge
+        self.assertEqual({(r['method'], r['auth'], r['doer']) for r in audit}, {('GET', 'token', fg.AUDITOR)})
+        intent = json.loads(self.store.get(AR.RECEIPT_PREFIX + challenge['shown']['nonce']).intent_json)
+        self.assertEqual(intent['protection']['before'], protection['before'])
+        self.secrets_absent(json.dumps(result))
+
+    def test_drift_refuses_before_anything_is_sent_and_the_challenge_stays_usable(self):
+        number, challenge = self.ready()
+        nonce = challenge['shown']['nonce']
+        main = self.gitea.audit.rule('main')
+        main.update(enable_bypass_allowlist=True, bypass_allowlist_usernames=['aieh-bot-builder'])
+        error = self.assertRefused('PROTECTION_DRIFT', self.record, nonce)
+        self.assertIn('main.enable_bypass_allowlist is True, declared False', error.detail)
+        self.assertNothingSent()
+        main.update(enable_bypass_allowlist=False, bypass_allowlist_usernames=[])
+        self.assertEqual(self.record(nonce)['receipt']['state'], 'confirmed')
+
+    def test_every_unverifiable_state_refuses_and_sends_nothing(self):
+        def missing_entry():
+            del self.provider.entries[AR.protection.ENTRY]
+
+        cases = {
+            'CREDENTIAL_MISSING': missing_entry,
+            'CREDENTIAL_REJECTED': lambda: self.gitea.audit.tokens.clear(),
+            'AUDITOR_INVALID': lambda: self.gitea.audit.tokens[fg.BOT_TOKENS[fg.AUDITOR]].update(scopes=['all']),
+            'READ_FAILED': lambda: self.gitea.audit.faults.update(rules=500),
+            'VIEW_INVALID': lambda: self.gitea.audit.rule('main').update(a_new_setting=True),
+            'PRECEDENCE_UNVERIFIED': lambda: setattr(self.gitea.audit, 'effective', '**'),
+        }
+        for code, damage in cases.items():
+            with self.subTest(code=code):
+                self.setUp()
+                number, challenge = self.ready()
+                damage()
+                error = self.assertRefused('PROTECTION_UNVERIFIED', self.record, challenge['shown']['nonce'])
+                self.assertTrue(error.detail.startswith(f'{code}: '), error.detail)
+                self.assertNothingSent()
+                self.secrets_absent(error.detail)
+
+    def test_a_rule_changed_across_the_merge_is_disclosed(self):
+        number, challenge = self.ready()
+        self.gitea.after_merge = lambda: self.gitea.audit.rule('**').update(required_approvals=2)
+        result = self.record(challenge['shown']['nonce'])
+        protection = result['protection']
+        self.assertEqual((result['receipt']['state'], protection['equal'], protection['code']),
+                         ('confirmed', False, 'PROTECTION_CHANGED_AFTER_MERGE'))
+        self.assertEqual(protection['after']['verdict'], 'drift')
+        self.assertIn('**.required_approvals is 2, declared 0', protection['after']['detail'])
+        self.assertEqual(self.gitea.merge_count(), 1)
+
+    def test_a_refused_statement_reads_neither_credential(self):
+        number, challenge = self.ready()
+        reads, audit = len(self.provider.reads), len(self.gitea.audit.requests)
+        self.assertRefused('STATEMENT_NOT_OWNER', self.record, challenge['shown']['nonce'],
+                           su.statement(attributedTo='person:someone'))
+        self.assertEqual((len(self.provider.reads), len(self.gitea.audit.requests)), (reads, audit))
+        self.assertNothingSent()
+
+
 class BotTokens(OverHttp):
     """Every bot token is refused as the recorder's input and for the merge."""
 
@@ -451,7 +545,9 @@ class BotTokens(OverHttp):
                     SERVER.port, f'/api/v1/repos/{fg.REPOSITORY}/pulls/{number}/merge', method='POST',
                     body=json.dumps({'Do': 'merge', 'head_commit_id': self.gitea.head(number)}).encode(),
                     headers={'Authorization': f'token {token}', 'Content-Type': 'application/json'})
-                self.assertEqual(status, 405, raw)
+                # the protection auditor's read:repository token is refused by its scope (403) before the merge
+                # allowlist is reached (405)
+                self.assertEqual(status, 403 if bot == fg.AUDITOR else 405, raw)
         self.assertNoMerge()
         recorder_calls = [r for r in self.gitea.requests if r['auth'] != 'token']
         self.assertEqual({r['auth'] for r in recorder_calls}, {'basic'})

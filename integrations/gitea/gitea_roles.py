@@ -2,8 +2,11 @@
 0009 and 0010).
 
 One Gitea account per role of policy/role-tokens.json that holds a Gitea credential: the planner, the
-builder and the reviewer (cred-gitea-bot-*), and the authorization verifier's read-only identity
-(cred-verifier-read). Each is created with Gitea's own CLI as a restricted, non-administrator account of
+builder and the reviewer (cred-gitea-bot-*), the authorization verifier's read-only identity
+(cred-verifier-read), and the protection auditor (cred-gitea-protection-audit; Owner decision OA-16): a
+read:repository token of an account that is a repository administrator of the fixture only, which the
+authorization recorder's protection check (protection_check.py) uses to read the branch protection rules
+that Gitea 28.3.0 serves to repository administrators only. Each is created with Gitea's own CLI as a restricted, non-administrator account of
 Gitea's Bot type (`admin user create --user-type Bot --restricted`, no password: it cannot sign in
 interactively). Each role's token is minted with `admin user generate-access-token --raw --scopes ...`
 using the narrowest scopes Gitea 28.3.0 can express for the role; the CLI's standard output is captured
@@ -14,7 +17,7 @@ gitea_host's CredentialProvider, which the harness's factory chooses
 (integrations/credentials/credential_provider.py, plan leaf F-06.3).
 
 The fixture is Gitea administration (op-gitea-administration): a disposable organization with one
-private repository, its collaborators and branch protection. Gitea's CLI cannot create organizations,
+private repository, its merge settings, its collaborators and branch protection. Gitea's CLI cannot create organizations,
 collaborators or protection rules, so `fixture` acts through the API as the site administrator, by HTTP
 basic authentication with the harness-held password that `task gitea:finalize-credentials` stored
 (Owner directive of 2026-11-07), read from the credential provider into memory. No token is minted for
@@ -79,6 +82,13 @@ ROLES = {
                  'credential': 'cred-gitea-bot-reviewer', 'permission': 'read'},
     'verifier': {'user': host.BOT_ACCOUNTS['verifier'], 'scopes': ('read:repository',),
                  'credential': 'cred-verifier-read', 'permission': 'read'},
+    # Owner decision OA-16: repository-administrator collaboration on the fixture only, so that Gitea serves
+    # it the branch protection rules (reqAdmin), and a token that can only read (read:repository: every
+    # POST, PUT, PATCH and DELETE under /repos needs the write scope). Its custodian is the authorization
+    # recorder, whose protection check alone reads the entry (decision 0012 point 6, Proposed).
+    'protection-audit': {'user': host.BOT_ACCOUNTS['protection-audit'], 'scopes': ('read:repository',),
+                         'credential': 'cred-gitea-protection-audit', 'permission': 'admin',
+                         'custodian': 'the authorization recorder (its protection check)'},
 }
 FIXTURE_ORG, FIXTURE_REPO, DEFAULT_BRANCH = 'aieh-authz-fixture', 'authz', 'main'
 PROPOSAL_PATTERN = 'work/*'
@@ -158,9 +168,26 @@ def protection_rules() -> list[dict]:
 
 
 def collaborators() -> dict:
-    """Repository permission per account: the bots per role; the Owner account writes, because Gitea
-    admits only accounts with write access to a merge allowlist."""
+    """Repository permission per account: the bots per role (the protection auditor admin); the Owner
+    account writes, because Gitea admits only accounts with write access to a merge allowlist."""
     return {**{spec['user']: spec['permission'] for spec in ROLES.values()}, host.OWNER: 'write'}
+
+
+def repository_settings() -> dict:
+    """The fixture repository's settings that protection depends on, as Gitea 28.3.0's repository view names
+    them (modules/structs/repo.go): private, not archived, its default branch, and merge commits as the only
+    merge style (G-03.1's authorization branch); no manual merge (a pull request marked merged without a
+    merge). apply_fixture applies them with PATCH /repos/{owner}/{repo}; the protection check compares them."""
+    return {'private': True, 'archived': False, 'default_branch': DEFAULT_BRANCH, 'allow_merge_commits': True,
+            'allow_rebase': False, 'allow_rebase_explicit': False, 'allow_squash_merge': False,
+            'allow_fast_forward_only_merge': False, 'allow_manual_merge': False, 'autodetect_manual_merge': False,
+            'default_merge_style': 'merge'}
+
+
+# The teams with access to the fixture repository, with their access level: the organization's Owners team
+# only, which Gitea creates with the organization and gives every repository of it (includes all
+# repositories). Not applied by apply_fixture; compared by the protection check.
+FIXTURE_TEAMS = {'Owners': 'owner'}
 
 
 # ---------------------------------------------------------------- the Gitea CLI
@@ -274,10 +301,11 @@ def read_token(provider, role: str) -> str | None:
 
 def store_token(provider, role: str, token: str, port: int) -> None:
     spec = ROLES[role]
+    custodian = spec.get('custodian', 'the management dispatcher')
     provider.set(target(role), spec['user'], token,
                  f'Gitea access token of {spec["user"]} ({role}; scopes {",".join(spec["scopes"])}) on the AIEH '
                  f'Gitea at http://{host.LOOPBACK}:{port}/ (plan leaf S-01.2.2). Bootstrap custody: the Owner '
-                 'account; the management dispatcher is its planned custodian.')
+                 f'account; {custodian} is its planned custodian.')
 
 
 def token_check(port: int, token: str, http: Callable = None) -> dict:
@@ -346,6 +374,7 @@ def apply_fixture(api: Api) -> list[dict]:
                                                     'default_branch': DEFAULT_BRANCH, 'readme': 'Default'})
     else:
         require(status, 200, f'GET {repo}', payload)
+    call('PATCH', repo, repository_settings())
     for user, permission in collaborators().items():
         call('PUT', f'{repo}/collaborators/{user}', {'permission': permission})
     status, existing = call('GET', f'{repo}/branch_protections')
@@ -361,7 +390,8 @@ def apply_fixture(api: Api) -> list[dict]:
 
 
 def read_fixture(api: Api) -> dict:
-    """The fixture as Gitea reports it: collaborator permissions and protection rules."""
+    """The fixture as Gitea reports it: the repository's settings, collaborator permissions and protection
+    rules."""
     repo = f'/repos/{FIXTURE_ORG}/{FIXTURE_REPO}'
     status, info = api.call('GET', repo)
     require(status, 200, f'GET {repo}', info)
@@ -373,6 +403,7 @@ def read_fixture(api: Api) -> dict:
     require(status, 200, f'GET {repo}/branch_protections', rules)
     return {'repository': {'full_name': info.get('full_name'), 'private': info.get('private'),
                            'default_branch': info.get('default_branch')},
+            'settings': {k: info.get(k) for k in repository_settings()},
             'collaborator_permissions': perms,
             'branch_protections': [{k: r.get(k) for k in PROTECTION_FIELDS} for r in rules or []]}
 

@@ -10,8 +10,10 @@ fake bots' tokens; the run directory is a fixture directory; the custody inspect
 the presentation's content; phase record refusing a statement that is missing, empty, not JSON,
 model-authored, not the Owner's or naming none of the challenged operations, before any Gitea call or
 credential read; the expected outcome without a protection verifier (PROTECTION_UNVERIFIED, nothing
-merged); with a fake verified verifier, one merge and the stale-head control's 409; and the SECURITY
-FAILURE stop when a fake bot merge succeeds. Every statement here is SYNTHETIC and no Owner decision: it
+merged); with a fake verified verifier, one merge and the stale-head control refused with nothing merged
+and main unmoved, its refusal recorded as observed (409, or 405 or 500: finding F14); the command line's
+protection check (Owner decision OA-16) end to end against the fake's protection auditor, verified and
+drifted; and the SECURITY FAILURE stop when a fake bot merge, or the stale-head control's, succeeds. Every statement here is SYNTHETIC and no Owner decision: it
 stands in, in a fixture, for the Owner's reply the live phase reads from a file.
 """
 import hashlib
@@ -105,11 +107,12 @@ class Prepare(Phases):
                 self.assertTrue(any(c['manifestDigest'] in e for e in c['effects']))
                 self.assertEqual(self.gitea.pulls[c['pull']]['reviews'], [(R.ROLES['reviewer']['user'], 'APPROVED',
                                                                            c['approvedHead'])])
-        self.assertIn('409', presentation['challenges'][1]['expectedOutcome'])
-        self.assertTrue(any('409' in e for e in presentation['challenges'][1]['effects']))
-        # the bot controls: each of the four tokens on each proposal, refused; nothing merged
-        self.assertEqual(len(presentation['botMerges']['statuses']), 8)
-        self.assertEqual(set(presentation['botMerges']['statuses'].values()), {405})
+        self.assertIn('nothing is merged and main does not move', presentation['challenges'][1]['expectedOutcome'])
+        self.assertTrue(any('409 expected' in e and 'F14' in e for e in presentation['challenges'][1]['effects']))
+        # the bot controls: each bot token on each proposal, refused (the auditor's by its scope); nothing merged
+        self.assertEqual(len(presentation['botMerges']['statuses']), 2 * len(R.ROLES))
+        for control, status in presentation['botMerges']['statuses'].items():
+            self.assertEqual(status, 403 if control.startswith('protection-audit ') else 405, control)
         self.assertEqual(self.gitea.merge_count(), 0)
         self.assertEqual({r['doer'] for r in self.gitea.requests_by('POST') if r['path'].endswith('/merge')},
                          {spec['user'] for spec in R.ROLES.values()})
@@ -117,7 +120,7 @@ class Prepare(Phases):
         for c in presentation['challenges']:
             for value in (c['operation'], c['nonce'], c['manifestDigest'], c['approvedHead'], c['challengeExpiresAt']):
                 self.assertIn(value, text)
-        self.assertIn('THE STALE-HEAD CONTROL (expected refusal: 409)', text)
+        self.assertIn('THE STALE-HEAD CONTROL (expected: refused; nothing merges and main does not move)', text)
         self.assertIn('Protection verifier: NONE', text)
         # the exercise wrote no statement, and no secret reached the run directory
         self.assertNotIn('attributedTo"', json.dumps(presentation))
@@ -131,8 +134,21 @@ class Prepare(Phases):
         self.assertEqual(presentation['verifier'], {'available': True, 'note': 'fake verifier'})
         authorize, stale = presentation['challenges']
         self.assertIn('one merge commit', authorize['expectedOutcome'])
-        self.assertIn('409', stale['expectedOutcome'])
+        self.assertIn('nothing is merged and main does not move', stale['expectedOutcome'])
+        self.assertIn('F14', stale['expectedOutcome'])
         self.assertEqual(authorize['protectionAtPrepare']['verdict'], 'verified')
+
+    def test_a_verifier_that_does_not_verify_at_prepare_sets_the_expected_outcome(self):
+        presentation, _ = self.prepared(su.FakeVerifier(default=su.DRIFT))
+        for c in presentation['challenges']:
+            self.assertTrue(c['expectedOutcome'].startswith('refused PROTECTION_DRIFT before anything is sent'),
+                            c['expectedOutcome'])
+
+    def test_the_available_verifier_is_the_command_line_s_protection_check(self):
+        verifier, note = L.available_verifier(self.port, self.provider)
+        self.assertEqual(verifier.__qualname__, 'protection_verifier.<locals>.verifier')
+        self.assertIn('OA-16', note)
+        self.assertIn(AR.protection.AUDITOR, note)
 
     def test_an_approval_of_another_commit_fails_the_phase(self):
         def http(port, path, **kw):
@@ -260,13 +276,53 @@ class Record(Phases):
         self.assertEqual(self.gitea.branches['main'], merged['merge']['mergeCommit'])
         self.assertEqual(self.gitea.merge_count(), 1)
         refused = observed['outcomes'][stale['operation']]
-        self.assertEqual((refused['code'], refused['moved'], refused['receipt']), ('HEAD_STALE', [201], 'failed'))
+        self.assertEqual((refused['code'], refused['moved'], refused['receipt'], refused['giteaStatus'],
+                          refused['merged'], refused['mainMoved']), ('HEAD_STALE', [201], 'failed', 409, False, False))
         self.assertNotEqual(self.gitea.head(stale['pull']), stale['approvedHead'])
         # the stale-head control is sent first, so that A's merge does not leave it behind main
         self.assertEqual([b['head_commit_id'] for b in self.gitea.merge_bodies[-2:]],
                          [stale['approvedHead'], authorize['approvedHead']])
         self.assertEqual(observed['cleanup'], {stale['pull']: 201})
         self.assertEqual(self.gitea.pulls[stale['pull']]['state'], 'closed')
+
+    def test_the_stale_head_control_records_the_refusal_it_observes(self):
+        """Finding F14: after the push Gitea may answer 405 (try again later) or 500 (still checking) instead of
+        409; the control's property is that nothing merges and main does not move."""
+        for status, code, receipt in ((405, 'MERGE_REFUSED', 'failed'), (500, 'OUTCOME_UNKNOWN', 'unknown')):
+            with self.subTest(status=status):
+                self.setUp()
+                verifier = su.FakeVerifier()
+                presentation, _ = self.prepared(verifier)
+                authorize, stale = presentation['challenges']
+                self.gitea.fail_routes['/merge'] = status
+                observed = L.record_phase(self.live(verifier), self.statement_file(
+                    self.synthetic(stale['operation'])), {})
+                refused = observed['outcomes'][stale['operation']]
+                self.assertEqual((refused['code'], refused['receipt'], refused['giteaStatus'], refused['moved'],
+                                  refused['merged'], refused['mainMoved']), (code, receipt, status, [201], False, False))
+                self.assertEqual(self.gitea.merge_count(), 0)
+                self.assertEqual(self.gitea.branches['main'], presentation['mainHead'])
+
+    def test_a_stale_head_control_that_merges_is_a_security_failure(self):
+        verifier = su.FakeVerifier()
+        presentation, _ = self.prepared(verifier)
+        authorize, stale = presentation['challenges']
+        with mock.patch.object(L.AR, 'record', return_value={'merge': 'as if it had merged'}), \
+                self.assertRaisesRegex(L.SecurityFailure, '^SECURITY FAILURE: the stale-head control merged'):
+            L.record_phase(self.live(verifier), self.statement_file(self.synthetic(stale['operation'])), {})
+
+    def test_a_stale_head_control_refused_by_the_protection_check_is_not_reached(self):
+        verifier = su.FakeVerifier()
+        presentation, _ = self.prepared(verifier)
+        authorize, stale = presentation['challenges']
+        verifier.default = su.UNVERIFIED
+        observed = L.record_phase(self.live(verifier), self.statement_file(
+            self.synthetic(*self.operations(presentation))), {})
+        self.assertEqual({op: (o['code'], o.get('moved'), o['receipt']) for op, o in observed['outcomes'].items()},
+                         {stale['operation']: ('PROTECTION_UNVERIFIED', [], None),
+                          authorize['operation']: ('PROTECTION_UNVERIFIED', None, None)})
+        self.assertEqual(self.gitea.merge_count(), 0)
+        self.assertEqual(self.gitea.head(stale['pull']), stale['approvedHead'])
 
     def test_a_stale_head_control_that_cannot_move_the_head_sends_no_merge_and_stops(self):
         verifier = su.FakeVerifier()
@@ -299,6 +355,48 @@ class Record(Phases):
         self.assertEqual(self.gitea.head(stale['pull']), stale['approvedHead'])
         self.assertEqual(self.gitea.merge_count(), 1)
         self.assertEqual(self.gitea.pulls[stale['pull']]['state'], 'closed')
+
+
+class ProtectionCheckEndToEnd(Phases):
+    """The command line's protection check (Owner decision OA-16) in the exercise, against the fake's protection
+    auditor (fake_gitea.FakeGitea.audit): it reads the auditor's entry, verifies, and the merge happens; with
+    drift the record is refused and nothing is merged."""
+
+    def check(self):
+        return AR.protection_verifier(self.provider, self.port, http=self.http)
+
+    def test_verified_one_merge_and_the_stale_head_control(self):
+        verifier = self.check()
+        presentation, _ = self.prepared(verifier)
+        authorize, stale = presentation['challenges']
+        self.assertEqual({c['protectionAtPrepare']['verdict'] for c in presentation['challenges']}, {'verified'})
+        observed = L.record_phase(self.live(verifier), self.statement_file(
+            self.synthetic(*self.operations(presentation))), {})
+        merged = observed['outcomes'][authorize['operation']]
+        self.assertEqual((merged['receipt']['state'], merged['protection']['equal']), ('confirmed', True))
+        self.assertEqual(merged['protection']['before']['verdict'], 'verified')
+        self.assertEqual(observed['outcomes'][stale['operation']]['code'], 'HEAD_STALE')
+        self.assertEqual(self.gitea.merge_count(), 1)
+        audit = self.gitea.audit.requests
+        self.assertTrue(audit)
+        self.assertEqual({(r['method'], r['auth'], r['doer']) for r in audit if not r['path'].endswith('/merge')},
+                         {('GET', 'token', fg.AUDITOR)})
+        merges = [r for r in self.gitea.requests if r['method'] == 'POST' and r['path'].endswith('/merge')
+                  and r['doer'] == AR.OWNER]
+        self.assertEqual({r['auth'] for r in merges}, {'basic'})
+
+    def test_drift_refuses_the_record_and_nothing_is_merged(self):
+        verifier = self.check()
+        presentation, _ = self.prepared(verifier)
+        self.gitea.audit.rule('main')['block_admin_merge_override'] = False
+        observed = L.record_phase(self.live(verifier), self.statement_file(
+            self.synthetic(*self.operations(presentation))), {})
+        for c in presentation['challenges']:
+            outcome = observed['outcomes'][c['operation']]
+            self.assertEqual((outcome['code'], outcome['receipt']), ('PROTECTION_DRIFT', None))
+            self.assertIn('main.block_admin_merge_override', outcome['detail'])
+        self.assertEqual(self.gitea.merge_count(), 0)
+        self.assertEqual(self.gitea.branches['main'], presentation['mainHead'])
 
 
 if __name__ == '__main__':

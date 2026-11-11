@@ -12,7 +12,10 @@ allow, 409 "head out of date" when ``head_commit_id`` is not the head, otherwise
 base and the head as parents and the message title, a blank line, then the message. For the live
 exercise's phase plumbing (test_live_phases.py) it also takes a bot's proposal: ``POST /contents/{path}``
 (a file on a new or existing branch; 403 on the protected branch), ``POST /pulls``, ``POST
-/pulls/{index}/reviews`` and ``PATCH /pulls/{index}`` (closing).
+/pulls/{index}/reviews`` and ``PATCH /pulls/{index}`` (closing). Every request authenticated with the
+protection auditor's token goes to ``audit``, the fake of the protection check's reads
+(integrations/gitea/tests/protection_fake.py: its scope rule refuses that token every write);
+``after_merge`` (a callable) runs after a merge, before its answer.
 
 It is callable in memory (``fake(port, path, method=..., body=..., headers=..., timeout=...)``, the
 signature of gitea_host.http_get) and served over host loopback by ``Server`` (one in-process
@@ -26,12 +29,30 @@ import copy
 import hashlib
 import http.server
 import json
+import importlib.util
+import sys
 import threading
 import urllib.parse
+from pathlib import Path
+
+_GITEA = Path(__file__).resolve().parents[2] / 'gitea'
+
+
+def _load(name, path):
+    if (module := sys.modules.get(name)) is None:
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return module
+
+
+_roles = _load('aieh_gitea_roles', _GITEA / 'gitea_roles.py')
+protection_fake = _load('aieh_gitea_protection_fake', _GITEA / 'tests' / 'protection_fake.py')
 
 REPOSITORY = 'aieh-authz-fixture/authz'
 OWNER = 'aieh-owner'
-BOTS = ('aieh-bot-planner', 'aieh-bot-builder', 'aieh-bot-reviewer', 'aieh-bot-verifier')
+AUDITOR = protection_fake.AUDITOR
+BOTS = ('aieh-bot-planner', 'aieh-bot-builder', 'aieh-bot-reviewer', 'aieh-bot-verifier', AUDITOR)
 # Synthetic secrets: the password of the fake aieh-owner and one token per fake bot (40 hex digits).
 PASSWORD = 'synthetic-owner-password-not-a-real-credential'
 BOT_TOKENS = {bot: hashlib.sha1(f'synthetic token {bot}'.encode()).hexdigest() for bot in BOTS}
@@ -60,7 +81,9 @@ class FakeGitea:
         # 'drop', 'drop-before', 'error-after' or 'move-head'; or a read-back fault: 'strip-trailers',
         # 'digest', 'one-parent', 'merged-by-other', 'ref-moves'
         self.on_merge = None
+        self.after_merge = None       # a callable run after a merge, before its answer
         self.fail_routes = {}         # {substring of the path: HTTP status} answered instead
+        self.audit = protection_fake.ProtectionGitea(_roles)  # the protection auditor's reads
         self.lock = threading.Lock()
 
     # ------------------------------------------------------------------ the repository's history
@@ -138,6 +161,8 @@ class FakeGitea:
                               'sudo': 'sudo' in lowered or 'sudo=' in path})
         if doer is None:
             return self.reply(401, {'message': 'unauthorized'})
+        if (doer, kind) == (AUDITOR, 'token'):
+            return self.audit.handle(method, path, headers, body)
         for fragment, status in self.fail_routes.items():
             if fragment in path:
                 return self.reply(status, {'message': 'a fault of the fake'})
@@ -301,6 +326,8 @@ class FakeGitea:
         self.merges += 1
         if self.on_merge == 'ref-moves':
             self.advance_main({'later.txt': b'a later change\n'})
+        if self.after_merge is not None:
+            self.after_merge()
         if self.on_merge == 'drop':
             return DROP
         if self.on_merge == 'error-after':

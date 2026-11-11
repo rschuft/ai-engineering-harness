@@ -495,7 +495,13 @@ class ManagedRootNeverReached(InMemory):
             with AR.managed_context(None, guard) as ctx:
                 self.assertEqual((ctx.port, ctx.state_dir, ctx.store), (3456, self.dir / 'managed-state', self.store))
                 self.assertIsInstance(ctx.provider, AR.contract.WatchedProvider)
-                self.assertIsNone(ctx.verifier)  # fail closed: no protection verifier until OA-16's is built
+                # the protection check of OA-16 over the same provider and port: with no auditor entry it
+                # answers unverified (fail closed), having read only its own entry and sent nothing
+                self.assertEqual(ctx.verifier.__qualname__, 'protection_verifier.<locals>.verifier')
+                answer = ctx.verifier(fg.REPOSITORY, 'main', 'before-merge')
+                self.assertEqual(answer.status, 'unverified')
+                self.assertTrue(answer.detail.startswith('CREDENTIAL_MISSING: '), answer.detail)
+                self.assertEqual(self.provider.reads, [AR.protection.ENTRY])
                 ctx.provider.get(AR.OWNER_ENTRY)
             with AR.managed_context(4567) as ctx:
                 self.assertEqual(ctx.port, 4567)

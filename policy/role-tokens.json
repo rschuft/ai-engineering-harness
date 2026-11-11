@@ -1435,12 +1435,19 @@
       "principal": "authorization-recorder",
       "agent_controlled": false,
       "grants": {
-        "operations": [],
-        "capabilities": [],
-        "credentials": []
+        "operations": [
+          "op-protection-verify"
+        ],
+        "capabilities": [
+          "cap-read-repositories"
+        ],
+        "credentials": [
+          "cred-gitea-protection-audit"
+        ]
       },
       "custodian_of": [
-        "cred-gitea-owner-account"
+        "cred-gitea-owner-account",
+        "cred-gitea-protection-audit"
       ],
       "denied": [
         "op-gitea-administration",
@@ -1448,18 +1455,41 @@
         "op-effect-receipt-write",
         "cap-code-merge-integration",
         "cred-gitea-admin",
-        "cred-executor-identity"
+        "cred-executor-identity",
+        "cap-protected-ref-push",
+        "cap-open-pr",
+        "cap-push-proposal-branch"
       ],
       "realization": [],
-      "issuance": [],
-      "revocation": [],
-      "target": "Custodian of cred-gitea-owner-account, the delegated performer of op-protected-merge, whose principal stays the Owner: on a recorded Owner decision it merges one exact operation manifest into the protected authorization branch as aieh-owner (Do: merge with head_commit_id; merge commits only; the decision trailers; a write-ahead receipt in the integration store), by HTTP basic authentication with the password read from the credential provider into memory for each command. It never mints or sends a token and never uses sudo, force_merge or auto-merge; it refuses an entry naming another account or holding a token, and an aieh-owner that is an administrator or holds a token. It has no agent-callable or MCP surface and runs only in the main session on an Owner decision (decision 0012, Proposed).",
+      "issuance": [
+        {
+          "credential": "cred-gitea-protection-audit",
+          "issuer": "gitea-site-admin",
+          "delivered_by": null,
+          "delivery": "Planned (Owner decision OA-16): minted by the site administrator through Gitea's CLI (gitea_roles.py provision: generate-access-token --raw, scope read:repository) for the restricted Bot aieh-bot-protection-audit, a repository-administrator collaborator of the admitted repository only, and written by the credential provider into the entry \"AIEH Gitea bot protection-audit\"; the recorder's protection check reads it by name, into memory, for one check. Never in an agent context, a guest, a log or a record (fingerprints only)."
+        }
+      ],
+      "revocation": [
+        {
+          "credential": "cred-gitea-protection-audit",
+          "triggers": [
+            "suspected-exposure",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "gitea-site-admin",
+          "method": "gitea_roles.py rotate protection-audit (revoke through DELETE /api/v1/token, prove the next call is refused, mint and store a new one) or retire protection-audit (revoke, then delete the entry), each with its integration-store receipt; the site administrator can also list and delete the bot's tokens or disable the account. A revoked or missing token makes the protection check answer unverified, so the recorder merges nothing.",
+          "rotation_owner": "gitea-site-admin"
+        }
+      ],
+      "target": "Custodian of cred-gitea-owner-account, the delegated performer of op-protected-merge, whose principal stays the Owner: on a recorded Owner decision it merges one exact operation manifest into the protected authorization branch as aieh-owner (Do: merge with head_commit_id; merge commits only; the decision trailers; a write-ahead receipt in the integration store), by HTTP basic authentication with the password read from the credential provider into memory for each command. It never mints or sends a token and never uses sudo, force_merge or auto-merge; it refuses an entry naming another account or holding a token, and an aieh-owner that is an administrator or holds a token. It has no agent-callable or MCP surface and runs only in the main session on an Owner decision (decision 0012, Proposed). Its protection check (Owner decision OA-16; decision 0012 point 6, Proposed) is the last read before each merge and the first after it: as aieh-bot-protection-audit, a restricted Gitea Bot with repository-administrator collaboration on the admitted repository only and a token of scope exactly read:repository (cred-gitea-protection-audit, whose custodian it is), it reads every protection rule (34 fields each), the exact rule set and the effective rule, the merge settings, the collaborators with their permissions, the teams and the deploy keys, and refuses the merge on drift or on anything it cannot verify (integrations/gitea/protection_check.py). Planned realization, verified at P-04.2's live qualification: the auditor reads the rules and every write by its token is refused.",
       "bootstrap": {
         "observed_performer": null,
         "evidence": [
           "integrations/owner/README.md"
         ],
-        "note": "Built at P-04.2 (task owner:authorize) and exercised against a fake Gitea only; it has merged nothing on a real Gitea. During bootstrap it runs as a process of the Owner's account, which the host-side bootstrap agents share (fd-bootstrap-shared-identity; decision 0010)."
+        "note": "Built at P-04.2 (task owner:authorize) and exercised against a fake Gitea only; it has merged nothing on a real Gitea. During bootstrap it runs as a process of the Owner's account, which the host-side bootstrap agents share (fd-bootstrap-shared-identity; decision 0010). Its protection check is built and tested against a fake Gitea only (OA-16); the auditor's account and token are not provisioned, so the check answers unverified and the recorder refuses every merge."
       },
       "status": "planned",
       "sources": [
@@ -1469,7 +1499,8 @@
       ],
       "findings": [
         "fd-bootstrap-shared-identity",
-        "fd-owner-authorization-record"
+        "fd-owner-authorization-record",
+        "fd-protection-check-toctou"
       ]
     },
     {

@@ -97,9 +97,10 @@ CRED_TARGETS = {SITE_ADMIN: 'AIEH Gitea site-admin (temporary)', OWNER: 'AIEH Gi
 # the fixture administration; never by agents, bots or tests.
 FINAL_TARGETS = {SITE_ADMIN: 'AIEH Gitea site-admin', OWNER: 'AIEH Gitea owner'}
 FINAL_PASSWORD_BYTES = 32  # secrets.token_urlsafe(32): 43 characters, 256 bits
-# The role bots of S-01.2.2 (gitea_roles.py): restricted, non-administrator Gitea Bot accounts.
+# The role bots of S-01.2.2 (gitea_roles.py): restricted, non-administrator Gitea Bot accounts; and the
+# protection auditor of Owner decision OA-16 (decision 0012 point 6; integrations/gitea/protection_check.py).
 BOT_ACCOUNTS = {'planner': 'aieh-bot-planner', 'builder': 'aieh-bot-builder', 'reviewer': 'aieh-bot-reviewer',
-                'verifier': 'aieh-bot-verifier'}
+                'verifier': 'aieh-bot-verifier', 'protection-audit': 'aieh-bot-protection-audit'}
 SECRET_NAMES = ('SECRET_KEY', 'INTERNAL_TOKEN', 'JWT_SECRET')
 RANDOM_PASSWORD_LENGTH = 24
 READY_CEILING_S, STOP_CEILING_S = 120.0, 60.0

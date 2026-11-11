@@ -84,6 +84,7 @@ class FakeGitea:
 
     def __init__(self, fail_path=None, admin_password=ADMIN_PASSWORD):
         self.tokens, self.orgs, self.repos, self.collab, self.rules = {}, set(), set(), {}, {}
+        self.settings = {}
         self.fail_path, self.requests, self.admin_password = fail_path, [], admin_password
 
     def __call__(self, port, path, method='GET', body=None, headers=None, timeout=5.0):
@@ -127,8 +128,10 @@ class FakeGitea:
         if route == repo:
             if R.FIXTURE_REPO not in self.repos:
                 return self.reply(404, {})
+            if method == 'PATCH':
+                self.settings.update(data)
             return self.reply(200, {'full_name': f'{R.FIXTURE_ORG}/{R.FIXTURE_REPO}', 'private': True,
-                                    'default_branch': R.DEFAULT_BRANCH})
+                                    'default_branch': R.DEFAULT_BRANCH, **self.settings})
         if route.startswith(f'{repo}/collaborators/'):
             user = route.split('/')[5]
             if method == 'PUT':
@@ -153,7 +156,7 @@ class FakeGitea:
 
 class MemoryProvider(G.CredentialProvider):
     def __init__(self, entries=None):
-        self.entries, self.reads = dict(entries or {}), []
+        self.entries, self.reads, self.comments = dict(entries or {}), [], {}
 
     def get(self, name):
         self.reads.append(name)
@@ -162,6 +165,7 @@ class MemoryProvider(G.CredentialProvider):
     def set(self, name, user, secret, comment=''):
         assert isinstance(secret, str)
         self.entries[name] = (user, secret)
+        self.comments[name] = comment
 
     def delete(self, name):
         return self.entries.pop(name, None) is not None
@@ -256,8 +260,13 @@ class TestFixture(Base):
         self.assertEqual(len(self.cli.minted), self.minted_before)  # no administration token
         self.assertEqual(report['admin_tokens_after'], [])
         self.assertEqual(self.gitea.collab, R.collaborators())
+        self.assertEqual(self.gitea.collab[R.ROLES['protection-audit']['user']], 'admin')
         self.assertEqual(set(self.gitea.rules), {r['rule_name'] for r in R.protection_rules()})
         self.assertEqual(report['fixture']['collaborator_permissions'], R.collaborators())
+        self.assertEqual(self.gitea.settings, R.repository_settings())  # PATCH /repos/{owner}/{repo}
+        self.assertEqual(report['fixture']['settings'], R.repository_settings())
+        patch = next(a for a in report['actions'] if a['method'] == 'PATCH')
+        self.assertEqual(patch['path'], f'/repos/{R.FIXTURE_ORG}/{R.FIXTURE_REPO}')
         self.assert_no_token(json.dumps(report))
         self.assertFalse(any('/admin/' in path for _m, path, _a in self.gitea.requests))
         admin_calls = {a for _m, _p, a in self.gitea.requests if _p.startswith('/api/v1/orgs') or 'branch_' in _p}
@@ -317,6 +326,17 @@ class TestRotate(Base):
         with self.assertRaises(G.GiteaError) as caught:
             R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
         self.assertEqual(caught.exception.code, 'ENTRY_MISSING')
+
+    def test_the_protection_auditor_rotates_like_every_role(self):
+        self.provision()
+        self.assertIn('the authorization recorder (its protection check) is its planned custodian',
+                      self.store.comments[R.target('protection-audit')])
+        self.assertIn('the management dispatcher is its planned custodian', self.store.comments[R.target('builder')])
+        old = self.store.get(R.target('protection-audit'))[1]
+        report = R.rotate('protection-audit', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
+        self.assertTrue(report['revocation']['revoked'])
+        self.assertNotEqual(self.store.get(R.target('protection-audit'))[1], old)
+        self.assertEqual(report['new_check']['scopes'], ['read:repository'])
 
     def test_entry_naming_another_account_refused(self):
         self.store.entries[R.target('builder')] = ('aieh-owner', 'x' * 40)
@@ -505,6 +525,25 @@ class TestPolicy(unittest.TestCase):
             self.assertEqual(rule['merge_whitelist_usernames'], [G.OWNER])
         self.assertEqual(R.collaborators()[R.ROLES['reviewer']['user']], 'read')
         self.assertEqual(R.collaborators()[R.ROLES['verifier']['user']], 'read')
+        self.assertEqual(R.collaborators()[R.ROLES['protection-audit']['user']], 'admin')
+
+    def test_the_protection_auditor(self):
+        """Owner decision OA-16: a restricted Bot, repository administrator of the fixture only, with a token of
+        scope exactly read:repository."""
+        spec = R.ROLES['protection-audit']
+        self.assertEqual((spec['user'], spec['scopes'], spec['credential'], spec['permission']),
+                         ('aieh-bot-protection-audit', ('read:repository',), 'cred-gitea-protection-audit', 'admin'))
+        self.assertEqual(G.BOT_ACCOUNTS['protection-audit'], spec['user'])
+        self.assertEqual(R.target('protection-audit'), 'AIEH Gitea bot protection-audit')
+        self.assertEqual([r for r, s in R.ROLES.items() if s['permission'] == 'admin'], ['protection-audit'])
+
+    def test_the_repository_settings_and_teams(self):
+        self.assertEqual(R.repository_settings(), {
+            'private': True, 'archived': False, 'default_branch': R.DEFAULT_BRANCH, 'allow_merge_commits': True,
+            'allow_rebase': False, 'allow_rebase_explicit': False, 'allow_squash_merge': False,
+            'allow_fast_forward_only_merge': False, 'allow_manual_merge': False, 'autodetect_manual_merge': False,
+            'default_merge_style': 'merge'})
+        self.assertEqual(R.FIXTURE_TEAMS, {'Owners': 'owner'})
 
     # The JSON names of Gitea 28.3.0's BranchProtection (modules/structs/repo_branch.go), in its order,
     # without branch_name (deprecated alias), created_at and updated_at.

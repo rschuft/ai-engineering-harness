@@ -256,13 +256,13 @@
       "owner_authority": false,
       "independently_isolated": true,
       "identity": {
-        "planned": "A deterministic, non-model recorder, the sole custodian of cred-gitea-owner-account (decision 0012, Proposed). On a recorded Owner decision it merges one exact operation manifest into the protected authorization branch as aieh-owner: HTTP basic authentication with the password read from the credential provider into memory for each command; never a token, sudo, force_merge or auto-merge; merge commits only, with head_commit_id and the decision trailers; a write-ahead receipt in the integration store. It has no agent-callable or MCP surface and runs only in the main session on an Owner decision.",
+        "planned": "A deterministic, non-model recorder, the sole custodian of cred-gitea-owner-account (decision 0012, Proposed). On a recorded Owner decision it merges one exact operation manifest into the protected authorization branch as aieh-owner: HTTP basic authentication with the password read from the credential provider into memory for each command; never a token, sudo, force_merge or auto-merge; merge commits only, with head_commit_id and the decision trailers; a write-ahead receipt in the integration store. It has no agent-callable or MCP surface and runs only in the main session on an Owner decision. It is also custodian of cred-gitea-protection-audit, the read-only token of the protection auditor aieh-bot-protection-audit (Owner decision OA-16), which its protection check alone reads, by name, into memory, for one check, as the last read before each merge and once after it; the two entries are read by two modules and never by the same code path.",
         "observed": null
       },
       "status": "planned",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2"],
       "findings": ["fd-bootstrap-shared-identity", "fd-owner-authorization-record"],
-      "notes": "Built at P-04.2 (integrations/owner/authorization_recorder.py, task owner:authorize) and exercised against a fake Gitea only; it has merged nothing on a real Gitea. During bootstrap it runs as a process of the Owner's Windows account, which the host-side bootstrap agents share (fd-bootstrap-shared-identity; decision 0010)."
+      "notes": "Built at P-04.2 (integrations/owner/authorization_recorder.py, task owner:authorize) and exercised against a fake Gitea only; it has merged nothing on a real Gitea. Its protection check (integrations/gitea/protection_check.py) is built and tested against a fake Gitea only; the auditor's account and token are not provisioned, so the check answers unverified and the recorder refuses every merge. During bootstrap it runs as a process of the Owner's Windows account, which the host-side bootstrap agents share (fd-bootstrap-shared-identity; decision 0010): any process of that account can read both of its entries."
     },
     {
       "id": "inference-broker",
@@ -820,6 +820,29 @@
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"],
       "evidence": ["evidence/S-01.2.2-segregated-credentials.md"],
       "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "cred-gitea-protection-audit",
+      "name": "The protection auditor's read-only Gitea token",
+      "authority": "scoped",
+      "issuer": "gitea-site-admin",
+      "holder": "authorization-recorder",
+      "manager": "authorization-recorder",
+      "readable_by": [],
+      "storage": "Planned (Owner decision OA-16, 2026-11-11), not provisioned: the account aieh-bot-protection-audit, a restricted, non-administrator Gitea Bot account without a password, created with Gitea's CLI by gitea_roles.py provision (admin user create --user-type Bot --restricted), and one token minted by generate-access-token --raw into one credential provider entry, \"AIEH Gitea bot protection-audit\" (bootstrap: a generic Credential Manager entry of the Owner's account); records carry fingerprints only. Its custodian is the authorization recorder: its protection check (integrations/gitea/protection_check.py) alone reads the entry, by name, into memory, for one check, never in the code path that reads cred-gitea-owner-account. Never sent anywhere but in the Authorization header of the check's fixed GET requests to the host-loopback Gitea.",
+      "scope": "Token scope read:repository only, of an account that is a collaborator with admin permission on the admitted authorization repository only (the S-01.2.2 fixture aieh-authz-fixture/authz), so that Gitea 28.3.0 serves it the branch protection rules (reqAdmin), every collaborator's permission, the teams and the deploy keys. Gitea enforces the scope by HTTP method (every POST, PUT, PATCH and DELETE under /repos needs the write scope, and a token presented as a basic-authentication password keeps its scope): it can change no rule, collaborator or setting, merge, push or sudo (read at the pinned source; to be observed live). It can delete itself (DELETE /api/v1/token needs no scope), which only makes the check fail closed.",
+      "lifetime": "Gitea 28.3.0 has no token lifetime; rotated by gitea_roles.py rotate protection-audit and retired by gitea_roles.py retire protection-audit, each act with its integration-store receipt.",
+      "rotation_revocation_owner": "gitea-site-admin",
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2",
+        "evidence/P-04.2-protection-check-recommendation.md"
+      ],
+      "findings": [
+        "fd-bootstrap-shared-identity",
+        "fd-protection-check-toctou"
+      ]
     },
     {
       "id": "cred-executor-identity",
@@ -1692,7 +1715,7 @@
       "credentials": ["cred-gitea-owner-account"],
       "assets": ["repo-gitea-authorization", "gitea-server"],
       "planned_performer": "authorization-recorder",
-      "performed_via": "Delegated: the authorization recorder (P-04.2; decision 0012, Proposed) performs the merge as aieh-owner on a recorded Owner decision; the Owner never operates Gitea. Not performed yet: no authorization repository exists, and the recorder has run against a fake Gitea only.",
+      "performed_via": "Delegated: the authorization recorder (P-04.2; decision 0012, Proposed) performs the merge as aieh-owner on a recorded Owner decision; the Owner never operates Gitea. Before the merge the recorder requires the protection check (op-protection-verify) to answer verified, and it asks again after the read-back. Not performed yet: no authorization repository exists, and the recorder has run against a fake Gitea only.",
       "status": "planned",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2"],
       "findings": ["fd-owner-authorization-record"]
@@ -1816,6 +1839,29 @@
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
     },
     {
+      "id": "op-protection-verify",
+      "name": "Verify the protection around a protected merge",
+      "mechanism": "Read, as the protection auditor, every branch protection rule of the admitted repository (34 fields each, the bypass allowlist included), the exact rule set, Gitea's own effective rule for the protected branch and its precedence, the repository's merge settings, the collaborators with their permissions, the teams and the deploy keys, and compare them with the harness's total declaration, immediately before and after each protected merge; anything it cannot establish refuses the merge (integrations/gitea/protection_check.py)",
+      "principal": "authorization-recorder",
+      "owner_only": false,
+      "credentials": [
+        "cred-gitea-protection-audit"
+      ],
+      "assets": [
+        "repo-gitea-authorization",
+        "gitea-server"
+      ],
+      "status": "planned",
+      "sources": [
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
+        "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2",
+        "evidence/P-04.2-protection-check-recommendation.md"
+      ],
+      "findings": [
+        "fd-protection-check-toctou"
+      ]
+    },
+    {
       "id": "op-effect-apply",
       "name": "Apply an authorized external effect",
       "mechanism": "The restricted executor: typed, allowlisted operation kinds; target and precondition recheck; one-time effect key",
@@ -1882,7 +1928,7 @@
       "id": "fd-bootstrap-shared-identity",
       "kind": "limit",
       "title": "Host-side bootstrap agents share the Owner's Windows account",
-      "detail": "The host-side agent sessions run as the Owner's account and are not independently isolated security principals. Every credential and store in that account's custody (the public-repository push credential, the provider login, the guest SSH keys, the exported session keys, QMP, the guest-state root, the integration store) is reachable by them. Their elevation is gated by the Owner's interactive UAC consent, which is not an OS security boundary. This is the accepted bootstrap limit; the guest boundary is the boundary against untrusted agents, and the genuine OS boundary for privileged effects is the executor's separate identity (G-04.2.1). No credential is designated to an agent principal here; the reachability is disclosed, not prevented. Since F-06.1 this includes the host-loopback Gitea: any process of the Owner's account, host agents included, can read Gitea's app.ini secrets (SECRET_KEY, INTERNAL_TOKEN, JWT_SECRET) and its SQLite database under the managed data root. The INTERNAL_TOKEN reaches Gitea's private API, and write access to the database can change any account, its administrator flag or its password hash, so such a process can forge or take over Gitea sessions and identities, the site administrator's and the Owner account's included. The two temporary passwords in Credential Manager, and after task gitea:finalize-credentials the two harness-held final passwords, are readable the same way. The final passwords exist only as Gitea's password hashes. Directory placement is not a security boundary (decision 0009, point 11). Since S-01.2.2 it also includes the four bot tokens in Credential Manager (\"AIEH Gitea bot <role>\"), which CredReadW returns to any process of the account without a prompt, and Gitea's CLI, which mints a token for any account, the site administrator's and the Owner account's included, without a password. None of this is reachable from the execution guest (profiles P3-P5, F-03.3.1).",
+      "detail": "The host-side agent sessions run as the Owner's account and are not independently isolated security principals. Every credential and store in that account's custody (the public-repository push credential, the provider login, the guest SSH keys, the exported session keys, QMP, the guest-state root, the integration store) is reachable by them. Their elevation is gated by the Owner's interactive UAC consent, which is not an OS security boundary. This is the accepted bootstrap limit; the guest boundary is the boundary against untrusted agents, and the genuine OS boundary for privileged effects is the executor's separate identity (G-04.2.1). No credential is designated to an agent principal here; the reachability is disclosed, not prevented. Since F-06.1 this includes the host-loopback Gitea: any process of the Owner's account, host agents included, can read Gitea's app.ini secrets (SECRET_KEY, INTERNAL_TOKEN, JWT_SECRET) and its SQLite database under the managed data root. The INTERNAL_TOKEN reaches Gitea's private API, and write access to the database can change any account, its administrator flag or its password hash, so such a process can forge or take over Gitea sessions and identities, the site administrator's and the Owner account's included. The two temporary passwords in Credential Manager, and after task gitea:finalize-credentials the two harness-held final passwords, are readable the same way. The final passwords exist only as Gitea's password hashes. Directory placement is not a security boundary (decision 0009, point 11). Since S-01.2.2 it also includes the four bot tokens in Credential Manager (\"AIEH Gitea bot <role>\"; five once the protection auditor's is provisioned, cred-gitea-protection-audit, OA-16), which CredReadW returns to any process of the account without a prompt, and Gitea's CLI, which mints a token for any account, the site administrator's and the Owner account's included, without a password. None of this is reachable from the execution guest (profiles P3-P5, F-03.3.1).",
       "refs": [
         "bootstrap-host-agents", "owner-os-account", "cred-owner-github", "cred-owner-provider-login",
         "cred-guest-ssh-key", "cred-agent-server-session-key", "cred-uac-consent", "store-integration",
@@ -1901,7 +1947,7 @@
       "id": "fd-owner-authorization-record",
       "kind": "limit",
       "title": "Owner authorization is a recorded decision, not an authenticated one",
-      "detail": "Narrowed at P-04.2, not closed. An Owner authorization is now a recorded decision: the authorization recorder (decision 0012, Proposed) records the Owner's statement in the shared Owner decision record (kind authorize-operation), binds it to the exact head and manifest digest of the proposal, writes a write-ahead receipt to the integration store and merges as aieh-owner with the decision's trailers; merged_by aieh-owner means merged under Owner authority by the recorder, never by the Owner. What remains: in the bootstrap channel the statement is the Owner's verbatim reply in the main-session conversation, transcribed by the Overseer, which proves a declared decision bound to an exact revision, not an authenticated Owner (the target channel is an authenticated Owner host session); aieh-owner cannot read the branch protection rule in Gitea 28.3.0 (repository or site administrators only), so the other accounts on the allowlists and the override flags are not compared before a merge; processes of the Owner's account can reach the credential (decision 0010); no authorization repository, verifier or Owner authorization exists yet, and the recorder has run against a fake Gitea only. During bootstrap the Owner's other decisions still reach the repository as records the Overseer writes (decisions/, evidence/bootstrap-log.md).",
+      "detail": "Narrowed at P-04.2, not closed. An Owner authorization is now a recorded decision: the authorization recorder (decision 0012, Proposed) records the Owner's statement in the shared Owner decision record (kind authorize-operation), binds it to the exact head and manifest digest of the proposal, writes a write-ahead receipt to the integration store and merges as aieh-owner with the decision's trailers; merged_by aieh-owner means merged under Owner authority by the recorder, never by the Owner. What remains: in the bootstrap channel the statement is the Owner's verbatim reply in the main-session conversation, transcribed by the Overseer, which proves a declared decision bound to an exact revision, not an authenticated Owner (the target channel is an authenticated Owner host session); aieh-owner cannot read the branch protection rule in Gitea 28.3.0 (repository or site administrators only), so the recorder merges only when the protection check (op-protection-verify; Owner decision OA-16), reading as a read:repository auditor, answers verified, and its auditor is not provisioned, so the recorder refuses every merge (the check is built and tested against a fake Gitea only; its time-of-check limit is fd-protection-check-toctou); processes of the Owner's account can reach the credential (decision 0010); no authorization repository, verifier or Owner authorization exists yet, and the recorder has run against a fake Gitea only. During bootstrap the Owner's other decisions still reach the repository as records the Overseer writes (decisions/, evidence/bootstrap-log.md).",
       "refs": ["owner", "authorization-recorder", "cred-gitea-owner-account", "op-policy-change", "op-protected-merge"],
       "citations": [
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification",
@@ -1910,6 +1956,28 @@
         "integrations/owner/README.md"
       ],
       "carried_to": ["G-03.1", "G-04.x"]
+    },
+    {
+      "id": "fd-protection-check-toctou",
+      "kind": "limit",
+      "title": "The protection check and Gitea's merge-time enforcement are not one transaction",
+      "detail": "Owner decision OA-16 (2026-11-11). The authorization recorder merges only when the protection check (op-protection-verify) answers verified as its last read before the merge; Gitea 28.3.0 then evaluates the rule row as it is at the merge itself, twice (CheckPullMergeable in the merge handler, and the pre-receive hook of the merge push), and no API spans a read and a merge. What Gitea enforces at merge time: the merge allowlist, the required approvals from the approvals allowlist, rejected reviews, official review requests, code-owner reviews, an outdated branch, status checks, protected files, signed commits, the head_commit_id the recorder sends (409 when the head moved) and the bypass allowlist, which lets a listed account force-merge past every gate; it does not compare the rule with any declaration, so a changed rule is enforced as changed. What remains: a repository or site administrator (inside the trusted computing base, decision 0010) can change a rule between the check and the merge, about one request round-trip on host loopback; the check runs again after the read-back and the receipt records both digests, so a change that is not reverted within the window is disclosed (PROTECTION_CHANGED_AFTER_MERGE), not prevented. Gitea 28.3.0 audits branch protection changes made through its web pages only, not through its API, and exposes the audit log through web pages only (protection-check recommendation, finding F-B), so the audit log is corroboration for web-made changes, never the control. Team membership is not readable with read:repository (it needs the organization scope), so who belongs to the Owners team, whose members administer the repository, is not compared; each collaborator's permission is read as Gitea computes it, team membership included.",
+      "refs": [
+        "authorization-recorder",
+        "op-protection-verify",
+        "op-protected-merge",
+        "cred-gitea-protection-audit",
+        "gitea-server",
+        "op-gitea-administration"
+      ],
+      "citations": [
+        "evidence/P-04.2-protection-check-recommendation.md",
+        "integrations/gitea/README.md",
+        "decisions/0010-effects-store-placement-and-governance-threat-model.md"
+      ],
+      "carried_to": [
+        "G-03.1"
+      ]
     },
     {
       "id": "fd-guest-login-name-and-key",

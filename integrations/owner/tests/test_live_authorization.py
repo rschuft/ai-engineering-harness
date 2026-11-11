@@ -7,7 +7,8 @@ into a statement file by the Overseer, is what phase ``record`` reads. A general
 authorizes no operation.
 
 Each phase runs only on Windows, while the managed Gitea answers and the Credential Manager entries
-"AIEH Gitea owner" and "AIEH Gitea bot <role>" (all four roles) exist; otherwise it skips with its reason.
+"AIEH Gitea owner" and "AIEH Gitea bot <role>" (every role of gitea_roles.ROLES: the four bots and the
+protection auditor of Owner decision OA-16) exist; otherwise it skips with its reason.
 Without AIEH_AUTHZ_RECORDER_LIVE set to a phase it skips: the ordinary suites never read a credential or
 write to Gitea. Each phase is an Owner-approved act. On aieh-authz-fixture/authz only:
 
@@ -17,20 +18,23 @@ empty directory>``):
 1. As aieh-bot-builder (its token): two proposal branches work/authz-recorder-<stamp>-a and -b, each
    adding one manifest operations/<id>.json (kind ``fixture-no-op``; it expires in 24 hours), and a pull
    request for each into main. As aieh-bot-reviewer: one approving review of each (main requires one).
-2. Negative controls, which need no Owner authority: each of the four bot tokens attempts the merge of
-   each pull request (``Do: merge`` with its ``head_commit_id``). Expected: refused (403 or 405) every time
-   and main unchanged. **Any successful bot merge, or main moving, is a SECURITY FAILURE**: the test fails
+2. Negative controls, which need no Owner authority: each bot token (the protection auditor's included)
+   attempts the merge of each pull request (``Do: merge`` with its ``head_commit_id``). Expected: refused
+   (403 or 405; the auditor's read:repository token 403 by its scope) every time and main unchanged. **Any successful bot merge, or main moving, is a SECURITY FAILURE**: the test fails
    naming it and stops; no further step runs and no presentation is written.
 3. The recorder's real ``prepare`` for each pull request (the real credential provider: it reads "AIEH
    Gitea owner" into memory; its own state and integration store under ``<run dir>/recorder``). It
-   issues the one-time challenge (expiring in 180 minutes) and asks the protection verifier, if one is
-   configured (none is until OA-16's mechanism is built: decision 0012 point 6).
+   issues the one-time challenge (expiring in 180 minutes) and asks the protection verifier: the protection
+   check of Owner decision OA-16 (integrations/gitea/protection_check.py; decision 0012 point 6), which
+   reads "AIEH Gitea bot protection-audit" into memory and the fixture's protection as the auditor. Its
+   answer is shown per challenge and decides the expected outcome.
 4. The presentation, written to the run directory as ``presentation.json`` and ``presentation.txt``: per
    challenge the repository, the pull request, the base, the approved head, the manifest path and its
    digest, the operation id, kind, target and expiry, the challenge nonce and its expiry, the effects the
    merge will have, the expected outcome and the recorder's own summary; which pull request is the
-   stale-head control (pull request B: expected refusal, Gitea's 409); whether a protection verifier was
-   available; the bot controls' statuses. Nothing is merged in this phase.
+   stale-head control (pull request B: expected refused, nothing merged and main unmoved; Gitea's 409 is
+   expected, its 405 or 500 possible, finding F14); whether a protection verifier was available; the bot
+   controls' statuses. Nothing is merged in this phase.
 5. The custody inspection (below). Then the phase stops.
 
 **Between the phases, the Owner.** The Overseer presents the presentation to the Owner. Only if the
@@ -48,16 +52,23 @@ attempt that the exercise makes stale on purpose.
    missing, empty or not JSON, model-authored or not the Owner's, or names none of the challenged
    operations. Only the challenges whose operation id the statement names are recorded.
 2. ``record`` for each authorized challenge, with the protection verifier available to this run. **With
-   none available (the presentation records it, and that is the state until OA-16), every record is
-   refused ``PROTECTION_UNVERIFIED`` before anything is sent: nothing is merged, no receipt is written;
-   that is the expected outcome.** With a verifier: A gives exactly one merge commit on main with main's
-   head and the approved head as parents, the six trailers as written, the manifest digest at the merge,
-   merged_by aieh-owner and the receipt confirmed; for B the builder pushes one commit to its branch
-   after the recorder's checks and before its merge call (a hook on the recorder's merge call), Gitea
-   answers 409, nothing is merged and the receipt is failed with HEAD_STALE. B is recorded before A, so
-   that A's merge does not leave B behind main (main's rule blocks an outdated branch, a 405 that would
-   come before the 409). A presentation that says a verifier was available when none is now (or the
-   reverse) is refused: the Owner saw other outcomes.
+   none available, every record is refused ``PROTECTION_UNVERIFIED`` before anything is sent: nothing is
+   merged, no receipt is written; that is the expected outcome.** With the protection check, a challenge
+   whose check does not answer ``verified`` immediately before its merge is refused ``PROTECTION_DRIFT``
+   or ``PROTECTION_UNVERIFIED`` with nothing sent (the expected outcome when the auditor is not
+   provisioned or the fixture's protection is not the declared one). Otherwise A gives exactly one merge
+   commit on main with main's head and the approved head as parents, the six trailers as written, the
+   manifest digest at the merge, merged_by aieh-owner and the receipt confirmed, its protection answers
+   before and after the merge equal; for B the builder pushes one commit to its branch after the
+   recorder's checks and before its merge call (a hook on the recorder's merge call), and the property
+   checked is that **nothing merges and main does not move**: Gitea's refusal is recorded as observed,
+   not assumed (finding F14: 409 "head out of date" is expected, HEAD_STALE with the receipt failed; but
+   while Gitea re-checks the pull request after the push it can answer 405 "try again later",
+   MERGE_REFUSED with the receipt failed, or 500, OUTCOME_UNKNOWN with the receipt unknown). B merging
+   is a SECURITY FAILURE: a head the Owner did not approve. B is recorded before A, so that A's merge
+   does not leave B behind main (main's rule blocks an outdated branch, a 405 that would come before the
+   409). A presentation that says a verifier was available when none is now (or the reverse) is refused:
+   the Owner saw other outcomes.
 3. Read-backs: main's head as expected; aieh-owner still holds zero tokens (the recorder's identity
    check). Cleanup: the builder closes every pull request of the run that is still open. A merge commit
    stays on the fixture's main (a protected branch: only a site administrator could rewrite it) and the
@@ -81,6 +92,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -109,6 +121,10 @@ KIND = 'fixture-no-op'
 RECORDED_BY = 'agent:live-exercise'
 AUTHORIZE, STALE = 'authorize', 'stale-head-control'
 BOT_REFUSALS = (403, 405)
+# Finding F14: the stale-head control's refusals (Gitea's answer to the moved head: 409, or 405 or 500 while
+# Gitea re-checks the pull request after the push) with the receipt state each leaves
+STALE_REFUSALS = {'HEAD_STALE': 'failed', 'MERGE_REFUSED': 'failed', 'OUTCOME_UNKNOWN': 'unknown'}
+PROTECTION_REFUSALS = ('PROTECTION_DRIFT', 'PROTECTION_UNVERIFIED')
 CHALLENGE_KEYS = ('role', 'repository', 'pull', 'base', 'branch', 'approvedHead', 'manifest', 'manifestDigest',
                   'operation', 'kind', 'target', 'operationExpiresAt', 'nonce', 'challengeExpiresAt',
                   'protectionAtPrepare', 'effects', 'expectedOutcome', 'summary')
@@ -144,10 +160,12 @@ class Live(NamedTuple):
     inspect: Callable | None = None
 
 
-def available_verifier():
-    """(verifier, note): the protection verifier this exercise can configure. None until the mechanism of
-    decision 0012 point 6 (Owner action OA-16) is built and qualified."""
-    return None, AR.NO_VERIFIER
+def available_verifier(port, provider):
+    """(verifier, note): the protection verifier this exercise configures, the command line's: the protection
+    check of Owner decision OA-16 (decision 0012 point 6) over the run's provider and port."""
+    return AR.protection_verifier(provider, port), ('the protection check of Owner decision OA-16 '
+                                                   '(integrations/gitea/protection_check.py), reading as '
+                                                   f'{AR.protection.AUDITOR}')
 
 
 def expect(condition, message):
@@ -279,21 +297,34 @@ def _effects(c):
         f'nothing acts on the operation: its kind {KIND} is a fixture no-op']
     if c['role'] == STALE:
         effects.append('intended: none of the above. The exercise pushes one commit to its branch after the '
-                       'recorder\'s checks and before its merge call, so Gitea refuses the merge (409)')
+                       'recorder\'s checks and before its merge call, so Gitea refuses the merge (409 expected; '
+                       'a 405 or 500 is possible while Gitea re-checks the pull request, finding F14)')
     return effects
+
+
+STALE_OUTCOME = ('the stale-head control: the exercise moves the head after the recorder\'s checks; Gitea '
+                 'refuses the merge, nothing is merged and main does not move; the refusal is recorded as '
+                 'observed (409 HEAD_STALE, receipt failed, expected; 405 MERGE_REFUSED, receipt failed, or 500 '
+                 'OUTCOME_UNKNOWN, receipt unknown, possible: finding F14)')
 
 
 def _expected(c, verifier):
     if verifier is None:
         outcome = ('refused PROTECTION_UNVERIFIED before anything is sent: nothing is merged and no receipt is '
-                   'written (no protection verifier exists until OA-16; decision 0012 point 6)')
+                   'written (no protection verifier is configured; decision 0012 point 6)')
         if c['role'] == STALE:
-            outcome += '; with a verifier it is the stale-head control: Gitea answers 409, HEAD_STALE, receipt failed'
+            outcome += f'; with a verifier answering verified it is {STALE_OUTCOME}'
         return outcome
+    at_prepare = c['protectionAtPrepare']
+    if at_prepare['verdict'] != 'verified':
+        return (f'refused {at_prepare.get("code")} before anything is sent, as the protection check answered at '
+                f'prepare ({at_prepare["detail"][:200]}): nothing is merged and no receipt is written, unless the '
+                'protection is restored and the check answers verified immediately before the merge')
     if c['role'] == STALE:
-        return ('the stale-head control: the exercise moves the head after the recorder\'s checks; Gitea answers '
-                '409, HEAD_STALE, nothing is merged, the receipt is failed')
-    return 'one merge commit as above, read back; the receipt is confirmed; aieh-owner holds zero tokens'
+        return STALE_OUTCOME
+    return ('one merge commit as above, read back; the receipt is confirmed with equal protection answers before '
+            'and after the merge; aieh-owner holds zero tokens; refused PROTECTION_DRIFT or PROTECTION_UNVERIFIED '
+            '(nothing sent) if the protection check does not answer verified immediately before the merge')
 
 
 def presentation_of(live, now, main_head, proposals, challenges, controls):
@@ -332,7 +363,8 @@ def presentation_text(p):
              + f' ({p["verifier"]["note"]}).',
              f'Bot merge controls (each must be refused): {p["botMerges"]["statuses"]}.', '']
     for c in p['challenges']:
-        role = 'THE STALE-HEAD CONTROL (expected refusal: 409)' if c['role'] == STALE else 'to authorize'
+        role = ('THE STALE-HEAD CONTROL (expected: refused; nothing merges and main does not move)'
+                if c['role'] == STALE else 'to authorize')
         lines += [f'== Pull request #{c["pull"]}: {role}',
                   f'Operation {c["operation"]} (kind {c["kind"]}); target: {c["target"]}; the manifest expires at '
                   f'{c["operationExpiresAt"]}.',
@@ -425,6 +457,12 @@ def _record_stale(live, ctx, challenge, statement):
         AR.Gitea.merge = original
 
 
+def _gitea_status(result):
+    """The HTTP status of Gitea's refusal in a recorder error's detail (None when it holds none)."""
+    match = re.search(r'answered (?:HTTP )?([0-9]{3})', getattr(result, 'detail', '') or '')
+    return int(match.group(1)) if match else None
+
+
 def _receipt(store, nonce):
     reservation = store.get(AR.RECEIPT_PREFIX + nonce)
     return None if reservation is None else reservation.state
@@ -462,16 +500,32 @@ def record_phase(live, statement_path, observed):
                        f'{c["operation"]}: expected PROTECTION_UNVERIFIED and nothing sent, got '
                        f'{outcomes[c["operation"]]}')
             elif c['role'] == STALE:
+                at_merge = _main_head(live)
                 result, moved = _record_stale(live, ctx, c, statement)
                 code = getattr(result, 'code', None)
-                outcomes[c['operation']] = {'code': code, 'moved': moved, 'receipt': _receipt(store, c['nonce']),
-                                            'detail': getattr(result, 'detail', None)}
-                expect(moved == [201] and code == 'HEAD_STALE' and '409' in result.detail
-                       and outcomes[c['operation']]['receipt'] == 'failed',
-                       f'the stale-head control: {outcomes[c["operation"]]}')
+                outcome = outcomes[c['operation']] = {
+                    'code': code, 'moved': moved, 'receipt': _receipt(store, c['nonce']),
+                    'giteaStatus': _gitea_status(result), 'detail': getattr(result, 'detail', None),
+                    'merged': _pull(live, c['pull']).get('merged') is True, 'mainMoved': _main_head(live) != at_merge}
+                if not isinstance(result, AR.RecorderError) or outcome['merged'] or outcome['mainMoved']:
+                    raise SecurityFailure(f'the stale-head control merged a head the Owner did not approve: {outcome}')
+                if code in PROTECTION_REFUSALS:  # refused before the merge call: the control was not reached
+                    expect(moved == [] and outcome['receipt'] is None, f'the stale-head control: {outcome}')
+                else:
+                    expect(moved == [201] and STALE_REFUSALS.get(code, '?') == outcome['receipt'],
+                           f'the stale-head control: {outcome}')
             else:
                 at_merge = _main_head(live)
-                result = AR.record(ctx, c['nonce'], statement, recorded_by=RECORDED_BY)
+                try:
+                    result = AR.record(ctx, c['nonce'], statement, recorded_by=RECORDED_BY)
+                except AR.RecorderError as exc:
+                    if exc.code not in PROTECTION_REFUSALS:
+                        raise
+                    outcomes[c['operation']] = {'code': exc.code, 'refusal': exc.refusal, 'detail': exc.detail,
+                                                'receipt': _receipt(store, c['nonce'])}
+                    expect(exc.refusal and outcomes[c['operation']]['receipt'] is None, f'{c["operation"]}: '
+                           f'{outcomes[c["operation"]]}')
+                    continue
                 merged_commit = result['merge']['mergeCommit']
                 outcomes[c['operation']] = {'merge': result['merge'], 'receipt': result['receipt'],
                                             'protection': result['protection'],
@@ -481,6 +535,8 @@ def record_phase(live, statement_path, observed):
                 expect(result['merge']['trailers'] == AR.trailers(result['decision'], c['approvedHead'],
                                                                   c['manifestDigest']), 'the trailers')
                 expect(_main_head(live) == merged_commit, 'main is not at the merge commit')
+                expect(result['protection']['equal'] is True, f'the protection changed across the merge: '
+                       f'{result["protection"]}')
         # read-backs
         main_after = observed['mainAfter'] = _main_head(live)
         expect(main_after == (merged_commit or main_before), f'main is at {main_after}')
@@ -542,7 +598,7 @@ class LiveExercise(unittest.TestCase):
     def test_phase(self):
         if not RUN_DIR:
             raise PhaseRefused('RUN_DIR_MISSING', 'AIEH_AUTHZ_RECORDER_RUN_DIR must name the run directory')
-        verifier, note = available_verifier()
+        verifier, note = available_verifier(self.port, self.provider)
         live = Live(self.port, self.provider, Path(RUN_DIR), verifier=verifier, verifier_note=note,
                     inspect=inspect_custody)
         if PHASE == 'prepare':

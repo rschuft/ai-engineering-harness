@@ -36,7 +36,8 @@ In two steps, as the Owner sees them:
    - identity: the credential authenticates as aieh-owner, a non-administrator holding zero tokens;
    - single use: no receipt exists for the nonce;
    - protection: the protection verifier answers ``verified`` (see "The protection verifier" below),
-     asked as the last read before the receipt is reserved and the merge is sent.
+     asked as the last read before the receipt is reserved and the merge is sent; the command line's is
+     the protection check of Owner decision OA-16 (integrations/gitea/protection_check.py).
 
    It then writes the Owner decision record (``owner_decision.py``, kind ``authorize-operation``) and,
    before anything is sent, a write-ahead receipt of its own append-only kind in the integration store
@@ -60,12 +61,12 @@ the recorder compares what a write collaborator can read: the repository's merge
 permission (``GET /repos/{owner}/{repo}``), and the protected branch's view (``GET /repos/{owner}/{repo}/
 branches/{branch}``: protected, required approvals, status checks, whether aieh-owner can push and can
 merge). The rule's allowlists of other accounts and its override flags (``Policy.unobservable``) are not
-compared here.
+compared here: the protection verifier compares them.
 
 **The protection verifier (fail closed).** Decision 0012 point 6 (Owner decision OA-15a): the recorder
 does not merge unless every security-relevant protection rule is verified by a narrowly scoped, trusted,
-read-only check immediately before the merge. That check's mechanism is undecided (Owner action OA-16),
-so the recorder calls it through a mechanism-neutral seam: ``Context.verifier``, a callable
+read-only check immediately before the merge. The recorder calls it through a mechanism-neutral seam:
+``Context.verifier``, a callable
 ``verifier(repository, base, phase)`` returning a ``ProtectionVerdict`` (``verified``, ``drift`` or
 ``unverified``, a detail, and optionally the sha256 digest of what it observed). It is given no
 credential, session or state of the recorder. ``record`` asks it (phase ``before-merge``) as the last read
@@ -76,9 +77,18 @@ the read-back it asks once more (phase ``after-merge``); both answers go into th
 in the intent and in the confirmed detail, additively), and an answer that differs from the first is
 recorded as the disclosure ``PROTECTION_CHANGED_AFTER_MERGE`` (``DISCLOSURES``): the merge stands and the
 receipt stays confirmed. ``prepare`` asks it too (phase ``prepare``) and reports the answer; it refuses
-nothing on it, since it sends nothing. The command line's context (``managed_context``) configures **no
-verifier**, so the command line refuses every merge until OA-16's mechanism is built and qualified. The
-observable checks above stay, as an additional layer.
+nothing on it, since it sends nothing. The command line's context (``managed_context``) configures the
+mechanism the Owner approved on 2026-11-11 (OA-16): the protection check of the Gitea integration
+(integrations/gitea/protection_check.py, ``protection_verifier``), which reads, in process, as the protection
+auditor aieh-bot-protection-audit, a restricted Gitea Bot with repository-administrator collaboration on the
+admitted repository only and a token of scope exactly ``read:repository``, every rule (34 fields each), the
+exact rule set and its precedence, the merge settings, the collaborators, the teams and the deploy keys, and
+compares them with the harness's total declaration. Its token is a second entry of which the recorder is
+custodian (``AIEH Gitea bot protection-audit``); only the check reads it, never the code path that reads
+aieh-owner's password. Until that auditor is provisioned (an Owner act), the check answers ``unverified``
+(its credential is missing), so the command line still refuses every merge. Gitea itself evaluates the rule
+again at the merge, and nothing spans the check and the merge (time of check to time of use): the bracket
+discloses a change it sees after the merge. The observable checks above stay, as an additional layer.
 
 Usage (from the repository root, under the tools interpreter):
 
@@ -126,6 +136,7 @@ def _load(name, path):
 
 D = _load('owner_decision', HERE / 'owner_decision.py')
 roles = _load('aieh_gitea_roles', REPO / 'integrations' / 'gitea' / 'gitea_roles.py')
+protection = _load('aieh_gitea_protection_check', REPO / 'integrations' / 'gitea' / 'protection_check.py')
 host = roles.host
 contract = host.contract
 
@@ -184,10 +195,10 @@ REMEDIES = {
     'POLICY_DRIFT': 'the repository or the protected branch differs from the expected policy: restore the policy '
                     'as site administration, then prepare again',
     'PROTECTION_UNVERIFIED': 'the recorder does not merge until every security-relevant protection rule is verified '
-                             'by a trusted read-only check (decision 0012 point 6); its mechanism is Owner action '
-                             'OA-16, and the command line configures none until it is built and qualified. Nothing '
-                             'was sent: configure the qualified protection verifier, or repair what kept it from '
-                             'verifying, then record again on an unexpired challenge',
+                             'by a trusted read-only check (decision 0012 point 6; the protection auditor of Owner '
+                             'decision OA-16). Nothing was sent: repair what kept it from verifying (the detail says '
+                             'what; an auditor that is not provisioned is an Owner act: gitea_roles.py provision and '
+                             'fixture), then record again on an unexpired challenge',
     'PROTECTION_DRIFT': 'a protection rule differs from its declaration: restore it as site administration (task '
                         'gitea:roles -- fixture for the authorization fixture), then record again on an unexpired '
                         'challenge',
@@ -306,8 +317,8 @@ def policy_drift(policy, repository_view, branch_view):
 
 PROTECTION_VERDICTS = ('verified', 'drift', 'unverified')
 PROTECTION_PHASES = ('prepare', 'before-merge', 'after-merge')
-NO_VERIFIER = ('no protection verifier is configured: the trusted read-only check of every security-relevant '
-               'protection rule (decision 0012 point 6) is not built yet (Owner action OA-16)')
+NO_VERIFIER = ('no protection verifier is configured in this context: the trusted read-only check of every '
+               'security-relevant protection rule (decision 0012 point 6; Owner decision OA-16) is not asked')
 
 
 class ProtectionVerdict(NamedTuple):
@@ -316,6 +327,16 @@ class ProtectionVerdict(NamedTuple):
     status: str
     detail: str
     digest: str | None = None
+
+
+def protection_verifier(provider, port, http=None):
+    """The command line's protection verifier (Owner decision OA-16): the Gitea integration's protection check,
+    asked in process, reading as the protection auditor with the token it reads from PROVIDER by name for each
+    answer. It is given the provider and the port only, never this recorder's session or password."""
+    def verifier(repository, base, phase):
+        verdict = protection.verify(provider, port, repository, base, http=http)
+        return ProtectionVerdict(verdict.status, f'{verdict.code}: {verdict.detail}', verdict.digest)
+    return verifier
 
 
 def check_protection(ctx, repository, base, phase):
@@ -360,8 +381,8 @@ class Context(NamedTuple):
     directory, an integration store of its own and a fixture provider; only main() builds the managed
     context (managed_context). HTTP None is one keep-alive connection to 127.0.0.1:PORT per command; a
     callable with gitea_host.http_get's signature stands in for it in tests. VERIFIER is the protection
-    verifier (see "The protection verifier" above); None, as in the managed context until OA-16's
-    mechanism is built, makes record refuse every merge with PROTECTION_UNVERIFIED."""
+    verifier (see "The protection verifier" above); the managed context's is the protection check
+    (protection_verifier). None makes record refuse every merge with PROTECTION_UNVERIFIED."""
     state_dir: Path
     store: object
     provider: object
@@ -385,9 +406,10 @@ def _check_context(ctx):
 def managed_context(port=None, guard=None):
     """The command line's context: the recorder's state under <state>/owner-authorization of the managed
     data root, the integration store at its managed location (decision 0009), the platform's credential
-    provider (held by GUARD for the I7 scan) and the managed Gitea's port from its host record. It
-    configures no protection verifier: the mechanism of decision 0012 point 6 is undecided (OA-16), so
-    record refuses with PROTECTION_UNVERIFIED and merges nothing."""
+    provider (held by GUARD for the I7 scan) and the managed Gitea's port from its host record. Its
+    protection verifier is the protection check of Owner decision OA-16 (protection_verifier), over the same
+    provider and port: until the protection auditor is provisioned it answers unverified, so record refuses
+    with PROTECTION_UNVERIFIED and merges nothing."""
     res = host.paths.resolve()
     if port is None:
         port = host.read_host_record(host.layout(res))['port']
@@ -396,7 +418,7 @@ def managed_context(port=None, guard=None):
     if guard is not None:
         provider = contract.WatchedProvider(provider, guard)
     with host.credential_receipts(res) as store:
-        yield Context(state, store, provider, port)
+        yield Context(state, store, provider, port, verifier=protection_verifier(provider, port))
 
 
 # ---------------------------------------------------------------------------- Gitea, as aieh-owner
