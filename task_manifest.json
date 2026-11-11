@@ -390,7 +390,7 @@
         "F-02"
       ],
       "path": "task_prompts/F-09.1.md",
-      "sha256": "cc5f4d26a1102ecc991ed1c1c7585c509851985e66af7eb0265d9964de77fbdb"
+      "sha256": "2fedd9b87faad0d10a4cb0e946506e8d5ba42f4833a587abaa4d00d0f7f5eedd"
     },
     {
       "id": "F-09.2",
@@ -401,7 +401,7 @@
         "F-07.1"
       ],
       "path": "task_prompts/F-09.2.md",
-      "sha256": "57e549d813d9ca675fa010ed936bc41c71a769a5410e60cd11408433e3d1cb9d"
+      "sha256": "1847347bddcf426f1942534ad871e069514f53a855760a01d1d8bcdb3263900d"
     },
     {
       "id": "F-09.3",
@@ -412,7 +412,7 @@
         "F-09.2"
       ],
       "path": "task_prompts/F-09.3.md",
-      "sha256": "6e08fd68db994bc69c8fda33d187bbb4c58c5193646999bbb065dc77e6bcfaf4"
+      "sha256": "a869637824cfdd44c48d5498e6098daba68debeb21e70351a72433727a959de2"
     },
     {
       "id": "U-01.1",
@@ -528,7 +528,7 @@
         "F-09.3"
       ],
       "path": "task_prompts/F-09.4.md",
-      "sha256": "6acfd2698b7b25c8200c8728a6e701f13ef50dee4ac0de77340afdb22487614d"
+      "sha256": "4e089ebfa1084bd8d4f87060e91bd195d2b03e07bdd80cc74c7da2fc19b5e563"
     },
     {
       "id": "F-10.1",
@@ -561,7 +561,7 @@
         "F-10.2"
       ],
       "path": "task_prompts/F-10.3.md",
-      "sha256": "44df1fc513586ff50e83d5df9b6ec1dcd9b12b64f5c259d9f5b9c05dda57d070"
+      "sha256": "23f0860402e7520c0ccf95b8d7c9669f774d00efbfbd2b46e30ed4118ae6cff7"
     },
     {
       "id": "F-10.4",

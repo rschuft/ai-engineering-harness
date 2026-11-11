@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "ee294d2aaff1a6d0349d0e164b362e90339400d66ae37f56702b8d26bf1d67ee",
-      "size_bytes": 2849474
+      "sha256": "64314adab9437262cb3a83a6a5ab39a6f65b6e363f18d4b45ac48944d181944f",
+      "size_bytes": 2856343
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "ed02d0f5b1347f1fc145d7da6ff0f7076270ed5606b0b89a151881c215b59de9",
-      "size_bytes": 1484443
+      "sha256": "68f780a4edb13c0d27115ae996c1cf650c222efd4f0e0019cdd4d0d701e53fa4",
+      "size_bytes": 1490728
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "2a4e70f7a2ff0bc017b40a56042ec3ffde21c71f07fcf1ccea1b9339ec5360ab",
-      "size_bytes": 255902
+      "sha256": "3de1661397d5e95af3ec8fe8b80d5dcfe02dc4337c6bcb3b2cf9ca20418dca99",
+      "size_bytes": 256035
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,7 +49,7 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "fd82f0819cde1c91946bbf85c46c6c18aa94ab3196ed59ce40301cc69f1a400e",
+      "sha256": "bb54904a16181643e0f4c204062a96b767c7dd6430a55098f22a7636851245e9",
       "size_bytes": 50127
     },
     {
@@ -324,23 +324,23 @@
     },
     {
       "path": "task_prompts/F-09.1.md",
-      "sha256": "cc5f4d26a1102ecc991ed1c1c7585c509851985e66af7eb0265d9964de77fbdb",
-      "size_bytes": 5106
+      "sha256": "2fedd9b87faad0d10a4cb0e946506e8d5ba42f4833a587abaa4d00d0f7f5eedd",
+      "size_bytes": 5284
     },
     {
       "path": "task_prompts/F-09.2.md",
-      "sha256": "57e549d813d9ca675fa010ed936bc41c71a769a5410e60cd11408433e3d1cb9d",
-      "size_bytes": 5693
+      "sha256": "1847347bddcf426f1942534ad871e069514f53a855760a01d1d8bcdb3263900d",
+      "size_bytes": 5766
     },
     {
       "path": "task_prompts/F-09.3.md",
-      "sha256": "6e08fd68db994bc69c8fda33d187bbb4c58c5193646999bbb065dc77e6bcfaf4",
-      "size_bytes": 4684
+      "sha256": "a869637824cfdd44c48d5498e6098daba68debeb21e70351a72433727a959de2",
+      "size_bytes": 4719
     },
     {
       "path": "task_prompts/F-09.4.md",
-      "sha256": "6acfd2698b7b25c8200c8728a6e701f13ef50dee4ac0de77340afdb22487614d",
-      "size_bytes": 4814
+      "sha256": "4e089ebfa1084bd8d4f87060e91bd195d2b03e07bdd80cc74c7da2fc19b5e563",
+      "size_bytes": 4960
     },
     {
       "path": "task_prompts/F-10.1.md",
@@ -354,8 +354,8 @@
     },
     {
       "path": "task_prompts/F-10.3.md",
-      "sha256": "44df1fc513586ff50e83d5df9b6ec1dcd9b12b64f5c259d9f5b9c05dda57d070",
-      "size_bytes": 6545
+      "sha256": "23f0860402e7520c0ccf95b8d7c9669f774d00efbfbd2b46e30ed4118ae6cff7",
+      "size_bytes": 6538
     },
     {
       "path": "task_prompts/F-10.4.md",
