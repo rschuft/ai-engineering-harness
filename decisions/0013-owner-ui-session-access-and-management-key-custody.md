@@ -56,3 +56,21 @@ Supersedes: none.
 - [`policy/network-matrix.json`](../policy/network-matrix.json) and `python -I -B tools/check_network_matrix.py` (`task policy:network-check`).
 - [`evidence/S-01.3.1-management-api-admission.md`](../evidence/S-01.3.1-management-api-admission.md), [`evidence/S-01.3.2-job-daemon-and-management-access.md`](../evidence/S-01.3.2-job-daemon-and-management-access.md) and [`evidence/S-01.4-network-matrix.md`](../evidence/S-01.4-network-matrix.md) (S-01.4).
 - Decisions [0003](0003-execution-guest-providers-and-isolation-contract.md), [0006](0006-guest-provisioning-channel-and-image-conformance.md), [0007](0007-role-token-matrix-and-revocation-contract.md) and [0010](0010-effects-store-placement-and-governance-threat-model.md).
+
+## Current facts (2026-11-11, OA-20 and E-01.3.3)
+
+Recorded by the Overseer after the Owner's approval of OA-20 (2026-11-11, verbatim in
+[`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md)). No text of the decision above changes.
+
+1. **Point 1, the bootstrap reading as written.** During bootstrap the dispatcher principal is the Owner's
+   account acting through the dispatch module, which reaches the guest through `tools/guest.py`'s `GuestApi`
+   as the `agent` login. A host identity distinct from the Owner's account is not built. The Owner deferred it
+   on 2026-11-11: "Do not introduce a separate dispatcher OS account or another guest login under this
+   approval. That architectural decision remains deferred."
+2. **Point 6 still governs the disclosure.** Same-account access to the host-held credentials remains
+   disclosed, and is not represented as independent isolation.
+3. **Point 7 and decision 0007 Amendment 1.** The standing Gitea bot credentials stay on the trusted host. The
+   dispatcher borrows a stage's credential into its own in-memory attempt context for a confirmed attempt and
+   releases it at the end; release is not revocation. A standing bot credential never enters a guest, an agent
+   environment, a conversation or the UI (the UI clause of point 1 read as covering every credential of that
+   class, not only the management key).

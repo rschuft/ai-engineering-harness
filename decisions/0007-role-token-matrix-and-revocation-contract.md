@@ -175,3 +175,54 @@ in [`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md):
 3. **Plan gaps.** Routed by the Owner on 2026-11-07 and added through the plan amendment
    of that day: F-06.1 installs Gitea; S-03.1 and S-03.2 design and build the inference
    broker (model access); P-04.1 builds the acceptance recorder.
+
+## Amendment 1 (OA-20): credential classes, borrowing and revocation triggers
+
+Added with the Owner's approval of 2026-11-11 (Owner decision OA-20), following the Owner's directions of 2026-11-11
+on the E-01.3.3 token lifecycle and on this decision (both verbatim in `evidence/bootstrap-log.md`). Points 4 and
+5 above are kept as decided on 2026-11-07, for history and provenance. Where they differ from this amendment, this
+amendment governs. The superseded clauses are named exactly below; no other part of the decision changes.
+
+1. **Point 4, superseded:** "delivers each agent role token per attempt into the attempt environment only".
+   Decision 0013 point 7 had already relocated the attempt environment to the dispatcher's attempt context.
+   **Current requirement:**
+   - The standing Gitea bot credentials stay on the trusted host, in the OS credential provider.
+   - For a confirmed operation, the dispatcher borrows the stage's mapped credential into its own in-memory
+     attempt context. It borrows only that stage's credential and releases the access when the operation ends.
+   - A standing Gitea token never enters a guest, an agent environment, a container, a conversation, a
+     conversation record or the UI. Records carry fingerprints only.
+2. **Point 4, superseded:** "the token is bounded to the attempt where the pinned Gitea supports it (to verify)
+   and is otherwise rotated at attempt end".
+   - **What was established.** S-01.2.2 verified that Gitea 28.3.0 gives a token no lifetime and that the bots
+     have no password. A replacement token can therefore be issued only by the site administrator, never by the
+     dispatcher. The Owner's direction of 2026-11-11 rejects routine revocation without an authorized, automatic
+     replacement mechanism.
+   - **Current requirement:**
+     - Releasing the dispatcher's in-memory access at the end of an operation is not Gitea revocation. It is
+       recorded as a release.
+     - Issuance (point 4), rotation and revocation (point 5, "the issuer's role") of a standing Gitea bot
+       credential are the Gitea site administrator's. During bootstrap the administration command performs them
+       as the Owner's account.
+     - Rotation and revocation happen on the triggers of point 5 as amended in 3 below, never on routine attempt
+       completion.
+     - The dispatcher holds no administrator credential and issues nothing.
+3. **Point 5, narrowed by credential class:** "attempt end" in the list of trigger classes.
+   - **Credentials with attempt end as a trigger:** attempt end remains a trigger for credentials issued for a
+     single attempt, task or session. Among them:
+     - the broker-issued inference attempt token (decision 0015);
+     - the inner conversation keys, which end with their container;
+     - the CI job and runtime tokens Gitea Actions mints per task;
+     - the conversation runtime credential.
+   - **Standing Gitea bot credentials:** attempt end is not a trigger for them. They are revoked or rotated only on
+     suspected exposure, definition revocation, policy revision, expiry or Owner direction.
+   - **Effects of a security-triggered revocation.** Revoking a standing credential keeps all of point 5's common
+     effects:
+     - new dispatch is refused at once;
+     - Gitea fails closed at the next authenticated call, so delivery is refused until the administrator-managed
+       lifecycle restores the credential;
+     - attempts in flight that hold the credential are stopped or contained and recorded as exposed;
+     - CI jobs holding it are cancelled;
+     - the evidence is the Gitea audit record where enabled, plus the revocation receipt in the integration store.
+
+Disclosed, not prevented: during bootstrap the Owner's account can read the standing credentials in the
+credential provider (decision 0013 point 6).
