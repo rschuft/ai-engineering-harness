@@ -380,14 +380,14 @@ class GuestApiFake:
     200); every
     request it is given is kept: what would travel over SSH into the guest."""
 
-    def __init__(self):
-        self.requests = []
+    def __init__(self, info=None):
+        self.requests, self.info = [], info or cc.SERVER_INFO
 
     def __call__(self, requests, timeout=900, secret=None):
         self.requests.append(copy.deepcopy(requests))
         (request,) = requests
         if (request['method'], request['path']) == cc.INFO:
-            answer = cc.SERVER_INFO
+            answer = self.info
         elif request['method'] == 'DELETE':
             answer = {'status': 200, 'body': True}
         else:
@@ -630,6 +630,22 @@ class LiveCustodyDriverTests(unittest.TestCase):
         self.assertEqual(out['deleted'], {'implement': 200, 'review': 200})
         self.assertEqual(shown_tokens(json.dumps([out, api.requests])), [])
         self.assertEqual(di._HELD_ROLE_TOKENS, {})
+
+    def test_refusals_are_reported_and_a_delivered_attempts_conversation_is_still_deleted(self):
+        api = GuestApiFake()
+        live = self.gt.GuestTransport(api, self.profile, api_login='agent')
+        no_builder = MemoryProvider({roles.target('reviewer'): entries()[roles.target('reviewer')]})
+        out = self.driver.deliver_attempts(live, no_builder, PORT, http=FakeGitea(views()))
+        self.assertEqual(out['refused'], [{'stage': 'implement', 'code': 'ROLE_TOKEN_MISSING'}])
+        self.assertEqual([r['stage'] for r in out['records']], ['review'])
+        self.assertEqual(out['deleted'], {'implement': 200, 'review': 200})
+        api = GuestApiFake(info={'status': 503, 'body': {}})  # no precondition: nothing is created
+        live = self.gt.GuestTransport(api, self.profile, api_login='agent')
+        out = self.driver.deliver_attempts(live, MemoryProvider(entries()), PORT, http=FakeGitea(views()))
+        self.assertEqual(out['refused'], [{'stage': 'implement', 'code': 'SERVER_PRECONDITION_FAILED'},
+                                          {'stage': 'review', 'code': 'SERVER_PRECONDITION_FAILED'}])
+        self.assertEqual((out['records'], out['deleted']), ([], {}))
+        self.assertEqual([r[0]['method'] for r in api.requests], ['GET', 'GET'])
 
     def test_the_read_only_provider_refuses_and_counts_writes(self):
         readonly = self.driver.ReadOnlyProvider(MemoryProvider(entries()))

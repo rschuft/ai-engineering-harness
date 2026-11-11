@@ -8,10 +8,10 @@ before any run), supplying the dispatch chain for step (5):
         --profile profiles/strong-windows-qemu-whpx --state-dir STATE --name NAME [--out FILE] \
         [--rotate-report FILE]
 
-Step (5) builds two attempts exactly as ``live_admitted_create.py`` builds its request: the E-01.2.1
-fixture (a throwaway design repository, Backlog.md's recorded readiness, a throwaway store and
-manifest) and the real ``strong-windows-qemu-whpx`` declaration with only ``status.operational`` set
-in a throwaway copy. ``dispatch`` sends one ``implement`` and one ``review`` create through the
+Step (5) builds two attempts on the E-01.2.1 fixture (a throwaway design repository, Backlog.md's
+recorded readiness, a throwaway store and manifest), as ``live_admitted_create.py`` builds its request,
+with the checked-in ``strong-windows-qemu-whpx`` declaration copied byte for byte (it is operational
+since E-01.2.2). ``dispatch`` sends one ``implement`` and one ``review`` create through the
 dispatch module's live transport (``GuestTransport`` on the probe's ``GuestApi``), and each confirmed
 attempt is delivered its stage's token by ``attempt_role_token`` from the Owner account's credential
 provider, read only (``ReadOnlyProvider`` counts and refuses any write: a write is a stop), checked
@@ -83,11 +83,11 @@ def deliver_attempts(transport, provider, port, http=None):
     out = {'records': [], 'fingerprints': {}, 'refused': [], 'deleted': {}}
     try:
         case.setUp()
-        declared = json.loads((REPO / 'profiles' / REAL_PROFILE / 'profile.json').read_bytes())
-        declared['status']['operational'] = True
         directory = case.profiles / REAL_PROFILE
         directory.mkdir()
-        (directory / 'profile.json').write_bytes(json.dumps(declared, indent=2).encode('utf-8'))
+        # the checked-in declaration, byte for byte (operational since E-01.2.2): a declaration that is not
+        # operational is refused by dispatch (PROFILE_NOT_OPERATIONAL) and the step fails
+        (directory / 'profile.json').write_bytes((REPO / 'profiles' / REAL_PROFILE / 'profile.json').read_bytes())
         adm.base.write_agent_server(directory)
         data = case.manifest_data()
         data['profiles'].append({'id': REAL_PROFILE, 'sha256': case.profile_sha(REAL_PROFILE)})
