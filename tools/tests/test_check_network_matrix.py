@@ -384,9 +384,11 @@ class Acceptance(unittest.TestCase):
                 m = fresh()
                 edge(m, 'nm-owner-guest-ssh')[key] = v
                 self.codes(m)
-                m = fresh()
-                edge(m, 'nm-owner-guest-ssh')['enforcement'] = [v]
-                self.codes(m)
+            # Once per value: this input does not depend on the key (it was evaluated once for
+            # each of the 18 keys, the same input every time; plan leaf F-09).
+            m = fresh()
+            edge(m, 'nm-owner-guest-ssh')['enforcement'] = [v]
+            self.codes(m)
         self.assert_code('SCHEMA', 'not a matrix')
 
 
