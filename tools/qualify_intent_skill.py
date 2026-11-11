@@ -47,9 +47,19 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
-# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', REPO / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 DEFAULT_CORPUS = REPO / 'tools' / 'tests' / 'fixtures' / 'intent_qualification' / 'corpus'
 DEFAULT_SKILL = REPO / 'catalog' / 'skills' / 'intent-normalization'
 SKILL_FILES = ('SKILL.md', 'references/intent-record.md', 'assets/proposal-template.md')
@@ -308,7 +318,7 @@ def run_turn(item, turn_number, template, cwd, out_dir, raw_dir, ledger, *,
     clock = time.monotonic()
     try:
         proc = subprocess.run(argv, cwd=cwd, input=stdin, capture_output=True, env=env,
-                              timeout=template.get('timeout_s', 900), creationflags=NO_WINDOW)
+                              timeout=template.get('timeout_s', 900), creationflags=_no_window().no_window_flags())
         exit_code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as exc:
         exit_code, stdout, stderr = 'timeout', exc.stdout or b'', exc.stderr or b''

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -31,6 +32,19 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CHECKOUT = HERE.parent.parent
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', CHECKOUT / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 LOCK = json.loads((HERE.parent / "lock" / "components.lock.json").read_text(encoding="utf-8"))
 
 
@@ -56,7 +70,8 @@ def fetch_tool(t, root: Path) -> Path:
 
 def run(cmd, env, cwd):
     print("  $ " + " ".join(map(str, cmd)), flush=True)
-    p = subprocess.run(list(map(str, cmd)), env=env, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    p = subprocess.run(list(map(str, cmd)), env=env, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=_no_window().no_window_flags())
     return p
 
 

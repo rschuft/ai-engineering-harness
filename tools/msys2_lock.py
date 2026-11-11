@@ -39,6 +39,7 @@ Exit status 0 on success; 1 on any finding (the report says which); 2 on usage.
 import argparse
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -52,9 +53,19 @@ import urllib.request
 from pathlib import Path
 
 TAR = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'tar.exe'
-# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
-# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', Path(__file__).resolve().parents[1] / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 META = ('.PKGINFO', '.BUILDINFO', '.MTREE', '.INSTALL')
 LINK_POLICY = 'materialise-as-copy'
 RESERVED = re.compile(r'(?i)^(con|prn|aux|nul|conin\$|conout\$|com[0-9\u00b9\u00b2\u00b3]|'
@@ -74,7 +85,8 @@ class Stop(Exception):
 def pax_stream(archive):
     """Yield a stream-mode TarFile over bsdtar's uncompressed rewrite of ARCHIVE."""
     proc = subprocess.Popen([str(TAR), '-cf', '-', '--format=pax', '@' + str(archive)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            creationflags=_no_window().no_window_flags())
     try:
         with tarfile.open(fileobj=proc.stdout, mode='r|') as tf:
             yield tf

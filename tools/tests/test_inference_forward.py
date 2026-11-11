@@ -113,7 +113,8 @@ def threaded_spawn(threads, pid=0):
 class ProcessLedger:
     """Every process a test starts (through subprocess.Popen, which guest uses, and the pids its
     records name) is ended in cleanup, whole tree, and none may be left alive; every launch must
-    carry CREATE_NO_WINDOW, so that none opens a console window."""
+    carry the flags the shared no-window helper gives this process (CREATE_NO_WINDOW where it has no
+    console), and none DETACHED_PROCESS or CREATE_NEW_CONSOLE, so that none opens a console window."""
 
     def ledger(self):
         self.launched, self.pids = [], set()
@@ -154,7 +155,10 @@ class ProcessLedger:
             finally:
                 handle.close()
         if os.name == 'nt':
-            self.assertTrue(all(flags & NO_WINDOW for flags in self.launched), self.launched)
+            want = guest._no_window().no_window_flags()
+            opens = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_CONSOLE
+            self.assertTrue(all(flags & want == want and not flags & opens for flags in self.launched),
+                            self.launched)
 
 
 class ForwardBase(unittest.TestCase):
@@ -332,7 +336,7 @@ class ForwardRecords(ForwardBase):
         if os.name == 'nt':
             self.assertEqual(holder_kw['creationflags'],
                              subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
-            self.assertEqual(ssh_kw['creationflags'], subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(ssh_kw['creationflags'], guest._no_window().no_window_flags())
             for kwargs in (holder_kw, ssh_kw):
                 self.assertFalse(kwargs['creationflags'] & subprocess.DETACHED_PROCESS)
                 self.assertFalse(kwargs['creationflags'] & subprocess.CREATE_NEW_CONSOLE)

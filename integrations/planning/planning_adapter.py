@@ -88,9 +88,19 @@ RESOLVE_FORMAT = 'planning-resolve/v1'
 POINTER_PREFIX = 'openspec:'
 CHANGES_DIR = 'openspec/changes'
 TOOL_TIMEOUT_S = 120  # a ceiling that bounds a hung tool, not an expected duration
-# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
-# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', Path(os.path.realpath(__file__)).parents[1] / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 CHECKLIST_NAME = 'tasks.md'
 
 CHANGE_ID = r'[a-z0-9]+(?:-[a-z0-9]+)*'
@@ -297,7 +307,8 @@ class ProcessTree:
         if os.name == 'nt':
             self._start_in_job(argv, popen_args)
         else:
-            flags = popen_args.pop('creationflags', 0) | NO_WINDOW   # 0 here: POSIX has no creation flags
+            # 0 here: POSIX has no creation flags
+            flags = popen_args.pop('creationflags', 0) | _no_window().no_window_flags()
             self.process = subprocess.Popen(argv, start_new_session=True, creationflags=flags, **popen_args)
 
     def _start_in_job(self, argv, popen_args):
@@ -311,7 +322,7 @@ class ProcessTree:
             if not k.SetInformationJobObject(job, _JOB_EXTENDED_LIMITS, ctypes.byref(limits),
                                              ctypes.sizeof(limits)):
                 raise ctypes.WinError(ctypes.get_last_error())
-            flags = popen_args.pop('creationflags', 0) | _CREATE_SUSPENDED | NO_WINDOW
+            flags = popen_args.pop('creationflags', 0) | _CREATE_SUSPENDED | _no_window().no_window_flags()
             self.process = subprocess.Popen(argv, creationflags=flags, **popen_args)
         except BaseException:
             k.CloseHandle(job)

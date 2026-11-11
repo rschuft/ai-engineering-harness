@@ -31,9 +31,19 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 PINNED_TASK_VERSION = '3.54.0'  # recorded with its checksums in docs/development.md
-# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
-# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', ROOT / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 
 
 def load(name, path):
@@ -51,7 +61,8 @@ def report(ok, name, detail):
 
 def output(cmd):
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                              creationflags=_no_window().no_window_flags())
     except (OSError, subprocess.TimeoutExpired):
         return None
     return proc.stdout.strip() if proc.returncode == 0 else None

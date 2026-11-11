@@ -13,6 +13,7 @@ a licence-compliance verification. No installed package is imported or executed.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import subprocess
@@ -21,6 +22,19 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', HERE.parents[1] / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 LOCK_DIR = HERE.parent / "lock"
 
 
@@ -58,7 +72,8 @@ def main():
     # Python
     targets = {t: req_pins(LOCK_DIR / s["file"]) for t, s in lock["python"]["platforms"].items()}
     p = subprocess.run([sys.executable, "-I", "-X", "utf8", "-m", "pip", "inspect", "--isolated", "--disable-pip-version-check",
-                        "--path", str(work / "python" / "site")], capture_output=True, text=True, encoding="utf-8", check=True)
+                        "--path", str(work / "python" / "site")], capture_output=True, text=True, encoding="utf-8", check=True,
+                       creationflags=_no_window().no_window_flags())
     inst = {norm(d["metadata"]["name"]): d["metadata"] for d in json.loads(p.stdout)["installed"]}
     names = sorted(set().union(*targets.values()))
     for n in names:

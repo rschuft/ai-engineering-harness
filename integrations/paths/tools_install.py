@@ -31,9 +31,19 @@ from pathlib import Path
 from typing import Callable
 
 HERE = Path(os.path.realpath(__file__)).parent
-# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
-# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', HERE.parent / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 TOOLS_LOCK = 'composition/lock/python/tools-requirements.txt'
 DEV_LOCK = 'composition/lock/python/dev-requirements.txt'
 # Each installable set: its name (the asset name and the install's tool directory), its lock and
@@ -63,7 +73,7 @@ def sha256_file(path: Path) -> str:
 
 
 def _call(run: Callable, command: list, env: dict) -> None:
-    if (result := run(command, env=env, creationflags=NO_WINDOW)).returncode != 0:
+    if (result := run(command, env=env, creationflags=_no_window().no_window_flags())).returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, command)
 
 

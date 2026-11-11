@@ -1347,6 +1347,24 @@ aliases and injectable parameters, and the tree's own launcher wrappers (`run_tr
 analysis cannot see: a launcher or a program computed at run time, git launched by a child
 process or inside a guest, and code outside tracked `*.py` files.
 
+**No-window guard.** The same census enforces the Owner's rule of 2026-11-11 that no process the
+harness starts opens a visible console window. Every launch in a non-test module under `tools/`,
+`integrations/` and `composition/` passes `creationflags=` from the shared helper
+[`integrations/platform/no_window.py`](../integrations/platform/no_window.py), loaded by path:
+`no_window_flags()` is `CREATE_NO_WINDOW` on Windows only when the starting process is attached to
+no console, and 0 when it is attached to one (a child shares that console, with or without a
+window, and opens none) and off Windows. The flag costs a console host per launch (about 7 ms on
+the verification host). The long-lived background starts whose window state must never depend on
+their parent (QEMU, the inference forward holder, the Gitea supervisor and Gitea) pass
+`CREATE_NO_WINDOW` unconditionally; the guard's `UNCONDITIONAL` list names exactly them. No
+module names `DETACHED_PROCESS` (under which every console child opens a window) or
+`CREATE_NEW_CONSOLE`. Its exact allowlist, each with its reason: `guest.py exec` (the operator's
+interactive passthrough, which shares the operator's console), the guest-side drill helper and
+`verify_seed.py` (integrity-tracked). A test proves the guard fails on the census's injected
+launches, on the supervisor's start put back to `DETACHED_PROCESS` and on a short launch given the
+unconditional flag. **Not yet verified** outside Windows 11 for the console states (a console with
+a window, a pseudo console, a console without a window, none).
+
 `task repository:test` runs its differential contract suite under the tools interpreter: the
 recorded half compares the module with git's answers recorded over a committed, git-built
 golden corpus and needs no git; the git-oracle half asks git again where git is on `PATH` and

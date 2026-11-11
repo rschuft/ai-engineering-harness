@@ -75,6 +75,19 @@ from typing import Callable, Iterable
 
 HERE = Path(os.path.realpath(__file__)).parent
 REPO = HERE.parents[1]
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', REPO / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 LOCK = 'composition/lock/components.lock.json'
 VERSION = '28.3.0'
 ASSET_KEY = 'windows-amd64'  # the Windows adapter's asset key (platform_contract.asset_key)
@@ -388,8 +401,7 @@ def read_ini(path: Path) -> dict:
 def run_quiet(argv: list[str], env: dict, cwd: Path, run: Callable = subprocess.run, timeout: float = 120.0):
     """Run a Gitea CLI command with its output captured in memory only; the caller decides what to show."""
     return run(argv, env=env, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-               stderr=subprocess.PIPE, timeout=timeout,
-               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+               stderr=subprocess.PIPE, timeout=timeout, creationflags=_no_window().no_window_flags())
 
 
 def generate_secrets(binary: Path, lay: Layout, run: Callable = subprocess.run) -> dict:

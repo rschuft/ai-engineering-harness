@@ -43,9 +43,11 @@ allowlisted function is not a new site (the R6 verifier's verb set is asserted b
 ``test_guest``).
 
 The same parsed trees serve a second guard, the no-window guard (the Owner's rule of 2026-11-11):
-every launch in a non-test module under tools/ and integrations/ carries CREATE_NO_WINDOW, and none
-names DETACHED_PROCESS or CREATE_NEW_CONSOLE (``WindowCensus``; its rules and blind spots are stated
-there, its exact allowlist is ``WINDOW_ALLOWLIST``).
+every launch in a non-test module under tools/, integrations/ and composition/ passes the shared
+helper's flags (integrations/platform/no_window.py) or, at the long-lived background starts only,
+CREATE_NO_WINDOW unconditionally, and none names DETACHED_PROCESS or CREATE_NEW_CONSOLE
+(``WindowCensus``; its rules and blind spots are stated there, its exact lists are
+``WINDOW_ALLOWLIST`` and ``UNCONDITIONAL``).
 """
 from __future__ import annotations
 
@@ -770,32 +772,40 @@ def release():
 
 # ---------------------------------------------------------------- the no-window guard
 #
-# The Owner's rule of 2026-11-11: every process the harness starts on Windows carries
-# CREATE_NO_WINDOW, and none is started with DETACHED_PROCESS (under which each console child opens
-# a window of its own, and CREATE_NO_WINDOW is ignored) or CREATE_NEW_CONSOLE. The guard reads the
-# non-test modules under tools/ and integrations/ from the census's parsed trees:
+# The Owner's rule of 2026-11-11: no process the harness starts ever opens a visible console window,
+# and none is started with DETACHED_PROCESS (under which each console child opens a window of its own,
+# and CREATE_NO_WINDOW is ignored) or CREATE_NEW_CONSOLE. The shared helper
+# integrations/platform/no_window.py gives CREATE_NO_WINDOW only where the starting process has no
+# console (a child of a process attached to a console shares it and opens no window; the flag costs a
+# console host per launch). The guard reads the non-test modules under tools/, integrations/ and
+# composition/ from the census's parsed trees:
 #
 # - every launch (a standard-library launcher reached as the census resolves it, a parameter that
 #   receives a launcher from a call in the same module, or a ``self`` attribute assigned one) passes
-#   ``creationflags=`` an expression that carries the flag: the module's ``NO_WINDOW``,
-#   ``getattr(subprocess, 'CREATE_NO_WINDOW', 0)``, ``subprocess.CREATE_NO_WINDOW``, a ``|`` with one
-#   of them, either branch of a conditional expression holding one, or a name every assignment of
+#   ``creationflags=`` an expression that carries either the helper's value (a call
+#   ``….no_window_flags()``) or the unconditional flag (the module's ``NO_WINDOW``,
+#   ``getattr(subprocess, 'CREATE_NO_WINDOW', 0)`` or ``subprocess.CREATE_NO_WINDOW``): either alone,
+#   in a ``|``, in either branch of a conditional expression, or through a name every assignment of
 #   which carries it;
-# - ``NO_WINDOW`` is bound only at module level, and only to ``getattr(subprocess,
-#   'CREATE_NO_WINDOW', 0)`` (0 off Windows, so POSIX launches are unchanged);
+# - the unconditional flag is used exactly at the long-lived background starts of ``UNCONDITIONAL``,
+#   whose window state must never depend on their parent; every other launch uses the helper;
+# - ``no_window_flags`` is defined only by the helper; ``NO_WINDOW`` is bound only at module level, and
+#   only to ``getattr(subprocess, 'CREATE_NO_WINDOW', 0)`` (0 off Windows: POSIX launches unchanged);
 # - no name, attribute or string names DETACHED_PROCESS or CREATE_NEW_CONSOLE.
 #
 # Blind spots, by construction: a launcher passed in from another module is checked where it is
 # called only when the receiving parameter defaults to a launcher (the repository's
 # ``run=subprocess.run`` form); ``**kwargs`` carrying creationflags is not followed (the launch
 # fails); guest-side Python held in strings is not parsed (it runs in a Linux guest). The allowlist
-# is exact, as the census's is: a site added to it that no longer needs it fails too.
+# and ``UNCONDITIONAL`` are exact, as the census's allowlist is: an entry that no longer applies fails.
 
-WINDOW_ROOTS = ('tools/', 'integrations/')
+WINDOW_ROOTS = ('tools/', 'integrations/', 'composition/')
+HELPER = 'integrations/platform/no_window.py'
 WINDOW_ALLOWLIST = {
-    ('tools/guest.py', 'exec_command'): "interactive passthrough: ssh shares the operator's console and opens no "
-                                        'window of its own; with CREATE_NO_WINDOW it gets a console of its own and '
-                                        "cannot reach the operator's (its output and input are lost); open finding",
+    ('tools/guest.py', 'exec_command'): "the operator's interactive passthrough (Overseer ruling, 2026-11-11): ssh "
+                                        "shares the operator's console and opens no window of its own; with "
+                                        'CREATE_NO_WINDOW it would get a console of its own and could not reach the '
+                                        "operator's (its output and input are lost, probed 2026-11-11)",
     ('tools/guest_drill.py', 'run'): 'guest-side: the drill guest\'s root helper, copied byte for byte into a '
                                      'Linux guest and run there only; Windows creation flags do not exist there',
     ('tools/verify_seed.py', 'git_reader'): 'integrity-tracked (SEED_MANIFEST.json): changed only by the '
@@ -803,27 +813,43 @@ WINDOW_ALLOWLIST = {
     ('tools/verify_seed.py', 'git_reader.git'): 'integrity-tracked (SEED_MANIFEST.json): changed only by the '
                                                 'Owner\'s documented process; open finding for the Owner',
 }
+UNCONDITIONAL = {
+    ('tools/guest.py', 'launch'): 'QEMU, in its own process group; it outlives its caller',
+    ('tools/guest.py', 'forward_spawn'): 'the inference forward holder, in its own process group',
+    ('integrations/platform/platform_windows.py', 'WindowsAdapter.launch_supervisor'): 'the Gitea supervisor, '
+                                                                                         'broken away from the caller',
+    ('integrations/gitea/gitea_host.py', 'supervise'): 'Gitea itself, for as long as its supervisor runs',
+}
 WINDOW_OPENERS = ('DETACHED_PROCESS', 'CREATE_NEW_CONSOLE')
 OPENER_TEXT = re.compile(r'\b(?:DETACHED_PROCESS|CREATE_NEW_CONSOLE)\b')
 NO_WINDOW_FORM = ast.dump(ast.parse("getattr(subprocess, 'CREATE_NO_WINDOW', 0)", mode='eval').body)
+HELPER_CALL, CONSTANT = 'helper', 'constant'
 
 
 def window_scanned(path):
-    """A non-test module under tools/ or integrations/."""
+    """A non-test module under tools/, integrations/ or composition/."""
     parts = path.split('/')
     return path.startswith(WINDOW_ROOTS) and 'tests' not in parts[:-1] and not parts[-1].startswith('test_')
 
 
+def _kind(kinds):
+    """The combined kind of the parts of a flags expression: the constant when any part is it (the start is
+    then unconditional), else the helper when any part is it, else None (the flag is not carried)."""
+    return CONSTANT if CONSTANT in kinds else HELPER_CALL if HELPER_CALL in kinds else None
+
+
 class WindowCensus:
-    """The launches of the scanned modules that may open a window: ``findings`` is {(path, site):
-    [(line, problem)]} for launches without the flag, ``problems`` [(path, line, problem)] for what no
-    allowlist admits (a window-opening flag, a ``NO_WINDOW`` bound to anything else)."""
+    """The launches of the scanned modules: ``findings`` is {(path, site): [(line, problem)]} for launches
+    that carry neither the helper's value nor the flag, ``unconditional`` {(path, site): [line]} for those
+    that carry the flag unconditionally, ``problems`` [(path, line, problem)] for what no allowlist admits
+    (a window-opening flag, a ``NO_WINDOW`` bound to anything else, a ``no_window_flags`` of another
+    module)."""
 
     def __init__(self, census, sources):
         self.census, self.sources = census, sources
         self.infos = {path: info for path, info in census.infos.items() if window_scanned(path)}
         self.marked = set()                # (id(function node), parameter): receives a launcher
-        self.findings, self.problems = {}, []
+        self.findings, self.unconditional, self.problems = {}, {}, []
         self.functions, self.methods = {}, {}  # path -> {name: scope}, path -> {(class, name): scope}
         for path, info in self.infos.items():
             self._index(path, info)
@@ -836,6 +862,8 @@ class WindowCensus:
         for scope in info.scopes:
             if not isinstance(scope.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            if scope.node.name == 'no_window_flags' and path != HELPER:
+                self.problems.append((path, scope.node.lineno, f'no_window_flags defined outside {HELPER}'))
             if scope.cls is not None:
                 methods[(scope.cls[0], scope.node.name)] = scope
             elif scope.parent is not None and scope.parent.node is info.tree:
@@ -894,30 +922,34 @@ class WindowCensus:
                     changed = True
 
     def carries(self, scope, expr, depth=0):
-        """True when EXPR, a creationflags value, carries CREATE_NO_WINDOW."""
+        """What EXPR, a creationflags value, carries: HELPER_CALL, CONSTANT or None."""
         if depth > MAX_DEPTH:
-            return False
+            return None
         info = scope.module
         if isinstance(expr, ast.Name):
             owner = scope.lookup(expr.id)
             if owner is None:
-                return False
+                return None
             values = owner.assigned.get(expr.id, [])   # a parameter's own value is unknown: never carries
             if expr.id == 'NO_WINDOW':
-                return owner.node is info.tree and bool(values) and \
-                    all(v is not None and ast.dump(v) == NO_WINDOW_FORM for v in values)
-            return bool(values) and all(v is not None and self.carries(owner, v, depth + 1) for v in values)
+                return CONSTANT if owner.node is info.tree and values and \
+                    all(v is not None and ast.dump(v) == NO_WINDOW_FORM for v in values) else None
+            kinds = [self.carries(owner, v, depth + 1) if v is not None else None for v in values]
+            return _kind(kinds) if kinds and None not in kinds else None
         if isinstance(expr, ast.Attribute):
-            return expr.attr == 'CREATE_NO_WINDOW' and isinstance(expr.value, ast.Name) and \
-                info.modules.get(expr.value.id) == 'subprocess' and scope.lookup(expr.value.id) is None
+            return CONSTANT if expr.attr == 'CREATE_NO_WINDOW' and isinstance(expr.value, ast.Name) and \
+                info.modules.get(expr.value.id) == 'subprocess' and scope.lookup(expr.value.id) is None else None
         if isinstance(expr, ast.Call):
-            return ast.dump(expr) == NO_WINDOW_FORM and scope.lookup('subprocess') is None and \
-                info.modules.get('subprocess') == 'subprocess'
+            if isinstance(expr.func, ast.Attribute) and expr.func.attr == 'no_window_flags' and not expr.args \
+                    and not expr.keywords:
+                return HELPER_CALL
+            return CONSTANT if ast.dump(expr) == NO_WINDOW_FORM and scope.lookup('subprocess') is None and \
+                info.modules.get('subprocess') == 'subprocess' else None
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.BitOr):
-            return self.carries(scope, expr.left, depth + 1) or self.carries(scope, expr.right, depth + 1)
+            return _kind([self.carries(scope, expr.left, depth + 1), self.carries(scope, expr.right, depth + 1)])
         if isinstance(expr, ast.IfExp):
-            return self.carries(scope, expr.body, depth + 1) or self.carries(scope, expr.orelse, depth + 1)
-        return False
+            return _kind([self.carries(scope, expr.body, depth + 1), self.carries(scope, expr.orelse, depth + 1)])
+        return None
 
     def _module(self, path, info):
         for scope, call in info.calls:
@@ -929,12 +961,14 @@ class WindowCensus:
             else:
                 continue
             flags = [k.value for k in call.keywords if k.arg == 'creationflags']
-            if not flags:
-                problem = f'no creationflags (via {via})'
-            elif not self.carries(scope, flags[0]):
-                problem = f'creationflags without CREATE_NO_WINDOW (via {via})'
-            else:
+            kind = self.carries(scope, flags[0]) if flags else None
+            if kind == CONSTANT:
+                self.unconditional.setdefault((path, scope.qualname), []).append(call.lineno)
                 continue
+            if kind == HELPER_CALL:
+                continue
+            problem = f'no creationflags (via {via})' if not flags else \
+                f'creationflags with neither no_window_flags() nor CREATE_NO_WINDOW (via {via})'
             self.findings.setdefault((path, scope.qualname), []).append((call.lineno, problem))
         for scope in info.scopes:
             if 'NO_WINDOW' in scope.assigned:
@@ -956,22 +990,32 @@ class WindowCensus:
                     self.problems.append((path, node.lineno, f'{name} (opens a console window)'))
 
 
-def window_failures(window, allowlist=None):
+def window_failures(window, allowlist=None, unconditional=None):
     """The no-window guard's verdict: the messages that fail it, none when it passes."""
     allowlist = WINDOW_ALLOWLIST if allowlist is None else allowlist
+    unconditional = UNCONDITIONAL if unconditional is None else unconditional
     unexpected, missing = compare(window.findings, allowlist)
     message = []
     if unexpected:
-        message.append('launches that may open a console window (pass creationflags=NO_WINDOW, the module\'s '
-                       "getattr(subprocess, 'CREATE_NO_WINDOW', 0)):\n"
+        message.append('launches that may open a console window (pass creationflags=_no_window().no_window_flags(), '
+                       f'the helper of {HELPER}):\n'
                        + '\n'.join(f'  {path}:{name} ' + '; '.join(f'line {line}: {problem}'
                                                                      for line, problem in window.findings[(path, name)])
                                    for path, name in unexpected))
     if missing:
         message.append('allowlisted sites the no-window guard no longer finds (remove them from '
                        'WINDOW_ALLOWLIST):\n' + '\n'.join(f'  {path}:{name}' for path, name in missing))
+    extra, gone = compare(window.unconditional, unconditional)
+    if extra:
+        message.append('unconditional CREATE_NO_WINDOW outside the long-lived background starts (use the helper, '
+                       'or add the start to UNCONDITIONAL with its reason):\n'
+                       + '\n'.join(f'  {path}:{name} (line {", ".join(map(str, window.unconditional[(path, name)]))})'
+                                   for path, name in extra))
+    if gone:
+        message.append('UNCONDITIONAL starts the guard no longer finds (remove them from UNCONDITIONAL):\n'
+                       + '\n'.join(f'  {path}:{name}' for path, name in gone))
     if window.problems:
-        message.append('window-opening flags or a NO_WINDOW of another value:\n'
+        message.append('window-opening flags, a NO_WINDOW of another value or a no_window_flags of another module:\n'
                        + '\n'.join(f'  {path} line {line}: {problem}' for path, line, problem in window.problems))
     return message
 
@@ -987,19 +1031,23 @@ NEWCOMER = 'integrations/newcomer/newcomer.py'
 GATE = 'tools/publication_gate.py'
 PLATFORM = 'integrations/platform/platform_windows.py'
 NO_WINDOW_SUPERVISOR = 'base = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP'
+PREREQS = 'tools/check_prereqs.py'
+HELPER_FLAGS = 'creationflags=_no_window().no_window_flags())'
 
 
 def injected(sources):
     """The tracked sources, copied, with a git launch injected into a module that is not
     allowlisted, a new module launching git, and the gate's retained site removed. For the no-window
-    guard, the injected launches carry no creationflags, and the Gitea supervisor's start is put back
-    to DETACHED_PROCESS (the defect of 2026-11-11)."""
+    guard, the injected launches carry no creationflags, the Gitea supervisor's start is put back
+    to DETACHED_PROCESS (the defect of 2026-11-11), and a short launch (check_prereqs.output) takes the
+    unconditional flag instead of the helper's."""
     sources = dict(sources)
     sources[ADAPTER] = sources[ADAPTER] + INJECTED
     sources[NEWCOMER] = 'import subprocess\n' + INJECTED
     sources[GATE] = sources[GATE].replace("['git', *args]", "['true', *args]")
     sources[PLATFORM] = sources[PLATFORM].replace(NO_WINDOW_SUPERVISOR, NO_WINDOW_SUPERVISOR.replace(
         'CREATE_NO_WINDOW', 'DETACHED_PROCESS'))
+    sources[PREREQS] = sources[PREREQS].replace(HELPER_FLAGS, 'creationflags=subprocess.CREATE_NO_WINDOW)')
     return sources
 
 
@@ -1020,13 +1068,13 @@ class TreeCensus(unittest.TestCase):
             cls.sites, cls.errors = census.sites, census.errors
             cls.failures = guard_failures(census.sites, census.errors)
             window = WindowCensus(census, cls.sources)
-            cls.window = (window.findings, window.problems, window_failures(window))
+            cls.window = (window.findings, window.unconditional, window.problems, window_failures(window))
             cls.injected_sources = injected(cls.sources)
             census = Census(cls.injected_sources)
             cls.injected_sites = census.sites
             cls.injected_failures = guard_failures(census.sites, census.errors)
             window = WindowCensus(census, cls.injected_sources)
-            cls.injected_window = (window.findings, window.problems, window_failures(window))
+            cls.injected_window = (window.findings, window.unconditional, window.problems, window_failures(window))
             del census, window
         finally:
             release()
@@ -1071,25 +1119,32 @@ class TreeCensus(unittest.TestCase):
 
 
     def test_every_launch_outside_the_tests_opens_no_window(self):
-        findings, problems, failures = self.window
+        findings, unconditional, problems, failures = self.window
         self.assertFalse(failures, '\n'.join(failures))
-        self.assertEqual((sorted(findings), problems), (sorted(WINDOW_ALLOWLIST), []))
+        self.assertEqual((sorted(findings), sorted(unconditional), problems),
+                         (sorted(WINDOW_ALLOWLIST), sorted(UNCONDITIONAL), []))
+        self.assertTrue(HELPER in self.sources, f'{HELPER} is not a tracked source')
 
     def test_the_no_window_guard_fails_on_the_injected_launches_and_a_detached_start(self):
         self.assertEqual(self.sources[PLATFORM].count(NO_WINDOW_SUPERVISOR), 1)
-        findings, problems, failures = self.injected_window
+        self.assertEqual(self.sources[PREREQS].count(HELPER_FLAGS), 1)
+        findings, unconditional, problems, failures = self.injected_window
         supervisor = (PLATFORM, 'WindowsAdapter.launch_supervisor')
         self.assertEqual(compare(findings, WINDOW_ALLOWLIST),
                          ([(NEWCOMER, 'injected_status'), (ADAPTER, 'injected_status'), supervisor], []))
         self.assertEqual({problem for _, problem in findings[supervisor]},
-                         {'creationflags without CREATE_NO_WINDOW (via subprocess.Popen)'})
+                         {'creationflags with neither no_window_flags() nor CREATE_NO_WINDOW (via subprocess.Popen)'})
+        self.assertEqual(compare(unconditional, UNCONDITIONAL), ([(PREREQS, 'output')], [supervisor]))
         self.assertEqual([(path, problem) for path, _, problem in problems],
                          [(PLATFORM, 'DETACHED_PROCESS (opens a console window)')])
         message = '\n'.join(failures)
-        self.assertEqual(len(failures), 2, message)
+        self.assertEqual(len(failures), 4, message)
         line = INJECTED_LINE + self.sources[ADAPTER].count('\n')
         for site in (f'{ADAPTER}:injected_status line {line}: no creationflags (via subprocess.run)',
-                     f'{NEWCOMER}:injected_status', f'{PLATFORM}:WindowsAdapter.launch_supervisor'):
+                     f'{NEWCOMER}:injected_status', f'{PLATFORM}:WindowsAdapter.launch_supervisor',
+                     f'outside the long-lived background starts (use the helper, or add the start to UNCONDITIONAL '
+                     f'with its reason):\n  {PREREQS}:output', f'no longer finds (remove them from UNCONDITIONAL):\n  '
+                     f'{PLATFORM}:WindowsAdapter.launch_supervisor'):
             self.assertIn(site, message)
 
 
@@ -1217,12 +1272,16 @@ class Detection(unittest.TestCase):
         self.assertIn('bad.py', census.errors)
 
 
-def window_of(source, path='tools/mod.py', extra=None):
-    """The no-window guard's census of synthetic sources: (findings by site name, problems)."""
+def window_of(source, path='tools/mod.py', extra=None, unconditional=False):
+    """The no-window guard's census of synthetic sources: (findings by site name, problems), and with
+    ``unconditional`` the names of the sites that carry the flag unconditionally too."""
     sources = {path: source, **(extra or {})}
     window = WindowCensus(Census(sources), sources)
-    return {name: [p for _, p in found] for (p_, name), found in window.findings.items() if p_ == path}, \
-        [problem for _, _, problem in window.problems]
+    result = ({name: [p for _, p in found] for (p_, name), found in window.findings.items() if p_ == path},
+              [problem for _, _, problem in window.problems])
+    if unconditional:
+        result += (sorted(name for p_, name in window.unconditional if p_ == path),)
+    return result
 
 
 class WindowDetection(unittest.TestCase):
@@ -1252,7 +1311,32 @@ class WindowDetection(unittest.TestCase):
                 self.assertIn('no creationflags', findings[site][0])
                 self.assertEqual(problems, [])
 
-    def test_the_flag_forms_that_carry_it(self):
+    def test_the_helpers_value_is_the_flag_of_every_ordinary_launch(self):
+        head = "import subprocess, os\nNO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)\n"
+        helper = [
+            'def f():\n    subprocess.run(["x"], creationflags=_no_window().no_window_flags())\n',
+            'def f():\n    subprocess.run(["x"], creationflags=nw.no_window_flags())\n',
+            'def f(a):\n    flags = a.pop("creationflags", 0) | 4 | _no_window().no_window_flags()\n'
+            '    subprocess.Popen(["x"], creationflags=flags)\n',
+            'def f(run=subprocess.run):\n    run(["x"], creationflags=_no_window().no_window_flags())\n',
+        ]
+        for body in helper:
+            with self.subTest(body=body):
+                self.assertEqual(window_of(head + body, unconditional=True), ({}, [], []))
+        # the unconditional flag is carried too, and the site is listed as an unconditional start
+        self.assertEqual(window_of(head + 'def f():\n    subprocess.Popen(["x"], creationflags=_no_window().'
+                                   'no_window_flags() | NO_WINDOW)\n', unconditional=True), ({}, [], ['f']))
+        # a helper of another name, or the helper called with an argument, carries nothing
+        for body in ('def f():\n    subprocess.run(["x"], creationflags=_no_window().other_flags())\n',
+                     'def f():\n    subprocess.run(["x"], creationflags=nw.no_window_flags(True))\n'):
+            with self.subTest(body=body):
+                self.assertEqual(list(window_of(head + body)[0]), ['f'])
+        # no_window_flags is the shared helper's own: another module's definition is refused
+        self.assertEqual(window_of('def no_window_flags():\n    return 0\n')[1],
+                         [f'no_window_flags defined outside {HELPER}'])
+        self.assertEqual(window_of('def no_window_flags():\n    return 0\n', HELPER)[1], [])
+
+    def test_the_unconditional_forms_that_carry_it(self):
         head = "import subprocess, os\nNO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)\n"
         carried = [
             'def f():\n    subprocess.run(["x"], creationflags=NO_WINDOW)\n',
@@ -1267,7 +1351,7 @@ class WindowDetection(unittest.TestCase):
         ]
         for body in carried:
             with self.subTest(body=body):
-                self.assertEqual(window_of(head + body), ({}, []))
+                self.assertEqual(window_of(head + body, unconditional=True), ({}, [], ['f']))
         missing = [
             'def f():\n    subprocess.run(["x"], creationflags=0)\n',
             'def f():\n    subprocess.run(["x"], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)\n',
@@ -1307,11 +1391,12 @@ class WindowDetection(unittest.TestCase):
         self.assertEqual(window_of('import subprocess\n# never DETACHED_PROCESS\n'
                                    'def f():\n    """never DETACHED_PROCESS here"""\n'), ({}, []))
 
-    def test_only_non_test_modules_under_tools_and_integrations_are_read(self):
+    def test_only_non_test_modules_under_tools_integrations_and_composition_are_read(self):
         launch = 'import subprocess\ndef f():\n    subprocess.run(["x"], creationflags=subprocess.DETACHED_PROCESS)\n'
         for path, read in (('tools/mod.py', True), ('integrations/a/mod.py', True), ('tools/tests/mod.py', False),
                            ('integrations/a/tests/helper.py', False), ('tools/test_mod.py', False),
-                           ('composition/mod.py', False), ('conftest.py', False)):
+                           ('composition/mod.py', True), ('composition/inventory/scan.py', True),
+                           ('profiles/x/netprobe.py', False), ('conftest.py', False)):
             with self.subTest(path=path):
                 self.assertEqual(window_scanned(path), read)
                 findings, problems = window_of(launch, path)
@@ -1320,12 +1405,16 @@ class WindowDetection(unittest.TestCase):
         self.assertEqual(window_of('SCRIPT = """\nimport subprocess\nsubprocess.run(["id"])\n"""\n'), ({}, []))
 
     def test_the_verdict_names_each_site_and_each_stale_allowance(self):
-        sources = {'tools/a.py': 'import subprocess\ndef f():\n    subprocess.run(["x"])\n'}
+        sources = {'tools/a.py': 'import subprocess\ndef f():\n    subprocess.run(["x"])\n'
+                                 'def g():\n    subprocess.run(["x"], creationflags=subprocess.CREATE_NO_WINDOW)\n'}
         window = WindowCensus(Census(sources), sources)
-        message = '\n'.join(window_failures(window, {('tools/b.py', 'g'): 'gone'}))
+        message = '\n'.join(window_failures(window, {('tools/b.py', 'g'): 'gone'}, {('tools/c.py', 'h'): 'gone'}))
         self.assertIn('tools/a.py:f line 3: no creationflags (via subprocess.run)', message)
         self.assertIn('no longer finds (remove them from WINDOW_ALLOWLIST):\n  tools/b.py:g', message)
-        self.assertEqual(window_failures(window, {('tools/a.py', 'f'): 'reason'}), [])
+        self.assertIn('with its reason):\n  tools/a.py:g (line 5)', message)
+        self.assertIn('no longer finds (remove them from UNCONDITIONAL):\n  tools/c.py:h', message)
+        self.assertEqual(window_failures(window, {('tools/a.py', 'f'): 'reason'}, {('tools/a.py', 'g'): 'reason'}),
+                         [])
 
 
 if __name__ == '__main__':

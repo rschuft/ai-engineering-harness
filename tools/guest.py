@@ -204,6 +204,19 @@ def _load_repository_access():
     return module
 
 
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', REPO / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
+
+
 repository_access = _load_repository_access()
 INVENTORY_FORMAT = 'repo-inventory/2'
 LAUNCH_SCHEMA = 'ai-engineering-harness/profiles/launch-record/v1'
@@ -215,11 +228,12 @@ LOG_HEADER_PREFIX = 'AIEH-LOG-HEADER '
 LABEL_VALUES = {'tier': ('strong', 'trusted-workload'), 'nesting': ('none', 'nested')}
 LOOPBACK = '127.0.0.1'
 GUEST_USER_HOST = '127.0.0.1'
-# Every process this module starts on Windows carries this flag (but exec, an interactive passthrough
-# that shares the operator's console): a console process started with it gets a console that no window
-# shows, and its children share it (0 elsewhere). Never DETACHED_PROCESS, under which every console
-# child opens a window of its own (the Owner's rule of 2026-11-11; tools/tests/test_launch_census.py
-# checks every launch).
+# The long-lived background starts (QEMU, the inference forward holder) carry this flag unconditionally:
+# a console process started with it gets a console that no window shows, and its children share it (0
+# elsewhere). Every other launch passes _no_window().no_window_flags(), which is this flag only where this
+# process has no console (integrations/platform/no_window.py); exec, an interactive passthrough, shares the
+# operator's console. Never DETACHED_PROCESS, under which every console child opens a window of its own (the
+# Owner's rule of 2026-11-11; tools/tests/test_launch_census.py checks every launch).
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 # The guest login the SSH channel runs as unless told otherwise: GuestApi's, so the login that reads the
 # management key and the dispatcher's guest login during bootstrap (decision 0013 point 1; E-01.3.3).
@@ -919,7 +933,7 @@ class Ssh:
     def check_effective(self, base):
         """ssh -G: the only identity is the per-instance key; no agent; no global file."""
         result = subprocess.run(base + ['-G', f'agent@{GUEST_USER_HOST}'], capture_output=True,
-                                text=True, check=False, creationflags=NO_WINDOW)
+                                text=True, check=False, creationflags=_no_window().no_window_flags())
         config = {}
         for line in result.stdout.splitlines():
             key, _, value = line.partition(' ')
@@ -946,7 +960,7 @@ class Ssh:
         # guest's bash would read '{\r' instead of '{'.
         data = input_text.encode('utf-8') if input_text is not None else None
         result = subprocess.run(self.argv(user, command), input=data, capture_output=True,
-                                timeout=timeout, check=False, creationflags=NO_WINDOW)
+                                timeout=timeout, check=False, creationflags=_no_window().no_window_flags())
         return subprocess.CompletedProcess(
             result.args, result.returncode, result.stdout,
             result.stderr.decode('utf-8', errors='replace').replace('\r\n', '\n'))
@@ -978,7 +992,7 @@ class Sftp:
         try:
             result = subprocess.run(self.argv(batch_file), capture_output=True,
                                     stdin=subprocess.DEVNULL, timeout=timeout, check=False,
-                                    creationflags=NO_WINDOW)
+                                    creationflags=_no_window().no_window_flags())
         finally:
             batch_file.unlink()
         return {'rc': result.returncode, 'commands': commands,
@@ -1025,7 +1039,7 @@ def run_git(args, home, repo=None, timeout=600):
         argv += ['-C', str(repo)]
     result = subprocess.run(argv + list(args), capture_output=True, env=git_env(home),
                             stdin=subprocess.DEVNULL, timeout=timeout, check=False,
-                            creationflags=NO_WINDOW)
+                            creationflags=_no_window().no_window_flags())
     return subprocess.CompletedProcess(
         argv + list(args), result.returncode,
         result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n'),
@@ -1438,7 +1452,7 @@ def preflight(ctx, xsave_info=None):
         qemu = launch_binary(ctx.profile, ctx.values)['path']
         result = subprocess.run([qemu, '-accel', 'help'], capture_output=True, text=True,
                                 env=scrubbed_env(ctx.values), check=False, timeout=60,
-                                creationflags=NO_WINDOW)
+                                creationflags=_no_window().no_window_flags())
         listed = [line.strip() for line in result.stdout.splitlines()[1:] if line.strip()]
         add('accelerator-listed', accel in listed, f'-accel help: {listed}',
             'A1: enable HypervisorPlatform and restart (PREREQUISITES.md, A1)')
@@ -1597,7 +1611,7 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
         if not parsed['keys']:
             scan = subprocess.run([openssh('ssh-keyscan.exe'), '-p', str(port), '-t', 'ed25519',
                                    GUEST_USER_HOST], capture_output=True, text=True, timeout=60,
-                                  check=False, creationflags=NO_WINDOW)
+                                  check=False, creationflags=_no_window().no_window_flags())
             scanned = parse_keyscan(scan.stdout)
         trusted, source = trusted_host_keys(parsed, scanned)
         known_hosts = Path(instance_dir) / 'ssh' / 'known_hosts'
@@ -1691,7 +1705,7 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
     keygen = subprocess.run([openssh('ssh-keygen.exe'), '-q', '-t', 'ed25519', '-N', '', '-C',
                              name, '-f', str(idir / 'ssh' / 'id_ed25519')],
                             capture_output=True, text=True, check=False, timeout=60,
-                            creationflags=NO_WINDOW)
+                            creationflags=_no_window().no_window_flags())
     if keygen.returncode != 0:
         raise Refused('REFUSED', f'ssh-keygen failed: {keygen.stderr.strip()}')
     values = resolve_values(ctx.profile, ctx.state_dir, name)
@@ -1705,7 +1719,7 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
     disks = {}
     for disk, argv in sorted(disk_commands.items()):
         result = subprocess.run(argv, capture_output=True, text=True, env=env, check=False,
-                                timeout=120, creationflags=NO_WINDOW)
+                                timeout=120, creationflags=_no_window().no_window_flags())
         disks[disk] = {'argv': argv, 'rc': result.returncode, 'stdout': result.stdout.strip(),
                        'stderr': result.stderr.strip()}
         if result.returncode != 0:
@@ -2554,7 +2568,7 @@ def qemu_img_info(record, instance_dir):
         argv = [record['inputs']['qemu_img']['path'], 'info', '--output=json', '-U',
                 posix(Path(instance_dir) / disk)]
         result = subprocess.run(argv, capture_output=True, text=True, env=record['env'],
-                                check=False, timeout=60, creationflags=NO_WINDOW)
+                                check=False, timeout=60, creationflags=_no_window().no_window_flags())
         try:
             out[disk] = json.loads(result.stdout) if result.returncode == 0 else \
                 {'error': result.stderr.strip(), 'rc': result.returncode}
@@ -2594,7 +2608,7 @@ def host_bindings(pid, ports):
         "ConvertTo-Json -Depth 4 -InputObject @{tcp_by_pid=$t;udp_by_pid=$u;tcp_by_port=$p}")
     result = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-Command', script],
                             capture_output=True, text=True, check=False, timeout=120,
-                            creationflags=NO_WINDOW)
+                            creationflags=_no_window().no_window_flags())
     try:
         return json.loads(result.stdout)
     except ValueError:
@@ -4571,7 +4585,7 @@ def powershell_json(script):
         'WindowsPowerShell' / 'v1.0' / 'powershell.exe'
     result = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-Command', script],
                             capture_output=True, text=True, check=False, timeout=120,
-                            creationflags=NO_WINDOW)
+                            creationflags=_no_window().no_window_flags())
     try:
         return json.loads(result.stdout)
     except ValueError:
@@ -4778,7 +4792,7 @@ class NetprobeSession:
                 '--log', str(self.log_path)]
         with open(self.dir / 'listener.stderr', 'xb') as err:
             self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=err, cwd=str(self.dir), creationflags=NO_WINDOW)
+                                         stderr=err, cwd=str(self.dir), creationflags=_no_window().no_window_flags())
         line = self.proc.stdout.readline()      # the listener's ready line, or EOF if it died
         try:
             ready = json.loads(line)
@@ -5353,7 +5367,7 @@ def crane_env(home, temp, environ=None):
 def run_crane(exe, args, env, timeout=CRANE_TIMEOUT_S):
     result = subprocess.run([str(exe)] + list(args), capture_output=True, env=env,
                             stdin=subprocess.DEVNULL, timeout=timeout, check=False,
-                            creationflags=NO_WINDOW)
+                            creationflags=_no_window().no_window_flags())
     return result.returncode, result.stdout, result.stderr.decode('utf-8', errors='replace')
 
 
@@ -6498,7 +6512,7 @@ def forward_hold(spec_text, out=None, pid=None):
     path = Path(spec['record'])
     want = f"remote forward success for: listen {spec['listen']}, connect {spec['connect']}"
     proc = subprocess.Popen(spec['argv'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE, creationflags=NO_WINDOW)
+                            stderr=subprocess.PIPE, creationflags=_no_window().no_window_flags())
     decided, kept, state = threading.Event(), [], {'established': False}
 
     def drain():

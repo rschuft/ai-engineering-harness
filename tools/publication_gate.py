@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -113,9 +114,19 @@ CONFIG_SECTION = 'publication_gate'
 LEAKS_EXIT = 42
 DEFAULT_TIMEOUT = 600          # seconds per scanner run; AIEH_GATE_TIMEOUT overrides
 GIT_TIMEOUT = 300
-# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
-# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
-NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', Path(__file__).resolve().parents[1] / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 MAX_DOWNLOAD = 64 * 1024 * 1024
 MAX_DECOMPRESSED = 256 * 1024 * 1024
 MAX_GZIP_DEPTH = 3
@@ -254,7 +265,7 @@ def require_scanner():
 def git(args, *, data=None, check=True):
     try:
         proc = subprocess.run(['git', *args], input=data, capture_output=True, timeout=GIT_TIMEOUT,
-                              creationflags=NO_WINDOW)
+                              creationflags=_no_window().no_window_flags())
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise GateError(f'git {args[0]} could not run: {exc.__class__.__name__}') from None
     if check and proc.returncode != 0:
@@ -512,7 +523,7 @@ def run_scanner(binary, root, config_path, ignore_dir, report_path, timeout):
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith('GITLEAKS')}
     try:
         proc = subprocess.run(argv, cwd=root, env=env, stdin=subprocess.DEVNULL,
-                              capture_output=True, timeout=timeout, creationflags=NO_WINDOW)
+                              capture_output=True, timeout=timeout, creationflags=_no_window().no_window_flags())
     except subprocess.TimeoutExpired:
         raise GateError(f'the scanner timed out after {timeout}s; the scan did not complete') from None
     except OSError as exc:
@@ -832,7 +843,7 @@ def mode_verify():
     print(f'scanner: Gitleaks {GITLEAKS_VERSION} {name} sha256 {want} OK (per-user cache)')
     try:
         proc = subprocess.run([*SCANNER_PREFIX, str(binary), 'version'], capture_output=True,
-                              timeout=60, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                              timeout=60, stdin=subprocess.DEVNULL, creationflags=_no_window().no_window_flags())
         version = proc.stdout.decode('utf-8', 'replace').strip()
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise GateError(f'the scanner could not report its version: {exc.__class__.__name__}') from None

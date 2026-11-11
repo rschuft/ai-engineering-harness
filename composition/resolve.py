@@ -45,6 +45,7 @@ import argparse
 import base64
 import datetime as _dt
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -60,6 +61,19 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CHECKOUT = HERE.parent
+
+
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', CHECKOUT / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
 LOCK_DIR = HERE / "lock"
 LOCK_FILE = LOCK_DIR / "components.lock.json"
 PYPI_INDEX = "https://pypi.org/simple"
@@ -141,13 +155,15 @@ def download(url, dest: Path, algos=("sha256",)):
 def run(cmd, cwd=None, env=None, capture=True):
     print("  $ " + " ".join(str(c) for c in cmd), flush=True)
     p = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, text=True, encoding="utf-8", errors="replace",
-                       stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None)
+                       stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None,
+                       creationflags=_no_window().no_window_flags())
     return p
 
 
 def tool_version(cmd):
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                           creationflags=_no_window().no_window_flags())
         return (p.stdout or p.stderr).strip()
     except (OSError, subprocess.TimeoutExpired):
         return None

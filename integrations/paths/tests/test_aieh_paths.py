@@ -693,8 +693,8 @@ class ToolsInstall(Base):
                                    *hashed])
         for _, env in self.calls:
             self.assertEqual(env['PIP_CACHE_DIR'], str(self.root / 'ephemeral' / 'cache' / 'pip'))
-        # no console window on Windows (the Owner's rule of 2026-11-11); 0 elsewhere
-        self.assertEqual(self.flags, [getattr(subprocess, 'CREATE_NO_WINDOW', 0)] * 3)
+        # no console window (the Owner's rule of 2026-11-11): the shared helper's flags for this process
+        self.assertEqual(self.flags, [T._no_window().no_window_flags()] * 3)
         record = P.read_asset_record(wheels)
         self.assertEqual(record['integrity']['sha256'], {'pyyaml-6.0.3-cp312-cp312-win_amd64.whl': T.sha256_file(
             wheels / 'pyyaml-6.0.3-cp312-cp312-win_amd64.whl')})

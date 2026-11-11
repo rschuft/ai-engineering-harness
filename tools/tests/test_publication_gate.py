@@ -36,6 +36,7 @@ CATEGORY = 'integration'
 
 REPO = Path(__file__).resolve().parents[2]
 GATE = REPO / 'tools' / 'publication_gate.py'
+NO_WINDOW_HELPER = 'integrations/platform/no_window.py'
 HOOK_FILES = ('pre-commit', 'pre-push', 'gate-common.sh')
 REQUIRE_SCANNER = os.environ.get('AIEH_GATE_REQUIRE_SCANNER') == '1'
 NESTED = os.environ.get('AIEH_GATE_NESTED_SUITE') == '1'
@@ -217,6 +218,8 @@ class GateRepo:
                 shutil.copyfile(scanner, self.tool_dir / gate.expected_scanner()[0])
         files = {f'.githooks/{name}': (REPO / '.githooks' / name).read_bytes() for name in HOOK_FILES}
         files['tools/publication_gate.py'] = gate_source if gate_source is not None else GATE.read_bytes()
+        # the gate's launches take their creation flags from the shared no-window helper, loaded by path
+        files[NO_WINDOW_HELPER] = (REPO / NO_WINDOW_HELPER).read_bytes()
         files['.gitleaks.toml'] = config if config is not None else (REPO / '.gitleaks.toml').read_bytes()
         golden, self.initial = _golden_repositories(files)
         shutil.copytree(golden / 'work', self.root, symlinks=True)

@@ -2562,9 +2562,10 @@ class ArtifactLabels(unittest.TestCase):
 
 
 class NoConsoleWindow(unittest.TestCase):
-    """The launches of the channel and of QEMU carry CREATE_NO_WINDOW (the Owner's rule of 2026-11-11);
-    QEMU in a process group of its own, never DETACHED_PROCESS. Each launcher is recorded and nothing is
-    started (tools/tests/test_launch_census.py checks every launch of the module)."""
+    """The channel's launches carry the shared helper's flags (CREATE_NO_WINDOW only where this process
+    has no console; the Owner's rule of 2026-11-11), QEMU's carry CREATE_NO_WINDOW unconditionally, in a
+    process group of its own, never DETACHED_PROCESS. Each launcher is recorded and nothing is started
+    (tools/tests/test_launch_census.py checks every launch of the module)."""
 
     def setUp(self):
         self.seen = []
@@ -2584,7 +2585,17 @@ class NoConsoleWindow(unittest.TestCase):
             with self.assertRaises(guest.Refused):          # an empty ssh -G answer is refused
                 ssh.check_effective(['ssh.exe'])
         self.assertEqual([argv[-1] for argv, _ in self.seen], ['true', 'true', 'agent@127.0.0.1'])
-        self.assertEqual([kw['creationflags'] for _, kw in self.seen], [guest.NO_WINDOW] * 3)
+        self.assertEqual([kw['creationflags'] for _, kw in self.seen], [guest._no_window().no_window_flags()] * 3)
+        # the helper's answer for each console state, by injection: no console gives the flag
+        helper = guest._no_window()
+        for attached, flags in ((True, 0), (False, guest.NO_WINDOW)):
+            with self.subTest(attached=attached), mock.patch.object(helper, 'attached_to_console',
+                                                                      return_value=attached):
+                self.seen.clear()
+                with mock.patch.object(guest.subprocess, 'run', self.run_fake), \
+                        mock.patch.object(guest.Ssh, 'argv', return_value=['ssh.exe', 'true']):
+                    ssh.run_raw(['true'])
+                self.assertEqual(self.seen[0][1]['creationflags'], flags)
 
     @unittest.skipUnless(os.name == 'nt', 'launch is implemented for Windows only')
     def test_qemu_is_started_in_its_own_group_with_no_window(self):
