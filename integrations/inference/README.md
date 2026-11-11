@@ -6,7 +6,8 @@ core, built and tested offline**. Authority:
 as amended by its amendment 1 (which governs where they disagree), decisions 0007 points 4 and 5,
 [0009](../../decisions/0009-managed-data-root-and-configuration-contract.md) and 0013 point 6; the ACP
 families of [`evidence/S-03-acp-coding-provider-recommendation.md`](../../evidence/S-03-acp-coding-provider-recommendation.md)
-sections 1.1 to 1.5. Slice record: [`evidence/S-03.2-slice1-broker-core.md`](../../evidence/S-03.2-slice1-broker-core.md).
+sections 1.1 to 1.5. Slice record: [`evidence/S-03.2-slice1-broker-core.md`](../../evidence/S-03.2-slice1-broker-core.md);
+the qualification tools of slice 4: [`evidence/S-03.2-slice4-qualification-tools.md`](../../evidence/S-03.2-slice4-qualification-tools.md).
 
 The broker is the host-side process of the trusted management domain (inventory principal
 `inference-broker`) that alone holds the model provider's key and alone issues inference access. Standard
@@ -22,7 +23,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 |---|---|
 | `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line |
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
-| `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation; `127.0.0.1` only) and an attempt token's fingerprint (`token_fingerprint`) |
+| `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation, and for the qualification one grant (`issue`, slice 4); `127.0.0.1` only), an attempt token's fingerprint (`token_fingerprint`) and the `issue` command (slice 4) |
+| `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`) |
 | `tests/broker_support.py` | Synthetic fixtures: an in-memory credential provider, a settable clock, a fake upstream per family (`FakeUpstream`, an in-process server on an ephemeral `127.0.0.1` port) and `Rig` (a broker over a fixture store and audit directory) |
 | `tests/test_config.py` | The shipped declarations; every refusal of the declaration file and of `components.inference_broker`; the decision 0009 loader's refusal of secret-shaped keys under the component; the `config` command |
 | `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
@@ -31,7 +33,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream` |
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan |
 | `tests/test_serve.py` | `serve` end to end in the test process |
-| `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, the broker's refusal codes, an unreachable or foreign port) and its only connection, to `127.0.0.1` |
+| `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
+| `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
 
 ## The declared families
 
@@ -103,7 +106,7 @@ Owner's account can call it (disclosed, decision 0013 point 6).
 | `POST /v1/grants` | `conversation_id`, `attempt_id` (canonical lower-case UUIDs), `family`, `models` (a non-empty subset of the family's allowlist), `budget` (`requests`, `tokens`: positive integers), `ttl_s` (1 to `max_ttl_s`) | 201: the token (returned once), its fingerprint, the grant and its receipt |
 | `POST /v1/grants/revoke` | `token_fingerprint`, `trigger` (a decision 0007 point 5 trigger: `attempt end`, `suspected exposure`, `definition revocation`, `policy revision`, `expiry`, `owner direction`), `revoker` | 200: the grant, revoked, with its revocation receipt |
 | `GET /v1/grants/<fingerprint>` | | the grant: state, budget, counts, usage, receipts |
-| `GET /v1/status` | | listeners, the provider key's fingerprint, each family and whether it is ready, grant counts, the audit file |
+| `GET /v1/status` | | listeners, the provider key's fingerprint and source, each family and whether it is ready, grant counts, the audit file |
 
 A token is `aieh-inf-` and 43 random URL-safe characters. The broker keeps only its sha256 digest and its
 fingerprint (`sha256:` and 16 hex digits). One grant per attempt, durably: its receipt
@@ -161,7 +164,9 @@ admitted one only), `request_bytes`, `response_bytes`, `status`, `upstream_statu
 receipt, refusal and control answer passes the I7 scan of F-06.3 (the broker's guard holds the provider key
 and every issued token, and refuses anything 40-hex token-shaped) first; a line that fails it is withheld
 (`EXPOSURE_FOUND`), an answer that fails it is replaced by an `EXPOSURE_FOUND` refusal. The provider key's
-fingerprint is recorded once, in the broker's start receipt (`aieh-inference-broker-start/1`).
+fingerprint is recorded once, in the broker's start receipt (`aieh-inference-broker-start/1`), with its `source`:
+the name of the credential provider it was read from (`windows-credential-manager` on Windows,
+`stdin-qualification` under the qualification launcher).
 
 ## The provider key
 
@@ -188,10 +193,60 @@ broker only through this module. `dispatcher_ports` reads `control_port` and `in
 (`CONTROL_PORT_REFUSED`) and any other (`FORWARD_PORT_REFUSED`); `ControlClient` calls the control
 listener on `127.0.0.1` as it admits callers (status, `GET /v1/grants/<fingerprint>`, revocation) and
 passes the broker's refusal code on (`CONTROL_UNREACHABLE` and `CONTROL_ANSWER_INVALID` otherwise);
-`token_fingerprint` checks a token's shape (`TOKEN_SHAPE_INVALID`) and returns only its fingerprint. It
-issues nothing: the token reaches an attempt through the typed create, which is A-01.2's and E-03.1's.
+`token_fingerprint` checks a token's shape (`TOKEN_SHAPE_INVALID`) and returns only its fingerprint. The
+dispatcher's own issuance, the token reaching an attempt through the typed create, is A-01.2's and E-03.1's;
+for the qualification only, `ControlClient.issue` and the `issue` command (next section) ask for one grant.
 `guest.py inference-forward` (the forward session) and `job-access-probe --attempt-token-stdin` (the
 token steps) use it; see `docs/development.md`, Execution guests.
+
+## The qualification tools (slice 4)
+
+Built for S-03.2's guest qualification (the plan in
+[`evidence/S-03.2-slice3-forward-session.md`](../../evidence/S-03.2-slice3-forward-session.md) section 3).
+**Not yet verified** outside a test process: running them is part of the Owner's act A2.
+
+- **The qualification launcher**, `inference_qualification.py broker --provider ID`: a separately named command
+  (the Overseer's ruling,
+  [`evidence/S-03.2-plan-amendment-proposal-child-clause.md`](../../evidence/S-03.2-plan-amendment-proposal-child-clause.md)
+  section 5). It runs the broker's own `serve` (`inference_broker.main(['serve'], context)`) with a synthetic
+  provider key held in memory, so that the qualification can show the key substituted for the attempt token
+  ("substitution shown with a synthetic key") and give the provider-key needle a fingerprint.
+  1. It refuses unless every configured family's upstream is plain `http` to a loopback IP literal
+     (`Origin.loopback`; `QUALIFICATION_UPSTREAM_REFUSED`) and one such family names `--provider`
+     (`QUALIFICATION_NO_FAMILY`). It reads `components.inference_broker` once, and the broker serves that
+     snapshot.
+  2. The key is read from standard input only (a terminal is refused: `KEY_STDIN_TTY`). It must be
+     `aieh-qualification-synthetic-` followed by 16 to 128 letters, digits, `_` or `-` (`KEY_NOT_SYNTHETIC`
+     otherwise), a shape no provider's keys have. The prefix is sent upstream as part of the key, so a real
+     provider key is refused as it is, and with the prefix added it is not valid at its provider.
+  3. The start receipt (`aieh-inference-broker-start/1`) records the key's fingerprint with `source`
+     `stdin-qualification`, the name of the launcher's credential provider, never the key; the launcher prints
+     the same fingerprint on standard error.
+  4. `serve` has no flag or variable for it. The launcher's provider (`SyntheticKeyProvider`) is constructed by
+     the launcher only, `credentials.select_provider` never returns it, and it writes nothing (`set` and
+     `delete` refuse: `KEY_NEVER_WRITTEN`).
+
+  The broker's receipts and audit lines go where `serve` writes them; the key is written nowhere.
+- **The token issue command**, `inference_control.py issue` (finding 3(c) of the slice 3 record): one grant from
+  the control listener (`POST /v1/grants`) with `--conversation-id`, `--attempt-id` (default: a new random
+  UUID), `--family`, `--model` (repeatable), `--requests`, `--tokens` and `--ttl-s`, its answer checked for one
+  token of the broker's shape, fingerprint and attempt. The token and one newline go to standard output and
+  nowhere else, for a pipe into `guest.py job-access-probe --attempt-token-stdin`; standard error carries only
+  `{"attempt_id", "token_fingerprint"}`. Standard output must be a pipe, checked before the configuration is
+  read or anything is asked: a terminal is refused (`TOKEN_STDOUT_TERMINAL`), so the token is never shown, and
+  so is a file or a device (`TOKEN_STDOUT_NOT_PIPE`), so it is never kept. Limit: a terminal window that is
+  itself a pipe (mintty, Git Bash's default window) cannot be told from one; run it in a console (PowerShell).
+- **The fake upstream**, `inference_qualification.py fake-upstream --family ID --port PORT [--address ADDR]`: one
+  declared family's fake provider on a loopback IPv4 literal (`127.0.0.1` by default; any other address is
+  refused, `FAKE_ADDRESS_REFUSED`, before anything binds), a port from 1024 to 65535 (`FAKE_PORT_INVALID`),
+  bound exclusively. A request on a declared route of the family gets one fixed answer that is not a model's:
+  the family's JSON shape with the text `aieh fake upstream: a fixed answer, not a model` and the usage counts
+  1 and 1, which the broker's extractor reads. Another route answers 404, a body without a valid length 411.
+  One JSON line (`aieh-inference-fake-upstream/1`) per request goes to standard output before its answer:
+  `method`, `path` (a declared route only), `header_names` and `credential_fingerprints` (the fingerprint of
+  each value of the family's auth header, its scheme word removed); never a header value or a body. `start`
+  and `stop` lines frame them. The qualification shows the substitution by comparing that fingerprint with the
+  start receipt's (and with the token's, which must differ).
 
 ## Commands
 
@@ -200,10 +255,16 @@ token steps) use it; see `docs/development.md`, Execution guests.
 <tools python> -I -B integrations/inference/inference_broker.py config            # validate and print the configuration
 <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   # key on stdin
 <tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until Ctrl+C
+<synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
+<tools python> -I -B integrations/inference/inference_qualification.py fake-upstream --family ID --port PORT
+<tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID \
+    --model NAME --requests N --tokens N --ttl-s SECONDS | <the command that reads the token>
 ```
 
 Exit 0 done, 1 failed, 2 refused (a stable code with its remedy). `serve` and `credential-set` act on the
-managed root, its `config.yml` and the real credential provider: Owner acts, not run in this slice.
+managed root, its `config.yml` and the real credential provider: Owner acts, not run in this slice. The
+qualification launcher acts on the managed root and its `config.yml` too (never on a credential provider); it,
+the fake upstream and `issue` are part of the Owner's act A2 and have not run outside a test process.
 
 ## Stable codes
 
@@ -221,6 +282,10 @@ Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`,
 (411), `BODY_TOO_LARGE` (413), `BUDGET_REQUESTS_EXHAUSTED`, `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_USAGE_UNKNOWN`
 (429), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
 Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.
+Qualification (`inference_qualification.py`, beside the broker's configuration and key codes):
+`QUALIFICATION_UPSTREAM_REFUSED`, `QUALIFICATION_NO_FAMILY`, `KEY_NOT_SYNTHETIC`, `KEY_NEVER_WRITTEN`,
+`FAKE_FAMILY_UNKNOWN`, `FAKE_ADDRESS_REFUSED`, `FAKE_PORT_INVALID`. The `issue` command (beside the dispatcher's
+side's codes and the broker's refusals): `TOKEN_STDOUT_TERMINAL`, `TOKEN_STDOUT_NOT_PIPE`.
 A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes the connection.
 
 ## Not yet verified
@@ -233,5 +298,8 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
 - The guest side: the SSH remote forward (built offline in slice 3, never run against a real ssh or guest),
   the sshd and container-guard changes (slice 2, offline), the typed create's `secrets`/LLM fields (A-01.2,
   E-03.1), the containment re-run; `inference_control.py` against the broker as a supervised host service.
+- The qualification tools (slice 4): the launcher, the `issue` command and the fake upstream have run only in a
+  test process (in-process listeners, an `os.pipe()` for the token); their first runs are part of act A2. The
+  `issue` command's pipe check with PowerShell's and Git Bash's pipes is not observed.
 - Linux and macOS (the listeners' exclusive binding is Windows-specific; elsewhere the default no-reuse
   binding applies).

@@ -67,7 +67,7 @@ class TestControlListener(unittest.TestCase):
         self.assertNotIn('token', answer)
         status, broker = S.control(RIG, 'GET', '/v1/status')
         self.assertEqual(status, 200)
-        self.assertEqual(broker['provider_key'], {'provider': S.PROVIDER,
+        self.assertEqual(broker['provider_key'], {'provider': S.PROVIDER, 'source': 'memory-fake',
                                                   'fingerprint': IB.contract.fingerprint(S.KEY)})
         self.assertEqual({f['id']: f['ready'] for f in broker['families']}, dict.fromkeys(S.FAMILIES, True))
         self.assertEqual(broker['listeners']['control'], {'address': '127.0.0.1', 'port': RIG.control})

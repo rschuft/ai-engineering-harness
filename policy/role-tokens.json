@@ -1622,7 +1622,7 @@
         "evidence": [
           "profiles/README.md"
         ],
-        "note": "The inference endpoint class is deferred, and no plan leaf builds the broker."
+        "note": "Planned at S-03.2 (decision 0015): the broker is built and tested offline in integrations/inference/, and the guest inference endpoint class is declared as an opt-in composition (create --provision --inference). Neither has run outside a test process: the broker's host listeners, its provider key, the guest forward and the guest hardening change are each an Owner act not yet performed."
       },
       "status": "planned",
       "sources": [

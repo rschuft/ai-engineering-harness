@@ -767,8 +767,11 @@ class Grant:
 
 @dataclasses.dataclass(frozen=True)
 class ProviderKey:
+    """The loaded provider key, the provider id it was stored under, and its source: the name of the credential
+    provider it was read from."""
     provider: str
     key: str = dataclasses.field(repr=False)
+    source: str = dataclasses.field(kw_only=True)
 
     @property
     def fingerprint(self) -> str:
@@ -938,7 +941,8 @@ class Broker:
             grants = list(self._grants.values())
         return {'format': STATUS_FORMAT, 'listeners': dict(self.listeners),
                 'provider_key': None if self.provider_key is None else {
-                    'provider': self.provider_key.provider, 'fingerprint': self.provider_key.fingerprint},
+                    'provider': self.provider_key.provider, 'fingerprint': self.provider_key.fingerprint,
+                    'source': self.provider_key.source},
                 'families': [{**family.describe(), 'ready': self.readiness(family) is None,
                               'not_ready': self.readiness(family)} for family in self.config.families.values()],
                 'grants': {'live': sum(g.revocation is None for g in grants),
@@ -1201,7 +1205,7 @@ class Broker:
                       'listeners': self.listeners, 'audit_file': self.audit.path.name,
                       'provider_key': None if self.provider_key is None else {
                           'entry': ENTRY, 'provider': self.provider_key.provider,
-                          'fingerprint': self.provider_key.fingerprint},
+                          'fingerprint': self.provider_key.fingerprint, 'source': self.provider_key.source},
                       'families': [{'id': f.id, 'status': f.status, 'upstream': None if f.upstream is None
                                     else f.upstream.text(), 'provider': f.provider, 'models': list(f.models)}
                                    for f in self.config.families.values()]}
@@ -1462,8 +1466,10 @@ def _serve(ctx: Context, guard: BrokerGuard) -> dict:
     config = load_config(ctx.component(), allow_ephemeral=ctx.allow_ephemeral)
     if config.control_port is None or config.inference_port is None:
         raise InferenceError('CONFIG_INCOMPLETE', 'a listener port is not configured')
-    entry = contract.WatchedProvider(ctx.provider(), guard).get(ENTRY)
-    provider_key = None if entry is None else ProviderKey(entry[0], entry[1])
+    provider = ctx.provider()
+    entry = contract.WatchedProvider(provider, guard).get(ENTRY)
+    provider_key = None if entry is None else ProviderKey(entry[0], entry[1],
+                                                          source=credentials.describe(provider)['provider'])
     del entry
     journal = Journal(ctx.store, guard)
     try:

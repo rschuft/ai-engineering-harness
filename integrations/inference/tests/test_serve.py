@@ -57,7 +57,7 @@ class TestServe(unittest.TestCase):
         self.assertEqual(seen['answer'][0], 200)
         self.assertEqual(self.upstream.requests[-1]['headers'][-1], ('x-api-key', S.KEY))
         report = json.loads(ctx.out.getvalue())
-        self.assertEqual(report['provider_key'], {'provider': S.PROVIDER,
+        self.assertEqual(report['provider_key'], {'provider': S.PROVIDER, 'source': 'memory-fake',
                                                   'fingerprint': IB.contract.fingerprint(S.KEY)})
         self.assertEqual(report['grants'], {'live': 1, 'revoked': 0, 'receipts_pending': 0})
         output = ctx.out.getvalue() + ctx.err.getvalue()
@@ -72,7 +72,8 @@ class TestServe(unittest.TestCase):
             (start,) = starts
             intent = json.loads(start.intent_json)
             self.assertEqual(intent['provider_key'], {'entry': 'AIEH model provider', 'provider': S.PROVIDER,
-                                                      'fingerprint': IB.contract.fingerprint(S.KEY)})
+                                                      'fingerprint': IB.contract.fingerprint(S.KEY),
+                                                      'source': 'memory-fake'})
             self.assertEqual(intent['listeners']['inference']['address'], '127.0.0.1')
             self.assertNotIn(S.KEY, store.canonical_dump().decode('utf-8', 'replace'))
         finally:

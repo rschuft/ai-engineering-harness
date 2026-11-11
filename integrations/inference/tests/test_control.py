@@ -1,13 +1,18 @@
 """The dispatcher's side of the broker (inference_control.py, S-03.2 slice 3): the listener ports read through
 the broker's own configuration loader, the forward target (the inference listener only; the control listener's
 port is refused by name), the token fingerprint, and the control client against a real broker on ephemeral
-127.0.0.1 ports (status, one grant's state, revocation, the broker's refusals passed on by code, an unreachable
-or foreign port). Its only connection is to 127.0.0.1, read from the module's syntax tree.
+127.0.0.1 ports (status, one grant's state, revocation, issuance, the broker's refusals passed on by code, an
+unreachable or foreign port), and the issue command (S-03.2 slice 4: the token to a pipe only; a terminal, a file
+or a device refused before anything is asked). Its only connection is to 127.0.0.1, read from the module's syntax
+tree.
 """
 from __future__ import annotations
 
 import ast
 import http.server
+import io
+import json
+import os
 import threading
 import unittest
 from unittest import mock
@@ -116,6 +121,99 @@ class TestControlClient(unittest.TestCase):
         answer = S.request(self.rig.inference, 'POST', '/v1/chat/completions', {'model': S.MODEL_A},
                            [S.auth('openai-chat', issued['token'])])
         self.assertEqual(answer[0], 401)
+
+    def live(self):
+        return self.client.status()['grants']['live']
+
+    def issue_argv(self, *extra, model=S.MODEL_A):
+        return ['issue', '--conversation-id', S.new_id(), '--family', 'openai-chat', '--model', model,
+                '--requests', '2', '--tokens', '100', '--ttl-s', '60', *extra]
+
+    def ports(self):
+        return {'control_port': self.rig.control, 'inference_port': self.rig.inference}
+
+    def test_issue_returns_one_checked_grant(self):
+        conversation, attempt = S.new_id(), S.new_id()
+        grant = self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A, S.MODEL_B], 3, 50, 60)
+        self.assertEqual((grant['conversation_id'], grant['attempt_id'], grant['models'], grant['budget']),
+                         (conversation, attempt, [S.MODEL_A, S.MODEL_B], {'requests': 3, 'tokens': 50}))
+        self.assertEqual(IC.token_fingerprint(grant['token']), grant['token_fingerprint'])
+        self.assertEqual(self.client.grant(grant['token_fingerprint'])['state'], 'live')
+        with self.assertRaises(IC.ControlError) as caught:
+            self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A], 3, 50, 60)
+        self.assertEqual(caught.exception.code, 'ATTEMPT_HAS_GRANT')
+        token = IB.TOKEN_PREFIX + 'B' * 43
+        good = {'token': token, 'token_fingerprint': IB.contract.fingerprint(token), 'attempt_id': attempt}
+        for answer in ({**good, 'token': None}, {**good, 'token': token + 'x'}, {**good, 'token': S.KEY},
+                       {**good, 'token_fingerprint': 'sha256:' + '0' * 16}, {**good, 'attempt_id': S.new_id()}):
+            with self.subTest(answer=sorted(answer.items())[1:]):
+                with mock.patch.object(IC.ControlClient, 'call', return_value=answer):
+                    with self.assertRaises(IC.ControlError) as caught:
+                        self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A], 3, 50, 60)
+                self.assertEqual(caught.exception.code, 'CONTROL_ANSWER_INVALID')
+                self.assertNotIn(token, str(caught.exception))
+        with mock.patch.object(IC.ControlClient, 'call', return_value=good) as call:
+            self.assertIs(self.client.issue(conversation, attempt, 'openai-chat', (S.MODEL_A,), 3, 50, 60), good)
+        call.assert_called_once_with('POST', '/v1/grants', {
+            'conversation_id': conversation, 'attempt_id': attempt, 'family': 'openai-chat', 'models': [S.MODEL_A],
+            'budget': {'requests': 3, 'tokens': 50}, 'ttl_s': 60})
+
+    def test_the_issue_command_writes_the_token_to_a_pipe_only(self):
+        read_end, write_end = os.pipe()
+        reader = os.fdopen(read_end, 'rb')
+        try:
+            with os.fdopen(write_end, 'w', encoding='ascii', newline='\n') as out:
+                err = io.StringIO()
+                before = self.live()
+                attempt = S.new_id()
+                code = IC.main(self.issue_argv('--attempt-id', attempt),
+                               IC.Context(component=self.ports, out=out, err=err))
+            data = reader.read()
+        finally:
+            reader.close()
+        self.assertEqual(code, 0, err.getvalue())
+        token = data.decode('ascii')[:-1]
+        self.assertEqual(data[-1:], b'\n')
+        fingerprint = IC.token_fingerprint(token)
+        self.assertEqual(self.live(), before + 1)
+        self.assertNotIn(token, err.getvalue())
+        (line,) = err.getvalue().splitlines()
+        self.assertEqual(json.loads(line.partition('inference-control: issued: ')[2]),
+                         {'attempt_id': attempt, 'token_fingerprint': fingerprint})
+        answer = S.request(self.rig.inference, 'POST', '/v1/chat/completions', {'model': S.MODEL_A},
+                           [S.auth('openai-chat', token)])
+        self.assertEqual(answer[0], 200)
+        self.client.revoke(fingerprint, 'attempt end', 'test')
+
+    def test_the_issue_command_refuses_a_terminal_a_file_and_a_broker_refusal(self):
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+
+        def unread():
+            raise AssertionError('the configuration was read before the output was checked')
+        before = self.live()
+        with open(os.devnull, 'w', encoding='ascii') as device:   # Windows' NUL is a character device: a tty
+            for out, code in ((Terminal(), 'TOKEN_STDOUT_TERMINAL'), (io.StringIO(), 'TOKEN_STDOUT_NOT_PIPE'),
+                              (device, 'TOKEN_STDOUT_TERMINAL' if device.isatty() else 'TOKEN_STDOUT_NOT_PIPE')):
+                with self.subTest(code=code):
+                    err = io.StringIO()
+                    self.assertEqual(IC.main(self.issue_argv(), IC.Context(component=unread, out=out, err=err)), 2)
+                    self.assertIn(code, err.getvalue())
+                    if isinstance(out, io.StringIO):
+                        self.assertEqual(out.getvalue(), '')
+        self.assertEqual(self.live(), before)
+        read_end, write_end = os.pipe()
+        with os.fdopen(read_end, 'rb') as reader:
+            with os.fdopen(write_end, 'w', encoding='ascii') as out:
+                for argv, component, code in ((self.issue_argv(model=S.MODEL_C), self.ports, 'MODEL_NOT_ALLOWLISTED'),
+                                              (self.issue_argv(), lambda: None, 'CONFIG_INCOMPLETE')):
+                    with self.subTest(code=code):
+                        err = io.StringIO()
+                        self.assertEqual(IC.main(argv, IC.Context(component=component, out=out, err=err)), 2)
+                        self.assertIn(code, err.getvalue())
+            self.assertEqual(reader.read(), b'')
+        self.assertEqual(self.live(), before)
 
     def test_refusals_carry_the_broker_code(self):
         with self.assertRaises(IC.ControlError) as caught:

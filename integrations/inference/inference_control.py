@@ -8,22 +8,35 @@ the broker, and this module is all of them:
   own configuration loader (dispatcher_ports): the forward session targets the inference listener only, and
   forward_target refuses the control listener's port and any port that is not the inference listener's;
 - a call of the control listener on 127.0.0.1 (ControlClient): the broker's status, one grant's state by its
-  token fingerprint, and revocation (decision 0015 section 3.3: the dispatcher revokes at attempt end). It
-  issues nothing: issuance belongs to the typed create's change (A-01.2, E-03.1), not to this slice;
+  token fingerprint, and revocation (decision 0015 section 3.3: the dispatcher revokes at attempt end). The
+  dispatcher's own issuance belongs to the typed create's change (A-01.2, E-03.1);
 - the fingerprint of an attempt token (token_fingerprint), after checking its shape, so that a record carries
   the fingerprint and never the token.
 
+For the S-03.2 qualification (slice 4), ControlClient.issue and the issue command ask the control listener for
+one grant and write its token to standard output only, which must be a pipe (into guest.py job-access-probe
+--attempt-token-stdin): a terminal is refused, so the token is never shown, and so is a file or device, so it is
+never kept; standard error carries only the grant's attempt id and the token's fingerprint.
+
+  <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID
+      --model NAME --requests N --tokens N --ttl-s SECONDS [--attempt-id UUID] | <the command that reads it>
+
 It connects to 127.0.0.1 only, to the port it is given, and nowhere else; it reads no environment, no proxy
-variable and no credential. Standard library only.
+variable and no credential. Standard library only. Exit 0 done, 2 refused (a stable code).
 """
 from __future__ import annotations
 
+import argparse
+import dataclasses
 import http.client
 import importlib.util
 import json
 import os
+import stat
 import sys
+import uuid
 from pathlib import Path
+from typing import Callable
 
 HERE = Path(os.path.realpath(__file__)).parent
 
@@ -53,6 +66,10 @@ CODES = {
                            'characters)',
     'CONTROL_UNREACHABLE': 'start the broker (an Owner act) and check components.inference_broker.control_port',
     'CONTROL_ANSWER_INVALID': 'the control listener did not answer as the broker does: check the port',
+    'TOKEN_STDOUT_TERMINAL': 'pipe standard output into the command that reads the token (guest.py '
+                             'job-access-probe --attempt-token-stdin): the token is never shown on a terminal',
+    'TOKEN_STDOUT_NOT_PIPE': 'pipe standard output into the command that reads the token: the token is never '
+                             'written to a file or a device',
 }
 
 
@@ -150,3 +167,75 @@ class ControlClient:
     def revoke(self, fingerprint: str, trigger: str, revoker: str) -> dict:
         return self.call('POST', '/v1/grants/revoke', {'token_fingerprint': fingerprint, 'trigger': trigger,
                                                        'revoker': revoker})
+
+    def issue(self, conversation_id: str, attempt_id: str, family: str, models: list, requests: int, tokens: int,
+              ttl_s: int) -> dict:
+        """One grant (POST /v1/grants, the fields as the control API takes them): the broker's answer, its token
+        checked for the broker's shape, its fingerprint and its attempt."""
+        answer = self.call('POST', '/v1/grants', {'conversation_id': conversation_id, 'attempt_id': attempt_id,
+                                                  'family': family, 'models': list(models),
+                                                  'budget': {'requests': requests, 'tokens': tokens}, 'ttl_s': ttl_s})
+        token = answer.get('token')
+        if not isinstance(token, str) or not broker.TOKEN_SHAPE.fullmatch(token) \
+                or answer.get('token_fingerprint') != broker.contract.fingerprint(token) \
+                or answer.get('attempt_id') != attempt_id:
+            raise ControlError('CONTROL_ANSWER_INVALID', 'the grant answer does not carry one token of this attempt')
+        return answer
+
+
+def token_pipe(stream) -> None:
+    """Refuse a standard output that is not a pipe: a terminal (the token would be shown) or a file or device (it
+    would be kept)."""
+    if stream.isatty():
+        raise ControlError('TOKEN_STDOUT_TERMINAL', 'standard output is a terminal')
+    try:
+        mode = os.fstat(stream.fileno()).st_mode
+    except (AttributeError, OSError, ValueError):  # no file descriptor (io.UnsupportedOperation is both)
+        mode = 0
+    if not stat.S_ISFIFO(mode):
+        raise ControlError('TOKEN_STDOUT_NOT_PIPE', 'standard output is not a pipe')
+
+
+@dataclasses.dataclass
+class Context:
+    """What the command line acts on: the managed components.inference_broker, standard output and error. A test
+    passes its own."""
+    component: Callable
+    out: object
+    err: object
+
+
+def main(argv=None, context: Context | None = None) -> int:
+    parser = argparse.ArgumentParser(prog='inference_control.py', description="The dispatcher's side of the "
+                                     'inference broker (S-03.2). Exit 0 done, 2 refused.')
+    sub = parser.add_subparsers(dest='command', required=True)
+    issue = sub.add_parser('issue', help='ask the control listener for one grant; its token goes to standard '
+                                         'output only, which must be a pipe')
+    issue.add_argument('--conversation-id', required=True, help='the reserved conversation id (a UUID)')
+    issue.add_argument('--attempt-id', help='the attempt id (a UUID; default: a new random one)')
+    issue.add_argument('--family', required=True, help='a declared family id')
+    issue.add_argument('--model', action='append', required=True, dest='models',
+                       help="a model of the family's allowlist (repeatable)")
+    issue.add_argument('--requests', type=int, required=True, help='the request budget')
+    issue.add_argument('--tokens', type=int, required=True, help='the usage-token budget')
+    issue.add_argument('--ttl-s', type=int, required=True, help='the lifetime in seconds')
+    args = parser.parse_args(argv)
+    ctx = context or Context(component=managed_component, out=sys.stdout, err=sys.stderr)
+    try:
+        token_pipe(ctx.out)
+        ports = dispatcher_ports(ctx.component())
+        grant = ControlClient(ports['control_port']).issue(
+            args.conversation_id, args.attempt_id or str(uuid.uuid4()), args.family, args.models, args.requests,
+            args.tokens, args.ttl_s)
+    except (ControlError, broker.paths.PathsError) as exc:
+        ctx.err.write(f'inference-control: {exc}\n')
+        return 2
+    ctx.out.write(grant['token'] + '\n')
+    ctx.out.flush()
+    ctx.err.write('inference-control: issued: ' + json.dumps({'attempt_id': grant['attempt_id'], 'token_fingerprint':
+                                                               grant['token_fingerprint']}, sort_keys=True) + '\n')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

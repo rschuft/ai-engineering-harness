@@ -234,7 +234,7 @@ class Rig:
         self.config = IB.load_config(raw, allow_ephemeral=True)
         self.journal = IB.Journal(store_factory or (lambda: STORE.open_store(self.db)), self.guard)
         self.audit = IB.AuditLog(self.tmp / 'logs', self.guard, clock=self.clock)
-        key = None if provider_key is None else IB.ProviderKey(*provider_key)
+        key = None if provider_key is None else IB.ProviderKey(*provider_key, source=MemoryProvider.name)
         self.broker = IB.Broker(self.config, provider_key=key, journal=self.journal, audit=self.audit,
                                 guard=self.guard, clock=self.clock, connect=connect)
         self.started = False
