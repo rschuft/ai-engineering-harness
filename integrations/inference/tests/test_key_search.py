@@ -214,6 +214,7 @@ class TestControls(unittest.TestCase):
                 self.assertEqual({c.split('/')[0] for c in control['failed']}, kinds)
                 search.capture('clean', b'nothing')
                 self.assertEqual(search.report()['verdict'], 'invalid')
+                self.assertIn('a positive control missed a planted copy', search.report()['statement'])
         with mock.patch.object(KS.Search, 'holds', lambda self, data: False):
             control = KS.Search(key, chunk=SMALL).controls()
         self.assertEqual(control['failed'], ['tar-name/raw'])      # a name holding the key was shown
@@ -412,7 +413,7 @@ class TestDisk(unittest.TestCase):
             except (ImportError, OSError):
                 os.symlink(target, named / 'link', target_is_directory=True)
             report = self.search.tree('named', named)
-            self.assertIn(KS.WITHHELD, report['where'])
+            self.assertEqual(sorted(report['where']), sorted([KS.WITHHELD, 'link']))     # the link: by its target
             self.assertEqual(report['not_followed'], {'links': 1})
             self.assertGreaterEqual(report['matches_by_view']['name']['fragment'], 2)
             self.assertEqual(self.search.tree('junction', root / 'junction')['unreadable'], {'not a directory': 1})
