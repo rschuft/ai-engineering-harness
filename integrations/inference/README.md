@@ -1,0 +1,220 @@
+# Inference broker (`integrations/inference/`)
+
+Plan leaf S-03.2 ("Implement and qualify the inference-access plane without a model"), **slice 1: the broker
+core, built and tested offline**. Authority:
+[decision 0015](../../decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md)
+as amended by its amendment 1 (which governs where they disagree), decisions 0007 points 4 and 5,
+[0009](../../decisions/0009-managed-data-root-and-configuration-contract.md) and 0013 point 6; the ACP
+families of [`evidence/S-03-acp-coding-provider-recommendation.md`](../../evidence/S-03-acp-coding-provider-recommendation.md)
+sections 1.1 to 1.5. Slice record: [`evidence/S-03.2-slice1-broker-core.md`](../../evidence/S-03.2-slice1-broker-core.md).
+
+The broker is the host-side process of the trusted management domain (inventory principal
+`inference-broker`) that alone holds the model provider's key and alone issues inference access. Standard
+library only, under the tools interpreter; it imports no litellm and no other HTTP client.
+
+**Nothing here has run outside a test process.** Running the broker, its host listeners, the provider key,
+the guest forward and hardening change, external egress and any model call are each their own explicit Owner
+act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the shipped allowlists are empty.
+
+## Files
+
+| Path | What |
+|---|---|
+| `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line |
+| `families.json` | The declared API families (`aieh-inference-families/1`) |
+| `tests/broker_support.py` | Synthetic fixtures: an in-memory credential provider, a settable clock, a fake upstream per family (`FakeUpstream`, an in-process server on an ephemeral `127.0.0.1` port) and `Rig` (a broker over a fixture store and audit directory) |
+| `tests/test_config.py` | The shipped declarations; every refusal of the declaration file and of `components.inference_broker`; the decision 0009 loader's refusal of secret-shaped keys under the component; the `config` command |
+| `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
+| `tests/test_grants.py` | Socket-free: issuance and its refusals, readiness, revocation and expiry with their receipts, journal failures, every admission refusal, budgets, refusal responses; a check that every stable code appears in a test |
+| `tests/test_credential_set.py` | `credential-set` over an in-memory provider and a fixture store |
+| `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream` |
+| `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan |
+| `tests/test_serve.py` | `serve` end to end in the test process |
+
+## The declared families
+
+`families.json` declares each API family the broker passes through, untranslated (amendment 1 point 3):
+
+```json
+{"id": "anthropic-messages", "status": "provisional",
+ "consumer": "Claude Code's ACP adapter ...",
+ "routes": [{"method": "POST", "path": "/v1/messages"}],
+ "query": "refuse",
+ "auth": {"header": "x-api-key", "scheme": null},
+ "usage": "anthropic-messages"}
+```
+
+| Family | Consumer | Routes (provisional) | Auth header | Usage from |
+|---|---|---|---|---|
+| `anthropic-messages` | Claude Code's ACP adapter (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`) | `POST /v1/messages` | `x-api-key: <credential>` | `message_start` and the last event carrying `usage` (`message_delta`); or the body's `usage` |
+| `openai-responses` | Codex's ACP adapter in API-key mode | `POST /v1/responses` | `Authorization: Bearer <credential>` | the last event's `response.usage` (`response.completed`); or the body's `usage` |
+| `openai-chat` | a native direct-LLM agent; a local model server as the degenerate upstream | `POST /v1/chat/completions` | `Authorization: Bearer <credential>` | the last chunk with a non-null `usage`; or the body's `usage` |
+
+- `routes`: the exact method and path pairs admitted. A path is matched as a string: no normalization, no
+  prefix, no trailing slash, no percent-decoding. Every set is **provisional**: it is pinned from observed
+  traffic at the plan leaf that first runs the family, and the extractors with it.
+- `query`: `refuse` (a request target with a query is refused) or `pass` (passed unchanged). All three ship
+  `refuse`.
+- `auth`: the header that carries the credential, read inbound (the attempt token) and written outbound (the
+  provider key), with its scheme (`null` or `Bearer`).
+- `usage`: the extractor (`anthropic-messages`, `openai-responses` or `openai-chat`). Counts are `input`
+  (including reported cache tokens), `output` and `total`; `unknown` when absent, unreadable or cut off.
+
+A declaration names no model, upstream or provider; `load_declarations` refuses anything malformed
+(`DECLARATION_INVALID`).
+
+## Configuration: `components.inference_broker` of `config.yml`
+
+Read through the decision 0009 loader, which refuses any secret-shaped key (`password`, `token`, `secret`,
+`key`, `credential`) anywhere; the broker applies the same rule again to its component.
+
+```yaml
+components:
+  inference_broker:
+    control_port: 18431            # 1024-65535, required to serve
+    inference_port: 18432          # 1024-65535, different from control_port
+    max_request_bytes: 33554432    # default 32 MiB (1 to 256 MiB)
+    max_ttl_s: 86400               # the longest token lifetime, default one day (at most 7 days)
+    upstream_timeout_s: 600        # default 600 (1 to 3600)
+    families:
+      anthropic-messages:
+        provider: <provider id>    # the credential entry's user; omitted only for a loopback upstream
+        upstream: https://<provider API host>   # an origin only
+        models: []                 # exact, verified identifiers; empty: every issue is refused
+```
+
+The ports and values above are placeholders, not decided values. `upstream` is an origin only:
+`https://host[:port]`, or `http://` with a loopback IP literal (a local model server); no path, query,
+fragment or user information. A non-loopback upstream needs a `provider`. Model names are exact identifiers
+(letters, digits, `.`, `_`, `:`, `@`, `/`, `-`): no wildcard, no duplicate. Unknown keys and undeclared
+families are refused. `python -I -B integrations/inference/inference_broker.py config` prints the effective
+configuration and touches no credential, store or listener.
+
+## Tokens: issue, revoke, status (the control listener)
+
+The control listener answers only a direct loopback call (`Host` exactly `127.0.0.1:<port>`, no `Origin`
+header, JSON bodies as `application/json`, at most 64 KiB); it is never forwarded. Every process of the
+Owner's account can call it (disclosed, decision 0013 point 6).
+
+| Call | Body | Answer |
+|---|---|---|
+| `POST /v1/grants` | `conversation_id`, `attempt_id` (canonical lower-case UUIDs), `family`, `models` (a non-empty subset of the family's allowlist), `budget` (`requests`, `tokens`: positive integers), `ttl_s` (1 to `max_ttl_s`) | 201: the token (returned once), its fingerprint, the grant and its receipt |
+| `POST /v1/grants/revoke` | `token_fingerprint`, `trigger` (a decision 0007 point 5 trigger: `attempt end`, `suspected exposure`, `definition revocation`, `policy revision`, `expiry`, `owner direction`), `revoker` | 200: the grant, revoked, with its revocation receipt |
+| `GET /v1/grants/<fingerprint>` | | the grant: state, budget, counts, usage, receipts |
+| `GET /v1/status` | | listeners, the provider key's fingerprint, each family and whether it is ready, grant counts, the audit file |
+
+A token is `aieh-inf-` and 43 random URL-safe characters. The broker keeps only its sha256 digest and its
+fingerprint (`sha256:` and 16 hex digits). One grant per attempt, durably: its receipt
+`inference/attempt/<attempt id>/grant` (`aieh-inference-grant/1`, fingerprint only) is written and read back
+before the token is returned, and a second grant for the same attempt is refused even after a restart.
+Revocation takes effect at once (the next request answers 401) and then writes
+`inference/attempt/<attempt id>/revocation` (`aieh-inference-revocation/1`: fingerprint, attempt,
+conversation, trigger, revoker, and the per-attempt summary of requests, refusals, usage and bytes). An
+expired token is revoked with trigger `expiry` at its next use or at the next control call. A receipt that
+cannot be written leaves the revocation in force and is retried at each control call (`receipts_pending` in
+the status). Receipts go to the integration store, never the effects store. Grants live in memory only: they
+end with the broker process (its stop writes an audit line naming the live fingerprints).
+
+## Inference: admission and pass-through
+
+A request on the inference listener is admitted only when, in this order: exactly one token is presented in a
+declared auth header shape; it is one this broker issued, unrevoked and unexpired; it arrives in its own
+family's auth header; the method and path are in that family's route set (and the query rule holds); the
+request and usage budgets are not spent; the body has one `Content-Length` (no chunked body) within
+`max_request_bytes`, is a JSON object and names a `model` that is in both the token's list and the family's
+allowlist; and the token appears nowhere in what would be forwarded (target, headers, body). The request is
+then counted, and passed through unchanged to the family's one upstream origin: the same method, target and
+body; the client's headers except hop-by-hop ones, `Host`, `Content-Length`, `Accept-Encoding` (the broker
+asks for `identity`, so that usage can be read) and every credential-bearing header (`Authorization`,
+`X-Api-Key`, `Api-Key`, `Proxy-Authorization`, `Cookie`, `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`); then the
+family's auth header with the provider key. The answer is streamed back as it arrives (status, headers,
+body; chunked when the upstream gives no length), its usage read on the way. Accounting and the audit line
+are written before the answer's last bytes, so a client's next request already meets them. An upstream error
+status is passed through as it is.
+
+**Budgets.** A request is refused when the request budget is spent or the usage total reaches the token
+budget. A successful answer that reports no usage (or is cut off) makes the token budget unenforceable, so
+the attempt is refused further requests (`BUDGET_USAGE_UNKNOWN`, fail closed). Concurrent requests of one
+attempt are admitted against the counts at admission, so in-flight requests can overshoot the token budget by
+their own usage (disclosed).
+
+**Egress.** `connect_upstream` is the one place that opens a connection, to the configured upstream origin of
+the admitted token's family: `https` with the system's trust roots and hostname check, or `http` to a
+loopback address only. It reads no proxy variable. The broker resolves the upstream name on the host; it
+opens nothing else (no cost map, telemetry or update check). This is a code-path control plus disclosure
+(decision 0015 section 5.1), shown by the syntax-tree census in `tests/test_egress.py`.
+
+**Listeners.** Both bind `127.0.0.1` only, without address reuse (on Windows with `SO_EXCLUSIVEADDRUSE`, so
+no other socket can take the port), and do no name lookup. Neither writes a log of its own: the audit is the
+broker's log.
+
+## Audit
+
+One append-only JSON line per request (`aieh-inference-audit/1`) in a new file per broker run,
+`<managed root>/persistent/logs/inference/audit-<stamp>-<random>.jsonl`: `time`, `attempt_id`,
+`conversation_id`, `token_fingerprint`, `family`, `method`, `path` (a declared route only), `model` (an
+admitted one only), `request_bytes`, `response_bytes`, `status`, `upstream_status`, `latency_ms`, `usage` and
+`code` (the refusal code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`); plus `broker-start`,
+`broker-stop` and `handler-error` lines. Never a body, a header, the token or the provider key. Every line,
+receipt, refusal and control answer passes the I7 scan of F-06.3 (the broker's guard holds the provider key
+and every issued token, and refuses anything 40-hex token-shaped) first; a line that fails it is withheld
+(`EXPOSURE_FOUND`), an answer that fails it is replaced by an `EXPOSURE_FOUND` refusal. The provider key's
+fingerprint is recorded once, in the broker's start receipt (`aieh-inference-broker-start/1`).
+
+## The provider key
+
+```
+<key on standard input> | <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider <id>
+```
+
+An Owner-run act. The key is read from standard input only (a terminal is refused: pipe it in; never argv,
+the environment, a file or `config.yml`), must be printable ASCII without spaces (8 to 4096 characters,
+optionally followed by one newline), and is stored through the credential provider of
+[`integrations/credentials/`](../credentials/README.md) as the entry `AIEH model provider` with the provider
+id as its user, then read back. Its receipt is an `aieh-credential-act/1` (`provision`, or `rotate` when an
+entry existed; trigger `owner direction`) in the managed integration store, fingerprints only. The output
+shows the fingerprint, never the key. **Not run** in this slice: the tests use an in-memory provider only.
+There is one entry, so the broker holds one provider's key at a time; a family whose `provider` is another
+id is not ready. Rotation is at the provider, then this command again and a broker restart.
+
+## Commands
+
+```
+<tools python> -I -B -m unittest discover -s integrations/inference/tests -v      # task inference:test
+<tools python> -I -B integrations/inference/inference_broker.py config            # validate and print the configuration
+<tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   # key on stdin
+<tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until Ctrl+C
+```
+
+Exit 0 done, 1 failed, 2 refused (a stable code with its remedy). `serve` and `credential-set` act on the
+managed root, its `config.yml` and the real credential provider: Owner acts, not run in this slice.
+
+## Stable codes
+
+Configuration: `DECLARATION_INVALID`, `CONFIG_NOT_A_MAPPING`, `CONFIG_UNKNOWN_KEY`, `CONFIG_SECRET_SHAPED_KEY`,
+`CONFIG_FAMILY_UNKNOWN`, `CONFIG_PORT_INVALID`, `CONFIG_LIMIT_INVALID`, `CONFIG_PROVIDER_INVALID`,
+`CONFIG_PROVIDER_REQUIRED`, `CONFIG_ORIGIN_INVALID`, `CONFIG_MODEL_INVALID`, `CONFIG_INCOMPLETE`.
+Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL_CONTENT_TYPE` (415),
+`CONTROL_BODY_INVALID` (400), `CONVERSATION_ID_INVALID`, `ATTEMPT_ID_INVALID`, `FAMILY_UNKNOWN`, `MODELS_INVALID`,
+`BUDGET_INVALID`, `TTL_INVALID`, `TRIGGER_UNKNOWN`, `REVOKER_INVALID` (400), `MODEL_NOT_ALLOWLISTED` (403),
+`FAMILY_NOT_READY`, `ATTEMPT_HAS_GRANT`, `GRANT_ALREADY_REVOKED` (409), `GRANT_UNKNOWN` (404), `JOURNAL_FAILED`,
+`EXPOSURE_FOUND` (500).
+Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`, `TOKEN_EXPIRED`,
+`TOKEN_WRONG_HEADER` (401), `ROUTE_NOT_ALLOWED` (404), `QUERY_NOT_ALLOWED`, `BODY_LENGTH_INVALID`,
+`BODY_NOT_JSON`, `MODEL_MISSING`, `TOKEN_IN_REQUEST` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
+(411), `BODY_TOO_LARGE` (413), `BUDGET_REQUESTS_EXHAUSTED`, `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_USAGE_UNKNOWN`
+(429), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
+Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.
+A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes the connection.
+
+## Not yet verified
+
+- Everything outside a test process: the broker as a supervised host service (the lifecycle contract), its
+  real listeners, the real credential entry, `credential-set` against the Credential Manager, TLS to a real
+  provider, any model call (each an Owner act).
+- The route sets, query rules and usage extractors of all three families: provisional, written from the
+  families' public shapes, not from observed traffic; they are pinned at the leaf that first runs each family.
+- The guest side (slice 2 onward): the SSH remote forward, the sshd and container-guard changes, the typed
+  create's `secrets`/LLM fields, the containment re-run.
+- Linux and macOS (the listeners' exclusive binding is Windows-specific; elsewhere the default no-reuse
+  binding applies).

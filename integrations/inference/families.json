@@ -1,0 +1,39 @@
+{
+  "format": "aieh-inference-families/1",
+  "description": "The inference broker's declared API families (decision 0015 as amended, amendment 1 points 1 and 3). Each family is passed through untranslated to its one upstream origin. Its routes are the exact method and path pairs admitted; the auth shape is the header that carries the credential, inbound (the attempt token) and outbound (the provider key); usage names the extractor that reads the provider's usage counts. Every route set is provisional: it is pinned from observed traffic at the plan leaf that first runs the family. No upstream, provider or model is declared here: the Owner sets them in components.inference_broker of config.yml, and the model allowlists ship empty (no wildcard; model names are verified, never assumed).",
+  "families": [
+    {
+      "id": "anthropic-messages",
+      "status": "provisional",
+      "consumer": "Claude Code's ACP adapter (ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY): the Anthropic Messages API family",
+      "routes": [
+        {"method": "POST", "path": "/v1/messages"}
+      ],
+      "query": "refuse",
+      "auth": {"header": "x-api-key", "scheme": null},
+      "usage": "anthropic-messages"
+    },
+    {
+      "id": "openai-responses",
+      "status": "provisional",
+      "consumer": "Codex's ACP adapter in API-key mode (OPENAI_BASE_URL through CODEX_CONFIG.openai_base_url, OPENAI_API_KEY): the OpenAI Responses API family",
+      "routes": [
+        {"method": "POST", "path": "/v1/responses"}
+      ],
+      "query": "refuse",
+      "auth": {"header": "authorization", "scheme": "Bearer"},
+      "usage": "openai-responses"
+    },
+    {
+      "id": "openai-chat",
+      "status": "provisional",
+      "consumer": "A native direct-LLM agent's LLM settings (model, base_url, api_key), or a local model server as the degenerate upstream (decision 0015 section 2.4): the OpenAI Chat Completions family",
+      "routes": [
+        {"method": "POST", "path": "/v1/chat/completions"}
+      ],
+      "query": "refuse",
+      "auth": {"header": "authorization", "scheme": "Bearer"},
+      "usage": "openai-chat"
+    }
+  ]
+}
