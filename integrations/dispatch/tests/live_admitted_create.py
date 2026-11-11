@@ -14,14 +14,15 @@ manifest, a managed root under the default TEMP) and the real ``strong-windows-q
 declaration with only ``status.operational`` set to true in a throwaway copy, with its pinned
 create template and route allowlist. The dispatcher's order runs unchanged: resolve,
 reserve_attempt, admit, send_create. Since E-01.3.1 ``send_create`` first reads ``GET
-/server_info`` (decision 0001's preconditions P1 to P5) and then sends the create:
-``PreconditionThenCreate`` answers the first over the drill's API channel (unauthenticated, as
-conversation-smoke reads it) and passes the create to ``tools/guest.py``'s
-``GuestCreateTransport``: one POST to the guest's Agent Server, as agent over the instance's
-management SSH channel (no new host port, guestfwd or share). NOT RUN since that change (E-01.3.1
-ran no live act). ``tools/guest.py drill`` then
-reads the root conversation facts and checks the created container's mounts, caps and runtime
-against the admitted ones, deletes the conversation, and writes the drill record.
+/server_info`` (decision 0001's preconditions P1 to P5) and then sends the create. Since E-01.3.3
+both go through the dispatch module's live transport, ``integrations/dispatch/guest_transport.py``'s
+``GuestTransport``, which ``tools/guest.py drill`` builds on the drill's ``GuestApi``: each call is
+one request to the guest's Agent Server, as the login that holds the management key (``agent``)
+over the instance's management SSH channel, the key read in the guest only (no new host port,
+guestfwd or share). NOT RUN since those changes (E-01.3.1 and E-01.3.3 ran no live act).
+``tools/guest.py drill`` then reads the root conversation facts and checks that exactly one create
+was sent and the created container's mounts, caps and runtime against the admitted ones, deletes
+the conversation, and writes the drill record.
 """
 import argparse
 import importlib.util
@@ -44,24 +45,10 @@ def _load(name, path):
     return module
 
 
-class PreconditionThenCreate:
-    """send_create's transport for the live check: ``GET /server_info`` over the drill's API
-    channel, every other call (the one create) through ``create`` (GuestCreateTransport)."""
-
-    def __init__(self, guest, api, create):
-        self.guest, self.api, self.create = guest, api, create
-
-    def __call__(self, method, path, body):
-        if (method, path) == ('GET', '/server_info'):
-            response, = self.guest._call(self.api, {'method': 'GET', 'path': '/server_info', 'auth': False})
-            return response
-        return self.create(method, path, body)
-
-
 def admitted_create(transport):
     """The dispatcher's order on the fixture, the real declaration in a throwaway copy; the
-    admitted request (AdmittedCreate.to_json) after send_create sent the create through
-    ``transport`` once."""
+    admitted request (AdmittedCreate.to_json) after send_create read ``GET /server_info`` and
+    sent the create through ``transport`` (the dispatch module's live transport), once."""
     adm = _load('test_dispatch_admission', HERE / 'test_dispatch_admission.py')
 
     class Live(adm.AdmissionFixture):
@@ -109,8 +96,7 @@ def main(argv=None):
     try:
         ctx = guest.Context(args.profile, args.state_dir)
         result = guest.drill(ctx, args.name, 'admitted-create', out_path=args.out,
-                             admitted_fn=lambda transport, api: admitted_create(
-                                 PreconditionThenCreate(guest, api, transport)))
+                             admitted_fn=admitted_create)
     except guest.Refused as exc:
         print(f'REFUSED {exc.code}: {exc}', file=sys.stderr)
         return 1

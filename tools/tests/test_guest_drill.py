@@ -534,11 +534,14 @@ class AdmittedCreate(unittest.TestCase):
                             'destination': m['destination'].replace('{conversation_hex}', hex_id),
                             'rw': m['rw']} for m in binds]}
 
+    def report(self, container):
+        return tg.conversation_facts_report([container], [tg.proxy_line()], [tg.proxy_entry()])
+
     def check(self, admitted, container, sent=None):
         record = {'provisioning': {'image_id': tg.IMAGE_ID, 'local_tag': tg.LOCAL_TAG}}
-        report = tg.conversation_facts_report([container], [tg.proxy_line()], [tg.proxy_entry()])
-        return guest.admitted_container_check(PROFILE, record, report, admitted,
-                                              admitted['body'] if sent is None else sent)
+        digest = guest.dispatch_transport().body_sha256
+        return guest.admitted_container_check(PROFILE, record, self.report(container), admitted,
+                                              digest(admitted['body'] if sent is None else sent))
 
     def test_the_container_equals_the_admitted_create(self):
         container = tg.conversation_container()
@@ -566,21 +569,102 @@ class AdmittedCreate(unittest.TestCase):
         ok, rows = self.check(other, container)
         self.assertFalse(ok)
 
-    def test_the_transport_sends_once(self):
-        calls = []
+    def run_drill(self, admitted_fn, api, container):
+        """drill admitted-create with the drill's GuestApi faked: the dispatch module's transport on it."""
+        state = Path(tempfile.mkdtemp(prefix='aieh-admitted-'))
+        self.addCleanup(tg.remove_tree, state)
+        written = {}
+        ctx = types.SimpleNamespace(profile=PROFILE, profile_path=PROFILE_DIR / 'profile.json', repo=REPO,
+                                    state_dir=state)
+        record = dict(DRILL_RECORD, provisioning={'image_id': tg.IMAGE_ID, 'local_tag': tg.LOCAL_TAG})
+        with mock.patch.object(guest, 'running_instance', return_value=(state, record)), \
+                mock.patch.object(guest, 'write_record', side_effect=lambda i, op, out: written.update({op: out})):
+            out = guest.drill(ctx, 'abc', 'admitted-create', admitted_fn=admitted_fn,
+                              channels=lambda rec: (api, lambda: self.report(container), None))
+        self.assertEqual(written['drill-admitted-create']['result'], out['result'])
+        return out
 
-        def api(requests):
-            calls.append(requests)
-            return {'responses': [{'status': 201, 'body': {'id': 'x'}}], 'session_key_occurrences': 0}
-        transport = guest.GuestCreateTransport(api)
-        self.assertEqual(transport('POST', '/api/conversations', {'a': 1})['status'], 201)
-        with self.assertRaises(guest.Refused):
+    def test_the_drill_sends_through_the_dispatch_modules_transport(self):
+        """E-01.3.3: the admitted create reaches the guest through guest_transport.GuestTransport on the
+        drill's GuestApi (no bridge of its own): GET /server_info and the one create, each one API request;
+        the record carries the body's digest and statuses, never the body."""
+        container = tg.conversation_container()
+        admitted = self.admitted(container)
+        requests, used = [], []
+
+        def api(batch):
+            requests.append(batch)
+            (request,) = batch
+            status = 200 if request['method'] != 'POST' else 201
+            return {'responses': [{'method': request['method'], 'path': request['path'], 'status': status,
+                                   'body': {'id': admitted['conversation_id']}, 'seconds': 0.1}],
+                    'session_key_occurrences': 0}
+
+        def chain(transport):
+            used.append(transport)
+            self.assertEqual(transport('GET', '/server_info', None)['status'], 200)
+            self.assertEqual(transport('POST', '/api/conversations', admitted['body']),
+                             {'status': 201, 'body': {'id': admitted['conversation_id']}})
+            return admitted
+        out = self.run_drill(chain, api, container)
+        self.assertEqual(out['result'], 'PASS', out['failed_steps'])
+        (transport,) = used
+        self.assertIsInstance(transport, guest.dispatch_transport().GuestTransport)
+        self.assertEqual(transport.custody['login'], guest.GUEST_API_LOGIN)
+        self.assertEqual([r[0]['method'] + ' ' + r[0]['path'] for r in requests],
+                         ['GET /server_info', 'POST /api/conversations',
+                          'DELETE /api/conversations/' + admitted['conversation_id']])
+        detail = out['steps'][0]['detail']
+        self.assertEqual([(c['method'], c['status']) for c in detail['transport_calls']],
+                         [('GET', 200), ('POST', 201)])
+        self.assertEqual(detail['transport_calls'][1]['body_sha256'],
+                         guest.dispatch_transport().body_sha256(admitted['body']))
+        self.assertNotIn(admitted['body']['conversation_id'], json.dumps(detail['transport_calls']))
+        self.assertEqual(detail['checks'][0]['check'], 'the dispatcher sent exactly one create, answered 2xx')
+
+    def test_a_second_create_or_a_refused_one_fails_the_drill(self):
+        container = tg.conversation_container()
+        admitted = self.admitted(container)
+
+        def api_answering(status):
+            def api(batch):
+                code = status if batch[0]['method'] == 'POST' else 200
+                return {'responses': [{'status': code, 'body': {}}], 'session_key_occurrences': 0}
+            return api
+
+        def twice(transport):
+            transport('POST', '/api/conversations', admitted['body'])
+            transport('POST', '/api/conversations', admitted['body'])
+            return admitted
+
+        def once(transport):
+            transport('POST', '/api/conversations', admitted['body'])
+            return admitted
+        out = self.run_drill(once, api_answering(201), container)
+        self.assertEqual(out['result'], 'PASS', out['failed_steps'])
+        out = self.run_drill(twice, api_answering(201), container)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertFalse(out['steps'][0]['detail']['checks'][0]['ok'])
+        out = self.run_drill(once, api_answering(422), container)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(out['steps'][0]['detail']['checks'][0]['observed'], [422])
+
+    def test_a_stopped_chain_is_a_failed_step_and_the_cleanup_still_runs(self):
+        container = tg.conversation_container()
+
+        def api(batch):
+            return {'responses': [{'error': 'ECONNREFUSED'}], 'session_key_occurrences': 0}
+
+        def chain(transport):
             transport('POST', '/api/conversations', {'a': 1})
-        self.assertEqual(len(calls), 1)
-        failing = guest.GuestCreateTransport(lambda r: {'responses': [{'status': 502}],
-                                                        'session_key_occurrences': 0})
-        with self.assertRaisesRegex(guest.Refused, '502'):
-            failing('POST', '/api/conversations', {})
+        out = self.run_drill(chain, api, container)
+        self.assertEqual(out['result'], 'FAIL')
+        step = out['steps'][0]
+        self.assertEqual(step['detail']['error'], 'CREATE')
+        self.assertIn('NO_ANSWER', step['detail']['message'])
+        self.assertEqual(step['detail']['detail']['transport_calls'][0]['error'], 'ECONNREFUSED')
+        self.assertEqual(out['steps'][1]['step'], 'delete the admitted conversation')
+        self.assertFalse(hasattr(guest, 'GuestCreateTransport'))
 
 
 # ---------------------------------------------------------------- the drills against a fake guest

@@ -215,6 +215,9 @@ LOG_HEADER_PREFIX = 'AIEH-LOG-HEADER '
 LABEL_VALUES = {'tier': ('strong', 'trusted-workload'), 'nesting': ('none', 'nested')}
 LOOPBACK = '127.0.0.1'
 GUEST_USER_HOST = '127.0.0.1'
+# The guest login the SSH channel runs as unless told otherwise: GuestApi's, so the login that reads the
+# management key and the dispatcher's guest login during bootstrap (decision 0013 point 1; E-01.3.3).
+GUEST_API_LOGIN = 'agent'
 PLACEHOLDER = re.compile(r'\{([a-z_]+(?::[a-z_]+)?)\}')
 NAME_DEFAULT = r'^[a-z][a-z0-9-]{1,40}$'
 QMP_WAIT_S = 60          # ceiling for QEMU to open its QMP socket after launch
@@ -924,14 +927,14 @@ class Ssh:
                           f'one: identityfile={identities} identityagent={config.get("identityagent")}')
         self._checked = True
 
-    def run(self, command, user='agent', input_text=None, timeout=300):
+    def run(self, command, user=GUEST_API_LOGIN, input_text=None, timeout=300):
         result = self.run_raw(command, user, input_text, timeout)
         return subprocess.CompletedProcess(
             result.args, result.returncode,
             result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n'),
             result.stderr)
 
-    def run_raw(self, command, user='agent', input_text=None, timeout=300):
+    def run_raw(self, command, user=GUEST_API_LOGIN, input_text=None, timeout=300):
         """stdout as bytes (for example a tar stream); stderr decoded."""
         # Bytes, not text mode: on Windows a text-mode pipe writes '\r\n' for '\n', and the
         # guest's bash would read '{\r' instead of '{'.
@@ -6290,10 +6293,16 @@ def key_search():
     return _inference_module('aieh_inference_key_search', 'inference_key_search.py')
 
 
-def _inference_module(name, file):
+def dispatch_transport():
+    """integrations/dispatch/guest_transport.py, the dispatcher's live transport over GuestApi (E-01.3.3; standard
+    library only, it imports nothing of this module), loaded once."""
+    return _inference_module('aieh_dispatch_guest_transport', 'guest_transport.py', 'dispatch')
+
+
+def _inference_module(name, file, package='inference'):
     module = sys.modules.get(name)
     if module is None:
-        path = REPO / 'integrations' / 'inference' / file
+        path = REPO / 'integrations' / package / file
         spec = importlib.util.spec_from_file_location(name, path)
         module = sys.modules[name] = importlib.util.module_from_spec(spec)
         try:
@@ -13766,31 +13775,13 @@ def drill_root_scan(ctx, name, idir, steps, chan, canaries, raw):
 
 # ---------------------------------------------------------------- the admitted create, live
 
-class GuestCreateTransport:
-    """send_create's transport for a live drill: exactly one POST to the guest's Agent Server
-    (as agent over the management SSH channel, as conversation-smoke does); a second call is
-    refused. The response is kept for the container check."""
-
-    def __init__(self, api):
-        self.api, self.calls = api, []
-
-    def __call__(self, method, path, body):
-        if self.calls:
-            raise Refused('REFUSED', 'the transport sends one create only')
-        self.calls.append({'method': method, 'path': path, 'body': copy.deepcopy(body)})
-        response, = _call(self.api, {'method': method, 'path': path, 'json': body, 'timeout': 600})
-        self.calls[-1]['response'] = {k: response.get(k) for k in ('status', 'seconds', 'error')}
-        if not _status_ok(response):
-            raise Refused('CREATE', f'{method} {path}: {response.get("status") or response.get("error")}')
-        return response
-
-
-def admitted_container_check(profile, record, report, admitted, sent):
+def admitted_container_check(profile, record, report, admitted, sent_sha256):
     """The created container against the admitted create (slice (a)'s AdmittedCreate.to_json):
     its mounts equal the admitted mount set exactly, its caps equal the admitted caps (the
     profile's, the body sends none), its runtime is the server's Docker runtime (a container
     exists for the conversation, the image is the locked one), and the body sent is the
-    admitted body."""
+    admitted body: ``sent_sha256``, the dispatch transport's record of the create (the sha256
+    of its canonical body, guest_transport.body_sha256), equals the admitted body's."""
     hex_id = str(admitted.get('conversation_id', '')).replace('-', '')
     mine = [c for c in report.get('containers') or [] if conversation_hex(c) == hex_id]
     cfg = (provisioning_config(profile)['agent_server'].get('config') or {}).get('content') or {}
@@ -13821,8 +13812,10 @@ def admitted_container_check(profile, record, report, admitted, sent):
                           (admitted.get('body') or {}).get('conversation_runtime') == 'docker',
                           {'image': c.get('Image'), 'config_image': (c.get('Config') or {}).get('Image'),
                            'body_runtime': (admitted.get('body') or {}).get('conversation_runtime')}))
-    rows.append(check_row('the body sent is the admitted body', sent == admitted.get('body'),
-                          'equal' if sent == admitted.get('body') else {'sent': sent}))
+    admitted_sha256 = dispatch_transport().body_sha256(admitted.get('body'))
+    rows.append(check_row('the body sent is the admitted body', sent_sha256 == admitted_sha256,
+                          'equal' if sent_sha256 == admitted_sha256 else
+                          {'sent_sha256': sent_sha256, 'admitted_sha256': admitted_sha256}))
     problems, _ = container_problems(profile, record, report, c) if c else ([{'check': 'absent'}], [])
     rows.append(check_row('the container passes the declared shape (inspect rules)', not problems, problems))
     return all(r['ok'] for r in rows), rows
@@ -14003,7 +13996,8 @@ def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None
     """drill (E-01.2.2 slice (b), TEST ONLY): on a running drill instance, ``fail-closed``
     (the key check and the guard), ``stored-state`` (every field of the job-writable stored
     state), ``root-scan`` (the guest-root P5 scan) or ``admitted-create`` (slice (a)'s admitted
-    create sent live; ``admitted_fn(transport, api)`` runs the dispatch chain). One verdict,
+    create sent live; ``admitted_fn(transport)`` runs the dispatch chain over the dispatch
+    module's live transport, guest_transport.GuestTransport on the drill's GuestApi). One verdict,
     PASS or FAIL (root-scan may be UNKNOWN). ``channels(record) -> (api, facts, req)`` and the
     *_fn hooks stand in for the guest in tests."""
     if kind not in DRILL_KINDS:
@@ -14065,13 +14059,21 @@ def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None
 
         def admitted_step():
             api, facts, _ = chan()
-            transport = GuestCreateTransport(api)
-            admitted = admitted_fn(transport, api)
+            transport = dispatch_transport().GuestTransport(api, profile, api_login=GUEST_API_LOGIN)
+            try:
+                admitted = admitted_fn(transport)
+            except Exception as exc:  # a dispatch refusal or no answer: a failed step, then the cleanup
+                raise Refused('CREATE', f'the dispatch chain stopped ({getattr(exc, "code", type(exc).__name__)}): '
+                              f'{exc}', {'transport_calls': transport.calls}) from None
             report = facts()
+            creates = [c for c in transport.calls if (c['method'], c['path']) == ('POST', '/api/conversations')]
             ok, rows = admitted_container_check(profile, current['record'], report, admitted,
-                                                (transport.calls[0] if transport.calls else {}).get('body'))
+                                                creates[0]['body_sha256'] if len(creates) == 1 else None)
+            rows.insert(0, check_row('the dispatcher sent exactly one create, answered 2xx',
+                                     len(creates) == 1 and _status_ok(creates[0]),
+                                     [c.get('status') for c in creates]))
             memo['admitted'] = admitted
-            return ok and len(transport.calls) == 1, {
+            return ok and rows[0]['ok'], {
                 'admitted': admitted, 'transport_calls': transport.calls, 'checks': rows}
 
         def cleanup():

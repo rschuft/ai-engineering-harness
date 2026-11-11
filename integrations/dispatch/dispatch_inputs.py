@@ -1345,8 +1345,9 @@ class AgentServerClient:
 
     The transport contract: ``transport(method, path, body)`` returns the HTTP answer as
     ``{"status": <int>, "body": <parsed JSON>}`` (the shape tools/guest.py's API calls return) and
-    raises when there is no answer. No implementation for live use exists here: the management key's
-    custody is not built (E-01.3.3 stopped at it); tests inject one. While a role token is delivered
+    raises when there is no answer. The live one is ``guest_transport.GuestTransport`` (E-01.3.3): over
+    tools/guest.py's GuestApi as the guest login that holds the management key, the key read in the guest
+    only (decision 0013 point 1, bootstrap); tests inject fakes. While a role token is delivered
     (attempt_tokens.py, E-01.3.3), a call whose path or body carries it or its fingerprint is
     ROLE_TOKEN_EXPOSURE."""
 
@@ -1402,7 +1403,8 @@ class AgentServerClient:
 # The role tokens open in a dispatcher attempt context (attempt_tokens.py, E-01.3.3), held here as the sha256
 # of the token and its fingerprint only. No Agent Server call may carry one: a conversation container never
 # holds a role token (decision 0013 point 7). Checked at the client, the dispatcher's one way to the server.
-# Two attempts of one stage hold the same standing token: each hold is counted.
+# Two attempts of one stage hold the same standing token: each hold is counted. A release ends the guard's
+# hold only; it is not Gitea revocation (the standing token stays valid; attempt_tokens.py, lifecycle 2).
 _HELD_ROLE_TOKENS: dict[str, list] = {}
 _HELD_LOCK = threading.Lock()
 _HEX_RUN = re.compile(r'[0-9a-f]{40,}')

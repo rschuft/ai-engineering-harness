@@ -298,12 +298,41 @@ reparse point or file anywhere from the category down is `WORKSPACE_PATH_UNSAFE`
 planted between the check and the `mkdir` remains a race the walk detects afterwards, not one it
 prevents.
 
-**Not this leaf.** No transport for live use exists. The management key's custody and the
-per-attempt role tokens are E-01.3.3 ([below](#the-stages-role-token-e-0133)): the role tokens are
-built offline; the key's custody is not (stopped at a recorded boundary). The create body is still the F-04.2 disposable template
+**Not this leaf.** The live transport and the per-attempt role tokens are E-01.3.3
+([below](#the-live-transport-e-0133) and [the stage's role token](#the-stages-role-token-e-0133)),
+built offline. The create body is still the F-04.2 disposable template
 (finding F3, carried to A-01.x and E-03.1). Reconciliation and the idempotent retry are E-01.4.x.
 The independent `docker inspect` of the created runtime is E-01.5. Nothing here has run against a
 live Agent Server: **not yet verified** live.
+
+## The live transport (E-01.3.3)
+
+[`guest_transport.py`](guest_transport.py) is the dispatcher's one live transport.
+`GuestTransport(api, profile, api_login=)` is the `transport(method, path, body)` that
+`AgentServerClient` calls. Each call is one request through `tools/guest.py`'s `GuestApi`: SSH
+over the instance's host-loopback forward with its per-instance key, and the API probe run in the
+guest as the login the profile declares (`identity.guest_user`, `agent`). It returns
+`{"status": <int>, "body": ...}` for every HTTP answer and raises `TransportError` when there is
+none (`NO_ANSWER`). `for_instance(guest, ctx, name)` builds it for a running provisioned
+instance.
+
+This is the bootstrap reading of decision 0013 point 1 (the Overseer's ruling of 2026-11-11): the
+dispatcher principal is the Owner's account acting through this module over `GuestApi` as
+`agent`, the one login that reads the management key. The cut-over is the code path: op-as-* on
+Work goes only through the dispatch module, and `tools/guest.py`'s probes keep their vantage. The
+transport refuses a profile that does not declare that custody (`KEY_CUSTODY_UNDECLARED`: the
+login is the key file's group, the file `root` `0440`, its directory `root` `0750`) and a channel
+that runs as another login (`LOGIN_MISMATCH`).
+
+The key is read in the guest only, from its file. The SSH command line and the guest python's
+arguments carry its path, the listener and the request, never the key. It never enters the host
+process: the probe sends it on the guest's loopback, redacts it from every answer and counts it,
+and an answer that carried it is refused (`SECRET_IN_ANSWER`). The transport never opens the host
+custody copy, which the provision and inspect steps fingerprint (disclosed under decision 0013
+point 6). `calls` records each call's method, path, status, seconds and the sha256 of its
+canonical body (`body_sha256`), never a body or an answer. `tools/guest.py drill --kind
+admitted-create` and `tests/live_admitted_create.py` use this transport; neither has a bridge of
+its own. **Not yet verified** live.
 
 ## The stage's role token (E-01.3.3)
 
@@ -528,6 +557,15 @@ times wherever nothing may be called. The positive control asserts exactly one `
 | `ServerPreconditionTests` (unit) | the recorded `/server_info` meets P1 to P5; each precondition alone refuses (another version, a non-2xx or malformed answer, a missing capability, a local, process, case-variant or absent runtime, a selectable runtime list), and several failures are all named |
 | `CreateReceiptTests` (unit) | 201 is created, 200 existing; another, missing or hex id, other statuses and non-objects give no receipt; the execution reference parses as the lineage reader's attempt reference |
 | `DispatchTests` | the positive control (two calls, the store's three transitions and their details, `workRef` and `outcomeRef` in the reservation, nothing of the answer but its id stored, no event route called, the workspace created as plain directories); an existing conversation is confirmed as existing; the call order and the re-read record (spied: admit and `send_create` get the store's record, not the resolution's object; admission ran with no workspace, the send on a `dispatched` attempt with one); a stored intent altered in seven ways is `RESERVATION_INVALID` and failed; `reserved_inputs` on a missing, untyped or no longer reserved attempt; a resolution refusal reserves nothing; an admission refusal is failed and creates no workspace; junctions planted after admission at the category, the repository and the Work, and a file at the workspace, are refused and nothing is created through them; every precondition case refuses the create through `dispatch` (one `GET`, no `POST`, failed with `create_sent` false), as do an unanswered `/server_info` and an allowlist that no longer allows it; a 4xx is `CREATE_REFUSED` and failed; a 5xx, a 202 or another conversation's id is `unknown` (reconciliation required) and never retried; a lost answer is `unknown`, re-raised, and blocks the next attempt; the outcome reference absent, malformed, ambiguous or at two revisions is refused before any reservation |
+
+[`tests/test_guest_transport.py`](tests/test_guest_transport.py) (E-01.3.3):
+
+| Class | What it shows |
+|---|---|
+| `SeamTests` (unit) | one `GuestApi` request per call; every HTTP status is an answer; a refused, malformed or doubled probe result is `NO_ANSWER`; an answer that carried the key is `SECRET_IN_ANSWER`; a failing channel is re-raised and recorded; `calls` carries the body's canonical digest, never the body |
+| `CustodyTests` (contract) | the checked-in profile declares the bootstrap custody; another group, mode, owner, directory, path or login, or none, is `KEY_CUSTODY_UNDECLARED`; a channel of another login is `LOGIN_MISMATCH`, and `tools/guest.py`'s channel login is `Ssh.run`'s default; `for_instance` builds the instance's `Ssh` and `GuestApi` and refuses an unprovisioned instance |
+| `ProbePairTests` | a fake ssh runs the real API probe locally against a loopback fake Agent Server: the key is read from the fake guest's file and sent on the guest side only; it is never on an ssh command line, in the script, an answer, a record or a refusal; the host process never opens the host custody copy that holds the same synthetic key (negative controls: the open spy sees a read of it, and the text check finds a planted key); an answer echoing the key is redacted in the guest and refused |
+| `DispatchOverTheProbePairTests` | `dispatch` end to end over the live transport and the probe pair: `GET /server_info` and the create, each with the key on the guest side only, the attempt `confirmed` |
 
 [`tests/test_attempt_tokens.py`](tests/test_attempt_tokens.py) (E-01.3.3), on the same fixture: attempts
 are dispatched through the fake Agent Server, then delivered from an in-memory credential provider
