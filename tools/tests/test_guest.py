@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import stat
@@ -5867,7 +5868,21 @@ def inference_observation(record, recorded=False, listener=None, **facts_overrid
     obs['inference_forward'] = {'path': 'x/inference-forward.json', 'recorded': recorded}
     obs['p5']['provider_key'] = {'fingerprint': PROVIDER_FP}
     obs['p5']['summary']['provider_key_hits'] = []
+    obs['p5']['provider_key_search'] = key_search_report('not-found')
     return obs
+
+
+def key_search_report(verdict):
+    """A provider-key search report of that verdict (its shape: inference_key_search.Search.report)."""
+    return {'verdict': verdict, 'bytes_searched': 1234, 'controls': {'valid': verdict != 'invalid', 'cases': 191},
+            'surfaces': [{'label': 'guest collection (P5: files, process environments, records)',
+                          'bytes_total': 1234, 'complete': verdict != 'incomplete',
+                          'found': 1 if verdict == 'found' else 0}]}
+
+
+def synthetic_key():
+    """A synthetic qualification key of the launcher's shape, made at run time."""
+    return guest.key_search().SYNTHETIC_PREFIX + secrets.token_urlsafe(48)[:40]
 
 
 class InferenceInspect(unittest.TestCase):
@@ -6001,6 +6016,29 @@ class InferenceInspect(unittest.TestCase):
         obs['p5']['summary']['provider_key_hits'] = []
         self.assertEqual(self.checks(self.prov, obs)[guest.INFERENCE_KEY_CHECK]['verdict'], 'PASS')
 
+    def test_the_provider_key_itself_is_searched_for(self):
+        """S-03.2's proof as amended: the key itself, not its fingerprint alone; UNKNOWN without the
+        search (or with an incomplete or invalid one), FAIL when found."""
+        obs = inference_observation(self.inf)
+        self.assertEqual(self.checks(self.inf, obs)[guest.INFERENCE_KEY_SEARCH_CHECK]['verdict'], 'PASS')
+        for verdict, want in (('found', 'FAIL'), ('incomplete', 'UNKNOWN'), ('invalid', 'UNKNOWN'),
+                              (None, 'UNKNOWN')):
+            with self.subTest(verdict=verdict):
+                obs['p5']['provider_key_search'] = None if verdict is None else key_search_report(verdict)
+                self.assertEqual(self.failing(self.inf, obs),
+                                 [('profiles P5', guest.INFERENCE_KEY_SEARCH_CHECK, want)])
+        obs['p5']['provider_key_search'] = key_search_report('found')
+        observed = self.checks(self.inf, obs)[guest.INFERENCE_KEY_SEARCH_CHECK]['observed']
+        self.assertEqual(observed['surfaces'][0]['found'], 1)
+        self.assertEqual(set(observed), {'verdict', 'bytes_searched', 'controls', 'surfaces'})
+        # an ordinary instance: the check only when a search ran
+        obs = provisioned_observation(self.prov)
+        self.assertNotIn(guest.INFERENCE_KEY_SEARCH_CHECK, self.checks(self.prov, obs))
+        obs['p5']['provider_key_search'] = key_search_report('not-found')
+        self.assertEqual(self.checks(self.prov, obs)[guest.INFERENCE_KEY_SEARCH_CHECK]['verdict'], 'PASS')
+        self.assertEqual(guest.CHECK_CLASSES[('profiles P5', guest.INFERENCE_KEY_SEARCH_CHECK)][0],
+                         guest.STABLE)
+
     def test_fingerprint_scan_finds_only_the_whole_secret(self):
         key = b'sk-test-0123456789abcdefghijklmnopqrstuv'
         fps = {'provider-key': {PROVIDER_FP}}
@@ -6114,6 +6152,14 @@ class InferenceInspect(unittest.TestCase):
         for fingerprint in (None, PROVIDER_FP):          # valid: on to the (absent) context
             with self.assertRaises(AttributeError):
                 guest.inspect(None, 'abc', provider_key_fingerprint=fingerprint)
+        key = synthetic_key()
+        fingerprint = guest.key_search().fingerprint(key)
+        for given in (None, PROVIDER_FP):                # the key must be the fingerprint's
+            with self.assertRaises(guest.Refused) as cm:
+                guest.inspect(None, 'abc', provider_key_fingerprint=given, provider_key=key)
+            self.assertNotIn(key[-20:], str(cm.exception))
+        with self.assertRaises(AttributeError):
+            guest.inspect(None, 'abc', provider_key_fingerprint=fingerprint, provider_key=key)
         record = self.record
         self.assertNotIn('inference', record)
         self.assertFalse(guest.inference_opted(record))
@@ -6125,6 +6171,124 @@ class InferenceInspect(unittest.TestCase):
             'overlay_sha256': INF['seed_overlay']['sha256']}}}), self.inf['inference'])
         with self.assertRaises(guest.Refused):
             guest.inference_record(PROFILE, {'compositions': {}})
+
+
+class FakeCollectSsh:
+    """The guest side of collect_p5: the plant, the collection (a tar given by the test) and the
+    removal; every argv and standard input kept."""
+
+    def __init__(self, tar_bytes):
+        self.tar_bytes, self.sent = tar_bytes, []
+
+    def run(self, argv, input_text=None, timeout=None, user='agent'):
+        self.sent.append(' '.join(argv) + (input_text or ''))
+        out = 'absent\n' if input_text and input_text.startswith('rm -f') else ''
+        return subprocess.CompletedProcess(argv, 0, out, '')
+
+    def run_raw(self, argv, input_text=None, timeout=None):
+        self.sent.append(' '.join(argv) + (input_text or ''))
+        return subprocess.CompletedProcess(argv, 0, self.tar_bytes, b'')
+
+
+class ProviderKeySearch(TempState):
+    """S-03.2's provider-key search in inspect (the P5 collection and its host files) and in
+    job-access-probe (the answers in the guest), offline: the key held on the host only, never sent
+    to the guest, never recorded; a planted copy found."""
+
+    def setUp(self):
+        super().setUp()
+        self.key = synthetic_key()
+        self.fp = guest.key_search().fingerprint(self.key)
+        self.idir = self.tmp / 'instance'
+        self.idir.mkdir()
+        for name, data in (('launch.json', b'{"instance": "x"}'), ('serial.log', b'boot ok\n'),
+                           ('seed.iso', b'\x00' * 4096)):
+            (self.idir / name).write_bytes(data)
+        self.record = {'inputs': {'seed': {'path': str(self.idir / 'seed.iso')}}, 'host_principal': None}
+
+    def collect(self, members):
+        ssh = FakeCollectSsh(make_tar(members))
+        with mock.patch.object(guest, 'p5_needles', return_value=([], {})):
+            out = guest.collect_p5(ssh, self.idir, self.record, None,
+                                   provider_key_search=lambda tar, host: guest.provider_key_search(
+                                       self.key, tar, host))
+        return out, ssh
+
+    def test_the_collection_and_host_files_are_searched_on_the_host(self):
+        clean = {'etc/hostname': b'guest\n', 'aieh-env/proc-1.environ': b'PATH=/usr/bin\x00HOME=/root\x00',
+                 'aieh-env/ssh-session.env': f'FP={self.fp}\n'.encode()}
+        out, ssh = self.collect(clean)
+        report = out['provider_key_search']
+        self.assertEqual(report['verdict'], 'not-found', json.dumps(report)[:2000])
+        self.assertEqual([s['label'] for s in report['surfaces']],
+                         ['guest collection (P5: files, process environments, records)', 'host launch.json',
+                          'host seed.iso', 'host serial.log'])
+        self.assertEqual(report['surfaces'][0]['items'], 3)
+        self.assertTrue(report['controls']['valid'])
+        sent = '\n'.join(ssh.sent)
+        self.assertFalse(guest.key_search().Search(self.key).holds(sent))
+        self.assertEqual(len(ssh.sent), 3)
+        planted = dict(clean, **{'srv/scratch/agent/x.b64': base64.b64encode(b'k:' + self.key.encode())})
+        (self.idir / 'serial.log').write_bytes(('key=' + self.key).encode('utf-16-le'))
+        out, _ = self.collect(planted)
+        report = out['provider_key_search']
+        self.assertEqual(report['verdict'], 'found')
+        found = {s['label']: s['where'] for s in report['surfaces'] if s['found']}
+        self.assertEqual(found, {'guest collection (P5: files, process environments, records)':
+                                 ['srv/scratch/agent/x.b64'], 'host serial.log': ['serial.log']})
+        self.assertFalse(guest.key_search().Search(self.key).holds(json.dumps(out)))
+        with mock.patch.object(guest, 'p5_needles', return_value=([], {})):
+            plain = guest.collect_p5(FakeCollectSsh(make_tar(clean)), self.idir, self.record, None)
+        self.assertNotIn('provider_key_search', plain)
+
+    def test_the_answers_in_the_guest_are_searched_and_never_kept(self):
+        answer = (b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}')
+        clean = guest.forward_answers_search(self.key, [('the job, forwarded', answer)])
+        self.assertEqual(clean['verdict'], 'not-found')
+        self.assertEqual(clean['surfaces'][0]['label'], 'answer received in the guest: the job, forwarded')
+        echo = json.dumps({'error': 'bad key ' + self.key[:-1] + '!' + self.key}).encode()
+        leaked = guest.forward_answers_search(self.key, [
+            ('x', b'HTTP/1.1 401 x\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n%s\r\n0\r\n\r\n'
+                  % (len(echo), echo))])
+        self.assertEqual(leaked['verdict'], 'found')
+        self.assertEqual(guest.key_search_summary(leaked)['surfaces'][0]['found'], leaked['surfaces'][0]['found'])
+
+    def test_read_provider_key_and_the_command_lines(self):
+        key, fp = self.key, self.fp
+        self.assertEqual(guest.read_provider_key(io.StringIO(key + '\n'), fp), key)
+        stream = io.StringIO(TOKEN + '\n' + key + '\n')
+        self.assertEqual((guest.read_attempt_token(stream), guest.read_provider_key(stream, fp)), (TOKEN, key))
+        tty = io.StringIO(key)
+        tty.isatty = lambda: True
+        for stream, expected, code in ((io.StringIO(key), PROVIDER_FP, 'FINGERPRINT_MISMATCH'),
+                                       (io.StringIO(key), None, 'FINGERPRINT_INVALID'),
+                                       (io.StringIO('sk-' + key), fp, 'KEY_NOT_SYNTHETIC'),
+                                       (io.StringIO(''), fp, 'KEY_INVALID'), (tty, fp, 'KEY_STDIN_TTY')):
+            with self.subTest(code=code), self.assertRaises(guest.Refused) as cm:
+                guest.read_provider_key(stream, expected)
+            self.assertIn(code, str(cm.exception))
+            self.assertFalse(guest.key_search().Search(key).holds(str(cm.exception)))
+        base = ['--profile', str(PROFILE_DIR), '--state-dir', str(self.state), '--name', 'job']
+        with mock.patch.object(guest, 'inspect', return_value={'operation': 'inspect'}) as fn, \
+                mock.patch('sys.stdin', io.StringIO(key + '\n')), mock.patch('sys.stdout', new_callable=io.StringIO):
+            guest.main(['inspect'] + base + ['--provider-key-fingerprint', fp, '--provider-key-stdin'])
+        self.assertEqual(fn.call_args.args[3:], (fp, key))
+        with mock.patch.object(guest, 'job_access_probe',
+                               return_value={'operation': 'job-access-probe', 'result': 'PASS'}) as fn, \
+                mock.patch('sys.stdin', io.StringIO(TOKEN + '\n' + key + '\n')), \
+                mock.patch('sys.stdout', new_callable=io.StringIO):
+            rc = guest.main(['job-access-probe'] + base + ['--attempt-token-stdin', '--provider-key-stdin',
+                                                           '--provider-key-fingerprint', fp])
+        self.assertEqual(rc, 0)
+        self.assertEqual((fn.call_args.kwargs['attempt_token'], fn.call_args.kwargs['provider_key']), (TOKEN, key))
+        for argv in (['inspect'] + base + ['--provider-key-stdin'],
+                     ['job-access-probe'] + base + ['--attempt-token-stdin', '--provider-key-stdin']):
+            with self.subTest(argv=argv), mock.patch('sys.stdin', io.StringIO(TOKEN + '\n' + key + '\n')), \
+                    mock.patch('sys.stdout', new_callable=io.StringIO), \
+                    mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+                self.assertEqual(guest.main(argv), 1)
+            self.assertIn('FINGERPRINT_INVALID', err.getvalue())
+            self.assertFalse(guest.key_search().Search(key).holds(err.getvalue()))
 
 
 class FakeInferenceJobGuest(FakeJobGuest):
@@ -6146,7 +6310,9 @@ class FakeInferenceJobGuest(FakeJobGuest):
             self.login_specs = getattr(self, 'login_specs', []) + [spec]
             status = 200 if self.faults.get('login_admitted') else 401
             data = {'outcome': 'answered', 'status': status,
-                    'refusal': None if status == 200 else 'TOKEN_MISSING'}
+                    'refusal': None if status == 200 else 'TOKEN_MISSING',
+                    'answer_b64': base64.b64encode(b'HTTP/1.1 %d x\r\nContent-Length: 0\r\n\r\n'
+                                                   % status).decode()}
             if self.faults.get('no_forward'):
                 data = {'outcome': 'ECONNREFUSED', 'status': None, 'refusal': None}
             return subprocess.CompletedProcess(argv, 0, guest.JOB_MARKER + json.dumps(data) + '\n',
@@ -6327,13 +6493,23 @@ class TokenPlane:
         if not self.held:
             return {'outcome': 'ECONNREFUSED', 'status': None, 'refusal': None}
         if self.revoked and not self.faults.get('revocation_ignored'):
-            return {'outcome': 'answered', 'status': 401, 'refusal': 'TOKEN_REVOKED',
-                    'token_in_answer': False}
+            return self.whole({'outcome': 'answered', 'status': 401, 'refusal': 'TOKEN_REVOKED',
+                               'token_in_answer': False})
         self.requests += 1
         if self.faults.get('upstream_refused'):
-            return {'outcome': 'answered', 'status': 403, 'refusal': 'MODEL_NOT_ALLOWED'}
-        return {'outcome': 'answered', 'status': 200, 'refusal': None, 'body_bytes': 90,
-                'body_sha256': 'f' * 64, 'token_in_answer': bool(self.faults.get('echo'))}
+            return self.whole({'outcome': 'answered', 'status': 403, 'refusal': 'MODEL_NOT_ALLOWED'})
+        return self.whole({'outcome': 'answered', 'status': 200, 'refusal': None, 'body_bytes': 90,
+                           'body_sha256': 'f' * 64, 'token_in_answer': bool(self.faults.get('echo'))},
+                          self.faults.get('reflect'))
+
+    def whole(self, result, reflect=None):
+        """The answer as the job script returns it (answer_b64), or its size when over the bound."""
+        if self.faults.get('omit'):
+            return dict(result, answer_omitted=1 << 17)
+        body = json.dumps({'status': result['status'],
+                           'echo': base64.b64encode(reflect.encode()).decode() if reflect else None}).encode()
+        data = b'HTTP/1.1 %d x\r\nContent-Length: %d\r\n\r\n%s' % (result['status'], len(body), body)
+        return dict(result, answer_b64=base64.b64encode(data).decode())
 
 
 class FakeTokenGuest(FakeInferenceJobGuest):
@@ -6388,7 +6564,7 @@ class InferenceTokenStep(TempState):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def run_probe(self, plane_faults=None, token=TOKEN, out_path=None, **faults):
+    def run_probe(self, plane_faults=None, token=TOKEN, out_path=None, provider_key=None, **faults):
         cid = json.loads((REPO / AS['fixture']['path']).read_text(encoding='utf-8'))['conversation_id']
         plane = TokenPlane(cid, **(plane_faults or {}))
         fake = FakeTokenGuest(plane, **faults)
@@ -6396,7 +6572,7 @@ class InferenceTokenStep(TempState):
                                      token_fingerprints=['builder=sha256:2edcc7070632f15d'],
                                      channels=lambda rec: (fake.api, fake.facts),
                                      ssh_fn=lambda rec: fake, attempt_token=token, broker=plane,
-                                     forward=plane)
+                                     forward=plane, provider_key=provider_key)
         steps = {s['step']: s for s in out['steps']}
         return out, steps, plane, fake
 
@@ -6462,6 +6638,50 @@ class InferenceTokenStep(TempState):
         self.assertGreater(out['attempt_token']['redacted_from_record'], 0)
         self.assertNotIn(TOKEN, Path(out['record']).read_text(encoding='utf-8'))
         self.assertIn(f'<attempt token {TOKEN_FP} redacted>', json.dumps(out))
+
+    def test_the_provider_key_is_searched_for_in_every_answer(self):
+        key = synthetic_key()
+        out, steps, plane, fake = self.run_probe(provider_key=key)
+        step = steps[guest.INFERENCE_KEY_SEARCH_STEP]
+        self.assertTrue(step['ok'], json.dumps(step, default=str)[:3000])
+        self.assertEqual(out['result'], 'PASS')
+        self.assertEqual(step['detail']['answers'], 4)        # guest login, forwarded, two refusals
+        labels = [s['label'] for s in step['detail']['search']['surfaces']]
+        self.assertEqual(labels, ['answer received in the guest: guest login, no token',
+                                  'answer received in the guest: the job, forwarded',
+                                  'answer received in the guest: the job, after revocation',
+                                  'answer received in the guest: the job, forward re-established'])
+        text = Path(out['record']).read_text(encoding='utf-8')
+        self.assertNotIn('answer_b64', text)
+        self.assertFalse(guest.key_search().Search(key).holds(text + '\n'.join(fake.commands)))
+        self.assertFalse(any(key in ' '.join(map(str, a)) for a in fake.argvs))
+        # the key in an answer: found, a stop condition; an answer not kept whole: a failure
+        out, steps, _, _ = self.run_probe({'reflect': key}, provider_key=key)
+        self.assertEqual(steps[guest.INFERENCE_KEY_SEARCH_STEP]['detail']['search']['verdict'], 'found')
+        self.assertIn('the provider key crossed the forward to the guest',
+                      [s['condition'] for s in out['stop_conditions']])
+        self.assertFalse(guest.key_search().Search(key).holds(Path(out['record']).read_text(encoding='utf-8')))
+        out, steps, _, _ = self.run_probe({'omit': True}, provider_key=key)
+        self.assertFalse(steps[guest.INFERENCE_KEY_SEARCH_STEP]['ok'])
+        self.assertEqual(len(steps[guest.INFERENCE_KEY_SEARCH_STEP]['detail']['omitted']), 3)
+        with self.assertRaises(guest.Refused) as cm:
+            self.run_probe(token=None, provider_key=key)
+        self.assertIn('--provider-key-stdin needs --attempt-token-stdin', str(cm.exception))
+        out, steps, _, _ = self.run_probe()
+        self.assertNotIn(guest.INFERENCE_KEY_SEARCH_STEP, steps)
+        # a record that would hold the key is not written
+        with self.assertRaises(guest.Refused) as cm:
+            self.run_probe({'conversation': key}, provider_key=key)
+        self.assertEqual(cm.exception.code, 'SECRET')
+
+    def test_the_job_script_returns_the_answer_whole_within_its_bound(self):
+        spec = guest.inference_token_spec(PROFILE, {'routes': [{'method': 'POST', 'path': '/v1/messages'}],
+                                                    'auth': {'header': 'x-api-key', 'scheme': None}},
+                                          'syn-model-a', True)
+        self.assertEqual(spec['capture_max'], guest.INFERENCE_CAPTURE_MAX)
+        self.assertIn("out['answer_b64'] = base64.b64encode(data).decode('ascii')", guest.JOB_INFERENCE_TOKEN)
+        self.assertIn("if len(data) <= spec.get('capture_max', 0):", guest.JOB_INFERENCE_TOKEN)
+        self.assertIn("out['answer_omitted'] = len(data)", guest.JOB_INFERENCE_TOKEN)
 
     def test_revoked_at_the_end_when_the_step_did_not_run(self):
         out, steps, plane, _ = self.run_probe(endpoint_open=True)     # the inference sweep fails

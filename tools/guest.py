@@ -2324,13 +2324,18 @@ def scan_host_file(path, literals, patterns, owner=True, fingerprints=None):
             for lab in sorted(scan_bytes(data, use, pats, fingerprints))]
 
 
-def collect_p5(ssh, idir, record, canaries, secret_scan=None, provider_key_fingerprint=None):
+def collect_p5(ssh, idir, record, canaries, secret_scan=None, provider_key_fingerprint=None,
+               provider_key_search=None):
     """The P5 test: plant the positive control, collect, remove it, scan on the host.
 
     Canary values never travel to the guest: the guest's data comes to the host and is
     searched here. The control file holds synthetic samples of each Owner class only.
     ``provider_key_fingerprint`` (decision 0015 section 4.5) makes the provider key a
     needle by its fingerprint: every secret-shaped run is fingerprinted and compared.
+    ``provider_key_search(tar bytes, {label: host path})`` (S-03.2's proof as amended)
+    searches the collection and the host files for the synthetic key itself, raw and
+    encoded, on the host, in memory (provider_key_search below); the key never travels to
+    the guest either.
     """
     token = secrets.token_hex(6)
     control_path = f'{CONTROL_DIR}/.aieh-p5-control-{token}'
@@ -2381,6 +2386,8 @@ def collect_p5(ssh, idir, record, canaries, secret_scan=None, provider_key_finge
         host_scans[key] = scan_host_file(path, literals, patterns, owner=key != 'launch.json',
                                          fingerprints=fingerprints)
     out['host_files'] = sorted(host)
+    if provider_key_search is not None:
+        out['provider_key_search'] = provider_key_search(collected.stdout, host)
     out['summary'] = summarize_p5(scan, control_path.lstrip('/'), host_scans)
     return out
 
@@ -3065,6 +3072,18 @@ def p5_checks(record, obs):
                             'host: every secret-shaped run of the collection, seed.iso, '
                             'launch.json and serial.log, fingerprinted',
                             None if not fingerprint else not summary.get('provider_key_hits')))
+    search = p5.get('provider_key_search')
+    if inference_opted(record) or search is not None:
+        # S-03.2's proof as amended: the fingerprint alone is not proof that the raw key is absent;
+        # without the search of the key itself (inspect --provider-key-stdin) this check is UNKNOWN,
+        # and so is an incomplete or invalid search
+        verdict = (search or {}).get('verdict')
+        checks.append(check(INFERENCE_KEY_SEARCH_CHECK, {'verdict': 'not-found', 'controls': 'valid'},
+                            None if search is None else key_search_summary(search),
+                            'host: the synthetic key held in memory (inspect --provider-key-stdin), '
+                            'raw and in its encodings, over the collection, seed.iso, launch.json '
+                            'and serial.log, with positive controls (inference_key_search.py)',
+                            None if verdict not in ('found', 'not-found') else verdict == 'not-found'))
     return checks
 
 
@@ -3341,14 +3360,25 @@ def evaluate(profile, record, obs):
     return props
 
 
-def inspect(ctx, name, canaries=None, provider_key_fingerprint=None):
+def inspect(ctx, name, canaries=None, provider_key_fingerprint=None, provider_key=None):
     """The P1-P12 record. ``canaries`` is a loaded canary set (load_canaries) or None;
     without it the P5 canary check is UNKNOWN. ``provider_key_fingerprint`` (sha256:<16 hex>,
     decision 0015) adds the provider key as a P5 needle; for an instance with the inference
-    composition its check is UNKNOWN without one."""
+    composition its check is UNKNOWN without one. ``provider_key`` (S-03.2: the synthetic
+    qualification key, read from standard input, the key of that fingerprint) adds the search
+    for the key itself (provider_key_search); for such an instance that check is UNKNOWN
+    without it."""
     if provider_key_fingerprint is not None and \
             not GITEA_FINGERPRINT.match(str(provider_key_fingerprint)):
         raise Refused('REFUSED', '--provider-key-fingerprint: sha256:<16 hex digits>')
+    guard = None
+    if provider_key is not None:
+        ks = key_search()
+        try:
+            ks.check_fingerprint(provider_key, provider_key_fingerprint)
+            guard = ks.Search(provider_key)
+        except ks.SearchError as exc:
+            raise Refused('REFUSED', f'--provider-key-stdin: {exc}') from None
     idir = ctx.instance_dir(name)
     record = read_launch_record(idir)
     proc = running_process(idir, record['binary'])
@@ -3401,7 +3431,10 @@ def inspect(ctx, name, canaries=None, provider_key_fingerprint=None):
         def p5_scan(tar_bytes):
             return tar_secret_scan(tar_bytes, session_key, secret_fp)
     obs['p5'] = collect_p5(ssh, idir, record, canaries, secret_scan=p5_scan,
-                           provider_key_fingerprint=provider_key_fingerprint)
+                           provider_key_fingerprint=provider_key_fingerprint,
+                           provider_key_search=None if provider_key is None else (
+                               lambda tar_bytes, host: provider_key_search(provider_key, tar_bytes,
+                                                                           host)))
     if inference_opted(record):
         # a record counts only while its ssh process runs (a dropped session claims nothing)
         forward = forward_state(ctx.profile, idir)
@@ -3433,6 +3466,8 @@ def inspect(ctx, name, canaries=None, provider_key_fingerprint=None):
            'verdicts': {p['property']: p['verdict'] for p in properties},
            'compatibility': compatibility,
            'properties': properties, 'observations': obs}
+    if guard is not None and guard.holds(json.dumps(out, sort_keys=True, default=str)):
+        raise Refused('SECRET', 'the inspect record would hold the provider key: not written')
     out['record'] = write_record(idir, 'inspect', out)
     return out
 
@@ -6142,6 +6177,7 @@ INFERENCE_DROPIN_CHECK = 'sshd drop-in (inference composition, decision 0015)'
 INFERENCE_SSHD_CHECK = 'sshd -T forwarding directives (inference composition)'
 INFERENCE_LISTENER_CHECK = 'inference endpoint listener (decision 0015)'
 INFERENCE_KEY_CHECK = 'provider key fingerprint (decision 0015)'
+INFERENCE_KEY_SEARCH_CHECK = 'provider key itself, raw and encoded (synthetic key, S-03.2)'
 INFERENCE_SSHD_KEYS = ('allowtcpforwarding', 'gatewayports', 'permitlisten')
 _SEED_FILES = {}
 
@@ -6244,17 +6280,76 @@ _MANAGED = object()
 def inference_control():
     """integrations/inference/inference_control.py, the dispatcher's side of the broker (its ports,
     its control client, the token fingerprint), loaded once."""
-    module = sys.modules.get('aieh_inference_control')
+    return _inference_module('aieh_inference_control', 'inference_control.py')
+
+
+def key_search():
+    """integrations/inference/inference_key_search.py, S-03.2's provider-key containment search
+    (standard library only; it imports nothing of the broker), loaded once."""
+    return _inference_module('aieh_inference_key_search', 'inference_key_search.py')
+
+
+def _inference_module(name, file):
+    module = sys.modules.get(name)
     if module is None:
-        path = REPO / 'integrations' / 'inference' / 'inference_control.py'
-        spec = importlib.util.spec_from_file_location('aieh_inference_control', path)
-        module = sys.modules['aieh_inference_control'] = importlib.util.module_from_spec(spec)
+        path = REPO / 'integrations' / 'inference' / file
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = sys.modules[name] = importlib.util.module_from_spec(spec)
         try:
             spec.loader.exec_module(module)
         except BaseException:
-            del sys.modules['aieh_inference_control']
+            del sys.modules[name]
             raise
     return module
+
+
+def read_provider_key(stream, expected):
+    """The synthetic qualification key of S-03.2's provider-key search from ``stream`` (one line
+    of standard input, never argv): never a terminal, the launcher's synthetic shape, and the key
+    of ``expected``, the broker start receipt's fingerprint. A refusal never repeats what was
+    read. The real key is never read here (its containment is S-03.3's)."""
+    ks = key_search()
+    try:
+        if not GITEA_FINGERPRINT.match(str(expected)):
+            raise ks.SearchError('FINGERPRINT_INVALID', 'give --provider-key-fingerprint too')
+        if stream.isatty():
+            raise ks.SearchError('KEY_STDIN_TTY', 'standard input is a terminal')
+        key = ks.read_key(io.StringIO(stream.readline(ks.KEY_LIMIT + 3)))
+        ks.check_fingerprint(key, expected)
+    except ks.SearchError as exc:
+        raise Refused('REFUSED', f'--provider-key-stdin: {exc}') from None
+    return key
+
+
+def provider_key_search(key, tar_bytes, host_files):
+    """S-03.2's provider-key search of the P5 collection (the guest's files, process
+    environments and records, as collect_p5 gathers them) and of its host files: the
+    synthetic key held in memory, raw and in its encodings, never by fingerprint; its positive
+    controls in memory. The report carries counts and the fingerprint only."""
+    search = key_search().Search(key)
+    search.tar('guest collection (P5: files, process environments, records)', tar_bytes)
+    for label, path in sorted(host_files.items()):
+        search.file(f'host {label}', path)
+    search.controls()
+    return search.report()
+
+
+def forward_answers_search(key, answers):
+    """S-03.2's provider-key search of what crossed the forward to the job: each answer the
+    endpoint gave the job (and the guest login), whole, as received in the guest."""
+    search = key_search().Search(key)
+    for label, data in answers:
+        search.http(f'answer received in the guest: {label}', data)
+    search.controls()
+    return search.report()
+
+
+def key_search_summary(report):
+    """The check's view of a provider-key search report: counts only."""
+    return {'verdict': report.get('verdict'), 'bytes_searched': report.get('bytes_searched'),
+            'controls': {k: (report.get('controls') or {}).get(k) for k in ('valid', 'cases')},
+            'surfaces': [{k: s.get(k) for k in ('label', 'bytes_total', 'complete', 'found')}
+                         for s in report.get('surfaces') or []]}
 
 
 class BrokerAccess:
@@ -6695,6 +6790,7 @@ CHECK_CLASSES[('profiles P7', INFERENCE_SSHD_CHECK)] = (STABLE, None)
 # whether a forward session is held depends on the moment; the verdict is still compared
 CHECK_CLASSES[('profiles P7', INFERENCE_LISTENER_CHECK)] = (VOLATILE, None)
 CHECK_CLASSES[('profiles P5', INFERENCE_KEY_CHECK)] = (STABLE, None)
+CHECK_CLASSES[('profiles P5', INFERENCE_KEY_SEARCH_CHECK)] = (STABLE, None)
 
 
 def provisioning_probes(conf):
@@ -9826,8 +9922,11 @@ def inference_job_verdict(results, before, after):
 # Run inside the conversation container of the token's conversation (decision 0015 sections 3.3 and
 # 4.4, S-03.2's proof): one request to the inference endpoint in the token family's route and auth
 # header shape. The token arrives on standard input (a bash builtin's pipe, never an argument) and is
-# never printed; the answer is reported by status, the broker's refusal code, its size and its sha256.
-# spec: base64 JSON {endpoint, method, path, header, scheme, body, with_token, timeout, max_bytes}.
+# never printed; the answer is reported by status, the broker's refusal code, its size and its sha256,
+# and up to capture_max bytes it is returned whole (answer_b64) for S-03.2's provider-key search on
+# the host, which takes it out of the result before anything is recorded.
+# spec: base64 JSON {endpoint, method, path, header, scheme, body, with_token, timeout, max_bytes,
+# capture_max}.
 JOB_INFERENCE_TOKEN = r'''import base64, errno, hashlib, json, socket, sys, time
 spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 token = sys.stdin.readline().strip() if spec['with_token'] else ''
@@ -9850,6 +9949,10 @@ try:
         if not chunk:
             break
         data += chunk
+    if len(data) <= spec.get('capture_max', 0):
+        out['answer_b64'] = base64.b64encode(data).decode('ascii')
+    else:
+        out['answer_omitted'] = len(data)
     top, _, payload = data.partition(b'\r\n\r\n')
     line = top.split(b'\r\n', 1)[0].decode('latin-1').split(' ')
     out['status'] = int(line[1]) if len(line) > 1 and line[1].isdigit() else None
@@ -9877,6 +9980,9 @@ INFERENCE_REVOKE_STEP = 'revoke the attempt token at the probe\'s end (decision 
 INFERENCE_REVOKER = 'tools/guest.py job-access-probe (the dispatcher\'s role during bootstrap)'
 INFERENCE_PROBE_PROMPT = 'aieh S-03.2 inference-plane probe: no model'
 INFERENCE_ANSWER_MAX = 1 << 20
+INFERENCE_CAPTURE_MAX = 64 << 10
+INFERENCE_KEY_SEARCH_STEP = 'the provider key itself in what crossed the forward to the job (synthetic ' \
+                            'key, raw and encoded, S-03.2)'
 
 
 def redact_secret(data, secret, label):
@@ -9921,7 +10027,8 @@ def inference_token_spec(profile, family, model, with_token):
             'header': family['auth']['header'], 'scheme': family['auth']['scheme'],
             'body': {'model': model, 'max_tokens': 16, 'stream': False,
                      'messages': [{'role': 'user', 'content': INFERENCE_PROBE_PROMPT}]},
-            'with_token': with_token, 'timeout': JOB_CONNECT_S * 5, 'max_bytes': INFERENCE_ANSWER_MAX}
+            'with_token': with_token, 'timeout': JOB_CONNECT_S * 5, 'max_bytes': INFERENCE_ANSWER_MAX,
+            'capture_max': INFERENCE_CAPTURE_MAX}
 
 
 def inference_token_verdict(phases):
@@ -10203,7 +10310,8 @@ class ForwardControl:
 
 
 def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels=None,
-                     ssh_fn=None, attempt_token=None, broker=None, forward=None):
+                     ssh_fn=None, attempt_token=None, broker=None, forward=None,
+                     provider_key=None):
     """job-access-probe (S-01.3.2) on a running provisioned instance: from inside two
     disposable conversation containers (the job environment; the agent's own terminal,
     through the outer server's proxied bash route), the job's effective environment (docker
@@ -10224,12 +10332,22 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     forward session is stopped, and refused again after the forward is re-established; at the end
     the token is revoked if it is not yet. It travels only sealed (in a script's text on standard
     input); records carry its fingerprint only. ``broker`` and ``forward`` stand in for the broker's
-    control listener and the forward session in tests."""
+    control listener and the forward session in tests.
+
+    ``provider_key`` (S-03.2, with ``attempt_token`` only): the synthetic qualification key the
+    broker was started with, read from standard input after the token. Every answer the job (and
+    the guest login) received from the endpoint comes back whole (up to INFERENCE_CAPTURE_MAX) and
+    is searched on the host, in memory, for the key itself, raw and encoded
+    (forward_answers_search); the answers are never recorded, the record carries counts only, and
+    a record that would hold the key is not written. The key never travels to the guest."""
     idir = ctx.instance_dir(name)
     _, record = running_instance(ctx, name)
     if not record.get('provisioning'):
         raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
     token_fp = None
+    if provider_key is not None and attempt_token is None:
+        raise Refused('REFUSED', '--provider-key-stdin needs --attempt-token-stdin: the key is searched '
+                      'for in the answers the token step receives')
     if attempt_token is not None:
         if not inference_opted(record):
             raise Refused('REFUSED', f'{name} was not created with create --provision --inference: '
@@ -10273,6 +10391,7 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     steps, failed, stop_conditions = [], [], []
     state = {'created': []}
     memo = {}
+    answers = []          # (label, bytes): what the endpoint answered in the guest, in memory only
     caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError,
               subprocess.SubprocessError)
 
@@ -10673,6 +10792,16 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
             requested and (detail.get('route_removed_report') or {}).get('state') == 'removed'
         return ok, detail
 
+    def keep_answer(label, result):
+        """Take the whole answer out of a JOB_INFERENCE_TOKEN result (it is never recorded) and
+        keep it in memory for the provider-key search."""
+        encoded = result.pop('answer_b64', None)
+        if encoded is not None:
+            answers.append((label, base64.b64decode(encoded)))
+        if result.get('answer_omitted') is not None:
+            memo.setdefault('omitted', []).append(label)
+        return result
+
     def inference_step():
         """Decision 0015 section 4.5, on an instance with the inference composition only: from
         inside each job the endpoint without a token, the allow's edges, the resolver and a
@@ -10692,8 +10821,9 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                                                                   'scheme': None}}, None, False),
                           body={})
         address, port = spec['endpoint']
-        login = _job_json(ssh.run(['python3', '-', base64.b64encode(json.dumps(login_spec).encode(
-            'utf-8')).decode('ascii')], input_text=JOB_INFERENCE_TOKEN, timeout=120).stdout)
+        login = keep_answer('guest login, no token', _job_json(ssh.run(
+            ['python3', '-', base64.b64encode(json.dumps(login_spec).encode('utf-8')).decode('ascii')],
+            input_text=JOB_INFERENCE_TOKEN, timeout=120).stdout))
         results.append({'proto': 'tcp', 'host': address, 'port': port, 'what': INFERENCE_GUEST_WHAT,
                         'outcome': login.get('outcome'), 'status': login.get('status'),
                         'refusal': login.get('refusal'), 'conversation': 'guest login (agent)'})
@@ -10736,31 +10866,44 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
             detail['error'] = 'no forward session is held: run inference-forward --action start first'
             return False, detail
 
-        def once():
+        def once(phase):
             spec = inference_token_spec(profile, family, grant['models'][0], True)
             arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
-            return _job_json(in_container(cid, container_python_sealed(
-                JOB_INFERENCE_TOKEN, arg, attempt_token), 120, secret=attempt_token))
-        phases = {'forwarded': once()}
+            return keep_answer(f'the job, {phase}', _job_json(in_container(cid, container_python_sealed(
+                JOB_INFERENCE_TOKEN, arg, attempt_token), 120, secret=attempt_token)))
+        phases = {'forwarded': once('forwarded')}
         counted = broker.call('grant', token_fp)
         phases['broker_counts'] = {k: counted.get(k) for k in ('requests', 'refused', 'usage')}
         revoked = broker.call('revoke', token_fp, 'attempt end', INFERENCE_REVOKER)
         memo['token_revoked'] = True
         phases['revocation'] = {'state': revoked.get('state'), 'revocation': revoked.get('revocation')}
-        phases['after_revocation'] = once()
+        phases['after_revocation'] = once('after revocation')
         stopped = forward.stop()
         phases['forward_stop'] = {'result': stopped.get('result')}
         try:
-            phases['without_forward'] = once()
+            phases['without_forward'] = once('without the forward')
         finally:
             started = forward.start()
             phases['forward_restart'] = {'result': started.get('result'),
                                          'existing': started.get('existing')}
-        phases['re_established'] = once()
+        phases['re_established'] = once('forward re-established')
         ok, checks, stop = inference_token_verdict(phases)
         stop_conditions.extend(stop)
         return ok and stopped.get('result') == 'stopped' and started.get('result') == 'held', \
             dict(detail, conversation=cid, phases=phases, checks=checks)
+
+    def key_search_step():
+        """S-03.2's proof as amended: the provider key itself, raw and encoded, in every answer the
+        endpoint gave in the guest (what crossed the forward), searched on the host in memory."""
+        omitted = memo.get('omitted', [])
+        report = forward_answers_search(provider_key, answers)
+        if report['verdict'] == 'found':
+            stop_conditions.append({'condition': 'the provider key crossed the forward to the guest',
+                                    'surfaces': [s['label'] for s in report['surfaces'] if s['found']]})
+        detail = {'decision_rule': 'PASS: every answer kept whole and the search not-found with valid '
+                                   'controls; STOP: the key found in an answer',
+                  'answers': len(answers), 'omitted': omitted, 'search': report}
+        return report['verdict'] == 'not-found' and bool(answers) and not omitted, detail
 
     def attempt_revoke_step():
         """The dispatcher revokes the token at attempt end (decision 0015 section 3.3) when the
@@ -10803,6 +10946,8 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
         run(INFERENCE_JOB_STEP, inference_step)
     if token_fp is not None:
         run(INFERENCE_TOKEN_STEP, attempt_token_step)
+        if provider_key is not None:
+            run(INFERENCE_KEY_SEARCH_STEP, key_search_step, always=True)
         run(INFERENCE_REVOKE_STEP, attempt_revoke_step, always=True)
     run('delete the conversations (positive control)', delete_step,
         always=bool(state['created']))
@@ -10820,6 +10965,9 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
         out['attempt_token'] = {'fingerprint': token_fp,
                                 'redacted_from_record': out.pop('redactions'),
                                 'echoes_redacted_in_guest': memo.get('token_echoes', 0)}
+    if provider_key is not None and \
+            key_search().Search(provider_key).holds(json.dumps(out, sort_keys=True, default=str)):
+        raise Refused('SECRET', 'the job-access-probe record would hold the provider key: not written')
     out['record'] = write_record(idir, 'job-access-probe', out)
     if out_file is not None:
         write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
@@ -14130,6 +14278,11 @@ def main(argv=None):
             p.add_argument('--provider-key-fingerprint',
                            help='decision 0015: sha256:<16 hex digits> of the model provider key '
                                 '(its credential receipt); a P5 needle by fingerprint only')
+            p.add_argument('--provider-key-stdin', action='store_true',
+                           help='S-03.2: read the synthetic qualification key (the key of '
+                                '--provider-key-fingerprint, the broker start receipt\'s) from '
+                                'standard input, never argv, and search the P5 collection and its '
+                                'host files for the key itself, raw and encoded, on the host')
         if op == 'conversation-smoke':
             p.add_argument('--restart', action='store_true',
                            help='also stop and start the guest, then reopen the conversation')
@@ -14173,6 +14326,14 @@ def main(argv=None):
                                 'conversation) from standard input, never argv, and show it '
                                 'forwarded, refused after revocation and refused without the '
                                 'forward; records carry its fingerprint only')
+            p.add_argument('--provider-key-stdin', action='store_true',
+                           help='S-03.2, with --attempt-token-stdin: read the synthetic '
+                                'qualification key from the next line of standard input and search '
+                                'every answer the job received for the key itself, raw and encoded, '
+                                'on the host; needs --provider-key-fingerprint')
+            p.add_argument('--provider-key-fingerprint',
+                           help="S-03.2: sha256:<16 hex digits>, the broker start receipt's "
+                                'provider-key fingerprint; the key piped must be its key')
         if op == 'inference-forward':
             p.add_argument('--action', required=True, choices=FORWARD_ACTIONS,
                            help='decision 0015: start (idempotent), status or stop the SSH remote '
@@ -14282,8 +14443,10 @@ def main(argv=None):
             result = admission_probe(ctx, args.name, args.out)
         elif op == 'job-access-probe':
             token = read_attempt_token(sys.stdin) if args.attempt_token_stdin else None
+            key = read_provider_key(sys.stdin, args.provider_key_fingerprint) \
+                if args.provider_key_stdin else None
             result = job_access_probe(ctx, args.name, args.out, args.token_fingerprint,
-                                      attempt_token=token)
+                                      attempt_token=token, provider_key=key)
         elif op == 'inference-forward':
             result = inference_forward(ctx, args.name, args.action, args.broker_port)
         elif op == 'containment-probe':
@@ -14294,7 +14457,9 @@ def main(argv=None):
             result = drill(ctx, args.name, args.kind, args.canaries, args.raw, args.out,
                            args.limit, args.ready_timeout)
         else:
-            result = inspect(ctx, args.name, canaries, args.provider_key_fingerprint)
+            key = read_provider_key(sys.stdin, args.provider_key_fingerprint) \
+                if args.provider_key_stdin else None
+            result = inspect(ctx, args.name, canaries, args.provider_key_fingerprint, key)
     except Refused as exc:
         print(f'REFUSED {exc.code}: {exc}', file=sys.stderr)
         print(json.dumps({'result': 'refused', 'code': exc.code, 'message': str(exc),
