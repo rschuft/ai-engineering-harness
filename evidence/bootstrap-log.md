@@ -38,10 +38,10 @@ what it blocks, and its status.
 
 | Id | Origin | Act needed | Why Owner authority | Evidence and prepared material | Blocks | Status |
 |---|---|---|---|---|---|---|
-| OA-19 | S-03.2 slice 3 finding 3(b); Architect consultation (gates A, G) | **Approve, amend or decline the plan amendment** in [the proposal](S-03.2-plan-amendment-proposal-child-clause.md) section 3: S-03.2's proof can no longer meet "A child conversation launched by an agent driven by the fake upstream ... No model call is made" (the 2026-11-10 re-scope removed the only create shape that lets an upstream drive an agent, and the template has no tools); the proposal shows the child's containment by a probe-created child through the same route and key, and moves the agent's own launch to S-03.3 (the ACP provider) and to the first leaf that runs an openhands-kind agent (made concrete in S-03.4); S-03.3 gains the real-key fingerprint search and a note on its create fixture | A change to the integrity-tracked plan and to acceptance criteria (Owner-reserved; never weakened silently) | The proposal (exact wording, reasoning, what was not determined); slice 3 evidence section 3.2 | S-03.2's guest qualification cannot pass as written; the offline slices continue | **Ready for decision (2026-11-11)** |
-| OA-18 | M-4 finding | **Approve or decline M-5**: the same blueprint reconciliation as M-4, for the passages M-4's named sections did not cover (listed in the M-5 row below), including "What the Owner sees ... Recommended: merge to activate", which asks the Owner to merge in Gitea. | A change to the integrity-tracked blueprint (Owner-reserved, as M-1 to M-4 were). | The M-5 row; the M-4 commit `31a7f8b` as the pattern. | Nothing blocks on it; the blueprint is inconsistent with decision 0012 until then. | **Ready for decision (2026-11-10)** |
-| OA-17 | F-10.5; the OA-05 run's Linux finding | **Approve or decline one run** of [revision 4](F-10.5-oa05-guest-run-plan-rev4.md): the same eight-file suite at `3cf45cd953642e90c4bbf6be63cf3d5483e9a0bc` (the ceiling fix: the test file and one docstring changed), archive `ac9693599f8ed97272e23dd9c1f4f7b94d6bf23849a872bbbead7ddd740e6c8d`, manifest `49fcb35f...7400`, script `2d67a7cb...87ba` (revision 3 with five binding constants changed; `REPO` stays the clone), runner and wheels unchanged; one disposable `f105-linux` guest with revision 2 and 3's isolation, limits, transfer and teardown. PASS = digest `d5aa24a7...6d937` (85 rows). One run, no retry. | Repository content in a guest (the standing guest authorization excludes it). | [Revision 4](F-10.5-oa05-guest-run-plan-rev4.md), sections 0-9; [the revision 3 run](F-10.5-oa05-linux-run.md). | F-10.5 and the F-10 group. Unrelated work continues. | **Ready for decision (2026-11-10).** Linux git-oracle parity, the native Linux wheel and `write_commit` on Linux stay unverified either way |
-| OA-16 | P-04.2; OA-15a | **Decide the mechanism** of the fail-closed protection check before each recorder merge ([recommendation](P-04.2-protection-check-recommendation.md), gate G, SOURCE-verified at Gitea 28.3.0). Recommended (option 2): a dedicated restricted Gitea Bot `aieh-bot-protection-audit` with **repository-administrator** collaboration on the admitted repository only and one token of scope exactly `read:repository` (Gitea refuses every write by scope, in either presentation; no password; no sudo), held by a small adapter the recorder calls in-process as the last read before the merge and again after it; it compares all 34 settings of every rule (including the bypass allowlist, finding F-A), the exact rule set and the repository roster and merge styles, and refuses on any drift or anything it cannot verify. **The question for the Owner:** whether a read-only-scoped token of a repository-administrator Bot, held by the recorder's adapter, is acceptable under "no administrator credentials in the recorder". Alternative without any Gitea credential: option 1, a read-only read of the rule from Gitea's own database by the same account that runs Gitea (rejected by the Architect: unenforced reach to every table, schema coupling). | His own constraint's meaning; a new identity and credential. | [Recommendation](P-04.2-protection-check-recommendation.md), sections 2-6 and 9. | P-04.2's merge path and OA-14's merge. Unrelated work continues. | **Ready for decision (2026-11-10).** Nothing built; the live acts (provisioning, negative controls, drift controls) come later as their own approvals |
+| OA-19 | S-03.2 slice 3 finding 3(b); Architect consultation (gates A, G) | **Approve, amend or decline the plan amendment** in [the proposal](S-03.2-plan-amendment-proposal-child-clause.md) section 3: S-03.2's proof can no longer meet "A child conversation launched by an agent driven by the fake upstream ... No model call is made" (the 2026-11-10 re-scope removed the only create shape that lets an upstream drive an agent, and the template has no tools); the proposal shows the child's containment by a probe-created child through the same route and key, and moves the agent's own launch to S-03.3 (the ACP provider) and to the first leaf that runs an openhands-kind agent (made concrete in S-03.4); S-03.3 gains the real-key fingerprint search and a note on its create fixture | A change to the integrity-tracked plan and to acceptance criteria (Owner-reserved; never weakened silently) | The proposal (exact wording, reasoning, what was not determined); slice 3 evidence section 3.2 | S-03.2's guest qualification cannot pass as written; the offline slices continue | **Approved 2026-11-11 with the Owner's qualification amendment**, verbatim in Decisions. Next: the plan amendment through the integrity process with the corrected wording, then the inventory and decision 0015 reconciliation |
+| OA-18 | M-4 finding | **Approve or decline M-5**: the same blueprint reconciliation as M-4, for the passages M-4's named sections did not cover (listed in the M-5 row below), including "What the Owner sees ... Recommended: merge to activate", which asks the Owner to merge in Gitea. | A change to the integrity-tracked blueprint (Owner-reserved, as M-1 to M-4 were). | The M-5 row; the M-4 commit `31a7f8b` as the pattern. | Nothing blocks on it; the blueprint is inconsistent with decision 0012 until then. | **Approved 2026-11-11 (wording only)**, verbatim in Decisions. Next: M-5 through the integrity process, the catalog passage checked separately against decision 0012's scope |
+| OA-17 | F-10.5; the OA-05 run's Linux finding | **Approve or decline one run** of [revision 4](F-10.5-oa05-guest-run-plan-rev4.md): the same eight-file suite at `3cf45cd953642e90c4bbf6be63cf3d5483e9a0bc` (the ceiling fix: the test file and one docstring changed), archive `ac9693599f8ed97272e23dd9c1f4f7b94d6bf23849a872bbbead7ddd740e6c8d`, manifest `49fcb35f...7400`, script `2d67a7cb...87ba` (revision 3 with five binding constants changed; `REPO` stays the clone), runner and wheels unchanged; one disposable `f105-linux` guest with revision 2 and 3's isolation, limits, transfer and teardown. PASS = digest `d5aa24a7...6d937` (85 rows). One run, no retry. | Repository content in a guest (the standing guest authorization excludes it). | [Revision 4](F-10.5-oa05-guest-run-plan-rev4.md), sections 0-9; [the revision 3 run](F-10.5-oa05-linux-run.md). | F-10.5 and the F-10 group. Unrelated work continues. | **Approved 2026-11-11, one run**, verbatim in Decisions (commit `3cf45cd953642e90c4bbf6be63cf3d5483e9a0bc`, archive `ac9693599f8ed97272e23dd9c1f4f7b94d6bf23849a872bbbead7ddd740e6c8d`, script `2d67a7cb80a83a96436e1b34628adb2da18e8b31daed411744c86707a06087ba`). Overseer pre-check 2026-11-11: the script's sha256 and the clean clone's head equal the approved values; the run directory does not exist. Not yet run |
+| OA-16 | P-04.2; OA-15a | **Decide the mechanism** of the fail-closed protection check before each recorder merge ([recommendation](P-04.2-protection-check-recommendation.md), gate G, SOURCE-verified at Gitea 28.3.0). Recommended (option 2): a dedicated restricted Gitea Bot `aieh-bot-protection-audit` with **repository-administrator** collaboration on the admitted repository only and one token of scope exactly `read:repository` (Gitea refuses every write by scope, in either presentation; no password; no sudo), held by a small adapter the recorder calls in-process as the last read before the merge and again after it; it compares all 34 settings of every rule (including the bypass allowlist, finding F-A), the exact rule set and the repository roster and merge styles, and refuses on any drift or anything it cannot verify. **The question for the Owner:** whether a read-only-scoped token of a repository-administrator Bot, held by the recorder's adapter, is acceptable under "no administrator credentials in the recorder". Alternative without any Gitea credential: option 1, a read-only read of the rule from Gitea's own database by the same account that runs Gitea (rejected by the Architect: unenforced reach to every table, schema coupling). | His own constraint's meaning; a new identity and credential. | [Recommendation](P-04.2-protection-check-recommendation.md), sections 2-6 and 9. | P-04.2's merge path and OA-14's merge. Unrelated work continues. | **Approved 2026-11-11 (option 2, read-only protection auditor)**, verbatim in Decisions. Next: the verifier built offline through the Gitea integration; then the live acts (the `aieh-bot-protection-audit` identity and its `read:repository` token, its repository-admin collaboration on the authorization repository, the protection settings, the negative tests, the live merge tests) presented each as its own Owner act |
 
 ### 2. Awaiting preparation
 
@@ -1064,6 +1064,168 @@ push never implies parent acceptance.
 - **2026-11-10: decision 0017 audit follow-ups.** `security/inventory.json` `fd-outer-server-local-recovery` reworded from "Upstream report to be filed" to "Upstream report deferred (decision 0017) ... kept as internal knowledge" (`be23a79`; kind, status and every other field unchanged; the README bullet edited to match, since no renderer covers it; inventory checker counts unchanged). The audit's open question on the publication gate is answered from source: the hook and `tools/publication_gate.py` fail closed (exit 2) when Gitleaks is missing, its hash is wrong or the scan does not complete. Process note: that Builder ran one unrequested `git stash` round trip to measure the before state (no loss).
 
 - **2026-11-11: S-03.2's child-conversation clause and the synthetic-key launcher (Architect consultation, gates A and G; advisory).** [Proposal](S-03.2-plan-amendment-proposal-child-clause.md). Gate A: slice 3 found the clause unmeetable as the plan stands; the Architect confirmed it (introduced by its own recommendation's S-03.2 row, carried into the plan at `13cb939`; exposed by slice 3) and recommended showing the child's containment by a probe-created child through the inner children route with the conversation's key, and moving the agent's own launch to the leaves that run agents live. **Overseer:** accepted, with one adjustment: S-03.4 is optional and nothing depends on it, so the native agent's launch is assigned to the first leaf that runs an openhands-kind agent, made concrete in S-03.4; presented to the Owner as OA-19 (a plan and acceptance-criteria change is the Owner's). Gate G: a qualification-only launcher taking a synthetic key on standard input does not conflict with decision 0015's custody (sections 2, 6; I6 binds `select_provider` on the production path) under four constraints (loopback-http upstreams only; standard input only, no terminal, a mandatory synthetic prefix; a start receipt with the fingerprint and source `stdin-qualification`; a separately named command, never a `serve` flag or variable). **Overseer ruling:** accepted; built offline under decision (d); running it is part of act A2, whose presentation will name it; it gives the provider-key fingerprint search a positive control. Further inconsistencies the Architect found, carried as records after OA-19: decision 0015's Consequences still say S-03.2 builds the create's LLM fields (superseded by amendment 1 item 2; a dated note to come); the S-03.1 authorization request's list "What S-03.2 will prove" includes items needing A1 and A5, now S-03.3's (re-presented leaf by leaf with A2 to A4); `fd-child-conversation-tool`'s `carried_to` (S-03.2) and S-01.3.1's evidence (E-01.2.2) disagree.
+
+- **2026-11-11: Owner decisions on OA-16, OA-17, OA-18 and OA-19**, verbatim:
+
+  ```text
+  Owner decisions: OA-16, OA-17, OA-18 and OA-19.
+
+  Continue autonomous execution. Do not interrupt the
+  active S-03.2 Builder.
+
+  OA-16 — APPROVED: READ-ONLY PROTECTION AUDITOR
+
+  Approve option 2 of
+  evidence/P-04.2-protection-check-recommendation.md.
+
+  Use a dedicated restricted Gitea Bot,
+  aieh-bot-protection-audit, with repository-admin
+  collaboration only on the admitted authorization
+  repository and a token scoped exactly read:repository.
+
+  This accepts the distinction between repository-admin
+  visibility and an API token that cannot perform writes.
+  It does not permit a site-admin identity or token,
+  an administrator credential for aieh-owner, or broader
+  permissions.
+
+  Build the bounded protection verifier through the
+  existing Gitea integration. Check the full declared
+  protection policy, including bypass lists, rule
+  precedence, collaborators, teams, deploy keys and
+  merge settings.
+
+  Fail closed on missing fields, unexpected fields,
+  policy drift, invalid credentials or failed reads.
+
+  Preserve the pre-merge verification and post-merge
+  evidence. Gitea's merge-time enforcement and the
+  remaining time-of-check/time-of-use limitation must
+  be explicitly documented.
+
+  Live provisioning of the new identity or credential,
+  changing Gitea collaborators or protection settings,
+  and executing live merge tests remain separate Owner
+  acts. Present them when prepared.
+
+  Require live negative tests demonstrating that the
+  read-only token cannot modify protection, change
+  permissions, push, merge or escape its scope.
+
+  OA-17 — APPROVED: ONE REVISION-4 LINUX RUN
+
+  Authorize exactly one execution of
+  evidence/F-10.5-oa05-guest-run-plan-rev4.md.
+
+  Approved source commit:
+  3cf45cd953642e90c4bbf6be63cf3d5483e9a0bc
+
+  Approved archive SHA-256:
+  ac9693599f8ed97272e23dd9c1f4f7b94d6bf23849a872bbbead7ddd740e6c8d
+
+  Approved run script SHA-256:
+  2d67a7cb80a83a96436e1b34628adb2da18e8b31daed411744c86707a06087ba
+
+  Use the dedicated clean clone, the exact eight-file
+  payload and the previously approved isolation,
+  resource, transfer and teardown conditions.
+
+  Verify the binding hashes before execution.
+  No changes to the main checkout, no additional files,
+  no automatic retries.
+
+  Record actual outcomes, independent teardown and
+  the Linux capabilities that remain unverified.
+  Do not promote a partial Linux result to full
+  cross-platform qualification.
+
+  OA-18 — APPROVED: M-5 BLUEPRINT RECONCILIATION
+
+  Approve the exact wording-only reconciliation
+  described in the M-5 maintenance row.
+
+  The Owner makes the decision on the presented exact
+  operation and challenge; the deterministic recorder
+  executes the authorized merge as aieh-owner.
+
+  Remove remaining instructions requiring the Owner
+  to log into Gitea and merge personally.
+
+  Check the catalog passage separately against
+  decision 0012's actual scope; do not extend recorder
+  authority to unrelated operations by changing wording.
+
+  Use the existing integrity-controlled blueprint
+  change process. Preserve historical evidence and
+  all accepted authority and security requirements.
+
+  OA-19 — APPROVED WITH QUALIFICATION AMENDMENT
+
+  Approve the separation proposed in
+  evidence/S-03.2-plan-amendment-proposal-child-clause.md,
+  section 3, subject to the following correction.
+
+  S-03.2 must demonstrate the model-free broker and
+  network containment properties. Probe the inner
+  children route with the conversation's own key.
+
+  If it creates a child, verify that the child remains
+  in the parent's container, under the same limits,
+  without an outer-server conversation or new
+  container/listener.
+
+  If it refuses creation without model settings, record
+  the refusal as a demonstrated fail-closed outcome,
+  NOT as proof of successful child containment.
+
+  The latter behavior remains unverified and must
+  retain a traceable qualification obligation. S-03.2
+  may satisfy its model-free acceptance requirements
+  without falsely claiming that a child ran.
+
+  S-03.3 must independently prove that the real ACP
+  coding provider and any delegated processes remain
+  under the execution container's limits, and that
+  no unexpected outer-server conversation appears.
+
+  Do not assume ACP provider delegation uses the
+  OpenHands start_child_conversation tool. Verify the
+  actual supported mechanism and distinguish the two
+  behaviors in evidence.
+
+  If native OpenHands agent execution is enabled, its
+  start_child_conversation capability must be qualified
+  at the first leaf actually enabling that capability.
+  S-03.4 alone must not become a mandatory dependency
+  of the default ACP coding path.
+
+  Preserve the provider-key containment requirement.
+  A fingerprint-only search must not be described as
+  proof of absence of the underlying raw credential.
+  Use evidence appropriate to the actual secret
+  exposure boundary, with a positive control, without
+  printing or persisting credential material.
+
+  Keep actual paid inference, model IDs, provider-key
+  storage and use, external egress, host listeners,
+  guest hardening and forwards behind their explicit
+  Owner authorization acts.
+
+  Apply the plan amendment through the established
+  integrity-controlled process. Reconcile related
+  inventory and decision references, preserving
+  provenance and verified-versus-unverified distinctions.
+
+  The synthetic-key launcher ruling is accepted as
+  an offline qualification mechanism only. It does
+  not authorize act A2 or any live listener.
+
+  Record these four Owner decisions without reopening
+  settled choices. Continue other eligible work.
+  Silence never constitutes authorization.
+  ```
+
+  Overseer reading (no settled choice reopened): OA-16 accepts the read-only auditor and directs the verifier through the existing Gitea integration, failing closed on missing or unexpected fields, drift, invalid credentials or failed reads; every live act is presented separately. OA-17 is one run only, performed as the revision 3 run was, after the active Builder returns. OA-18 is wording only, through the integrity process. OA-19 corrects the proposal: a refused child is a fail-closed outcome, never proof of containment, and successful child containment stays a traceable obligation; ACP delegation is not assumed to be `start_child_conversation`; the native tool is qualified at the first leaf that enables it; a fingerprint search is not described as proof of absence. The synthetic-key launcher is an offline qualification mechanism only and authorizes neither A2 nor any listener.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
