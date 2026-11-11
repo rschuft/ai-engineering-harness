@@ -34,6 +34,8 @@ INF = PROFILE['network']['inference_composition']
 SESSION = INF['forward_session']
 BROKER_PORTS = {'control_port': 18431, 'inference_port': 18432}
 BASE_PYTHON = getattr(sys, '_base_executable', sys.executable)
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)     # no console window on Windows
+REAL_POPEN = subprocess.Popen
 LAUNCH = {'schema': guest.LAUNCH_SCHEMA, 'binary': 'D:/x/qemu-system-x86_64.exe',
           'ports': {'ssh': 40001, 'qmp': 40002, 'bind': '127.0.0.1'},
           'inference': {'composition': 'inference', 'status': 'planned'}}
@@ -106,6 +108,53 @@ def threaded_spawn(threads, pid=0):
         threads.append((thread, box))
         return types.SimpleNamespace(stdout=reader, kill=lambda: None, pid=pid)
     return spawn
+
+
+class ProcessLedger:
+    """Every process a test starts (through subprocess.Popen, which guest uses, and the pids its
+    records name) is ended in cleanup, whole tree, and none may be left alive; every launch must
+    carry CREATE_NO_WINDOW, so that none opens a console window."""
+
+    def ledger(self):
+        self.launched, self.pids = [], set()
+        test = self
+
+        class Recording(REAL_POPEN):
+            def __init__(self, *args, **kwargs):
+                test.launched.append(kwargs.get('creationflags', 0))
+                super().__init__(*args, **kwargs)
+                test.pids.add(self.pid)
+        patcher = mock.patch.object(subprocess, 'Popen', Recording)
+        patcher.start()
+        self.addCleanup(self.end_processes)
+        self.addCleanup(patcher.stop)
+
+    def end_processes(self):
+        left = []
+        for pid in sorted(self.pids):
+            try:
+                handle = guest.WinProcess(pid)
+            except OSError:
+                continue                             # gone (or never alive)
+            try:
+                if handle.alive():
+                    handle.terminate()
+                    if not handle.wait(10):
+                        left.append(pid)
+            finally:
+                handle.close()
+        self.assertEqual(left, [], 'processes left alive')
+        for pid in sorted(self.pids):
+            try:
+                handle = guest.WinProcess(pid)
+            except OSError:
+                continue
+            try:
+                self.assertFalse(handle.alive(), pid)
+            finally:
+                handle.close()
+        if os.name == 'nt':
+            self.assertTrue(all(flags & NO_WINDOW for flags in self.launched), self.launched)
 
 
 class ForwardBase(unittest.TestCase):
@@ -234,6 +283,61 @@ class ForwardRecords(ForwardBase):
         with self.assertRaises(guest.Refused):
             guest.forward_argv(bare, FakeSsh(self.script), 18432)
 
+    def test_forward_argv_over_the_instance_channel(self):
+        """The exact command line with the real per-instance channel (guest.Ssh), its ssh -G check
+        and the OpenSSH lookup stood in for: no ssh runs."""
+        _, idir = self.instance()
+        (idir / 'ssh').mkdir()
+        for name in ('id_ed25519', 'known_hosts'):
+            (idir / 'ssh' / name).write_text('synthetic\n', encoding='utf-8')
+        exe = 'C:/Windows/System32/OpenSSH/ssh.exe'
+        with mock.patch.object(guest, 'openssh', return_value=exe), \
+                mock.patch.object(guest.Ssh, 'check_effective', autospec=True) as checked:
+            ssh = guest.Ssh(PROFILE, idir, 40001)
+            argv = guest.forward_argv(PROFILE, ssh, 18432)
+        checked.assert_called_once()
+        known = guest.posix(idir) + '/ssh/known_hosts'
+        self.assertEqual(argv, [
+            exe, '-F', 'none', '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes',
+            '-o', f'UserKnownHostsFile={known}', '-o', 'BatchMode=yes', '-o', 'IdentityAgent=none',
+            '-o', 'GlobalKnownHostsFile=none', '-o', 'ConnectTimeout=15',
+            '-i', str(idir / 'ssh' / 'id_ed25519'), '-p', '40001',
+            '-N', '-v', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15',
+            '-o', 'ServerAliveCountMax=3', '-R', '172.17.0.1:8090:127.0.0.1:18432',
+            'agent@127.0.0.1'])
+
+    def test_launches_open_no_console_window(self):
+        """The holder and the ssh it starts: CREATE_NO_WINDOW, never DETACHED_PROCESS (whose
+        console-less process would give ssh a window of its own); no process is started."""
+        seen = []
+
+        class Stop(Exception):
+            pass
+
+        def popen(argv, **kwargs):
+            seen.append((argv, kwargs))
+            raise Stop
+        spec = {'argv': ['ssh.exe', '-N'], 'record': 'x', 'log': 'y', 'instance': 'i',
+                'listen': 'a:1', 'connect': 'b:2', 'ceiling': 1, 'ports': {}}
+        _, idir = self.instance()
+        with mock.patch.object(guest.subprocess, 'Popen', popen):
+            with self.assertRaises(Stop):
+                guest.forward_spawn(spec, idir)
+            with self.assertRaises(Stop):
+                guest.forward_hold(base64.b64encode(json.dumps(spec).encode()).decode(),
+                                   out=io.StringIO(), pid=0)
+        (holder, holder_kw), (ssh, ssh_kw) = seen
+        self.assertEqual(holder[3:5], [str(REPO / 'tools' / 'guest.py'), 'inference-forward-hold'])
+        self.assertEqual(ssh, ['ssh.exe', '-N'])
+        if os.name == 'nt':
+            self.assertEqual(holder_kw['creationflags'],
+                             subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
+            self.assertEqual(ssh_kw['creationflags'], subprocess.CREATE_NO_WINDOW)
+            for kwargs in (holder_kw, ssh_kw):
+                self.assertFalse(kwargs['creationflags'] & subprocess.DETACHED_PROCESS)
+                self.assertFalse(kwargs['creationflags'] & subprocess.CREATE_NEW_CONSOLE)
+        self.assertEqual((holder_kw['stdin'], ssh_kw['stdin']), (subprocess.DEVNULL,) * 2)
+
     def test_write_json_new_is_whole_and_exclusive(self):
         _, idir = self.instance()
         path = idir / 'x.json'
@@ -256,7 +360,7 @@ class ForwardRecords(ForwardBase):
         blocked.set()
 
 
-class ForwardCommand(ForwardBase):
+class ForwardCommand(ProcessLedger, ForwardBase):
     """inference_forward: its refusals and its decisions, the holder in a thread of this process
     and a fake ssh process."""
     category = 'integration'
@@ -264,6 +368,7 @@ class ForwardCommand(ForwardBase):
     def setUp(self):
         self.threads = []
         self.addCleanup(self.join_holders)
+        self.ledger()
         patcher = mock.patch.object(guest, 'running_process', return_value=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -459,35 +564,25 @@ class ForwardCommand(ForwardBase):
         self.assertEqual(cm.exception.code, 'STOP_FAILED')
 
 
-class ForwardSpawned(ForwardBase):
-    """The holder as the real detached process (forward_spawn), once: start, then stop."""
+class ForwardSpawned(ProcessLedger, ForwardBase):
+    """The holder as the real process (forward_spawn), once: start, then stop."""
     category = 'integration'
 
-    def test_detached_holder(self):
+    def test_spawned_holder(self):
+        self.ledger()
         name, idir = self.instance()
         ctx = types.SimpleNamespace(profile=PROFILE, instance_dir=self.ctx.instance_dir)
         with mock.patch.object(guest, 'running_process', return_value=True):
             out = guest.inference_forward(ctx, name, 'start', None, FakeBroker(), None,
                                           FakeSsh(self.script))
         session = out['session']
-        self.addCleanup(self.kill, session['pid'])
+        self.pids.update((session['pid'], session['holder_pid']))      # its own children
         self.assertEqual(out['result'], 'held')
         self.assertNotEqual(session['holder_pid'], os.getpid())
         self.assertTrue(guest.forward_state(PROFILE, idir)['held'])
         stopped = guest.inference_forward(ctx, name, 'stop')
         self.assertEqual((stopped['result'], stopped['record_removed_by']), ('stopped', 'holder'))
         self.assertFalse(self.record_path(idir).exists())
-
-    def kill(self, pid):
-        try:
-            handle = guest.WinProcess(pid)
-        except OSError:
-            return
-        try:
-            if handle.alive():
-                handle.terminate()
-        finally:
-            handle.close()
 
 
 class RecreateAndDestroy(ForwardBase):
@@ -564,7 +659,8 @@ class TokenScriptAgainstTheBroker(unittest.TestCase):
         arg = base64.b64encode(json.dumps(spec).encode()).decode()
         proc = subprocess.run([sys.executable, '-I', '-', arg],
                               input=(guest.JOB_INFERENCE_TOKEN + '\n').encode(), capture_output=True,
-                              timeout=60) if token is None else self.run_with_token(arg, token)
+                              timeout=60, creationflags=NO_WINDOW) \
+            if token is None else self.run_with_token(arg, token)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         if token:
             self.assertNotIn(token.encode(), proc.stdout)
@@ -576,7 +672,7 @@ class TokenScriptAgainstTheBroker(unittest.TestCase):
         self.addCleanup(guest.remove_tree, script.parent)
         script.write_text(guest.JOB_INFERENCE_TOKEN, encoding='utf-8')
         return subprocess.run([sys.executable, '-I', str(script), arg], input=(token + '\n').encode(),
-                              capture_output=True, timeout=60)
+                              capture_output=True, timeout=60, creationflags=NO_WINDOW)
 
     def test_forwarded_then_revoked_and_admission_without_a_token(self):
         issued = self.rig.issue(family='anthropic-messages', models=('syn-model-a',))

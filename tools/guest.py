@@ -6235,6 +6235,9 @@ FORWARD_MARGIN_S = 15          # the parent's ceiling beyond the holder's own es
 FORWARD_STOP_WAIT_S = 30       # ceiling for ssh, then its holder, to exit after stop
 FORWARD_KEEP_LINES = 40        # ssh's non-debug stderr lines the holder keeps for its log
 FORWARD_LOG = 'inference-forward.log'
+# Windows: a console process started with this flag gets a console that no window shows, and its
+# children share it (0 elsewhere)
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 _MANAGED = object()
 
 
@@ -6374,7 +6377,7 @@ def forward_hold(spec_text, out=None, pid=None):
     path = Path(spec['record'])
     want = f"remote forward success for: listen {spec['listen']}, connect {spec['connect']}"
     proc = subprocess.Popen(spec['argv'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE)
+                            stderr=subprocess.PIPE, creationflags=NO_WINDOW)
     decided, kept, state = threading.Event(), [], {'established': False}
 
     def drain():
@@ -6443,11 +6446,13 @@ def forward_hold(spec_text, out=None, pid=None):
 
 
 def forward_spawn(spec, cwd):
-    """The detached holder of one forward session (the dispatcher's process for its whole life)."""
+    """The holder of one forward session (the dispatcher's process for its whole life), in its own
+    process group and with a console that no window shows: never DETACHED_PROCESS, under which the ssh
+    it starts would open a console window of its own."""
     text = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
     argv = [sys.executable, '-I', '-B', str(Path(__file__).resolve()), 'inference-forward-hold',
             '--spec', text]
-    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+    flags = NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
     return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, cwd=str(cwd), close_fds=True,
                             creationflags=flags)

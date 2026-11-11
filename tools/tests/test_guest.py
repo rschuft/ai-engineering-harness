@@ -4255,7 +4255,8 @@ class ApiProbe(unittest.TestCase):
         proc = subprocess.run([sys.executable, '-I', '-', str(self.key_file), '127.0.0.1',
                                str(self.server.server_address[1])],
                               input=guest.sealed_api_probe(spec, secret).encode(),
-                              capture_output=True, timeout=60)
+                              capture_output=True, timeout=60,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn(secret.encode(), proc.stdout)
         out = json.loads(proc.stdout.decode().strip().splitlines()[-1])
