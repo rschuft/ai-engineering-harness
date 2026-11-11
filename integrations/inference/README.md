@@ -34,7 +34,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_grants.py` | Socket-free: issuance and its refusals, readiness, revocation and expiry with their receipts, journal failures, every admission refusal, budgets, refusal responses; a check that every stable code appears in a test |
 | `tests/test_credential_set.py` | `credential-set` over an in-memory provider and a fixture store |
 | `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream` |
-| `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan |
+| `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -162,10 +162,19 @@ broker's log.
 
 One append-only JSON line per request (`aieh-inference-audit/1`) in a new file per broker run,
 `<managed root>/persistent/logs/inference/audit-<stamp>-<random>.jsonl`: `time`, `attempt_id`,
-`conversation_id`, `token_fingerprint`, `family`, `method`, `path` (a declared route only), `model` (an
-admitted one only), `request_bytes`, `response_bytes`, `status`, `upstream_status`, `latency_ms`, `usage` and
-`code` (the refusal code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`); plus `broker-start`,
-`broker-stop` and `handler-error` lines. Never a body, a header, the token or the provider key. Every line,
+`conversation_id`, `token_fingerprint`, `family`, `method`, `path`, `query_names`, `model`, `unrecorded`,
+`request_bytes`, `response_bytes`, `status`, `upstream_status`, `latency_ms`, `usage` and `code` (the refusal
+code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`); plus `broker-start`, `broker-stop` and
+`handler-error` lines. An admitted request's line has its declared route and admitted model. A refused
+request's line (the S-03.3 slice plan's D-4, for route and model discovery without a model call against the
+fake upstream) has its path, its query parameter **names** (sorted, at most 16) and, when it presented a
+grant's token, the `model` of its JSON body (read, if the refusal came first, from the body the refusal
+drains anyway); each only in a bounded grammar: a path segment or a name of at most 32 characters from
+`[A-Za-z0-9._~-]`, a model in the broker's model grammar (128 characters), none holding the token prefix or
+anything the I7 scan finds. What fails that is counted under `unrecorded` (`path`, `query_names`, `model`),
+never written. Never a query value, a header, any other part of a body, the token or the provider key. A
+secret the broker does not hold that a client places in a path segment, a name or the model within that
+grammar is not recognized (disclosed). Every line,
 receipt, refusal and control answer passes the I7 scan of F-06.3 (the broker's guard holds the provider key
 and every issued token, and refuses anything 40-hex token-shaped) first; a line that fails it is withheld
 (`EXPOSURE_FOUND`), an answer that fails it is replaced by an `EXPOSURE_FOUND` refusal. The provider key's

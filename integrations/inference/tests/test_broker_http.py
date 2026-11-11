@@ -10,6 +10,7 @@ import http.client
 import json
 import socket
 import unittest
+from unittest import mock
 
 import broker_support as S
 
@@ -310,8 +311,8 @@ class TestRefusalsOnTheWire(unittest.TestCase):
 
 class TestAudit(unittest.TestCase):
     KEYS = {'format', 'time', 'event', 'attempt_id', 'conversation_id', 'token_fingerprint', 'family', 'method',
-            'path', 'model', 'request_bytes', 'response_bytes', 'status', 'upstream_status', 'latency_ms', 'usage',
-            'code'}
+            'path', 'query_names', 'model', 'unrecorded', 'request_bytes', 'response_bytes', 'status',
+            'upstream_status', 'latency_ms', 'usage', 'code'}
 
     def test_one_line_per_request_without_body_header_token_or_key(self):
         grant = issue(family='openai-responses')
@@ -334,8 +335,10 @@ class TestAudit(unittest.TestCase):
                           'request_bytes': len(request), 'response_bytes': len(answer), 'status': 200,
                           'upstream_status': 200, 'usage': {'input': 11, 'output': 7, 'total': 18}, 'code': None})
         self.assertIsInstance(ok['latency_ms'], float)
-        self.assertEqual((refused['status'], refused['code'], refused['model'], refused['upstream_status']),
-                         (403, 'MODEL_NOT_ALLOWED', None, None))
+        self.assertEqual((ok['query_names'], ok['unrecorded']), (None, None))
+        self.assertEqual((refused['status'], refused['code'], refused['path'], refused['query_names'], refused['model'],
+                          refused['unrecorded'], refused['upstream_status']),
+                         (403, 'MODEL_NOT_ALLOWED', '/v1/responses', None, S.MODEL_B, None, None))
         self.assertEqual(lines[0]['event'], 'broker-start')
         text = RIG.audit.path.read_text(encoding='utf-8')
         for needle in [S.KEY, S.PROMPT_MARKER, S.ANSWER_MARKER, 'header-value-5e1f', 'x-api-key', 'Bearer',
@@ -361,6 +364,137 @@ class TestAudit(unittest.TestCase):
         self.assertEqual([line.get('withheld') for line in lines], ['EXPOSURE_FOUND', 'EXPOSURE_FOUND'])
         self.assertEqual(RIG.audit.withheld, before + 2)
         self.assertNotIn(S.KEY, RIG.audit.path.read_text(encoding='utf-8'))
+
+
+class TestRefusedRequestAudit(unittest.TestCase):
+    """The audit of a refused request (the S-03.3 slice plan's D-4): the method, the path, the query parameter names
+    and, for a request presenting a grant's token, the requested model, each only in its bounded grammar, for route
+    and model discovery without a model call. Never a query value, a header, any other part of the body or a
+    credential."""
+
+    def line_of(self, grant):
+        return [line for line in RIG.audit_lines() if line.get('token_fingerprint') == grant['token_fingerprint']][-1]
+
+    def fields(self, line):
+        self.assertEqual((line['request_bytes'], line['response_bytes'], line['upstream_status'], line['usage']),
+                         (0, 0, None, None))
+        return {key: line[key] for key in ('method', 'path', 'query_names', 'model', 'unrecorded', 'code')}
+
+    def test_a_refused_route_records_its_path_query_names_and_model(self):
+        grant = issue(family='anthropic-messages')
+        status, _, data = infer(grant, 'anthropic-messages', model=S.MODEL_B,
+                                target='/v1/messages/count_tokens?beta=true&beta=1&api-version=2023-06-01')
+        self.assertEqual((status, refusal(data)), (404, 'ROUTE_NOT_ALLOWED'))
+        self.assertEqual(self.fields(self.line_of(grant)),
+                         {'method': 'POST', 'path': '/v1/messages/count_tokens', 'query_names': ['api-version', 'beta'],
+                          'model': S.MODEL_B, 'unrecorded': None, 'code': 'ROUTE_NOT_ALLOWED'})
+        status, _, data = S.request(RIG.inference, 'GET', '/v1/models?limit=20',
+                                    header_pairs=[S.auth('anthropic-messages', grant['token'])])
+        self.assertEqual((status, refusal(data)), (404, 'ROUTE_NOT_ALLOWED'))
+        self.assertEqual(self.fields(self.line_of(grant)),
+                         {'method': 'GET', 'path': '/v1/models', 'query_names': ['limit'], 'model': None,
+                          'unrecorded': None, 'code': 'ROUTE_NOT_ALLOWED'})
+
+    def test_a_refused_query_on_a_declared_route_records_names_never_values(self):
+        grant = issue(family='anthropic-messages')
+        target = f'/v1/messages?beta=true&key={S.KEY}&token={grant["token"]}&q=query-value-91ac'
+        status, _, data = infer(grant, 'anthropic-messages', target=target,
+                                extra=[('X-Debug', S.KEY), ('X-Synthetic-Header', 'header-value-77b1')])
+        self.assertEqual((status, refusal(data)), (400, 'QUERY_NOT_ALLOWED'))
+        line = self.line_of(grant)
+        self.assertEqual(self.fields(line), {'method': 'POST', 'path': '/v1/messages',
+                                             'query_names': ['beta', 'key', 'q', 'token'], 'model': S.MODEL_A,
+                                             'unrecorded': None, 'code': 'QUERY_NOT_ALLOWED'})
+        self.assertNotIn('withheld', line)
+        text = RIG.audit.path.read_text(encoding='utf-8')
+        for needle in (S.KEY, grant['token'], grant['token'][len(IB.TOKEN_PREFIX):], 'query-value-91ac',
+                       'header-value-77b1', 'x-debug', 'X-Debug', 'x-synthetic-header', S.PROMPT_MARKER):
+            with self.subTest(needle=needle[:12]):
+                self.assertNotIn(needle, text)
+
+    def test_a_credential_in_the_path_a_name_or_the_model_is_counted_not_recorded(self):
+        grant = issue(family='anthropic-messages')
+        for target, body, expected in (
+                (f'/v1/{grant["token"]}/messages', {'model': S.MODEL_A}, ('ROUTE_NOT_ALLOWED', None, S.MODEL_A, {'path': 1})),
+                (f'/v1/messages?{S.KEY}=1&{grant["token"]}&beta', {'model': S.MODEL_A},
+                 ('QUERY_NOT_ALLOWED', ['beta'], S.MODEL_A, {'query_names': 2})),
+                ('/v1/messages', {'model': grant['token']}, ('MODEL_NOT_ALLOWED', None, None, {'model': 1})),
+                ('/v1/messages', {'model': S.KEY + ' x'}, ('MODEL_NOT_ALLOWED', None, None, {'model': 1}))):
+            with self.subTest(target=target[:20], expected=expected):
+                pairs = [S.auth('anthropic-messages', grant['token']), ('Content-Type', 'application/json')]
+                status, _, data = S.request(RIG.inference, 'POST', target, body, pairs)
+                self.assertEqual(refusal(data), expected[0])
+                line = self.line_of(grant)
+                self.assertEqual((line['code'], line['query_names'], line['model'], line['unrecorded']), expected)
+        text = RIG.audit.path.read_text(encoding='utf-8')
+        for needle in (S.KEY, grant['token'], grant['token'][len(IB.TOKEN_PREFIX):]):
+            self.assertNotIn(needle, text)
+
+    def test_without_a_grant_the_body_is_not_read_for_its_model(self):
+        status, _, data = S.request(RIG.inference, 'POST', '/v1/discovery-probe-5c2e?stream=1',
+                                    {'model': 'discovery-model-6b1f'}, [('Content-Type', 'application/json')])
+        self.assertEqual((status, refusal(data)), (401, 'TOKEN_MISSING'))
+        line = [line for line in RIG.audit_lines() if line.get('path') == '/v1/discovery-probe-5c2e'][-1]
+        self.assertEqual(self.fields(line), {'method': 'POST', 'path': '/v1/discovery-probe-5c2e',
+                                             'query_names': ['stream'], 'model': None, 'unrecorded': None,
+                                             'code': 'TOKEN_MISSING'})
+        self.assertIsNone(line['token_fingerprint'])
+        self.assertNotIn('discovery-model-6b1f', RIG.audit.path.read_text(encoding='utf-8'))
+
+    def test_the_recorded_shapes(self):
+        observe = RIG.broker.observed_request
+        word, many = 'a' * 32, '&'.join(f'n{i:02d}=v' for i in range(20))
+        none = {'path': None, 'query_names': None, 'model': None, 'unrecorded': None}
+        for (target, body), expected in (
+                (('/v1/messages', None), dict(none, path='/v1/messages')),
+                (('/', None), dict(none, path='/')),
+                (('', None), dict(none, unrecorded={'path': 1})),
+                (('/v1/' + word, None), dict(none, path='/v1/' + word)),
+                (('/v1/' + word + 'a', None), dict(none, unrecorded={'path': 1})),
+                (('/' + '/'.join(['s'] * 16), None), dict(none, path='/' + '/'.join(['s'] * 16))),
+                (('/' + '/'.join(['s'] * 17), None), dict(none, unrecorded={'path': 1})),
+                (('/v1/messages/', None), dict(none, unrecorded={'path': 1})),
+                (('/v1//messages', None), dict(none, unrecorded={'path': 1})),
+                (('v1/messages', None), dict(none, unrecorded={'path': 1})),
+                (('http://evil.example.test/v1/messages', None), dict(none, unrecorded={'path': 1})),
+                (('/v1/%41', None), dict(none, unrecorded={'path': 1})),
+                (('/v1/-dash', None), dict(none, unrecorded={'path': 1})),
+                (('/v1/aieh-inf-x', None), dict(none, unrecorded={'path': 1})),
+                (('/v1/m?', None), dict(none, path='/v1/m')),
+                (('/v1/m?a=1&&b&a', None), dict(none, path='/v1/m', query_names=['a', 'b'])),
+                (('/v1/m?=x&%41=1', None), dict(none, path='/v1/m', query_names=[], unrecorded={'query_names': 2})),
+                (('/v1/m?' + many, None), dict(none, path='/v1/m', query_names=[f'n{i:02d}' for i in range(16)],
+                                                unrecorded={'query_names': 4})),
+                (('/v1/m', b'{"model": "m-1"}'), dict(none, path='/v1/m', model='m-1')),
+                (('/v1/m', b'{"model": "us.vendor.m-2:0"}'), dict(none, path='/v1/m', model='us.vendor.m-2:0')),
+                (('/v1/m', json.dumps({'model': 'x' * 128}).encode()), dict(none, path='/v1/m', model='x' * 128)),
+                (('/v1/m', json.dumps({'model': 'x' * 129}).encode()),
+                 dict(none, path='/v1/m', unrecorded={'model': 1})),
+                (('/v1/m', b'{"model": 7}'), dict(none, path='/v1/m', unrecorded={'model': 1})),
+                (('/v1/m', b'{"model": null}'), dict(none, path='/v1/m', unrecorded={'model': 1})),
+                (('/v1/m', b'{"model": "has space"}'), dict(none, path='/v1/m', unrecorded={'model': 1})),
+                (('/v1/m', b'{"model": "aieh-inf-m"}'), dict(none, path='/v1/m', unrecorded={'model': 1})),
+                (('/v1/m', b'{"other": "m-1"}'), dict(none, path='/v1/m')),
+                (('/v1/m', b'["m-1"]'), dict(none, path='/v1/m')),
+                (('/v1/m', b'not json'), dict(none, path='/v1/m')),
+                (('/v1/m', bytes([255])), dict(none, path='/v1/m')),
+                (('/v1/m', b''), dict(none, path='/v1/m'))):
+            with self.subTest(target=target[:40], body=body[:40] if body else body):
+                self.assertEqual(observe(target, body), expected)
+
+    def test_anything_the_i7_scan_holds_is_counted_not_recorded(self):
+        guard = IB.BrokerGuard()
+        guard.hold('held-short-secret-2a7d')
+        with mock.patch.object(RIG.broker, 'guard', guard):
+            observed = RIG.broker.observed_request('/v1/held-short-secret-2a7d?held-short-secret-2a7d=1&beta',
+                                                   b'{"model": "held-short-secret-2a7d"}')
+            self.assertEqual(observed, {'path': None, 'query_names': ['beta'], 'model': None,
+                                        'unrecorded': {'path': 1, 'query_names': 1, 'model': 1}})
+            hex_run = 'f' * 40
+            self.assertEqual(RIG.broker.observed_request('/v1/m', json.dumps({'model': hex_run}).encode())['unrecorded'],
+                             {'model': 1})
+        self.assertEqual(RIG.broker.observed_request('/v1/held-short-secret-2a7d', None)['path'],
+                         '/v1/held-short-secret-2a7d')
 
 
 if __name__ == '__main__':

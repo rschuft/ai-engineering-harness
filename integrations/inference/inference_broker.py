@@ -127,6 +127,12 @@ LIMITS = {'max_request_bytes': (1, 256 * MIB), 'max_ttl_s': (1, 7 * 86400), 'ups
 BUDGET_LIMITS = {'requests': 1_000_000, 'tokens': 10_000_000_000}
 CONTROL_BODY_LIMIT = 64 * 1024
 DRAIN_LIMIT = MIB
+# The refused-request audit (D-4 of the S-03.3 slice plan, an Overseer ruling): a path segment or a query parameter name is
+# recorded only in this grammar (bounded length and charset), so that no credential-length run is; at most
+# OBSERVED_NAMES names per line; the model only in MODEL_NAME's.
+OBSERVED_WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._~-]{0,31}')
+OBSERVED_SEGMENTS = 16
+OBSERVED_NAMES = 16
 USAGE_BODY_LIMIT = 16 * MIB
 SSE_LINE_LIMIT = 4 * MIB
 KEY_LIMIT = 4096
@@ -1070,6 +1076,43 @@ class Broker:
             grant.bytes_in += len(body)
         return Admission(grant, family, method, target, path, model, body, forward)
 
+    def _recordable(self, what: str, text: str, shape: re.Pattern) -> bool:
+        return shape.fullmatch(text) is not None and TOKEN_PREFIX not in text and self.guard.check(what, text)
+
+    def observed_request(self, target, body: bytes | None) -> dict:
+        """What the audit records of a refused request, for route and model discovery without a model call: the
+        path, the query parameter names and, when the body of a request presenting a grant's token was read, its
+        ``model``. Never a query value, a header, any other part of the body or a credential: a path segment or a
+        name outside OBSERVED_WORD, a model outside MODEL_NAME, anything holding the token prefix, and anything the
+        I7 scan finds (the provider key, every issued token, 40-hex runs) is counted under ``unrecorded`` instead."""
+        unrecorded = {}
+        path, _, query = target.partition('?')
+        segments = path[1:].split('/')
+        recorded_path = None
+        if path.startswith('/') and len(segments) <= OBSERVED_SEGMENTS and (path == '/' or all(
+                self._recordable('audit path', segment, OBSERVED_WORD) for segment in segments)):
+            recorded_path = path
+        else:
+            unrecorded['path'] = 1
+        names = [part.partition('=')[0] for part in query.split('&') if part]
+        kept = sorted({name for name in names if self._recordable('audit query name', name, OBSERVED_WORD)})
+        dropped = sum(1 for name in names if name not in kept) + max(0, len(kept) - OBSERVED_NAMES)
+        if dropped:
+            unrecorded['query_names'] = dropped
+        model = None
+        try:
+            document = json.loads(body) if body else None
+        except (ValueError, UnicodeDecodeError):
+            document = None
+        if isinstance(document, dict) and 'model' in document:
+            candidate = document['model']
+            if isinstance(candidate, str) and self._recordable('audit model', candidate, MODEL_NAME):
+                model = candidate
+            else:
+                unrecorded['model'] = 1
+        return {'path': recorded_path, 'query_names': kept[:OBSERVED_NAMES] if names else None, 'model': model,
+                'unrecorded': unrecorded or None}
+
     # -- inference: the pass-through
 
     def serve_inference(self, handler) -> None:
@@ -1079,8 +1122,10 @@ class Broker:
         started = time.monotonic()
         line = {'event': 'request', 'attempt_id': None, 'conversation_id': None, 'token_fingerprint': None,
                 'family': None, 'method': handler.command if handler.command in METHODS else 'other',
-                'path': None, 'model': None, 'request_bytes': 0, 'response_bytes': 0, 'status': None,
-                'upstream_status': None, 'latency_ms': None, 'usage': None, 'code': None}
+                'path': None, 'query_names': None, 'model': None, 'unrecorded': None, 'request_bytes': 0,
+                'response_bytes': 0, 'status': None, 'upstream_status': None, 'latency_ms': None, 'usage': None,
+                'code': None}
+        captured = []
 
         def audit(**fields):
             line.update(fields, latency_ms=round((time.monotonic() - started) * 1000, 1))
@@ -1088,13 +1133,17 @@ class Broker:
 
         def read(length: int) -> bytes:
             handler.body_consumed = True
-            return handler.rfile.read(length)
+            captured.append(handler.rfile.read(length))
+            return captured[-1]
         try:
             admission = self.admit(handler.command, handler.path, handler.headers, read)
         except InferenceError as exc:
+            body = None
             if exc.grant is not None:
                 line.update(attempt_id=exc.grant.attempt_id, conversation_id=exc.grant.conversation_id,
                             token_fingerprint=exc.grant.fingerprint, family=exc.grant.family)
+                body = captured[0] if captured else _drain(handler)
+            line.update(self.observed_request(handler.path, body))
             audit(status=exc.status, code=exc.code)
             _send_refusal(handler, exc)
             return
@@ -1294,19 +1343,20 @@ def _send_json(handler, status: int, payload: dict, *, close: bool) -> None:
     handler.wfile.write(data)
 
 
-def _drain(handler) -> None:
-    """Read and discard an unread request body of at most DRAIN_LIMIT bytes before a refusal, so that the
-    closing connection does not reset the refusal away; a larger or chunked body is left and the connection
-    closed."""
+def _drain(handler) -> bytes | None:
+    """Read an unread request body of at most DRAIN_LIMIT bytes before a refusal, so that the closing connection
+    does not reset the refusal away, and return it (the refused-request audit reads its model, nothing else); a
+    larger or chunked body is left and the connection closed."""
     if getattr(handler, 'body_consumed', False):
-        return
+        return None
     handler.body_consumed = True
     length = handler.headers.get('content-length') or ''
     if handler.headers.get('transfer-encoding') is None and length.isdigit() and int(length) <= DRAIN_LIMIT:
         try:
-            handler.rfile.read(int(length))
+            return handler.rfile.read(int(length))
         except OSError:
             pass
+    return None
 
 
 def _send_refusal(handler, exc: InferenceError) -> None:
