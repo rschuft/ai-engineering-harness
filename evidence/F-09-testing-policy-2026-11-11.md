@@ -10,7 +10,9 @@ and tooling change. The verdict is the Overseer's and the Owner's.
 
 - **Commits** (on `f8506b2`): `8b9442e` (the concurrent runner), `d2e3ff0` (the test check and the
   recorded test set), `20f51d6` (documentation), `e6af9c9` (the plan amendment), `9b2f62b` (fix
-  forward of the runner's summary line), then this record.
+  forward of the runner's summary line), `58cf3b7` (this record); after the Overseer's review
+  `6b9a6ec` (the historical `original_proof` fields restored), `34d36a2` (the no-window guard covers
+  `tools/test_profile.py`), then this record's correction.
 - **Host:** Windows 11 x86_64, 32 logical processors, CPython 3.12.10 under the `python-tools`
   interpreter. Every run from Git Bash with `PYTHONDONTWRITEBYTECODE=1` and `AIEH_DATA_ROOT` an
   empty scratch directory (the runner gives each suite its own); Windows Disk Cleanup (`cleanmgr`)
@@ -86,13 +88,22 @@ unittest's verdict line. Exit statuses were never affected.
 
 A new dated `amendments` entry quotes the direction, cites the log and quotes each superseded
 clause; the notes of F-09, F-09.1, F-09.3, F-09.4 and F-10.3 record it. Changed, in the plan JSON
-(proof, `completion_evidence`, `original_proof`, the F-09 gate on F-09.4, `overseer_prompt`), the
-HTML (cards, prompts, lower-cased search text, `planData`), the CSV, the prompts of F-09.1 to
-F-09.4 and F-10.3, `task_manifest.json` and `SEED_MANIFEST.json`:
+(proof, `completion_evidence`, notes, `overseer_prompt`), the HTML (cards, prompts, lower-cased
+search text, `planData`), the CSV, the prompts of F-09.1 to F-09.4 and F-10.3, `task_manifest.json`
+and `SEED_MANIFEST.json`. `e6af9c9` also rewrote the F-09 group's `original_proof` and the F-09
+gate on F-09.4 that copies it; those are historical fields, and `6b9a6ec` restored both to their
+`f8506b2` values with what renders the gate (F-09.4's prompt line under "PARENT ACCEPTANCE CHECKS
+AT THIS STEP", its HTML card and the CSV gate cell), and corrected the amendment entry's summary
+and F-09.4's note. Against `f8506b2` the plan JSON now differs only in `amendments`, the F-09
+group's `proof`, `completion_evidence` and notes, and the proof, `completion_evidence`, notes and
+`overseer_prompt` of F-09.1, F-09.3 and F-10.3, F-09.2's `overseer_prompt`, and F-09.4's notes and
+`overseer_prompt` (its "Required outcome" line only). Consequence for the Overseer: F-09.4's gate
+line and card still show the original F-09 proof, with its 150 s clause, as the historical
+original; the amended proof is the group's `proof`.
 
 | Field | Before | After |
 |---|---|---|
-| F-09 proof (and `original_proof`, the F-09.4 gate, F-09.1 to F-09.4's "Required outcome") | … the budget check passes on the baseline and fails on an injected regression; serial task test takes at most 150 s; every fail-closed security proof stays in a required tier. | … the budget check passes on the baseline and fails on an injected removed or newly skipped test, while wall times and launch and mkdtemp counts are reported as diagnostics, never as gates; every fail-closed security proof stays in a required tier. |
+| F-09 proof (and F-09.1 to F-09.4's "Required outcome"; not `original_proof` or the F-09.4 gate) | … the budget check passes on the baseline and fails on an injected regression; serial task test takes at most 150 s; every fail-closed security proof stays in a required tier. | … the budget check passes on the baseline and fails on an injected removed or newly skipped test, while wall times and launch and mkdtemp counts are reported as diagnostics, never as gates; every fail-closed security proof stays in a required tier. |
 | F-09.1 proof | … the budget check passes on the baseline and fails on an injected regression. | … the budget check passes on the baseline and fails on an injected removed or newly skipped test; wall times and launch and mkdtemp counts are reported as diagnostics, never as gates. |
 | F-09.3 proof | … with the CLI contracts kept; serial task test takes at most 150 s; the test count is at least the baseline; … | … with the CLI contracts kept; the test count is at least the baseline; … |
 | F-10.3 proof | … task test:budget PASS on re-proposed budgets and serial task test at most 150 s; … | … task test:budget PASS, its wall times and counts recorded as diagnostics; … |
@@ -137,10 +148,11 @@ test-budget section says the same. The root README states no ceiling and is unch
   became `…test_test_serial_runs_every_suite_under_the_tools_interpreter` (same assertions) beside
   the new `…test_test_runs_the_suites_concurrently_under_the_tools_interpreter`; the checker's tests
   for the old blocking rules became tests of the new ones.
-- **Unrelated but detected:** `tools/test_profile.py`'s own launches (`run_child`, `run_plain`)
-  pass no creation flags; the no-window guard does not scan it because its name starts with
-  `test_`. Its children share the caller's console, so no window opens from a console session.
-  Not changed (outside this dispatch).
+- **Unrelated but detected, then fixed (`34d36a2`):** `tools/test_profile.py`'s own launches
+  (`run_child`, `run_plain`) passed no creation flags, and the no-window guard did not scan it
+  because its name starts with `test_`. They now use the helper, and the guard excludes only
+  modules inside a `tests/` directory; no other non-test module was hidden by the old rule. The
+  guard reports both launches of the previous file (negative control).
 - **Unrelated but detected:** `build_profile` keys test rows by id across suites; two suites with
   the same module and test name would lose a row. None collide today (2,587 rows, equal to the
   suites' tests and fixture rows).
