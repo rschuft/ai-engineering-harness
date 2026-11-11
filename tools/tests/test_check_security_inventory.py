@@ -406,5 +406,56 @@ class Publication(unittest.TestCase):
         self.assertTrue(any('op-exchange' in p.where for p in problems))
 
 
+BLUEPRINT = 'AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html'
+PLAN_FILE = 'AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json'
+
+
+class RememberedAnswers(unittest.TestCase):
+    """The machine-path answer and a link's verdict are remembered (plan leaf F-09): what a
+    checker reports is what the unremembered rule reports, every time it is asked."""
+
+    def test_machine_path_answers_as_the_pattern_every_time(self):
+        texts = ['C:\\Users\\you\\state', 'D:/guest-state/instances', '\\\\server\\share',
+                 '%userprofile%\\.ssh', 'unix:///var/run/docker.sock', 'https://example.org/x',
+                 '/srv/scratch/openhands', 'ab:/x', 'a', '', README, README + '\nE:\\late\n',
+                 'x' * 5000 + 'Z:/end']
+        for _ in range(2):              # the second pass is answered from memory
+            for text in texts:
+                with self.subTest(text=text[-40:]):
+                    self.assertEqual(csi.machine_path(text), csi.MACHINE_PATH.search(text) is not None)
+        self.assertFalse(csi.machine_path(README))
+        self.assertTrue(csi.machine_path(README + '\nE:\\late\n'))  # a changed text is asked anew
+
+    def test_a_remembered_link_reports_what_a_fresh_check_reports_where_it_is_used(self):
+        links = ['evidence/F-99-nothing.md', f'{BLUEPRINT}#no-such-section', f'{PLAN_FILE}#S-01.9',
+                 f'{PLAN_FILE}#S-01.1', '../outside.md', 'C:/x.md', '/abs.md', 'README.md', '', 5, None,
+                 f'{BLUEPRINT}#{"x" * 3}']
+        shared = csi.RepoFiles(REPO)
+        for link in links * 2:                                  # the second round from memory
+            with self.subTest(link=link):
+                fresh_checker = csi.Checker({}, REPO, None, csi.RepoFiles(REPO))
+                fresh_checker.check_link('first', link)
+                fresh_checker.check_link('second', link)
+                checker = csi.Checker({}, REPO, None, shared)
+                checker.check_link('first', link)
+                checker.check_link('second', link)
+                self.assertEqual(checker.problems, fresh_checker.problems)
+                half = len(checker.problems) // 2
+                self.assertEqual([p.where for p in checker.problems], ['first'] * half + ['second'] * half)
+        # the codes the links give: each rule still fires
+        found = csi.Checker({}, REPO, None, shared)
+        for link in links:
+            found.check_link('x', link)
+        self.assertEqual(sorted({p.code for p in found.problems}),
+                         ['ANCHOR_MISSING', 'LINK_INVALID', 'LINK_MISSING'])
+        self.assertEqual(len(found.problems), 10)
+        # a verdict is remembered per tree (per files object): another tree's files answer for themselves
+        other = csi.RepoFiles(REPO)
+        other._is_file[Path('README.md')] = False
+        checker = csi.Checker({}, REPO, None, other)
+        checker.check_link('x', 'README.md')
+        self.assertEqual([p.code for p in checker.problems], ['LINK_MISSING'])
+
+
 if __name__ == '__main__':
     unittest.main()

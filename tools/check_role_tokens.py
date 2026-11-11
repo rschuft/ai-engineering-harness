@@ -564,7 +564,7 @@ class Checker(csi.Checker):
     def check_policy_readme(self):
         if self.readme is None:
             return
-        if csi.MACHINE_PATH.search(self.readme):
+        if csi.machine_path(self.readme):
             self.add('MACHINE_PATH', 'readme', 'a machine-specific path must not be published')
         for ident in [*self.roles, *self.capabilities]:
             if f'`{ident}`' not in self.readme:

@@ -139,19 +139,6 @@ class Checker(csi.Checker):
         self.catalog = catalog
         self.kinds = lineage_kinds(lineage)
 
-    def check_link(self, where, link):
-        """The inventory checker's link rule, remembered per link on the shared files (a link's
-        verdict depends only on the tree; the anchor search of the blueprint dominates)."""
-        memo = self.files.__dict__.setdefault('_link_verdicts', {})
-        if isinstance(link, str) and link in memo:
-            for code, message in memo[link]:
-                self.add(code, where, message)
-            return
-        before = len(self.problems)
-        super().check_link(where, link)
-        if isinstance(link, str):
-            memo[link] = [(p.code, p.message) for p in self.problems[before:]]
-
     def keys(self, where, entry, allowed):
         for key in entry:
             if key not in allowed:
@@ -454,7 +441,7 @@ class Checker(csi.Checker):
     def check_catalog_readme(self):
         if self.readme is None:
             return
-        if csi.MACHINE_PATH.search(self.readme):
+        if csi.machine_path(self.readme):
             self.add('MACHINE_PATH', 'readme', 'a machine-specific path must not be published')
         for collection in ('controls', 'deferred_controls'):
             for r in _list(self.catalog.get(collection)):

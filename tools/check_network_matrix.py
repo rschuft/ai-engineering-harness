@@ -415,7 +415,7 @@ class Checker(csi.Checker):
     def check_matrix_readme(self, rows):
         if self.readme is None:
             return
-        if csi.MACHINE_PATH.search(self.readme):
+        if csi.machine_path(self.readme):
             self.add('MACHINE_PATH', 'readme', 'a machine-specific path must not be published')
         for r in rows:
             ident = r.get('id') if isinstance(r, dict) else None

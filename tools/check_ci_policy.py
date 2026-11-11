@@ -1221,7 +1221,7 @@ class Checker(csi.Checker):
         if block is None:
             self.add('README_STALE', 'readme', 'the generated block is missing its markers')
         else:
-            if csi.MACHINE_PATH.search(block):
+            if csi.machine_path(block):
                 self.add('MACHINE_PATH', 'readme', 'a machine-specific path must not be published')
             if block.strip() != render(self.profile, self.policy).strip():
                 self.add('README_STALE', 'readme', 'the generated block differs from --render; '
@@ -1230,7 +1230,7 @@ class Checker(csi.Checker):
 
 def source_path_ok(path):
     return isinstance(path, str) and path and not path.startswith(('/', '\\')) and \
-        '..' not in path.split('/') and not csi.MACHINE_PATH.search(path)
+        '..' not in path.split('/') and not csi.machine_path(path)
 
 
 def forbidden_option(token, mount):

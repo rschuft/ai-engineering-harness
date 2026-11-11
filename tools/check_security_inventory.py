@@ -32,6 +32,7 @@ Usage (from the repository root):
 Exit status: 0 PASS, 1 FAIL, 2 could not run.
 """
 import argparse
+import functools
 import json
 import re
 import sys
@@ -66,6 +67,14 @@ MACHINE_PATH = re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\[A-Za-z0-9]|%USER
                           re.IGNORECASE)
 
 
+@functools.lru_cache(maxsize=1 << 16)
+def machine_path(text):
+    """Whether TEXT holds a machine path (``MACHINE_PATH.search``), each text's answer remembered:
+    the checkers ask it of the same strings and READMEs in every evaluation, and a caller that
+    evaluates many inputs (the type-fuzzing tests) repeats them."""
+    return MACHINE_PATH.search(text) is not None
+
+
 @dataclass(frozen=True)
 class Problem:
     code: str
@@ -78,7 +87,8 @@ class Problem:
 
 class RepoFiles:
     """The repository files a checker reads under ROOT, read only: each text read once, each
-    file tested once and the plan's ids parsed once. A checker makes its own by default; a
+    file tested once, the plan's ids parsed once and each link's verdict reached once (by
+    ``Checker.check_link``, from these reads). A checker makes its own by default; a
     caller that checks many inputs against one unchanged tree may load one and share it (the
     checkers' load/evaluate seam)."""
 
@@ -149,14 +159,27 @@ class Checker:
         return self.files.plan_ids()
 
     def check_link(self, where, link):
-        """A link is a repository-relative file path, optionally with #anchor."""
+        """A link is a repository-relative file path, optionally with #anchor. A link's verdict
+        depends only on the tree its files read once, so it is remembered per link on the shared
+        files (the anchor search of the blueprint dominates a checker's evaluation)."""
+        memo = self.files.__dict__.setdefault('_link_verdicts', {})
+        if isinstance(link, str) and link in memo:
+            for code, message in memo[link]:
+                self.add(code, where, message)
+            return
+        before = len(self.problems)
+        self._check_link(where, link)
+        if isinstance(link, str):
+            memo[link] = [(p.code, p.message) for p in self.problems[before:]]
+
+    def _check_link(self, where, link):
         if not isinstance(link, str) or not link:
             self.add('LINK_INVALID', where, f'not a link: {link!r}')
             return
         path, _, anchor = link.partition('#')
         rel = Path(path)
         if rel.is_absolute() or path.startswith(('/', '\\')) or '..' in rel.parts \
-                or MACHINE_PATH.search(path):
+                or machine_path(path):
             self.add('LINK_INVALID', where, f'not a repository-relative path: {link}')
             return
         if not self.files.is_file(rel):
@@ -279,7 +302,7 @@ class Checker:
 
     def check_machine_paths(self, value, where):
         if isinstance(value, str):
-            if MACHINE_PATH.search(value):
+            if machine_path(value):
                 self.add('MACHINE_PATH', where, 'a machine-specific path must not be published; '
                          'describe the location generically')
         elif isinstance(value, dict):

@@ -558,7 +558,7 @@ class Checker(csi.Checker):
     def check_readme_block(self):
         if self.readme is None:
             return
-        if csi.MACHINE_PATH.search(self.readme):
+        if csi.machine_path(self.readme):
             self.add('MACHINE_PATH', 'readme', 'a machine-specific path must not be published')
         block = generated_block(self.readme)
         if block is None:
