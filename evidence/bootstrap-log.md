@@ -1368,6 +1368,100 @@ push never implies parent acceptance.
 
 - **2026-11-11: no-window audit and helper (the Owner's rule after the window incident).** The Builder's audit found 29 launches in `tools/` and `integrations/` without `CREATE_NO_WINDOW`, among them `Ssh.run`, and two `DETACHED_PROCESS` starts (QEMU, and the Gitea supervisor, which starts a console child) (`410132b`). An unconditional flag cost about 7 ms per launch and took the serial median to 147.0 s (one run 154.9 s) against the 150 s ceiling, which is never raised. **Overseer ruling:** the purpose is that no harness process opens a visible window, so one helper, `integrations/platform/no_window.py`, gives the flag when this process is attached to no console and inheritance otherwise (a child sharing a console opens no window); QEMU, the Gitea supervisor, Gitea and the forward holder keep it unconditionally (`f8ba6ec`). The Builder verified the premise in kill-on-close jobs for three parent states (a pseudo console, a parent started with `CREATE_NO_WINDOW`, a detached parent): no case opened a window. Accepted deviation: the test is `GetConsoleProcessList` (attached to any console), not `GetConsoleWindow`, which is NULL for a windowless console and would have re-imposed the cost in agent sessions. A repository-wide guard (`tools/tests/test_launch_census.py`, `composition/` included) fails on any launch without the helper or the unconditional flag and on `DETACHED_PROCESS` or `CREATE_NEW_CONSOLE`, with a negative control; allowlisted: `guest.py exec` (an interactive passthrough whose console handles the flag breaks), `guest_drill` (runs in the Linux guest) and `verify_seed.py` (integrity-tracked). Accepted: the flag added to `tools/publication_gate.py`'s launches (the gate rule protects the hooks path, `.githooks/` and `.gitleaks.toml`). **Overseer verification:** the helper read; budget `check --run` PASS at `2fd333c` on the idle host (serial 139.1 s; cleanmgr absent before and after); verify_seed and the contract checkers PASS; publication gate and private-path grep clean. Not verified: console behaviour outside Windows 11; a live guest or Gitea start since the change.
 
+- **2026-11-11: Owner direction, test runtime is diagnostic, not a gate (verbatim).** It supersedes the 150 s serial ceiling, the per-suite wall-clock ceilings and the exact launch and mkdtemp budgets as blockers of ordinary work. Verbatim:
+
+  > Owner direction: stop optimizing tests against the
+  > fixed 150-second serial runtime ceiling.
+  >
+  > The current test infrastructure is sufficiently fast
+  > and mature for development to continue.
+  >
+  > I do not want repeated Builder assignments that
+  > recover 5-15 seconds whenever legitimate new tests
+  > consume the available headroom.
+  >
+  > Stop the active "Serial test runtime reduction 2"
+  > Builder cleanly. Preserve any useful completed
+  > findings, but do not require it to achieve another
+  > runtime target or initiate further optimization rounds.
+  >
+  > Change the testing policy as follows:
+  >
+  > 1. Retire the hard 150-second serial-suite
+  >    acceptance requirement.
+  >
+  > 2. Retire per-suite wall-clock ceilings and exact
+  >    launch/mkdtemp budgets as routine blockers for
+  >    accepting ordinary engineering work.
+  >
+  > 3. Keep test runtime measurements and process counts
+  >    as diagnostic information, not continuously
+  >    rebaselined performance gates.
+  >
+  > 4. Prefer parallel tests by default wherever they
+  >    are deterministic and independent.
+  >
+  > 5. Continue preferring in-memory fixtures, mocks
+  >    and stubs for unit tests. Use real filesystems,
+  >    processes, services and repositories only where
+  >    their behavior is actually being qualified.
+  >
+  > 6. Preserve:
+  >    - All existing behavioral and security assertions
+  >    - Fail-closed security and authorization tests
+  >    - Test category separation
+  >    - Unit-test isolation rules
+  >    - Independent integration and contract tests
+  >    - Detection of accidentally removed or skipped tests
+  >    - Process cleanup and no-visible-window requirements
+  >    - Deterministic, reproducible outcomes
+  >
+  > 7. Do not weaken or delete tests to improve speed.
+  >    Do not reduce coverage or hide failures.
+  >
+  > 8. During development, run focused affected suites.
+  >    Run the applicable broader suite at acceptance
+  >    and release gates. Do not repeatedly validate
+  >    unchanged artifacts without a reason.
+  >
+  > 9. Investigate significant, sustained performance
+  >    regressions, not small increases caused by
+  >    legitimate new tests. As a review heuristic,
+  >    consider roughly 50% regression from comparable
+  >    measurements or a full suite exceeding five
+  >    minutes. These are investigation signals, not
+  >    automatic work-blocking thresholds.
+  >
+  > 10. Never launch an optimization workstream merely
+  >     because a passing suite approaches an old budget.
+  >
+  > This supersedes my earlier 150-second requirement.
+  >
+  > Reconcile the canonical F-09 acceptance criteria,
+  > test-budget policy, checker behavior, developer
+  > documentation and generated task prompts through
+  > the existing integrity-controlled process.
+  >
+  > Preserve their historical provenance. Keep genuine
+  > test failures blocking, but remove artificial
+  > performance gating and per-change budget churn.
+  >
+  > Make the minimum required policy/tooling changes.
+  > Do not build a replacement performance management
+  > system or spend another extended period benchmarking.
+  >
+  > Then return engineering capacity to the critical
+  > path: authorization, dispatch, inference qualification,
+  > coding providers, independent review and delivery.
+  >
+  > OA-20, the G-01.1 policy admission and C-3 remain
+  > separate Owner decisions. Do not infer approval
+  > of those actions from this testing direction.
+  >
+  > Continue autonomous eligible engineering work.
+
+- **2026-11-11: the second runtime-reduction slice stopped cleanly under that direction.** Kept, each verified by the Overseer (the six contract checkers PASS; tools suite 1327 OK, 6 skipped, its data root empty afterwards; verify_seed PASS): `7d02e72` (the custody-probe test class launches each distinct sweep once per class, 18 launches to 2; test only), `dedc6ae` (a byte-identical memo of the checkers' machine-path and link answers, proven by running all 2,096 checker-test calls on the old and new checkers with equal problem lists), `b9a8faf` (a test digest helper reading whole files; equal digests), and `04ecee6` (findings, marked diagnostic). Diagnostic finding: of the rise from `f3da010` to `a3cf0ab`, about 5 s was the cost of the new test classes and about 12 s was host drift (the same revision measured 133.8 s and 145.7 s on the same day). No budget commit; no further optimization. Process note: a background-command stop did not end its child processes; the Builder ended them and its final check found none of its processes left.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
