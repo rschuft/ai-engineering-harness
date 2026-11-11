@@ -77,10 +77,14 @@ class Listener(http.server.ThreadingHTTPServer):
 
 class FakeSweepSsh:
     """guest.Ssh's run(): the sweep runs locally; the outer listener and the inner endpoint are mapped to the
-    loopback fake. Every script is kept."""
+    loopback fake. Every script is kept. With ``memo`` (a dict) and ``admitted`` (returning the outer listener's
+    admissions as a frozenset), a sweep whose script text and admissions equal an earlier one's gets that earlier
+    run's result: the listeners answer by the request alone, so the same script against the same admissions gives
+    the same output, and the launch that would check the same thing again is not made."""
 
-    def __init__(self, port, inner_port, lose=False):
+    def __init__(self, port, inner_port, lose=False, memo=None, admitted=frozenset):
         self.port, self.inner_port, self.lose, self.scripts = port, inner_port, lose, []
+        self.memo, self.admitted = memo, admitted
 
     def run(self, command, user='agent', input_text=None, timeout=300):
         self.scripts.append((list(command), user, input_text))
@@ -92,10 +96,15 @@ class FakeSweepSsh:
         spec['outer'] = ['127.0.0.1', self.port]
         spec['inner'][:2] = ['127.0.0.1', self.inner_port]
         text = 'SEALED = ' + repr((guest.base64.b64encode(json.dumps(spec).encode()).decode(), sealed[1])) + '\n' + body
-        done = subprocess.run([BASE_PYTHON, '-I', '-'], input=text.encode(), capture_output=True, timeout=timeout,
-                              creationflags=NO_WINDOW)
-        return subprocess.CompletedProcess(command, done.returncode, done.stdout.decode().replace('\r\n', '\n'),
-                                           done.stderr.decode())
+        key = (text, self.admitted())
+        if self.memo is None or key not in self.memo:
+            done = subprocess.run([BASE_PYTHON, '-I', '-'], input=text.encode(), capture_output=True, timeout=timeout,
+                                  creationflags=NO_WINDOW)
+            answer = (done.returncode, done.stdout.decode().replace('\r\n', '\n'), done.stderr.decode())
+            if self.memo is None:
+                return subprocess.CompletedProcess(command, *answer)
+            self.memo[key] = answer
+        return subprocess.CompletedProcess(command, *self.memo[key])
 
 
 def inspect_record(**changes):
@@ -138,6 +147,7 @@ class ProbeRun(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server, cls.inner = Listener(), Listener(inner=True)
+        cls.sweeps = {}                     # one launch per distinct sweep (FakeSweepSsh)
         cls.threads = [threading.Thread(target=s.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
                        for s in (cls.server, cls.inner)]
         for thread in cls.threads:
@@ -151,7 +161,8 @@ class ProbeRun(unittest.TestCase):
             thread.join(10)
 
     def sweep_ssh(self, lose=False):
-        return FakeSweepSsh(self.server.server_address[1], self.inner.server_address[1], lose)
+        return FakeSweepSsh(self.server.server_address[1], self.inner.server_address[1], lose, memo=self.sweeps,
+                            admitted=lambda: frozenset(self.server.admit))
 
     def setUp(self):
         self.server.admit.clear()
