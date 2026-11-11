@@ -26,8 +26,10 @@ import hashlib
 import http.client
 import importlib.util
 import json
+import pickle
 import sys
 import unittest
+from unittest import mock
 
 CATEGORY = 'integration'
 
@@ -136,6 +138,19 @@ class StageMappingTests(unittest.TestCase):
                 others = {roles.ROLES[r]['credential'] for r in at.STAGE_ROLES.values() if r != role}
                 self.assertTrue(others <= set(rows[role]['denied']), others)
 
+    def test_the_module_refuses_an_incomplete_mapping(self):
+        """STAGE_ROLES must cover exactly the store's stages, each with a role gitea_roles knows."""
+        source = (HERE.parent / 'attempt_tokens.py').read_text(encoding='utf-8')
+        for name, patch in (('a stage without a role', mock.patch.object(di, 'STAGES', (*di.STAGES, 'deploy'))),
+                            ('a role gitea_roles lacks', mock.patch.dict(roles.ROLES, clear=False))):
+            with self.subTest(name), patch:
+                if name == 'a role gitea_roles lacks':
+                    del roles.ROLES['reviewer']
+                with self.assertRaisesRegex(ImportError, 'STAGE_ROLES'):
+                    exec(compile(source, 'attempt_tokens.py', 'exec'), {'__file__': str(HERE.parent / 'attempt_tokens.py'),
+                                                                        '__name__': 'attempt_tokens_check'})
+        self.assertIn('reviewer', roles.ROLES)
+
     def test_holds_are_counted_and_released(self):
         token = synthetic('held')
         digest, fp = hashlib.sha256(token.encode()).hexdigest(), roles.fingerprint(token)
@@ -215,10 +230,13 @@ class DeliveryTests(adm.AdmissionFixture):
                 'fingerprint': roles.fingerprint(token)})
             for shown in (json.dumps(record), repr(delivery), str(delivery), repr(credential)):
                 self.assertEqual(shown_tokens(shown), [], shown)
-            with self.assertRaises(TypeError):
-                copy.deepcopy(delivery)
+            self.assertIn(f"fingerprint='{roles.fingerprint(token)}', open=True", repr(delivery))
+            for serialize in (pickle.dumps, copy.deepcopy, copy.copy):
+                with self.assertRaisesRegex(TypeError, 'not serializable'):
+                    serialize(delivery)
         self.assertFalse(delivery.open)
-        with self.assertRaises(ValueError):
+        self.assertIn('open=False', repr(delivery))
+        with self.assertRaisesRegex(ValueError, 'the attempt context has ended'):
             delivery.credential()
         self.assertNotIn(token, self.store.canonical_dump().decode('utf-8'))
         return key
@@ -305,13 +323,40 @@ class DeliveryTests(adm.AdmissionFixture):
                   'bad status line': http.client.BadStatusLine('')}
         for name, fault in faults.items():
             with self.subTest(name):
-                self.refused('ROLE_TOKEN_UNVERIFIED', key, gitea=FakeGitea(views(), fault=fault), requests=1)
+                refusal = self.refused('ROLE_TOKEN_UNVERIFIED', key, gitea=FakeGitea(views(), fault=fault), requests=1)
+                if name == '500':
+                    self.assertEqual(refusal.context, {'status': 500})
 
     def test_a_failing_provider_is_refused(self):
         key = self.confirmed()
         for error in (OSError('CredReadW'), RuntimeError('locked'), roles.GiteaError('X', 'y')):
             with self.subTest(error=type(error).__name__):
                 self.refused('ROLE_TOKEN_UNAVAILABLE', key, provider=MemoryProvider(entries(), error), requests=0)
+
+    def test_the_stored_record_is_checked_before_any_read(self):
+        """stored_inputs on a confirmed attempt: a stored digest, intent or identity that is not the
+        dispatch record's is RESERVATION_INVALID, and nothing is read."""
+        key = self.confirmed()
+        real_get = self.store.get
+        good = real_get(key)
+
+        def stored(**changes):
+            return mock.patch.object(self.store, 'get', lambda k: store_mod.Reservation(
+                **{**real_get(k).__dict__, **changes}))
+
+        def digested(text):
+            return {'intent_json': text, 'intent_digest': hashlib.sha256(text.encode()).hexdigest()}
+
+        intent = json.loads(good.intent_json)
+        intent[di.INTENT_KEY]['ordinal'] = 0  # outside the identity's range, with a consistent digest
+        cases = {'another digest': {'intent_digest': '0' * 64},
+                 'not strict JSON': digested(good.intent_json[:-1] + ', "x": NaN}'),
+                 'an invalid identity': digested(store_mod.canonical_intent(intent))}
+        for name, changes in cases.items():
+            with self.subTest(name), stored(**changes):
+                self.refused('RESERVATION_INVALID', key, reads=[], requests=0)
+        with self.assertRaises(ValueError):
+            di.stored_inputs(self.store, key, state='failed')
 
     def test_only_a_confirmed_attempt_gets_a_token(self):
         self.refused('RESERVATION_INVALID', 'attempt/v1/TASK-9/x@y/implement/1', reads=[], requests=0)
