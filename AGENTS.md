@@ -128,6 +128,7 @@ unless adaptation is necessary.
   <tools python> -I -B -m unittest discover -s integrations/gitea/tests -v
   <tools python> -I -B -m unittest discover -s integrations/dispatch/tests -v
   <tools python> -I -B -m unittest discover -s integrations/repository/tests -v
+  <tools python> -I -B -m unittest discover -s integrations/inference/tests -v
   ```
 
 - Component resolution, inventory and SBOM commands need network access and the
