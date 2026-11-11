@@ -9,6 +9,7 @@ tree.
 from __future__ import annotations
 
 import ast
+import contextlib
 import http.server
 import io
 import json
@@ -159,15 +160,23 @@ class TestControlClient(unittest.TestCase):
             'budget': {'requests': 3, 'tokens': 50}, 'ttl_s': 60})
 
     def test_the_issue_command_writes_the_token_to_a_pipe_only(self):
+        class Pipe(io.TextIOWrapper):
+            flushed = 0
+
+            def flush(self):
+                if not self.closed:
+                    self.flushed += 1
+                super().flush()
         read_end, write_end = os.pipe()
         reader = os.fdopen(read_end, 'rb')
         try:
-            with os.fdopen(write_end, 'w', encoding='ascii', newline='\n') as out:
+            with Pipe(os.fdopen(write_end, 'wb'), encoding='ascii', newline='\n') as out:
                 err = io.StringIO()
                 before = self.live()
                 attempt = S.new_id()
                 code = IC.main(self.issue_argv('--attempt-id', attempt),
                                IC.Context(component=self.ports, out=out, err=err))
+                self.assertEqual(out.flushed, 1, 'the token is flushed to the pipe at once')
             data = reader.read()
         finally:
             reader.close()
@@ -214,6 +223,18 @@ class TestControlClient(unittest.TestCase):
                         self.assertIn(code, err.getvalue())
             self.assertEqual(reader.read(), b'')
         self.assertEqual(self.live(), before)
+
+    def test_the_issue_command_requires_every_grant_field(self):
+        full = self.issue_argv('--attempt-id', S.new_id())
+        for index in range(1, len(full) - 2, 2):
+            argv = full[:index] + full[index + 2:]
+            with self.subTest(dropped=full[index]):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                    IC.main(argv, IC.Context(component=self.ports, out=io.StringIO(), err=io.StringIO()))
+                self.assertEqual(caught.exception.code, 2)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            IC.main([], IC.Context(component=self.ports, out=io.StringIO(), err=io.StringIO()))
+        self.assertEqual(caught.exception.code, 2)
 
     def test_refusals_carry_the_broker_code(self):
         with self.assertRaises(IC.ControlError) as caught:

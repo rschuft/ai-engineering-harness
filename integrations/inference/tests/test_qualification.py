@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import http.client
 import io
 import json
 import shutil
+import socket
 import tempfile
 import types
 import unittest
@@ -55,6 +57,18 @@ class Stdin:
 
 def refuse(*args, **kwargs):
     raise AssertionError('the launcher went past its refusal')
+
+
+class Out(io.StringIO):
+    """Standard output that counts its lines and flushes (a record must reach a pipe as it is written)."""
+
+    def __init__(self):
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self):
+        self.flushes += 1
+        super().flush()
 
 
 def config(**families) -> dict:
@@ -149,6 +163,26 @@ class TestLauncherRefusals(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'KEY_NEVER_WRITTEN')
         self.assertEqual(CRED.describe(provider)['provider'], 'stdin-qualification')
         self.assertEqual(IQ.KEY_SOURCE, 'stdin-qualification')
+
+
+class TestCommandLine(unittest.TestCase):
+    def test_required_options_and_the_managed_defaults(self):
+        for argv in ([], ['broker'], ['fake-upstream', '--family', 'openai-chat'],
+                     ['fake-upstream', '--port', '18433']):
+            with self.subTest(argv=argv):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                    IQ.main(argv, context(None, Stdin()))
+                self.assertEqual(caught.exception.code, 2)
+        # without a context: the fake upstream admits no ephemeral port, and the launcher's managed context
+        # failing to resolve is a refusal on standard error
+        with mock.patch.object(IQ, '_FakeServer', refuse), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(IQ.main(['fake-upstream', '--family', 'openai-chat', '--port', '0']), 2)
+        self.assertIn('FAKE_PORT_INVALID', err.getvalue())
+        failing = IB.paths.PathsError('DEFAULT_ROOT_UNAVAILABLE', 'synthetic')
+        with mock.patch.object(IB, 'managed_context', side_effect=failing), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(IQ.main(['broker', '--provider', PROVIDER_ID]), 2)
+        self.assertIn('DEFAULT_ROOT_UNAVAILABLE', err.getvalue())
 
 
 class TestSeparateCommand(unittest.TestCase):
@@ -286,7 +320,7 @@ class TestLaunch(unittest.TestCase):
 
 class TestFakeUpstream(unittest.TestCase):
     def run_fake(self, argv, wait=refuse, allow_ephemeral=True):
-        ctx = types.SimpleNamespace(out=io.StringIO(), err=io.StringIO(), wait=wait, allow_ephemeral=allow_ephemeral)
+        ctx = types.SimpleNamespace(out=Out(), err=io.StringIO(), wait=wait, allow_ephemeral=allow_ephemeral)
         return IQ.main(['fake-upstream', *argv], ctx), ctx
 
     def test_refusals_come_before_any_bind(self):
@@ -324,10 +358,11 @@ class TestFakeUpstream(unittest.TestCase):
                 self.assertEqual(reader.finish(), {'input': 1, 'output': 1, 'total': 2})
 
     def test_records_names_and_fingerprints_never_values_or_bodies(self):
-        answers = []
+        answers, ports = [], []
 
         def wait(fake):
             port, route = fake.port, '/v1/chat/completions'
+            ports.append(port)
             bearer = [('Authorization', f'Bearer {SYNTHETIC}'), ('X-Synthetic-Marker', HEADER_MARKER)]
             answers.append(S.request(port, 'POST', route, {'model': S.MODEL_A, 'prompt': S.PROMPT_MARKER}, bearer))
             answers.append(S.request(port, 'POST', '/v1/other', {'model': S.MODEL_A}, bearer))
@@ -341,6 +376,13 @@ class TestFakeUpstream(unittest.TestCase):
         status, ctx = self.run_fake(['--family', 'openai-chat', '--port', '0'], wait)
         self.assertEqual(status, 0, ctx.err.getvalue())
         self.assertEqual([a[0] for a in answers], [200, 404, 404, 404, 404, 411, 411, 200])
+        self.assertEqual({a[1]['content-type'] for a in answers}, {'application/json'})
+        self.assertEqual([a[1].get('connection') for a in answers],
+                         [None, None, None, None, None, 'close', 'close', None])
+        self.assertIn(f'serving openai-chat on 127.0.0.1:{ports[0]} until interrupted', ctx.err.getvalue())
+        self.assertGreaterEqual(ctx.out.flushes, 10)
+        # stopped when the wait returned: the port is free again
+        IQ.FakeUpstream(IB.load_declarations()['openai-chat'], '127.0.0.1', ports[0], io.StringIO()).stop()
         self.assertEqual(json.loads(answers[0][2])['usage'], {'prompt_tokens': 1, 'completion_tokens': 1,
                                                               'total_tokens': 2})
         records = [json.loads(line) for line in ctx.out.getvalue().splitlines()]
@@ -364,15 +406,43 @@ class TestFakeUpstream(unittest.TestCase):
         for value in (SYNTHETIC, HEADER_MARKER, S.PROMPT_MARKER, S.MODEL_A, 'x=1'):
             self.assertNotIn(value, ctx.out.getvalue() + ctx.err.getvalue())
 
-    def test_its_port_is_exclusive(self):
+    def test_its_port_is_exclusive_and_freed_at_stop(self):
         family = IB.load_declarations()['openai-chat']
         holder = IQ.FakeUpstream(family, '127.0.0.1', 0, io.StringIO())
         try:
+            if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+                self.assertEqual(holder.server.socket.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE), 1)
             status, ctx = self.run_fake(['--family', 'openai-chat', '--port', str(holder.port)])
         finally:
             holder.stop()
         self.assertEqual(status, 1)
         self.assertIn('FAILED: ', ctx.err.getvalue())
+        IQ.FakeUpstream(family, '127.0.0.1', holder.port, io.StringIO()).stop()
+
+    def test_bodies_are_drained_on_a_kept_alive_connection_and_handler_errors_recorded(self):
+        family = IB.load_declarations()['anthropic-messages']
+        out = Out()
+        fake = IQ.FakeUpstream(family, '127.0.0.1', 0, out)
+        fake.start()
+        try:
+            connection = http.client.HTTPConnection('127.0.0.1', fake.port, timeout=30)
+            try:
+                for body in (b'{"pad": "' + b'x' * 200_000 + b'"}', b'{}', b'{}'):
+                    connection.request('POST', '/v1/messages' if body == b'{}' else '/v1/other', body)
+                    response = connection.getresponse()
+                    response.read()
+                    self.assertEqual(response.status, 200 if body == b'{}' else 404)
+            finally:
+                connection.close()
+            with mock.patch.object(IQ, 'credential_fingerprints', side_effect=RuntimeError('synthetic')):
+                with self.assertRaises((OSError, http.client.HTTPException)):
+                    S.request(fake.port, 'POST', '/v1/messages', {})
+        finally:
+            fake.stop()
+        records = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual([r['event'] for r in records], ['request'] * 3 + ['handler-error'])
+        self.assertEqual(records[-1]['error'], 'RuntimeError')
+        self.assertEqual(fake.requests, 3)
 
 
 if __name__ == '__main__':
