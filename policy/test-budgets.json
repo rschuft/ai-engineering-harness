@@ -1,6 +1,6 @@
 {
- "schema": "ai-engineering-harness/policy/test-budgets/v1",
- "description": "Enforceable test budgets (plan leaf F-09.1). Counters are exact: tests at least, launches and mkdtemp at most. wall_s is a median over wall.runs serial runs on the baseline host; a median passes up to wall_s x (1 + wall.tolerance), and never below wall_s + wall.min_slack_s. Checked by tools/check_test_budget.py (task test:budget) at every leaf acceptance and release, never in a hook.",
+ "schema": "ai-engineering-harness/policy/test-budgets/v2",
+ "description": "Recorded test measurements (plan leaf F-09.1, as amended on 2026-11-11: test runtime is diagnostic, not a gate). Counts and wall medians of the reference profile, per category, per suite and in total; wall_s is a median over wall.runs serial runs on the reference host. They are compared as notes only, never as gates, and need no update when tests are added. A median above wall_s x (1 + signals.regression), and never below wall_s + wall.min_slack_s, or a serial total above signals.full_suite_s, is an investigation signal. What blocks is the recorded test set (recorded_tests): removed or newly skipped tests. Checked by tools/check_test_budget.py (task test:budget), never in a hook.",
  "baseline": {
   "revision": "a57b04312336c869718cce3d024d90432cba2905",
   "measured": "2026-11-11",
@@ -14,11 +14,15 @@
   },
   "profile": "evidence/test-profile/baseline.json"
  },
+ "recorded_tests": "evidence/test-profile/test-ids.json",
  "wall": {
   "runs": 3,
   "statistic": "median",
-  "tolerance": 0.3,
   "min_slack_s": 0.5
+ },
+ "signals": {
+  "regression": 0.5,
+  "full_suite_s": 300
  },
  "total": {
   "tests": 2541,

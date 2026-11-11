@@ -116,10 +116,12 @@ tasks:
       - task: repository:test
       - task: inference:test
 
-  # Test profile and budgets (plan leaf F-09.1; docs/development.md#testing), under the python-tools
-  # interpreter, as test runs the suites (plan leaf F-10.2). test:budget is an
-  # acceptance obligation: run it at the acceptance of every plan leaf and at every release,
-  # and record its result with the leaf's evidence. Never run it from a git hook.
+  # Test profile and test check (plan leaf F-09.1; docs/development.md#testing), under the python-tools
+  # interpreter, as test runs the suites (plan leaf F-10.2). test:budget is an acceptance obligation:
+  # run it at the acceptance of every plan leaf and at every release, and record its result with the
+  # leaf's evidence. Never run it from a git hook. It blocks on failing, removed or newly skipped
+  # tests, categories and unit isolation; wall times and counters are diagnostics, never gates (the
+  # Owner's direction of 2026-11-11).
   test:profile:
     desc: "Profile the suites of test (test:serial) serially under the python-tools interpreter, counting process launches, mkdtemp, sockets and chdir per test, class, category and suite (<tools python> -I -B tools/test_profile.py run); writes the profile to a new temporary directory; pass -- --runs 3 for wall-time medians"
     vars:
@@ -139,7 +141,7 @@ tasks:
       - '{{.PYTHON}} -I -B tools/test_profile.py categories {{.CLI_ARGS}}'
 
   test:budget:
-    desc: "Acceptance obligation at every leaf acceptance and release, never in a hook: profile three serial runs under the python-tools interpreter and check them against policy/test-budgets.json (<tools python> -I -B tools/check_test_budget.py check --run); -- --counters-only checks the counters from one run"
+    desc: "Acceptance obligation at every leaf acceptance and release, never in a hook: profile three serial runs under the python-tools interpreter and check them against the recorded test set (evidence/test-profile/test-ids.json): failing, removed or newly skipped tests, categories and unit isolation block; wall times and counters against policy/test-budgets.json are notes only (<tools python> -I -B tools/check_test_budget.py check --run); -- --counters-only profiles one run"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
