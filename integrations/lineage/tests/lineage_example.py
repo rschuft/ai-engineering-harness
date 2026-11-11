@@ -119,9 +119,23 @@ def in_process_backlog():
 
 
 def build_store(path, intents):
-    """An integration store at PATH with one reservation per (operation key, intent)."""
+    """An integration store at PATH with one reservation per (operation key, intent).
+
+    A new store in a new directory starts as a copy of one migrated, empty store made once per
+    process (``two_task_fixture.golden``; plan leaf F-09): the store a fresh ``open_store``
+    makes, its schema and rows the same (only the migrations' applied_at times differ), and
+    ``open_store`` still verifies every applied migration against the migration files."""
     store_mod = store_module()
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    path = Path(path)
+    if not path.parent.exists():
+        migrations = sorted(Path(store_mod.MIGRATIONS_DIR).glob('*.sql'))
+        key = fx.input_digest('empty-integration-store/1', path.name, {m.name: m.read_bytes() for m in migrations})
+
+        def empty_store(directory):
+            directory.mkdir(parents=True)
+            store_mod.open_store(directory / path.name).close()
+        fx.golden(path.parent, key, empty_store)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with store_mod.open_store(path) as store:
         return [store.reserve(key, intent, actor='p-03.2-example').reservation for key, intent in intents]
 

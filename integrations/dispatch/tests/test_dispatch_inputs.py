@@ -200,6 +200,12 @@ class Fixture(unittest.TestCase):
             (cls.profiles / name).mkdir(parents=True)
             (cls.profiles / name / 'profile.json').write_bytes(profile_bytes(name, operational))
             write_agent_server(cls.profiles / name)
+        # One migrated, empty integration store for the class, copied for each test (plan leaf
+        # F-09): a copy is the store a fresh open_store makes (the same schema and rows; only the
+        # migrations' applied_at times differ), and each test's open_store still verifies every
+        # applied migration against the migration files. Creating it took about 10 ms a test.
+        cls.empty_store = cls.tmp / 'empty-integration.sqlite'
+        store_mod.open_store(cls.empty_store).close()
 
     @classmethod
     def tearDownClass(cls):
@@ -207,6 +213,7 @@ class Fixture(unittest.TestCase):
 
     def setUp(self):
         self.case = Path(tempfile.mkdtemp(prefix='case-', dir=self.tmp))
+        shutil.copyfile(self.empty_store, self.case / 'integration.sqlite')
         self.store = store_mod.open_store(self.case / 'integration.sqlite')
         self.addCleanup(self.store.close)
         self.ordinal_calls = []
