@@ -1944,14 +1944,14 @@
       "id": "fd-child-conversation-tool",
       "kind": "limit",
       "title": "start_child_conversation reaches only the conversation's own inner server",
-      "detail": "Established at S-01.3.1 from the locked binary and live: the tool (openhands-tools child_conversation) posts to OH_INTERNAL_SERVER_URL + /api/conversations/{parent}/children with the key of the agent-server running it. In a conversation container that URL is http://127.0.0.1:8000, the inner server, and the key is the conversation's own (cred-conversation-keys); the inner server is a local runtime (OH_CONVERSATION_RUNTIME=local), so a child runs in the same container. From inside both disposable containers the inner children route answered 401 without a key and 422 with the inner key and an empty body (nothing created); the outer listener refused the inner key at every address (no connection); the outer count stayed 2. The tool therefore cannot invoke privileged conversation creation on the outer server. Not exercised: a valid child launch, which would start an agent step and an LLM call. A child in the same container shares that container's caps and mounts: E-01.2.2's ceilings.",
+      "detail": "Established at S-01.3.1 from the locked binary and live: the tool (openhands-tools child_conversation) posts to OH_INTERNAL_SERVER_URL + /api/conversations/{parent}/children with the key of the agent-server running it. In a conversation container that URL is http://127.0.0.1:8000, the inner server, and the key is the conversation's own (cred-conversation-keys); the inner server is a local runtime (OH_CONVERSATION_RUNTIME=local), so a child runs in the same container. From inside both disposable containers the inner children route answered 401 without a key and 422 with the inner key and an empty body (nothing created); the outer listener refused the inner key at every address (no connection); the outer count stayed 2. The tool therefore cannot invoke privileged conversation creation on the outer server. Not exercised: a valid child launch, which would start an agent step and an LLM call. A child in the same container shares that container's caps and mounts: E-01.2.2's ceilings. Carried on 2026-11-11 by the plan amendment of that date (Owner decision on OA-19): S-03.2's probe uses the inner children route with the conversation's own key, and a refusal there is a demonstrated fail-closed outcome, not proof that a child ran or was contained; S-03.3 covers the ACP provider's own delegation, without assuming that it uses start_child_conversation; A-01.2 is the gate for the native tool: no materialized role profile enables it until the leaf that first enables it qualifies it. History kept: S-01.3.1's evidence carried the finding to E-01.2.2, and the inventory then carried it to S-03.2 (2026-11-08).",
       "refs": ["op-child-conversation", "api-agent-server-unenumerated", "engineering-agent", "cred-conversation-keys"],
       "citations": [
         "evidence/S-01.3.1-management-api-admission.md",
         "profiles/strong-windows-qemu-whpx/agent-server/routes.json",
         "evidence/F-04.1c-agent-server.md"
       ],
-      "carried_to": ["S-03.2"]
+      "carried_to": ["S-03.2", "S-03.3", "A-01.2"]
     },
     {
       "id": "fd-container-network-deviations",
