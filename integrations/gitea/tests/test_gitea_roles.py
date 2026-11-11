@@ -398,6 +398,8 @@ class TestEscapeProbe(Base):
                 self.assertEqual(caught.exception.code, 'ESCAPE_PROBE_STATE')
                 self.assertTrue(caught.exception.refusal)
                 self.assertIn(f'{named} is ', str(caught.exception))
+                if 'collaborators' in change:
+                    self.assertIn(f"collaborators is {change['collaborators']!r}, not []", str(caught.exception))
                 self.assertIn('nothing changed', str(caught.exception))
                 self.assertEqual({m for m, _p, _a in self.sent()}, {'GET'})
                 self.assertEqual(json.dumps(self.gitea.others, sort_keys=True), state)
@@ -415,6 +417,32 @@ class TestEscapeProbe(Base):
             self.run_probe()
         self.assertEqual(caught.exception.code, 'ESCAPE_PROBE_STATE')
         self.assertIn('full_name', str(caught.exception))
+
+    def test_a_roster_entry_that_is_not_an_object_is_a_collaborator(self):
+        self.run_probe()
+        real = self.gitea.reply
+        with mock.patch.object(self.gitea, 'reply', lambda s, p: real(s, ['someone'] if isinstance(p, list) else p)), \
+                self.assertRaises(G.GiteaError) as caught:
+            self.run_probe()
+        self.assertEqual(caught.exception.code, 'ESCAPE_PROBE_STATE')
+        self.assertIn("collaborators is ['someone'], not []", str(caught.exception))
+
+    def test_a_failed_read_back_or_token_list(self):
+        reads = []
+
+        def second_view_fails(port, path, method='GET', body=None, headers=None, timeout=5.0):
+            if method == 'GET' and path == f'/api/v1{self.PROBE}':
+                reads.append(path)
+                if len(reads) == 2:
+                    return self.gitea.reply(500, {'message': 'boom'})
+            return self.gitea(port, path, method, body, headers, timeout)
+        with self.assertRaises(G.GiteaError) as caught:
+            R.escape_probe(http=second_view_fails, ctx=ctx(self.cli, self.store))
+        self.assertEqual(caught.exception.code, 'API_UNEXPECTED')
+        self.assertIn(f'GET {self.PROBE}: HTTP 500', str(caught.exception))
+        self.gitea.fail_path = f'/users/{G.SITE_ADMIN}/tokens'
+        self.assertEqual(self.run_probe()['admin_tokens_after'], 'HTTP 500')
+        self.assert_fixture_untouched()
 
     def test_a_creation_that_reads_back_otherwise_fails(self):
         self.gitea.created_with = [R.ROLES['protection-audit']['user']]
@@ -474,6 +502,14 @@ class TestEscapeProbe(Base):
         provision.assert_not_called()
         self.assertEqual(json.loads(out.getvalue()), {'state': 'created'})
         self.assertIn('I7 no-exposure scan: clean', err.getvalue())
+        for command in (['rotate', 'builder'], ['retire', 'builder'], ['status']):
+            with self.subTest(command=command), mock.patch.object(R, 'escape_probe') as act, \
+                    mock.patch.object(R, command[0], return_value={}) as other, \
+                    mock.patch.object(R, 'os', SimpleNamespace(name='nt')), \
+                    mock.patch.object(sys, 'stdout', io.StringIO()), mock.patch.object(sys, 'stderr', io.StringIO()):
+                self.assertEqual(R.main(command), 0)
+            act.assert_not_called()
+            other.assert_called_once()
 
     def test_the_live_negative_test_reads_it_by_default(self):
         live = _load('aieh_protection_audit_live', HERE / 'test_protection_audit_live.py')
