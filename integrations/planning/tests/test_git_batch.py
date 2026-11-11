@@ -21,6 +21,7 @@ plays one on any platform: through it, a kill, a timeout, an exception and a nor
 end the child too. Where Git for Windows' own launcher is installed, the same is checked through
 it.
 """
+import concurrent.futures
 import contextlib
 import hashlib
 import importlib.util
@@ -290,6 +291,13 @@ class Equivalence(RepoCase):
                                 stdin=subprocess.DEVNULL, timeout=adapter.TOOL_TIMEOUT_S, env=adapter.tool_env())
         return result.stdout if result.returncode == 0 else None
 
+    def one_shots(self, argvs):
+        """{argument tuple: one_shot(*arguments)} for each of ARGVS: every one its own one-shot git
+        process, as one_shot runs it, four at a time (they only read; plan leaf F-09)."""
+        argvs = list(dict.fromkeys(map(tuple, argvs)))
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:
+            return dict(zip(argvs, pool.map(lambda args: self.one_shot(*args), argvs)))
+
     def ambiguous_prefix(self):
         """A four-digit prefix shared by two blobs written here (found by hashing, one launch)."""
         if getattr(type(self), 'prefix', None) is None:
@@ -323,10 +331,12 @@ class Equivalence(RepoCase):
         revisions = ['HEAD', 'main', 'refs/heads/main', self.commit, self.commit[:12], self.commit[:4], '@',
                      'HEAD~0', 'HEAD~1', 'HEAD^2', 'no-such-branch', '0' * 40, 'f' * 64, tree, blob,
                      f'HEAD:{DESIGN}', 'HEAD:openspec', 'main@{0}', 'HEAD^{tree}', self.ambiguous_prefix()]
+        oracle = self.one_shots(('rev-parse', '--verify', '--quiet', f'{revision}^{{commit}}')
+                                for revision in revisions)
         with self.git.session():
             for revision in revisions:
                 with self.subTest(revision=revision):
-                    expected = self.one_shot('rev-parse', '--verify', '--quiet', f'{revision}^{{commit}}')
+                    expected = oracle['rev-parse', '--verify', '--quiet', f'{revision}^{{commit}}']
                     self.assertEqual(self.git.commit(revision), expected.decode('ascii').strip() if expected else None)
         self.assertEqual(self.git.commit('HEAD'), self.commit)
         self.assertEnded(Recorded.made)
@@ -334,21 +344,26 @@ class Equivalence(RepoCase):
     def test_object_types_and_blobs(self):
         names = [DESIGN, 'openspec', 'openspec/', f'openspec/changes/{fx.CHANGE}/no-such.md', 'README.md',
                  'no/such/dir', f'openspec/changes/{fx.CHANGE}', 'openspec/config.yaml']
+        revisions = (self.commit, 'HEAD', '0' * 40)
+        objects = (self.commit, self.commit[:7], '0' * 40, self.ambiguous_prefix())
+        paths = [f'{revision}:{path}' for revision in revisions for path in names]
+        oracle = self.one_shots([*(('cat-file', '-t', name) for name in paths + list(objects)),
+                                 *(('cat-file', 'blob', name) for name in paths)])
         with self.git.session():
-            for revision in (self.commit, 'HEAD', '0' * 40):
+            for revision in revisions:
                 for path in names:
                     with self.subTest(revision=revision, path=path):
                         name = f'{revision}:{path}'
-                        kind = self.one_shot('cat-file', '-t', name)
+                        kind = oracle['cat-file', '-t', name]
                         self.assertEqual(self.git.object_type(revision, path), kind.decode().strip() if kind else None)
-                        data = self.one_shot('cat-file', 'blob', name)
+                        data = oracle['cat-file', 'blob', name]
                         if data is None:
                             self.expect('GIT_FAILED', self.git.blob, revision, path)
                         else:
                             self.assertEqual(self.git.blob(revision, path), data)
-            for name in (self.commit, self.commit[:7], '0' * 40, self.ambiguous_prefix()):
+            for name in objects:
                 with self.subTest(name=name):
-                    kind = self.one_shot('cat-file', '-t', name)
+                    kind = oracle['cat-file', '-t', name]
                     self.assertEqual(self.git.object_kind(name), kind.decode().strip() if kind else None)
         self.assertEnded(Recorded.made)
 
@@ -364,18 +379,21 @@ class Equivalence(RepoCase):
         commit = self.plumbing(['commit-tree', tree, '-m', 'spaced'], b'').strip()
         paths = names + ['dir with space', 'dir with space/inner file.md', 'no such file.md', 'a  b.md',
                          'dir with space/']
+        listed = ('ls-tree', '-r', '-z', '--name-only', commit, '--', 'dir with space/')
+        oracle = self.one_shots([*(('cat-file', kind, f'{commit}:{path}') for path in paths for kind in ('-t', 'blob')),
+                                 listed])
         with self.git.session():
             for path in paths:
                 with self.subTest(path=path):
                     name = f'{commit}:{path}'
-                    kind = self.one_shot('cat-file', '-t', name)
+                    kind = oracle['cat-file', '-t', name]
                     self.assertEqual(self.git.object_type(commit, path), kind.decode().strip() if kind else None)
-                    data = self.one_shot('cat-file', 'blob', name)
+                    data = oracle['cat-file', 'blob', name]
                     if data is None:
                         self.expect('GIT_FAILED', self.git.blob, commit, path)
                     else:
                         self.assertEqual(self.git.blob(commit, path), data)
-            out = self.one_shot('ls-tree', '-r', '-z', '--name-only', commit, '--', 'dir with space/')
+            out = oracle[listed]
             self.assertEqual(self.git.files(commit, 'dir with space'),
                              [n.decode() for n in out.split(bytes([0])) if n])
         self.assertEqual(len(Recorded.made), 1)  # one repository served every spaced name
@@ -386,10 +404,13 @@ class Equivalence(RepoCase):
                               timeout=adapter.TOOL_TIMEOUT_S, env={**adapter.tool_env(), **fx.GIT_ENV}).stdout.decode()
 
     def test_file_lists(self):
+        directories = ('openspec/changes', f'openspec/changes/{fx.CHANGE}', 'no/such', DESIGN)
+        oracle = self.one_shots(('ls-tree', '-r', '-z', '--name-only', self.commit, '--', directory + '/')
+                                for directory in directories)
         with self.git.session():
-            for directory in ('openspec/changes', f'openspec/changes/{fx.CHANGE}', 'no/such', DESIGN):
+            for directory in directories:
                 with self.subTest(directory=directory):
-                    out = self.one_shot('ls-tree', '-r', '-z', '--name-only', self.commit, '--', directory + '/')
+                    out = oracle['ls-tree', '-r', '-z', '--name-only', self.commit, '--', directory + '/']
                     expected = [n.decode() for n in out.split(bytes([0])) if n]
                     self.assertEqual(self.git.files(self.commit, directory), expected)
                     self.assertEqual(self.git.files(self.commit, directory), expected)  # the memo
@@ -757,11 +778,16 @@ class Launcher(RepoCase):
         self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its tree')
 
     def test_a_normal_close_ends_the_launcher_and_its_child(self):
+        # The child (it inherits the launcher's standard input) waits for a line before it
+        # answers, so it is still running when it is watched; the line is sent once it is
+        # (a 1 s sleep in the child did this before; plan leaf F-09).
         argv, pidfile = self.through_launcher('close', [sys.executable, '-I', '-c',
-                                                        'import time; time.sleep(1); print("done")'])
-        tree = self.tree(argv, stdin=subprocess.DEVNULL)
+                                                        'import sys; sys.stdin.readline(); print("done")'])
+        tree = self.tree(argv, stdin=subprocess.PIPE)
         child = Watch(self, read_pid(pidfile))
-        out, _ = tree.process.communicate(timeout=adapter.TOOL_TIMEOUT_S)
+        if os.name == 'nt':
+            self.assertTrue(child.handle, f'the child {child.pid} ended before it was watched')
+        out, _ = tree.process.communicate(input=b'go\n', timeout=adapter.TOOL_TIMEOUT_S)
         self.close(tree)
         self.assertEqual((tree.process.returncode, out.strip()), (0, b'done'))
         self.assertTrue(child.gone_within(GONE_WITHIN_S), f'the child {child.pid} outlived its tree')
