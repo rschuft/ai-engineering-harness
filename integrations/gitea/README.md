@@ -25,7 +25,7 @@ supplies through the harness's fail-closed factory
 | Path | What |
 |---|---|
 | `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `restart`, `status`, `inspect`, `verify [--readiness]`, `identities`, `finalize-credentials`, `upgrade --to VERSION`, `recover`, `uninstall` (and the internal `supervise`); composes the platform adapter and its credential provider |
-| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `rotate ROLE`, `retire ROLE`, `status`; the fixture's total declaration (`protection_rules()`, `repository_settings()`, `collaborators()`, `FIXTURE_TEAMS`) |
+| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `escape-probe`, `rotate ROLE`, `retire ROLE`, `status`; the fixture's total declaration (`protection_rules()`, `repository_settings()`, `collaborators()`, `FIXTURE_TEAMS`) |
 | `protection_check.py` | The protection check before and after each protected merge (Owner decision OA-16; decision 0012 point 6, Proposed): `verify OWNER/NAME`, and `verify()` for the authorization recorder ([below](#the-protection-check-oa-16)) |
 | `tests/test_lifecycle.py` | The composition over the contract (F-06.2): the moved names, the platform asset key and `PLATFORM_MISMATCH`, both run-record formats, readiness, `inspect`, the transitions over a real SQLite database and `app.ini` in a temporary root, and the I7 scan of `main` |
 | `tests/test_gitea_roles.py` | Bots, tokens, custody, fixture, revocation and rotation with a fake CLI and a fake API; the guest profile declares no path to a token store |
@@ -46,7 +46,7 @@ python -I -B integrations/gitea/gitea_host.py up | down | restart | status | ins
 python -I -B integrations/gitea/gitea_host.py identities
 python -I -B integrations/gitea/gitea_host.py finalize-credentials
 python -I -B integrations/gitea/gitea_host.py upgrade --to VERSION [--from-file EXE] | recover | uninstall
-python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | rotate ROLE | retire ROLE | status
+python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | escape-probe | rotate ROLE | retire ROLE | status
 python -I -B integrations/gitea/protection_check.py verify OWNER/NAME [--base BRANCH] [--port N]   # task gitea:protection-check
 python -I -B -m unittest discover -s integrations/gitea/tests -v                    # task gitea:test
 AIEH_GITEA_AUTHZ=1 python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v   # task gitea:authz
@@ -257,6 +257,16 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   It reports that the administrator holds no token afterwards. `--admin-merge-probe` also has the
   site administrator try to merge a proposal PR, which must be refused. Gitea refuses every API call
   of an account that must still change its password, so `fixture` runs after `finalize-credentials`.
+- **Escape probe.** `escape-probe`, a separate Owner act and never part of `provision` or `fixture`, acts
+  as the site administrator as `fixture` does (basic authentication, no token; the report shows none
+  afterwards) and creates the organization's second repository, `aieh-authz-fixture/escape-probe`:
+  private, empty (`auto_init` false) and with no collaborators. The protection auditor's live negative
+  test reads its rules by default and must be refused (`test_protection_audit_live.py`;
+  `AIEH_PROTECTION_AUDIT_OTHER_REPOS` names others instead). It reads the organization and that repository
+  only, its one write is the repository's creation, and it never addresses `authz`. An existing
+  `escape-probe` that is private, empty, not archived and without collaborators is reported and left
+  unchanged; one in any other state is refused (`ESCAPE_PROBE_STATE`) and left unchanged; a missing
+  organization is refused (`FIXTURE_MISSING`: run `fixture` first).
 - **Live tests.** `task gitea:authz` reads every role's token into memory (the protection auditor's
   too, once it is provisioned; until then the suite skips naming the missing entry) and probes what each
   may and may not do; the fixture-dependent classes skip while the fixture is absent, and the executor
@@ -337,6 +347,9 @@ repository will need its own declaration.
 - A real cross-version `upgrade` (one version is pinned), and the rehearsal of upgrade, recovery and
   uninstall on a disposable instance with a reboot or sign-out (F-06.6).
 - `retire` against the running Gitea (fakes only).
+- `escape-probe` against the running Gitea (fakes only): that Gitea 28.3.0 adds no collaborator to an
+  organization repository the site administrator creates, and reports it `empty`, is modelled by the fake
+  only, neither read at the pinned source nor observed.
 - The protection check and its auditor against the running Gitea: the auditor is not provisioned, the
   fixture's total declaration and settings are not applied, and the live negative tests and the
   qualification (`test_protection_audit_live.py`) have not run. Gitea's actual views (field sets, `null`
