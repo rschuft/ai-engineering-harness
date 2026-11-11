@@ -183,10 +183,12 @@ class FakeUpstream:
                 for index, (name, event) in enumerate(events):
                     text = (f'event: {name}\n' if name else '') + f'data: {json.dumps(event)}\n\n'
                     data = text.encode()
+                    gated = index == 0 and model == 'syn-gated'
+                    if gated:
+                        upstream.first_sent.set()   # before the write: a client that has the bytes sees it set
                     self.wfile.write(b'%x\r\n%s\r\n' % (len(data), data))
                     self.wfile.flush()
-                    if index == 0 and model == 'syn-gated':
-                        upstream.first_sent.set()
+                    if gated:
                         upstream.release.wait(30)  # a bound against a hang, released by the test
                 if upstream.family != 'anthropic-messages':
                     data = b'data: [DONE]\n\n'
