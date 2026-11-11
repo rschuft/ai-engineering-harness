@@ -21,10 +21,14 @@ private repository, its merge settings, its collaborators and branch protection.
 collaborators or protection rules, so `fixture` acts through the API as the site administrator, by HTTP
 basic authentication with the harness-held password that `task gitea:finalize-credentials` stored
 (Owner directive of 2026-11-07), read from the credential provider into memory. No token is minted for
-administration, and the report shows that the administrator holds none afterwards.
+administration, and the report shows that the administrator holds none afterwards. `escape-probe` acts the
+same way, separately, to create the organization's second repository, escape-probe: private, empty and with
+no collaborators, whose rules the protection auditor's live negative test must be refused; it never addresses
+the fixture repository, and it refuses an existing escape-probe in any other state.
 
   python -I -B integrations/gitea/gitea_roles.py provision      # the bot accounts and missing tokens
   python -I -B integrations/gitea/gitea_roles.py fixture        # organization, repository, protection
+  python -I -B integrations/gitea/gitea_roles.py escape-probe   # the auditor's escape-probe repository
   python -I -B integrations/gitea/gitea_roles.py rotate ROLE    # revoke a token, prove it fails closed, re-issue
   python -I -B integrations/gitea/gitea_roles.py retire ROLE    # revoke a token, prove it fails closed, drop the entry
   python -I -B integrations/gitea/gitea_roles.py status         # entries, fingerprints, token checks
@@ -91,6 +95,9 @@ ROLES = {
                          'custodian': 'the authorization recorder (its protection check)'},
 }
 FIXTURE_ORG, FIXTURE_REPO, DEFAULT_BRANCH = 'aieh-authz-fixture', 'authz', 'main'
+# A second repository of the fixture organization that no account is a collaborator of: the live negative test
+# of the protection auditor (test_protection_audit_live.py) reads its rules and must be refused.
+ESCAPE_PROBE_REPO = 'escape-probe'
 PROPOSAL_PATTERN = 'work/*'
 TOKEN_SHAPE = re.compile(rb'[0-9a-f]{40}')
 
@@ -447,7 +454,80 @@ def fixture(provider=None, run: Callable = subprocess.run, http: Callable = None
     return report
 
 
-TRIGGER = 'owner direction'  # decision 0007 point 5: a command-line act is the Owner's direction (bootstrap)
+# The escape-probe repository as escape_probe_repository creates it, in the names of Gitea 28.3.0's repository
+# view: private, empty (no auto_init), not archived; and no collaborator.
+ESCAPE_PROBE_STATE = {'private': True, 'empty': True, 'archived': False}
+
+
+def read_escape_probe(api: Api) -> dict:
+    """The escape-probe repository as Gitea reports it: its view's ESCAPE_PROBE_STATE fields and its direct
+    collaborators (the first page of 50: an empty first page means none)."""
+    repo = f'/repos/{FIXTURE_ORG}/{ESCAPE_PROBE_REPO}'
+    status, info = api.call('GET', repo)
+    require(status, 200, f'GET {repo}', info)
+    status, roster = api.call('GET', f'{repo}/collaborators?page=1&limit=50')
+    require(status, 200, f'GET {repo}/collaborators', roster)
+    if not isinstance(info, dict) or not isinstance(roster, list):
+        raise GiteaError('API_UNEXPECTED', f'{repo}: a view of another kind', refusal=False)
+    return {'full_name': info.get('full_name'), **{k: info.get(k) for k in ESCAPE_PROBE_STATE},
+            'collaborators': sorted(str(c.get('login') if isinstance(c, dict) else c) for c in roster)}
+
+
+def escape_probe_differences(observed: dict) -> list[str]:
+    """How observed differs from the escape-probe repository as it is created ([] when it does not)."""
+    wanted = {'full_name': f'{FIXTURE_ORG}/{ESCAPE_PROBE_REPO}', **ESCAPE_PROBE_STATE, 'collaborators': []}
+    return [f'{k} is {observed.get(k)!r}, not {v!r}' for k, v in wanted.items() if observed.get(k) != v]
+
+
+def escape_probe_repository(api: Api) -> dict:
+    """Create the private, empty repository FIXTURE_ORG/ESCAPE_PROBE_REPO with no collaborators, or find it so.
+    Bounded: it reads the organization and that repository only and its one write is the repository's
+    creation; the fixture repository is never addressed. An existing repository as it is created is reported
+    and left unchanged; one in any other state is refused (ESCAPE_PROBE_STATE) and left unchanged; a missing
+    organization is refused (FIXTURE_MISSING): fixture creates it."""
+    status, payload = api.call('GET', f'/orgs/{FIXTURE_ORG}')
+    if status == 404:
+        raise GiteaError('FIXTURE_MISSING', f'the organization {FIXTURE_ORG} does not exist; run fixture first')
+    require(status, 200, f'GET /orgs/{FIXTURE_ORG}', payload)
+    repo = f'/repos/{FIXTURE_ORG}/{ESCAPE_PROBE_REPO}'
+    status, payload = api.call('GET', repo)
+    actions = []
+    if status == 404:
+        path = f'/orgs/{FIXTURE_ORG}/repos'
+        status, payload = api.call('POST', path, {
+            'name': ESCAPE_PROBE_REPO, 'private': True, 'auto_init': False,
+            'description': 'The protection auditor\'s escape probe: no collaborators (Owner decision OA-16)'})
+        actions.append({'method': 'POST', 'path': path, 'status': status})
+        require(status, 201, f'POST {path}', payload)
+    else:
+        require(status, 200, f'GET {repo}', payload)
+    observed = read_escape_probe(api)
+    differences = escape_probe_differences(observed)
+    if differences and actions:
+        raise GiteaError('ESCAPE_PROBE_READBACK', f'{FIXTURE_ORG}/{ESCAPE_PROBE_REPO} was created but reads back '
+                         'otherwise: ' + '; '.join(differences), refusal=False)
+    if differences:
+        raise GiteaError('ESCAPE_PROBE_STATE', f'{FIXTURE_ORG}/{ESCAPE_PROBE_REPO} exists in another state; '
+                         'nothing changed: ' + '; '.join(differences))
+    return {'repository': f'{FIXTURE_ORG}/{ESCAPE_PROBE_REPO}',
+            'state': 'created' if actions else 'already present with no collaborators; nothing changed',
+            'actions': actions, 'observed': observed}
+
+
+def escape_probe(provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None) -> dict:
+    """The escape-probe repository (escape_probe_repository) as the site administrator, as fixture() acts
+    (basic authentication, password in memory only), and the administrator's tokens afterwards (none)."""
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
+    api = admin_api(provider, port, http)
+    report = {'admin_auth': {'user': host.SITE_ADMIN, 'method': 'HTTP basic authentication, password read from '
+                             f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} into memory; no token minted'}}
+    report.update(escape_probe_repository(api))
+    status, tokens = api.call('GET', f'/users/{host.SITE_ADMIN}/tokens')
+    report['admin_tokens_after'] = [t.get('name') for t in tokens] if status == 200 else f'HTTP {status}'
+    return report
+
+
+TRIGGER ='owner direction'  # decision 0007 point 5: a command-line act is the Owner's direction (bootstrap)
 
 
 def receipt_for(receipts, verb: str, role: str, provider, token: str | None):
@@ -598,7 +678,10 @@ def main(argv=None) -> int:
     fix = sub.add_parser('fixture', help='apply the fixture as the site administrator (credentials in memory)')
     fix.add_argument('--admin-merge-probe', action='store_true',
                      help='also check that the site administrator cannot merge or force-merge a proposal PR')
-    rot = sub.add_parser('rotate', help='revoke a role token, prove it fails closed, re-issue it')
+    sub.add_parser('escape-probe', help=f'create the private, empty repository {FIXTURE_ORG}/{ESCAPE_PROBE_REPO} '
+                   'with no collaborators as the site administrator (the protection auditor\'s escape probe); '
+                   'never touches the fixture repository')
+    rot =sub.add_parser('rotate', help='revoke a role token, prove it fails closed, re-issue it')
     rot.add_argument('role', choices=sorted(ROLES))
     ret = sub.add_parser('retire', help='revoke a role token, prove it fails closed, delete its entry')
     ret.add_argument('role', choices=sorted(ROLES))
@@ -619,6 +702,8 @@ def main(argv=None) -> int:
             ctx = context()
             probe = admin_merge_probe(ctx[3], ctx[2]) if args.admin_merge_probe else None
             report = fixture(ctx=ctx, probe=probe)
+        elif args.command == 'escape-probe':
+            report = escape_probe()
         elif args.command == 'rotate':
             report = rotate(args.role)
         elif args.command == 'retire':

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib.util
+import io
 import json
 import re
 import sys
@@ -86,6 +87,8 @@ class FakeGitea:
         self.tokens, self.orgs, self.repos, self.collab, self.rules = {}, set(), set(), {}, {}
         self.settings = {}
         self.fail_path, self.requests, self.admin_password = fail_path, [], admin_password
+        # the organization's other repositories (escape-probe): their view's state and collaborator logins
+        self.others, self.created_with = {}, None
 
     def __call__(self, port, path, method='GET', body=None, headers=None, timeout=5.0):
         assert port == PORT
@@ -124,7 +127,18 @@ class FakeGitea:
             return self.reply(201, {})
         if route == f'/orgs/{R.FIXTURE_ORG}/repos' and method == 'POST':
             self.repos.add(data['name'])
+            if data['name'] != R.FIXTURE_REPO:
+                self.others[data['name']] = {'private': bool(data.get('private')), 'empty': not data.get('auto_init'),
+                                             'archived': False, 'collaborators': list(self.created_with or [])}
             return self.reply(201, {})
+        base, _, query = route.partition('?')
+        for name, other in self.others.items():
+            if base == f'/repos/{R.FIXTURE_ORG}/{name}' and method == 'GET':
+                view = {k: v for k, v in other.items() if k != 'collaborators'}
+                return self.reply(200, {'full_name': f'{R.FIXTURE_ORG}/{name}', **view})
+            if base == f'/repos/{R.FIXTURE_ORG}/{name}/collaborators' and method == 'GET':
+                assert query == 'page=1&limit=50', query
+                return self.reply(200, [{'login': u} for u in other['collaborators']])
         if route == repo:
             if R.FIXTURE_REPO not in self.repos:
                 return self.reply(404, {})
@@ -303,6 +317,171 @@ class TestFixture(Base):
         with self.assertRaises(G.GiteaError) as caught:
             self.run_fixture()
         self.assertEqual(caught.exception.code, 'BOTS_MISSING')
+
+
+class TestEscapeProbe(Base):
+    """gitea_roles.py escape-probe: the protection auditor's escape-probe repository, a separate Owner act."""
+
+    PROBE = f'/repos/{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}'
+
+    def setUp(self):
+        super().setUp()
+        self.provision()
+        R.fixture(http=self.gitea, ctx=ctx(self.cli, self.store))
+        self.minted_before = len(self.cli.minted)
+        self.fixture_before = self.fixture_state()
+        self.sent_before = len(self.gitea.requests)
+
+    def fixture_state(self):
+        return json.dumps([R.FIXTURE_REPO in self.gitea.repos, self.gitea.settings, self.gitea.collab,
+                           self.gitea.rules], sort_keys=True)
+
+    def run_probe(self):
+        return R.escape_probe(http=self.gitea, ctx=ctx(self.cli, self.store))
+
+    def sent(self):
+        return self.gitea.requests[self.sent_before:]
+
+    def assert_fixture_untouched(self):
+        fixture = f'/api/v1/repos/{R.FIXTURE_ORG}/{R.FIXTURE_REPO}'
+        self.assertEqual([p for _m, p, _a in self.sent() if p == fixture or p.startswith(fixture + '/')], [])
+        self.assertEqual(self.fixture_state(), self.fixture_before)
+
+    def assert_as_the_administrator_without_a_token(self):
+        self.assertEqual({a for _m, _p, a in self.sent()}, {'Basic '})
+        self.assertEqual(len(self.cli.minted), self.minted_before)
+
+    def test_neither_provision_nor_fixture_creates_it(self):
+        self.assertEqual(self.gitea.others, {})
+        self.assertFalse(any(R.ESCAPE_PROBE_REPO in p for _m, p, _a in self.gitea.requests))
+
+    def test_it_creates_a_private_empty_repository_without_collaborators(self):
+        report = self.run_probe()
+        self.assertEqual(self.gitea.others, {R.ESCAPE_PROBE_REPO: {'private': True, 'empty': True, 'archived': False,
+                                                                   'collaborators': []}})
+        self.assertEqual(report['repository'], f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}')
+        self.assertEqual(report['state'], 'created')
+        self.assertEqual(report['actions'], [{'method': 'POST', 'path': f'/orgs/{R.FIXTURE_ORG}/repos', 'status': 201}])
+        self.assertEqual(report['observed'], {'full_name': f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}', 'private': True,
+                                              'empty': True, 'archived': False, 'collaborators': []})
+        self.assertEqual(report['admin_tokens_after'], [])
+        self.assertEqual(report['admin_auth']['user'], G.SITE_ADMIN)
+        self.assertEqual([(m, p) for m, p, _a in self.sent() if m != 'GET'],
+                         [('POST', f'/api/v1/orgs/{R.FIXTURE_ORG}/repos')])
+        self.assert_as_the_administrator_without_a_token()
+        self.assert_fixture_untouched()
+        self.assert_no_token(json.dumps(report))
+
+    def test_an_existing_repository_without_collaborators_changes_nothing(self):
+        self.run_probe()
+        created, self.sent_before = json.dumps(self.gitea.others, sort_keys=True), len(self.gitea.requests)
+        report = self.run_probe()
+        self.assertEqual(report['state'], 'already present with no collaborators; nothing changed')
+        self.assertEqual(report['actions'], [])
+        self.assertEqual(report['admin_tokens_after'], [])
+        self.assertEqual({m for m, _p, _a in self.sent()}, {'GET'})
+        self.assertEqual(json.dumps(self.gitea.others, sort_keys=True), created)
+        self.assert_as_the_administrator_without_a_token()
+        self.assert_fixture_untouched()
+
+    def test_an_existing_repository_in_another_state_is_refused(self):
+        builder = R.ROLES['builder']['user']
+        for change, named in (({'collaborators': [builder]}, 'collaborators'), ({'private': False}, 'private'),
+                              ({'empty': False}, 'empty'), ({'archived': True}, 'archived'),
+                              ({'collaborators': [R.ROLES['protection-audit']['user']]}, 'collaborators')):
+            with self.subTest(change=change):
+                self.gitea.others[R.ESCAPE_PROBE_REPO] = {'private': True, 'empty': True, 'archived': False,
+                                                          'collaborators': [], **change}
+                state, self.sent_before = json.dumps(self.gitea.others, sort_keys=True), len(self.gitea.requests)
+                with self.assertRaises(G.GiteaError) as caught:
+                    self.run_probe()
+                self.assertEqual(caught.exception.code, 'ESCAPE_PROBE_STATE')
+                self.assertTrue(caught.exception.refusal)
+                self.assertIn(f'{named} is ', str(caught.exception))
+                self.assertIn('nothing changed', str(caught.exception))
+                self.assertEqual({m for m, _p, _a in self.sent()}, {'GET'})
+                self.assertEqual(json.dumps(self.gitea.others, sort_keys=True), state)
+                self.assert_fixture_untouched()
+
+    def test_a_repository_answering_as_another_is_refused(self):
+        self.run_probe()
+        real = self.gitea.reply
+
+        def renamed(status, payload):
+            if isinstance(payload, dict) and payload.get('full_name') == f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}':
+                payload = {**payload, 'full_name': f'{R.FIXTURE_ORG}/{R.FIXTURE_REPO}'}
+            return real(status, payload)
+        with mock.patch.object(self.gitea, 'reply', renamed), self.assertRaises(G.GiteaError) as caught:
+            self.run_probe()
+        self.assertEqual(caught.exception.code, 'ESCAPE_PROBE_STATE')
+        self.assertIn('full_name', str(caught.exception))
+
+    def test_a_creation_that_reads_back_otherwise_fails(self):
+        self.gitea.created_with = [R.ROLES['protection-audit']['user']]
+        with self.assertRaises(G.GiteaError) as caught:
+            self.run_probe()
+        self.assertEqual(caught.exception.code, 'ESCAPE_PROBE_READBACK')
+        self.assertFalse(caught.exception.refusal)
+        self.assert_fixture_untouched()
+
+    def test_a_refused_creation_or_view_fails(self):
+        for fail, sent in (('/repos', 'POST'), (f'{R.ESCAPE_PROBE_REPO}/collaborators?page=1&limit=50', 'GET')):
+            with self.subTest(fail=fail):
+                self.gitea.others.clear()
+                self.gitea.fail_path = fail
+                with self.assertRaises(G.GiteaError) as caught:
+                    self.run_probe()
+                self.assertEqual(caught.exception.code, 'API_UNEXPECTED')
+                self.assertIn(sent, str(caught.exception))
+                self.gitea.fail_path = None
+        real = self.gitea.reply
+        with mock.patch.object(self.gitea, 'reply', lambda s, p: real(s, {'login': 'x'} if isinstance(p, list) else p)):
+            with self.assertRaises(G.GiteaError) as caught:
+                self.run_probe()
+        self.assertEqual(caught.exception.code, 'API_UNEXPECTED')
+        self.assert_fixture_untouched()
+
+    def test_without_the_organization_or_the_administrator_refused(self):
+        self.gitea.orgs.clear()
+        with self.assertRaises(G.GiteaError) as caught:
+            self.run_probe()
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('FIXTURE_MISSING', True))
+        self.assertEqual({m for m, _p, _a in self.sent()}, {'GET'})
+        self.gitea.orgs.add(R.FIXTURE_ORG)
+        self.gitea.fail_path = f'/orgs/{R.FIXTURE_ORG}'
+        with self.assertRaises(G.GiteaError) as caught:
+            self.run_probe()
+        self.assertEqual(caught.exception.code, 'API_UNEXPECTED')
+        self.gitea.fail_path = None
+        del self.store.entries[G.FINAL_TARGETS[G.SITE_ADMIN]]
+        self.sent_before = len(self.gitea.requests)
+        with self.assertRaises(G.GiteaError) as caught:
+            self.run_probe()
+        self.assertEqual(caught.exception.code, 'ADMIN_NOT_FINALIZED')
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.gitea.others, {})
+
+    def test_the_command_line(self):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(R, 'escape_probe', return_value={'state': 'created'}) as act, \
+                mock.patch.object(R, 'fixture') as fixture, mock.patch.object(R, 'provision') as provision, \
+                mock.patch.object(R, 'os', SimpleNamespace(name='nt')), mock.patch.object(sys, 'stdout', out), \
+                mock.patch.object(sys, 'stderr', err):
+            code = R.main(['escape-probe'])
+        self.assertEqual(code, 0)
+        act.assert_called_once_with()
+        fixture.assert_not_called()
+        provision.assert_not_called()
+        self.assertEqual(json.loads(out.getvalue()), {'state': 'created'})
+        self.assertIn('I7 no-exposure scan: clean', err.getvalue())
+
+    def test_the_live_negative_test_reads_it_by_default(self):
+        live = _load('aieh_protection_audit_live', HERE / 'test_protection_audit_live.py')
+        self.assertEqual(live.ESCAPE_PROBE, f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}')
+        self.assertEqual(live.other_repos({}), [live.ESCAPE_PROBE])
+        self.assertEqual(live.other_repos({'AIEH_PROTECTION_AUDIT_OTHER_REPOS': ' a/b, c/d ,'}), ['a/b', 'c/d'])
+        self.assertEqual(live.other_repos({'AIEH_PROTECTION_AUDIT_OTHER_REPOS': ''}), [])
+        self.assertNotIn(f'{R.FIXTURE_ORG}/{R.FIXTURE_REPO}', live.other_repos({}))
 
 
 class TestRotate(Base):

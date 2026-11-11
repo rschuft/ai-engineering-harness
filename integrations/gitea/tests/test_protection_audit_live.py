@@ -28,10 +28,13 @@ entries; writes nothing if Gitea behaves as read at the pinned source). The audi
   merge (an absent pull request), create a repository (its own, or in the fixture organization);
 - not escape its repository: ``GET /repos/search`` lists the fixture only; the organization, user and admin
   routes are refused (403 by scope); ``sudo`` is refused ("Only administrators allowed to sudo."); every
-  repository named in AIEH_PROTECTION_AUDIT_OTHER_REPOS (comma-separated; the auditor is no collaborator of
-  them) answers 404 or 403 on its rules. **Without such a repository that probe fails as not exercised**:
-  naming one (for example a private repository the site administrator creates for the purpose) is part of
-  this act.
+  repository the escape probe reads answers 404 or 403 on its rules: by default
+  ``aieh-authz-fixture/escape-probe``, the private, empty repository with no collaborators that
+  ``gitea_roles.py escape-probe`` creates as the site administrator (a separate Owner act, run before this
+  phase); AIEH_PROTECTION_AUDIT_OTHER_REPOS, when set, names others instead (comma-separated; the auditor is
+  no collaborator of them), and set but empty, the probe fails as not exercised. Gitea answers 404 both for a
+  repository the token cannot see and for one that does not exist, so this phase cannot tell them apart: the
+  escape-probe act's report (``state``, ``observed``) is what shows that the repository exists.
 
 The bodies are chosen so that a write Gitea wrongly accepted would change nothing (a declared value, an
 absent object, an invalid body), except the git push and the API file write, which the branch rules refuse
@@ -86,7 +89,19 @@ PC = _load('aieh_gitea_protection_check', HERE.parent / 'protection_check.py')
 PHASES = ('negative', 'qualify')
 PHASE = os.environ.get('AIEH_PROTECTION_AUDIT_LIVE', '')
 REPORT = os.environ.get('AIEH_PROTECTION_AUDIT_REPORT')
-OTHER_REPOS = [r.strip() for r in os.environ.get('AIEH_PROTECTION_AUDIT_OTHER_REPOS', '').split(',') if r.strip()]
+ESCAPE_PROBE = f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}'
+
+
+def other_repos(environ) -> list[str]:
+    """The repositories the escape probe reads: AIEH_PROTECTION_AUDIT_OTHER_REPOS (comma-separated) when it is
+    set, else the escape-probe repository that gitea_roles.py escape-probe creates."""
+    named = environ.get('AIEH_PROTECTION_AUDIT_OTHER_REPOS')
+    if named is None:
+        return [ESCAPE_PROBE]
+    return [r.strip() for r in named.split(',') if r.strip()]
+
+
+OTHER_REPOS = other_repos(os.environ)
 REPOSITORY = f'{R.FIXTURE_ORG}/{R.FIXTURE_REPO}'
 REPO = f'/repos/{REPOSITORY}'
 MAIN = f'refs/heads/{R.DEFAULT_BRANCH}'
@@ -334,8 +349,8 @@ class TestNoEscape(NegativeLive):
 
     def test_another_repository_s_rules(self):
         if not OTHER_REPOS:
-            self.fail('not exercised: name a repository the auditor is no collaborator of in '
-                      'AIEH_PROTECTION_AUDIT_OTHER_REPOS (part of this act)')
+            self.fail('not exercised: AIEH_PROTECTION_AUDIT_OTHER_REPOS names no repository; unset it to read '
+                      f'{ESCAPE_PROBE} (gitea_roles.py escape-probe) or name one the auditor is no collaborator of')
         for other in OTHER_REPOS:
             with self.subTest(repository=other):
                 path = f'/repos/{urllib.parse.quote(other)}/branch_protections'
