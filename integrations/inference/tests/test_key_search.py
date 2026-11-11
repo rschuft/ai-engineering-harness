@@ -112,6 +112,36 @@ class TestForms(unittest.TestCase):
                 KS.Search(bad)
             self.assertEqual(caught.exception.code, 'KEY_INVALID')
 
+    def test_the_programmatic_checks_refuse_as_the_command_line_does(self):
+        key = synthetic()
+        self.assertEqual(KS.check_fingerprint(key, KS.fingerprint(key)), KS.fingerprint(key))
+        for expected, code in (('sha256:XYZ', 'FINGERPRINT_INVALID'), (None, 'FINGERPRINT_INVALID'),
+                               ('sha256:' + '0' * 16, 'FINGERPRINT_MISMATCH')):
+            with self.assertRaises(KS.SearchError) as caught:
+                KS.check_fingerprint(key, expected)
+            self.assertEqual(caught.exception.code, code)
+            self.assertTrue(str(caught.exception).startswith(f'{code}: '))
+            self.assertIn('Remedy: ', str(caught.exception))
+        for surfaces in ([], [('a', 'environ', 'self'), ('a', 'environ', 'self')]):
+            with self.assertRaises(KS.SearchError) as caught:
+                KS.run(key, KS.fingerprint(key), surfaces)
+            self.assertEqual(caught.exception.code, 'SURFACE_INVALID')
+        self.assertEqual(KS.body_of(KS.SYNTHETIC_PREFIX), KS.SYNTHETIC_PREFIX)
+        for edge in ('!' * 16, '~' * 1024):
+            self.assertEqual(KS.Search(edge).fingerprint, KS.fingerprint(edge))
+        with self.assertRaises(ValueError):
+            KS.Search(key).capture('x', b'', expect='maybe')
+        search = KS.Search(key, chunk=SMALL)
+        search.capture('clean', b'nothing')
+        self.assertEqual(search.report()['verdict'], 'invalid')       # the controls were not run
+        self.assertEqual(search.report()['controls']['failed'], ['not run'])
+        search.controls()
+        self.assertEqual(search.report()['verdict'], 'not-found')
+        search.capture('two', key.encode() + b' ' + key.encode())
+        search.capture('one', key.encode('utf-16-le'))
+        self.assertTrue(search.report()['statement'].startswith('the key was found on 2 surface(s)'))
+        self.assertEqual(KS.Search(key)._shown('n' * 300), 'n' * 200)
+
     def test_the_module_is_independent_of_the_broker(self):
         names = {n.module if isinstance(n, ast.ImportFrom) else a.name
                  for n in ast.walk(ast.parse(SOURCE)) if isinstance(n, (ast.Import, ast.ImportFrom))
@@ -220,6 +250,8 @@ class TestViews(unittest.TestCase):
         with mock.patch.object(KS, 'GZIP_LIMIT', 5000):
             bomb = self.search.capture('bomb', gzip.compress(b'\x00' * 20000, mtime=0))
         self.assertIn('gzip: more than 5000 bytes decompressed', bomb['incomplete'])
+        later = self.search.capture('later', b'x' * SMALL + gzip.compress(b'x', mtime=0)[:5])
+        self.assertEqual((later['complete'], later['bytes'].get('gzip')), (True, None))
         trailing = self.search.capture('trailing', gzip.compress(self.k, mtime=0) + b'not gzip')
         self.assertTrue(trailing['complete'])
         self.assertEqual(trailing['matches_by_view']['gzip']['key/raw'], 1)
@@ -267,19 +299,25 @@ class TestViews(unittest.TestCase):
         self.assertEqual(report['items'], 7)
         self.assertEqual(report['matches_by_view']['http-decoded']['key/raw'], 2)
         self.assertEqual(report['where'], ['mixed message 4', 'mixed message 5'])
-        for broken in (b'HTTP/1.1 200 OK\r\nContent-Length: 5\r\n',
-                       b'HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\nshort',
-                       b'HTTP/1.1 200 OK\r\nbad header\r\n\r\n',
-                       b'NOT HTTP\r\n\r\n',
-                       b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n',
-                       b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab',
-                       b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n0\r\n',
-                       b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab',
-                       b'HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 3\r\n\r\nabc'):
+        chunked = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'
+        for broken, fault in ((b'HTTP/1.1 200 OK\r\nContent-Length: 5\r\n', 'a message without the end of its headers'),
+                              (b'HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\nshort',
+                               'a body shorter than its Content-Length'),
+                              (b'HTTP/1.1 200 OK\r\nbad header\r\n\r\n', 'a header line without a colon'),
+                              (b'NOT HTTP\r\n\r\n', 'not an HTTP/1.x start line'),
+                              (chunked + b'zz\r\n', 'invalid literal for int() with base 16'),
+                              (chunked + b'2', 'a chunk without its size line'),
+                              (chunked + b'5\r\nab', 'a chunk shorter than its size'),
+                              (chunked + b'2\r\nab\r\n0\r\n', 'a chunked body without its end'),
+                              (chunked + b'2\r\nab', 'a chunk shorter than its size'),
+                              (chunked + b'2\r\nabXY', 'a chunk shorter than its size'),
+                              (b'HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 3\r\n\r\nabc',
+                               'the body does not decode')):
             with self.subTest(broken=broken[:40]):
                 result = self.search.http('broken', broken)
                 self.assertFalse(result['complete'])
-                self.assertTrue(all(k.startswith('http: ') for k in result['incomplete']), result['incomplete'])
+                (got,) = result['incomplete']
+                self.assertTrue(got.startswith('http: ' + fault), got)
         with mock.patch.object(KS, 'GZIP_LIMIT', 10):
             over = self.search.http('over', KS._gzip_response(b'x' * 100))
         self.assertIn('http: the decoded body is over the bound', over['incomplete'])
@@ -289,12 +327,13 @@ class TestViews(unittest.TestCase):
         with tarfile.open(fileobj=archive, mode='w:gz') as tar:
             for name, kind, link in (('etc/plain', tarfile.REGTYPE, ''), (f'home/{self.key}.txt', tarfile.REGTYPE, ''),
                                      ('etc/link', tarfile.SYMTYPE, f'/x/{base64.b64encode(self.k).decode()}'),
-                                     ('dev/fifo', tarfile.FIFOTYPE, ''), ('etc', tarfile.DIRTYPE, '')):
+                                     ('dev/fifo', tarfile.FIFOTYPE, ''), ('etc', tarfile.DIRTYPE, ''),
+                                     ('home', tarfile.DIRTYPE, '')):
                 info = tarfile.TarInfo(name)
                 info.type, info.linkname = kind, link
                 tar.addfile(info, io.BytesIO(b'') if kind == tarfile.REGTYPE else None)
         report = self.search.tar('collection', archive.getvalue())
-        self.assertEqual(report['items'], 5)
+        self.assertEqual(report['items'], 6)
         self.assertEqual(report['where'], [KS.WITHHELD, 'etc/link'])
         self.assertEqual(report['not_followed'], {'links': 1, 'special files': 1})
         self.assertIn('key/base64@0', report['matches_by_view']['name'])
@@ -355,7 +394,27 @@ class TestDisk(unittest.TestCase):
         self.assertEqual(self.search.tree('missing', self.tmp / 'nothing')['unreadable'], {'not a directory': 1})
         self.assertEqual(self.search.file('missing', self.tmp / 'nothing')['unreadable'],
                          {'FileNotFoundError': 1})
+        named = self.tmp / 'named'
+        named.mkdir()
+        (named / f'{self.key[-30:]}.txt').write_bytes(b'nothing')
+        report = self.search.tree('named', named)
+        self.assertEqual((report['where'], list(report['matches_by_view'])), ([KS.WITHHELD], ['name']))
+        with mock.patch.object(KS.os, 'lstat', side_effect=PermissionError('denied')):
+            denied = self.search.file('denied', root / 'logs' / 'a.jsonl')
+        self.assertEqual(denied['unreadable'], {}, denied)          # lstat refused: read anyway, and it reads
+        self.assertGreater(denied['bytes']['raw'], 0)
         if linked:
+            target = self.tmp / self.key[-30:]
+            target.mkdir()
+            try:
+                import _winapi
+                _winapi.CreateJunction(str(target), str(named / 'link'))
+            except (ImportError, OSError):
+                os.symlink(target, named / 'link', target_is_directory=True)
+            report = self.search.tree('named', named)
+            self.assertIn(KS.WITHHELD, report['where'])
+            self.assertEqual(report['not_followed'], {'links': 1})
+            self.assertGreaterEqual(report['matches_by_view']['name']['fragment'], 2)
             self.assertEqual(self.search.tree('junction', root / 'junction')['unreadable'], {'not a directory': 1})
             self.assertEqual(self.search.file('junction', root / 'junction')['not_followed'], {'links': 1})
 
@@ -392,6 +451,7 @@ class TestDisk(unittest.TestCase):
         self.assertIn('process memory', report['not_covered'][0])
         self.assertTrue(report['controls']['valid'])
         self.assertIn('inference-key-search: not-found: ', err.getvalue())
+        self.assertIn('controls valid (191 cases)', err.getvalue())
         text = out.getvalue() + err.getvalue()
         self.assertFalse(KS.Search(self.key).holds(text))
         for part in substrings(self.key):
@@ -409,7 +469,10 @@ class TestDisk(unittest.TestCase):
         out = io.StringIO()
         missing = ['search', '--expect-fingerprint', fp, '--surface', f'gone=tar:{self.tmp / "gone.tar"}']
         self.assertEqual(KS.main(missing, Pipe(self.key.encode()), out, io.StringIO()), 1)
-        self.assertEqual(json.loads(out.getvalue())['verdict'], 'incomplete')
+        report = json.loads(out.getvalue())
+        self.assertEqual(report['verdict'], 'incomplete')
+        self.assertEqual((report['surfaces'][0]['searched'], report['surfaces'][0]['unreadable']),
+                         (True, {'FileNotFoundError': 1}))
 
     def test_the_command_lines_refusals_never_repeat_the_key(self):
         fp = KS.fingerprint(self.key)
@@ -448,7 +511,7 @@ class TestDisk(unittest.TestCase):
         self.assertEqual((code, out.getvalue()), (1, ''))
         self.assertIn('OUTPUT_WITHHELD', err.getvalue())
         self.assertFalse(KS.Search(self.key).holds(err.getvalue()))
-        for argv in ([], ['search'], ['search', '--expect-fingerprint', fp]):
+        for argv in ([], ['search'], ['search', '--expect-fingerprint', fp], ['search', '--surface', 'a=environ:self']):
             with self.subTest(argv=argv), mock.patch('sys.stderr', new_callable=io.StringIO), \
                     self.assertRaises(SystemExit) as caught:
                 KS.main(argv, Pipe(), io.StringIO(), io.StringIO())

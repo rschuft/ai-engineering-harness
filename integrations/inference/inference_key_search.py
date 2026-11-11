@@ -428,8 +428,8 @@ class Search:
 
     def _shown(self, name) -> str:
         """NAME as the report may show it: withheld when it holds a match."""
-        text = name.decode('utf-8', 'replace') if isinstance(name, bytes) else str(name)
-        return WITHHELD if self.holds(name if isinstance(name, bytes) else text) else text[:200]
+        text = str(name)
+        return WITHHELD if self.holds(text) else text[:200]
 
     def _merge(self, surface: _Surface, view: str, stream: _Stream, name) -> None:
         if stream.found:

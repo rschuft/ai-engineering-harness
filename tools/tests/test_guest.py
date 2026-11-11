@@ -6658,8 +6658,13 @@ class InferenceTokenStep(TempState):
         # the key in an answer: found, a stop condition; an answer not kept whole: a failure
         out, steps, _, _ = self.run_probe({'reflect': key}, provider_key=key)
         self.assertEqual(steps[guest.INFERENCE_KEY_SEARCH_STEP]['detail']['search']['verdict'], 'found')
-        self.assertIn('the provider key crossed the forward to the guest',
-                      [s['condition'] for s in out['stop_conditions']])
+        (stop,) = [s for s in out['stop_conditions'] if s['condition'] ==
+                   'the provider key crossed the forward to the guest']
+        self.assertEqual(stop['surfaces'], ['answer received in the guest: the job, forwarded'])
+        # the search runs also when the token step failed
+        out, steps, _, _ = self.run_probe({'upstream_refused': True}, provider_key=key)
+        self.assertFalse(steps[guest.INFERENCE_TOKEN_STEP]['ok'])
+        self.assertTrue(steps[guest.INFERENCE_KEY_SEARCH_STEP]['ok'])
         self.assertFalse(guest.key_search().Search(key).holds(Path(out['record']).read_text(encoding='utf-8')))
         out, steps, _, _ = self.run_probe({'omit': True}, provider_key=key)
         self.assertFalse(steps[guest.INFERENCE_KEY_SEARCH_STEP]['ok'])
