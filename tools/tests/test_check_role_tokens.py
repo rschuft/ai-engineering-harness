@@ -36,6 +36,8 @@ AGENT_ROLES = ('planner', 'builder', 'reviewer', 'ci-job')
 # plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md)
 REPOINTED = {
     ('owner', 'A separate Gitea Owner account'): 'P-04.2',
+    # Owner decision OA-16 (evidence/P-04.2-protection-verifier.md): the recorder's protection auditor
+    ('authorization-recorder', 'The protection auditor'): 'P-04.2',
     ('gitea-site-admin', 'Issues Gitea identities'): 'Q-02.2.1',
     ('reviewer', 'A dedicated Gitea bot account'): 'D-01.2',
     ('ci-job', 'The Gitea Actions job token'): 'Q-02.3.1',

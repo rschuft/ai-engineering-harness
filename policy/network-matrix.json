@@ -258,7 +258,8 @@
       "endpoint": "gitea-server",
       "credentials": [
         "cred-gitea-admin",
-        "cred-gitea-owner-account"
+        "cred-gitea-owner-account",
+        "cred-gitea-protection-audit"
       ],
       "enforcement": [
         {

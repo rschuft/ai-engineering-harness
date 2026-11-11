@@ -1460,7 +1460,17 @@
         "cap-open-pr",
         "cap-push-proposal-branch"
       ],
-      "realization": [],
+      "realization": [
+        {
+          "mechanism": "The protection auditor aieh-bot-protection-audit (Owner decision OA-16): a restricted Gitea Bot without a password, repository-administrator collaborator of the admitted repository only, whose token of scope exactly read:repository (cred-gitea-protection-audit) the recorder's protection check (integrations/gitea/protection_check.py) alone reads, for the last read before each merge and the first after it; every write by that token is refused by its scope.",
+          "verified": false,
+          "verify_at": "P-04.2",
+          "evidence": [
+            "evidence/P-04.2-protection-verifier.md"
+          ],
+          "notes": "Built and tested at P-04.2 against fake Gitea servers only (evidence/P-04.2-protection-verifier.md). Not verified: the auditor's account and token are not provisioned and the fixture's total declaration is not applied; it is verified by P-04.2's live acts, each an Owner act: the negative tests (the auditor reads the rules; every write by its token, a git push included, is refused 403 by its scope; another repository's rules, aieh-authz-fixture/escape-probe by default, are not readable) and the qualification (each injected drift is detected and its restoration verified)."
+        }
+      ],
       "issuance": [
         {
           "credential": "cred-gitea-protection-audit",
