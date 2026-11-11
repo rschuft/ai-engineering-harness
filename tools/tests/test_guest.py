@@ -2561,6 +2561,55 @@ class ArtifactLabels(unittest.TestCase):
         self.assertLess(body.index('log_header('), body.index('subprocess.Popen('))
 
 
+class NoConsoleWindow(unittest.TestCase):
+    """The launches of the channel and of QEMU carry CREATE_NO_WINDOW (the Owner's rule of 2026-11-11);
+    QEMU in a process group of its own, never DETACHED_PROCESS. Each launcher is recorded and nothing is
+    started (tools/tests/test_launch_census.py checks every launch of the module)."""
+
+    def setUp(self):
+        self.seen = []
+
+    def run_fake(self, argv, **kwargs):
+        self.seen.append((argv, kwargs))
+        out = '' if kwargs.get('text') else b''
+        return subprocess.CompletedProcess(argv, 0, out, out)
+
+    def test_ssh_and_its_effective_configuration_check(self):
+        with mock.patch.object(guest, 'openssh', return_value='ssh.exe'), \
+                mock.patch.object(guest.subprocess, 'run', self.run_fake):
+            ssh = guest.Ssh(PROFILE, Path('instance'), 2222)
+            with mock.patch.object(guest.Ssh, 'argv', return_value=['ssh.exe', 'agent@127.0.0.1', 'true']):
+                ssh.run_raw(['true'])
+                ssh.run(['true'], input_text='x')
+            with self.assertRaises(guest.Refused):          # an empty ssh -G answer is refused
+                ssh.check_effective(['ssh.exe'])
+        self.assertEqual([argv[-1] for argv, _ in self.seen], ['true', 'true', 'agent@127.0.0.1'])
+        self.assertEqual([kw['creationflags'] for _, kw in self.seen], [guest.NO_WINDOW] * 3)
+
+    @unittest.skipUnless(os.name == 'nt', 'launch is implemented for Windows only')
+    def test_qemu_is_started_in_its_own_group_with_no_window(self):
+        class Stop(Exception):
+            pass
+
+        def popen(argv, **kwargs):
+            self.seen.append((argv, kwargs))
+            raise Stop
+        record = {'argv': ['qemu-system-x86_64.exe'], 'env': {}, 'binary': 'qemu', 'labels': LABELS,
+                  'instance': {'name': 'abc'}, 'ports': {'ssh': 1, 'qmp': 2}}
+        with mock.patch.object(guest, 'verify_inputs', return_value={}), \
+                mock.patch.object(guest, 'check_forwarding'), \
+                mock.patch.object(guest, 'running_process', return_value=False), \
+                mock.patch.object(guest, 'port_free', return_value=True), \
+                mock.patch.object(guest, 'open', mock.mock_open(), create=True), \
+                mock.patch.object(guest.subprocess, 'Popen', popen), self.assertRaises(Stop):
+            guest.launch(None, 'instance', record, 'start')
+        (argv, kwargs), = self.seen
+        self.assertEqual(kwargs['creationflags'], subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertFalse(kwargs['creationflags'] & (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_CONSOLE))
+        self.assertEqual((kwargs['stdin'], kwargs['stdout'], kwargs['close_fds']),
+                         (subprocess.DEVNULL, subprocess.DEVNULL, True))
+
+
 # ---------------------------------------------------------------- F-03.4: XSAVE detector
 
 

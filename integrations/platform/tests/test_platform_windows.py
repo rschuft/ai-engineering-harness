@@ -12,9 +12,11 @@ from __future__ import annotations
 import importlib.util
 import os
 import socket
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 CATEGORY = 'unit'
 
@@ -67,6 +69,29 @@ class FakeJob:
 
     def contains(self, handle):
         return handle == 'child'
+
+
+@windows_only
+class TestSupervisorStart(unittest.TestCase):
+    def test_the_supervisor_opens_no_console_window(self):
+        """Its own process group and a console no window shows, broken away from the caller's job where
+        allowed: never DETACHED_PROCESS, under which a console child it starts opens a window (the Owner's
+        rule of 2026-11-11). The start is recorded; nothing is started."""
+        seen = []
+
+        def popen(argv, **kwargs):
+            seen.append(kwargs['creationflags'])
+            if len(seen) == 1 and fallback:
+                raise OSError(5, 'breakaway refused')
+            return 'started'
+        base = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        for fallback, flags in ((False, [base | subprocess.CREATE_BREAKAWAY_FROM_JOB]),
+                                (True, [base | subprocess.CREATE_BREAKAWAY_FROM_JOB, base])):
+            seen.clear()
+            with self.subTest(fallback=fallback), mock.patch.object(W.subprocess, 'Popen', popen):
+                self.assertEqual(W.WindowsAdapter().launch_supervisor(['supervisor'], None, Path('.')), 'started')
+                self.assertEqual(seen, flags)
+                self.assertFalse(any(f & (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_CONSOLE) for f in seen))
 
 
 class TestSupervision(unittest.TestCase):

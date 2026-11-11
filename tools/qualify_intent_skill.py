@@ -47,6 +47,9 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
+# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 DEFAULT_CORPUS = REPO / 'tools' / 'tests' / 'fixtures' / 'intent_qualification' / 'corpus'
 DEFAULT_SKILL = REPO / 'catalog' / 'skills' / 'intent-normalization'
 SKILL_FILES = ('SKILL.md', 'references/intent-record.md', 'assets/proposal-template.md')
@@ -305,7 +308,7 @@ def run_turn(item, turn_number, template, cwd, out_dir, raw_dir, ledger, *,
     clock = time.monotonic()
     try:
         proc = subprocess.run(argv, cwd=cwd, input=stdin, capture_output=True, env=env,
-                              timeout=template.get('timeout_s', 900))
+                              timeout=template.get('timeout_s', 900), creationflags=NO_WINDOW)
         exit_code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as exc:
         exit_code, stdout, stderr = 'timeout', exc.stdout or b'', exc.stderr or b''

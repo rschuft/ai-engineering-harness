@@ -31,6 +31,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 PINNED_TASK_VERSION = '3.54.0'  # recorded with its checksums in docs/development.md
+# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
+# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
 def load(name, path):
@@ -48,7 +51,7 @@ def report(ok, name, detail):
 
 def output(cmd):
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return proc.stdout.strip() if proc.returncode == 0 else None

@@ -665,10 +665,11 @@ class ToolsInstall(Base):
         shutil.copyfile(REPO / T.TOOLS_LOCK, lock)
         self.root = self.base / 'data-root'
         self.res = self.resolve(self.rooted(self.root), config={})
-        self.calls = []
+        self.calls, self.flags = [], []
 
-    def fake_run(self, command, env):
+    def fake_run(self, command, env, creationflags):
         self.calls.append((command, env))
+        self.flags.append(creationflags)
         if 'download' in command:
             Path(command[command.index('--dest') + 1], 'pyyaml-6.0.3-cp312-cp312-win_amd64.whl').write_bytes(b'w')
         if 'venv' in command:
@@ -692,6 +693,8 @@ class ToolsInstall(Base):
                                    *hashed])
         for _, env in self.calls:
             self.assertEqual(env['PIP_CACHE_DIR'], str(self.root / 'ephemeral' / 'cache' / 'pip'))
+        # no console window on Windows (the Owner's rule of 2026-11-11); 0 elsewhere
+        self.assertEqual(self.flags, [getattr(subprocess, 'CREATE_NO_WINDOW', 0)] * 3)
         record = P.read_asset_record(wheels)
         self.assertEqual(record['integrity']['sha256'], {'pyyaml-6.0.3-cp312-cp312-win_amd64.whl': T.sha256_file(
             wheels / 'pyyaml-6.0.3-cp312-cp312-win_amd64.whl')})
@@ -739,7 +742,7 @@ class ToolsInstall(Base):
                 self.assertIn('--set python-tools|python-dev-tools] [--python]', err.getvalue())
 
     def test_a_failed_step_stops(self):
-        def failing(command, env):
+        def failing(command, env, creationflags):
             return subprocess.CompletedProcess(command, 1)
         with self.assertRaises(subprocess.CalledProcessError):
             T.tools_install(self.res, run=failing)

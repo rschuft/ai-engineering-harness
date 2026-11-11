@@ -41,6 +41,11 @@ function named like a tree wrapper counts as a launch, and every assignment of a
 whatever the control flow. Each site is a function, so a second git launch added inside an
 allowlisted function is not a new site (the R6 verifier's verb set is asserted by
 ``test_guest``).
+
+The same parsed trees serve a second guard, the no-window guard (the Owner's rule of 2026-11-11):
+every launch in a non-test module under tools/ and integrations/ carries CREATE_NO_WINDOW, and none
+names DETACHED_PROCESS or CREATE_NEW_CONSOLE (``WindowCensus``; its rules and blind spots are stated
+there, its exact allowlist is ``WINDOW_ALLOWLIST``).
 """
 from __future__ import annotations
 
@@ -763,6 +768,214 @@ def release():
     _PARSED.clear()
 
 
+# ---------------------------------------------------------------- the no-window guard
+#
+# The Owner's rule of 2026-11-11: every process the harness starts on Windows carries
+# CREATE_NO_WINDOW, and none is started with DETACHED_PROCESS (under which each console child opens
+# a window of its own, and CREATE_NO_WINDOW is ignored) or CREATE_NEW_CONSOLE. The guard reads the
+# non-test modules under tools/ and integrations/ from the census's parsed trees:
+#
+# - every launch (a standard-library launcher reached as the census resolves it, a parameter that
+#   receives a launcher from a call in the same module, or a ``self`` attribute assigned one) passes
+#   ``creationflags=`` an expression that carries the flag: the module's ``NO_WINDOW``,
+#   ``getattr(subprocess, 'CREATE_NO_WINDOW', 0)``, ``subprocess.CREATE_NO_WINDOW``, a ``|`` with one
+#   of them, either branch of a conditional expression holding one, or a name every assignment of
+#   which carries it;
+# - ``NO_WINDOW`` is bound only at module level, and only to ``getattr(subprocess,
+#   'CREATE_NO_WINDOW', 0)`` (0 off Windows, so POSIX launches are unchanged);
+# - no name, attribute or string names DETACHED_PROCESS or CREATE_NEW_CONSOLE.
+#
+# Blind spots, by construction: a launcher passed in from another module is checked where it is
+# called only when the receiving parameter defaults to a launcher (the repository's
+# ``run=subprocess.run`` form); ``**kwargs`` carrying creationflags is not followed (the launch
+# fails); guest-side Python held in strings is not parsed (it runs in a Linux guest). The allowlist
+# is exact, as the census's is: a site added to it that no longer needs it fails too.
+
+WINDOW_ROOTS = ('tools/', 'integrations/')
+WINDOW_ALLOWLIST = {
+    ('tools/guest.py', 'exec_command'): "interactive passthrough: ssh shares the operator's console and opens no "
+                                        'window of its own; with CREATE_NO_WINDOW it gets a console of its own and '
+                                        "cannot reach the operator's (its output and input are lost); open finding",
+    ('tools/guest_drill.py', 'run'): 'guest-side: the drill guest\'s root helper, copied byte for byte into a '
+                                     'Linux guest and run there only; Windows creation flags do not exist there',
+    ('tools/verify_seed.py', 'git_reader'): 'integrity-tracked (SEED_MANIFEST.json): changed only by the '
+                                            'Owner\'s documented process; open finding for the Owner',
+    ('tools/verify_seed.py', 'git_reader.git'): 'integrity-tracked (SEED_MANIFEST.json): changed only by the '
+                                                'Owner\'s documented process; open finding for the Owner',
+}
+WINDOW_OPENERS = ('DETACHED_PROCESS', 'CREATE_NEW_CONSOLE')
+OPENER_TEXT = re.compile(r'\b(?:DETACHED_PROCESS|CREATE_NEW_CONSOLE)\b')
+NO_WINDOW_FORM = ast.dump(ast.parse("getattr(subprocess, 'CREATE_NO_WINDOW', 0)", mode='eval').body)
+
+
+def window_scanned(path):
+    """A non-test module under tools/ or integrations/."""
+    parts = path.split('/')
+    return path.startswith(WINDOW_ROOTS) and 'tests' not in parts[:-1] and not parts[-1].startswith('test_')
+
+
+class WindowCensus:
+    """The launches of the scanned modules that may open a window: ``findings`` is {(path, site):
+    [(line, problem)]} for launches without the flag, ``problems`` [(path, line, problem)] for what no
+    allowlist admits (a window-opening flag, a ``NO_WINDOW`` bound to anything else)."""
+
+    def __init__(self, census, sources):
+        self.census, self.sources = census, sources
+        self.infos = {path: info for path, info in census.infos.items() if window_scanned(path)}
+        self.marked = set()                # (id(function node), parameter): receives a launcher
+        self.findings, self.problems = {}, []
+        self.functions, self.methods = {}, {}  # path -> {name: scope}, path -> {(class, name): scope}
+        for path, info in self.infos.items():
+            self._index(path, info)
+        self._propagate()
+        for path, info in sorted(self.infos.items()):
+            self._module(path, info)
+
+    def _index(self, path, info):
+        functions, methods = self.functions.setdefault(path, {}), self.methods.setdefault(path, {})
+        for scope in info.scopes:
+            if not isinstance(scope.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if scope.cls is not None:
+                methods[(scope.cls[0], scope.node.name)] = scope
+            elif scope.parent is not None and scope.parent.node is info.tree:
+                functions[scope.node.name] = scope
+
+    def launcher(self, scope, expr, depth=0):
+        """True when EXPR (a callee or an argument) is a launcher."""
+        if depth > MAX_DEPTH or not isinstance(expr, (ast.Name, ast.Attribute)):
+            return False
+        if self.census.stdlib_launcher(scope, expr):
+            return True
+        if isinstance(expr, ast.Name):
+            owner = scope.lookup(expr.id)
+            return owner is not None and (id(owner.node), expr.id) in self.marked
+        if isinstance(expr.value, ast.Name) and expr.value.id in SELF:
+            cls = Census._class_of(scope)
+            values = scope.module.self_attrs.get(cls, {}).get(expr.attr, []) if cls else []
+            return any(v is not None and self.launcher(owner, v, depth + 1) for owner, v in values)
+        return False
+
+    def _callee(self, scope, func):
+        """The scope of a function of the same module that FUNC calls, and whether it is a method."""
+        path = scope.module.path
+        if isinstance(func, ast.Name) and scope.lookup(func.id) is None:
+            return self.functions[path].get(func.id), False
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in SELF:
+            cls = Census._class_of(scope)
+            return self.methods[path].get((cls, func.attr)), True
+        return None, False
+
+    def _propagate(self):
+        """Mark the parameters that receive a launcher, to a fixed point."""
+        passed = []                        # (caller's scope, (id(function node), parameter), argument)
+        for info in self.infos.values():
+            for scope, call in info.calls:
+                target, method = self._callee(scope, call.func)
+                if target is None:
+                    continue
+                args = target.node.args
+                positional = [a.arg for a in [*args.posonlyargs, *args.args]][1 if method else 0:]
+                pairs = []
+                for index, arg in enumerate(call.args):
+                    if isinstance(arg, ast.Starred):
+                        break
+                    if index < len(positional):
+                        pairs.append((positional[index], arg))
+                pairs += [(k.arg, k.value) for k in call.keywords if k.arg in target.params]
+                passed += [(scope, (id(target.node), name), arg) for name, arg in pairs
+                           if isinstance(arg, (ast.Name, ast.Attribute))]
+        changed = True
+        while changed:
+            changed = False
+            for scope, key, arg in passed:
+                if key not in self.marked and self.launcher(scope, arg):
+                    self.marked.add(key)
+                    changed = True
+
+    def carries(self, scope, expr, depth=0):
+        """True when EXPR, a creationflags value, carries CREATE_NO_WINDOW."""
+        if depth > MAX_DEPTH:
+            return False
+        info = scope.module
+        if isinstance(expr, ast.Name):
+            owner = scope.lookup(expr.id)
+            if owner is None:
+                return False
+            values = owner.assigned.get(expr.id, [])   # a parameter's own value is unknown: never carries
+            if expr.id == 'NO_WINDOW':
+                return owner.node is info.tree and bool(values) and \
+                    all(v is not None and ast.dump(v) == NO_WINDOW_FORM for v in values)
+            return bool(values) and all(v is not None and self.carries(owner, v, depth + 1) for v in values)
+        if isinstance(expr, ast.Attribute):
+            return expr.attr == 'CREATE_NO_WINDOW' and isinstance(expr.value, ast.Name) and \
+                info.modules.get(expr.value.id) == 'subprocess' and scope.lookup(expr.value.id) is None
+        if isinstance(expr, ast.Call):
+            return ast.dump(expr) == NO_WINDOW_FORM and scope.lookup('subprocess') is None and \
+                info.modules.get('subprocess') == 'subprocess'
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.BitOr):
+            return self.carries(scope, expr.left, depth + 1) or self.carries(scope, expr.right, depth + 1)
+        if isinstance(expr, ast.IfExp):
+            return self.carries(scope, expr.body, depth + 1) or self.carries(scope, expr.orelse, depth + 1)
+        return False
+
+    def _module(self, path, info):
+        for scope, call in info.calls:
+            found = self.census.stdlib_launcher(scope, call.func)
+            if found is not None:
+                via = '.'.join(found)
+            elif self.launcher(scope, call.func):
+                via = ast.unparse(call.func)
+            else:
+                continue
+            flags = [k.value for k in call.keywords if k.arg == 'creationflags']
+            if not flags:
+                problem = f'no creationflags (via {via})'
+            elif not self.carries(scope, flags[0]):
+                problem = f'creationflags without CREATE_NO_WINDOW (via {via})'
+            else:
+                continue
+            self.findings.setdefault((path, scope.qualname), []).append((call.lineno, problem))
+        for scope in info.scopes:
+            if 'NO_WINDOW' in scope.assigned:
+                if scope.node is not info.tree:
+                    self.problems.append((path, scope.node.lineno, f'NO_WINDOW bound in {scope.qualname}'))
+                elif any(v is None or ast.dump(v) != NO_WINDOW_FORM for v in scope.assigned['NO_WINDOW']):
+                    self.problems.append((path, 1, "NO_WINDOW bound to something other than "
+                                                   "getattr(subprocess, 'CREATE_NO_WINDOW', 0)"))
+        # Only the top-level statements holding a line that names a window-opening flag are walked.
+        text = self.sources[path]
+        lines = {text.count('\n', 0, m.start()) + 1 for m in OPENER_TEXT.finditer(text)}
+        for statement in info.tree.body if lines else ():
+            if not any(statement.lineno <= line <= statement.end_lineno for line in lines):
+                continue
+            for node in ast.walk(statement):
+                name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) \
+                    else node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+                if name in WINDOW_OPENERS:
+                    self.problems.append((path, node.lineno, f'{name} (opens a console window)'))
+
+
+def window_failures(window, allowlist=None):
+    """The no-window guard's verdict: the messages that fail it, none when it passes."""
+    allowlist = WINDOW_ALLOWLIST if allowlist is None else allowlist
+    unexpected, missing = compare(window.findings, allowlist)
+    message = []
+    if unexpected:
+        message.append('launches that may open a console window (pass creationflags=NO_WINDOW, the module\'s '
+                       "getattr(subprocess, 'CREATE_NO_WINDOW', 0)):\n"
+                       + '\n'.join(f'  {path}:{name} ' + '; '.join(f'line {line}: {problem}'
+                                                                     for line, problem in window.findings[(path, name)])
+                                   for path, name in unexpected))
+    if missing:
+        message.append('allowlisted sites the no-window guard no longer finds (remove them from '
+                       'WINDOW_ALLOWLIST):\n' + '\n'.join(f'  {path}:{name}' for path, name in missing))
+    if window.problems:
+        message.append('window-opening flags or a NO_WINDOW of another value:\n'
+                       + '\n'.join(f'  {path} line {line}: {problem}' for path, line, problem in window.problems))
+    return message
+
+
 INJECTED = '''
 
 def injected_status(path):
@@ -772,22 +985,29 @@ INJECTED_LINE = 4   # the subprocess.run line, counted from the end of the sourc
 ADAPTER = 'integrations/planning/planning_adapter.py'
 NEWCOMER = 'integrations/newcomer/newcomer.py'
 GATE = 'tools/publication_gate.py'
+PLATFORM = 'integrations/platform/platform_windows.py'
+NO_WINDOW_SUPERVISOR = 'base = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP'
 
 
 def injected(sources):
     """The tracked sources, copied, with a git launch injected into a module that is not
-    allowlisted, a new module launching git, and the gate's retained site removed."""
+    allowlisted, a new module launching git, and the gate's retained site removed. For the no-window
+    guard, the injected launches carry no creationflags, and the Gitea supervisor's start is put back
+    to DETACHED_PROCESS (the defect of 2026-11-11)."""
     sources = dict(sources)
     sources[ADAPTER] = sources[ADAPTER] + INJECTED
     sources[NEWCOMER] = 'import subprocess\n' + INJECTED
     sources[GATE] = sources[GATE].replace("['git', *args]", "['true', *args]")
+    sources[PLATFORM] = sources[PLATFORM].replace(NO_WINDOW_SUPERVISOR, NO_WINDOW_SUPERVISOR.replace(
+        'CREATE_NO_WINDOW', 'DETACHED_PROCESS'))
     return sources
 
 
 class TreeCensus(unittest.TestCase):
     """The tracked sources launch git only at the retained sites of decision 0014 section 1, and the
     guard fails on an injected launch (the tracked sources, copied in memory, with an injected
-    subprocess.run(['git', ...]): no product file is edited). Both censuses are made once."""
+    subprocess.run(['git', ...]): no product file is edited). Both censuses are made once, and the
+    no-window guard reads both."""
     category = 'contract'
 
     @classmethod
@@ -799,11 +1019,15 @@ class TreeCensus(unittest.TestCase):
             census = Census(cls.sources)
             cls.sites, cls.errors = census.sites, census.errors
             cls.failures = guard_failures(census.sites, census.errors)
+            window = WindowCensus(census, cls.sources)
+            cls.window = (window.findings, window.problems, window_failures(window))
             cls.injected_sources = injected(cls.sources)
             census = Census(cls.injected_sources)
             cls.injected_sites = census.sites
             cls.injected_failures = guard_failures(census.sites, census.errors)
-            del census
+            window = WindowCensus(census, cls.injected_sources)
+            cls.injected_window = (window.findings, window.problems, window_failures(window))
+            del census, window
         finally:
             release()
             if enabled:
@@ -843,6 +1067,29 @@ class TreeCensus(unittest.TestCase):
         self.assertEqual(len(self.injected_failures), 2, message)
         for site in (f'{ADAPTER}:injected_status (line {line}; via subprocess.run)',
                      f'{NEWCOMER}:injected_status', f'{GATE}:git'):
+            self.assertIn(site, message)
+
+
+    def test_every_launch_outside_the_tests_opens_no_window(self):
+        findings, problems, failures = self.window
+        self.assertFalse(failures, '\n'.join(failures))
+        self.assertEqual((sorted(findings), problems), (sorted(WINDOW_ALLOWLIST), []))
+
+    def test_the_no_window_guard_fails_on_the_injected_launches_and_a_detached_start(self):
+        self.assertEqual(self.sources[PLATFORM].count(NO_WINDOW_SUPERVISOR), 1)
+        findings, problems, failures = self.injected_window
+        supervisor = (PLATFORM, 'WindowsAdapter.launch_supervisor')
+        self.assertEqual(compare(findings, WINDOW_ALLOWLIST),
+                         ([(NEWCOMER, 'injected_status'), (ADAPTER, 'injected_status'), supervisor], []))
+        self.assertEqual({problem for _, problem in findings[supervisor]},
+                         {'creationflags without CREATE_NO_WINDOW (via subprocess.Popen)'})
+        self.assertEqual([(path, problem) for path, _, problem in problems],
+                         [(PLATFORM, 'DETACHED_PROCESS (opens a console window)')])
+        message = '\n'.join(failures)
+        self.assertEqual(len(failures), 2, message)
+        line = INJECTED_LINE + self.sources[ADAPTER].count('\n')
+        for site in (f'{ADAPTER}:injected_status line {line}: no creationflags (via subprocess.run)',
+                     f'{NEWCOMER}:injected_status', f'{PLATFORM}:WindowsAdapter.launch_supervisor'):
             self.assertIn(site, message)
 
 
@@ -968,6 +1215,117 @@ class Detection(unittest.TestCase):
     def test_unparseable_sources_are_reported(self):
         census = Census({'bad.py': 'def (:\n'})
         self.assertIn('bad.py', census.errors)
+
+
+def window_of(source, path='tools/mod.py', extra=None):
+    """The no-window guard's census of synthetic sources: (findings by site name, problems)."""
+    sources = {path: source, **(extra or {})}
+    window = WindowCensus(Census(sources), sources)
+    return {name: [p for _, p in found] for (p_, name), found in window.findings.items() if p_ == path}, \
+        [problem for _, _, problem in window.problems]
+
+
+class WindowDetection(unittest.TestCase):
+    """The no-window guard's rules, each on a synthetic source."""
+
+    def test_each_launch_form_needs_the_flag(self):
+        cases = {
+            'import subprocess\ndef f():\n    subprocess.run(["x"])\n': 'f',
+            'import subprocess as sp\ndef f():\n    sp.Popen(["x"])\n': 'f',
+            'from subprocess import check_output as co\ndef f():\n    co(["x"])\n': 'f',
+            'import os\ndef f():\n    os.system("x")\n': 'f',
+            'import subprocess\nsubprocess.call(["x"])\n': '<module>',
+            'import subprocess\nrun = subprocess.run\ndef f():\n    run(["x"])\n': 'f',
+            'import subprocess\ndef f(run=subprocess.run):\n    run(["x"])\n': 'f',
+            # a launcher passed on to a function of the same module, and kept on self
+            'import subprocess\ndef g(run, argv):\n    run(argv)\ndef f(run=subprocess.run):\n    g(run, ["x"])\n': 'g',
+            'import subprocess\ndef g(argv, *, run):\n    run(argv)\ndef f():\n    g(["x"], run=subprocess.run)\n': 'g',
+            'import subprocess\nclass C:\n    def __init__(self, run=subprocess.run):\n        self.run = run\n'
+            '    def m(self):\n        self.run(["x"])\n': 'C.m',
+            'import subprocess\nclass C:\n    def m(self, run):\n        run(["x"])\n'
+            '    def n(self):\n        self.m(subprocess.run)\n': 'C.m',
+        }
+        for source, site in cases.items():
+            with self.subTest(source=source):
+                findings, problems = window_of(source)
+                self.assertEqual(list(findings), [site])
+                self.assertIn('no creationflags', findings[site][0])
+                self.assertEqual(problems, [])
+
+    def test_the_flag_forms_that_carry_it(self):
+        head = "import subprocess, os\nNO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)\n"
+        carried = [
+            'def f():\n    subprocess.run(["x"], creationflags=NO_WINDOW)\n',
+            'def f():\n    subprocess.run(["x"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))\n',
+            'def f():\n    subprocess.run(["x"], creationflags=subprocess.CREATE_NO_WINDOW)\n',
+            'def f():\n    subprocess.Popen(["x"], creationflags=NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)\n',
+            'def f():\n    flags = NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0\n'
+            '    subprocess.Popen(["x"], creationflags=flags)\n',
+            'def f(a):\n    flags = a.pop("creationflags", 0) | 4 | NO_WINDOW\n    subprocess.Popen(["x"], creationflags=flags)\n',
+            'def f(run=subprocess.run):\n    run(["x"], creationflags=NO_WINDOW)\n',
+            'def f(flags):\n    flags = flags | NO_WINDOW\n    subprocess.run(["x"], creationflags=flags)\n',
+        ]
+        for body in carried:
+            with self.subTest(body=body):
+                self.assertEqual(window_of(head + body), ({}, []))
+        missing = [
+            'def f():\n    subprocess.run(["x"], creationflags=0)\n',
+            'def f():\n    subprocess.run(["x"], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)\n',
+            'def f(flags=NO_WINDOW):\n    subprocess.run(["x"], creationflags=flags)\n',
+            'def f():\n    flags = NO_WINDOW\n    flags = 0\n    subprocess.run(["x"], creationflags=flags)\n',
+            'def f():\n    subprocess.run(["x"], creationflags=NO_WINDOW & 0)\n',
+            'def f(kw):\n    subprocess.run(["x"], **kw)\n',
+            'def f():\n    subprocess.run(["x"], creationflags=OTHER.CREATE_NO_WINDOW)\n',
+        ]
+        for body in missing:
+            with self.subTest(body=body):
+                findings, _ = window_of(head + body)
+                self.assertEqual(list(findings), ['f'], findings)
+
+    def test_no_window_is_the_one_definition(self):
+        cases = {
+            'import subprocess\nNO_WINDOW = 0\ndef f():\n    subprocess.run(["x"], creationflags=NO_WINDOW)\n':
+                (['f'], ["NO_WINDOW bound to something other than getattr(subprocess, 'CREATE_NO_WINDOW', 0)"]),
+            "import subprocess\nNO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)\n"
+            'def f():\n    NO_WINDOW = 0\n    subprocess.run(["x"], creationflags=NO_WINDOW)\n':
+                (['f'], ['NO_WINDOW bound in f']),
+            'import subprocess\ndef f():\n    subprocess.run(["x"], creationflags=NO_WINDOW)\n': (['f'], []),
+        }
+        for source, (sites, problems) in cases.items():
+            with self.subTest(source=source):
+                findings, found = window_of(source)
+                self.assertEqual((list(findings), found), (sites, problems))
+
+    def test_window_opening_flags_fail_wherever_they_are_named(self):
+        for line in ('flags = subprocess.DETACHED_PROCESS\n', 'flags = subprocess.CREATE_NEW_CONSOLE\n',
+                     'flags = getattr(subprocess, "DETACHED_PROCESS", 0)\n', 'from subprocess import DETACHED_PROCESS\n'
+                     'flags = DETACHED_PROCESS\n'):
+            with self.subTest(line=line):
+                _, problems = window_of('import subprocess\n' + line)
+                self.assertTrue(problems and all('opens a console window' in p for p in problems), problems)
+        # prose and comments that name them are not flags
+        self.assertEqual(window_of('import subprocess\n# never DETACHED_PROCESS\n'
+                                   'def f():\n    """never DETACHED_PROCESS here"""\n'), ({}, []))
+
+    def test_only_non_test_modules_under_tools_and_integrations_are_read(self):
+        launch = 'import subprocess\ndef f():\n    subprocess.run(["x"], creationflags=subprocess.DETACHED_PROCESS)\n'
+        for path, read in (('tools/mod.py', True), ('integrations/a/mod.py', True), ('tools/tests/mod.py', False),
+                           ('integrations/a/tests/helper.py', False), ('tools/test_mod.py', False),
+                           ('composition/mod.py', False), ('conftest.py', False)):
+            with self.subTest(path=path):
+                self.assertEqual(window_scanned(path), read)
+                findings, problems = window_of(launch, path)
+                self.assertEqual(bool(findings) and bool(problems), read)
+        # guest-side Python held in a string is never parsed as a launch
+        self.assertEqual(window_of('SCRIPT = """\nimport subprocess\nsubprocess.run(["id"])\n"""\n'), ({}, []))
+
+    def test_the_verdict_names_each_site_and_each_stale_allowance(self):
+        sources = {'tools/a.py': 'import subprocess\ndef f():\n    subprocess.run(["x"])\n'}
+        window = WindowCensus(Census(sources), sources)
+        message = '\n'.join(window_failures(window, {('tools/b.py', 'g'): 'gone'}))
+        self.assertIn('tools/a.py:f line 3: no creationflags (via subprocess.run)', message)
+        self.assertIn('no longer finds (remove them from WINDOW_ALLOWLIST):\n  tools/b.py:g', message)
+        self.assertEqual(window_failures(window, {('tools/a.py', 'f'): 'reason'}), [])
 
 
 if __name__ == '__main__':

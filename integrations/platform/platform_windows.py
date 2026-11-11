@@ -397,8 +397,11 @@ class WindowsAdapter(contract.PlatformAdapter):
 
     def launch_supervisor(self, argv, log, cwd):
         """Detached, in a new process group, and broken away from the caller's job where the caller's job
-        allows it (a caller whose job forbids breakaway gets a supervisor that also ends with it)."""
-        base = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        allows it (a caller whose job forbids breakaway gets a supervisor that also ends with it). Detached
+        means a console of its own that no window shows (CREATE_NO_WINDOW), outside the caller's console;
+        never DETACHED_PROCESS, under which a console process it starts opens a window of its own unless that
+        start hides it too."""
+        base = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         try:
             return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True,
                                     cwd=str(cwd), creationflags=base | subprocess.CREATE_BREAKAWAY_FROM_JOB)

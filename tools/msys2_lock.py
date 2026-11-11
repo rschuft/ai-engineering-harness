@@ -52,6 +52,9 @@ import urllib.request
 from pathlib import Path
 
 TAR = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'tar.exe'
+# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
+# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 META = ('.PKGINFO', '.BUILDINFO', '.MTREE', '.INSTALL')
 LINK_POLICY = 'materialise-as-copy'
 RESERVED = re.compile(r'(?i)^(con|prn|aux|nul|conin\$|conout\$|com[0-9\u00b9\u00b2\u00b3]|'
@@ -71,7 +74,7 @@ class Stop(Exception):
 def pax_stream(archive):
     """Yield a stream-mode TarFile over bsdtar's uncompressed rewrite of ARCHIVE."""
     proc = subprocess.Popen([str(TAR), '-cf', '-', '--format=pax', '@' + str(archive)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
     try:
         with tarfile.open(fileobj=proc.stdout, mode='r|') as tf:
             yield tf

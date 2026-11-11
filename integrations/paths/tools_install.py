@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import Callable
 
 HERE = Path(os.path.realpath(__file__)).parent
+# Windows: a console process started with this flag gets a console that no window shows (0 elsewhere);
+# every process this module starts carries it (tools/tests/test_launch_census.py checks it).
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 TOOLS_LOCK = 'composition/lock/python/tools-requirements.txt'
 DEV_LOCK = 'composition/lock/python/dev-requirements.txt'
 # Each installable set: its name (the asset name and the install's tool directory), its lock and
@@ -60,7 +63,7 @@ def sha256_file(path: Path) -> str:
 
 
 def _call(run: Callable, command: list, env: dict) -> None:
-    if (result := run(command, env=env)).returncode != 0:
+    if (result := run(command, env=env, creationflags=NO_WINDOW)).returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, command)
 
 
