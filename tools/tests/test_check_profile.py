@@ -9,8 +9,10 @@ private copy for each case that writes into it.
 """
 from pathlib import Path
 import copy
+import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -835,20 +837,66 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, 'exchange.push.max_bytes')
 
 
+def tree_state(root):
+    """Every file under ROOT by relative path with the sha256 of its bytes, and every
+    directory's relative path: what restore() makes equal."""
+    files, dirs = {}, set()
+    for top, subdirs, names in os.walk(root):
+        rel_top = Path(top).relative_to(root)
+        dirs.update((rel_top / name).as_posix() for name in subdirs)
+        for name in names:
+            files[(rel_top / name).as_posix()] = hashlib.sha256(Path(top, name).read_bytes()).hexdigest()
+    return files, dirs
+
+
+def restore(root, source, state):
+    """Make ROOT, a copy of files of SOURCE at the same relative paths whose tree_state was
+    STATE, that copy again: remove what a test added, copy back from SOURCE every file a test
+    changed or removed, recreate removed directories. Only the differences are written."""
+    files, dirs = tree_state(root)
+    want_files, want_dirs = state
+    for rel in sorted(dirs - want_dirs, reverse=True):
+        if (root / rel).is_dir():
+            shutil.rmtree(root / rel)
+    for rel in set(files) - set(want_files):
+        if (root / rel).exists():
+            (root / rel).unlink()
+    for rel in sorted(want_dirs - dirs):
+        (root / rel).mkdir(parents=True, exist_ok=True)
+    for rel, digest in want_files.items():
+        if files.get(rel) != digest:
+            shutil.copyfile(source / rel, root / rel)
+
+
 class AgentServerBlock(unittest.TestCase):
     """F-04.1 slice (c): provisioning.agent_server, the agent-server directories and the
-    conversation fixture; each mutation must FAIL naming the rule."""
+    conversation fixture; each mutation must FAIL naming the rule.
+
+    The copy of profiles/ (with the pinned lock and the cited evidence it reads) is one work
+    copy per class (this class and the classes that share its setUp), made by the class's first
+    test and restored before each later one to the checkout's files: only what the previous
+    test changed is written again, and the whole copy is then checked to equal the copy first
+    made, every file's bytes and every directory, so each test starts from the tree a fresh
+    copy gives (plan leaf F-09). A fresh copy per test cost about 50 ms: the copy, its removal
+    and Windows' scan of each newly written file the checker then read."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-profile-as-'))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        shutil.copytree(REPO / 'profiles', self.tmp / 'profiles')
-        lock = Path('composition') / 'lock' / 'components.lock.json'
-        (self.tmp / lock.parent).mkdir(parents=True)
-        shutil.copy(REPO / lock, self.tmp / lock)
-        point = load(QEMU)['network']['enforcement_point']
-        (self.tmp / 'evidence').mkdir()
-        shutil.copy(REPO / point['evidence'], self.tmp / point['evidence'])
+        cls = type(self)
+        if cls.__dict__.get('_work_state') is None:
+            work = Path(tempfile.mkdtemp(prefix='aieh-profile-as-'))
+            cls.addClassCleanup(shutil.rmtree, work, True)
+            shutil.copytree(REPO / 'profiles', work / 'profiles')
+            lock = Path('composition') / 'lock' / 'components.lock.json'
+            (work / lock.parent).mkdir(parents=True)
+            shutil.copy(REPO / lock, work / lock)
+            point = load(QEMU)['network']['enforcement_point']
+            (work / 'evidence').mkdir()
+            shutil.copy(REPO / point['evidence'], work / point['evidence'])
+            cls._work, cls._work_state = work, tree_state(work)
+        else:
+            restore(cls._work, REPO, cls._work_state)
+            self.assertEqual(tree_state(cls._work), cls._work_state, 'the work copy differs from its first copy')
+        self.tmp = cls._work
         self.qemu = load(QEMU, self.tmp)
         self.server = self.qemu['provisioning']['agent_server']
         self.fixture_path = self.tmp / self.server['fixture']['path']
