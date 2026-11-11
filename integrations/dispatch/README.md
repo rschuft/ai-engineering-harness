@@ -334,6 +334,14 @@ canonical body (`body_sha256`), never a body or an answer. `tools/guest.py drill
 admitted-create` and `tests/live_admitted_create.py` use this transport; neither has a bridge of
 its own. **Not yet verified** live.
 
+The custody probe (prepared, **not run**) runs from
+[`tests/live_custody_probe.py`](tests/live_custody_probe.py), which drives `tools/guest.py`'s
+`custody_probe` (its decision rule, `CUSTODY_PROBE_RULE`, is fixed before any run) and supplies its
+step (5): one `implement` and one `review` attempt dispatched over this transport on the fixture
+with the real declaration, each delivered its stage's token from the credential provider behind a
+read-only wrapper (a write is a stop), both conversations then deleted
+([`docs/development.md`](../../docs/development.md), the guest operations).
+
 ## The stage's role token (E-01.3.3)
 
 Plan leaf E-01.3.3, decision 0007 point 4 and decision 0013 point 7:
@@ -587,4 +595,5 @@ and a fake Gitea that answers `GET /api/v1/token` as Gitea 28.3.0 does (its logi
 | `StageMappingTests` (contract) | the mapping covers exactly the store's stages; each mapped credential is in the dispatcher's `custodian_of` and is delivered by it, is granted to its role, and the other stage's credential is denied to it; the held-token guard counts holds and matches the token in a path or body and the fingerprint with or without its prefix |
 | `DeliveryTests` | `implement` reads only the builder's entry and asks Gitea about that token only; `review` the reviewer's; the record carries the fingerprint and no token, and after the context `credential()` refuses; while the builder's token is held, another attempt's create carries neither it nor its fingerprint, and four calls that would carry it are refused before the transport (and pass once the context has ended); a missing entry, an entry naming another account, malformed values, another bot's token, other scopes, a `401`, lost or malformed answers and a failing provider refuse; an unknown, failed or merely reserved attempt reads nothing |
 | `StandingCredentialTests` | the three lifecycles: two sequential attempts of a stage use the standing credential; two concurrent ones hold it at once, the first released out of order leaves the second's credential usable and the guard holding it, a third joins meanwhile, and Gitea is only ever asked `GET /api/v1/token` (nothing revokes); a token Gitea refuses is `ROLE_TOKEN_REJECTED` on every try until `gitea_roles.rotate` (the administrative act, resuming over the refused token) replaces the entry, then delivery works with the new one; while a token is held, another attempt dispatched over the live transport sends neither it nor its fingerprint, and calls that would carry it are refused before `GuestApi` is called; an attempt takes no stage from its caller, reads only its own stage's entry and refuses another attempt's stored record |
+| `LiveCustodyDriverTests` | the prepared probe's step (5) composed offline: two attempts dispatched over the live transport on a fake `GuestApi`, each delivered its mapped bot through the read-only provider, both conversations deleted, no token in what was sent; the read-only wrapper refuses and counts writes; the optional administrative-lifecycle step's verdict |
 | `ReachableNamesTests` (contract) | the package's syntax trees: no mint, CLI, entry write, administrative act or revocation is reachable, no `generate-access-token`, and Gitea is asked `GET /token` only; a negative control finds a planted mint |

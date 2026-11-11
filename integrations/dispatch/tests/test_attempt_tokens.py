@@ -376,7 +376,8 @@ class DeliveryTests(DeliveryFixture):
 
 
 class GuestApiFake:
-    """tools/guest.py GuestApi's call shape, answering as the pinned server (GET /server_info, the create); every
+    """tools/guest.py GuestApi's call shape, answering as the pinned server (GET /server_info, the create; a delete
+    200); every
     request it is given is kept: what would travel over SSH into the guest."""
 
     def __init__(self):
@@ -387,6 +388,8 @@ class GuestApiFake:
         (request,) = requests
         if (request['method'], request['path']) == cc.INFO:
             answer = cc.SERVER_INFO
+        elif request['method'] == 'DELETE':
+            answer = {'status': 200, 'body': True}
         else:
             answer = copy.deepcopy(cc.CREATE_ANSWER)
             answer['body']['id'] = request['json']['conversation_id']
@@ -595,6 +598,64 @@ class ReachableNamesTests(unittest.TestCase):
         source = (HERE.parent / 'attempt_tokens.py').read_text(encoding='utf-8')
         planted = ast.parse(source + "\nroles.Cli(None, None).mint('u', 'n', ())\nroles.revoke_current(1, 't')\n")
         self.assertEqual(sorted(self.names(planted) & {'mint', 'Cli', 'revoke_current'}), ['Cli', 'mint', 'revoke_current'])
+
+
+class LiveCustodyDriverTests(unittest.TestCase):
+    """The prepared probe's driver (live_custody_probe.py, not run live) composed offline: step (5) over the live
+    transport on a fake GuestApi, an in-memory provider behind its read-only wrapper and the fake Gitea; and the
+    optional administrative-lifecycle step's verdict."""
+    category = 'integration'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.driver = _load('live_custody_probe', HERE / 'live_custody_probe.py')
+        cls.gt = _load('guest_transport', HERE.parent / 'guest_transport.py')
+        cls.profile = json.loads((REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'profile.json').read_text(
+            encoding='utf-8'))
+
+    def test_step_five_dispatches_delivers_and_deletes(self):
+        api, provider, gitea = GuestApiFake(), MemoryProvider(entries()), FakeGitea(views())
+        live = self.gt.GuestTransport(api, self.profile, api_login='agent')
+        out = self.driver.deliver_attempts(live, provider, PORT, http=gitea)
+        self.assertEqual(out['refused'], [])
+        self.assertEqual([(r['stage'], r['bot']) for r in out['records']],
+                         [('implement', 'aieh-bot-builder'), ('review', 'aieh-bot-reviewer')])
+        self.assertEqual(out['fingerprints'], {'builder': roles.fingerprint(TOKENS['builder']),
+                                               'reviewer': roles.fingerprint(TOKENS['reviewer'])})
+        self.assertEqual(out['provider_writes'], 0)
+        self.assertEqual(provider.reads, [roles.target('builder'), roles.target('reviewer')])
+        self.assertEqual([(r[0]['method'], r[0]['path'].split('/')[2] if r[0]['path'].count('/') > 2 else r[0]['path'])
+                          for r in api.requests],
+                         [('GET', '/server_info'), ('POST', '/api/conversations'), ('DELETE', 'conversations')] * 2)
+        self.assertEqual(out['deleted'], {'implement': 200, 'review': 200})
+        self.assertEqual(shown_tokens(json.dumps([out, api.requests])), [])
+        self.assertEqual(di._HELD_ROLE_TOKENS, {})
+
+    def test_the_read_only_provider_refuses_and_counts_writes(self):
+        readonly = self.driver.ReadOnlyProvider(MemoryProvider(entries()))
+        self.assertEqual(readonly.get(roles.target('builder'))[0], 'aieh-bot-builder')
+        for write in (lambda: readonly.set('x', 'u', 's'), lambda: readonly.delete('x')):
+            with self.assertRaises(PermissionError):
+                write()
+        self.assertEqual(readonly.writes, 2)
+
+    def test_the_administrative_lifecycle_step(self):
+        old, new = roles.fingerprint(synthetic('old')), roles.fingerprint(synthetic('new'))
+        delivered = [{'role': 'builder', 'fingerprint': new}]
+        report = {'role': 'builder', 'old_fingerprint': old, 'new_fingerprint': new, 'old_on_repository_read': 401,
+                  'revocation': {'delete_status': 204, 'next_call_status': 401, 'revoked': True},
+                  'receipt': {'read_back': True}}
+        verdict = self.driver.admin_lifecycle_verdict
+        self.assertEqual(verdict(report, delivered)[0], 'PASS')
+        self.assertEqual(verdict(dict(report, revocation='already refused by Gitea (revoked earlier)'), delivered)[0],
+                         'PASS')
+        for change in ({'revocation': {'revoked': False}}, {'old_on_repository_read': 200},
+                       {'receipt': {'read_back': False}}, {'new_fingerprint': old}):
+            with self.subTest(change=change):
+                self.assertEqual(verdict(dict(report, **change), delivered)[0], 'FAIL')
+        self.assertEqual(verdict(report, [{'role': 'builder', 'fingerprint': old}])[0], 'FAIL')
+        self.assertEqual(verdict(report, [])[0], 'UNKNOWN')
+        self.assertEqual(verdict(None, delivered)[0], 'UNKNOWN')
 
 
 if __name__ == '__main__':

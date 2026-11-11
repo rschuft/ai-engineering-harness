@@ -14104,6 +14104,437 @@ def drill(ctx, name, kind, canary_dir=None, raw=False, out_path=None, limit=None
     return out
 
 
+# ---------------------------------------------------------------- dispatcher custody (E-01.3.3)
+
+CUSTODY_PROBE_SCHEMA = 'ai-engineering-harness/profiles/custody-probe-record/v1'
+CUSTODY_CONVERSATION_ID = 'e0133b00-0000-4000-8000-00000000c0d1'
+# Fixed before any run (plan leaf E-01.3.3; the Overseer's rulings F-1 to F-3 of 2026-11-11 and the Owner's
+# correction of 2026-11-11 on the standing bot credential). Each step is PASS, FAIL or UNKNOWN; a lost or
+# unreadable answer is UNKNOWN, never PASS.
+CUSTODY_PROBE_RULE = (
+    'PASS iff every step passes: (1) the key file and its directory have the owner, group and modes the profile '
+    'declares (inspect); (2) the positive control: the key the dispatcher login reads in the guest has the '
+    'fingerprint of the host copy and of the one the root step published (inspect); (3) zero hits of the outer '
+    "key's fingerprints and of the builder's and reviewer's token fingerprints in the files and process "
+    'environments of both conversation containers, which hold no credential file (job-access-probe, its '
+    'credentials step and verdict); (4) a conversation runtime credential minted by the dispatcher answers 401 on '
+    'every key-gated route of the outer server (HTTP 401, a WebSocket refused) and 2xx on its own conversation\'s '
+    'inner server, which refuses a request without it; (5) one confirmed implement and one confirmed review '
+    "attempt each get exactly the stage's mapped bot (Gitea's own view of the token) and their delivery records "
+    'carry fingerprints only. FAIL when a step observes a violation; otherwise UNKNOWN when a step is UNKNOWN. '
+    'STOP (FAIL, the run ends): a 2xx from the runtime credential on an outer route; a credential-provider write; '
+    'a need to change the seed or the profile (the declared custody is not the bootstrap one); a new host port '
+    '(the instance\'s forwarded ports change). Revocation and re-issue of a standing bot token are not part of '
+    'this rule: they are the administrative lifecycle\'s (gitea_roles.py rotate), an optional separate step.')
+# U-01.2 verifies the runtime-credentials route's response shape; until then the probe reads it under this
+# assumption and a body of another shape makes step 4 UNKNOWN (never PASS).
+ASSUMED_CREDENTIAL_SHAPE = ('POST /api/conversations/{id}/runtime/credentials (key-gated; routes.json dispatcher '
+                            'not-used) answers 2xx with a JSON object whose "session_api_key" is the credential '
+                            '(a string of 16 to 512 URL-safe characters): ASSUMED, to be checked live (U-01.2)')
+RUNTIME_CREDENTIAL = re.compile(r'^[A-Za-z0-9_-]{16,512}$')
+
+# Run as the dispatcher's guest login: the minted runtime credential (sealed: in this script's own text on
+# standard input, never an argument) against every key-gated route of the outer server and against its own
+# conversation's inner server; the outer key is never read. Prints statuses only; the credential is redacted
+# from every answer and counted.
+RUNTIME_CREDENTIAL_SWEEP = r'''import base64, http.client, json, os, socket, struct, sys
+spec, cred = SEALED
+spec = json.loads(base64.b64decode(spec).decode('utf-8'))
+hits = 0
+def text_of(raw):
+    global hits
+    text = raw.decode('utf-8', 'replace')
+    hits += text.count(cred)
+    return text.replace(cred, '<runtime credential redacted>')
+def http_req(host, port, method, path, key):
+    conn = http.client.HTTPConnection(host, port, timeout=60)
+    try:
+        conn.request(method, path, headers={'X-Session-API-Key': key} if key else {})
+        resp = conn.getresponse()
+        return {'status': resp.status, 'text': text_of(resp.read(1 << 14))[:120]}
+    except OSError as exc:
+        return {'error': type(exc).__name__}
+    finally:
+        conn.close()
+def frame(op, payload):
+    mask = os.urandom(4)
+    return bytes([0x80 | op, 0x80 | len(payload)]) + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+def ws(host, port, path):
+    out = {}
+    try:
+        s = socket.create_connection((host, port), timeout=60)
+    except OSError as exc:
+        return {'error': type(exc).__name__}
+    try:
+        s.sendall(('GET ' + path + ' HTTP/1.1\r\nHost: ' + host + '\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                   'Sec-WebSocket-Key: ' + base64.b64encode(os.urandom(16)).decode() + '\r\n'
+                   'Sec-WebSocket-Version: 13\r\n\r\n').encode())
+        buf = b''
+        while b'\r\n\r\n' not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        head, _, data = buf.partition(b'\r\n\r\n')
+        line = head.split(b'\r\n')[0].decode('latin-1').split()
+        out['handshake'] = int(line[1]) if len(line) > 1 and line[1].isdigit() else None
+        if out['handshake'] == 101:
+            s.sendall(frame(1, json.dumps({'type': 'auth', 'session_api_key': cred}).encode()))
+            while len(data) < 2:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            if len(data) >= 2:
+                n = data[1] & 0x7f
+                while len(data) < 2 + n:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                out['opcode'] = data[0] & 0x0f
+                if out['opcode'] == 8 and n >= 2:
+                    out['close_code'] = struct.unpack('!H', data[2:4])[0]
+    except OSError as exc:
+        out['error'] = type(exc).__name__
+    finally:
+        s.close()
+    return out
+outer, inner = spec['outer'], spec['inner']
+out = {'http': [], 'ws': []}
+for method, path in spec['http']:
+    out['http'].append({'method': method, 'path': path,
+                        'with_credential': http_req(outer[0], outer[1], method, path, cred)})
+for path in spec['ws']:
+    out['ws'].append({'path': path, 'first_message_credential': ws(outer[0], outer[1], path)})
+out['inner'] = {'with_credential': http_req(inner[0], inner[1], 'GET', inner[2], cred),
+                'without': http_req(inner[0], inner[1], 'GET', inner[2], None)}
+out['credential_occurrences'] = hits
+print(json.dumps(out, sort_keys=True))
+'''
+
+
+def runtime_credential_of(body):
+    """The credential in a runtime-credentials answer under ASSUMED_CREDENTIAL_SHAPE, or None."""
+    value = body.get('session_api_key') if isinstance(body, dict) else None
+    return value if isinstance(value, str) and RUNTIME_CREDENTIAL.match(value) else None
+
+
+def inner_endpoint(profile, report, conversation_id):
+    """(host, port) of the conversation's inner server as the guest sees it: the container's one published port on
+    the declared host address (root facts), or None."""
+    hex_id = conversation_id.replace('-', '')
+    conv = conversations_config(provisioning_config(profile))
+    published = conv.get('published') or {}
+    mine = [c for c in report.get('containers') or [] if conversation_hex(c) == hex_id]
+    if len(mine) != 1:
+        return None
+    bound = (((mine[0].get('NetworkSettings') or {}).get('Ports') or {}).get(published.get('container_port'))) or []
+    ports = [b.get('HostPort') for b in bound if isinstance(b, dict) and b.get('HostIp') == published.get('host_ip')]
+    if len(ports) != 1 or not str(ports[0]).isdigit():
+        return None
+    return published.get('host_ip'), int(ports[0])
+
+
+def runtime_credential_spec(routes, outer, inner):
+    """The sweep's requests: every key-gated HTTP route (admission session-key) and every WebSocket route of the
+    pinned inventory at the outer listener, and its inner server's conversation count."""
+    http = [(r['method'], concrete_path(r['path'])) for r in routes['routes']
+            if r.get('admission') == 'session-key' and r['method'] != 'WEBSOCKET']
+    ws = [concrete_path(r['path']) for r in routes['routes'] if r['method'] == 'WEBSOCKET']
+    return {'outer': list(outer), 'inner': [inner[0], inner[1], '/api/conversations/count'], 'http': http, 'ws': ws}
+
+
+def runtime_credential_verdict(sweep, spec):
+    """Step 4: ('PASS' | 'FAIL' | 'UNKNOWN', detail, stop conditions). A 2xx on an outer route is a stop."""
+    if not isinstance(sweep, dict) or sweep.get('credential_occurrences') is None:
+        return 'UNKNOWN', {'reason': 'no sweep result'}, []
+    stops, unanswered, admitted = [], [], []
+    rows = {(r.get('method'), r.get('path')): (r.get('with_credential') or {}) for r in sweep.get('http') or []}
+    for method, path in spec['http']:
+        got = rows.get((method, path))
+        status = (got or {}).get('status')
+        if not isinstance(status, int):
+            unanswered.append(f'{method} {path}')
+        elif 200 <= status < 300:
+            stops.append({'stop': 'the runtime credential got 2xx on an outer route', 'route': f'{method} {path}',
+                          'status': status})
+        elif status != 401:
+            admitted.append({'route': f'{method} {path}', 'status': status})
+    ws_rows = {r.get('path'): (r.get('first_message_credential') or {}) for r in sweep.get('ws') or []}
+    for path in spec['ws']:
+        got = ws_rows.get(path)
+        if not got or ('handshake' not in got):
+            unanswered.append(f'WEBSOCKET {path}')
+        elif got.get('handshake') == 101 and got.get('close_code') != 4001:
+            stops.append({'stop': 'the runtime credential was not refused on an outer WebSocket', 'route': path,
+                          'observed': got})
+    inner = sweep.get('inner') or {}
+    with_cred = (inner.get('with_credential') or {}).get('status')
+    without = (inner.get('without') or {}).get('status')
+    detail = {'outer_http_routes': len(spec['http']), 'outer_ws_routes': len(spec['ws']),
+              'outer_not_401': admitted, 'unanswered': unanswered, 'inner': {'with_credential': with_cred,
+                                                                              'without': without},
+              'credential_occurrences': sweep.get('credential_occurrences'), 'assumed': ASSUMED_CREDENTIAL_SHAPE}
+    if stops or admitted or sweep.get('credential_occurrences') or \
+            (isinstance(with_cred, int) and not 200 <= with_cred < 300) or \
+            (isinstance(without, int) and 200 <= without < 300):
+        return 'FAIL', detail, stops
+    if unanswered or not isinstance(with_cred, int) or not isinstance(without, int):
+        return 'UNKNOWN', detail, []
+    return 'PASS', detail, []
+
+
+def custody_key_verdict(profile, inspect_record):
+    """Steps 1 and 2 from inspect's 'Agent Server secrets (custody)' check: the files' owner, group and modes as
+    declared, the dispatcher login reads the key (READABLE), and the host copy's fingerprint equals the
+    root-published one and the one read in the guest."""
+    key = provisioning_config(profile)['agent_server']['session_key']
+    checks = [c for p in (inspect_record or {}).get('properties') or [] for c in p.get('checks') or []
+              if c.get('check') == 'Agent Server secrets (custody)']
+    if len(checks) != 1 or not isinstance(checks[0].get('observed'), dict):
+        unknown = {'reason': 'inspect gave no custody check'}
+        return ('UNKNOWN', unknown), ('UNKNOWN', unknown)
+    observed = checks[0]['observed']
+    files = observed.get('files') if isinstance(observed.get('files'), dict) else {}
+    key_dir = key['guest_path'].rsplit('/', 1)[0]
+    want = {key['guest_path']: [key['owner'], key['group'], key['mode'], 'regular file'],
+            key_dir: [key['guest_dir_owner'], key['guest_dir_group'], key['guest_dir_mode'], 'directory']}
+    got = {p: files.get(p) for p in want}
+    if any(v is None for v in got.values()):
+        first = ('UNKNOWN', {'declared': want, 'observed': got})
+    else:
+        first = ('PASS' if got == want else 'FAIL', {'declared': want, 'observed': got})
+    readable = (observed.get('agent_open') or {}).get(key['guest_path'])
+    equal = (observed.get('host_copy') or {}).get('equal')
+    detail = {'dispatcher_login_open': readable, 'host_copy': observed.get('host_copy'),
+              'session_key_matches': observed.get('session_key_matches')}
+    if readable is None or equal is None:
+        second = ('UNKNOWN', detail)
+    else:
+        second = ('PASS' if readable == 'READABLE' and equal is True and observed.get('session_key_matches') is True
+                  else 'FAIL', detail)
+    return first, second
+
+
+JOB_CREDENTIALS_STEP = 'credentials by name and fingerprint inside each job'
+
+
+def custody_container_verdict(job_record, token_fingerprints):
+    """Step 3 from job-access-probe's record: its verdict, and its credentials step searched the two outer key
+    fingerprints and exactly the given bot token fingerprints, with no hit and no credential file in either
+    container."""
+    steps = [s for s in (job_record or {}).get('steps') or [] if s.get('step') == JOB_CREDENTIALS_STEP]
+    if len(steps) != 1 or not isinstance(steps[0].get('detail'), dict) or 'ok' not in steps[0]:
+        return 'UNKNOWN', {'reason': 'job-access-probe gave no credentials step'}
+    detail = steps[0]['detail']
+    searched = detail.get('searched') or {}
+    containers = detail.get('containers') if isinstance(detail.get('containers'), dict) else {}
+    hits = {cid: (c or {}).get('hits') for cid, c in containers.items() if (c or {}).get('hits')}
+    files = {cid: (c or {}).get('credential_files') for cid, c in containers.items()
+             if (c or {}).get('credential_files')}
+    out = {'job_access_probe': (job_record or {}).get('result'), 'searched': searched, 'hits': hits,
+           'credential_files': files, 'containers': len(containers)}
+    complete = len(searched.get('outer (aieh v1)') or []) == 2 and \
+        sorted(searched.get('gitea (sha256 prefix)') or []) == sorted(token_fingerprints) and len(containers) == 2
+    if hits or files:
+        return 'FAIL', out
+    if not complete or steps[0].get('ok') is not True:
+        return ('FAIL' if steps[0].get('ok') is False and complete else 'UNKNOWN'), out
+    return ('PASS' if (job_record or {}).get('result') == 'PASS' else 'FAIL'), out
+
+
+DELIVERY_KEYS = {'format', 'operationKey', 'attemptId', 'stage', 'role', 'bot', 'entry', 'credential', 'scopes',
+                 'fingerprint'}
+STAGE_BOTS = {'implement': ('builder', 'aieh-bot-builder'), 'review': ('reviewer', 'aieh-bot-reviewer')}
+
+
+def attempt_deliveries_verdict(deliveries):
+    """Step 5: one confirmed implement and one review attempt, each delivered exactly its stage's bot, the
+    records fingerprint-only (the keys of role-token-delivery/v1, a sha256:<16 hex> fingerprint, no run of 40
+    hex digits but the commit ids of the operation key)."""
+    if not isinstance(deliveries, dict) or not isinstance(deliveries.get('records'), list):
+        return 'UNKNOWN', {'reason': 'no delivery records'}
+    records, problems = deliveries['records'], []
+    by_stage = {}
+    for r in records:
+        if not isinstance(r, dict) or set(r) != DELIVERY_KEYS:
+            problems.append('a record is not exactly role-token-delivery/v1')
+            continue
+        by_stage.setdefault(r['stage'], []).append(r)
+        if (r['role'], r['bot']) != STAGE_BOTS.get(r['stage'], (None, None)):
+            problems.append(f"{r['stage']} got {r['bot']}")
+        if not GITEA_FINGERPRINT.match(str(r['fingerprint'])):
+            problems.append(f"{r['stage']}: not a fingerprint")
+        text = json.dumps({k: v for k, v in r.items() if k != 'operationKey'})
+        if re.search(r'[0-9a-f]{40}', text):
+            problems.append(f"{r['stage']}: a token-shaped value in the record")
+    if sorted(by_stage) != ['implement', 'review'] or any(len(v) != 1 for v in by_stage.values()):
+        problems.append(f'stages delivered: {sorted((s, len(v)) for s, v in by_stage.items())}')
+    if deliveries.get('refused'):
+        problems.append(f"refused: {deliveries['refused']}")
+    return ('FAIL' if problems else 'PASS'), {'records': records, 'problems': problems}
+
+
+def custody_verdict(steps, stop_conditions):
+    """The run's verdict under CUSTODY_PROBE_RULE from the steps' verdicts."""
+    verdicts = [s.get('verdict') for s in steps]
+    if stop_conditions or 'FAIL' in verdicts:
+        return 'FAIL'
+    if not steps or any(v != 'PASS' for v in verdicts):
+        return 'UNKNOWN'
+    return 'PASS'
+
+
+def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, inspect_fn=None,
+                  job_access_fn=None, ssh_fn=None):
+    """custody-probe (plan leaf E-01.3.3; PREPARED, NOT RUN) on a running provisioned instance, under
+    CUSTODY_PROBE_RULE, fixed before any run. ``attempts_fn(transport)`` runs the dispatch chain for one implement
+    and one review attempt over the dispatch module's live transport and delivers each stage's token
+    (integrations/dispatch/tests/live_custody_probe.py supplies it, with a credential provider that refuses every
+    write); it returns {'records': [...], 'fingerprints': {role: fp}, 'refused': [...], 'provider_writes': n}. In
+    order: (5) the attempts; (1, 2) inspect; (3) job-access-probe with the delivered tokens' fingerprints; (4) a
+    disposable conversation, its runtime credential minted through the dispatcher's channel and swept in the
+    guest, the conversation deleted; then the host-port check. ``channels(record) -> (api, facts)``, ``ssh_fn``,
+    ``inspect_fn`` and ``job_access_fn`` stand in for the guest in tests."""
+    if attempts_fn is None:
+        raise Refused('REFUSED', 'custody-probe runs from integrations/dispatch/tests/live_custody_probe.py '
+                      '(the dispatch chain dispatches and delivers the attempts)')
+    idir = ctx.instance_dir(name)
+    _, record = running_instance(ctx, name)
+    if not record.get('provisioning'):
+        raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    out_file = None
+    if out_path:
+        out_file = Path(out_path).resolve()
+        if os.path.lexists(out_file) or not out_file.parent.is_dir() or \
+                inside(out_file, ctx.repo) or inside(out_file, idir):
+            raise Refused('REFUSED', f'--out {out_path}: must be a new file in an existing '
+                          'directory, outside the checkout and the instance directory')
+    profile = ctx.profile
+    gt = dispatch_transport()
+    ports_before = dict(record.get('ports') or {})
+    steps, stop_conditions, memo = [], [], {}
+    t0, started = time.time(), utc_now()
+    try:
+        gt.declared_custody(profile)
+    except gt.TransportError as exc:
+        stop_conditions.append({'stop': 'a change of the seed or the profile would be needed', 'detail': str(exc)})
+
+    def default_channels(rec):
+        ssh = Ssh(profile, idir, rec['ports']['ssh'])
+        return GuestApi(ssh, profile), GuestFacts(ssh, profile)
+    channels = channels or default_channels
+    ssh = (ssh_fn or (lambda rec: Ssh(profile, idir, rec['ports']['ssh'])))(record)
+    inspect_fn = inspect_fn or (lambda: inspect(ctx, name))
+    job_access_fn = job_access_fn or (lambda fps: job_access_probe(ctx, name, token_fingerprints=[
+        f'{role}={fp}' for role, fp in sorted(fps.items())]))
+    api, facts = channels(record)
+    caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError,
+              gt.TransportError)
+
+    def run(step, func):
+        if stop_conditions:
+            steps.append({'step': step, 'verdict': 'UNKNOWN', 'skipped': 'a stop condition'})
+            return
+        s = time.time()
+        try:
+            verdict, detail = func()
+        except caught as exc:  # a lost answer is UNKNOWN, never PASS
+            verdict, detail = 'UNKNOWN', {'error': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}
+        steps.append({'step': step, 'verdict': verdict, 'seconds': round(time.time() - s, 1), 'detail': detail})
+        log(f'custody-probe: {step}: {verdict}')
+
+    def attempts_step():
+        transport = gt.GuestTransport(api, profile, api_login=GUEST_API_LOGIN)
+        deliveries = attempts_fn(transport)
+        memo['fingerprints'] = dict((deliveries or {}).get('fingerprints') or {})
+        if (deliveries or {}).get('provider_writes'):
+            stop_conditions.append({'stop': 'a credential-provider write', 'count': deliveries['provider_writes']})
+        verdict, detail = attempt_deliveries_verdict(deliveries)
+        return verdict, dict(detail, transport_calls=transport.calls)
+
+    def key_steps():
+        record_ = inspect_fn()
+        memo['key'] = custody_key_verdict(profile, record_)
+        return memo['key'][0]
+
+    def container_step():
+        fps = memo.get('fingerprints') or {}
+        if sorted(fps) != ['builder', 'reviewer']:
+            return 'UNKNOWN', {'reason': 'the bot token fingerprints of step 5 are missing'}
+        return custody_container_verdict(job_access_fn(fps), sorted(fps.values()))
+
+    def credential_step():
+        routes, problems = load_routes(ctx)
+        body, _, _ = _fixture(ctx)
+        server = provisioning_config(profile)['agent_server']['listener']
+        created, = _call(api, {'method': 'POST', 'path': '/api/conversations', 'timeout': 600,
+                               'json': dict(body, conversation_id=CUSTODY_CONVERSATION_ID)})
+        memo['created'] = _status_ok(created)
+        if not memo['created']:
+            return 'UNKNOWN', {'create': created.get('status') or created.get('error')}
+        minted, = _call(api, {'method': 'POST', 'timeout': 120,
+                              'path': f'/api/conversations/{CUSTODY_CONVERSATION_ID}/runtime/credentials'})
+        credential = runtime_credential_of(minted.get('body')) if _status_ok(minted) else None
+        if credential is None:
+            return 'UNKNOWN', {'mint': minted.get('status') or minted.get('error'), 'assumed': ASSUMED_CREDENTIAL_SHAPE}
+        inner = inner_endpoint(profile, facts(), CUSTODY_CONVERSATION_ID)
+        if inner is None or problems:
+            return 'UNKNOWN', {'inner': inner, 'inventory_problems': problems}
+        spec = runtime_credential_spec(routes, (server['address'], server['port']), inner)
+        encoded = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        result = ssh.run(['python3', '-'], input_text=f'SEALED = ({encoded!r}, {credential!r})\n'
+                         + RUNTIME_CREDENTIAL_SWEEP, timeout=1800)
+        try:
+            sweep = json.loads(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            sweep = None
+        memo['credential'] = credential
+        del credential
+        verdict, detail, stops = runtime_credential_verdict(sweep, spec)
+        stop_conditions.extend(stops)
+        return verdict, dict(detail, mint_status=minted.get('status'))
+
+    def cleanup():
+        if not memo.get('created'):
+            return
+        deleted, = _call(api, {'method': 'DELETE', 'path': f'/api/conversations/{CUSTODY_CONVERSATION_ID}',
+                               'timeout': 300})
+        memo['deleted'] = deleted.get('status')
+
+    run('(5) one confirmed implement and one review attempt, each its mapped bot, fingerprints only', attempts_step)
+    run('(1) key file custody as declared (inspect)', key_steps)
+    second = memo.get('key', (None, ('UNKNOWN', {'reason': 'inspect did not answer'})))[1]
+    steps.append({'step': '(2) positive control: the dispatcher login reads the key; its fingerprint equals the '
+                  'host copy and the root-published one (inspect)', 'verdict': second[0], 'detail': second[1]})
+    run('(3) no outer key or bot token fingerprint in either container (job-access-probe)', container_step)
+    try:
+        run('(4) the runtime credential: 401 on every key-gated outer route, 2xx only on its inner server',
+            credential_step)
+    finally:
+        try:
+            cleanup()
+        except caught as exc:
+            memo['deleted'] = getattr(exc, 'code', type(exc).__name__)
+    _, after = running_instance(ctx, name)
+    if dict(after.get('ports') or {}) != ports_before:
+        stop_conditions.append({'stop': 'a new host port', 'before': ports_before, 'after': after.get('ports')})
+    out = {'schema': CUSTODY_PROBE_SCHEMA, 'operation': 'custody-probe', 'plan_leaf': 'E-01.3.3',
+           'labels': labels(profile), 'profile': profile['name'], 'instance': name, 'rule': CUSTODY_PROBE_RULE,
+           'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
+           'result': custody_verdict(steps, stop_conditions), 'stop_conditions': stop_conditions,
+           'conversation_deleted': memo.get('deleted'), 'steps': steps}
+    if memo.get('credential') and memo['credential'] in json.dumps(out, default=str):
+        raise Refused('SECRET', 'the custody-probe record would hold the runtime credential: not written')
+    memo.pop('credential', None)
+    out['record'] = write_record(idir, 'custody-probe', out)
+    if out_file is not None:
+        write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
+        out['out'] = str(out_file)
+    return out
+
+
 def defective_catalogue(catalogue, control_ids):
     """A copy of the catalogue whose named positive controls attempt a read that cannot succeed
     (proof item 1: an injected defective control), with the record of each replacement."""

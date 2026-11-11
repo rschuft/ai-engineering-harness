@@ -1227,6 +1227,30 @@ defaults them.
   restart series (on the qualified host only),
   [`evidence/E-01.4.3-start-race.md`](../evidence/E-01.4.3-start-race.md).
 
+- `custody_probe` (plan leaf E-01.3.3; **prepared, not run**) checks the dispatcher's custody
+  on a running provisioned guest under its decision rule, fixed before any run
+  (`CUSTODY_PROBE_RULE`). It runs from
+  [`integrations/dispatch/tests/live_custody_probe.py`](../integrations/dispatch/tests/live_custody_probe.py)
+  (`--profile <dir> --state-dir <dir> --name <name> [--out <file>] [--rotate-report <file>]`),
+  which supplies the dispatch chain; there is no Task target. Its steps: (5) one `implement`
+  and one `review` attempt dispatched over the live transport, each delivered exactly its
+  mapped bot from the credential provider read only, records with fingerprints only; (1, 2)
+  `inspect`'s key-file custody and its positive control (the dispatcher login reads the key,
+  whose fingerprint equals the host copy's and the root-published one); (3) `job-access-probe`
+  with the delivered tokens' fingerprints: no outer key or bot token fingerprint in either
+  container; (4) a disposable conversation's runtime credential, minted through the
+  dispatcher's channel and swept in the guest (sealed on standard input): `401` on every
+  key-gated outer route and a WebSocket refused, `2xx` only on its own inner server. A lost
+  answer is UNKNOWN, never PASS. A 2xx from that credential on an outer route, a
+  credential-provider write, a profile or seed change and a new host port are stops. The
+  runtime-credentials answer is read under an assumed shape (`ASSUMED_CREDENTIAL_SHAPE`, a
+  `session_api_key` string) that U-01.2 verifies; another shape makes step (4) UNKNOWN.
+  `--rotate-report` adds the optional administrative-lifecycle step, outside the routine
+  rule: the Owner's own `gitea_roles.py rotate ROLE` report shows the old token refused with
+  its receipt read back, and the run delivered the new token. Offline tests:
+  `tools/tests/test_custody_probe.py` and `LiveCustodyDriverTests` in
+  `integrations/dispatch/tests/test_attempt_tokens.py`.
+
 Each operation prints one JSON object. The first real boot cycles are in
 [`evidence/F-03.2.2b-guest-lifecycle.md`](../evidence/F-03.2.2b-guest-lifecycle.md);
 the exchange and surface-test cycles (F-03.3.1) are in
