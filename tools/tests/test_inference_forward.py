@@ -396,11 +396,13 @@ class ForwardCommand(ProcessLedger, ForwardBase):
             with self.assertRaises(guest.Refused) as cm:
                 guest.inference_forward(self.ctx, name, action, broker=FakeBroker())
             self.assertIn('--inference', str(cm.exception))
-        with self.assertRaises(guest.Refused):
+        with self.assertRaises(guest.Refused) as cm:
             guest.inference_forward(self.ctx, 'inst-absent', 'status')
+        self.assertIn('no such instance', str(cm.exception))
         name, _ = self.instance()
-        with self.assertRaises(guest.Refused):
-            guest.inference_forward(self.ctx, name, 'restart')
+        with self.assertRaises(guest.Refused) as cm:
+            guest.inference_forward(self.ctx, name, 'restart', broker=FakeBroker())
+        self.assertIn('--action must be one of', str(cm.exception))
         bare = json.loads(json.dumps(PROFILE))
         bare['network']['inference_composition']['forward_session']['record'] = 'C:/x.json'
         with self.assertRaises(guest.Refused) as cm:
@@ -499,6 +501,7 @@ class ForwardCommand(ProcessLedger, ForwardBase):
             self.start(name, mode='silent', ceiling=0.2)
         self.assertIn('no establishment within', cm.exception.detail['reason'])
         self.join_holders()
+        self.assertEqual([box['rc'] for _, box in self.threads], [1, 1])
         self.assertFalse(self.record_path(idir).exists())
         self.assertIn('not established', (idir / guest.FORWARD_LOG).read_text(encoding='utf-8'))
 
@@ -529,6 +532,23 @@ class ForwardCommand(ProcessLedger, ForwardBase):
                                         FakeSsh(self.script))
             self.assertEqual(cm.exception.code, 'FORWARD_FAILED')
         self.assertEqual(killed, ['kill'])
+
+    def test_the_holder_removes_only_its_own_record(self):
+        """When its session ends, the holder leaves a record that names another ssh process, even one
+        with its own holder id (from the mutation check)."""
+        name, idir = self.instance()
+        session = self.start(name)['session']
+        other = dict(session, pid=session['pid'] + 4)
+        self.record_path(idir).write_text(json.dumps(other), encoding='utf-8')
+        handle = guest.WinProcess(session['pid'])
+        try:
+            handle.terminate()
+            handle.wait(30)
+        finally:
+            handle.close()
+        self.join_holders()
+        self.assertEqual(json.loads(self.record_path(idir).read_text(encoding='utf-8')), other)
+        self.record_path(idir).unlink()
 
     def test_the_holder_refuses_a_second_record(self):
         name, idir = self.instance()
@@ -693,6 +713,47 @@ class TokenScriptAgainstTheBroker(unittest.TestCase):
         login = self.request(None, {'routes': [{'method': 'GET', 'path': '/'}],
                                     'auth': {'header': 'authorization', 'scheme': None}}, None)
         self.assertEqual((login['status'], login['refusal']), (401, 'TOKEN_MISSING'))
+
+
+class BrokerAccessAndForwardControl(unittest.TestCase):
+    """The dispatcher's hold on the broker (its ports, its control client, the refusals) and the
+    token step's hold on the forward session, without a broker or a process (from the mutation
+    check)."""
+
+    def test_broker_access(self):
+        client = mock.Mock()
+        client.status.return_value = {'listeners': {}}
+        access = guest.BrokerAccess({'control_port': 18431, 'inference_port': 18432}, client)
+        self.assertEqual(access.ports, BROKER_PORTS)
+        self.assertIs(access.client, client)
+        self.assertEqual(access.call('status'), {'listeners': {}})
+        ic = guest.inference_control()
+        client.grant.side_effect = ic.ControlError('GRANT_UNKNOWN', 'x', broker_code=True, status=404)
+        with self.assertRaises(guest.Refused) as cm:
+            access.call('grant', 'sha256:' + '0' * 16)
+        self.assertEqual((cm.exception.code, cm.exception.detail), ('BROKER', {'code': 'GRANT_UNKNOWN',
+                                                                              'status': 404}))
+        own = guest.BrokerAccess({'control_port': 18431, 'inference_port': 18432})
+        self.assertIsInstance(own.client, ic.ControlClient)
+        self.assertEqual(own.client.port, 18431)
+        for raw in (None, {'control_port': 18431}, {'control_port': 18431, 'inference_port': 18432,
+                                                    'token': 'x'}):
+            with self.assertRaises(guest.Refused) as cm:
+                guest.BrokerAccess(raw, client)
+            self.assertEqual(cm.exception.code, 'BROKER_CONFIG')
+        with mock.patch.object(ic, 'managed_component', return_value=dict(BROKER_PORTS)) as managed:
+            self.assertEqual(guest.BrokerAccess(client=client).ports, BROKER_PORTS)
+        managed.assert_called_once_with()
+
+    def test_forward_control(self):
+        ctx = types.SimpleNamespace(profile=PROFILE, instance_dir=lambda name: Path('inst') / name)
+        control = guest.ForwardControl(ctx, 'abc', 'ACCESS')
+        with mock.patch.object(guest, 'forward_state', return_value={'held': True}) as state, \
+                mock.patch.object(guest, 'inference_forward', side_effect=lambda *a, **k: (a, k)):
+            self.assertEqual(control.status(), {'held': True})
+            self.assertEqual(control.stop(), ((ctx, 'abc', 'stop'), {}))
+            self.assertEqual(control.start(), ((ctx, 'abc', 'start'), {'broker': 'ACCESS'}))
+        state.assert_called_once_with(PROFILE, Path('inst') / 'abc')
 
 
 class ForwardCli(ForwardBase):

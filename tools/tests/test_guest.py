@@ -6293,7 +6293,10 @@ class TokenPlane:
                   'routes': [{'method': 'POST', 'path': '/v1/messages'}],
                   'auth': {'header': 'x-api-key', 'scheme': None}, 'upstream': 'http://127.0.0.1:1'}
         if method == 'status':
-            return {'families': [dict(family, ready=not self.faults.get('not_ready'))]}
+            other = dict(family, id='openai-chat', routes=[{'method': 'POST', 'path': '/v1/chat/completions'}],
+                         auth={'header': 'authorization', 'scheme': 'Bearer'})
+            mine = [] if self.faults.get('family_absent') else [dict(family, ready=not self.faults.get('not_ready'))]
+            return {'families': ['not a family', other] + mine}
         if method == 'revoke':
             assert args == (TOKEN_FP, 'attempt end', guest.INFERENCE_REVOKER), args
             self.revoked = True
@@ -6435,6 +6438,7 @@ class InferenceTokenStep(TempState):
                 ({'not_live': True}, {}, False),
                 ({'not_ready': True}, {}, False),
                 ({'conversation': 'another'}, {}, False),
+                ({'family_absent': True}, {}, False),
                 ({'no_forward_held': True}, {}, False)):
             with self.subTest(plane=plane_faults, faults=faults):
                 out, steps, plane, _ = self.run_probe(plane_faults, **faults)
@@ -6444,6 +6448,12 @@ class InferenceTokenStep(TempState):
                 self.assertEqual(bool(out['stop_conditions']), stops)
                 self.assertTrue(plane.revoked or plane_faults.get('not_live'))
                 self.assertTrue(steps[guest.INFERENCE_REVOKE_STEP]['ok'])
+                detail = step['detail']
+                if plane_faults.get('no_forward_held'):
+                    self.assertIn('no forward session is held', detail['error'])
+                if plane_faults.get('family_absent') or plane_faults.get('not_ready'):
+                    self.assertIn('its family ready', detail['error'])
+                    self.assertEqual(detail['family'] is None, bool(plane_faults.get('family_absent')))
 
     def test_a_leak_is_redacted_from_the_record(self):
         out, steps, _, _ = self.run_probe(leak=True)

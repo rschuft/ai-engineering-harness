@@ -34,6 +34,15 @@ class TestPortsAndTokens(unittest.TestCase):
                 self.assertEqual(caught.exception.code, code)
                 self.assertEqual(caught.exception.broker_code, code != 'CONFIG_INCOMPLETE')
 
+    def test_managed_component_is_the_config_entry(self):
+        resolution = mock.Mock(components={'inference_broker': {'control_port': 18431}, 'other': {}})
+        with mock.patch.object(IC.broker.paths, 'resolve', return_value=resolution) as resolve:
+            self.assertEqual(IC.managed_component(), {'control_port': 18431})
+        resolve.assert_called_once_with()
+        resolution.components = {}
+        with mock.patch.object(IC.broker.paths, 'resolve', return_value=resolution):
+            self.assertIsNone(IC.managed_component())
+
     def test_forward_target_is_the_inference_listener_only(self):
         ports = {'control_port': 18431, 'inference_port': 18432}
         self.assertEqual(IC.forward_target(ports), 18432)
