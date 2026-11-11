@@ -60,11 +60,13 @@ class OracleAgreement(unittest.TestCase):
         sample = {'repo one': ['HEAD~1', 'HEAD^2', '@', 'main@{0}', 'HEAD^{tree}', 'v1^{}', 'HEAD~1:README.md',
                                facts['amb4'], facts['cb4'], 'main@{99}', f'v1-1-g{facts["E"][:7]}', ':README.md'],
                   'sha256 repo': ['HEAD~1', 'HEAD^2', facts['H4'][:7]], 'linked tree': ['HEAD@{1}', 'wtb@{0}']}
+        asked = [(repo, form) for repo, forms in sample.items() for form in forms]
+        answers = dict(zip(asked, rc.concurrently([(oracle.commit, repo, form) for repo, form in asked])))
         for repo, forms in sample.items():
             batched = dict(self.live['repos'][repo]['commits'])
             for form in forms:
                 with self.subTest(repo=repo, form=form):
-                    self.assertEqual(oracle.commit(repo, form), batched[form])
+                    self.assertEqual(answers[(repo, form)], batched[form])
 
     def test_git_still_gives_the_recorded_answers(self):
         for repo, recorded in self.expected['repos'].items():
@@ -253,26 +255,41 @@ class OracleBundles(unittest.TestCase):
         cases = [('repo one', ['refs/heads/main']), ('repo one', ['refs/heads/side', 'refs/tags/v1']),
                  ('packed copy', ['refs/heads/main']), ('sha256 repo', ['refs/heads/main', 'refs/tags/s1']),
                  ('long.git', ['refs/heads/main'])]
+        # The module writes every bundle first; git's three questions about each (verify it, list
+        # its heads, write its own bundle of the same references) are then asked together, each
+        # case's answers checked in its own subTest as before.
+        written = {}
         for number, (repo, refs) in enumerate(cases):
             with self.subTest(repo=repo, refs=refs):
                 path = self.tmp / f'{number} ü.bundle'
                 with open_repo(repo) as r:
                     header = r.write_bundle(refs, path)
                 self.assertTrue(header['pack_trailer']['ok'])
-                code, err = self.oracle.bundle_verify(repo, path)
+                written[number] = (path, header, self.tmp / f'{number}-git.bundle')
+        calls = []
+        for number, (path, _header, own) in written.items():
+            repo, refs = cases[number]
+            calls += [(self.oracle.bundle_verify, repo, path), (self.oracle.bundle_heads, repo, path),
+                      (self.oracle.run, repo, 'bundle', 'create', '--quiet', str(own), *refs)]
+        found, checked = iter(rc.concurrently(calls)), []
+        for number, (path, header, own) in written.items():
+            repo, refs = cases[number]
+            verified, listed, created = next(found), next(found), next(found)
+            with self.subTest(repo=repo, refs=refs):
+                code, err = verified
                 self.assertEqual(code, 0, err)
-                code, heads = self.oracle.bundle_heads(repo, path)
+                code, heads = listed
                 self.assertEqual(code, 0)
                 self.assertEqual([line.split(' ', 1) for line in heads], header['refs'])
                 # git's own bundle of the same references carries the same header.
-                own = self.tmp / f'{number}-git.bundle'
-                created = self.oracle.run(repo, 'bundle', 'create', '--quiet', str(own), *refs)
                 self.assertEqual(created.returncode, 0, created.stderr)
                 theirs = ra.parse_bundle_header(own)
                 self.assertEqual((theirs['version'], theirs['capabilities'], theirs['prerequisites']),
                                  (header['version'], header['capabilities'], header['prerequisites']))
                 self.assertEqual(sorted(theirs['refs']), sorted(header['refs']))
                 self.assertTrue(ra.pack_trailer(own, theirs)['ok'])
+                checked.append(number)
+        self.assertEqual(checked, list(range(len(cases))), 'every case written and checked')
 
 
 class OracleTransport(unittest.TestCase):

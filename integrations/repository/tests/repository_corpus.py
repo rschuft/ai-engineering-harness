@@ -32,6 +32,7 @@ Re-record (needs git; writes both fixture files):
 import argparse
 import atexit
 import base64
+import concurrent.futures
 import gzip
 import hashlib
 import json
@@ -118,21 +119,36 @@ def ceilings():
     return [str(corpus().parent)]
 
 
+EXTRACT_WORKERS = 8
+
+
 def extract_tree(archive, destination, only=None):
     """Write the tree ARCHIVE holds below DESTINATION: directories, then files with their bytes,
-    read-only where git wrote them read-only. Every path must be a plain relative path. ONLY, when
-    given, names the top-level entries below the root to write (the root itself is written)."""
+    read-only where git wrote them read-only. Every path must be a plain relative path (checked for
+    every entry before anything is written). ONLY, when given, names the top-level entries below
+    the root to write (the root itself is written). The root's entries are written first; then
+    each top-level entry's subtree, in the archive's order, EXTRACT_WORKERS subtrees at a time
+    (no two subtrees share a path)."""
     data = json.loads(gzip.decompress(Path(archive).read_bytes()).decode('utf-8'))
     if data.get('schema') != TREE_SCHEMA:
         raise ValueError(f'{archive}: not a {TREE_SCHEMA} tree')
     destination = Path(destination)
+    first, subtrees = [], {}
     for entry in data['entries']:
         parts = PurePosixPath(entry['path']).parts
         if not parts or entry['path'].startswith('/') or any(p in ('', '.', '..') for p in parts):
             raise ValueError(f'{archive}: unsafe path {entry["path"]!r}')
         if only is not None and len(parts) > 1 and parts[1] not in only:
             continue
-        target = destination.joinpath(*parts)
+        (first if len(parts) < 2 else subtrees.setdefault(parts[1], [])).append((destination.joinpath(*parts), entry))
+    _write_entries(first)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as pool:
+        for written in [pool.submit(_write_entries, entries) for entries in subtrees.values()]:
+            written.result()
+
+
+def _write_entries(entries):
+    for target, entry in entries:
         if entry['type'] == 'dir':
             target.mkdir(parents=True, exist_ok=True)
             continue
@@ -1010,62 +1026,140 @@ class Oracle:
         return result.returncode, result.stderr.decode('utf-8', 'replace')
 
 
+ORACLE_WORKERS = 16
+
+
+class _Asked:
+    """A question asked of git at once, in the caller's thread (recording asks one at a time, in
+    order); ``result`` gives its answer, as a pool's future does."""
+
+    def __init__(self, function, *args):
+        self.answer = function(*args)
+
+    def result(self):
+        return self.answer
+
+
+def concurrently(calls):
+    """[CALL's result for each CALL] of CALLS, each ``(function, *args)``, run ORACLE_WORKERS at
+    a time (each git process asked as it would be one after another); the first call that raised
+    raises again, once every call has ended."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=ORACLE_WORKERS, thread_name_prefix='aieh-oracle') as pool:
+        asked = [pool.submit(*call) for call in calls]
+        return [answer.result() for answer in asked]
+
+
 def answers(root, facts, batch=False):
     """Every answer the expectations record, asked of git over the corpus at ROOT: the commit
     forms with one ``rev-parse --verify`` each (recording), or through ``cat-file --batch-check``
-    (BATCH, the oracle tests)."""
-    oracle = Oracle(root)
-    repos = {}
+    (BATCH, the oracle tests). Under BATCH the questions, each its own git process over a corpus
+    nothing writes (``GIT_OPTIONAL_LOCKS=0``), run ORACLE_WORKERS at a time: every launch is the
+    one asked one after another, and each answer is placed where that launch's answer was."""
+    if not batch:
+        return _answers(Oracle(root), facts, False, _Asked)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=ORACLE_WORKERS, thread_name_prefix='aieh-oracle')
+    try:
+        return _answers(Oracle(root), facts, True, pool.submit)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _answers(oracle, facts, batch, ask):
+    """``answers``: every question is ASKed first (in the recording's order), then each answer is
+    read in that order into the record."""
+    repos, pending = {}, {}
     for repo, asked in forms(facts).items():
-        names = oracle.names(repo, asked['names'])
+        names = ask(oracle.names, repo, asked['names'])
         if batch:
-            batched = oracle.commits(repo, asked['commits'])
-            commits = [[f, batched[f]] for f in asked['commits']]
+            commits = ask(oracle.commits, repo, asked['commits'])
         else:
-            commits = [[f, oracle.commit(repo, f)] for f in asked['commits']]
-        repos[repo] = {'commits': commits, 'names': [[n, names[n]] for n in asked['names']]}
+            commits = [(f, ask(oracle.commit, repo, f)) for f in asked['commits']]
+        extra = {}
         for kind in ('fallback', 'replaced'):
             # Recorded for the record, never compared with the module, which refuses these: the
             # fallback answers depend on the clock, the replaced ones on refs/replace/.
             if f'{kind}_commits' in asked and not batch:
-                found = oracle.names(repo, asked[f'{kind}_names'])
-                repos[repo][f'{kind}_commits'] = [[f, oracle.commit(repo, f)] for f in asked[f'{kind}_commits']]
-                repos[repo][f'{kind}_names'] = [[n, found[n]] for n in asked[f'{kind}_names']]
+                found = ask(oracle.names, repo, asked[f'{kind}_names'])
+                extra[kind] = ([(f, ask(oracle.commit, repo, f)) for f in asked[f'{kind}_commits']], found)
+        pending[repo] = (asked, names, commits, extra)
     # Recording asks one question per launch; the oracle tests (BATCH) ask git many questions per
     # launch where git answers them in one (F-10.4), and check those answers against the recorded.
-    for repo, cases in FILES.items():
-        found = oracle.files_batched(repo, cases) if batch else {(c, d): oracle.files(repo, c, d) for c, d in cases}
-        repos[repo]['files'] = [[c, d, found[(c, d)]] for c, d in cases]
-    for repo, cases in EXPORTS.items():
-        repos[repo]['export'] = [[c, s, oracle.export_members(repo, c, s)] for c, s in cases]
+    files = {repo: ask(oracle.files_batched, repo, cases) if batch else
+             {(c, d): ask(oracle.files, repo, c, d) for c, d in cases} for repo, cases in FILES.items()}
+    exports = {repo: [(c, s, ask(oracle.export_members, repo, c, s)) for c, s in cases]
+               for repo, cases in EXPORTS.items()}
 
     def statuses(repo, cases):
-        found = oracle.status_batched(repo, cases) if batch else \
-            {(u, tuple(p or ())): oracle.status(repo, u, p) for u, p in cases}
-        return [[u, p, found[(u, tuple(p or ()))]] for u, p in cases]
+        if batch:
+            return cases, ask(oracle.status_batched, repo, cases)
+        return cases, {(u, tuple(p or ())): ask(oracle.status, repo, u, p) for u, p in cases}
 
     def listings(repo, cases):
-        found = oracle.listings_batched(repo, cases) if batch else \
-            {(c, o, x): oracle.listing(repo, c, o, x) for c, o, x in cases}
+        if batch:
+            return cases, ask(oracle.listings_batched, repo, cases)
+        return cases, {(c, o, x): ask(oracle.listing, repo, c, o, x) for c, o, x in cases}
+
+    status = {repo: statuses(repo, cases) for repo, cases in STATUS.items()}
+    work = {repo: (ask(oracle.index, repo), listings(repo, LISTINGS)) for repo in WORK_TREES}
+    heads = {repo: ask(oracle.head_batched if batch else oracle.head, repo) for repo in HEADS}
+    tops = [(s, ask(oracle.toplevel, s)) for s in WORK_TREE_SUBJECTS]
+    case_answers = {repo: (ask(oracle.index, repo), listings(repo, asked['listing']), statuses(repo, asked['status']))
+                    for repo, asked in CASES.items()}
+    full_name_answers = {}
+    for repo, names in full_name_forms(facts).items():
+        if batch:
+            full_name_answers[repo] = (names, ask(oracle.full_names_batched, repo, names))
+        else:
+            full_name_answers[repo] = (names, {n: ask(oracle.full_name, repo, n) for n in names})
+    version = ask(oracle.version)
+
+    def answer(found):
+        """FOUND's answers: a whole dict asked at once, or a dict of single questions."""
+        return found.result() if not isinstance(found, dict) else {k: v.result() for k, v in found.items()}
+
+    for repo, (asked, names, commits, extra) in pending.items():
+        names = names.result()
+        if batch:
+            found = commits.result()
+            commits = [[f, found[f]] for f in asked['commits']]
+        else:
+            commits = [[f, oid.result()] for f, oid in commits]
+        repos[repo] = {'commits': commits, 'names': [[n, names[n]] for n in asked['names']]}
+        for kind, (kind_commits, found) in extra.items():
+            found = found.result()
+            repos[repo][f'{kind}_commits'] = [[f, oid.result()] for f, oid in kind_commits]
+            repos[repo][f'{kind}_names'] = [[n, found[n]] for n in asked[f'{kind}_names']]
+    for repo, cases in FILES.items():
+        found = answer(files[repo])
+        repos[repo]['files'] = [[c, d, found[(c, d)]] for c, d in cases]
+    for repo, rows in exports.items():
+        repos[repo]['export'] = [[c, s, members.result()] for c, s, members in rows]
+
+    def statuses_of(asked):
+        cases, found = asked
+        found = answer(found)
+        return [[u, p, found[(u, tuple(p or ()))]] for u, p in cases]
+
+    def listings_of(asked):
+        cases, found = asked
+        found = answer(found)
         return [[c, o, x, found[(c, o, x)]] for c, o, x in cases]
 
-    for repo, cases in STATUS.items():
-        repos[repo]['status'] = statuses(repo, cases)
-    for repo in WORK_TREES:
-        repos[repo]['index'] = oracle.index(repo)
-        repos[repo]['listing'] = listings(repo, LISTINGS)
-    for repo in HEADS:
-        repos[repo]['head'] = oracle.head_batched(repo) if batch else oracle.head(repo)
-    work_trees = [[s, oracle.toplevel(s)] for s in WORK_TREE_SUBJECTS]
-    cases = {}
-    for repo, asked in CASES.items():
-        cases[repo] = {'index': oracle.index(repo), 'listing': listings(repo, asked['listing']),
-                       'status': statuses(repo, asked['status'])}
+    for repo, asked in status.items():
+        repos[repo]['status'] = statuses_of(asked)
+    for repo, (index, listing) in work.items():
+        repos[repo]['index'] = index.result()
+        repos[repo]['listing'] = listings_of(listing)
+    for repo, head in heads.items():
+        repos[repo]['head'] = head.result()
+    work_trees = [[s, top.result()] for s, top in tops]
+    cases = {repo: {'index': index.result(), 'listing': listings_of(listing), 'status': statuses_of(status_)}
+             for repo, (index, listing, status_) in case_answers.items()}
     full_names = {}
-    for repo, names in full_name_forms(facts).items():
-        found = oracle.full_names_batched(repo, names) if batch else {n: oracle.full_name(repo, n) for n in names}
+    for repo, (names, found) in full_name_answers.items():
+        found = answer(found)
         full_names[repo] = [[name, found[name]] for name in names]
-    return {'git': oracle.version(), 'repos': repos, 'work_trees': work_trees, 'cases': cases,
+    return {'git': version.result(), 'repos': repos, 'work_trees': work_trees, 'cases': cases,
             'full_names': full_names}
 
 
