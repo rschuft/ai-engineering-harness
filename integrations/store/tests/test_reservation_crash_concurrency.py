@@ -70,6 +70,30 @@ def run_worker(*args):
     return result.returncode, [json.loads(line) for line in result.stdout.splitlines()], result.stderr
 
 
+def run_workers(arg_lists):
+    """``run_worker`` for each argument list, the workers started together.
+
+    Each worker is the same command ``run_worker`` runs, on a database of its own, and each
+    result is read on the worker's own exit (``communicate``), in order. The workers do not
+    share anything, so starting them together changes no worker's run, only the wall time.
+    """
+    procs = []
+    try:
+        for args in arg_lists:
+            procs.append(subprocess.Popen(worker_cmd(*args), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                          text=True, encoding='utf-8'))
+        results = []
+        for proc in procs:
+            out, err = proc.communicate(timeout=WAIT_CEILING_S)
+            results.append((proc.returncode, [json.loads(line) for line in out.splitlines()], err))
+        return results
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()  # only a worker this test started
+                proc.communicate(timeout=WAIT_CEILING_S)
+
+
 def start_worker(*args):
     return subprocess.Popen(worker_cmd(*args), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, encoding='utf-8')
@@ -94,18 +118,24 @@ def finish(procs):
 
 class StoreTestCase(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix='aieh-crash-test-'))
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.db = self.tmp / 'integration.sqlite'
-        store_mod.open_store(self.db).close()  # created and migrated; the WAL is checkpointed away
+        self.db = self.new_store()
+        self.tmp = self.db.parent
 
-    def wal_size(self):
-        wal = Path(str(self.db) + '-wal')
+    def new_store(self):
+        """A fresh store in a fresh temporary directory, removed after the test."""
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-crash-test-'))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        db = tmp / 'integration.sqlite'
+        store_mod.open_store(db).close()  # created and migrated; the WAL is checkpointed away
+        return db
+
+    def wal_size(self, db=None):
+        wal = Path(str(db or self.db) + '-wal')
         return wal.stat().st_size if wal.exists() else 0
 
-    def assert_store_verifies(self):
+    def assert_store_verifies(self, db=None):
         """Integrity, foreign keys, current migrations and the store kind's own invariants."""
-        with store_mod.open_store(self.db, apply_migrations=False) as store:
+        with store_mod.open_store(db or self.db, apply_migrations=False) as store:
             conn = store.conn
             self.assertEqual(conn.execute('PRAGMA integrity_check').fetchall(), [('ok',)])
             self.assertEqual(conn.execute('PRAGMA foreign_key_check').fetchall(), [])
@@ -174,7 +204,11 @@ class CrashMatrixTests(StoreTestCase):
     """Each row: crash a real process at one statement, reopen, and check what persisted."""
 
     def crash(self, steps, crash):
-        proc = start_worker('scripted', str(self.db), json.dumps(BASE), json.dumps(INTENT), steps, crash)
+        return self.crashed(start_worker('scripted', str(self.db), json.dumps(BASE), json.dumps(INTENT),
+                                         steps, crash), crash)
+
+    def crashed(self, proc, crash):
+        """Read a started crash worker to its crash point, end it, and check how it ended."""
         try:
             messages = []
             while True:
@@ -194,19 +228,42 @@ class CrashMatrixTests(StoreTestCase):
         return messages
 
     def test_crash_matrix(self):
+        """Every row runs its three steps, in order, on a fresh store of its own.
+
+        The rows share nothing, so each step's workers start together across the rows (the
+        crashes, then the fresh-process reads, then the re-requests), and each row's checks
+        run on its own worker's result in the same order as before. A row whose check fails
+        stops there, as it did when the rows ran one after another.
+        """
         identity = ident()
         key = identity.operation_key
-        for label, steps, crash, state, events, live in MATRIX:
-            with self.subTest(label):
-                self.setUp()  # a fresh store per row
-                messages = self.crash(steps, crash)
-                committed_in_worker = [m for m in messages if 'done' in m]
-                if state is not None and committed_in_worker:
-                    # the commits are in a WAL nobody checkpointed: they must survive the reopen
-                    self.assertGreater(self.wal_size(), 0)
+        rows = [{'label': label, 'steps': steps, 'crash': crash, 'state': state, 'events': events,
+                 'live': live, 'ok': False} for label, steps, crash, state, events, live in MATRIX]
+        procs = []
+        try:
+            for row in rows:
+                row['db'] = self.new_store()  # a fresh store per row
+                procs.append(start_worker('scripted', str(row['db']), json.dumps(BASE), json.dumps(INTENT),
+                                          row['steps'], row['crash']))
+            for row, proc in zip(rows, procs):
+                with self.subTest(row['label']):
+                    messages = self.crashed(proc, row['crash'])
+                    committed_in_worker = [m for m in messages if 'done' in m]
+                    if row['state'] is not None and committed_in_worker:
+                        # the commits are in a WAL nobody checkpointed: they must survive the reopen
+                        self.assertGreater(self.wal_size(row['db']), 0)
+                    row['ok'] = True
+        finally:
+            finish(procs)
 
-                # 1. What persisted, read by a fresh process.
-                code, [seen], err = run_worker('get', str(self.db), key)
+        # 1. What persisted, read by a fresh process.
+        rows = [row for row in rows if row['ok']]
+        results = run_workers([('get', str(row['db']), key) for row in rows])
+        for row, result in zip(rows, results):
+            row['ok'] = False
+            state, events, db = row['state'], row['events'], row['db']
+            with self.subTest(row['label']):
+                code, [seen], err = result
                 self.assertEqual(code, 0, err)
                 if state is None:
                     self.assertIsNone(seen['reservation'])
@@ -216,30 +273,39 @@ class CrashMatrixTests(StoreTestCase):
                     self.assertEqual(seen['reservation']['state'], state)
                     self.assertEqual([e['to_state'] for e in seen['events']], events)
                     self.assertEqual(seen['reservation']['state_seq'], len(events) - 1)
-                    self.assertEqual(seen['attempt']['live'], live)
+                    self.assertEqual(seen['attempt']['live'], row['live'])
                     self.assert_same_identity(seen, identity)
-                with store_mod.open_store(self.db) as store:
+                with store_mod.open_store(db) as store:
                     counts = [store.conn.execute(f'SELECT count(*) FROM {t}').fetchone()[0]
                               for t in ('attempt', 'attempt_identity', 'attempt_event')]
                 self.assertEqual(counts, [0, 0, 0] if state is None else [1, 1, len(events)])
-                self.assert_store_verifies()
+                self.assert_store_verifies(db)
+                row['ok'] = True
 
-                # 2. An identical re-request, in another process.
-                code, [again], err = run_worker('reserve-attempt', str(self.db), json.dumps(BASE),
-                                                json.dumps(INTENT))
+        # 2. An identical re-request, in another process.
+        rows = [row for row in rows if row['ok']]
+        results = run_workers([('reserve-attempt', str(row['db']), json.dumps(BASE), json.dumps(INTENT))
+                               for row in rows])
+        completed = []
+        for row, result in zip(rows, results):
+            state, db = row['state'], row['db']
+            with self.subTest(row['label']):
+                code, [again], err = result
                 self.assertEqual(code, 0, err)
                 self.assertEqual(again['outcome'], 'created' if state is None else 'existing')
                 self.assert_same_identity(again, identity)
                 self.assertEqual(again['reservation']['state'], state or 'reserved')
 
                 # 3. The claim rule after the crash: the next ordinal only once it is terminal.
-                with store_mod.open_store(self.db) as store:
+                with store_mod.open_store(db) as store:
                     if state in (None, 'reserved', 'dispatched', 'unknown'):
                         with self.assertRaises(store_mod.LiveClaim):
                             store.reserve_attempt(ident(ordinal=2), INTENT, actor='t')
                     else:
                         self.assertTrue(store.reserve_attempt(ident(ordinal=2), INTENT, actor='t').created)
-                self.assert_store_verifies()
+                self.assert_store_verifies(db)
+                completed.append(row['label'])
+        self.assertEqual(completed, [row[0] for row in MATRIX])  # every row ran every step
 
     def test_killed_writer_releases_the_lock(self):
         """A kill inside the reservation transaction leaves nothing, and the next writer proceeds."""
@@ -288,20 +354,31 @@ class RestartTests(StoreTestCase):
         self.assert_store_verifies()
 
     def test_restart_after_each_lifecycle_state(self):
-        for path in ('reserve', 'reserve,dispatched', 'reserve,dispatched,unknown',
-                     'reserve,dispatched,unknown,confirmed', 'reserve,failed'):
+        """Each path runs on a fresh store of its own, so the paths' workers start together:
+        first every path's scripted run, then every path's re-request in a new process."""
+        paths = ('reserve', 'reserve,dispatched', 'reserve,dispatched,unknown',
+                 'reserve,dispatched,unknown,confirmed', 'reserve,failed')
+        dbs = [self.new_store() for _ in paths]
+        results = run_workers([('scripted', str(db), json.dumps(BASE), json.dumps(INTENT), path, 'none')
+                               for path, db in zip(paths, dbs)])
+        ran = []
+        for path, db, (code, _, err) in zip(paths, dbs, results):
             with self.subTest(path=path):
-                self.setUp()
-                code, _, err = run_worker('scripted', str(self.db), json.dumps(BASE), json.dumps(INTENT),
-                                          path, 'none')
                 self.assertEqual(code, 0, err)
-                code, [again], err = run_worker('reserve-attempt', str(self.db), json.dumps(BASE),
-                                                json.dumps(INTENT))
+                ran.append((path, db))
+        results = run_workers([('reserve-attempt', str(db), json.dumps(BASE), json.dumps(INTENT))
+                               for _, db in ran])
+        completed = []
+        for (path, db), result in zip(ran, results):
+            with self.subTest(path=path):
+                code, [again], err = result
                 self.assertEqual(code, 0, err)
                 self.assertEqual(again['outcome'], 'existing')
                 self.assertEqual(again['reservation']['state'], path.split(',')[-1].replace('reserve', 'reserved'))
                 self.assert_same_identity(again, ident())
-                self.assert_store_verifies()
+                self.assert_store_verifies(db)
+                completed.append(path)
+        self.assertEqual(completed, list(paths))  # every path ran both steps
 
 
 # ---------------------------------------------------------------------------
