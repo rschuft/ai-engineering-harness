@@ -777,7 +777,7 @@
       "default": "off. Without the option the seed (user-data, meta-data, network-config and seed.iso), the provisioning manifest (daemon.json included) and every guest-visible file are byte-identical to an ordinary provisioned guest's: no forwarding directive, no extra guard rule, no daemon.json key, no guestfwd. The launch record carries an inference block only with the option.",
       "seed_overlay": {
         "path": "profiles/seed/inference-overlay.json",
-        "sha256": "8602aee3c4c409861f737ab307adf2c4a3df1d724b45a4268551113fc3df5091"
+        "sha256": "674bd2d9240be575d0020fb90d54f4e6157e5edbc6664603ed1ff44193021297"
       },
       "sshd": {
         "dropin": "/etc/ssh/sshd_config.d/10-aieh.conf",
@@ -816,7 +816,14 @@
       "daemon_json_rule": "Merged into provisioning.moby.daemon_json in the manifest of an opted-in guest only. bip pins the docker0 address (the endpoint's address); dns replaces Moby's public default resolvers (8.8.8.8 and 8.8.4.4, F-04.2) by the docker0 address, where nothing listens and the container guard refuses the query with an ICMP reject (UDP) or a reset (TCP) and a counter: a policy denial instead of a topology one (decision 0015 section 7.1).",
       "forward_session": {
         "record": "{instance_dir}/inference-forward.json",
-        "written_by": "the dispatcher while it holds the forward (tools/guest.py, S-03.2 slice 3); inspect reads only whether it exists",
+        "fields": ["schema", "instance", "pid", "binary", "created_epoch", "holder_pid", "started_at", "ports", "argv"],
+        "written_by": "the dispatcher while it holds the forward (tools/guest.py inference-forward start, S-03.2 slice 3): a detached holder process starts ssh, writes the record once ssh reports the remote forward established, waits on ssh and removes the record when the session ends. inspect, status and start trust a record only while its ssh process (pid, binary and creation time) still runs",
+        "command": "tools/guest.py inference-forward --action start|status|stop (start is idempotent: a live session is returned, a stale record replaced; re-establishment is an explicit re-run, never an automatic retry loop)",
+        "ssh_options": ["-N", "-v", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"],
+        "ssh_options_rule": "Added after identity.ssh_client_options, the harness's own options, the per-instance key (-i) and the instance's hostfwd port (-p), with -R <endpoint address>:<endpoint port>:127.0.0.1:<broker inference port> before the destination: ExitOnForwardFailure=yes ends ssh when sshd refuses the bind; the keepalives end it when the guest stops answering; -v gives the establishment signal",
+        "established_signal": "ssh -v's line 'remote forward success for: listen <endpoint address>:<endpoint port>, connect 127.0.0.1:<broker inference port>' (OpenSSH ssh.c, ssh_confirm_remote_forward); the holder keeps no other debug line",
+        "establish_ceiling_s": 60,
+        "broker_port": "components.inference_broker.inference_port of config.yml (integrations/inference/inference_control.py, dispatcher_ports); the control listener's port and any other port are refused; start also asks the broker's control listener for its status and refuses unless its inference listener is on that port (decision 0015 section 4.4: broker up, then the forward)",
         "status": "planned"
       },
       "job_sweep": {

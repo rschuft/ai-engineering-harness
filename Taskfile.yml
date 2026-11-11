@@ -872,11 +872,18 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py admission-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
 
   guest:job-access-probe:
-    desc: "Job daemon and management access (S-01.3.2) on a running provisioned guest: two disposable conversations; each container's docker inspect against the declared job environment; from inside each job its identity, capabilities, no_new_privs, seccomp, AppArmor, credential-like variable names, sockets and root; every engine socket; the engine API, the management listener, the published ports and the SLIRP host aliases over TCP; every privileged route at every address; the outer key and Gitea tokens by fingerprint; the S-01.4 egress sweep against the egress guard's counters; exit 0 only on PASS (python -I -B tools/guest.py job-access-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --token-fingerprint LABEL=sha256:HEX16 --out FILE])"
+    desc: "Job daemon and management access (S-01.3.2) on a running provisioned guest: two disposable conversations; each container's docker inspect against the declared job environment; from inside each job its identity, capabilities, no_new_privs, seccomp, AppArmor, credential-like variable names, sockets and root; every engine socket; the engine API, the management listener, the published ports and the SLIRP host aliases over TCP; every privileged route at every address; the outer key and Gitea tokens by fingerprint; the S-01.4 egress sweep against the egress guard's counters; on a guest with the inference composition the inference sweep, and with --attempt-token-stdin (the token on standard input) the token forwarded, refused after revocation and refused without the forward; exit 0 only on PASS (python -I -B tools/guest.py job-access-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --token-fingerprint LABEL=sha256:HEX16 --attempt-token-stdin --out FILE])"
     requires:
       vars: [PROFILE, STATE_DIR, NAME]
     cmds:
       - '{{.PYTHON}} -I -B tools/guest.py job-access-probe --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" {{.CLI_ARGS}}'
+
+  guest:inference-forward:
+    desc: "The inference forward session (S-03.2, decision 0015 sections 4.1, 4.3 and 4.4) of a guest created with create --provision --inference: start holds ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port> over the instance's hostfwd with the per-instance key (a detached holder writes <instance>/inference-forward.json while the session is held and removes it when the session ends; start is idempotent and replaces a stale record), status reads it, stop ends it; the broker's port comes from components.inference_broker and its control listener must report it first. Needs the Owner's acts A2, A3 and A4 (python -I -B tools/guest.py inference-forward --profile PROFILE --state-dir STATE_DIR --name NAME --action ACTION [-- --broker-port PORT])"
+    requires:
+      vars: [PROFILE, STATE_DIR, NAME, ACTION]
+    cmds:
+      - '{{.PYTHON}} -I -B tools/guest.py inference-forward --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}" --name "{{.NAME}}" --action "{{.ACTION}}" {{.CLI_ARGS}}'
 
   guest:containment-probe:
     desc: "Containment probes (S-02.1) on a running provisioned guest: the versioned catalogue security/containment-cases.json in one pass (admission-probe and job-access-probe unchanged; the rest from inside two further disposable conversation containers with generated canary workspaces); per case the attempt, principal, observations, positive control and verdict (PASS, FAIL or UNKNOWN) with the runtime-configuration snapshot; --sensitivity also runs the live mutations; exit 0 only on PASS (python -I -B tools/guest.py containment-probe --profile PROFILE --state-dir STATE_DIR --name NAME [-- --sensitivity --token-fingerprint LABEL=sha256:HEX16 --out FILE])"

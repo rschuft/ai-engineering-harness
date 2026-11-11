@@ -441,6 +441,14 @@ INFERENCE_OPTION = 'create --provision --inference'
 INFERENCE_SSHD_REPLACES = 'AllowTcpForwarding no'
 INFERENCE_SSHD_KEYS = ('allowtcpforwarding', 'gatewayports', 'permitlisten', 'permitopen')
 INFERENCE_FORBIDDEN_PORTS = (22, 53, 5355, 8000, 8001)
+# decision 0015 sections 4.1, 4.3 and 4.4 (S-03.2 slice 3): the forward session's record fields and
+# its ssh options. -N and -v are flags; each -o names one of the options below; ExitOnForwardFailure
+# must be yes and the two keepalives bounded integers.
+FORWARD_FIELDS = ['schema', 'instance', 'pid', 'binary', 'created_epoch', 'holder_pid', 'started_at',
+                  'ports', 'argv']
+FORWARD_FLAGS = ('-N', '-v')
+FORWARD_OPTIONS = {'ExitOnForwardFailure': ('yes',), 'ServerAliveInterval': range(1, 301),
+                   'ServerAliveCountMax': range(1, 11)}
 IPV4 = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}'
                   r'(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$')
 SWEEP_HOST = re.compile(r'^(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.')
@@ -603,6 +611,7 @@ def check_inference_composition(report, profile, root, comp, word, address, port
     if not str(session.get('record', '')).startswith('{instance_dir}/') or \
             not str(session.get('written_by', '')).strip():
         report.fail(f'{label}.forward_session: a record under {{instance_dir}} and its writer')
+    check_forward_session(report, label, session)
     sweep = comp.get('job_sweep') if isinstance(comp.get('job_sweep'), dict) else {}
     edges = sweep.get('edges') if isinstance(sweep.get('edges'), list) else []
     if not edges or not all(
@@ -620,6 +629,54 @@ def check_inference_composition(report, profile, root, comp, word, address, port
         report.fail(f'{label}.inspection: the checks of decision 0015 section 4.5')
     check_repo_file(report, root, f'{label}.seed_overlay', comp.get('seed_overlay') or {})
     check_inference_states(report, profile, root, sshd, want)
+
+
+def forward_option_problems(options):
+    """What is wrong with a forward session's ssh options (decision 0015 section 4.1): the flags -N
+    and -v and exactly the -o options FORWARD_OPTIONS names, each once and in its range;
+    ExitOnForwardFailure=yes and both keepalives present. No other flag (no -L, -D, -R, -f, -g, -A)."""
+    if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
+        return ['a list of strings']
+    problems, seen, flags, index = [], {}, [], 0
+    while index < len(options):
+        item = options[index]
+        if item == '-o' and index + 1 < len(options):
+            key, sep, value = options[index + 1].partition('=')
+            allowed = FORWARD_OPTIONS.get(key)
+            if not sep or allowed is None or key in seen or \
+                    (value not in allowed if key == 'ExitOnForwardFailure' else
+                     not (value.isdigit() and int(value) in allowed)):
+                problems.append(f'-o {options[index + 1]}')
+            seen[key] = value
+            index += 2
+            continue
+        if item not in FORWARD_FLAGS or item in flags:
+            problems.append(item)
+        flags.append(item)
+        index += 1
+    missing = [f for f in FORWARD_FLAGS if f not in flags] + \
+        [k for k in FORWARD_OPTIONS if k not in seen]
+    if missing:
+        problems.append(f'missing {missing}')
+    return problems
+
+
+def check_forward_session(report, label, session):
+    """The forward session's declared record fields, ssh options and establishment ceiling."""
+    if session.get('fields') != FORWARD_FIELDS:
+        report.fail(f'{label}.forward_session.fields: must be {FORWARD_FIELDS} (what tools/guest.py '
+                    'writes)')
+    problems = forward_option_problems(session.get('ssh_options'))
+    if problems:
+        report.fail(f'{label}.forward_session.ssh_options: -N, -v, -o ExitOnForwardFailure=yes and '
+                    f'the keepalives ServerAliveInterval (1-300) and ServerAliveCountMax (1-10), '
+                    f'nothing else: {problems}')
+    ceiling = session.get('establish_ceiling_s')
+    if isinstance(ceiling, bool) or not isinstance(ceiling, int) or not 5 <= ceiling <= 600:
+        report.fail(f'{label}.forward_session.establish_ceiling_s: an integer from 5 to 600')
+    for key in ('command', 'ssh_options_rule', 'established_signal', 'broker_port'):
+        if not isinstance(session.get(key), str) or not session[key].strip():
+            report.fail(f'{label}.forward_session.{key}: required')
 
 
 def check_inference_states(report, profile, root, sshd, want):

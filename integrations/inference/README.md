@@ -22,6 +22,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 |---|---|
 | `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line |
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
+| `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation; `127.0.0.1` only) and an attempt token's fingerprint (`token_fingerprint`) |
 | `tests/broker_support.py` | Synthetic fixtures: an in-memory credential provider, a settable clock, a fake upstream per family (`FakeUpstream`, an in-process server on an ephemeral `127.0.0.1` port) and `Rig` (a broker over a fixture store and audit directory) |
 | `tests/test_config.py` | The shipped declarations; every refusal of the declaration file and of `components.inference_broker`; the decision 0009 loader's refusal of secret-shaped keys under the component; the `config` command |
 | `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
@@ -30,6 +31,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream` |
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan |
 | `tests/test_serve.py` | `serve` end to end in the test process |
+| `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, the broker's refusal codes, an unreachable or foreign port) and its only connection, to `127.0.0.1` |
 
 ## The declared families
 
@@ -177,6 +179,20 @@ shows the fingerprint, never the key. **Not run** in this slice: the tests use a
 There is one entry, so the broker holds one provider's key at a time; a family whose `provider` is another
 id is not ready. Rotation is at the provider, then this command again and a broker restart.
 
+## The dispatcher's side (`inference_control.py`)
+
+`tools/guest.py` performs the dispatcher's role during bootstrap (decision 0013 point 1) and reaches the
+broker only through this module. `dispatcher_ports` reads `control_port` and `inference_port` through
+`load_config` (refusing what the broker refuses, and a missing port with `CONFIG_INCOMPLETE`);
+`forward_target` gives the port a forward session may target and refuses the control listener's port
+(`CONTROL_PORT_REFUSED`) and any other (`FORWARD_PORT_REFUSED`); `ControlClient` calls the control
+listener on `127.0.0.1` as it admits callers (status, `GET /v1/grants/<fingerprint>`, revocation) and
+passes the broker's refusal code on (`CONTROL_UNREACHABLE` and `CONTROL_ANSWER_INVALID` otherwise);
+`token_fingerprint` checks a token's shape (`TOKEN_SHAPE_INVALID`) and returns only its fingerprint. It
+issues nothing: the token reaches an attempt through the typed create, which is A-01.2's and E-03.1's.
+`guest.py inference-forward` (the forward session) and `job-access-probe --attempt-token-stdin` (the
+token steps) use it; see `docs/development.md`, Execution guests.
+
 ## Commands
 
 ```
@@ -214,7 +230,8 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
   provider, any model call (each an Owner act).
 - The route sets, query rules and usage extractors of all three families: provisional, written from the
   families' public shapes, not from observed traffic; they are pinned at the leaf that first runs each family.
-- The guest side (slice 2 onward): the SSH remote forward, the sshd and container-guard changes, the typed
-  create's `secrets`/LLM fields, the containment re-run.
+- The guest side: the SSH remote forward (built offline in slice 3, never run against a real ssh or guest),
+  the sshd and container-guard changes (slice 2, offline), the typed create's `secrets`/LLM fields (A-01.2,
+  E-03.1), the containment re-run; `inference_control.py` against the broker as a supervised host service.
 - Linux and macOS (the listeners' exclusive binding is Windows-specific; elsewhere the default no-reuse
   binding applies).

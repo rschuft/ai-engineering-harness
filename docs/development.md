@@ -286,7 +286,8 @@ Only what is listed as verified has been exercised.
 | `guest:provision PROFILE=… STATE_DIR=… NAME=<name>` | `python -I -B tools/guest.py provision --profile <dir> --state-dir <dir> --name <name>` | no | Guest side of provisioning (F-04.1b): transfers the stage over SFTP, triggers the seeded single-use root step and checks its `RESULT.json`. See [Execution guests](#execution-guests). |
 | `guest:conversation-smoke PROFILE=… STATE_DIR=… NAME=<name> [-- --restart --openapi <file> --canaries <dir> --out <file>]` | `python -I -B tools/guest.py conversation-smoke --profile <dir> --state-dir <dir> --name <name> [--restart] [--openapi <file>] [--canaries <dir>] [--out <file>]` | no | The contained conversation lifecycle (F-04.2) on a running provisioned guest: create the disposable Docker conversation of the pinned fixture, inspect it and its container, create it again (idempotent), read its events, stop its runtime, reopen it, optionally restart the guest and reopen again, delete it. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:admission-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --out <file>]` | `python -I -B tools/guest.py admission-probe --profile <dir> --state-dir <dir> --name <name> [--out <file>]` | no | The management API admission (S-01.3.1) on a running provisioned guest: the pinned route inventory against the running server, every route without the key and with a wrong one, the agent network's reach from inside two disposable conversation containers, the key check and the logged refusals. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
-| `guest:job-access-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --token-fingerprint LABEL=sha256:<hex16> --out <file>]` | `python -I -B tools/guest.py job-access-probe --profile <dir> --state-dir <dir> --name <name> [--token-fingerprint LABEL=sha256:<hex16>] [--out <file>]` | no | The job environment (S-01.3.2) on a running provisioned guest: from inside two disposable conversation containers, their effective hardening, every engine socket, the engine API and the host aliases over TCP, every privileged Agent Server route at every address, the management, Owner, admin and bot credentials by name and fingerprint, and the S-01.4 egress sweep (public literals, SLIRP's aliases, an unconfigured guestfwd-class address) against the egress guard's counters. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:job-access-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --token-fingerprint LABEL=sha256:<hex16> --attempt-token-stdin --out <file>]` | `python -I -B tools/guest.py job-access-probe --profile <dir> --state-dir <dir> --name <name> [--token-fingerprint LABEL=sha256:<hex16>] [--attempt-token-stdin] [--out <file>]` | no | The job environment (S-01.3.2) on a running provisioned guest: from inside two disposable conversation containers, their effective hardening, every engine socket, the engine API and the host aliases over TCP, every privileged Agent Server route at every address, the management, Owner, admin and bot credentials by name and fingerprint, and the S-01.4 egress sweep (public literals, SLIRP's aliases, an unconfigured guestfwd-class address) against the egress guard's counters. On a guest with the inference composition it adds the inference sweep, and `--attempt-token-stdin` (one attempt token on standard input, never an argument) the token steps of S-03.2. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
+| `guest:inference-forward PROFILE=… STATE_DIR=… NAME=<name> ACTION=start\|status\|stop [-- --broker-port <port>]` | `python -I -B tools/guest.py inference-forward --profile <dir> --state-dir <dir> --name <name> --action start\|status\|stop [--broker-port <port>]` | no | The inference forward session (S-03.2, decision 0015 sections 4.1, 4.3 and 4.4) of a guest created with `create --provision --inference` (refused for any other): `start` holds `ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port>` over the instance's hostfwd, with `ExitOnForwardFailure=yes`, keepalives and the per-instance key; a detached holder writes `<instance>\inference-forward.json` once ssh reports the forward and removes it when the session ends. `start` is idempotent (a held session is returned, a stale record replaced); `status` and `stop` read and end it. The port is `components.inference_broker.inference_port` (the control port and any other are refused) and the broker's control listener must report it. **Not yet verified** against a real ssh or guest: it needs the Owner's acts A2, A3 and A4. See [Execution guests](#execution-guests). |
 | `guest:containment-probe PROFILE=… STATE_DIR=… NAME=<name> [-- --sensitivity --token-fingerprint LABEL=sha256:<hex16> --out <file>]` | `python -I -B tools/guest.py containment-probe --profile <dir> --state-dir <dir> --name <name> [--sensitivity] [--token-fingerprint LABEL=sha256:<hex16>] [--out <file>]` | no | The containment probes (S-02.1) on a running provisioned guest: the versioned catalogue in one pass, reusing `admission-probe` and `job-access-probe` unchanged and running the remaining cases inside two further disposable conversation containers with generated canary workspaces; per case the attempt, principal, observations, positive control and verdict (PASS, FAIL or UNKNOWN) with the runtime-configuration snapshot. `--sensitivity` adds the live mutations. The route-present egress case needs a guest created with `--egress-falsification`. Exit 0 only on PASS. See [Execution guests](#execution-guests). |
 | `guest:host-census [-- --exclude-pid <pid> --out <file>]` | `python -I -B tools/guest.py host-census [--exclude-pid <pid>] [--out <file>]` | no | S-01.4, read only and unelevated: the harness's host listeners by PID (QEMU, the host Gitea and its proxy, the Owner host's Vite servers), each of which must be on 127.0.0.1, and the Windows Firewall profiles and rule count, recorded as disclosure (UNKNOWN when a cmdlet is refused). No profile or state directory; it changes no rule. Exit 0 only on PASS. |
 | `guest:netprobe PROFILE=… STATE_DIR=… NAME=<name>` | `<tools python> -I -B tools/guest.py netprobe --profile <dir> --state-dir <dir> --name <name>` | no | **Test only.** The F-03.3.2 network validation of profiles P7 in a disposable guest (guest root, one test `guestfwd` to a 127.0.0.1 listener, decoys). Exit 0 only on PASS. Destroy the instance afterwards. |
@@ -913,8 +914,8 @@ defaults them.
   verifies the state the launch record names: off, the ordinary drop-in, the four guard
   rules, the profile's `daemon.json` and nothing on the endpoint's port; on, the composed
   drop-in, `sshd -T`, the guard's ACCEPT in iptables only, `bip` and `dns`, and the
-  endpoint listened on by sshd exactly when a forward session is recorded
-  (`<instance>\inference-forward.json`, written by the dispatcher in a later slice).
+  endpoint listened on by sshd exactly when a forward session is held (a record
+  `<instance>\inference-forward.json` whose ssh process still runs).
   `inspect --provider-key-fingerprint sha256:<16 hex>` makes the provider key a P5
   needle (every secret-shaped run of the collection and the host files is fingerprinted);
   for an opted-in guest that check is UNKNOWN without it. `job-access-probe` on an
@@ -922,8 +923,27 @@ defaults them.
   without a token, the allow's edges (`172.17.0.1:8091`, UDP to the endpoint,
   `10.0.2.15:8090`) and the resolver (`172.17.0.1:53`) must be refused with the
   container guard's IPv4 REJECT counters rising, and a name lookup must fail; an edge
-  that answers or a name that resolves is a stop condition. The containment catalogue
+  that answers or a name that resolves is a stop condition; once from the guest's own
+  login (outside every container) the endpoint must refuse a request without a token
+  (401 `TOKEN_MISSING`: while a forward is held the token is the only admission control
+  for the guest's own processes, `nm-guest-inference`). The containment catalogue
   declares the matching cases as `planned`.
+  **The forward session (S-03.2 slice 3, offline only):** `inference-forward --action
+  start|status|stop` holds `ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port>`
+  for an opted-in instance with `ssh_client_options`, the per-instance key, the hostfwd
+  port and the forward's own options (`network.inference_composition.forward_session`:
+  `-N -v`, `ExitOnForwardFailure=yes`, keepalives). A detached holder starts ssh, writes
+  the record (pid, binary, creation time, holder pid, ports, argv) once ssh reports
+  `remote forward success`, waits on ssh and removes the record when the session ends;
+  `start` returns a held session, replaces a stale record and never retries on its own;
+  `destroy` stops a held session first and `recreate` carries the composition from the
+  launch record (it then needs `--provision`). `job-access-probe --attempt-token-stdin`
+  reads one attempt token from standard input and, from inside the token's own job, shows
+  it forwarded to the family's upstream, refused (401 `TOKEN_REVOKED`) after the probe
+  revokes it through the broker's control listener, refused (`ECONNREFUSED`) while the
+  forward is stopped and refused again after it is re-established; the token travels only
+  in a script's text on standard input and records carry its fingerprint. Both are
+  **not yet verified** against a real ssh, broker listener or guest (Owner acts A2-A4).
 - The same root step installs the OpenHands Agent Server (F-04.1 slice (c)): the release
   binary as `aieh-agent-server.service` under the no-login system user `openhands`
   (group `docker`), bound to the guest's `127.0.0.1:8000` only, configured by the

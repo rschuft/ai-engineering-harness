@@ -548,6 +548,47 @@ class Negative(unittest.TestCase):
         del self.qemu['network']['inference_composition']
         self.assertNotIn('inference', ' '.join(self.errors(self.qemu)))
 
+    def test_inference_forward_session_declarations(self):
+        """S-03.2 slice 3: the record's fields, the forward's ssh options and its ceiling."""
+        _, comp = self.inference()
+        session = comp['forward_session']
+        self.assertEqual(session['fields'], check_profile.FORWARD_FIELDS)
+        self.assertEqual(check_profile.forward_option_problems(session['ssh_options']), [])
+        for key, value, fragment in (
+                ('fields', check_profile.FORWARD_FIELDS[:-1], '.forward_session.fields'),
+                ('ssh_options', ['-N', '-v', '-o', 'ExitOnForwardFailure=no', '-o',
+                                 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3'],
+                 '-o ExitOnForwardFailure=no'),
+                ('ssh_options', session['ssh_options'] + ['-L', '1:2:3'], "'-L'"),
+                ('ssh_options', session['ssh_options'] + ['-o', 'GatewayPorts=yes'], 'GatewayPorts'),
+                ('ssh_options', session['ssh_options'][1:], "missing ['-N']"),
+                ('ssh_options', session['ssh_options'][:-2], "missing ['ServerAliveCountMax']"),
+                ('ssh_options', session['ssh_options'] + ['-N'], "['-N']"),
+                ('ssh_options', ['-N', '-v', '-o', 'ExitOnForwardFailure=yes', '-o',
+                                 'ServerAliveInterval=0', '-o', 'ServerAliveCountMax=3'],
+                 'ServerAliveInterval=0'),
+                ('ssh_options', ['-N', '-v', '-o', 'ExitOnForwardFailure=yes', '-o',
+                                 'ServerAliveInterval=x', '-o', 'ServerAliveCountMax=3'],
+                 'ServerAliveInterval=x'),
+                ('ssh_options', ['-N', '-v', '-o', 'ExitOnForwardFailure=yes', '-o',
+                                 'ServerAliveInterval=15', '-o', 'ServerAliveInterval=15', '-o',
+                                 'ServerAliveCountMax=3'], 'ServerAliveInterval=15'),
+                ('ssh_options', ['-N', '-v', '-o', 'ExitOnForwardFailure', '-o',
+                                 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3'],
+                 '-o ExitOnForwardFailure'),
+                ('ssh_options', ['-N', '-v', '-o'], "'-o'"),
+                ('ssh_options', '-N -v', 'a list of strings'),
+                ('establish_ceiling_s', 4, 'establish_ceiling_s'),
+                ('establish_ceiling_s', 601, 'establish_ceiling_s'),
+                ('establish_ceiling_s', True, 'establish_ceiling_s'),
+                ('established_signal', ' ', '.forward_session.established_signal: required'),
+                ('broker_port', None, '.forward_session.broker_port: required')):
+            saved = copy.deepcopy(session.get(key))
+            session[key] = value
+            self.assertFails(self.qemu, fragment)
+            session[key] = saved
+        self.assertEqual(self.errors(self.qemu), [])
+
     def test_inference_composition_states_from_the_pinned_overlay(self):
         """Off and on, as the generator composes them: each overlay loosening is named."""
         _, comp = self.inference()

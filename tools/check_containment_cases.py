@@ -67,7 +67,8 @@ VERDICTS = ('PASS', 'FAIL', 'UNKNOWN')
 LOCATIONS = ('container-mount-set', 'uid-permissions', 'capabilities', 'no-new-privileges',
              'seccomp', 'apparmor', 'pid-namespace', 'device-cgroup', 'masked-proc',
              'image-content', 'container-guard', 'egress-guard', 'icc', 'slirp-restrict',
-             'guest-routing', 'agent-server-key', 'key-check', 'launch-no-share')
+             'guest-routing', 'agent-server-key', 'key-check', 'launch-no-share',
+             'broker-token-admission')
 SNAPSHOT_KEYS = ('docker_inspect', 'container_guard', 'egress_guard', 'daemon', 'pins')
 REQUIREMENTS = ('egress-falsification',)
 SOURCES = ('containment-probe', 'job-access-probe', 'admission-probe')

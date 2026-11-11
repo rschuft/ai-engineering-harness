@@ -298,11 +298,15 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     guard chains carry no allow, `daemon.json` has no `bip` or `dns`, nothing listens on
     the endpoint's port and `launch.argv` has no guestfwd; on, the drop-in equals the
     composed text and `sshd -T` (root, boot facts) reports the three directives, the
-    endpoint is listened on by sshd exactly when a forward session is recorded, the
+    endpoint is listened on by sshd exactly when a forward session is held (amended
+    2026-11-11, S-03.2 slice 3: its record `{instance_dir}/inference-forward.json` names a
+    running ssh process; `tools/guest.py inference-forward` holds it), the
     container guard carries its one ACCEPT (IPv4) and the egress guard none, and the
     provider key's fingerprint is a P5 needle; from a job, the endpoint answers 401
     without a token, its edges and the resolver are refused and a name lookup fails
-    closed (`job-access-probe`).
+    closed (`job-access-probe`); from the guest's own login the endpoint refuses a request
+    without a token (the token is the only admission control there while a forward is
+    held, `nm-guest-inference`).
 
 ### P8 Identity
 - **Per instance:** a unique instance name. machine-id and SSH host keys are

@@ -134,7 +134,7 @@ changes three seeded files only:
 | Path | Change |
 |---|---|
 | `/etc/ssh/sshd_config.d/10-aieh.conf` | `AllowTcpForwarding no` becomes `AllowTcpForwarding remote`, `GatewayPorts clientspecified` and `PermitListen 172.17.0.1:8090`; local forwarding stays refused |
-| `/usr/local/sbin/aieh-container-guard` | one ACCEPT after the container guard's RETURN, IPv4 only, for new TCP from `docker0` to `172.17.0.1:8090`; installed and verified per family; the egress guard's allowlist stays empty |
+| `/usr/local/sbin/aieh-container-guard` | one ACCEPT after the container guard's RETURN, IPv4 only, for new TCP from `docker0` to `172.17.0.1:8090`; installed and verified per family; the egress guard's allowlist stays empty, and its header comment says so (the template's own comment, which still names an inference allowlist entry, is left as it is so that the default bytes do not change) |
 | `/usr/local/sbin/aieh-provision` | the boot facts gain an `inference` section: `sshd -T`'s forwarding directives |
 
 The composition's `daemon.json` keys (`bip`, `dns`) travel in the provisioning manifest.

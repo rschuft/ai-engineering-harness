@@ -875,6 +875,26 @@
       "findings": ["fd-acp-provider-auth"]
     },
     {
+      "id": "cred-inference-attempt-token",
+      "name": "Per-attempt inference token",
+      "authority": "scoped",
+      "issuer": "inference-broker",
+      "holder": "engineering-agent",
+      "manager": "management-dispatcher",
+      "readable_by": ["reviewer-agent", "guest-service-openhands", "guest-root", "bootstrap-host-agents"],
+      "storage": "Issued by the broker's control listener to the dispatcher for one attempt and returned once; the broker keeps only its sha256 digest and its fingerprint and journals the grant by fingerprint in the integration store. The dispatcher places it in the attempt's create request (an ACP agent: the create's secrets under the pinned registry entry's api_key_env_var; a native agent: the LLM settings' api_key; decision 0015 section 3.2 and amendment 1 point 2), so it is readable inside that conversation's container and persists in that conversation's record in the guest until revocation. Never in the harness's records, logs or reports (fingerprints only); never a provider key and never a role token. During bootstrap tools/guest.py, the dispatcher's stand-in, handles it in memory under the Owner's account (fd-bootstrap-shared-identity).",
+      "scope": "Inference for one attempt, on the broker's inference listener only (through the guest inference endpoint): bound to the attempt's reserved conversation, one API family, a model list, a budget of requests and usage tokens and an expiry (decision 0015 section 3.1, amendment 1 point 1).",
+      "lifetime": "One attempt: revoked at once (the next request answers 401) by the dispatcher at attempt end and on suspected exposure, definition revocation, policy revision and Owner direction, and by the broker at expiry (decision 0007 point 5), each with a revocation receipt (fingerprint, attempt, trigger, revoker) in the integration store, never the effects store; live grants end with the broker process.",
+      "rotation_revocation_owner": "management-dispatcher",
+      "status": "planned",
+      "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "integrations/inference/README.md",
+        "profiles/README.md"
+      ],
+      "findings": ["fd-acp-provider-auth", "fd-bootstrap-shared-identity", "fd-guest-inference-reach"]
+    },
+    {
       "id": "cred-owner-ui-session",
       "name": "The Owner's UI session credential to the Owner host and Integration process",
       "authority": "owner",
@@ -1299,7 +1319,7 @@
       "kind": "listener",
       "custodian": "inference-broker",
       "location": "A TCP listener on the guest's docker0 gateway address 172.17.0.1:8090, owned by the guest's sshd as a remote forward that the dispatcher holds over the management channel to the broker's inference listener (decision 0015 section 4.1); the only path out of a container, allowed by the container guard's one ACCEPT. Declared in the profile's opt-in inference composition (create --provision --inference); applying it is the Owner's guest hardening act.",
-      "credentials": ["cred-llm-provider-key"],
+      "credentials": ["cred-llm-provider-key", "cred-inference-attempt-token"],
       "status": "planned",
       "sources": ["decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md", "profiles/strong-windows-qemu-whpx/profile.json",
                   "profiles/README.md"],
@@ -1311,7 +1331,7 @@
       "kind": "listener",
       "custodian": "inference-broker",
       "location": "Host 127.0.0.1 at components.inference_broker.inference_port (config.yml), the only target of the guest inference endpoint's remote forward: inference requests under per-attempt tokens, the provider API passed through untranslated (decision 0015 sections 4.3 and 5.3). Reachable by any local process; admission by token.",
-      "credentials": ["cred-llm-provider-key"],
+      "credentials": ["cred-llm-provider-key", "cred-inference-attempt-token"],
       "status": "planned",
       "sources": [
         "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
@@ -1324,6 +1344,7 @@
       "name": "Inference broker's control listener",
       "kind": "api",
       "custodian": "inference-broker",
+      "credentials": ["cred-inference-attempt-token"],
       "location": "Host 127.0.0.1 at components.inference_broker.control_port (config.yml): issue, revoke and status of per-attempt tokens for the dispatcher; never forwarded into a guest. Same-account processes can call it, disclosed under decision 0013 point 6 (decision 0015 section 4.3).",
       "status": "planned",
       "sources": [
@@ -2123,6 +2144,19 @@
         "policy/role-tokens.json"
       ],
       "carried_to": ["S-03.1", "S-03.2", "S-03.3"]
+    },
+    {
+      "id": "fd-guest-inference-reach",
+      "kind": "limit",
+      "title": "While a forward is held, the guest's own processes reach the inference endpoint",
+      "detail": "Found at S-03.2 slice 2 and recorded at slice 3. The guest inference endpoint (172.17.0.1:8090) is a listener of the guest's sshd while the dispatcher holds the forward session. The container guard filters traffic from docker0 only, so any process of the guest itself (the operator login agent, root, the guest services) can connect to it while a forward is held, and reaches the broker's inference listener on the host; the per-attempt token is then the only admission control (without one the broker answers 401). nm-guest-management (deny, observed) describes SLIRP's restrict=on, which this forward does not cross, and decision 0015 does not name this path. No guest process holds an attempt token unless it reads one from a conversation container or record (guest-root and guest-service-openhands can; the operator login cannot read them). Disclosed, not prevented: nm-guest-inference and the containment case egr-inference-guest-login (planned) observe it at the guest qualification.",
+      "refs": ["endpoint-inference", "guest-login-agent", "guest-root", "guest-service-openhands", "cred-inference-attempt-token"],
+      "citations": [
+        "evidence/S-03.2-slice2-guest-composition.md",
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "policy/network-matrix.json"
+      ],
+      "carried_to": ["S-03.2"]
     }
   ]
 }

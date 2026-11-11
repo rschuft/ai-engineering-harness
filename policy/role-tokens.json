@@ -494,7 +494,8 @@
         ],
         "credentials": [
           "cred-gitea-bot-planner",
-          "cred-conversation-keys"
+          "cred-conversation-keys",
+          "cred-inference-attempt-token"
         ]
       },
       "denied": [
@@ -552,6 +553,12 @@
           "issuer": "guest-service-openhands",
           "delivered_by": null,
           "delivery": "Passed by the Agent Server's Docker runtime as environment values into the conversation container."
+        },
+        {
+          "credential": "cred-inference-attempt-token",
+          "issuer": "inference-broker",
+          "delivered_by": "management-dispatcher",
+          "delivery": "Issued per attempt by the inference broker alone (decision 0007 point 4) on its control listener to the dispatcher, before the create: bound to the attempt's reserved conversation, one API family, a model list, a budget and an expiry, returned once and kept by the broker as its digest only. The dispatcher places it in the create request (an ACP agent: the create's secrets under the pinned registry's api_key_env_var, with the endpoint under base_url_env_var; a native agent: the LLM settings' api_key), so the attempt's agent can read it by design (decision 0015 sections 3.2 and 3.3, amendment 1 point 2). It is issued by the broker and is not a role token: no role token is ever sent to the broker and no provider credential is ever a role token. Records carry its fingerprint only."
         }
       ],
       "revocation": [
@@ -586,6 +593,23 @@
           "rotation_owner": "guest-service-openhands",
           "findings": [
             "fd-container-shares-service-uid"
+          ]
+        },
+        {
+          "credential": "cred-inference-attempt-token",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "inference-broker",
+          "method": "The dispatcher asks the broker's control listener to revoke the grant by its fingerprint at attempt end and on any other trigger, and the broker revokes it itself at expiry; revocation is immediate (the next request answers 401) and leaves a receipt (fingerprint, attempt, trigger, revoker) in the integration store, never in the effects store (decision 0015 section 3.3).",
+          "rotation_owner": "management-dispatcher",
+          "findings": [
+            "fd-acp-provider-auth"
           ]
         }
       ],
@@ -625,7 +649,8 @@
         ],
         "credentials": [
           "cred-gitea-bot-builder",
-          "cred-conversation-keys"
+          "cred-conversation-keys",
+          "cred-inference-attempt-token"
         ]
       },
       "denied": [
@@ -692,6 +717,12 @@
           "issuer": "guest-service-openhands",
           "delivered_by": null,
           "delivery": "Passed by the Agent Server's Docker runtime as environment values into the conversation container."
+        },
+        {
+          "credential": "cred-inference-attempt-token",
+          "issuer": "inference-broker",
+          "delivered_by": "management-dispatcher",
+          "delivery": "Issued per attempt by the inference broker alone (decision 0007 point 4) on its control listener to the dispatcher, before the create: bound to the attempt's reserved conversation, one API family, a model list, a budget and an expiry, returned once and kept by the broker as its digest only. The dispatcher places it in the create request (an ACP agent: the create's secrets under the pinned registry's api_key_env_var, with the endpoint under base_url_env_var; a native agent: the LLM settings' api_key), so the attempt's agent can read it by design (decision 0015 sections 3.2 and 3.3, amendment 1 point 2). It is issued by the broker and is not a role token: no role token is ever sent to the broker and no provider credential is ever a role token. Records carry its fingerprint only."
         }
       ],
       "revocation": [
@@ -726,6 +757,23 @@
           "rotation_owner": "guest-service-openhands",
           "findings": [
             "fd-container-shares-service-uid"
+          ]
+        },
+        {
+          "credential": "cred-inference-attempt-token",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "inference-broker",
+          "method": "The dispatcher asks the broker's control listener to revoke the grant by its fingerprint at attempt end and on any other trigger, and the broker revokes it itself at expiry; revocation is immediate (the next request answers 401) and leaves a receipt (fingerprint, attempt, trigger, revoker) in the integration store, never in the effects store (decision 0015 section 3.3).",
+          "rotation_owner": "management-dispatcher",
+          "findings": [
+            "fd-acp-provider-auth"
           ]
         }
       ],
@@ -764,7 +812,8 @@
           "cap-submit-review"
         ],
         "credentials": [
-          "cred-gitea-bot-reviewer"
+          "cred-gitea-bot-reviewer",
+          "cred-inference-attempt-token"
         ]
       },
       "denied": [
@@ -817,6 +866,12 @@
           "issuer": "gitea-site-admin",
           "delivered_by": "management-dispatcher",
           "delivery": "Delivered per attempt by the dispatcher into the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+        },
+        {
+          "credential": "cred-inference-attempt-token",
+          "issuer": "inference-broker",
+          "delivered_by": "management-dispatcher",
+          "delivery": "Issued per attempt by the inference broker alone (decision 0007 point 4) on its control listener to the dispatcher, before the create: bound to the attempt's reserved conversation, one API family, a model list, a budget and an expiry, returned once and kept by the broker as its digest only. The dispatcher places it in the create request (an ACP agent: the create's secrets under the pinned registry's api_key_env_var, with the endpoint under base_url_env_var; a native agent: the LLM settings' api_key), so the attempt's agent can read it by design (decision 0015 sections 3.2 and 3.3, amendment 1 point 2). It is issued by the broker and is not a role token: no role token is ever sent to the broker and no provider credential is ever a role token. Records carry its fingerprint only."
         }
       ],
       "revocation": [
@@ -835,6 +890,23 @@
           "rotation_owner": "management-dispatcher",
           "findings": [
             "fd-gitea-version-docs"
+          ]
+        },
+        {
+          "credential": "cred-inference-attempt-token",
+          "triggers": [
+            "attempt-end",
+            "suspected-exposure",
+            "definition-revocation",
+            "policy-revision",
+            "expiry",
+            "owner-direction"
+          ],
+          "revoker": "inference-broker",
+          "method": "The dispatcher asks the broker's control listener to revoke the grant by its fingerprint at attempt end and on any other trigger, and the broker revokes it itself at expiry; revocation is immediate (the next request answers 401) and leaves a receipt (fingerprint, attempt, trigger, revoker) in the integration store, never in the effects store (decision 0015 section 3.3).",
+          "rotation_owner": "management-dispatcher",
+          "findings": [
+            "fd-acp-provider-auth"
           ]
         }
       ],
@@ -1163,7 +1235,8 @@
       "custodian_of": [
         "cred-gitea-bot-planner",
         "cred-gitea-bot-builder",
-        "cred-gitea-bot-reviewer"
+        "cred-gitea-bot-reviewer",
+        "cred-inference-attempt-token"
       ],
       "denied": [
         "op-effect-apply",

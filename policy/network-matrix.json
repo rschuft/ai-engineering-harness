@@ -1665,6 +1665,47 @@
       ]
     },
     {
+      "id": "nm-guest-inference",
+      "name": "The guest's own processes to the inference broker through the guest inference endpoint, while a forward session is held",
+      "from": "td-guest-control",
+      "to": "td-management",
+      "verdict": "disclosed",
+      "protocol": "tcp from a guest process outside every container (the operator login agent, root, a guest service) to the guest inference endpoint 172.17.0.1:8090, the guest sshd's remote-forward listener, carried by the dispatcher-held SSH session to the broker's inference listener on host 127.0.0.1",
+      "endpoint": "endpoint-inference",
+      "credentials": [
+        "cred-inference-attempt-token"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "none in the guest: the container guard filters traffic from docker0 only and the listener is the guest's own sshd, so any guest process connects while the dispatcher holds a forward session (SLIRP's restrict=on, the enforcement of nm-guest-management, is not crossed: the session is the management channel's own)",
+          "kind": "disclosure",
+          "where": "guest"
+        },
+        {
+          "mechanism": "the broker admits only a live per-attempt token in its family's auth header (decision 0015 section 3), so a guest process without one is refused (401); the listener exists only while a forward session is held",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "evidence/S-03.2-slice2-guest-composition.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "builds_at": "S-03.2",
+      "verify_at": "S-03.2",
+      "owner_act": true,
+      "findings": [
+        "fd-guest-inference-reach"
+      ],
+      "inspection": [
+        "planned: S-03.2 (guest.py job-access-probe on a guest created with create --provision --inference, its forward held: the inference sweep's request from the guest login without a token; the containment case egr-inference-guest-login)"
+      ],
+      "notes": "Found at S-03.2 slice 2 and recorded at slice 3; decision 0015 does not name this path. nm-guest-management stays the deny of every other path from the guest's own processes to the host (SLIRP restrict=on)."
+    },
+    {
       "id": "nm-guest-privileged-effect",
       "name": "The guest's own processes to the executor",
       "from": "td-guest-control",

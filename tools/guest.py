@@ -1920,6 +1920,9 @@ def destroy(ctx, name):
     links = reparse_points(idir)
     if links:
         raise Refused('REFUSED', f'{idir} holds links; destroy follows none: {links}')
+    forward = forward_state(ctx.profile, idir)
+    if forward['held']:                    # decision 0015 section 4.4: the forward ends with the guest
+        result['inference_forward'] = forward_stop(ctx.profile, idir, forward)
     expected = launch_binary(ctx.profile, ctx.values)['path']
     proc = running_process(idir, expected)
     if proc:
@@ -1939,12 +1942,35 @@ def destroy(ctx, name):
     return result
 
 
+def recreate_inference(ctx, name, provision):
+    """Whether recreate carries the inference composition: an instance created with --inference is
+    recreated with it (decision 0015: never dropped silently), which needs --provision; an instance
+    without a launch record (absent) carries nothing. Read before destroy."""
+    path = Path(ctx.instance_dir(name)) / 'launch.json'
+    if not path.is_file():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise Refused('REFUSED', f'{path}: cannot read the launch record ({exc}); recreate does '
+                      'not drop a composition it cannot see') from None
+    if not isinstance(record, dict) or not inference_opted(record):
+        return False
+    if not provision:
+        raise Refused('REFUSED', f'{name} was created with create --provision --inference: recreate '
+                      'carries the inference composition and needs --provision')
+    return True
+
+
 def recreate(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, provision=False):
     """destroy, then create with the same name and profile (with --provision, the new
-    instance carries the provisioning manifest again; the provision operation follows)."""
+    instance carries the provisioning manifest again; the provision operation follows). The
+    inference composition is carried from the launch record (recreate_inference); the
+    --egress-falsification mark is not (a test aid, dropped as before)."""
+    inference = recreate_inference(ctx, name, provision)
     destroyed = destroy(ctx, name)
-    created = create(ctx, name, ready_timeout, canaries, provision=True) if provision \
-        else create(ctx, name, ready_timeout, canaries)
+    created = create(ctx, name, ready_timeout, canaries, provision=True, inference=inference) \
+        if provision else create(ctx, name, ready_timeout, canaries)
     return {'operation': 'recreate', 'labels': labels(ctx.profile), 'instance': name,
             'destroy': destroyed, 'create': created}
 
@@ -3377,9 +3403,10 @@ def inspect(ctx, name, canaries=None, provider_key_fingerprint=None):
     obs['p5'] = collect_p5(ssh, idir, record, canaries, secret_scan=p5_scan,
                            provider_key_fingerprint=provider_key_fingerprint)
     if inference_opted(record):
-        forward = inference_forward_path(ctx.profile, idir)
-        obs['inference_forward'] = {'path': None if forward is None else posix(forward),
-                                    'recorded': forward is not None and forward.is_file()}
+        # a record counts only while its ssh process runs (a dropped session claims nothing)
+        forward = forward_state(ctx.profile, idir)
+        obs['inference_forward'] = {'path': forward['path'], 'recorded': forward['held'],
+                                    'stale': forward['stale']}
     if record.get('provisioning'):
         mine = json.dumps(obs, sort_keys=True, default=str).encode('utf-8')
         obs['agent_server_secrets'] = {
@@ -6189,6 +6216,374 @@ def inference_forward_path(profile, instance_dir):
     return Path(instance_dir) / record[len('{instance_dir}/'):]
 
 
+# ---------------------------------------------------------------- inference forward session (S-03.2)
+#
+# Decision 0015 sections 4.1, 4.3 and 4.4 (S-03.2 slice 3): the dispatcher holds the guest's inference
+# endpoint as an SSH remote forward over the management hostfwd, ssh -N -R <endpoint>:127.0.0.1:<broker
+# inference port>, with the per-instance key, the profile's ssh_client_options and the forward's own
+# options (network.inference_composition.forward_session). A detached holder process starts ssh, writes
+# {instance_dir}/inference-forward.json once ssh reports the forward established, waits on ssh and removes
+# the record when the session ends; every reader trusts a record only while its ssh process runs. start is
+# idempotent (a live session is returned, a stale record replaced); re-establishment is an explicit re-run,
+# never an automatic retry loop. Nothing here runs without an Owner act: a forward is the guest-to-host path
+# (A3), on a guest with the composition (A4), to the broker's host listener (A2).
+
+FORWARD_SCHEMA = 'ai-engineering-harness/profiles/inference-forward/v1'
+FORWARD_OPERATION = 'inference-forward'
+FORWARD_ACTIONS = ('start', 'status', 'stop')
+FORWARD_MARGIN_S = 15          # the parent's ceiling beyond the holder's own establishment ceiling
+FORWARD_STOP_WAIT_S = 30       # ceiling for ssh, then its holder, to exit after stop
+FORWARD_KEEP_LINES = 40        # ssh's non-debug stderr lines the holder keeps for its log
+FORWARD_LOG = 'inference-forward.log'
+_MANAGED = object()
+
+
+def inference_control():
+    """integrations/inference/inference_control.py, the dispatcher's side of the broker (its ports,
+    its control client, the token fingerprint), loaded once."""
+    module = sys.modules.get('aieh_inference_control')
+    if module is None:
+        path = REPO / 'integrations' / 'inference' / 'inference_control.py'
+        spec = importlib.util.spec_from_file_location('aieh_inference_control', path)
+        module = sys.modules['aieh_inference_control'] = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['aieh_inference_control']
+            raise
+    return module
+
+
+class BrokerAccess:
+    """The broker as the dispatcher reaches it: its two listener ports (components.inference_broker of
+    config.yml, through the broker's own loader) and a client of its control listener. ``component``
+    and ``client`` stand in for config.yml and the listener in tests (never the managed ones)."""
+
+    def __init__(self, component=_MANAGED, client=None):
+        ic = inference_control()
+        try:
+            raw = ic.managed_component() if component is _MANAGED else component
+            self.ports = ic.dispatcher_ports(raw)
+            self.client = client or ic.ControlClient(self.ports['control_port'])
+        except (ic.ControlError, ic.broker.paths.PathsError) as exc:
+            raise Refused('BROKER_CONFIG', f'components.inference_broker: {exc}') from None
+
+    def call(self, method, *args):
+        ic = inference_control()
+        try:
+            return getattr(self.client, method)(*args)
+        except ic.ControlError as exc:
+            raise Refused('BROKER', f'the broker\'s control listener: {exc}',
+                          {'code': exc.code, 'status': exc.status}) from None
+
+
+def forward_config(profile):
+    return inference_config(profile).get('forward_session') or {}
+
+
+def forward_process(session):
+    """The recorded ssh process of a forward session while it runs (its pid, binary and creation time as
+    recorded), else None."""
+    if os.name != 'nt':
+        raise Refused('REFUSED', 'process control is implemented for Windows only')
+    try:
+        proc = WinProcess(int(session['pid']))
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    try:
+        if proc.alive() and same_path(proc.image(), session['binary']) and \
+                abs(proc.created() - float(session['created_epoch'])) < 1.0:
+            return proc
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    proc.close()
+    return None
+
+
+def forward_state(profile, instance_dir):
+    """{'path', 'session', 'held', 'stale'} of an instance's forward-session record, changing nothing:
+    held while the record names a running ssh process; stale (why) for a record whose process is gone
+    or that is not a record of this profile's shape."""
+    path = inference_forward_path(profile, instance_dir)
+    out = {'path': None if path is None else posix(path), 'session': None, 'held': False,
+           'stale': None}
+    if path is None or not path.is_file():
+        return out
+    try:
+        session = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(session, dict) or session.get('schema') != FORWARD_SCHEMA or \
+                sorted(session) != sorted(forward_config(profile).get('fields') or []):
+            raise ValueError('not a forward-session record of this profile')
+    except (OSError, ValueError) as exc:
+        out['stale'] = f'unreadable: {exc}'[:300]
+        return out
+    out['session'] = session
+    proc = forward_process(session)
+    if proc is None:
+        out['stale'] = 'its ssh process is gone'
+    else:
+        proc.close()
+        out['held'] = True
+    return out
+
+
+def remove_stale_forward(profile, instance_dir, state):
+    """Remove a stale forward-session record (never a held one); returns what was removed."""
+    if state['held'] or state['stale'] is None:
+        return None
+    try:
+        Path(state['path']).unlink()
+    except FileNotFoundError:
+        pass
+    return {'why': state['stale'], 'session': state['session']}
+
+
+def forward_argv(profile, ssh, broker_port):
+    """The forward session's ssh command line: the per-instance channel (ssh_client_options, the
+    harness's options, -i, -p), the forward's own options, -R, then the destination."""
+    address, port = inference_endpoint(profile)
+    options = forward_config(profile).get('ssh_options')
+    problems = load_profile_checker().forward_option_problems(options)
+    if problems or address is None or port is None:
+        raise Refused('REFUSED', f'the profile declares no usable forward session: {problems}')
+    base = ssh.argv('agent', [])               # checks the key, known_hosts and ssh -G first
+    return base[:-1] + list(options) + ['-R', f'{address}:{port}:{LOOPBACK}:{broker_port}',
+                                        base[-1]]
+
+
+def write_json_new(path, data):
+    """Write a JSON file that appears whole or not at all, and never over an existing one."""
+    path = Path(path)
+    tmp = path.with_name(f'{path.name}.{secrets.token_hex(4)}.partial')
+    write_json_exclusive(tmp, data)
+    try:
+        os.rename(tmp, path)                      # Windows: FileExistsError when it exists
+    except BaseException:
+        tmp.unlink()
+        raise
+
+
+def forward_hold(spec_text, out=None, pid=None):
+    """inference-forward-hold (internal, started detached by inference-forward start): start ssh, wait
+    for its establishment line (or its end, or the ceiling), write the record, report one JSON line on
+    standard output, then wait on ssh and remove the record when the session ends. ``pid`` stands
+    in for the holder's own process id in tests that run it in a thread."""
+    out = out or sys.stdout
+    holder_pid = os.getpid() if pid is None else pid
+    spec = json.loads(base64.b64decode(spec_text).decode('utf-8'))
+    path = Path(spec['record'])
+    want = f"remote forward success for: listen {spec['listen']}, connect {spec['connect']}"
+    proc = subprocess.Popen(spec['argv'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE)
+    decided, kept, state = threading.Event(), [], {'established': False}
+
+    def drain():
+        for raw in proc.stderr:
+            line = raw.decode('utf-8', 'replace').rstrip('\r\n')
+            if not state['established'] and want in line:
+                state['established'] = True
+                decided.set()
+            elif not line.startswith('debug') and len(kept) < FORWARD_KEEP_LINES:
+                kept.append(line)
+        decided.set()                             # end of stderr: ssh has ended
+
+    def report(result, **extra):
+        out.write(json.dumps(dict(extra, result=result), sort_keys=True) + '\n')
+        out.flush()
+
+    def keep_log(message):
+        with open(spec['log'], 'a', encoding='utf-8', newline='\n') as handle:
+            handle.write(f'{utc_now()} {message}\n' + ''.join(f'  ssh: {k}\n' for k in kept))
+        kept.clear()
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    in_time = decided.wait(spec['ceiling'])
+    if not state['established']:
+        if proc.poll() is None:
+            proc.kill()
+        rc = proc.wait()
+        reader.join(FORWARD_STOP_WAIT_S)
+        proc.stderr.close()
+        report('failed', rc=rc, stderr=kept[-20:],
+               reason='ssh ended before the forward was established' if in_time
+               else f'no establishment within {spec["ceiling"]} s')
+        keep_log(f'ssh {proc.pid}: not established (rc {rc})')
+        return 1
+    handle = WinProcess(proc.pid)
+    try:
+        created = handle.created()
+    finally:
+        handle.close()
+    session = {'schema': FORWARD_SCHEMA, 'instance': spec['instance'], 'pid': proc.pid,
+               'binary': spec['argv'][0], 'created_epoch': created, 'holder_pid': holder_pid,
+               'started_at': utc_now(), 'ports': spec['ports'], 'argv': spec['argv']}
+    try:
+        write_json_new(path, session)
+    except FileExistsError:
+        proc.kill()
+        proc.wait()
+        reader.join(FORWARD_STOP_WAIT_S)
+        proc.stderr.close()
+        report('already-held')
+        return 1
+    report('held', session=session)
+    keep_log(f'ssh {proc.pid}: forward established ({spec["listen"]} -> {spec["connect"]})')
+    rc = proc.wait()
+    reader.join(FORWARD_STOP_WAIT_S)
+    proc.stderr.close()
+    try:
+        current = json.loads(path.read_text(encoding='utf-8'))
+        if current.get('pid') == proc.pid and current.get('holder_pid') == holder_pid:
+            path.unlink()
+    except (OSError, ValueError):
+        pass
+    keep_log(f'ssh {proc.pid}: session ended (rc {rc}); its record is removed')
+    return 0
+
+
+def forward_spawn(spec, cwd):
+    """The detached holder of one forward session (the dispatcher's process for its whole life)."""
+    text = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+    argv = [sys.executable, '-I', '-B', str(Path(__file__).resolve()), 'inference-forward-hold',
+            '--spec', text]
+    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+    return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, cwd=str(cwd), close_fds=True,
+                            creationflags=flags)
+
+
+def read_line_within(stream, ceiling):
+    """One line of ``stream``, or None when none arrives within ``ceiling`` seconds (a bound on a hang:
+    the line is the holder's own completion signal)."""
+    box = []
+    reader = threading.Thread(target=lambda: box.append(stream.readline()), daemon=True)
+    reader.start()
+    reader.join(ceiling)
+    return box[0] if box else None
+
+
+def forward_start(ctx, name, idir, record, state, broker_port=None, broker=None, spawn=None,
+                  ssh=None):
+    """Hold the forward session of one opted-in instance (idempotent)."""
+    if state['held']:
+        return {'result': 'held', 'existing': True, 'session': state['session']}
+    ic = inference_control()
+    access = broker or BrokerAccess()
+    try:
+        target = ic.forward_target(access.ports, broker_port)
+    except ic.ControlError as exc:
+        raise Refused('REFUSED', str(exc), {'code': exc.code}) from None
+    status = access.call('status')
+    if ((status.get('listeners') or {}).get('inference') or {}).get('port') != target:
+        raise Refused('BROKER_NOT_READY', f'the broker\'s inference listener is not on '
+                      f'{LOOPBACK}:{target} (decision 0015 section 4.4: the broker first)',
+                      {'listeners': status.get('listeners')})
+    if not running_process(idir, record['binary']):
+        raise Refused('NOT_RUNNING', f'{name} is not running')
+    replaced = remove_stale_forward(ctx.profile, idir, state)
+    ssh = ssh or Ssh(ctx.profile, idir, record['ports']['ssh'])
+    argv = forward_argv(ctx.profile, ssh, target)
+    address, port = inference_endpoint(ctx.profile)
+    ceiling = forward_config(ctx.profile).get('establish_ceiling_s')
+    spec = {'argv': argv, 'record': str(inference_forward_path(ctx.profile, idir)),
+            'log': str(idir / FORWARD_LOG), 'instance': name, 'listen': f'{address}:{port}',
+            'connect': f'{LOOPBACK}:{target}', 'ceiling': ceiling,
+            'ports': {'endpoint': {'address': address, 'port': port},
+                      'broker': {'address': LOOPBACK, 'port': target},
+                      'hostfwd': {'address': LOOPBACK, 'port': record['ports']['ssh']}}}
+    holder = (spawn or forward_spawn)(spec, idir.parent)
+    line = read_line_within(holder.stdout, ceiling + FORWARD_MARGIN_S)
+    try:
+        reply = json.loads(line) if line else None
+    except ValueError:
+        reply = None
+    finally:
+        holder.stdout.close()
+    if not isinstance(reply, dict):
+        holder.kill()
+        raise Refused('FORWARD_FAILED', f'the holder reported nothing within '
+                      f'{ceiling + FORWARD_MARGIN_S} s; see {FORWARD_LOG}')
+    if reply.get('result') == 'held':
+        return {'result': 'held', 'existing': False, 'replaced_stale': replaced,
+                'session': reply.get('session')}
+    if reply.get('result') == 'already-held':
+        again = forward_state(ctx.profile, idir)
+        if again['held']:
+            return {'result': 'held', 'existing': True, 'session': again['session']}
+    raise Refused('FORWARD_FAILED', f'the forward was not established: {reply.get("reason")}', reply)
+
+
+def forward_stop(profile, idir, state):
+    """End a held forward session: terminate its ssh; its holder removes the record (or this does)."""
+    if not state['held']:
+        return {'result': 'not-held', 'removed_stale': remove_stale_forward(profile, idir, state)}
+    session, path = state['session'], Path(state['path'])
+    proc = forward_process(session)
+    exited = True
+    if proc is not None:
+        try:
+            proc.terminate()
+            exited = proc.wait(FORWARD_STOP_WAIT_S)
+        finally:
+            proc.close()
+    try:
+        holder = WinProcess(int(session['holder_pid']))
+    except (OSError, ValueError, TypeError):
+        holder = None
+    if holder is not None:
+        try:
+            holder.wait(FORWARD_STOP_WAIT_S)       # it removes the record, then exits
+        finally:
+            holder.close()
+    removed_by = 'holder'
+    if path.is_file():
+        try:
+            current = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            current = {}
+        if current.get('pid') == session.get('pid'):
+            try:
+                path.unlink()
+                removed_by = 'stop'
+            except (FileNotFoundError, PermissionError):
+                pass                              # the holder has it in hand (Windows sharing)
+    return {'result': 'stopped' if exited else 'still-running', 'session': session,
+            'record_removed_by': removed_by}
+
+
+def inference_forward(ctx, name, action, broker_port=None, broker=None, spawn=None, ssh=None):
+    """inference-forward --action start|status|stop (decision 0015 sections 4.1, 4.3 and 4.4) for an
+    instance created with create --provision --inference; refused for any other. ``broker``,
+    ``spawn`` and ``ssh`` stand in for the broker, the holder and the channel in tests."""
+    if action not in FORWARD_ACTIONS:
+        raise Refused('REFUSED', f'--action must be one of {", ".join(FORWARD_ACTIONS)}')
+    idir = ctx.instance_dir(name)
+    if not idir.is_dir():
+        raise Refused('REFUSED', f'{name}: no such instance')
+    record = read_launch_record(idir)
+    if not inference_opted(record):
+        raise Refused('REFUSED', f'{name} was not created with create --provision --inference: it '
+                      'has no inference endpoint to forward')
+    if inference_forward_path(ctx.profile, idir) is None:
+        raise Refused('REFUSED', 'the profile declares no forward-session record')
+    state = forward_state(ctx.profile, idir)
+    result = {'operation': FORWARD_OPERATION, 'action': action, 'labels': labels(ctx.profile),
+              'instance': name}
+    if action == 'status':
+        result.update(result='held' if state['held'] else 'not-held', session=state['session'],
+                      removed_stale=remove_stale_forward(ctx.profile, idir, state))
+    elif action == 'stop':
+        result.update(forward_stop(ctx.profile, idir, state))
+    else:
+        result.update(forward_start(ctx, name, idir, record, state, broker_port, broker, spawn,
+                                    ssh))
+    result['record'] = write_record(idir, FORWARD_OPERATION, result)
+    if result['result'] == 'still-running':
+        raise Refused('STOP_FAILED', f'{name}: the forward\'s ssh process still runs', result)
+    return result
+
+
 def guard_rules_for(profile, record, tool):
     """The container guard's declared rules for one family: the inference composition's
     ACCEPT after the RETURN in its families when the instance opted in."""
@@ -7558,11 +7953,14 @@ CONVERSATION_SMOKE_SCHEMA = 'ai-engineering-harness/profiles/conversation-smoke-
 # line, never printed: any occurrence in a response is counted and redacted). Prints one
 # JSON line: the responses (status, JSON body or text) and the redaction count.
 API_PROBE = r'''import base64, errno, http.client, json, sys, time
-key_path, host, port, spec = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+key_path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+# sealed (decision 0015): the requests and one secret arrive in this script's own text on standard
+# input (SEALED, prepended), never as an argument; the secret is redacted from every answer
+spec, sealed = (sys.argv[4], None) if len(sys.argv) > 4 else SEALED
 requests = json.loads(base64.b64decode(spec).decode('utf-8'))
 with open(key_path, encoding='ascii') as handle:
     key = handle.read().strip()
-out, hits = [], 0
+out, hits, sealed_hits = [], 0, 0
 for req in requests:
     headers = {'Accept': 'application/json'}
     if req.get('auth', True):
@@ -7581,6 +7979,9 @@ for req in requests:
         entry['status'] = resp.status
         hits += text.count(key)
         text = text.replace(key, '<OH_SESSION_API_KEYS_0 redacted>')
+        if sealed:
+            sealed_hits += text.count(sealed)
+            text = text.replace(sealed, '<sealed secret redacted>')
         try:
             value = json.loads(text) if text else None
         except ValueError:
@@ -7596,12 +7997,26 @@ for req in requests:
         conn.close()
     entry['seconds'] = round(time.monotonic() - t0, 2)
     out.append(entry)
-print(json.dumps({'responses': out, 'session_key_occurrences': hits}, sort_keys=True))
+print(json.dumps(dict({'responses': out, 'session_key_occurrences': hits},
+                      **({'sealed_occurrences': sealed_hits} if sealed else {})), sort_keys=True))
 '''
+# A secret's shape the sealed form accepts: one word of URL-safe characters (an attempt token), so
+# that its repr in the script text is a plain quoted literal.
+SEALED_SECRET = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
+
+
+def sealed_api_probe(spec, secret):
+    """API_PROBE with the requests and one secret in its own text (SEALED), for standard input."""
+    if not isinstance(secret, str) or not SEALED_SECRET.match(secret):
+        raise Refused('REFUSED', 'the sealed secret is not one URL-safe word')
+    return f'SEALED = ({spec!r}, {secret!r})\n' + API_PROBE
 
 
 class GuestApi:
-    """The Agent Server API, called as agent on the guest's loopback over SSH."""
+    """The Agent Server API, called as agent on the guest's loopback over SSH. With ``secret``
+    (sealed), the requests and that secret travel in the script's text on ssh's standard input,
+    never in an argument of ssh or of the guest's python3, and the secret is redacted from the
+    answers (sealed_occurrences counts it)."""
 
     def __init__(self, ssh, profile):
         server = provisioning_config(profile)['agent_server']
@@ -7609,10 +8024,13 @@ class GuestApi:
         self.args = [server['session_key']['guest_path'], server['listener']['address'],
                      str(server['listener']['port'])]
 
-    def __call__(self, requests, timeout=900):
+    def __call__(self, requests, timeout=900, secret=None):
         spec = base64.b64encode(json.dumps(requests).encode('utf-8')).decode('ascii')
-        result = self.ssh.run(['python3', '-'] + self.args + [spec], input_text=API_PROBE,
-                              timeout=timeout)
+        if secret is None:
+            argv, script = ['python3', '-'] + self.args + [spec], API_PROBE
+        else:
+            argv, script = ['python3', '-'] + self.args, sealed_api_probe(spec, secret)
+        result = self.ssh.run(argv, input_text=script, timeout=timeout)
         try:
             return json.loads(result.stdout.strip().splitlines()[-1])
         except (IndexError, ValueError):
@@ -9332,6 +9750,10 @@ results.append(dict(lookup(spec['name']), proto='dns', host=spec['name'], port=N
 print('AIEH-JOB-JSON ' + json.dumps({'results': results}, sort_keys=True))
 '''
 INFERENCE_ENDPOINT_WHAT = 'inference endpoint (no token)'
+# the guest's own login, outside every container (S-03.2 slice 3, nm-guest-inference): the
+# container guard filters docker0 only, so while a forward is held the attempt token is the
+# endpoint's only admission control for the guest's own processes
+INFERENCE_GUEST_WHAT = 'inference endpoint from the guest login (no token)'
 INFERENCE_LOOKUP_WHAT = 'name lookup'
 INFERENCE_LOOKUP_NAME = 'deb.debian.org'
 INFERENCE_JOB_STEP = 'inference endpoint, its edges and the resolver from inside each job ' \
@@ -9369,6 +9791,12 @@ def inference_job_verdict(results, before, after):
         what, outcome = r.get('what'), r.get('outcome')
         if what == INFERENCE_ENDPOINT_WHAT:
             ok = outcome == 'answered' and r.get('status') == 401
+        elif what == INFERENCE_GUEST_WHAT:
+            ok = outcome == 'answered' and r.get('status') == 401 and \
+                r.get('refusal') == 'TOKEN_MISSING'
+            if outcome == 'answered' and r.get('status') != 401:
+                stop.append({'condition': 'the inference endpoint admitted the guest login without '
+                                          'a token', 'status': r.get('status')})
         elif what == INFERENCE_LOOKUP_WHAT:
             ok = outcome == 'not-resolved'
             if outcome == 'resolved':
@@ -9388,6 +9816,132 @@ def inference_job_verdict(results, before, after):
         after - before >= refused
     ok = bool(rows) and all(r['ok'] for r in rows) and counters['incremented'] and not stop
     return ok, rows, stop, counters
+
+
+# Run inside the conversation container of the token's conversation (decision 0015 sections 3.3 and
+# 4.4, S-03.2's proof): one request to the inference endpoint in the token family's route and auth
+# header shape. The token arrives on standard input (a bash builtin's pipe, never an argument) and is
+# never printed; the answer is reported by status, the broker's refusal code, its size and its sha256.
+# spec: base64 JSON {endpoint, method, path, header, scheme, body, with_token, timeout, max_bytes}.
+JOB_INFERENCE_TOKEN = r'''import base64, errno, hashlib, json, socket, sys, time
+spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+token = sys.stdin.readline().strip() if spec['with_token'] else ''
+host, port = spec['endpoint']
+body = json.dumps(spec['body']).encode('utf-8')
+head = ['%s %s HTTP/1.1' % (spec['method'], spec['path']), 'Host: %s:%d' % (host, port),
+        'Content-Type: application/json', 'Content-Length: %d' % len(body), 'Connection: close']
+if token:
+    head.append('%s: %s' % (spec['header'], spec['scheme'] + ' ' + token if spec['scheme'] else token))
+out = {'status': None, 'refusal': None}
+t0 = time.monotonic()
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(spec['timeout'])
+try:
+    s.connect((host, port))
+    s.sendall(('\r\n'.join(head) + '\r\n\r\n').encode('ascii') + body)
+    data = b''
+    while len(data) < spec['max_bytes']:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+    top, _, payload = data.partition(b'\r\n\r\n')
+    line = top.split(b'\r\n', 1)[0].decode('latin-1').split(' ')
+    out['status'] = int(line[1]) if len(line) > 1 and line[1].isdigit() else None
+    out['outcome'] = 'answered' if out['status'] is not None else 'connected'
+    try:
+        refusal = json.loads(payload.decode('utf-8')).get('aieh_refusal')
+        out['refusal'] = refusal.get('code') if isinstance(refusal, dict) else None
+    except (ValueError, AttributeError):
+        pass
+    out['body_bytes'] = len(payload)
+    out['body_sha256'] = hashlib.sha256(payload).hexdigest()
+    out['token_in_answer'] = bool(token) and token.encode('ascii') in data
+except socket.timeout:
+    out['outcome'] = 'timeout'
+except OSError as exc:
+    out['outcome'] = errno.errorcode.get(exc.errno, str(exc.errno)) if exc.errno else type(exc).__name__
+finally:
+    s.close()
+out['seconds'] = round(time.monotonic() - t0, 2)
+print('AIEH-JOB-JSON ' + json.dumps(out, sort_keys=True))
+'''
+INFERENCE_TOKEN_STEP = 'inference with the attempt token from inside its job: forwarded, refused ' \
+                       'after revocation, refused without the forward (decision 0015)'
+INFERENCE_REVOKE_STEP = 'revoke the attempt token at the probe\'s end (decision 0015 section 3.3)'
+INFERENCE_REVOKER = 'tools/guest.py job-access-probe (the dispatcher\'s role during bootstrap)'
+INFERENCE_PROBE_PROMPT = 'aieh S-03.2 inference-plane probe: no model'
+INFERENCE_ANSWER_MAX = 1 << 20
+
+
+def redact_secret(data, secret, label):
+    """``data`` (JSON-shaped) with every occurrence of ``secret`` replaced by ``label``, and the
+    number replaced under 'redactions': the last guard before a record is written."""
+    text = json.dumps(data, default=str)
+    count = text.count(secret)
+    out = json.loads(text.replace(secret, label)) if count else json.loads(text)
+    out['redactions'] = count
+    return out
+
+
+def read_attempt_token(stream):
+    """One attempt token from ``stream`` (standard input, never argv), checked for its shape; the
+    message of a refusal never repeats what was read."""
+    text = stream.readline(512)
+    token = text.strip() if isinstance(text, str) else ''
+    ic = inference_control()
+    try:
+        ic.token_fingerprint(token)
+    except ic.ControlError:
+        raise Refused('REFUSED', '--attempt-token-stdin: standard input is not one attempt token '
+                      '(aieh-inf- and 43 URL-safe characters)') from None
+    return token
+
+
+def container_python_sealed(script, arg, secret):
+    """container_python, the secret on the script's standard input through bash's printf builtin
+    (no process argument carries it)."""
+    if not SEALED_SECRET.match(secret):
+        raise Refused('REFUSED', 'the sealed secret is not one URL-safe word')
+    return container_python(script, arg).replace(
+        '&& python3 /tmp/aieh-job.py', f"&& printf '%s\\n' '{secret}' | python3 /tmp/aieh-job.py", 1)
+
+
+def inference_token_spec(profile, family, model, with_token):
+    """The in-container request of one family's first declared route (its method, path and auth
+    header shape, as the broker's status reports the family), naming ``model``."""
+    address, port = inference_endpoint(profile)
+    method, path = sorted((r['method'], r['path']) for r in family['routes'])[0]
+    return {'endpoint': [address, port], 'method': method, 'path': path,
+            'header': family['auth']['header'], 'scheme': family['auth']['scheme'],
+            'body': {'model': model, 'max_tokens': 16, 'stream': False,
+                     'messages': [{'role': 'user', 'content': INFERENCE_PROBE_PROMPT}]},
+            'with_token': with_token, 'timeout': JOB_CONNECT_S * 5, 'max_bytes': INFERENCE_ANSWER_MAX}
+
+
+def inference_token_verdict(phases):
+    """(ok, stop) of the token step's phases, by the rule fixed before observation: with the token
+    the answer is the upstream's (2xx, no broker refusal); after revocation 401 TOKEN_REVOKED; without
+    the forward ECONNREFUSED; after the forward is re-established 401 TOKEN_REVOKED again; the token
+    never echoed. A revoked token answered 2xx, or a connection without the forward, is a stop
+    condition."""
+    stop, checks = [], {}
+    forwarded, revoked = phases.get('forwarded') or {}, phases.get('after_revocation') or {}
+    lost, back = phases.get('without_forward') or {}, phases.get('re_established') or {}
+    checks['forwarded'] = forwarded.get('outcome') == 'answered' and \
+        isinstance(forwarded.get('status'), int) and 200 <= forwarded['status'] < 300 and \
+        forwarded.get('refusal') is None
+    for name, got in (('after_revocation', revoked), ('re_established', back)):
+        checks[name] = got.get('status') == 401 and got.get('refusal') == 'TOKEN_REVOKED'
+        if isinstance(got.get('status'), int) and 200 <= got['status'] < 300:
+            stop.append({'condition': 'a revoked attempt token was forwarded', 'phase': name})
+    checks['without_forward'] = lost.get('outcome') == EGRESS_REFUSED
+    if lost.get('outcome') in ('connected', 'answered'):
+        stop.append({'condition': 'the endpoint answered while no forward session was held'})
+    checks['revocation_answer'] = (phases.get('revocation') or {}).get('state') == 'revoked'
+    checks['token_never_echoed'] = not any((p or {}).get('token_in_answer') for p in phases.values()
+                                           if isinstance(p, dict))
+    return all(checks.values()) and not stop, checks, stop
 
 
 def egress_targets(record, jobs):
@@ -9626,8 +10180,25 @@ def job_socket_verdict(profile, data, uid):
     return ok, rows, stop
 
 
+class ForwardControl:
+    """The token step's hold on the instance's forward session: status, stop and start (decision
+    0015 section 4.4), through inference-forward."""
+
+    def __init__(self, ctx, name, access):
+        self.ctx, self.name, self.access = ctx, name, access
+
+    def status(self):
+        return forward_state(self.ctx.profile, self.ctx.instance_dir(self.name))
+
+    def stop(self):
+        return inference_forward(self.ctx, self.name, 'stop')
+
+    def start(self):
+        return inference_forward(self.ctx, self.name, 'start', broker=self.access)
+
+
 def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels=None,
-                     ssh_fn=None):
+                     ssh_fn=None, attempt_token=None, broker=None, forward=None):
     """job-access-probe (S-01.3.2) on a running provisioned instance: from inside two
     disposable conversation containers (the job environment; the agent's own terminal,
     through the outer server's proxied bash route), the job's effective environment (docker
@@ -9639,11 +10210,32 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     hardening controls as positive controls. One machine verdict, PASS or FAIL; an engine
     socket or API, a management route or a host service reachable from a job is a stop
     condition. ``channels(record) -> (api, facts)`` and ``ssh_fn(record)`` stand in for the
-    guest in tests."""
+    guest in tests.
+
+    ``attempt_token`` (decision 0015, an instance with the inference composition only): an attempt
+    token the broker issued for one of the probe's conversations, read from standard input by the
+    command line. From inside that conversation's container the probe shows it forwarded to the
+    family's upstream, refused at once after the probe revokes it, refused (ECONNREFUSED) while the
+    forward session is stopped, and refused again after the forward is re-established; at the end
+    the token is revoked if it is not yet. It travels only sealed (in a script's text on standard
+    input); records carry its fingerprint only. ``broker`` and ``forward`` stand in for the broker's
+    control listener and the forward session in tests."""
     idir = ctx.instance_dir(name)
     _, record = running_instance(ctx, name)
     if not record.get('provisioning'):
         raise Refused('REFUSED', f'{name} was not created with --provision; it runs no Agent Server')
+    token_fp = None
+    if attempt_token is not None:
+        if not inference_opted(record):
+            raise Refused('REFUSED', f'{name} was not created with create --provision --inference: '
+                          'an attempt token has no endpoint to reach')
+        ic = inference_control()
+        try:
+            token_fp = ic.token_fingerprint(attempt_token)
+        except ic.ControlError:
+            raise Refused('REFUSED', 'the attempt token is not of the broker\'s shape') from None
+        broker = broker or BrokerAccess()
+        forward = forward or ForwardControl(ctx, name, broker)
     jobs = jobs_config(ctx.profile)
     adm = admission_config(ctx.profile)
     if not jobs or not adm:
@@ -9697,18 +10289,21 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
             failed.append(step)
         return detail
 
-    def call(*requests):
-        data = api(list(requests))
+    def call(*requests, secret=None):
+        data = api(list(requests), secret=secret) if secret else api(list(requests))
         if data.get('session_key_occurrences'):
             raise Refused('SECRET', 'a response carried the session key '
                           f'({data["session_key_occurrences"]} occurrence(s), redacted)')
+        if secret:
+            memo['token_echoes'] = memo.get('token_echoes', 0) + \
+                int(data.get('sealed_occurrences') or 0)
         return data['responses']
 
-    def in_container(conversation, command, timeout=300):
+    def in_container(conversation, command, timeout=300, secret=None):
         response, = call({'method': 'POST',
                           'path': f'/api/conversations/{conversation}/bash/execute_bash_command',
                           'json': {'command': command, 'cwd': '/workspace', 'timeout': timeout},
-                          'timeout': timeout + 60})
+                          'timeout': timeout + 60}, secret=secret)
         body = response.get('body') if isinstance(response.get('body'), dict) else {}
         if not _status_ok(response) or body.get('exit_code') is None:
             raise Refused('CONTAINER', f'the command did not run in {conversation}: '
@@ -10076,7 +10671,9 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     def inference_step():
         """Decision 0015 section 4.5, on an instance with the inference composition only: from
         inside each job the endpoint without a token, the allow's edges, the resolver and a
-        name lookup, the container guard's IPv4 refusal counters read before and after."""
+        name lookup, the container guard's IPv4 refusal counters read before and after; and
+        once from the guest's own login (outside every container) the endpoint without a
+        token, answered by the broker's token admission alone."""
         spec = inference_job_spec(profile)
         arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
         before = container_guard_rejects(facts())
@@ -10085,16 +10682,90 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
             data = _job_json(in_container(cid, container_python(JOB_INFERENCE_SWEEP, arg), 300))
             results += [dict(r, conversation=cid) for r in data.get('results') or []]
         after = container_guard_rejects(facts())
+        login_spec = dict(inference_token_spec(profile, {'routes': [{'method': 'GET', 'path': '/'}],
+                                                         'auth': {'header': 'authorization',
+                                                                  'scheme': None}}, None, False),
+                          body={})
+        address, port = spec['endpoint']
+        login = _job_json(ssh.run(['python3', '-', base64.b64encode(json.dumps(login_spec).encode(
+            'utf-8')).decode('ascii')], input_text=JOB_INFERENCE_TOKEN, timeout=120).stdout)
+        results.append({'proto': 'tcp', 'host': address, 'port': port, 'what': INFERENCE_GUEST_WHAT,
+                        'outcome': login.get('outcome'), 'status': login.get('status'),
+                        'refusal': login.get('refusal'), 'conversation': 'guest login (agent)'})
         ok, rows, stop, counters = inference_job_verdict(results, before, after)
         stop_conditions.extend(stop)
-        complete = len(results) == (len(spec['targets']) + 2) * len(conversations)
+        complete = len(results) == (len(spec['targets']) + 2) * len(conversations) + 1
         return ok and complete, {
-            'decision_rule': 'PASS: the endpoint answers 401 without a token from every job, '
-                             'every edge and resolver target is refused (ECONNREFUSED) with the '
-                             'container guard\'s IPv4 REJECT counters up by at least the refused '
-                             'attempts, and the name lookup returns no address; STOP: an edge or '
-                             'resolver target connects or answers, or a name resolves',
+            'decision_rule': 'PASS: the endpoint answers 401 without a token from every job and '
+                             'from the guest login (TOKEN_MISSING: the token is the only admission '
+                             'control there), every edge and resolver target is refused '
+                             '(ECONNREFUSED) with the container guard\'s IPv4 REJECT counters up '
+                             'by at least the refused attempts, and the name lookup returns no '
+                             'address; STOP: an edge or resolver target connects or answers, a '
+                             'name resolves, or the guest login is admitted without a token',
             'spec': spec, 'results': rows, 'counters': counters, 'complete': complete}
+
+    def attempt_token_step():
+        """Decision 0015 sections 3.3 and 4.4 from inside the token's own job, by the rule of
+        inference_token_verdict; the forward session is stopped once and re-established."""
+        status, grant = broker.call('status'), broker.call('grant', token_fp)
+        family = next((f for f in status.get('families') or []
+                       if isinstance(f, dict) and f.get('id') == grant.get('family')), None)
+        detail = {'token_fingerprint': token_fp,
+                  'grant': {k: grant.get(k) for k in ('state', 'family', 'models', 'conversation_id',
+                                                      'attempt_id', 'budget', 'expires_at')},
+                  'family': None if family is None else {k: family.get(k) for k in (
+                      'id', 'status', 'routes', 'auth', 'ready', 'upstream')},
+                  'decision_rule': 'PASS: with the token the upstream answers (2xx, no broker '
+                                   'refusal); after revocation 401 TOKEN_REVOKED; with the forward '
+                                   'stopped ECONNREFUSED; after it is re-established 401 '
+                                   'TOKEN_REVOKED; the token never echoed. STOP: a revoked token '
+                                   'forwarded, or an answer without the forward'}
+        cid = grant.get('conversation_id')
+        if grant.get('state') != 'live' or family is None or family.get('ready') is not True or \
+                not grant.get('models') or cid not in state['created']:
+            detail['error'] = ('the grant must be live, its family ready, and it must be bound to '
+                               'one of the probe\'s conversations')
+            return False, detail
+        if not forward.status()['held']:
+            detail['error'] = 'no forward session is held: run inference-forward --action start first'
+            return False, detail
+
+        def once():
+            spec = inference_token_spec(profile, family, grant['models'][0], True)
+            arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+            return _job_json(in_container(cid, container_python_sealed(
+                JOB_INFERENCE_TOKEN, arg, attempt_token), 120, secret=attempt_token))
+        phases = {'forwarded': once()}
+        counted = broker.call('grant', token_fp)
+        phases['broker_counts'] = {k: counted.get(k) for k in ('requests', 'refused', 'usage')}
+        revoked = broker.call('revoke', token_fp, 'attempt end', INFERENCE_REVOKER)
+        memo['token_revoked'] = True
+        phases['revocation'] = {'state': revoked.get('state'), 'revocation': revoked.get('revocation')}
+        phases['after_revocation'] = once()
+        stopped = forward.stop()
+        phases['forward_stop'] = {'result': stopped.get('result')}
+        try:
+            phases['without_forward'] = once()
+        finally:
+            started = forward.start()
+            phases['forward_restart'] = {'result': started.get('result'),
+                                         'existing': started.get('existing')}
+        phases['re_established'] = once()
+        ok, checks, stop = inference_token_verdict(phases)
+        stop_conditions.extend(stop)
+        return ok and stopped.get('result') == 'stopped' and started.get('result') == 'held', \
+            dict(detail, conversation=cid, phases=phases, checks=checks)
+
+    def attempt_revoke_step():
+        """The dispatcher revokes the token at attempt end (decision 0015 section 3.3) when the
+        token step did not."""
+        grant = broker.call('grant', token_fp)
+        if grant.get('state') == 'live':
+            grant = broker.call('revoke', token_fp, 'attempt end', INFERENCE_REVOKER)
+        return grant.get('state') == 'revoked', {
+            'token_fingerprint': token_fp, 'state': grant.get('state'),
+            'revocation': grant.get('revocation'), 'by_token_step': bool(memo.get('token_revoked'))}
 
     def delete_step():
         out = {}
@@ -10125,6 +10796,9 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                                        '(S-01.4)' in failed)
     if inference_opted(record):
         run(INFERENCE_JOB_STEP, inference_step)
+    if token_fp is not None:
+        run(INFERENCE_TOKEN_STEP, attempt_token_step)
+        run(INFERENCE_REVOKE_STEP, attempt_revoke_step, always=True)
     run('delete the conversations (positive control)', delete_step,
         always=bool(state['created']))
     out = {'schema': JOB_PROBE_SCHEMA, 'operation': 'job-access-probe',
@@ -10136,6 +10810,11 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                   'carried_to': (jobs.get('ci') or {}).get('carried_to')},
            'result': 'PASS' if not failed and not stop_conditions else 'FAIL',
            'failed_steps': failed, 'stop_conditions': stop_conditions, 'steps': steps}
+    if token_fp is not None:
+        out = redact_secret(out, attempt_token, f'<attempt token {token_fp} redacted>')
+        out['attempt_token'] = {'fingerprint': token_fp,
+                                'redacted_from_record': out.pop('redactions'),
+                                'echoes_redacted_in_guest': memo.get('token_echoes', 0)}
     out['record'] = write_record(idir, 'job-access-probe', out)
     if out_file is not None:
         write_json_exclusive(out_file, json.loads(json.dumps(out, default=str)))
@@ -10607,6 +11286,9 @@ def extract_job(record, extract, args, context):
             got = row.get('outcome')
             if row.get('what') == INFERENCE_ENDPOINT_WHAT and got == 'answered':
                 got = 'answered' if row.get('status') == 401 else f"answered-{row.get('status')}"
+            elif row.get('what') == INFERENCE_GUEST_WHAT and got == 'answered':
+                got = 'token-refused' if row.get('status') == 401 and \
+                    row.get('refusal') == 'TOKEN_MISSING' else f"answered-{row.get('status')}"
             out.append(_obs(row.get('conversation'), got,
                             target=f"{row.get('proto')} {row.get('host')}:{row.get('port')}"))
     elif extract == 'tcp':
@@ -13416,6 +14098,8 @@ def main(argv=None):
     p.add_argument('--out', required=True, help='a new directory outside the checkout')
     p = sub.add_parser('netprobe-listen', help=argparse.SUPPRESS)
     p.add_argument('--log', required=True)
+    p = sub.add_parser('inference-forward-hold', help=argparse.SUPPRESS)
+    p.add_argument('--spec', required=True)
     p = sub.add_parser('host-census', help='S-01.4: read-only, unelevated census of the '
                        "harness's host listeners by PID and the Windows Firewall disclosure")
     p.add_argument('--exclude-pid', action='append', type=int, default=[],
@@ -13424,7 +14108,8 @@ def main(argv=None):
     for op in ('preflight', 'create', 'start', 'stop', 'destroy', 'recreate', 'inspect', 'exec',
                'exchange-push', 'exchange-pull', 'check-surfaces', 'netprobe', 'smoke',
                'provision-fetch', 'provision', 'conversation-smoke', 'admission-probe',
-               'job-access-probe', 'containment-probe', 'drill', 'image-inspect'):
+               'job-access-probe', 'containment-probe', 'drill', 'image-inspect',
+               'inference-forward'):
         p = sub.add_parser(op)
         p.add_argument('--profile', required=True, help='profile directory (never defaulted)')
         p.add_argument('--state-dir', required=True, help='the Owner-named state directory')
@@ -13476,6 +14161,20 @@ def main(argv=None):
             p.add_argument('--token-fingerprint', action='append', default=[],
                            help='LABEL=sha256:<16 hex digits>: a Gitea token fingerprint '
                                 '(S-01.2.2 form) to search for inside the jobs (repeatable)')
+        if op == 'job-access-probe':
+            p.add_argument('--attempt-token-stdin', action='store_true',
+                           help='decision 0015, an instance with the inference composition only: '
+                                'read one attempt token (issued by the broker for the probe\'s '
+                                'conversation) from standard input, never argv, and show it '
+                                'forwarded, refused after revocation and refused without the '
+                                'forward; records carry its fingerprint only')
+        if op == 'inference-forward':
+            p.add_argument('--action', required=True, choices=FORWARD_ACTIONS,
+                           help='decision 0015: start (idempotent), status or stop the SSH remote '
+                                'forward of the instance\'s inference endpoint')
+            p.add_argument('--broker-port', type=int,
+                           help='start: must be components.inference_broker.inference_port (the '
+                                'control port and any other are refused)')
         if op == 'exchange-push':
             p.add_argument('--repo', required=True, help='the repository to read the branch from')
             p.add_argument('--ref', required=True, help='one local branch')
@@ -13519,6 +14218,8 @@ def main(argv=None):
             return 0
         if op == 'netprobe-listen':
             return netprobe_listen(args.log)
+        if op == 'inference-forward-hold':
+            return forward_hold(args.spec)
         if op == 'host-census':
             result = host_census(args.exclude_pid, args.out)
             print(json.dumps(result, indent=2, sort_keys=True, default=str))
@@ -13575,7 +14276,11 @@ def main(argv=None):
         elif op == 'admission-probe':
             result = admission_probe(ctx, args.name, args.out)
         elif op == 'job-access-probe':
-            result = job_access_probe(ctx, args.name, args.out, args.token_fingerprint)
+            token = read_attempt_token(sys.stdin) if args.attempt_token_stdin else None
+            result = job_access_probe(ctx, args.name, args.out, args.token_fingerprint,
+                                      attempt_token=token)
+        elif op == 'inference-forward':
+            result = inference_forward(ctx, args.name, args.action, args.broker_port)
         elif op == 'containment-probe':
             result = containment_probe(ctx, args.name, args.out, args.token_fingerprint,
                                        args.sensitivity,

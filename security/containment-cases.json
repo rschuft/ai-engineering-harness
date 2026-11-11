@@ -2,8 +2,8 @@
   "schema": "ai-engineering-harness/security/containment-cases/v1",
   "plan_leaf": "S-02.1",
   "title": "Containment cases and the expected-denial matrix of the job environment",
-  "version": "2",
-  "as_of": "2026-11-10",
+  "version": "3",
+  "as_of": "2026-11-11",
   "inventory": "security/inventory.json",
   "properties": "profiles/properties.json",
   "matrix": "policy/network-matrix.json",
@@ -53,7 +53,8 @@
     "guest-routing": "the guest has no default route (topology, not policy)",
     "agent-server-key": "the Agent Server's session-key admission",
     "key-check": "the seeded ExecStartPre key check: no valid key, no server",
-    "launch-no-share": "launch.argv carries no host share; host_shares is empty (profiles P3)"
+    "launch-no-share": "launch.argv carries no host share; host_shares is empty (profiles P3)",
+    "broker-token-admission": "the host-side inference broker admits only a live per-attempt token in its family's auth header (decision 0015 section 3): the only control between the guest's own processes and the inference endpoint while a forward session is held"
   },
   "snapshot_keys": {
     "docker_inspect": "sha256 of each job container's normalized docker inspect (image, user, AppArmor, the declared HostConfig values, binds with the conversation id replaced) and the number of distinct digests",
@@ -4092,6 +4093,57 @@
       ],
       "verify_at": "S-03.2",
       "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+    },
+    {
+      "id": "egr-inference-guest-login",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the guest's own login reaches the inference endpoint only to be refused without a token",
+      "principal": {
+        "id": "guest-login-agent",
+        "user": "the guest operator login agent, outside every container",
+        "root_attempt": false
+      },
+      "attempt": "while a forward session is held, one TCP connect from the guest's operator login (not a container) to the inference endpoint 172.17.0.1:8090 and GET / without a token (job-access-probe's inference sweep, 20 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inference",
+        "args": {
+          "what": "inference endpoint from the guest login (no token)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "token-refused"
+        ],
+        "rule": "token-refused: the broker's 401 with TOKEN_MISSING. Nothing in the guest refuses this connection (the container guard filters docker0 only): the attempt token is the only admission control for the guest's own processes while a forward is held (fd-guest-inference-reach)"
+      },
+      "enforcement": [
+        {
+          "location": "broker-token-admission",
+          "refs": [
+            "nm-guest-inference",
+            "listener-inference-broker",
+            "cred-inference-attempt-token",
+            "fd-guest-inference-reach"
+          ]
+        }
+      ],
+      "assets": [
+        "endpoint-inference",
+        "listener-inference-broker"
+      ],
+      "positive_control": "ctl-inference-endpoint",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [
+        "fd-guest-inference-reach"
+      ],
+      "status": "planned",
+      "depends_on": [
+        "pins"
+      ],
+      "verify_at": "S-03.2",
+      "notes": "The path S-03.2 slice 2 found (nm-guest-inference, disclosed), declared at slice 3: on a guest created with create --provision --inference only, with the dispatcher's forward session held (inference-forward start), run by job-access-probe's inference sweep at the guest qualification."
     },
     {
       "id": "priv-sudo",

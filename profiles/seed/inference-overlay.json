@@ -89,6 +89,17 @@
       ]
     },
     {
+      "id": "guard-comment",
+      "why": "The container guard's header comment no longer names an egress allowlist entry for inference: with the composition the endpoint is the container guard's one INPUT allow, and the egress guard's allowlist stays empty (decision 0015 section 4.2). The default template keeps its text, so its bytes are unchanged.",
+      "anchor": [
+        "      # prefix; the allowlist is empty (its first entry belongs to S-03.x, inference). Traffic"
+      ],
+      "replacement": [
+        "      # prefix; the allowlist is empty and stays empty: inference is never an entry (decision",
+        "      # 0015 section 4.2 puts its one allow in the container guard's INPUT chain). Traffic"
+      ]
+    },
+    {
       "id": "facts-call",
       "why": "The boot facts carry the inference section; an error is recorded, never fatal to the Moby facts.",
       "anchor": [

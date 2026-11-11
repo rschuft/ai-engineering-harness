@@ -2499,6 +2499,7 @@ class ArtifactLabels(unittest.TestCase):
         with mock.patch.object(guest, 'destroy', return_value={'result': 'absent'}), \
                 mock.patch.object(guest, 'create', return_value={'result': 'ready'}):
             ctx = mock.Mock(profile=PROFILE)
+            ctx.instance_dir.return_value = self.idir / 'abc'       # absent: nothing to carry
             self.assertEqual(guest.recreate(ctx, 'abc')['labels'], LABELS)
 
     def test_launch_writes_the_header_first(self):
@@ -4243,6 +4244,25 @@ class ApiProbe(unittest.TestCase):
         self.assertEqual(out['session_key_occurrences'], 1)
         self.assertEqual([s[2] for s in self.seen], [self.KEY, self.KEY, None, None, self.KEY])
         self.assertEqual(self.seen[0][3], {'conversation_id': 'x'})
+
+    def test_sealed_requests_and_secret(self):
+        """decision 0015 (S-03.2 slice 3): the requests and one secret in the script's own text on
+        standard input, nothing but the key path and the address as arguments; the secret is sent
+        and redacted from the answers, which count it."""
+        secret = 'aieh-inf-' + 'S' * 43
+        spec = base64.b64encode(json.dumps([{'method': 'POST', 'path': '/api/conversations',
+                                             'json': {'conversation_id': secret}}]).encode()).decode()
+        proc = subprocess.run([sys.executable, '-I', '-', str(self.key_file), '127.0.0.1',
+                               str(self.server.server_address[1])],
+                              input=guest.sealed_api_probe(spec, secret).encode(),
+                              capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn(secret.encode(), proc.stdout)
+        out = json.loads(proc.stdout.decode().strip().splitlines()[-1])
+        self.assertEqual(self.seen, [('POST', '/api/conversations', self.KEY,
+                                      {'conversation_id': secret})])
+        self.assertEqual(out['responses'][0]['body'], {'id': '<sealed secret redacted>'})
+        self.assertEqual((out['sealed_occurrences'], out['session_key_occurrences']), (1, 0))
 
     def test_connection_refused_is_recorded(self):
         port = self.server.server_address[1]
@@ -6118,6 +6138,20 @@ class FakeInferenceJobGuest(FakeJobGuest):
         rows[3] = dict(rows[3], packets=rows[3]['packets'] + self.inference_rejects)
         return report
 
+    def run(self, argv, input_text=None, timeout=None, user='agent'):
+        # the guest login's request to the endpoint without a token (outside every container)
+        if argv[:2] == ['python3', '-'] and input_text == guest.JOB_INFERENCE_TOKEN:
+            spec = json.loads(base64.b64decode(argv[2]).decode('utf-8'))
+            self.login_specs = getattr(self, 'login_specs', []) + [spec]
+            status = 200 if self.faults.get('login_admitted') else 401
+            data = {'outcome': 'answered', 'status': status,
+                    'refusal': None if status == 200 else 'TOKEN_MISSING'}
+            if self.faults.get('no_forward'):
+                data = {'outcome': 'ECONNREFUSED', 'status': None, 'refusal': None}
+            return subprocess.CompletedProcess(argv, 0, guest.JOB_MARKER + json.dumps(data) + '\n',
+                                               '')
+        return super().run(argv, input_text, timeout, user)
+
     def container_output(self, cid, command):
         script, arg = _script_of(command)
         if script != guest.JOB_INFERENCE_SWEEP:
@@ -6179,20 +6213,26 @@ class InferenceJobSweep(TempState):
         spec = fake.inference_specs[0]
         self.assertEqual(spec['endpoint'], ['172.17.0.1', 8090])
         self.assertEqual(spec['targets'], INF['job_sweep']['edges'])
-        self.assertEqual(len(step['detail']['results']), 2 * (len(spec['targets']) + 2))
+        self.assertEqual(len(step['detail']['results']), 2 * (len(spec['targets']) + 2) + 1)
         self.assertEqual(step['detail']['counters']['refused'], 2 * len(spec['targets']))
         self.assertTrue(step['detail']['counters']['incremented'])
+        # the guest login's request: no token, the endpoint and no container
+        login, = fake.login_specs
+        self.assertEqual((login['endpoint'], login['method'], login['path'], login['with_token'],
+                          login['body']), (['172.17.0.1', 8090], 'GET', '/', False, {}))
         # the catalogue's extractor reads the step
         record = {'steps': out['steps']}
         got = guest.extract_job(record, 'inference', {'what': guest.INFERENCE_ENDPOINT_WHAT}, {})
         self.assertEqual({o['outcome'] for o in got}, {'answered'})
         got = guest.extract_job(record, 'inference', {'what': 'inference allow edge (port)'}, {})
         self.assertEqual([o['outcome'] for o in got], ['ECONNREFUSED'] * 2)
+        got = guest.extract_job(record, 'inference', {'what': guest.INFERENCE_GUEST_WHAT}, {})
+        self.assertEqual([o['outcome'] for o in got], ['token-refused'])
 
     def test_each_fault_fails_or_stops(self):
         self.record['inference'] = inference_record(self.record)['inference']
         for fault, stops in (('endpoint_open', False), ('no_forward', False), ('edge_open', True),
-                             ('resolves', True), ('uncounted', False)):
+                             ('resolves', True), ('uncounted', False), ('login_admitted', True)):
             out, step, _ = self.run_inference(**{fault: True})
             self.assertFalse(step['ok'], fault)
             self.assertEqual(out['result'], 'FAIL', fault)
@@ -6216,6 +6256,288 @@ class InferenceJobSweep(TempState):
         ok, _, stop, _ = guest.inference_job_verdict([dict(rows[0], status=200)] + rows[1:], 10, 11)
         self.assertFalse(ok)
         self.assertEqual(stop, [])
+        login = {'what': guest.INFERENCE_GUEST_WHAT, 'outcome': 'answered', 'status': 401,
+                 'refusal': 'TOKEN_MISSING'}
+        self.assertTrue(guest.inference_job_verdict(rows + [login], 10, 11)[0])
+        for change, stops in (({'refusal': None}, False), ({'status': 200, 'refusal': None}, True),
+                              ({'outcome': 'ECONNREFUSED', 'status': None}, False)):
+            ok, _, stop, _ = guest.inference_job_verdict(rows + [dict(login, **change)], 10, 11)
+            self.assertFalse(ok, change)
+            self.assertEqual(bool(stop), stops, change)
+        record = {'steps': [{'step': guest.INFERENCE_JOB_STEP, 'detail': {'results': [
+            dict(login, refusal=None, conversation='g'), dict(login, status=200, conversation='h'),
+            dict(login, outcome='ECONNREFUSED', conversation='i')]}}]}
+        self.assertEqual([o['outcome'] for o in guest.extract_job(
+            record, 'inference', {'what': guest.INFERENCE_GUEST_WHAT}, {})],
+            ['answered-401', 'answered-200', 'ECONNREFUSED'])
+
+
+TOKEN = 'aieh-inf-' + 'T0k3n_-' * 6 + 'x'                  # synthetic, the broker's shape
+TOKEN_FP = 'sha256:' + hashlib.sha256(TOKEN.encode()).hexdigest()[:16]
+
+
+class TokenPlane:
+    """The broker's control listener and the forward session as the token step sees them, and the
+    endpoint's answers from inside the job, sharing one state."""
+
+    def __init__(self, cid, **faults):
+        self.faults, self.held, self.revoked, self.requests = faults, True, False, 0
+        self.conversation, self.calls = cid, []
+        self.ports = {'control_port': 18431, 'inference_port': 18432}
+
+    # BrokerAccess
+    def call(self, method, *args):
+        self.calls.append((method,) + args)
+        family = {'id': 'anthropic-messages', 'status': 'provisional', 'ready': True,
+                  'routes': [{'method': 'POST', 'path': '/v1/messages'}],
+                  'auth': {'header': 'x-api-key', 'scheme': None}, 'upstream': 'http://127.0.0.1:1'}
+        if method == 'status':
+            return {'families': [dict(family, ready=not self.faults.get('not_ready'))]}
+        if method == 'revoke':
+            assert args == (TOKEN_FP, 'attempt end', guest.INFERENCE_REVOKER), args
+            self.revoked = True
+        state = 'revoked' if self.revoked or self.faults.get('not_live') else 'live'
+        return {'token_fingerprint': TOKEN_FP, 'state': state, 'family': 'anthropic-messages',
+                'models': ['syn-model-a'], 'budget': {'requests': 5, 'tokens': 100},
+                'conversation_id': self.faults.get('conversation', self.conversation),
+                'attempt_id': '0' * 8, 'expires_at': 'later', 'requests': self.requests,
+                'revocation': {'trigger': 'attempt end'} if self.revoked else None}
+
+    # the forward session
+    def status(self):
+        return {'held': self.held and not self.faults.get('no_forward_held')}
+
+    def stop(self):
+        self.held = bool(self.faults.get('stop_fails'))
+        return {'result': 'stopped'}
+
+    def start(self):
+        self.held = True
+        return {'result': 'held', 'existing': False}
+
+    # the endpoint, from inside the job
+    def answer(self, spec, token):
+        assert token == TOKEN and spec['with_token'] and spec['header'] == 'x-api-key', spec
+        assert (spec['method'], spec['path'], spec['body']['model']) == \
+            ('POST', '/v1/messages', 'syn-model-a'), spec
+        if not self.held:
+            return {'outcome': 'ECONNREFUSED', 'status': None, 'refusal': None}
+        if self.revoked and not self.faults.get('revocation_ignored'):
+            return {'outcome': 'answered', 'status': 401, 'refusal': 'TOKEN_REVOKED',
+                    'token_in_answer': False}
+        self.requests += 1
+        if self.faults.get('upstream_refused'):
+            return {'outcome': 'answered', 'status': 403, 'refusal': 'MODEL_NOT_ALLOWED'}
+        return {'outcome': 'answered', 'status': 200, 'refusal': None, 'body_bytes': 90,
+                'body_sha256': 'f' * 64, 'token_in_answer': bool(self.faults.get('echo'))}
+
+
+class FakeTokenGuest(FakeInferenceJobGuest):
+    """FakeInferenceJobGuest whose API takes a sealed secret (the token step's requests)."""
+
+    def __init__(self, plane, **faults):
+        super().__init__(**faults)
+        self.plane, self.sealed, self.commands, self.argvs = plane, [], [], []
+
+    def run(self, argv, input_text=None, timeout=None, user='agent'):
+        self.argvs.append(list(argv))
+        return super().run(argv, input_text, timeout, user)
+
+    def api(self, requests, secret=None):
+        if secret is None:
+            for req in requests:
+                if TOKEN in json.dumps(req):
+                    raise AssertionError('the token travelled unsealed')
+            return super().api(requests)
+        self.sealed.append(secret)
+        out = []
+        for req in requests:
+            command = req['json']['command']
+            self.commands.append(command)
+            head, _, tail = command.partition("&& printf '%s\\n' '")
+            token, _, rest = tail.partition("' | python3 /tmp/aieh-job.py ")
+            script = base64.b64decode(head.split()[1]).decode('utf-8')
+            assert script == guest.JOB_INFERENCE_TOKEN, 'not the token script'
+            spec = json.loads(base64.b64decode(rest.split(';', 1)[0].strip()).decode('utf-8'))
+            data = self.plane.answer(spec, token)
+            stdout = guest.JOB_MARKER + json.dumps(data) + '\n'
+            if self.faults.get('leak'):
+                stdout = f'echo {token}\n' + stdout          # a leak the record must not carry
+            out.append({'method': req['method'], 'path': req['path'], 'status': 200,
+                        'body': {'exit_code': 0, 'stdout': stdout}, 'seconds': 0.0})
+        return {'responses': out, 'session_key_occurrences': 0, 'sealed_occurrences': 1}
+
+
+class InferenceTokenStep(TempState):
+    """Decision 0015 sections 3.3 and 4.4 (S-03.2 slice 3): job-access-probe with an attempt
+    token, offline: forwarded, refused after revocation, refused without the forward, refused
+    again after re-establishment; the token sealed everywhere, its fingerprint only in records."""
+
+    def setUp(self):
+        super().setUp()
+        self.idir = self.state / 'instances' / 'job'
+        self.idir.mkdir(parents=True)
+        self.record = inference_record({'ports': {'ssh': 40001, 'qmp': 40002}})
+        self.record['provisioning']['egress_falsification'] = True
+        patcher = mock.patch.object(guest, 'running_instance',
+                                    lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_probe(self, plane_faults=None, token=TOKEN, out_path=None, **faults):
+        cid = json.loads((REPO / AS['fixture']['path']).read_text(encoding='utf-8'))['conversation_id']
+        plane = TokenPlane(cid, **(plane_faults or {}))
+        fake = FakeTokenGuest(plane, **faults)
+        out = guest.job_access_probe(self.ctx(), 'job', out_path,
+                                     token_fingerprints=['builder=sha256:2edcc7070632f15d'],
+                                     channels=lambda rec: (fake.api, fake.facts),
+                                     ssh_fn=lambda rec: fake, attempt_token=token, broker=plane,
+                                     forward=plane)
+        steps = {s['step']: s for s in out['steps']}
+        return out, steps, plane, fake
+
+    def test_the_proof_passes_and_the_token_stays_sealed(self):
+        out_path = self.tmp / 'probe.json'
+        out, steps, plane, fake = self.run_probe(out_path=str(out_path))
+        step = steps[guest.INFERENCE_TOKEN_STEP]
+        self.assertTrue(step['ok'], json.dumps(step, default=str)[:3000])
+        self.assertEqual(out['result'], 'PASS')
+        phases = step['detail']['phases']
+        self.assertEqual((phases['forwarded']['status'], phases['after_revocation']['refusal'],
+                          phases['without_forward']['outcome'], phases['re_established']['refusal']),
+                         (200, 'TOKEN_REVOKED', 'ECONNREFUSED', 'TOKEN_REVOKED'))
+        self.assertEqual(phases['revocation']['state'], 'revoked')
+        self.assertEqual(phases['broker_counts']['requests'], 1)
+        self.assertEqual((phases['forward_stop']['result'], phases['forward_restart']['result']),
+                         ('stopped', 'held'))
+        self.assertTrue(all(step['detail']['checks'].values()))
+        self.assertTrue(steps[guest.INFERENCE_REVOKE_STEP]['ok'])
+        self.assertTrue(steps[guest.INFERENCE_REVOKE_STEP]['detail']['by_token_step'])
+        self.assertEqual([c[0] for c in plane.calls].count('revoke'), 1)
+        self.assertEqual(fake.sealed, [TOKEN] * 4)
+        self.assertEqual(out['attempt_token'], {'fingerprint': TOKEN_FP, 'redacted_from_record': 0,
+                                                'echoes_redacted_in_guest': 4})
+        # never in argv, never in a record, never in the out file
+        self.assertFalse(any(TOKEN in ' '.join(map(str, a)) for a in fake.argvs))
+        for path in [Path(out['record']), out_path] + list((self.idir / 'records').iterdir()):
+            self.assertNotIn(TOKEN, path.read_text(encoding='utf-8'))
+            self.assertIn(TOKEN_FP, Path(out['record']).read_text(encoding='utf-8'))
+        for command in fake.commands:
+            self.assertIn(f"printf '%s\\n' '{TOKEN}' | python3 /tmp/aieh-job.py", command)
+
+    def test_each_fault_fails_or_stops(self):
+        for plane_faults, faults, stops in (
+                ({'upstream_refused': True}, {}, False),
+                ({'revocation_ignored': True}, {}, True),
+                ({'stop_fails': True}, {}, True),
+                ({'echo': True}, {}, False),
+                ({'not_live': True}, {}, False),
+                ({'not_ready': True}, {}, False),
+                ({'conversation': 'another'}, {}, False),
+                ({'no_forward_held': True}, {}, False)):
+            with self.subTest(plane=plane_faults, faults=faults):
+                out, steps, plane, _ = self.run_probe(plane_faults, **faults)
+                step = steps[guest.INFERENCE_TOKEN_STEP]
+                self.assertFalse(step['ok'])
+                self.assertEqual(out['result'], 'FAIL')
+                self.assertEqual(bool(out['stop_conditions']), stops)
+                self.assertTrue(plane.revoked or plane_faults.get('not_live'))
+                self.assertTrue(steps[guest.INFERENCE_REVOKE_STEP]['ok'])
+
+    def test_a_leak_is_redacted_from_the_record(self):
+        out, steps, _, _ = self.run_probe(leak=True)
+        self.assertEqual(out['attempt_token']['redacted_from_record'], 0)   # stdout is not kept
+        out, steps, _, _ = self.run_probe(plane_faults={'conversation': TOKEN})
+        self.assertGreater(out['attempt_token']['redacted_from_record'], 0)
+        self.assertNotIn(TOKEN, Path(out['record']).read_text(encoding='utf-8'))
+        self.assertIn(f'<attempt token {TOKEN_FP} redacted>', json.dumps(out))
+
+    def test_revoked_at_the_end_when_the_step_did_not_run(self):
+        out, steps, plane, _ = self.run_probe(endpoint_open=True)     # the inference sweep fails
+        self.assertEqual(steps[guest.INFERENCE_TOKEN_STEP].get('skipped'), 'an earlier step failed')
+        revoke = steps[guest.INFERENCE_REVOKE_STEP]
+        self.assertTrue(revoke['ok'])
+        self.assertFalse(revoke['detail']['by_token_step'])
+        self.assertTrue(plane.revoked)
+
+    def test_refusals(self):
+        record = self.record
+        self.record = {k: v for k, v in record.items() if k != 'inference'}
+        with self.assertRaises(guest.Refused) as cm:
+            self.run_probe()
+        self.assertIn('--inference', str(cm.exception))
+        self.record = record
+        for bad in ('Bearer ' + TOKEN, TOKEN[:-1], 'sk-not-a-token'):
+            with self.assertRaises(guest.Refused) as cm:
+                self.run_probe(token=bad)
+            self.assertNotIn(bad, str(cm.exception))
+        out, steps, _, _ = self.run_probe(token=None)
+        self.assertNotIn(guest.INFERENCE_TOKEN_STEP, steps)
+        self.assertNotIn('attempt_token', out)
+
+    def test_read_attempt_token_and_cli(self):
+        self.assertEqual(guest.read_attempt_token(io.StringIO(TOKEN + '\n')), TOKEN)
+        for bad in ('', 'x' * 600, TOKEN + ' extra'):
+            with self.assertRaises(guest.Refused) as cm:
+                guest.read_attempt_token(io.StringIO(bad))
+            self.assertNotIn(bad or 'x', str(cm.exception).replace('aieh-inf-', ''))
+        with mock.patch.object(guest, 'job_access_probe',
+                               return_value={'operation': 'job-access-probe', 'result': 'PASS'}) as fn, \
+                mock.patch('sys.stdin', io.StringIO(TOKEN + '\n')), \
+                mock.patch('sys.stdout', new_callable=io.StringIO):
+            rc = guest.main(['job-access-probe', '--profile', str(PROFILE_DIR), '--state-dir',
+                             str(self.state), '--name', 'job', '--attempt-token-stdin'])
+        self.assertEqual(rc, 0)
+        self.assertEqual(fn.call_args.kwargs['attempt_token'], TOKEN)
+        with mock.patch.object(guest, 'job_access_probe',
+                               return_value={'operation': 'job-access-probe', 'result': 'PASS'}) as fn, \
+                mock.patch('sys.stdout', new_callable=io.StringIO):
+            guest.main(['job-access-probe', '--profile', str(PROFILE_DIR), '--state-dir',
+                        str(self.state), '--name', 'job'])
+        self.assertIsNone(fn.call_args.kwargs['attempt_token'])
+
+    def test_sealed_transport_and_verdict(self):
+        compile(guest.JOB_INFERENCE_TOKEN, 'token', 'exec')
+        command = guest.container_python_sealed(guest.JOB_INFERENCE_TOKEN, 'ARG', TOKEN)
+        self.assertIn(f"&& printf '%s\\n' '{TOKEN}' | python3 /tmp/aieh-job.py ARG;", command)
+        with self.assertRaises(guest.Refused):
+            guest.container_python_sealed(guest.JOB_INFERENCE_TOKEN, 'ARG', "x'; rm -rf /; '")
+        ssh = mock.Mock()
+        ssh.run.return_value = subprocess.CompletedProcess([], 0, '{"responses": []}\n', '')
+        api = guest.GuestApi(ssh, PROFILE)
+        api([{'method': 'GET', 'path': '/x'}], secret=TOKEN)
+        argv, kwargs = ssh.run.call_args[0][0], ssh.run.call_args[1]
+        self.assertEqual(argv, ['python3', '-'] + api.args)
+        self.assertNotIn(TOKEN, ' '.join(argv))
+        self.assertTrue(kwargs['input_text'].startswith('SEALED = ('))
+        self.assertTrue(kwargs['input_text'].endswith(guest.API_PROBE))
+        with self.assertRaises(guest.Refused):
+            guest.sealed_api_probe('spec', 'two words')
+        api([{'method': 'GET', 'path': '/x'}])
+        self.assertEqual(len(ssh.run.call_args[0][0]), len(api.args) + 3)
+        base = {'forwarded': {'outcome': 'answered', 'status': 200, 'refusal': None},
+                'revocation': {'state': 'revoked'},
+                'after_revocation': {'outcome': 'answered', 'status': 401, 'refusal': 'TOKEN_REVOKED'},
+                'without_forward': {'outcome': 'ECONNREFUSED'},
+                're_established': {'outcome': 'answered', 'status': 401, 'refusal': 'TOKEN_REVOKED'}}
+        self.assertTrue(guest.inference_token_verdict(base)[0])
+        for phase, change, stops in (
+                ('forwarded', {'status': 502}, False), ('forwarded', {'refusal': 'X'}, False),
+                ('forwarded', {'outcome': 'timeout', 'status': None}, False),
+                ('revocation', {'state': 'live'}, False),
+                ('after_revocation', {'status': 200, 'refusal': None}, True),
+                ('after_revocation', {'refusal': 'TOKEN_UNKNOWN'}, False),
+                ('re_established', {'status': 204, 'refusal': None}, True),
+                ('without_forward', {'outcome': 'timeout'}, False),
+                ('without_forward', {'outcome': 'connected'}, True),
+                ('forwarded', {'token_in_answer': True}, False)):
+            phases = json.loads(json.dumps(base))
+            phases[phase].update(change)
+            ok, _, stop = guest.inference_token_verdict(phases)
+            self.assertFalse(ok, (phase, change))
+            self.assertEqual(bool(stop), stops, (phase, change))
+        self.assertEqual(guest.redact_secret({'a': [TOKEN, 'b'], TOKEN: 1}, TOKEN, '<r>'),
+                         {'a': ['<r>', 'b'], '<r>': 1, 'redactions': 2})
 
 
 if __name__ == '__main__':
