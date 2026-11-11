@@ -96,6 +96,20 @@ class ProfileError(Exception):
     """The profile could not be produced (exit 2)."""
 
 
+def _no_window():
+    """integrations/platform/no_window.py, the shared no-window helper, loaded by path once per process:
+    ``_no_window().no_window_flags()`` is CREATE_NO_WINDOW only where this process has no console."""
+    module = sys.modules.get('aieh_no_window')
+    if module is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'aieh_no_window', REPO / 'integrations' / 'platform' / 'no_window.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['aieh_no_window'] = module
+    return module
+
+
 # --------------------------------------------------------------------------- categories
 
 def class_category(cls):
@@ -554,7 +568,8 @@ def run_child(name, start_dir, workdir, tag, discover_only=False):
         argv.append('--discover-only')
     t0 = time.perf_counter()
     with open(log, 'wb') as stream:
-        proc = subprocess.run(argv, cwd=REPO, stdout=stream, stderr=subprocess.STDOUT)
+        proc = subprocess.run(argv, cwd=REPO, stdout=stream, stderr=subprocess.STDOUT,
+                              creationflags=_no_window().no_window_flags())
     wall = time.perf_counter() - t0
     if not out.is_file():
         raise ProfileError(f'suite {name}: the profiling child wrote no result '
@@ -935,7 +950,7 @@ def run_plain(name, start_dir, workdir):
     log = Path(workdir) / f'plain-{name}.log'
     proc = subprocess.run([sys.executable, '-I', '-B', '-m', 'unittest', 'discover', '-s',
                            start_dir, '-v'], cwd=REPO, stdout=subprocess.DEVNULL,
-                          stderr=subprocess.PIPE)
+                          stderr=subprocess.PIPE, creationflags=_no_window().no_window_flags())
     log.write_bytes(proc.stderr)
     return parse_verbose(proc.stderr.decode('utf-8', 'replace')), proc.returncode
 

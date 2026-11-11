@@ -827,9 +827,10 @@ HELPER_CALL, CONSTANT = 'helper', 'constant'
 
 
 def window_scanned(path):
-    """A non-test module under tools/, integrations/ or composition/."""
+    """A non-test module under tools/, integrations/ or composition/: any module outside a tests/
+    directory, whatever its name (tools/test_profile.py is a tool, not a test)."""
     parts = path.split('/')
-    return path.startswith(WINDOW_ROOTS) and 'tests' not in parts[:-1] and not parts[-1].startswith('test_')
+    return path.startswith(WINDOW_ROOTS) and 'tests' not in parts[:-1]
 
 
 def _kind(kinds):
@@ -1394,7 +1395,8 @@ class WindowDetection(unittest.TestCase):
     def test_only_non_test_modules_under_tools_integrations_and_composition_are_read(self):
         launch = 'import subprocess\ndef f():\n    subprocess.run(["x"], creationflags=subprocess.DETACHED_PROCESS)\n'
         for path, read in (('tools/mod.py', True), ('integrations/a/mod.py', True), ('tools/tests/mod.py', False),
-                           ('integrations/a/tests/helper.py', False), ('tools/test_mod.py', False),
+                           ('integrations/a/tests/helper.py', False), ('tools/test_mod.py', True),
+                           ('tools/tests/test_mod.py', False), ('integrations/a/tests/test_mod.py', False),
                            ('composition/mod.py', True), ('composition/inventory/scan.py', True),
                            ('profiles/x/netprobe.py', False), ('conftest.py', False)):
             with self.subTest(path=path):
