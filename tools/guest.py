@@ -15063,7 +15063,6 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
             verdict, detail = 'UNKNOWN', {'error': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}
         steps.append({'step': step, 'verdict': verdict, 'seconds': round(time.time() - s, 1), 'detail': detail})
         log(f'acp-qualification: {step}: {verdict}')
-        return verdict
 
     def preconditions():
         status, grant = broker.call('status'), broker.call('grant', token_fp)
@@ -15192,7 +15191,6 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
         last, met = wait(lambda: execution_status()[1], lambda s: s in ACP_TURN_END, turn_ceiling_s)
         answer, status = execution_status()
         agent = body_of(answer).get('agent') if isinstance(body_of(answer).get('agent'), dict) else {}
-        memo['turn_ended'] = met
         detail = {'execution_status': status, 'within_ceiling': met, 'ceiling_s': turn_ceiling_s,
                   'agent': {k: agent.get(k) for k in ('kind', 'acp_server', 'acp_model')},
                   'assumed': ACP_ASSUMED['status']}
@@ -15300,7 +15298,6 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
         report = facts()
         left = ours(report)
         count = call('GET', '/api/conversations/count')
-        memo['deleted'] = answer.get('status')
         ok = ok_status(answer) and not left and ok_status(count) and count.get('body') == 0
         return ('PASS' if ok else 'FAIL'), {'delete': answer.get('status'), 'containers_left': len(left),
                                             'outer_count_after': count.get('body')}

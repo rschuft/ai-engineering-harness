@@ -950,6 +950,8 @@ class NetworkVerdict(unittest.TestCase):
         self.assertEqual(CC.parse_net_connections(HEADER + tcp_row('0100007F:1', '0100007F:2', '0D', 1))[0]['state'],
                          '0D')
         self.assertEqual(CC.parse_net_connections('header\n   0: 0100007F:1F40 00000000:0000 01\n'), [])
+        ten = 'header\n   0: 0100007F:1F40 0100007F:A1B2 01 0:0 0:0 0 999 0 5003\n'   # ten fields, as listeners
+        self.assertEqual([r['inode'] for r in CC.parse_net_connections(ten)], ['5003'])
         snap = net_snapshot(TO_ENDPOINT, INBOUND)
         self.assertIn({'local': '172.17.0.2', 'local_port': 50000, 'remote': '172.17.0.1', 'remote_port': 8090,
                        'state': 'ESTABLISHED', 'pids': [21]}, snap['connections'])
@@ -986,12 +988,15 @@ class NetworkVerdict(unittest.TestCase):
         verdict = CC.network_verdict(net_snapshot(ELSEWHERE['SYN_SENT']), endpoint=ENDPOINT)
         self.assertTrue(verdict['ok'])
         self.assertEqual([r['state'] for r in verdict['attempted']], ['SYN_SENT'])
+        self.assertEqual([c['kind'] for c in verdict['connections'] if c['state'] == 'SYN_SENT'], ['attempted'])
         for row in (ELSEWHERE['CLOSE'], tcp_row('020011AC:C352', '01010101:01BB', '0D', 6005)):
             with self.subTest(row=row):
                 verdict = CC.network_verdict(net_snapshot(row), endpoint=ENDPOINT)
                 self.assertFalse(verdict['ok'])
                 self.assertEqual(verdict['other_reached'], [])
                 self.assertFalse(check(verdict, 'network: every connection state')['ok'])
+                self.assertEqual([c['kind'] for c in verdict['connections'] if c['remote'] == '1.1.1.1'],
+                                 ['ambiguous'])
 
     def test_ipv6_mapped_and_ipv6_loopback(self):
         tcp6 = (HEADER + tcp_row('0000000000000000FFFF0000020011AC:C353', '0000000000000000FFFF0000010011AC:1F9A',

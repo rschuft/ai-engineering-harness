@@ -80,10 +80,12 @@ class FakeGuest:
         self.test = test
         self.created = False
         self.calls = []
+        self.bodies = {}
         self.statuses = ['running', 'finished']
         self.during = snapshot(rows=[TO_ENDPOINT])
         self.after = snapshot(rows=[TO_ENDPOINT])
         self.env = job_env(TOKEN_SHAPED)
+        self.env_specs = []
         self.events = [[{'id': 'e1', 'kind': 'MessageEvent', 'source': 'user'},
                         {'id': 'e2', 'kind': guest.ACP_TOOL_CALL_KIND, 'title': 'Task'}],
                        [{'id': 'e3', 'kind': 'MessageEvent', 'source': 'agent'}]]
@@ -94,23 +96,41 @@ class FakeGuest:
         self.create_agent = {'kind': 'ACPAgent', 'acp_server': 'claude-code', 'acp_model': MODEL}
         self.echo_token = False
         self.lose = set()              # paths whose answer is lost
+        self.answers = {}              # path: (status, body) answered instead
+        self.malformed = set()         # paths answered without a single response
         self.sent = False
-        self.container_problems = False
         self.rejects = 3
+        self.count = None              # the outer count answered instead of the real one
+        self.phantom = False           # a container the outer server does not count
+        self.extra_when_sent = False   # a second container for the conversation once the prompt is sent
+        self.extra_after_create = False
+        self.image = None              # another image for the container
+        self.keep_container = False    # the container stays after the delete
+        self.collector_noise = ''      # a line the collector prints before its result
+        self.bash = None               # (status, body) of the bash route instead of the script's output
 
     def facts(self):
         container = tg.conversation_container(hex_id=HEX)
         container['State']['Pid'] = tcc.HOST_BASE + 1
-        return {'containers': [container] if self.created else [], 'server_user': dict(SERVER_USER),
+        if self.image:
+            container['Image'] = self.image
+        deleted = ('DELETE', f'/api/conversations/{CID}') in self.calls
+        containers = [container] if self.created or (self.keep_container and deleted) or self.phantom else []
+        if (self.extra_when_sent and self.sent) or (self.extra_after_create and self.created):
+            containers.append(tg.conversation_container(cid='f' * 64, hex_id=HEX))
+        return {'containers': containers, 'server_user': dict(SERVER_USER),
                 'admission': {'iptables': [{'target': 'REJECT', 'packets': self.rejects}]}}
 
     def answer(self, method, path, body):
         self.calls.append((method, path))
+        self.bodies[(method, path)] = body
         if path in self.lose:
             raise OSError('connection lost')
+        if path in self.answers:
+            return self.answers[path]
         base = f'/api/conversations/{CID}'
         if method == 'GET' and path == '/api/conversations/count':
-            return 200, 0 if not self.created else 1
+            return 200, (0 if not self.created else 1) if self.count is None else self.count
         if method == 'POST' and path == '/api/conversations':
             self.test.assertEqual(body['agent_settings']['acp_command'], ['claude-agent-acp'])
             self.test.assertEqual(body['secrets']['ANTHROPIC_API_KEY']['value'], TOKEN)
@@ -123,7 +143,8 @@ class FakeGuest:
             ids = ([CID] if self.created else []) + (self.outer_extra if self.sent else [])
             return 200, {'items': [{'id': i} for i in ids], 'next_page_id': None}
         if method == 'POST' and path == base + '/events':
-            self.test.assertEqual(body['content'][0]['text'] in guest.ACP_QUALIFICATION_PROMPTS.values(), True)
+            self.test.assertIn(body['content'][0]['text'], guest.ACP_QUALIFICATION_PROMPTS.values())
+            self.test.assertEqual((body['role'], body['content'][0]['type'], body['run']), ('user', 'text', True))
             self.sent = True
             return 200, {'success': True}
         if method == 'GET' and path == base:
@@ -136,6 +157,8 @@ class FakeGuest:
         if method == 'GET' and path == base + '/agent_final_response':
             return 200, {'response': 'ready'}
         if method == 'POST' and path == base + '/bash/execute_bash_command':
+            if self.bash is not None:
+                return self.bash
             return 200, {'exit_code': 0, 'stdout': self.run_script(body['command'])}
         if method == 'DELETE' and path == base:
             self.created = False
@@ -143,16 +166,19 @@ class FakeGuest:
         raise AssertionError(f'unexpected request {method} {path}')
 
     def run_script(self, command):
-        encoded = re.match(r'echo ([A-Za-z0-9+/=]+) \| base64 -d', command).group(1)
-        script = base64.b64decode(encoded).decode('utf-8')
+        match = re.match(r'echo ([A-Za-z0-9+/=]+) \| base64 -d > /tmp/aieh-job.py && python3 /tmp/aieh-job.py ([^\s;]+)',
+                         command)
+        script = base64.b64decode(match.group(1)).decode('utf-8')
         if script.startswith('"""The containment observation'):
             snap = self.after if self.test.turn_done else self.during
-            return 'noise\n' + CC.MARKER + json.dumps(snap) + '\n'
+            return 'noise\n' + self.collector_noise + CC.MARKER + json.dumps(snap) + '\n'
         if script == guest.ACP_INNER_CONVERSATIONS:
+            self.test.assertEqual(match.group(2), str(CC.INNER_PORT))
             rows = self.inner_after if self.test.turn_done else self.inner_before
             return guest.JOB_MARKER + json.dumps({'key_present': True, 'status': 200, 'pages': 1,
                                                   'key_occurrences': 0, 'items': rows}) + '\n'
         if script == guest.JOB_ENV_PROBE:
+            self.env_specs.append(json.loads(base64.b64decode(match.group(2))))
             return guest.JOB_MARKER + json.dumps(self.env) + '\n'
         raise AssertionError('an unexpected script')
 
@@ -160,12 +186,13 @@ class FakeGuest:
         self.test.assertEqual(secret, TOKEN)            # every call is sealed with the token
         (request,) = requests
         status, body = self.answer(request['method'], request['path'], request.get('json'))
+        if request['path'] in self.malformed:
+            return {'responses': [], 'session_key_occurrences': 0}
         text = json.dumps(body)
         sealed = text.count(secret)
         body = json.loads(text.replace(secret, '<sealed secret redacted>'))
         return {'responses': [{'status': status, 'body': body}], 'session_key_occurrences': 0,
                 'sealed_occurrences': sealed}
-
 
 class FakeBroker:
     def __init__(self, source=guest.ACP_SYNTHETIC_SOURCE, fingerprint=SYNTHETIC_FP):
@@ -646,6 +673,259 @@ class DriverRun(unittest.TestCase):
             self.assertIn(word, guest.ACP_QUALIFICATION_RULE)
 
 
+    # ---- tests from the mutation check: each fact of a check on its own
+
+    def test_the_record_details(self):
+        out = self.run_driver()
+        create = self.guest.bodies[('POST', '/api/conversations')]
+        self.assertEqual(self.step(out, 2)['detail']['sent_body_sha256'],
+                         guest.dispatch_transport().body_sha256(create))
+        self.assertEqual(self.step(out, 2)['detail']['agent'],
+                         {'kind': 'ACPAgent', 'acp_server': 'claude-code', 'acp_model': MODEL})
+        self.assertEqual(self.step(out, 2)['detail']['containers'], 1)
+        self.assertEqual(self.step(out, 9)['detail']['kinds'], {'MessageEvent': 2, guest.ACP_TOOL_CALL_KIND: 1})
+        mech = self.step(out, 9)['detail']['mechanisms']["(a) the provider's own tools and sub-agents"]
+        self.assertEqual(mech['provider_processes'], {'during': ['node', 'claude', 'bash'],
+                                                      'after': ['node', 'claude', 'bash']})
+        spec, = self.guest.env_specs
+        self.assertEqual(spec['attempt_token'], guest.attempt_token_spec(('ANTHROPIC_API_KEY',)))
+        self.assertEqual(spec['pattern'],
+                         PROFILE['provisioning']['agent_server']['jobs']['environment']['credential_name_pattern'])
+        self.assertIn('/run/docker.sock', spec['sockets'])
+
+    def test_each_precondition_fact_alone(self):
+        for name, change in (('the count is not answered', lambda: self.guest.answers.update(
+                {'/api/conversations/count': (500, {})})),
+                             ('the outer server counts one', lambda: setattr(self.guest, 'count', 1)),
+                             ('a container the outer server does not count',
+                              lambda: setattr(self.guest, 'phantom', True))):
+            with self.subTest(name):
+                self.setUp()
+                change()
+                out = self.run_driver()
+                self.assertEqual(self.step(out, 1)['verdict'], 'FAIL')
+                self.assertEqual([k for k, v in self.step(out, 1)['detail']['checks'].items() if not v],
+                                 ['no conversation container' if 'container' in name else
+                                  'the outer server holds no conversation'])
+        self.setUp()
+        self.broker = FakeBroker(source='windows-credential-manager', fingerprint=None)
+        out = self.run_driver(key_mode='real', real_key_act='A1')
+        self.assertEqual((self.step(out, 1)['verdict'], self.real_reads), ('FAIL', []))
+
+    def test_each_create_fact_alone(self):
+        for name, change in (('a second container', lambda: setattr(self.guest, 'extra_after_create', True)),
+                             ('another image', lambda: setattr(self.guest, 'image', 'sha256:' + '0' * 64))):
+            with self.subTest(name):
+                self.setUp()
+                change()
+                out = self.run_driver()
+                self.assertEqual(self.step(out, 2)['verdict'], 'FAIL')
+        self.setUp()
+        self.guest.create_agent = {'kind': 'ACPAgent'}           # an answer that names no acp_server
+        self.assertEqual(self.step(self.run_driver(), 2)['verdict'], 'PASS')
+
+    def test_teardown_failures(self):
+        base = f'/api/conversations/{CID}'
+        cases = {'the delete is refused': lambda: setattr(self.guest, 'delete_refused', True),
+                 'the container stays': lambda: setattr(self.guest, 'keep_container', True),
+                 'the outer server still counts one': lambda: setattr(self.guest, 'count_after', 1)}
+        for name, change in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                change()
+                original = self.guest.answer
+
+                def answer(method, path, body, original=original):
+                    if method == 'DELETE' and getattr(self.guest, 'delete_refused', False):
+                        self.guest.calls.append((method, path))
+                        return 500, {}
+                    if path == '/api/conversations/count' and method == 'GET' and \
+                            getattr(self.guest, 'count_after', None) is not None and \
+                            ('DELETE', base) in self.guest.calls:
+                        self.guest.calls.append((method, path))
+                        return 200, self.guest.count_after
+                    return original(method, path, body)
+                self.guest.answer = answer
+                out = self.run_driver()
+                self.assertEqual((self.step(out, 13)['verdict'], out['result']), ('FAIL', 'FAIL'), name)
+
+    def test_container_and_list_errors_are_unknown(self):
+        for name, change, number in (
+                ('the bash route refuses', lambda: setattr(self.guest, 'bash', (500, {})), 3),
+                ('the command gives no exit code', lambda: setattr(self.guest, 'bash', (200, {'stdout': ''})), 3),
+                ('the outer list is refused', lambda: self.guest.answers.update(
+                    {'/api/conversations/search?limit=100': (500, {'items': []})}), 3),
+                ('the outer list is not a list', lambda: self.guest.answers.update(
+                    {'/api/conversations/search?limit=100': (200, {'items': {}})}), 3),
+                ('the outer list has another page', lambda: self.guest.answers.update(
+                    {'/api/conversations/search?limit=100': (200, {'items': [], 'next_page_id': 'x'})}), 3),
+                ('an outer id that is not a uuid', lambda: self.guest.answers.update(
+                    {'/api/conversations/search?limit=100': (200, {'items': [{'id': 'conversation-1'}]})}), 3),
+                ('an events page refused', lambda: self.guest.answers.update(
+                    {f'/api/conversations/{CID}/events/search?limit=100': (500, {'items': []})}), 9),
+                ('an events page of another shape', lambda: self.guest.answers.update(
+                    {f'/api/conversations/{CID}/events/search?limit=100': (200, {'items': 'x'})}), 9),
+                ('a second container once the turn runs', lambda: setattr(self.guest, 'extra_when_sent', True), 5)):
+            with self.subTest(name):
+                self.setUp()
+                change()
+                out = self.run_driver()
+                self.assertEqual(self.step(out, number)['verdict'], 'UNKNOWN', name)
+                self.assertNotEqual(out['result'], 'PASS')
+
+    def test_a_lost_answer_is_not_a_stop(self):
+        self.guest.malformed = {f'/api/conversations/{CID}/agent_final_response'}
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 9)['verdict'], out['stop_conditions'], out['result']),
+                         ('UNKNOWN', [], 'UNKNOWN'))
+        self.assertEqual(self.step(out, 9)['detail']['error'], 'NO_ANSWER')
+
+    def test_during_the_turn_a_stop_or_another_failure_is_never_excused(self):
+        gone = {k: v for k, v in tcc.CONTAINER.items() if k not in (20, 21, 22)}
+        for name, processes, change in (
+                ('npx with the adapter gone', {**gone, 23: (8, '/usr/bin/node', ['npx', '-y', 'x'])}, None),
+                ('a limit with the adapter gone', gone, lambda snap: snap['limits'].update({'pids.max': 'max'}))):
+            with self.subTest(name):
+                self.setUp()
+                self.guest.statuses = ['finished']
+                self.guest.during = snapshot(processes, rows=[TO_ENDPOINT])
+                if change:
+                    change(self.guest.during)
+                out = self.run_driver(host=lambda rec, pid: host_snapshot(gone))
+                self.assertEqual(self.step(out, 5)['verdict'], 'FAIL', name)
+
+    def test_after_the_turn_each_view_fails_on_its_own(self):
+        bad_host = host_snapshot()
+        bad_host['limits'] = dict(bad_host['limits'], **{'pids.max': 'max'})
+
+        def host_after(rec, pid):
+            return bad_host if self.turn_done else host_snapshot()
+        cases = {
+            'the container view': (lambda: self.guest.after['limits'].update({'pids.max': 'max'}), {}),
+            'the guest-root view': (lambda: None, {'host': host_after}),
+            'the connections (ambiguous, no stop)': (lambda: setattr(self.guest, 'after', snapshot(
+                rows=[TO_ENDPOINT, tcc.tcp_row('020011AC:C351', '01010101:01BB', '07', 6003)])), {}),
+        }
+        for name, (change, kw) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                change()
+                out = self.run_driver(**kw)
+                self.assertEqual((self.step(out, 8)['verdict'], out['stop_conditions']), ('FAIL', []), name)
+
+    def test_the_job_contract_needs_the_admitted_names(self):
+        bare = json.loads(json.dumps(PROFILE))
+        del bare['network']['inference_composition']['attempt_token_environment']
+        out = self.run_driver(profile=bare)
+        self.assertEqual(self.step(out, 6)['verdict'], 'FAIL')
+        self.assertNotIn('attempt_token', self.guest.env_specs[0])
+
+    def test_the_native_tool_in_an_acp_tool_call_fails(self):
+        self.guest.events[1].append({'id': 'e7', 'kind': guest.ACP_TOOL_CALL_KIND,
+                                     'title': 'start_child_conversation(task)'})
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 9)['verdict'], 'FAIL')
+        self.assertEqual(self.step(out, 9)['detail']['mechanisms']["(d) OpenHands' start_child_conversation tool"]
+                         ['events_naming_it'], ['e7'])
+
+    def test_the_key_search_is_unknown_unless_both_searches_are_clean(self):
+        ks = guest.key_search()
+        real_report = ks.Search.report
+        for verdict in ('incomplete', 'invalid'):
+            with self.subTest(verdict=verdict):
+                self.setUp()
+                with mock.patch.object(ks.Search, 'report',
+                                       lambda self_, real=real_report, v=verdict: dict(real(self_), verdict=v)):
+                    out = self.run_driver()
+                self.assertEqual((self.step(out, 11)['verdict'], out['result']), ('UNKNOWN', 'UNKNOWN'))
+        self.setUp()
+        out = self.run_driver(inspected='UNKNOWN')
+        self.assertEqual(self.step(out, 11)['verdict'], 'UNKNOWN')
+
+    def test_the_key_in_a_container_output_is_found(self):
+        self.guest.collector_noise = base64.b64encode(SYNTHETIC.encode()).decode() + '\n'
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 11)['verdict'], out['result']), ('FAIL', 'FAIL'))
+
+    def test_an_already_revoked_grant_is_not_revoked_again(self):
+        self.broker.grant['state'] = 'revoked'
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 12)['verdict'], 'PASS')
+        self.assertNotIn('revoke', [c[0] for c in self.broker.calls])
+        self.setUp()
+        self.broker.grant['state'] = 'expired'
+        original = self.broker.call
+        self.broker.call = lambda method, *a: dict(original(method, *a), state='expired') \
+            if method in ('grant', 'revoke') else original(method, *a)
+        out = self.run_driver()
+        self.assertEqual(self.step(out, 12)['verdict'], 'FAIL')
+
+    def test_the_stop_names_its_cause(self):
+        self.guest.during = snapshot({**tcc.CONTAINER, 40: (0, '/usr/bin/bash', ['bash'])}, rows=[TO_ENDPOINT])
+        out = self.run_driver()
+        self.assertEqual(sorted(self.stops(out)), [
+            "a process outside the container's lineage (entered from outside)",
+            "a process outside the container's lineage (not a descendant of the inner server)"])
+        # with the inner server not identified (no listener owner), its ancestry is a failure, not a stop
+        self.setUp()
+        fs = tcc.container_fs(socket_owner=None)
+        fs.files['/proc/net/tcp'] = (tcc.TCP + TO_ENDPOINT).encode()
+        self.guest.during = tcc.container_snapshot(fs)
+        out = self.run_driver()
+        self.assertEqual((self.step(out, 5)['verdict'], out['stop_conditions']), ('FAIL', []))
+
+    def test_more_refusals(self):
+        ctx = types.SimpleNamespace(profile=PROFILE, repo=REPO, instance_dir=lambda n: self.state / n)
+        with mock.patch.object(guest, 'running_instance', side_effect=AssertionError('reached')), \
+                self.assertRaisesRegex(guest.Refused, 'needs the synthetic key'):
+            guest.acp_qualification_run(ctx, 'g1', TOKEN, 'single', MODEL, key_mode='synthetic',
+                                        provider_key_fingerprint=SYNTHETIC_FP)
+        existing = self.state / 'exists.json'
+        existing.write_text('{}', encoding='utf-8')
+        with mock.patch.object(guest, 'running_instance', return_value=(None, RECORD)), \
+                self.assertRaisesRegex(guest.Refused, '--out'):
+            guest.acp_qualification_run(ctx, 'g1', TOKEN, 'single', MODEL, out_path=str(existing))
+
+    def test_the_synthetic_source_is_the_launchers(self):
+        source = (REPO / 'integrations' / 'inference' / 'inference_qualification.py').read_text(encoding='utf-8')
+        self.assertIn(repr(guest.ACP_SYNTHETIC_SOURCE), source)
+        self.assertEqual((guest.ACP_QUALIFICATION_FAMILY, guest.ACP_QUALIFICATION_PROVIDER, guest.ACP_EVENT_PAGES),
+                         ('anthropic-messages', 'claude-code', 50))
+        self.assertEqual(guest.ACP_TURN_CEILING_S, 1920)
+        self.assertEqual(guest.ACP_TURN_END, ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation'))
+
+
+class Delegation(unittest.TestCase):
+    """acp_delegation on its own: what each mechanism is classified from."""
+
+    def test_processes_alone_or_tool_calls_alone_show_mechanism_a(self):
+        a = "(a) the provider's own tools and sub-agents"
+        self.assertTrue(guest.acp_delegation([], ['node', 'claude', 'bash'], None, [], [])[a]['observed'])
+        self.assertTrue(guest.acp_delegation([], None, ['node', 'claude', 'bash'], [], [])[a]['observed'])
+        self.assertFalse(guest.acp_delegation([], ['node', 'claude'], ['node'], [], [])[a]['observed'])
+        self.assertFalse(guest.acp_delegation([{'kind': 'MessageEvent'}], None, None, [], [])[a]['observed'])
+        out = guest.acp_delegation([{'kind': guest.ACP_TOOL_CALL_KIND}], None, None, [], [])[a]
+        self.assertEqual((out['observed'], out['tool_call_titles']), (True, ['None']))
+
+    def test_the_drivers_own_fork_calls_are_named(self):
+        calls = [{'path': '/api/conversations/x/ask_agent'}, {'path': '/api/conversations/x/fork?y=1'},
+                 {'path': '/api/conversations/x/children'}, {'path': '/api/conversations/x/events'},
+                 {'path': '/api/conversations/x/forked'}]
+        b = guest.acp_delegation([], None, None, [], calls)['(b) an ACP session fork (ask_agent)']
+        self.assertEqual(b['driver_called'], ['/api/conversations/x/ask_agent', '/api/conversations/x/fork?y=1',
+                                              '/api/conversations/x/children'])
+
+    def test_the_native_tool_by_name_only(self):
+        d = "(d) OpenHands' start_child_conversation tool"
+        for events, want in (([{'id': 1, 'tool_name': 'start_child_conversation'}], [1]),
+                             ([{'id': 2, 'kind': 'MessageEvent', 'title': 'start_child_conversation'}], []),
+                             ([{'id': 3, 'kind': guest.ACP_TOOL_CALL_KIND, 'title': None}], []),
+                             ([{'id': 4, 'kind': guest.ACP_TOOL_CALL_KIND, 'title': 'x start_child_conversation'}],
+                              [4])):
+            with self.subTest(events=events):
+                self.assertEqual(guest.acp_delegation(events, None, None, [], [])[d]['events_naming_it'], want)
+
+
 INNER_KEY = 'inner-session-key-' + 'K' * 32
 
 
@@ -654,7 +934,7 @@ class InnerServer(http.server.ThreadingHTTPServer):
 
     def __init__(self):
         server = self
-        self.pages, self.seen, self.status, self.echo = [], [], 200, False
+        self.pages, self.seen, self.status, self.echo, self.body = [], [], 200, False, None
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -668,6 +948,8 @@ class InnerServer(http.server.ThreadingHTTPServer):
                 else:
                     nxt = f'p{index + 1}' if index + 1 < len(server.pages) else None
                     status, body = server.status, {'items': server.pages[index], 'next_page_id': nxt}
+                    if server.body is not None:
+                        body = server.body
                     if server.echo:
                         body['key'] = INNER_KEY
                 data = json.dumps(body).encode()
@@ -699,7 +981,7 @@ class InnerConversationsScript(unittest.TestCase):
         self.server.pages = [[{'id': CID, 'parent_conversation_id': None, 'title': 'x'}],
                              [{'id': CHILD, 'parent_conversation_id': CID}, 'not an object']]
         self.server.seen.clear()
-        self.server.status, self.server.echo = 200, False
+        self.server.status, self.server.echo, self.server.body = 200, False, None
 
     def run_script(self, environ=b'OH_SESSION_API_KEYS_0=' + INNER_KEY.encode() + b'\0PATH=/bin\0'):
         real_open = builtins.open
@@ -744,6 +1026,13 @@ class InnerConversationsScript(unittest.TestCase):
         with mock.patch('socket.create_connection', side_effect=ConnectionRefusedError()):
             out = self.run_script()
         self.assertEqual((out['items'], out['error'], out['pages']), (None, 'ConnectionRefusedError', 0))
+
+    def test_an_answer_of_another_shape_leaves_items_unset(self):
+        for body in ([], {'items': {}}, {'next_page_id': None}):
+            with self.subTest(body=body):
+                self.server.body = body
+                out = self.run_script()
+                self.assertEqual((out['items'], out['status'], out['pages']), (None, 200, 1))
 
     def test_twenty_pages_at_most(self):
         self.server.pages = [[{'id': CID}]] * 25

@@ -122,7 +122,8 @@ class AttemptTokenContract(unittest.TestCase):
                              '20': b'ANTHROPIC_API_KEY=' + TOKEN.encode() + b'\0ANTHROPIC_BASE_URL=http://a\0',
                              '21': b'ANTHROPIC_API_KEY=' + REAL.encode() + b'\0',
                              '22': b'ANTHROPIC_API_KEY=' + TOKEN.encode() + b'x\0OTHER=1\0',
-                             '23': b'ANTHROPIC_API_KEYS=' + TOKEN.encode() + b'\0'},
+                             '23': b'ANTHROPIC_API_KEYS=' + TOKEN.encode() + b'\0',
+                             '24': b'ANTHROPIC_API_KEY\0'},
                             guest.attempt_token_spec(('ANTHROPIC_API_KEY',)))
         envs = out['process_environments']
         self.assertEqual(envs['20']['shapes'], {'ANTHROPIC_API_KEY': {'token': True, 'provider_key': False}})
@@ -130,6 +131,7 @@ class AttemptTokenContract(unittest.TestCase):
         self.assertEqual(envs['22']['shapes'], {'ANTHROPIC_API_KEY': {'token': False, 'provider_key': False}})
         self.assertNotIn('shapes', envs['1'])
         self.assertNotIn('shapes', envs['23'])
+        self.assertEqual(envs['24'], {'comm': 'c24', 'names': ['ANTHROPIC_API_KEY']})   # a name without '='
         self.assertEqual(envs['20']['names'], ['ANTHROPIC_API_KEY'])
         text = json.dumps(out)
         self.assertNotIn(TOKEN, text)
