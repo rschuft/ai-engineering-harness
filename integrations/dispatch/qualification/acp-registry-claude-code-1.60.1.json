@@ -1,0 +1,70 @@
+{
+  "format": "ai-engineering-harness/dispatch/acp-registry-extract/v1",
+  "use": "The facts of the pinned OpenHands ACP registry that the S-03.3 qualification create relies on, read as data from the locked wheels (nothing run). Line numbers are of those wheels' files. acp_qualification.py pins this file by sha256 and checks the create fixture against it.",
+  "openhands_version": "1.60.1",
+  "wheels": {
+    "openhands_sdk-1.60.1-py3-none-any.whl": "f6efa8f8428ccc8abebbcf4c424bf3008a66a46f9f2340d37b3b306fcb45eb6b",
+    "openhands_agent_server-1.60.1-py3-none-any.whl": "df80a622059f3cce797ab2c08adfc5256a69d7c7a6b4712b2d5147df25be76f6"
+  },
+  "acp_server": "claude-code",
+  "facts": {
+    "api_key_env_var": {
+      "value": "ANTHROPIC_API_KEY",
+      "source": "openhands/sdk/settings/acp_providers.py:382"
+    },
+    "base_url_env_var": {
+      "value": "ANTHROPIC_BASE_URL",
+      "source": "openhands/sdk/settings/acp_providers.py:383"
+    },
+    "binary_name": {
+      "value": "claude-agent-acp",
+      "source": "openhands/sdk/settings/acp_install_catalog.py:126 (ACP_INSTALL_CATALOG, read by acp_providers.py:397)"
+    },
+    "adapter_version": {
+      "value": "0.63.0",
+      "source": "openhands/sdk/settings/acp_install_catalog.py:105"
+    },
+    "default_session_mode": {
+      "value": "bypassPermissions",
+      "source": "openhands/sdk/settings/acp_providers.py:384"
+    },
+    "data_dir_env_var": {
+      "value": "CLAUDE_CONFIG_DIR",
+      "source": "openhands/sdk/settings/acp_providers.py:398"
+    },
+    "env_conflicts": {
+      "value": [
+        {"dominant": "CLAUDE_CODE_OAUTH_TOKEN", "strip": ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"]}
+      ],
+      "source": "openhands/sdk/settings/acp_providers.py:404-409; applied by ACPAgent._strip_conflicting_env, openhands/sdk/agent/acp_agent.py:2811-2834, only when the dominant variable is present"
+    },
+    "explicit_command_verbatim": {
+      "value": "a non-empty acp_command is used verbatim; an empty one takes the registry's npx command, rewritten to binary_name only when shutil.which finds it",
+      "source": "openhands/sdk/settings/model.py:2047-2073, 2106-2140"
+    },
+    "secret_kinds": {
+      "value": ["StaticSecret", "LookupSecret"],
+      "source": "openhands/sdk/secret/secrets.py:93 (StaticSecret), 113-130 (LookupSecret: httpx.get of the url it names, line 128)"
+    },
+    "blank_secret_is_none": {
+      "value": "an empty, whitespace-only or redacted StaticSecret value validates to None",
+      "source": "openhands/sdk/utils/pydantic_secrets.py:133-135"
+    },
+    "registry_exports_non_empty_only": {
+      "value": "get_all_secrets_as_env_vars exports a secret only when its value is non-empty",
+      "source": "openhands/sdk/conversation/secret_registry.py:250-284 (line 281)"
+    },
+    "acp_subprocess_environment": {
+      "value": "default_environment(), then os.environ of the inner server, then the whole secret registry, then the data dir, file secrets, CLAUDECODE removed and env_conflicts; never sanitized_env",
+      "source": "openhands/sdk/agent/acp_agent.py:3076-3101"
+    },
+    "sanitized_env_strips": {
+      "value": ["OH_SECRET_KEY", "OH_SESSION_API_KEYS_*"],
+      "source": "openhands/sdk/utils/command.py:17-30, 62-68 (the native terminal's environment, not the ACP subprocess's)"
+    },
+    "container_environment": {
+      "value": ["OH_SECRET_KEY", "OH_SESSION_API_KEYS_0"],
+      "source": "openhands/agent_server/docker_runtime/registry.py:615-665 (the Docker runtime passes both into the conversation container)"
+    }
+  }
+}

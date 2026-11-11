@@ -1,0 +1,35 @@
+{
+  "format": "ai-engineering-harness/dispatch/acp-qualification-create/v1",
+  "use": "S-03.3 only: the disposable create of the Claude Code ACP qualification run, one fixed prompt, no repository content. Never read by the dispatcher's admission: a real dispatch stage admits only its profile's pinned create template (profiles/<id>/...), which this file is not. acp_qualification.py pins it by sha256 and fills the four placeholders, each checked.",
+  "placeholders": ["{conversation_id}", "{acp_model}", "{attempt_token}", "{inference_endpoint}"],
+  "body": {
+    "conversation_id": "{conversation_id}",
+    "conversation_runtime": "docker",
+    "workspace": {
+      "kind": "LocalWorkspace",
+      "working_dir": "/workspace"
+    },
+    "agent_settings": {
+      "agent_kind": "acp",
+      "acp_server": "claude-code",
+      "acp_command": ["claude-agent-acp"],
+      "acp_args": [],
+      "acp_model": "{acp_model}",
+      "acp_session_mode": null,
+      "acp_isolate_data_dir": true,
+      "mcp_config": {}
+    },
+    "secrets": {
+      "ANTHROPIC_API_KEY": {"kind": "StaticSecret", "value": "{attempt_token}"},
+      "ANTHROPIC_BASE_URL": {"kind": "StaticSecret", "value": "{inference_endpoint}"}
+    },
+    "secrets_encrypted": false,
+    "autotitle": false,
+    "container": {
+      "browser": false
+    },
+    "tags": {
+      "aieh": "s-03.3-disposable"
+    }
+  }
+}

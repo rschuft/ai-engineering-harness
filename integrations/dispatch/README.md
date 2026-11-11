@@ -446,6 +446,53 @@ passed. Every verdict fails closed, and a snapshot, inspection or set that is no
 `ContainmentError` (`SNAPSHOT_INVALID`, `EXPECTED_INVALID`, `INSPECT_INVALID`, `SETS_INVALID`, `LIMITS_INVALID`,
 `NO_SNAPSHOT`, `MODE_INVALID`, `TARGET_INVALID`) instead of being judged.
 
+## The ACP qualification create (S-03.3, slice 2)
+
+Plan leaf S-03.3 runs the first ACP coding provider (Claude Code) through the inference broker with "a disposable
+pinned create fixture" (its proof). That create carries the ACP `agent_settings` block and the create's `secrets`,
+which no dispatch stage admits: a stage's body must be its profile's pinned template (`check_create_body`, whose
+allowlist has no `secrets`), and a stage reads pinned artifacts only under `profiles/<id>/`
+(`read_profile_artifact`). So the fixture lives here, beside its own admission, and the two never meet (the
+Overseer's ruling on the [slice plan](../../evidence/S-03.3-slice-plan.md)'s D-3).
+[`acp_qualification.py`](acp_qualification.py) builds and checks it; nothing sends it yet (the live driver is slice
+5), and nothing here has run in a guest: **not yet verified** against a live Agent Server.
+
+| File | What it is |
+|---|---|
+| [`qualification/acp-claude-code-create.json`](qualification/acp-claude-code-create.json) | The fixture (`ai-engineering-harness/dispatch/acp-qualification-create/v1`), pinned by `FIXTURE_SHA256`: the Docker runtime, `/workspace`, `agent_settings` `{agent_kind: acp, acp_server: claude-code, acp_command: ["claude-agent-acp"], acp_args: [], acp_model, acp_session_mode: null, acp_isolate_data_dir: true, mcp_config: {}}` (no `tools`, `agent_context` or `acp_file_secrets`), `secrets` `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` as `StaticSecret`s, `secrets_encrypted` false, no browser, the tag `s-03.3-disposable`; four placeholders: the reserved conversation id, the approved model, the attempt token and the guest inference endpoint |
+| [`qualification/acp-registry-claude-code-1.60.1.json`](qualification/acp-registry-claude-code-1.60.1.json) | The facts of the pinned OpenHands registry the fixture relies on (the key and base-URL variable names, the binary name, the session mode, the data-dir variable, `env_conflicts`, the secret kinds, and the environment facts behind finding F-3), each with its source line in the locked wheels, whose sha256 it names; pinned by `REGISTRY_SHA256`. The fixture's command and secret names are checked against it on every load |
+
+`build_create(conversation_id=, attempt_token=, acp_model=, approved_models=, profile=)` fills the fixture and
+checks it; `check_create(body, conversation_id=, approved_models=, profile=)` admits exactly the fixture with its
+four values and refuses everything else with a `QualificationRefused` code
+(`ai-engineering-harness/dispatch/acp-qualification-refusal/v1`):
+
+| Code | Refused |
+|---|---|
+| `FIXTURE_DRIFTED`, `FIXTURE_INVALID` | the fixture or the extract is not its pinned bytes, not its strict JSON shape, or they disagree (a command or secret name that is not the registry's) |
+| `ENDPOINT_UNDECLARED` | the profile declares no single `network.endpoints` entry of class `inference` with an IPv4 literal and a port |
+| `MODEL_NOT_APPROVED` | `acp_model` is not one name of the family's configured allowlist (the broker's model grammar, no wildcard, no duplicate; an empty list approves nothing) |
+| `CONVERSATION_ID_MISMATCH` | not the reserved conversation id |
+| `BODY_MALFORMED`, `BODY_FIELD_UNKNOWN`, `BODY_NOT_FIXTURE` | not an object; a field outside the fixture; any other field (runtime, workspace, container, tags, session mode, data-dir isolation, ...) not the fixture's |
+| `AGENT_PROFILE_FORBIDDEN` | `agent_profile_id` or another profile reference: a profile resolution brings the server's stored settings and MCP servers |
+| `TOOLS_FORBIDDEN` | tools, skills, plugins, hooks, client tools, agent definitions, launch additions or an `agent_context` |
+| `MCP_FORBIDDEN` | any MCP server: `mcp_config` other than `{}`, or an MCP field |
+| `ACP_SERVER_NOT_PINNED` | `agent_kind` other than `acp`, or `acp_server` other than `claude-code` (`custom` included) |
+| `ACP_COMMAND_NOT_PINNED` | `acp_command` other than exactly `["claude-agent-acp"]`: empty or absent (the registry's `npx` form, which the SDK keeps when `shutil.which` misses the wrapper), the `npx` command, a path, a shell or `env` prefix, another adapter; any `acp_args` |
+| `SECRET_NAMES`, `SECRET_KIND_FORBIDDEN`, `SECRETS_ENCRYPTED` | secrets other than exactly the registry's two names (no `OH_*` name, no OAuth token); a secret that is not `{kind: StaticSecret, value: <string>}` (a `LookupSecret` makes the outer server fetch a URL the body names, finding F-2); `secrets_encrypted` not `false` |
+| `SECRET_PROVIDER_KEY_SHAPED` | a provider-key-shaped value anywhere (`sk-ant-`, `sk-proj-`, a long `sk-` run) |
+| `SECRET_NOT_ATTEMPT_TOKEN`, `TOKEN_OUTSIDE_SECRET` | `ANTHROPIC_API_KEY` is not one broker-issued attempt token (`aieh-inf-` and 43 URL-safe characters); that token, its body or any other token anywhere else in the create |
+| `DESTINATION_NOT_ENDPOINT` | `ANTHROPIC_BASE_URL` other than the profile's guest inference endpoint (`http://172.17.0.1:8090` for `strong-windows-qemu-whpx`), or any other URL anywhere in the create |
+
+The attempt token in `ANTHROPIC_API_KEY` is the broker-issued per-attempt token, never a provider key
+(`cred-inference-attempt-token`). **Finding F-3, disclosed, not changed:** at the pinned OpenHands the adapter's
+environment is the inner server's own (`OH_SECRET_KEY`, `OH_SESSION_API_KEYS_0` included) plus the secret registry,
+and no field of the create can remove or blank a variable of it: the registry has no environment field
+(`env_conflicts` is per provider and, for Claude Code, strips only the Anthropic variables when an OAuth token is
+present), `ACPAgentSettings` has no `acp_env`, and a blank `StaticSecret` validates to none and is not exported. The
+exposure class is the one S-01.3.1 recorded through `/proc/1/environ`
+([slice 2 record](../../evidence/S-03.3-slice2-qualification-create.md)).
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json
@@ -634,6 +681,16 @@ Claude Code adapter, its CLI and a shell it started, the collector's chain throu
 | `HostVerdict` | the passing view; another target, the inspected caps, the cgroup's files, a member's cgroup or identity, an escaped child, a missing namespaced pid, an adapter not seen or with another executable, two host processes for one inner pid; a transient process that ended between the views is listed, not failed |
 | `SetsVerdict` | no new container, outer conversation or foreign inner conversation; a child through the children route classified, not failed |
 | `Shapes`, `CommandLine` | malformed snapshots, expectations, limits, sets and outputs refused, not judged; `collect` prints one result line and refuses bad arguments; the file imports only the standard library |
+
+[`tests/test_acp_qualification.py`](tests/test_acp_qualification.py) (S-03.3 slice 2, unit), with a synthetic
+conversation id, models and attempt tokens and the checked-in profile:
+
+| Class | What it shows |
+|---|---|
+| `PositiveControl` | the filled fixture, exactly, admitted (also after a JSON round trip and with another approved model); the endpoint is the profile's; a token whose body holds an `sk-` run is still a token; the pins hold and the extract's wheels are the lock's; the module imports nothing that launches or connects |
+| `RealStageRefusal` | the dispatcher's own body check against the profile's template and admission policy refuses the create (`BODY_FIELD_UNKNOWN` on `secrets`, then `BODY_NOT_TEMPLATE` on `agent_settings`) and admits the template itself; its artifact reader cannot read either qualification file (`PROFILE_ARTIFACT_MISSING`); the qualification check refuses the stage template |
+| `FieldRefusals`, `SecretRefusals`, `DestinationRefusals`, `FixtureRefusals` | each refusal code above on its own fact: profile, tool, skill, plugin, hook and MCP fields; another agent kind or server; the empty, absent, `npx`, path, shell, `env` and other-adapter commands and any arguments; models outside or malformed allowlists; missing, extra (`OH_*`, OAuth) or renamed secrets; `LookupSecret` and malformed sources; encrypted secrets; provider-key-shaped values in four places; values that are not one token; the token, its body or another token elsewhere; eleven other base URLs and URLs elsewhere; malformed endpoint declarations; the conversation id; every other fixture field |
+| `PinRefusals` | drifted bytes (a newline, CRLF, truncation, empty) and re-pinned but invalid files (not JSON, duplicate keys, another format, a missing or doubled placeholder, a command or secret names that disagree with the extract) are refused by the loader, the builder and the check; a re-pinned equivalent file is admitted |
 
 [`tests/test_attempt_tokens.py`](tests/test_attempt_tokens.py) (E-01.3.3), on the same fixture: attempts
 are dispatched through the fake Agent Server, then delivered from an in-memory credential provider
