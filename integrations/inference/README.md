@@ -7,7 +7,9 @@ as amended by its amendment 1 (which governs where they disagree), decisions 000
 [0009](../../decisions/0009-managed-data-root-and-configuration-contract.md) and 0013 point 6; the ACP
 families of [`evidence/S-03-acp-coding-provider-recommendation.md`](../../evidence/S-03-acp-coding-provider-recommendation.md)
 sections 1.1 to 1.5. Slice record: [`evidence/S-03.2-slice1-broker-core.md`](../../evidence/S-03.2-slice1-broker-core.md);
-the qualification tools of slice 4: [`evidence/S-03.2-slice4-qualification-tools.md`](../../evidence/S-03.2-slice4-qualification-tools.md).
+the qualification tools of slice 4: [`evidence/S-03.2-slice4-qualification-tools.md`](../../evidence/S-03.2-slice4-qualification-tools.md);
+the provider-key containment search of slice 5:
+[`evidence/S-03.2-slice5-key-containment-search.md`](../../evidence/S-03.2-slice5-key-containment-search.md).
 
 The broker is the host-side process of the trusted management domain (inventory principal
 `inference-broker`) that alone holds the model provider's key and alone issues inference access. Standard
@@ -25,6 +27,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
 | `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation, and for the qualification one grant (`issue`, slice 4); `127.0.0.1` only), an attempt token's fingerprint (`token_fingerprint`) and the `issue` command (slice 4) |
 | `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`) |
+| `inference_key_search.py` | The provider-key containment search (S-03.2 slice 5): the synthetic key held in memory, searched for raw and in its encodings over byte surfaces, with positive controls; its command line (`search`). Standard library only; it imports nothing of the broker |
 | `tests/broker_support.py` | Synthetic fixtures: an in-memory credential provider, a settable clock, a fake upstream per family (`FakeUpstream`, an in-process server on an ephemeral `127.0.0.1` port) and `Rig` (a broker over a fixture store and audit directory) |
 | `tests/test_config.py` | The shipped declarations; every refusal of the declaration file and of `components.inference_broker`; the decision 0009 loader's refusal of secret-shaped keys under the component; the `config` command |
 | `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
@@ -35,6 +38,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_serve.py` | `serve` end to end in the test process |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
+| `tests/test_key_search.py` | `inference_key_search.py`: its forms (the standard encodings at every alignment, the body, the fragments), a copy across a read boundary, every positive control for keys of 16 to 128 body characters and each control failing when the view it controls is broken, the gzip, SQLite, HTTP, tar, tree and environment views with their incomplete cases, the command line (a pipe only, every refusal without the key, a planted copy found, nothing printed, logged or written) |
+| `tests/test_key_search_boundary.py` | The search end to end at the broker's exposure boundary: the broker under the qualification launcher with the fake upstreams, every byte that crossed its listeners, its outputs, store and audit directory searched (not found; found on the bytes it sends upstream); a planted leak (a reflecting upstream, a copy in the audit directory and in a database) found where it was planted |
 
 ## The declared families
 
@@ -248,6 +253,59 @@ Built for S-03.2's guest qualification (the plan in
   and `stop` lines frame them. The qualification shows the substitution by comparing that fingerprint with the
   start receipt's (and with the token's, which must differ).
 
+## The provider-key containment search (slice 5)
+
+S-03.2's proof as amended on 2026-11-11 (Owner decision OA-19) asks that agents cannot read the provider
+credential be shown with the synthetic key "searched for at the secret's exposure boundaries ... in its raw form
+and its common encodings by a checker that holds it in memory only and reports counts, with a positive control";
+a fingerprint search alone is not proof that the raw credential is absent. `inference_key_search.py` is that
+checker. **Not yet verified** against a live broker or guest: running it there is part of the Owner's acts A2,
+A3 and A4.
+
+- **What it searches for:** the whole key and its body (the key without the public prefix
+  `aieh-qualification-synthetic-`), each raw (also what JSON escaping, URL and form encoding, HTML escaping and
+  shell quoting give, all identities on this alphabet), as lower- and upper-case hex, as base64 and base64url at
+  each of the three alignments, and as UTF-16LE and UTF-16BE; and raw windows of 16 body characters at a stride
+  of 8, so a raw run of 23 body characters is found. Never by fingerprint.
+- **Views:** the raw bytes in chunks that overlap by the longest needle less one byte (a copy across a read
+  boundary is found); a gzip blob decompressed; an SQLite database row by row (a value split across overflow
+  pages is whole there; read from an in-memory copy, the file is never opened by SQLite); a tar stream member by
+  member with names and link targets; an HTTP/1.x capture message by message, de-chunked and decoded from gzip
+  or deflate.
+- **Surfaces:** `capture` and `http` (bytes held in memory, in a test or by `tools/guest.py`), `file`, `tree`
+  (links and junctions not followed, counted), `tar` and `environ` (this process's). Each reports whether it was
+  searched in full, the bytes per view, the items, what it could not read (by error type), what it did not
+  follow, and the matches per form and view. A name is shown only if it holds no match.
+- **Positive controls** (`Search.controls()`): copies of the key made by the standard library's encoders, planted
+  in memory in every kind of surface and view (191 cases), including a copy across the read boundary, an SQLite
+  row split across an overflow page and an HTTP body split across two chunks (where the raw view must find no
+  whole copy). The verdict is `invalid` unless each is found. A surface may also be declared to hold the key
+  (`expect='present'`): the offline test's bytes the broker sends upstream.
+- **Verdicts:** `found`, `invalid`, `incomplete`, `not-found`. `not-found` is stated for the bytes searched only,
+  with `not_covered` listing what lies outside them, process memory first.
+- **Never kept:** the key comes from standard input only (a terminal is refused), must have the synthetic shape
+  and the fingerprint given (`--expect-fingerprint`, the broker start receipt's); the report carries the
+  fingerprint and counts, is searched for the key before it is printed and withheld if it holds one
+  (`OUTPUT_WITHHELD`); the module prints nothing, keeps no log and writes no file.
+
+```
+<synthetic key> | <tools python> -I -B integrations/inference/inference_key_search.py search \
+    --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
+```
+
+KIND is `file`, `tree`, `tar` or `environ` (PATH `self`). Exit 0 `not-found`, 1 `found`, `invalid` or
+`incomplete` (or a withheld report), 2 refused.
+
+**Wired for the live qualification** (prepared, not run): `tools/guest.py inspect --provider-key-fingerprint FP
+--provider-key-stdin` searches the P5 collection (the guest's files, process environments and records, as
+collected as the agent user) and its host files (`seed.iso`, `launch.json`, `serial.log`) for the key itself, on
+the host, in memory, beside the fingerprint needle; for a guest with the inference composition that P5 check is
+UNKNOWN without it. `tools/guest.py job-access-probe --attempt-token-stdin --provider-key-stdin
+--provider-key-fingerprint FP` (the token, then the key, on standard input) has the job's token script return
+each answer it received whole (up to 64 KiB) and searches them, which is what crossed the forward; the answers
+are never recorded. The key never travels to the guest. The search command then covers the instance directory,
+the reports, the broker's store, audit directory and captured output. The prepared order is in the slice record.
+
 ## Commands
 
 ```
@@ -259,6 +317,8 @@ Built for S-03.2's guest qualification (the plan in
 <tools python> -I -B integrations/inference/inference_qualification.py fake-upstream --family ID --port PORT
 <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID \
     --model NAME --requests N --tokens N --ttl-s SECONDS | <the command that reads the token>
+<synthetic key> | <tools python> -I -B integrations/inference/inference_key_search.py search \
+    --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
 ```
 
 Exit 0 done, 1 failed, 2 refused (a stable code with its remedy). `serve` and `credential-set` act on the
@@ -285,7 +345,9 @@ Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ
 Qualification (`inference_qualification.py`, beside the broker's configuration and key codes):
 `QUALIFICATION_UPSTREAM_REFUSED`, `QUALIFICATION_NO_FAMILY`, `KEY_NOT_SYNTHETIC`, `KEY_NEVER_WRITTEN`,
 `FAKE_FAMILY_UNKNOWN`, `FAKE_ADDRESS_REFUSED`, `FAKE_PORT_INVALID`. The `issue` command (beside the dispatcher's
-side's codes and the broker's refusals): `TOKEN_STDOUT_TERMINAL`, `TOKEN_STDOUT_NOT_PIPE`.
+side's codes and the broker's refusals): `TOKEN_STDOUT_TERMINAL`, `TOKEN_STDOUT_NOT_PIPE`. The key search (`inference_key_search.py`): `KEY_STDIN_TTY`,
+`KEY_INVALID`, `KEY_NOT_SYNTHETIC`, `FINGERPRINT_INVALID`, `FINGERPRINT_MISMATCH`, `SURFACE_INVALID` (exit 2),
+`OUTPUT_WITHHELD` (exit 1).
 A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes the connection.
 
 ## Not yet verified
@@ -295,6 +357,8 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
   provider, any model call (each an Owner act).
 - The route sets, query rules and usage extractors of all three families: provisional, written from the
   families' public shapes, not from observed traffic; they are pinned at the leaf that first runs each family.
+- The provider-key search against a live broker, guest, job or instance directory (slice 5: offline only, in
+  the test process); piping the token and the key as two lines into `job-access-probe` from PowerShell.
 - The guest side: the SSH remote forward (built offline in slice 3, never run against a real ssh or guest),
   the sshd and container-guard changes (slice 2, offline), the typed create's `secrets`/LLM fields (A-01.2,
   E-03.1), the containment re-run; `inference_control.py` against the broker as a supervised host service.
