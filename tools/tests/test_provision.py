@@ -1375,6 +1375,25 @@ class Manifest(ManifestFixture):
         with self.assertRaises(guest.Refused):
             guest.create(self.ctx(), 'abc', egress_falsification=True)
 
+    def test_inference_adds_only_its_daemon_json_keys(self):
+        """Decision 0015 (S-03.2 slice 2): create --provision --inference merges the
+        composition's bip and dns into daemon.json and marks the record; the ordinary manifest
+        is the same bytes with the option off."""
+        plain = guest.build_provision_manifest(self.ctx())
+        self.assertEqual(guest.build_provision_manifest(self.ctx(), inference=False)['bytes'],
+                         plain['bytes'])
+        self.assertNotIn('inference', plain['record'])
+        composed = guest.build_provision_manifest(self.ctx(), inference=True)
+        inf = PROFILE['network']['inference_composition']
+        self.assertEqual(composed['manifest']['docker']['daemon_json'],
+                         dict(PCONF['moby']['daemon_json'], **inf['daemon_json']))
+        self.assertIs(composed['record']['inference'], True)
+        changed = {k for k in plain['manifest'] if plain['manifest'][k] != composed['manifest'][k]}
+        self.assertEqual(changed, {'docker'})
+        nocloud_seed.check_composition_manifest(PROFILE, ('inference',), composed['bytes'])
+        with self.assertRaises(nocloud_seed.Refused):
+            nocloud_seed.check_composition_manifest(PROFILE, ('inference',), plain['bytes'])
+
     def test_a_changed_stage_is_refused(self):
         deb = self.staged / 'debs' / 'tini_0.19.0-3+b8_amd64.deb'
         deb.write_bytes(b'deb tinX')
@@ -1618,6 +1637,16 @@ class SmokeAndCli(unittest.TestCase):
                                                                 'result': 'PASS'}) as smoke:
             self.assertEqual(guest.main(['create'] + base + ['--provision']), 0)
             self.assertIs(create.call_args.kwargs.get('provision'), True)
+            self.assertIs(create.call_args.kwargs.get('inference'), False)     # off by default
+            self.assertEqual(guest.main(['create'] + base + ['--provision', '--inference']), 0)
+            self.assertIs(create.call_args.kwargs.get('inference'), True)
+            calls = create.call_count
+            with mock.patch('builtins.print'):
+                self.assertEqual(guest.main(['create'] + base + ['--inference']), 1)
+                self.assertEqual(guest.main(['create'] + base + [
+                    '--provision', '--drill', '--drill-leaf', guest.DRILL_LEAVES[0],
+                    '--inference']), 1)
+            self.assertEqual(create.call_count, calls)          # refused before create
             self.assertEqual(guest.main(['create'] + base), 0)
             self.assertNotIn('provision', create.call_args.kwargs)
             self.assertEqual(guest.main(['provision'] + base), 0)
@@ -1625,6 +1654,13 @@ class SmokeAndCli(unittest.TestCase):
             self.assertEqual(guest.main(['smoke'] + base + ['--canaries', 'C', '--durable', 'D',
                                                             '--provision']), 0)
             self.assertIs(smoke.call_args.args[6], True)
+        fp = 'sha256:' + '0' * 16
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(guest, 'inspect', return_value={'operation': 'inspect'}) as insp:
+            self.assertEqual(guest.main(['inspect'] + base + ['--provider-key-fingerprint', fp]), 0)
+            self.assertEqual(insp.call_args.args[3], fp)
+            self.assertEqual(guest.main(['inspect'] + base), 0)
+            self.assertIsNone(insp.call_args.args[3])
 
     def test_validation_instances_are_never_provisioned(self):
         with self.assertRaises(guest.Refused):

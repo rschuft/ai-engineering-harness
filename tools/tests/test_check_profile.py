@@ -485,6 +485,7 @@ class Negative(unittest.TestCase):
         self.assertTrue(entry['status'].startswith('planned'))
         for key, value, fragment in (
                 ('mechanism', 'guestfwd=tcp:172.17.0.1:8090-tcp:127.0.0.1:1', 'not a guestfwd'),
+                ('mechanism', 'ssh-local-forward', 'not a guestfwd'),
                 ('status', 'enabled', 'status must start with'),
                 ('status', 'active: observed', 'cites the evidence of its qualification'),
                 ('guest_address', '172.17.0', 'docker0 gateway'),
@@ -583,8 +584,23 @@ class Negative(unittest.TestCase):
                      'the seed overlay does not apply')
         path.write_bytes(json.dumps(original).encode())
         self.assertFails(self.qemu, 'does not match its pinned sha256')
-        # off: a template whose drop-in already forwards is refused
+        # off: a template whose guard installs other rules is refused
         template = tmp / 'profiles' / 'seed' / 'user-data.tmpl'
+        base = template.read_text(encoding='utf-8')
+        fewer = base.replace("               '-p tcp -j REJECT --reject-with tcp-reset',\n"
+                             "               '-j REJECT')\n      EGRESS_CHAIN",
+                             "               '-j REJECT')\n      EGRESS_CHAIN")
+        self.assertNotEqual(fewer, base)
+        template.write_bytes(fewer.encode())
+        pin = self.qemu['boot_inputs']['seed']['templates']['user-data']['sha256']
+        self.qemu['boot_inputs']['seed']['templates']['user-data']['sha256'] = \
+            check_profile.hashlib.sha256(fewer.encode()).hexdigest()
+        path.write_bytes(json.dumps(original).encode())
+        comp['seed_overlay']['sha256'] = check_profile.sha256_file(path)
+        self.assertFails(self.qemu, 'off, /usr/local/sbin/aieh-container-guard must install')
+        template.write_bytes(base.encode())
+        self.qemu['boot_inputs']['seed']['templates']['user-data']['sha256'] = pin
+        # off: a template whose drop-in already forwards is refused
         text = template.read_text(encoding='utf-8').replace(
             '      PermitTunnel no\n', '      PermitTunnel no\n      GatewayPorts yes\n')
         template.write_bytes(text.encode())
@@ -602,6 +618,10 @@ class Negative(unittest.TestCase):
         self.assertEqual(rules, {'RULES': ['a', 'b'], 'iptables': ['a', 'x', 'b'],
                                  'ip6tables': ['a', 'b']})
         self.assertEqual(check_profile.guard_rules_of("RULES = ('a',)\n"), {'RULES': ['a']})
+        # without both an install and an observe function nothing is simulated
+        self.assertEqual(check_profile.guard_rules_of(
+            "RULES = ('a',)\nCHAIN = 'X'\ndef install(tool):\n    raise SystemExit('never')\n"),
+            {'RULES': ['a']})
 
     # guest storage and exchange (profiles P3, P4; F-03.3.1)
     def test_guest_storage_required_for_qemu(self):

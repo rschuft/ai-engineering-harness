@@ -26,6 +26,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import types
 import unittest
 import zlib
 from unittest import mock
@@ -5860,6 +5861,7 @@ class InferenceInspect(unittest.TestCase):
         base = LaunchRecord('test_record_fields')        # one launch record for the class
         base.setUp()
         cls.addClassCleanup(base.doCleanups)
+        cls.tmp = base.tmp
         cls.record = base.record
         cls.prov = provisioned_record(cls.record)
         cls.inf = inference_record(cls.record)
@@ -5990,6 +5992,86 @@ class InferenceInspect(unittest.TestCase):
         self.assertEqual(guest.scan_bytes(b'ANTHROPIC_API_KEY=' + key, [], {}), set())
         self.assertEqual(guest.token_fingerprint(key), PROVIDER_FP)
 
+    def test_declared_and_observed_values(self):
+        obs = provisioned_observation(self.prov)
+        checks = self.checks(self.prov, obs)
+        self.assertEqual(checks[guest.INFERENCE_DROPIN_CHECK]['declared'],
+                         {'state': 'off', 'dropin': ORDINARY_DROPIN})
+        self.assertEqual(checks[guest.INFERENCE_LISTENER_CHECK]['declared'],
+                         {'state': 'off', 'endpoint': INF_ENDPOINT, 'listener': 'none'})
+        self.assertIsInstance(checks[guest.ADMISSION_CHECK]['declared']['chain'], list)
+        on = self.checks(self.inf, inference_observation(self.inf))
+        self.assertEqual(on[guest.INFERENCE_DROPIN_CHECK]['declared'],
+                         {'state': 'on', 'dropin': INFERENCE_DROPIN})
+        self.assertEqual(on[guest.INFERENCE_LISTENER_CHECK]['declared'],
+                         {'state': 'on', 'endpoint': INF_ENDPOINT,
+                          'listener': 'sshd, exactly when a forward session is recorded'})
+        self.assertEqual(on[guest.INFERENCE_KEY_CHECK]['observed'], [])
+        # no drop-in output: UNKNOWN, never a pass or a fail
+        del obs['guest']['sshd_dropin']
+        self.assertEqual(self.checks(self.prov, obs)[guest.INFERENCE_DROPIN_CHECK]['verdict'],
+                         'UNKNOWN')
+
+    def test_helpers(self):
+        self.assertEqual(guest.inference_endpoint({}), (None, None))
+        self.assertEqual(guest.inference_endpoint(PROFILE), ('172.17.0.1', 8090))
+        self.assertEqual(guest.inference_forward_path(PROFILE, Path('inst')),
+                         Path('inst') / 'inference-forward.json')
+        bare = copy.deepcopy(PROFILE)
+        bare['network']['inference_composition']['forward_session']['record'] = 'C:/x.json'
+        self.assertIsNone(guest.inference_forward_path(bare, Path('inst')))
+        del bare['network']['inference_composition']['daemon_json']
+        with self.assertRaises(guest.Refused):
+            guest.declared_daemon_json(bare, True)
+        self.assertEqual(guest.declared_daemon_json(bare, False), PCONF['moby']['daemon_json'])
+        guest.declared_seed_files(PROFILE, True)                  # cached by its declarations
+        tampered = copy.deepcopy(PROFILE)
+        tampered['boot_inputs']['seed']['templates']['user-data']['sha256'] = '0' * 64
+        with self.assertRaises(guest.Refused) as cm:
+            guest.declared_seed_files(tampered, True)
+        self.assertIn('cannot be composed', str(cm.exception))
+        rows = [{'packets': 9, 'target': 'RETURN'}, {'packets': 4, 'target': 'ACCEPT'},
+                {'packets': 3, 'target': 'LOG'}, {'packets': 2, 'target': 'REJECT'}, 'x',
+                {'packets': 1, 'target': 'REJECT'}]
+        self.assertEqual(guest.container_guard_rejects({'admission': {'iptables': rows}}), 3)
+        self.assertIsNone(guest.container_guard_rejects({'admission': {}}))
+        record = {'steps': [{'step': guest.INFERENCE_JOB_STEP, 'detail': {'results': [
+            {'what': guest.INFERENCE_ENDPOINT_WHAT, 'outcome': 'answered', 'status': 200,
+             'conversation': 'a'},
+            {'what': guest.INFERENCE_ENDPOINT_WHAT, 'outcome': 'ECONNREFUSED', 'status': None,
+             'conversation': 'b'},
+            {'what': 'inference allow edge (udp)', 'outcome': 'answered 12 bytes',
+             'conversation': 'a'}]}}]}
+        self.assertEqual([o['outcome'] for o in guest.extract_job(
+            record, 'inference', {'what': guest.INFERENCE_ENDPOINT_WHAT}, {})],
+            ['answered-200', 'ECONNREFUSED'])
+        self.assertEqual([o['outcome'] for o in guest.extract_job(
+            record, 'inference', {'what': 'inference allow edge (udp)'}, {})],
+            ['answered 12 bytes'])
+
+    def test_create_passes_the_option_to_the_manifest(self):
+        class Built(Exception):
+            pass
+
+        def built(ctx, egress_falsification, inference):
+            raise Built(inference)
+
+        def never(*args, **kwargs):
+            raise AssertionError('create must stop at the manifest here')
+        # an absolute path in this class's own temporary directory, never created; a create
+        # that went on would fail at once, never make a directory or launch anything
+        idir = self.tmp / 'instances' / 'abc'
+        ctx = types.SimpleNamespace(instance_dir=lambda name: idir, profile=PROFILE, repo=REPO)
+        with mock.patch.object(guest, 'preflight', return_value={'result': 'available'}), \
+                mock.patch.object(guest, 'profile_revision', return_value={}), \
+                mock.patch.object(guest, 'build_provision_manifest', side_effect=built), \
+                mock.patch.object(guest.os, 'mkdir', side_effect=never), \
+                mock.patch.object(guest.subprocess, 'run', side_effect=never):
+            for flag in (True, False):
+                with self.assertRaises(Built) as cm:
+                    guest.create(ctx, 'abc', provision=True, inference=flag)
+                self.assertIs(cm.exception.args[0], flag)
+
     def test_records_compare_across_start(self):
         a = inference_observation(self.inf, True, INF_LINE)
         b = inference_observation(self.inf, False)
@@ -6008,6 +6090,9 @@ class InferenceInspect(unittest.TestCase):
             self.assertIn('--inference needs --provision', str(cm.exception))
         with self.assertRaises(guest.Refused):
             guest.inspect(None, 'abc', provider_key_fingerprint='sha256:short')
+        for fingerprint in (None, PROVIDER_FP):          # valid: on to the (absent) context
+            with self.assertRaises(AttributeError):
+                guest.inspect(None, 'abc', provider_key_fingerprint=fingerprint)
         record = self.record
         self.assertNotIn('inference', record)
         self.assertFalse(guest.inference_opted(record))

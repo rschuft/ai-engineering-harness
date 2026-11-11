@@ -12,6 +12,7 @@ Joliet specification; it is the round-trip check (no isoinfo or other host tool)
 """
 from pathlib import Path
 import base64
+import contextlib
 import copy
 import hashlib
 import importlib.util
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CATEGORY = 'unit'
 
@@ -649,6 +651,44 @@ class Compositions(unittest.TestCase):
         refused('single lines', [dict(sshd, replacement=['a\nb'])])
         refused('single lines', [dict(sshd, anchor=[])])
         refused('non-empty list', [])
+
+    def test_overlay_reading_refusals(self):
+        good = json.loads((REPO / INF['seed_overlay']['path']).read_text(encoding='utf-8'))
+
+        def refused(fragment, raw=None, entry=None, overlay=None):
+            profile = copy.deepcopy(self.profile)
+            conf = profile['network']['inference_composition']
+            if overlay is not None:
+                raw = (json.dumps(overlay) + '\n').encode()
+            if raw is not None:
+                conf['seed_overlay']['sha256'] = hashlib.sha256(raw).hexdigest()
+            if entry is not None:
+                conf['seed_overlay'] = entry
+            with mock.patch.object(nocloud_seed.Path, 'read_bytes', return_value=raw) \
+                    if raw is not None else contextlib.nullcontext():
+                with self.assertRaises(nocloud_seed.Refused) as ctx:
+                    nocloud_seed.read_overlay(profile, self.root, 'inference')
+            self.assertIn(fragment, str(ctx.exception))
+        refused('path and sha256 required', entry={'path': INF['seed_overlay']['path']})
+        refused('path and sha256 required', entry={'path': 5, 'sha256': '0' * 64})
+        refused('cannot read', entry={'path': 'profiles/seed/no-such-overlay.json',
+                                      'sha256': '0' * 64})
+        refused('carries CR bytes', raw=b'{}\r\n')
+        refused('larger than', raw=b' ' * (nocloud_seed.OVERLAY_MAX + 1))
+        refused('not one JSON document', raw=b'{not json')
+        for key, value in (('schema', 'x'), ('composition', 'other'), ('template', 'meta-data'),
+                           ('placeholders', ['inference_port'])):
+            refused('not a ai-engineering-harness', overlay=dict(good, **{key: value}))
+        refused('not a ai-engineering-harness', overlay=[good])
+        with self.assertRaises(nocloud_seed.Refused) as ctx:
+            nocloud_seed.apply_overlay(self.templates['user-data'], dict(good, edits=[5]), {})
+        self.assertIn('must be an object', str(ctx.exception))
+        two = copy.deepcopy(self.profile)
+        two['network']['endpoints'] += [e for e in two['network']['endpoints']
+                                        if e['class'] == 'inference']
+        with self.assertRaises(nocloud_seed.Refused) as ctx:
+            nocloud_seed.compose_templates(two, self.root, self.templates, ('inference',))
+        self.assertIn('exactly one inference endpoint', str(ctx.exception))
 
     def test_pins_endpoint_and_manifest_are_required(self):
         def refused(fragment, profile=None, compositions=('inference',), manifest=None):
