@@ -616,8 +616,10 @@ specifies separate validation and trusted promotion lanes.
 6. Actions is enabled on the governance repository only, no repository is public, the token
    mode is restricted with an all-none ceiling, no cross-repository grant, secret or variable
    exists, and the governance protections are complete;
-7. the filtering proxy admits exactly the runner RPC, and the registration token is reset after
-   every registration (or the disclosed fallback is in force);
+7. the filtering proxy admits exactly the runner RPC, the registration token is reset before it
+   is read and after every registration, the fallback (a token standing between provisionings)
+   is never in force, and the live gate blocks a live runner until Q-02.2.2 proves the reset
+   invalidates the delivered value (the Owner's direction of 2026-11-10);
 8. every Owner act names its requesting leaf, an observed one cites its approval verbatim, and
    every forward and host listener names an Owner act;
 9. every fact verified at source names its paths and lines in the archive the lock pins, and the
@@ -770,7 +772,7 @@ Filtering proxy (planned, Owner act A-4), allowed: POST `/api/actions/ping.v1.Pi
 | `ci-gitea-ceiling` | `GITEA_TOKEN_MODE`, `GITEA_CEILING`, `GITEA_CROSS_REPO` | Restricted mode and an all-none ceiling at the governance owner and repository; no cross-repository grant anywhere. |
 | `ci-gitea-secrets` | `GITEA_SECRETS` | No Actions secret or variable is allowed anywhere. |
 | `ci-proxy` | `PROXY_ALLOWLIST` | The filtering proxy admits exactly the runner RPC, Register only in the provisioning window. |
-| `ci-registration` | `REGISTRATION_RESET` | The registration procedure resets the token after registration, unless the disclosed fallback is in force. |
+| `ci-registration` | `REGISTRATION_RESET` | The registration procedure resets the token before it is read and after registration; the fallback is never in force; a live runner waits on the live reset proof, and its absence blocks (Owner direction, 2026-11-10). |
 | `ci-owner-acts` | `OWNER_ACT` | Every Owner act names its requesting leaf, and an observed one cites its bootstrap-log approval verbatim. |
 | `ci-forward-owner-act` | `FORWARD_OWNER_ACT` | Every forward and host listener names an Owner act. |
 | `ci-facts` | `FACT_UNSUPPORTED`, `FACT_ARCHIVE` | A fact verified at source names its paths and lines in the archive the lock pins; a live one cites evidence; an unverified one names its leaf. |

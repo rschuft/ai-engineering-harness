@@ -580,12 +580,40 @@ class ProxyRegistrationActs(Base):
         p['registration']['procedure'].pop(0)
         self.assert_code('REGISTRATION_RESET', 'registration.procedure', profile=p)
         p, _ = fresh()
-        p['registration']['procedure'].pop()
-        p['registration']['fallback']['in_force'] = True
+        item(p['registration']['procedure'], 'step', 'register')['step'] = 'enrol'
+        self.assert_code('REGISTRATION_RESET', 'registration.procedure', profile=p)
+
+    def test_the_fallback_is_never_in_force(self):
+        # The Owner's direction of 2026-11-10 (decision 0016, dated note, point 1): a token
+        # standing between provisionings is no path to a live runner, disclosed or not.
+        for value in (True, 'yes', 1):
+            p, _ = fresh()
+            p['registration']['fallback']['in_force'] = value
+            p['registration']['fallback']['disclosure'] = 'ci-d2'
+            self.assert_code('REGISTRATION_RESET', 'registration.fallback', profile=p)
+        p, _ = fresh()
+        del p['registration']['fallback']
         found, problems = self.codes(profile=p)
         self.assertNotIn('REGISTRATION_RESET', found, '\n'.join(map(str, problems)))
-        p['registration']['fallback']['disclosure'] = 'ci-d99'
-        self.assert_code('REGISTRATION_RESET', 'registration.fallback', profile=p)
+
+    def test_an_unverified_reset_blocks_the_live_runner(self):
+        p, _ = fresh()
+        del p['registration']['live_gate']
+        self.assert_code('SCHEMA', 'registration.live_gate', profile=p)
+        self.assert_code('REGISTRATION_RESET', 'registration.live_gate', profile=p)
+        for key, value in (('on_unverified', 'warn'), ('on_unverified', None), ('alternatives', []),
+                           ('alternatives', [5]), ('verify_at', 'Q-02.3.1'),
+                           ('verify_at', ['Q-02.3.1'])):
+            p, _ = fresh()
+            p['registration']['live_gate'][key] = value
+            self.assert_code('REGISTRATION_RESET', 'registration.live_gate', profile=p)
+        p, _ = fresh()
+        p['registration']['live_gate']['verify_at'] = ['Q-02.2.2', 'Q-02.3.1']
+        found, problems = self.codes(profile=p)
+        self.assertNotIn('REGISTRATION_RESET', found, '\n'.join(map(str, problems)))
+        p, _ = fresh()
+        p['registration']['live_gate']['status'] = 'assumed'
+        self.assert_code('STATUS_INVALID', 'registration.live_gate', profile=p)
 
     def test_an_owner_act_names_its_leaf(self):
         p, _ = fresh()

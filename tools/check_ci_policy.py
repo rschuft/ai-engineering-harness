@@ -35,7 +35,9 @@ It fails when:
   repository, a token mode other than ``restricted``, a ceiling other than none, a
   cross-repository grant, a secret or variable, or an incomplete governance protection;
 - the proxy allowlist is not exactly the runner RPC; the registration procedure does not reset
-  the token after registration (unless the disclosed fallback is in force);
+  the token before it is read and after registration, its fallback (a token standing between
+  provisionings) is in force, or its live gate does not block a live runner until Q-02.2.2
+  proves the reset invalidates the delivered value (the Owner's direction of 2026-11-10);
 - an Owner act lacks its requesting leaf or claims ``observed`` without a verbatim bootstrap-log
   approval; a forward or host listener names no Owner act;
 - a fact verified at source lacks its paths and lines or the archive the lock pins, a live one
@@ -440,8 +442,6 @@ class Checker(csi.Checker):
                       if isinstance(r.get('id'), str)}
         self.acts = {a.get('id'): a for a in _dicts(prof.get('owner_acts'))
                      if isinstance(a.get('id'), str)}
-        self.disclosures = {d.get('id') for d in _dicts(pol.get('disclosures'))
-                            if isinstance(d.get('id'), str)}
 
         for name, doc in (('profile', prof), ('policy', pol)):
             if not self.check_links(name, doc, 'sources'):
@@ -781,18 +781,27 @@ class Checker(csi.Checker):
         reg = _dict(reg)
         steps = [_str(_dict(s).get('step')) for s in _list(reg.get('procedure'))]
         reset_after = 'register' in steps and 'reset' in steps[steps.index('register') + 1:]
-        fallback = _dict(reg.get('fallback'))
-        if fallback.get('in_force') is True:
-            if fallback.get('disclosure') not in self.disclosures:
-                self.add('REGISTRATION_RESET', 'registration.fallback', 'the fallback in force needs '
-                         'a disclosure of the token policy')
-        elif not reset_after:
+        if _dict(reg.get('fallback')).get('in_force') not in (None, False):
+            self.add('REGISTRATION_RESET', 'registration.fallback', 'a registration token standing '
+                     'between provisionings is never in force for a live runner (the Owner\'s '
+                     'direction of 2026-11-10, decision 0016)')
+        if not reset_after:
             self.add('REGISTRATION_RESET', 'registration.procedure', 'the registration token is '
                      'reset after the register step, so the delivered value is dead before any job '
-                     'runs (or the disclosed fallback is in force)')
+                     'runs')
         if 'register' in steps and 'reset' not in steps[:steps.index('register')]:
             self.add('REGISTRATION_RESET', 'registration.procedure', 'a fresh token is made by a '
                      'reset before it is read and delivered')
+        gate = reg.get('live_gate')
+        self.statement('registration.live_gate', gate)
+        gate = _dict(gate)
+        verify_at = gate.get('verify_at')
+        if gate.get('on_unverified') != 'block' or not _strs(gate.get('alternatives')) or \
+                'Q-02.2.2' not in ([verify_at] if isinstance(verify_at, str) else _strs(verify_at)):
+            self.add('REGISTRATION_RESET', 'registration.live_gate', 'a live runner waits on the '
+                     'live proof that the reset invalidates the delivered value (verify_at '
+                     'Q-02.2.2); unverified, it blocks (on_unverified: block) and names its '
+                     'alternatives')
 
     def governance(self):
         repos = [r for r in _dicts(_dict(self.profile.get('gitea')).get('repositories'))
