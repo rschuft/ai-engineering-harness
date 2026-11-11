@@ -376,7 +376,7 @@ tasks:
       - '{{.PYTHON}} -I -B integrations/owner/acceptance_recorder.py {{.CLI_ARGS}}'
 
   owner:authorize:
-    desc: "The Owner authorization recorder (<tools python> -I -B integrations/owner/authorization_recorder.py <command>; plan leaf P-04.2), run only in the main session on an Owner decision: pass -- prepare OWNER/NAME PULL [--expires-in-minutes N] to write the challenge to show the Owner to the recorder's state, -- record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION to record the Owner's statement and merge the challenged head as aieh-owner, or -- resolve --challenge NONCE to resolve an unknown outcome by reading (never merging); record refuses PROTECTION_UNVERIFIED until the protection check of decision 0012 point 6 exists (OA-16); exit 2 on a refusal, 1 on a failed or unknown outcome"
+    desc: "The Owner authorization recorder (<tools python> -I -B integrations/owner/authorization_recorder.py <command>; plan leaf P-04.2), run only in the main session on an Owner decision: pass -- prepare OWNER/NAME PULL [--expires-in-minutes N] to write the challenge to show the Owner to the recorder's state, -- record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION to record the Owner's statement and merge the challenged head as aieh-owner, or -- resolve --challenge NONCE to resolve an unknown outcome by reading (never merging); record refuses PROTECTION_UNVERIFIED or PROTECTION_DRIFT unless the protection check of decision 0012 point 6 (OA-16, gitea:protection-check) answers verified, and its auditor is not provisioned yet; exit 2 on a refusal, 1 on a failed or unknown outcome"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
@@ -585,6 +585,11 @@ tasks:
     desc: "Role bots and the authorization fixture (python -I -B integrations/gitea/gitea_roles.py <command>): pass -- provision | fixture [--admin-merge-probe] | rotate ROLE | status; fixture needs gitea:finalize-credentials first"
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_roles.py {{.CLI_ARGS}}'
+
+  gitea:protection-check:
+    desc: "The protection check of decision 0012 point 6 (Owner decision OA-16; python -I -B integrations/gitea/protection_check.py <command>): pass -- verify OWNER/NAME [--base BRANCH] to read the admitted repository's protection as the read-only protection auditor (its Credential Manager entry, in memory) and print the verdict; exit 0 verified, 1 drift, 2 unverified or refused"
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/gitea/protection_check.py {{.CLI_ARGS}}'
 
   gitea:authz:
     desc: "Live authorization tests of the role bots against the running Gitea, opt-in through AIEH_GITEA_AUTHZ=1 (python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v); reads the bot tokens from Credential Manager into memory; the fixture tests skip until the fixture exists"

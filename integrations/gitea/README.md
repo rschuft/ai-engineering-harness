@@ -25,10 +25,14 @@ supplies through the harness's fail-closed factory
 | Path | What |
 |---|---|
 | `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `restart`, `status`, `inspect`, `verify [--readiness]`, `identities`, `finalize-credentials`, `upgrade --to VERSION`, `recover`, `uninstall` (and the internal `supervise`); composes the platform adapter and its credential provider |
-| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `rotate ROLE`, `retire ROLE`, `status` |
+| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `rotate ROLE`, `retire ROLE`, `status`; the fixture's total declaration (`protection_rules()`, `repository_settings()`, `collaborators()`, `FIXTURE_TEAMS`) |
+| `protection_check.py` | The protection check before and after each protected merge (Owner decision OA-16; decision 0012 point 6, Proposed): `verify OWNER/NAME`, and `verify()` for the authorization recorder ([below](#the-protection-check-oa-16)) |
 | `tests/test_lifecycle.py` | The composition over the contract (F-06.2): the moved names, the platform asset key and `PLATFORM_MISMATCH`, both run-record formats, readiness, `inspect`, the transitions over a real SQLite database and `app.ini` in a temporary root, and the I7 scan of `main` |
 | `tests/test_gitea_roles.py` | Bots, tokens, custody, fixture, revocation and rotation with a fake CLI and a fake API; the guest profile declares no path to a token store |
 | `tests/test_authorization_live.py` | Opt-in (`AIEH_GITEA_AUTHZ=1`, `task gitea:authz`) allowed and forbidden calls of each bot token against the running Gitea |
+| `tests/protection_fake.py` | A fake Gitea 28.3.0 of what the protection auditor reads: token and scope rules, `reqAdmin`, the 37-field rule view, the repository, branch, collaborator, permission, team and deploy-key views, faults; also used by the authorization recorder's fake |
+| `tests/test_protection_check.py` | The protection check against the fake: the closed list pinned to 28.3.0, verified, each field's drift, the rule set and precedence, the settings, roster, teams and deploy keys, every unverifiable state, the session's fixed reads, the keep-alive connection and the command line over loopback |
+| `tests/test_protection_audit_live.py` | Opt-in, two phases, each an Owner act (`AIEH_PROTECTION_AUDIT_LIVE=negative` or `=qualify`): the auditor's token is refused every write and reaches nothing outside its repository; the check detects injected drift and its restoration. Prepared, not run |
 | `tests/test_gitea_host.py` | Pin, layout, `app.ini`, acquisition, the binary lock, identities and first login with fakes; the Job Object, socket table and token code against real child processes; an opt-in live lifecycle test (install, up, verify and its readiness record, inspect, restart, down, uninstall, a supervisor kill, recover) on a fixture instance |
 | `../../composition/lock/components.lock.json` | The pin: `release_assets` entry `gitea-28.3.0-windows-amd64.exe` (sha256, URL, checksum sources) |
 
@@ -43,8 +47,10 @@ python -I -B integrations/gitea/gitea_host.py identities
 python -I -B integrations/gitea/gitea_host.py finalize-credentials
 python -I -B integrations/gitea/gitea_host.py upgrade --to VERSION [--from-file EXE] | recover | uninstall
 python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | rotate ROLE | retire ROLE | status
+python -I -B integrations/gitea/protection_check.py verify OWNER/NAME [--base BRANCH] [--port N]   # task gitea:protection-check
 python -I -B -m unittest discover -s integrations/gitea/tests -v                    # task gitea:test
 AIEH_GITEA_AUTHZ=1 python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v   # task gitea:authz
+AIEH_PROTECTION_AUDIT_LIVE=negative|qualify <tools python> -I -B -m unittest discover -s integrations/gitea/tests -p test_protection_audit_live.py -v
 ```
 
 Exit 0 done, 1 failed, 2 refused (a stable code). Every command prints JSON and never a secret.
@@ -215,13 +221,14 @@ Record: [`evidence/S-01.2.2-segregated-credentials.md`](../../evidence/S-01.2.2-
 matrix: [`policy/role-tokens.json`](../../policy/README.md).
 
 - **Accounts.** `provision` creates, with Gitea's CLI, one account per role that holds a Gitea
-  credential: `aieh-bot-planner`, `aieh-bot-builder`, `aieh-bot-reviewer` and `aieh-bot-verifier`
-  (`admin user create --user-type Bot --restricted`). They are not administrators and have no
+  credential: `aieh-bot-planner`, `aieh-bot-builder`, `aieh-bot-reviewer`, `aieh-bot-verifier` and,
+  since Owner decision OA-16 (planned: not provisioned yet), the protection auditor
+  `aieh-bot-protection-audit` (`admin user create --user-type Bot --restricted`). They are not administrators and have no
   password, so they cannot sign in interactively. An existing account that is not a
   non-administrator Bot is refused.
 - **Tokens.** Each is minted with `admin user generate-access-token --raw` and the narrowest scope
   Gitea 28.3.0 can express: `write:repository` for the planner, builder and reviewer, and
-  `read:repository` for the verifier. Gitea's scopes are categorical; the per-repository and
+  `read:repository` for the verifier and the protection auditor. Gitea's scopes are categorical; the per-repository and
   per-branch limits come from collaborator permission and branch protection. The CLI's output is
   captured in memory and must be exactly one token, which the credential provider writes into the
   entry `AIEH Gitea bot <role>`. Reports carry a fingerprint (`sha256:` and 16 hex digits)
@@ -231,19 +238,98 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   lifetime, so per-attempt rotation is the dispatcher's job (S-01.3.1).
 - **Fixture.** `fixture` acts as `aieh-site-admin` by HTTP basic authentication with its
   harness-held password, read from the credential provider into memory; it mints no token. It creates the
-  private organization `aieh-authz-fixture` and repository `authz`, the collaborators (planner and
-  builder write, reviewer and verifier read, `aieh-owner` write) and three protection rules:
-  - `main`: no push or force-push; only `aieh-owner` merges; one approval from the reviewer bot;
+  private organization `aieh-authz-fixture` and repository `authz`, applies the repository's settings
+  (`repository_settings()`: private, not archived, default branch `main`, merge commits the only merge
+  style, no manual merge; `PATCH /repos/{owner}/{repo}`), the collaborators (planner and builder write,
+  reviewer and verifier read, `aieh-owner` write, the protection auditor admin) and three protection
+  rules, each total over the 34 fields of Gitea 28.3.0's rule (`protection_rules()`: every field named, the
+  rest at Gitea's zero value, so re-applying resets a drifted field):
+  - `main` (priority 1): no push or force-push; only `aieh-owner` merges; one approval from the reviewer
+    bot; a rejected review blocks; a branch behind `main` cannot be merged (`block_on_outdated_branch`);
     the administrator's merge override blocked;
-  - `work/*`: the planner and builder bots push;
-  - `**`: nobody pushes.
+  - `work/*` (priority 2): the planner and builder bots push; only `aieh-owner` merges;
+  - `**` (priority 3): nobody pushes; only `aieh-owner` merges.
+
+  On every rule the bypass allowlist is disabled and empty, and stale approvals are not dismissed until
+  G-03.1 decides the authorization branch's policy. The declaration on the live fixture changes only when
+  `fixture` is run again (an Owner act; not run since the declaration became total).
 
   It reports that the administrator holds no token afterwards. `--admin-merge-probe` also has the
   site administrator try to merge a proposal PR, which must be refused. Gitea refuses every API call
   of an account that must still change its password, so `fixture` runs after `finalize-credentials`.
-- **Live tests.** `task gitea:authz` reads the four tokens into memory and probes what each may and
-  may not do; the fixture-dependent classes skip while the fixture is absent, and the executor test
-  is not applicable (G-04.2.1).
+- **Live tests.** `task gitea:authz` reads every role's token into memory (the protection auditor's
+  too, once it is provisioned; until then the suite skips naming the missing entry) and probes what each
+  may and may not do; the fixture-dependent classes skip while the fixture is absent, and the executor
+  test is not applicable (G-04.2.1).
+
+## The protection check (OA-16)
+
+Owner decision OA-16 (2026-11-11; [recommendation](../../evidence/P-04.2-protection-check-recommendation.md),
+option 2; record [`evidence/P-04.2-protection-verifier.md`](../../evidence/P-04.2-protection-verifier.md)).
+Decision [0012](../../decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md) stays
+Proposed. `protection_check.py` is a bounded read-only adapter of this integration, not a policy service:
+the authorization recorder ([`integrations/owner`](../owner/README.md)) asks it in process as the last read
+before each merge and once more after the read-back, and merges only on `verified`.
+
+**The auditor.** Gitea 28.3.0 serves the branch protection rules to repository and site administrators only
+(`routers/api/v1/api.go`: `branch_protections` behind `reqToken(), reqAdmin()`), and `aieh-owner` is
+neither. The check reads as `aieh-bot-protection-audit`: a restricted Bot without a password, collaborator
+with `admin` permission on the admitted repository only, one token of scope exactly `read:repository`
+(credential `cred-gitea-protection-audit`, entry `AIEH Gitea bot protection-audit`; its custodian is the
+recorder). Gitea decides a token's required scope by HTTP method (`tokenRequiresScopes`: GET read; POST,
+PUT, PATCH, DELETE write), also for a token used as a basic-authentication password, so the token can
+change no rule, collaborator or setting, push, merge or sudo. It can delete itself (`DELETE /api/v1/token`
+needs no scope), which the check never sends; a deleted token only makes the check fail closed. No site
+administrator identity, no administrator credential of `aieh-owner` and no broader permission is used.
+
+**The closed list.** Every read is a fixed GET (anything else is a `ValueError` before sending):
+
+| What | Read from | Drift when | Unverified when |
+|---|---|---|---|
+| The auditor | `GET /token`; the repository view's `permissions` | - | not 200 (401: `CREDENTIAL_REJECTED`); its login is not `aieh-bot-protection-audit`, its scopes not exactly `read:repository`, or `permissions.admin` not true (`AUDITOR_INVALID`) |
+| Every rule, 34 fields (`PROTECTION_FIELDS`: push, force-push, merge and bypass allowlists, the review gate, outdated branch, status checks, signed commits, file patterns, the admin override, name, priority) | `GET .../branch_protections` | a field differs from `protection_rules()` (lists as multisets; `null` equals `[]`) | a field outside the 37 of 28.3.0's view, a missing one, a value of another type, `branch_name` not what Gitea derives, a repeated name |
+| The rule set | same | a declared rule missing, any other rule | - |
+| Precedence | the rules, and `GET .../branches/main` (`effective_branch_protection_name`, shown to administrators) | the rules matching `main`, in Gitea's order, or the enforced one, differ from the declaration | Gitea's enforced rule is not the first its own order gives at the pin, or a glob the check cannot evaluate (`PRECEDENCE_UNVERIFIED`) |
+| Repository settings (`repository_settings()`) | `GET /repos/{owner}/{repo}` | a value differs | a top-level field outside 28.3.0's 70, or a required one missing; the repository answers under another name |
+| Collaborators and their permissions | `GET .../collaborators` and `.../collaborators/{user}/permission` | the roster or a permission differs from `collaborators()` (permission as Gitea computes it, team membership included) | `X-Total-Count` is not the number listed; a permission outside Gitea's levels |
+| Teams with access | `GET .../teams` | not exactly the Owners team with `owner` | a field outside 28.3.0's, a repeated name |
+| Deploy keys (deploy tokens included) | `GET .../keys` | any | `X-Total-Count` is not the number listed |
+
+Any read that is not 200, not JSON, of the wrong kind or lost is `READ_FAILED`; a missing entry is
+`CREDENTIAL_MISSING`, an entry naming another account or not holding a token `CREDENTIAL_REFUSED` (both
+before anything is sent); a repository other than the admitted fixture is `NOT_DECLARED`. Each is
+`unverified`, never `verified`. The verdict's digest is `sha256:` of the canonical observed values (never
+a token, a time or a commit).
+
+**Rule precedence at the pin** (`models/git/protected_branch_list.go`, read in the pinned source): Gitea
+sorts a repository's rules by `priority` (lower first), then a plain name before a glob, then the earlier
+created, and enforces the first rule that matches the branch; a plain name matches case-insensitively, a
+glob through `modules/glob` with `/` as the separator (`*` within a segment, `**` across, `?`, classes,
+alternatives). A rule created without a priority gets the highest plus one. For `main` the declaration
+gives `main` (1) then `**` (3); `work/*` does not match.
+
+**Gitea's own merge-time enforcement** (`services/pull/check.go` `CheckPullMergeable`,
+`services/pull/merge.go` `CheckPullBranchProtections`, `routers/private/hook_pre_receive.go`): at the merge
+Gitea itself evaluates the rule row as it is then, twice (in the merge handler and in the pre-receive hook
+of the merge push). It enforces the merge allowlist, the required approvals (from the approvals allowlist),
+rejected reviews, official review requests, code-owner reviews, an outdated branch, required status checks,
+protected files, signed commits and the recorder's `head_commit_id` (409 when the head moved), and it lets
+an account on the bypass allowlist (or an administrator when the override is not blocked) force-merge past
+those gates. It does not compare the rule with any declaration: a changed rule is enforced as changed; and
+a manual merge (`Do: manually-merged`, when the repository allows it) is checked against the merge
+allowlist only, which is why `allow_manual_merge` is declared false.
+
+**Time of check to time of use.** No API spans the check and the merge. A repository or site administrator
+can change a rule in between (about one request round-trip on host loopback); the recorder asks the check
+again after the read-back and records both answers in the receipt, so a change that is not reverted within
+the window is disclosed (`PROTECTION_CHANGED_AFTER_MERGE`), not prevented. Gitea 28.3.0 records protection
+changes in its audit log only when they are made through its web pages, and shows the log through web pages
+only, so the log corroborates, never controls (security finding `fd-protection-check-toctou`).
+
+**Limits.** Team membership is not readable with `read:repository`: who belongs to the Owners team is not
+compared. The allowlist names Gitea shows are resolved among the repository's current readers. Webhooks are
+not read. The check reads the S-01.2.2 fixture, the one admitted repository; G-03.1's authorization
+repository will need its own declaration.
 
 ## Not yet verified
 
@@ -251,6 +337,11 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
 - A real cross-version `upgrade` (one version is pinned), and the rehearsal of upgrade, recovery and
   uninstall on a disposable instance with a reboot or sign-out (F-06.6).
 - `retire` against the running Gitea (fakes only).
+- The protection check and its auditor against the running Gitea: the auditor is not provisioned, the
+  fixture's total declaration and settings are not applied, and the live negative tests and the
+  qualification (`test_protection_audit_live.py`) have not run. Gitea's actual views (field sets, `null`
+  versus `[]`, `X-Total-Count`, the Owners team in the team list, `effective_branch_protection_name`) are
+  read at the pinned source and modelled by the fake only.
 - The receipts of credential acts against the running Gitea and the managed root's integration store
   (fakes and a fixture store only, F-06.3).
 - Gitea's egress proxy beyond the 407 answer, and the effective `EGRESS_MODE` policy.
