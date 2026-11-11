@@ -33,11 +33,25 @@ Inside the context the token is held in memory only: ``credential()`` gives the 
 ``role-token-delivery/v1`` with the token's fingerprint and never the token. While the context is open the
 Agent Server client refuses any call whose path or body carries the token or its fingerprint
 (ROLE_TOKEN_EXPOSURE, ``dispatch_inputs.AgentServerClient``), so nothing the dispatcher sends into the guest
-can hold it. At the end the token is dropped and ``credential()`` refuses.
+can hold it. At the end the in-memory reference is dropped and ``credential()`` refuses.
 
-Not here (evidence/E-01.3.3-dispatcher-custody.md): per-attempt rotation (Gitea 28.3.0 cannot bound a token to
-an attempt, and only the site administrator can issue the next one), the management key's custody and the
-op-as-* cut-over in the guest, and any live run.
+Three lifecycles are kept apart (the Owner's correction of 2026-11-11; decision 0007 point 4):
+
+1. the standing bot credential, held in the host's credential provider, is issued, rotated and revoked only by
+   the existing administrative authority (``gitea_roles.py provision``, ``rotate`` and ``retire``) on defined
+   security and lifecycle triggers, never on routine attempt completion. Gitea 28.3.0 gives the dispatcher no
+   replacement mechanism (no token lifetime; minting is the site administrator's CLI);
+2. its per-attempt use is this context: obtained only for a confirmed attempt, held in memory for the bounded
+   operation and released when the operation ends. Releasing the in-memory reference is NOT Gitea revocation:
+   the standing token stays valid, and concurrent or later attempts of the stage keep using it. Nothing here
+   revokes, mints or writes a credential entry (the package reaches no mint: tests/test_attempt_tokens.py);
+3. the per-attempt inference token (decision 0015) is a separate credential, issued by the inference broker and
+   revoked at attempt end; it is not handled here.
+
+A token Gitea refuses (revoked by the administrative lifecycle, or not this instance's) is ROLE_TOKEN_REJECTED
+until that lifecycle replaces the entry. During bootstrap the Owner's account can read the standing credential
+(decision 0013 point 6, a disclosed same-account limit). Not here: any live run
+(evidence/E-01.3.3-dispatcher-custody.md).
 """
 from __future__ import annotations
 
@@ -174,5 +188,6 @@ def attempt_role_token(integration_store, operation_key: str, *, provider, port:
     try:
         yield delivery
     finally:
+        # The in-memory reference is released; the standing token is not revoked (module docstring, lifecycle 2).
         delivery._token = None
         di.release_role_token(digest)

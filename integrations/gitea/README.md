@@ -234,8 +234,14 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   entry `AIEH Gitea bot <role>`. Reports carry a fingerprint (`sha256:` and 16 hex digits)
   only. An existing entry is kept.
 - **Rotation.** `rotate ROLE` revokes the token through Gitea's `DELETE /api/v1/token`, proves that
-  its next call gets 401, mints a new one and replaces the entry. Gitea 28.3.0 has no token
-  lifetime, so per-attempt rotation is the dispatcher's job (S-01.3.1).
+  its next call gets 401, mints a new one and replaces the entry. It resumes as `retire` does: a token
+  Gitea already refuses (401, revoked earlier) is not revoked again, and the new one is minted.
+  Rotation and revocation of a standing bot token are this administrative lifecycle's acts, on
+  defined security and lifecycle triggers, never on routine attempt completion (decision 0007
+  point 4; the Owner's correction of 2026-11-11). Gitea 28.3.0 has no token lifetime and gives the
+  dispatcher no way to issue a replacement, so the dispatcher only uses the standing token per
+  attempt and releases its in-memory reference at the end, which revokes nothing
+  ([`integrations/dispatch/`](../dispatch/README.md#the-stages-role-token-e-0133)).
 - **Fixture.** `fixture` acts as `aieh-site-admin` by HTTP basic authentication with its
   harness-held password, read from the credential provider into memory; it mints no token. It creates the
   private organization `aieh-authz-fixture` and repository `authz`, applies the repository's settings

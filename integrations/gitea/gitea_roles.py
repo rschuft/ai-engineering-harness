@@ -554,8 +554,10 @@ def receipt_store(receipts, ctx):
 def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Callable = None, ctx=None,
            receipts=None) -> dict:
     """The revocation contract once: revoke the role's token through DELETE /api/v1/token, prove its
-    next call fails closed, mint a new one and replace the entry, prove the new one works. The act's
-    integration-store receipt is reserved before the revocation and confirmed and read back at the end."""
+    next call fails closed, mint a new one and replace the entry, prove the new one works. It resumes, as
+    retire does: a token Gitea already refuses (401: revoked by an earlier run or on another trigger) is not
+    revoked again, and the new one is minted. The act's integration-store receipt is reserved before the
+    revocation and confirmed and read back at the end."""
     if role not in ROLES:
         raise GiteaError('ROLE_UNKNOWN', f'{role!r} is not one of {sorted(ROLES)}')
     given = ctx
@@ -569,11 +571,14 @@ def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Calla
             report = {'role': role, 'user': ROLES[role]['user'], 'entry': target(role),
                       'old_fingerprint': fingerprint(old), 'old_before': token_check(port, old, http)}
             receipt.dispatched()
-            report['revocation'] = revoke_current(port, old, http)
+            if report['old_before']['status'] == 401:
+                report['revocation'] = 'already refused by Gitea (revoked earlier)'
+            else:
+                report['revocation'] = revoke_current(port, old, http)
             report['old_on_repository_read'] = Api(port, old, http).call(
                 'GET', f'/repos/{FIXTURE_ORG}/{FIXTURE_REPO}')[0]
             del old
-            if not report['revocation']['revoked']:
+            if isinstance(report['revocation'], dict) and not report['revocation']['revoked']:
                 raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
             new = cli.mint(ROLES[role]['user'], f'aieh-{role}-{now_stamp()}', ROLES[role]['scopes'])
             store_token(provider, role, new, port)
@@ -583,6 +588,8 @@ def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Calla
             receipt.abort(exc)
             raise
         report['receipt'] = receipt.finish({'fingerprint_after': report['new_fingerprint'], 'revoked': True,
+                                            'revocation': 'revoked' if isinstance(report['revocation'], dict)
+                                            else report['revocation'],
                                             'new_token_status': report['new_check']['status']})
     return report
 

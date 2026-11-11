@@ -379,17 +379,28 @@ operation key, attempt id, stage, role, bot, entry, credential id, scopes and th
 copied or pickled. While the context is open, `AgentServerClient` refuses any call whose path or body
 holds the token (a 40-hex run whose sha256 is held) or its fingerprint (`ROLE_TOKEN_EXPOSURE`), before
 the transport: nothing the dispatcher sends into the guest can carry it. The holds are counted, because
-two attempts of one stage hold the same standing token. When the context ends, the token is dropped and
-`credential()` refuses.
+two attempts of one stage hold the same standing token. When the context ends, the in-memory reference is
+dropped and `credential()` refuses.
 
-**Not built here** ([`evidence/E-01.3.3-dispatcher-custody.md`](../../evidence/E-01.3.3-dispatcher-custody.md)):
+**Three lifecycles** (decision 0007 point 4; the Owner's correction of 2026-11-11):
 
-- per-attempt rotation. Gitea 28.3.0 cannot bound a token to an attempt (no lifetime). The dispatcher can
-  revoke the token it holds (`DELETE /api/v1/token`), but only the site administrator can issue the next
-  one (Gitea's CLI, or the administrator's basic authentication; a Bot has no password), and the role
-  model grants the dispatcher no issuance;
-- the management key's custody and the op-as-* cut-over in the guest;
-- any live run: only the fakes have been used. **Not yet verified** live.
+1. **The standing bot credential**, in the host's credential provider, is issued, rotated and revoked only by
+   the existing administrative authority ([`gitea_roles.py`](../gitea/README.md) `provision`, `rotate` and
+   `retire`, the site administrator's acts) on defined security and lifecycle triggers, never on routine
+   attempt completion. Gitea 28.3.0 gives the dispatcher no replacement mechanism: no token lifetime, and a
+   new token only from the site administrator's CLI. The dispatcher is granted no issuance.
+2. **Its per-attempt use** is this context: obtained only for a confirmed attempt, held in memory for the
+   bounded operation, and released when the operation ends. **Releasing the in-memory reference is not Gitea
+   revocation**: the standing token stays valid, and a concurrent or later attempt of the stage keeps using
+   it. Nothing in this package revokes, mints or writes a credential entry. A token that Gitea refuses
+   (revoked by the administrative lifecycle, or not this instance's) is `ROLE_TOKEN_REJECTED` until that
+   lifecycle replaces the entry (`rotate` resumes over a token Gitea already refuses).
+3. **The per-attempt inference token** (decision 0015) is a separate credential, issued by the inference
+   broker, bounded to the attempt and revoked at attempt end; it is not handled here.
+
+**Disclosed same-account limit:** during bootstrap the Owner's account can read the standing credentials in
+its Credential Manager (decision 0013 point 6). Only fakes have been used: **not yet verified** live
+([`evidence/E-01.3.3-dispatcher-custody.md`](../../evidence/E-01.3.3-dispatcher-custody.md)).
 
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
@@ -575,3 +586,5 @@ and a fake Gitea that answers `GET /api/v1/token` as Gitea 28.3.0 does (its logi
 |---|---|
 | `StageMappingTests` (contract) | the mapping covers exactly the store's stages; each mapped credential is in the dispatcher's `custodian_of` and is delivered by it, is granted to its role, and the other stage's credential is denied to it; the held-token guard counts holds and matches the token in a path or body and the fingerprint with or without its prefix |
 | `DeliveryTests` | `implement` reads only the builder's entry and asks Gitea about that token only; `review` the reviewer's; the record carries the fingerprint and no token, and after the context `credential()` refuses; while the builder's token is held, another attempt's create carries neither it nor its fingerprint, and four calls that would carry it are refused before the transport (and pass once the context has ended); a missing entry, an entry naming another account, malformed values, another bot's token, other scopes, a `401`, lost or malformed answers and a failing provider refuse; an unknown, failed or merely reserved attempt reads nothing |
+| `StandingCredentialTests` | the three lifecycles: two sequential attempts of a stage use the standing credential; two concurrent ones hold it at once, the first released out of order leaves the second's credential usable and the guard holding it, a third joins meanwhile, and Gitea is only ever asked `GET /api/v1/token` (nothing revokes); a token Gitea refuses is `ROLE_TOKEN_REJECTED` on every try until `gitea_roles.rotate` (the administrative act, resuming over the refused token) replaces the entry, then delivery works with the new one; while a token is held, another attempt dispatched over the live transport sends neither it nor its fingerprint, and calls that would carry it are refused before `GuestApi` is called; an attempt takes no stage from its caller, reads only its own stage's entry and refuses another attempt's stored record |
+| `ReachableNamesTests` (contract) | the package's syntax trees: no mint, CLI, entry write, administrative act or revocation is reachable, no `generate-access-token`, and Gitea is asked `GET /token` only; a negative control finds a planted mint |

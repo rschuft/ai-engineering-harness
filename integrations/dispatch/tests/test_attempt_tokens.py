@@ -21,6 +21,7 @@ in-memory credential provider standing in for Windows Credential Manager and a f
 Every value is synthetic. No guest, Gitea, Agent Server, credential store or network is used.
 """
 from pathlib import Path
+import ast
 import copy
 import hashlib
 import http.client
@@ -171,8 +172,8 @@ class StageMappingTests(unittest.TestCase):
         self.assertEqual(di._HELD_ROLE_TOKENS, {})
 
 
-class DeliveryTests(adm.AdmissionFixture):
-    """attempt_role_token on attempts dispatched through the E-01.3.1 fixture."""
+class DeliveryFixture(adm.AdmissionFixture):
+    """attempt_role_token on attempts dispatched through the E-01.3.1 fixture (helpers; no tests)."""
 
     def setUp(self):
         super().setUp()
@@ -240,6 +241,11 @@ class DeliveryTests(adm.AdmissionFixture):
             delivery.credential()
         self.assertNotIn(token, self.store.canonical_dump().decode('utf-8'))
         return key
+
+
+
+class DeliveryTests(DeliveryFixture):
+    """attempt_role_token on attempts dispatched through the E-01.3.1 fixture."""
 
     # -- each stage uses exactly its mapped bot --------------------------------
 
@@ -367,6 +373,228 @@ class DeliveryTests(adm.AdmissionFixture):
         resolved = self.resolve()
         self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor='token-test')
         self.refused('ATTEMPT_NOT_CONFIRMED', resolved.attempt_identity().operation_key, reads=[], requests=0)
+
+
+class GuestApiFake:
+    """tools/guest.py GuestApi's call shape, answering as the pinned server (GET /server_info, the create); every
+    request it is given is kept: what would travel over SSH into the guest."""
+
+    def __init__(self):
+        self.requests = []
+
+    def __call__(self, requests, timeout=900, secret=None):
+        self.requests.append(copy.deepcopy(requests))
+        (request,) = requests
+        if (request['method'], request['path']) == cc.INFO:
+            answer = cc.SERVER_INFO
+        else:
+            answer = copy.deepcopy(cc.CREATE_ANSWER)
+            answer['body']['id'] = request['json']['conversation_id']
+        return {'responses': [{'status': answer['status'], 'body': answer['body']}], 'session_key_occurrences': 0}
+
+
+class AdministratorProvider(MemoryProvider):
+    """The administrative lifecycle's writes (gitea_roles.py rotate) into the same entries the delivery reads."""
+
+    def __init__(self, shared):
+        super().__init__({})
+        self.entries = shared.entries
+
+    def set(self, name, user, secret, comment=''):
+        self.entries[name] = (user, secret)
+
+
+class AdministratorGitea(FakeGitea):
+    """The fake Gitea as the administrative rotate sees it: a token's own view, and a repository read that a refused
+    token answers with 401. It never answers DELETE /api/v1/token for a delivery (the base class refuses it)."""
+
+    def __call__(self, port, path, *, method='GET', body=None, headers=None, timeout=None):
+        if path.startswith('/api/v1/repos/'):
+            self.requests.append((port, method, path, (headers or {}).get('Authorization', '')))
+            return 401, {}, b'{}'
+        return super().__call__(port, path, method=method, body=body, headers=headers, timeout=timeout)
+
+
+class MintingCli:
+    """Gitea's CLI as the site administrator runs it: mint gives a new token that the fake Gitea then knows."""
+
+    def __init__(self, gitea):
+        self.gitea, self.minted = gitea, []
+
+    def mint(self, user, name, scopes):
+        token = synthetic(f'minted {len(self.minted)}')
+        self.minted.append(token)
+        self.gitea.tokens[token] = {'login': user, 'scopes': list(scopes), 'name': name}
+        return token
+
+
+class StandingCredentialTests(DeliveryFixture):
+    """The three lifecycles (the Owner's correction of 2026-11-11): the standing bot credential is used per attempt
+    and released, never revoked by the dispatcher; an actually revoked one fails closed until the administrative
+    lifecycle replaces it; a stage's credential never reaches the guest or another stage's attempt."""
+
+    def assert_only_token_views_asked(self, gitea=None):
+        """Nothing revokes: the only request the delivery sent to Gitea is GET /api/v1/token."""
+        gitea = gitea or self.gitea
+        self.assertEqual({(method, path) for _port, method, path, _auth in gitea.requests},
+                         {('GET', '/api/v1/token')})
+
+    def test_two_sequential_attempts_of_a_stage_use_the_standing_credential(self):
+        first, second = self.confirmed('implement'), self.confirmed('implement')
+        self.assertNotEqual(first, second)
+        for key in (first, second):
+            with self.deliver(key) as delivery:
+                self.assertEqual(delivery.credential().authorization(), 'token ' + TOKENS['builder'])
+                self.assertEqual(delivery.record()['operationKey'], key)
+            self.assertFalse(delivery.open)
+        self.assertEqual(self.provider.reads, [roles.target('builder')] * 2)
+        self.assert_only_token_views_asked()
+        self.assertIn(TOKENS['builder'], self.gitea.tokens, 'the standing token stays valid')
+        self.assertEqual(self.provider.entries[roles.target('builder')], ('aieh-bot-builder', TOKENS['builder']))
+
+    def test_concurrent_attempts_of_a_stage_cannot_invalidate_one_another(self):
+        """Two attempts hold the stage's one standing token; the first released (out of order) leaves the second's
+        credential usable and the guard holding it; nothing revokes; the last release ends the guard's hold."""
+        first, second = self.confirmed('implement'), self.confirmed('implement')
+        token = TOKENS['builder']
+        one, two = self.deliver(first), self.deliver(second)
+        held_one, held_two = one.__enter__(), two.__enter__()
+        released = False
+        try:
+            one.__exit__(None, None, None)
+            released = True
+            self.assertFalse(held_one.open)
+            self.assertTrue(held_two.open)
+            self.assertEqual(held_two.credential().authorization(), 'token ' + token)
+            with self.assertRaises(di.DispatchRefused) as caught:
+                cc.client(cc.Recorder({'status': 201, 'body': {}})).call(
+                    'POST', '/api/conversations', body={**adm.TEMPLATE, 'tags': {'aieh': token}})
+            self.assertEqual(caught.exception.code, 'ROLE_TOKEN_EXPOSURE', 'still held by the second attempt')
+            with self.deliver(self.confirmed('implement')) as third:  # a later attempt joins while one holds
+                self.assertEqual(third.credential().authorization(), 'token ' + token)
+            self.assertTrue(held_two.open)
+        finally:
+            if not released:
+                one.__exit__(None, None, None)
+            two.__exit__(None, None, None)
+        self.assertEqual(di._HELD_ROLE_TOKENS, {})
+        self.assert_only_token_views_asked()
+        self.assertIn(token, self.gitea.tokens)
+
+    def test_a_revoked_credential_fails_closed_until_the_administrative_lifecycle_replaces_it(self):
+        key = self.confirmed('implement')
+        gitea = AdministratorGitea(views())
+        del gitea.tokens[TOKENS['builder']]  # revoked in Gitea (by the administrator, or on another trigger)
+        for _ in range(2):
+            self.refused('ROLE_TOKEN_REJECTED', key, gitea=gitea)
+        self.assertEqual(self.provider.entries[roles.target('builder')][1], TOKENS['builder'], 'nothing replaced it')
+        # The administrative lifecycle (gitea_roles.py rotate, the site administrator's act) replaces the entry; it
+        # resumes over the token Gitea already refuses (no second revocation) and mints a new one.
+        cli = MintingCli(gitea)
+        report = roles.rotate('builder', ctx=(None, None, PORT, AdministratorProvider(self.provider), cli),
+                              http=gitea, receipts=self.store)
+        self.assertEqual((report['old_before']['status'], report['revocation']),
+                         (401, 'already refused by Gitea (revoked earlier)'))
+        (new,) = cli.minted
+        self.assertEqual(self.provider.entries[roles.target('builder')], ('aieh-bot-builder', new))
+        with self.deliver(key, gitea=gitea) as delivery:
+            self.assertEqual(delivery.credential().authorization(), 'token ' + new)
+            self.assertEqual(delivery.fingerprint, roles.fingerprint(new))
+        self.assertNotIn(('DELETE', '/api/v1/token'), {(m, p) for _port, m, p, _a in gitea.requests})
+        self.assertEqual(shown_tokens(self.store.canonical_dump().decode('utf-8')), [])
+        self.assertNotIn(new, self.store.canonical_dump().decode('utf-8'))
+
+    def test_no_stage_credential_reaches_the_guest_through_the_live_transport(self):
+        """While the builder token is held: another attempt dispatched over the live transport (GuestTransport on a
+        GuestApi) sends neither the token nor its fingerprint into the guest, and a call that would carry it is
+        refused before the transport, so GuestApi is never called with it."""
+        gt = _load('guest_transport', HERE.parent / 'guest_transport.py')
+        profile = json.loads((REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'profile.json').read_text(
+            encoding='utf-8'))
+        token = TOKENS['builder']
+        needles = (token, roles.fingerprint(token), roles.fingerprint(token).partition(':')[2])
+        api = GuestApiFake()
+        live = gt.GuestTransport(api, profile, api_login='agent')
+        with self.deliver(self.confirmed('implement')):
+            review_key = self.confirmed('review', live)
+            self.assertEqual(self.store.get(review_key).state, 'confirmed')
+            self.assertEqual([r[0]['method'] for r in api.requests], ['GET', 'POST'])
+            for needle in needles:
+                self.assertNotIn(needle, json.dumps(api.requests))
+            sent = len(api.requests)
+            for carried in ({'tags': {'aieh': token}}, {'tags': {'x': needles[1]}}, {'tags': {'x': needles[2]}}):
+                with self.subTest(carried=carried), self.assertRaises(di.DispatchRefused) as caught:
+                    cc.client(live).call('POST', '/api/conversations', body={**adm.TEMPLATE, **carried})
+                self.assertEqual(caught.exception.code, 'ROLE_TOKEN_EXPOSURE')
+            with self.assertRaises(di.DispatchRefused):
+                cc.client(live).call('GET', '/api/conversations/{conversation_id}', params={'conversation_id': token})
+            self.assertEqual(len(api.requests), sent, 'refused before the live transport')
+        for needle in needles:
+            self.assertNotIn(needle, json.dumps([api.requests, live.calls]))
+
+    def test_an_attempt_cannot_acquire_another_stages_credential(self):
+        """The stage comes from the attempt's own stored record only: attempt_role_token takes no stage, role, bot
+        or entry; an implement attempt reads the builder's entry and no other, even when only the reviewer's
+        exists; a stored record that is another attempt's (another stage) is RESERVATION_INVALID before any
+        read."""
+        import inspect
+        self.assertEqual(list(inspect.signature(at.attempt_role_token).parameters),
+                         ['integration_store', 'operation_key', 'provider', 'port', 'http'])
+        implement, review = self.confirmed('implement'), self.confirmed('review')
+        only_reviewer = MemoryProvider({roles.target('reviewer'): entries()[roles.target('reviewer')]})
+        self.refused('ROLE_TOKEN_MISSING', implement, provider=only_reviewer, reads=[roles.target('builder')],
+                     requests=0)
+        only_builder = MemoryProvider({roles.target('builder'): entries()[roles.target('builder')]})
+        self.refused('ROLE_TOKEN_MISSING', review, provider=only_builder, reads=[roles.target('reviewer')],
+                     requests=0)
+        stored = self.store.get(review)
+        with mock.patch.object(self.store, 'get', lambda k: stored if k == implement else None):
+            self.refused('RESERVATION_INVALID', implement, reads=[], requests=0)
+        with self.deliver(review) as delivery:
+            self.assertEqual((delivery.stage, delivery.role, delivery.bot), ('review', 'reviewer', 'aieh-bot-reviewer'))
+            self.assertEqual(delivery.credential().authorization(), 'token ' + TOKENS['reviewer'])
+
+
+class ReachableNamesTests(unittest.TestCase):
+    """What the dispatch package's own code can reach, read from its syntax trees (the credentials README pattern):
+    no mint, no CLI, no entry write, no administrative act and no revocation; Gitea is only asked for a token's own
+    view (GET /api/v1/token)."""
+    category = 'contract'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.trees = {path.name: ast.parse(path.read_text(encoding='utf-8'))
+                     for path in sorted(HERE.parent.glob('*.py'))}
+
+    def names(self, tree):
+        return ({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+                | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)})
+
+    def test_the_package_never_reaches_the_mint_or_an_administrative_act(self):
+        self.assertIn('attempt_tokens.py', self.trees)
+        forbidden = {'mint', 'Cli', 'create_bot', 'store_token', 'provision', 'rotate', 'retire', 'revoke_current',
+                     'admin_api', 'basic_header', 'FINAL_TARGETS', 'escape_probe', 'apply_fixture', 'delete'}
+        for name, tree in self.trees.items():
+            with self.subTest(module=name):
+                self.assertEqual(sorted(self.names(tree) & forbidden), [])
+                constants = {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+                self.assertFalse({c for c in constants if 'generate-access-token' in c or 'access_token' in c})
+
+    def test_gitea_is_asked_for_the_tokens_own_view_only(self):
+        calls = [n for n in ast.walk(self.trees['attempt_tokens.py'])
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'call']
+        self.assertEqual([[a.value for a in c.args] for c in calls], [['GET', '/token']])
+        # a provider is only read: no set or delete on it anywhere in the package
+        for name, tree in self.trees.items():
+            setters = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == 'set'
+                       and isinstance(n.value, ast.Name) and n.value.id == 'provider']
+            self.assertEqual(setters, [], name)
+
+    def test_the_check_would_see_a_mint(self):
+        """Negative control: the same reading finds a mint and a revocation planted in a copy of the module."""
+        source = (HERE.parent / 'attempt_tokens.py').read_text(encoding='utf-8')
+        planted = ast.parse(source + "\nroles.Cli(None, None).mint('u', 'n', ())\nroles.revoke_current(1, 't')\n")
+        self.assertEqual(sorted(self.names(planted) & {'mint', 'Cli', 'revoke_current'}), ['Cli', 'mint', 'revoke_current'])
 
 
 if __name__ == '__main__':

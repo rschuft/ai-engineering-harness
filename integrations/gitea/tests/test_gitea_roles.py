@@ -534,6 +534,33 @@ class TestRotate(Base):
         self.assertEqual(report['new_check']['status'], 200)
         self.assert_no_token(json.dumps(report))
 
+    def test_a_token_gitea_already_refuses_is_not_revoked_again_and_is_replaced(self):
+        """rotate resumes as retire does: an entry whose token answers 401 (revoked earlier) gets a new token without
+        a second DELETE; the receipt says the revocation was found done."""
+        self.provision()
+        old = self.store.get(R.target('builder'))[1]
+        del self.gitea.tokens[old]  # revoked earlier: Gitea answers 401 for it
+        sent = len(self.gitea.requests)
+        report = R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
+        self.assertEqual(report['old_before']['status'], 401)
+        self.assertEqual(report['revocation'], 'already refused by Gitea (revoked earlier)')
+        self.assertNotIn('DELETE', [r[0] for r in self.gitea.requests[sent:]])
+        new = self.store.get(R.target('builder'))[1]
+        self.assertNotEqual(new, old)
+        self.assertEqual((report['new_fingerprint'], report['new_check']['status']), (R.fingerprint(new), 200))
+        (key, states), = self.receipts.states().items()
+        self.assertEqual(states, ['reserved', 'dispatched', 'confirmed'])
+        detail = json.loads(self.receipts.events(key)[-1].detail_json)
+        self.assertEqual((detail['revocation'], detail['revoked']), ('already refused by Gitea (revoked earlier)', True))
+        self.assert_no_token(json.dumps(report))
+
+    def test_a_live_token_is_still_revoked_before_the_new_one(self):
+        self.provision()
+        report = R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
+        (key, _states), = self.receipts.states().items()
+        self.assertEqual(json.loads(self.receipts.events(key)[-1].detail_json)['revocation'], 'revoked')
+        self.assertEqual(report['old_before']['status'], 200)
+
     def test_refusals(self):
         with self.assertRaises(G.GiteaError) as caught:
             R.rotate('owner', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
