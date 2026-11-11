@@ -468,9 +468,140 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, 'active guestfwd endpoint(s) are declared')
 
     def test_deferred_endpoint_with_a_port(self):
-        endpoint = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'inference')
+        endpoint = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'provision')
         endpoint['host_port'] = 4000
-        self.assertFails(self.qemu, 'deferred inference endpoint declares a host port')
+        self.assertFails(self.qemu, 'deferred provision endpoint declares a host port')
+
+    # the inference endpoint and its opt-in composition (decision 0015; S-03.2 slice 2)
+    def inference(self, profile=None):
+        profile = profile or self.qemu
+        return (next(e for e in profile['network']['endpoints'] if e['class'] == 'inference'),
+                profile['network']['inference_composition'])
+
+    def test_inference_endpoint_is_a_remote_forward_never_a_guestfwd(self):
+        entry, _ = self.inference()
+        self.assertEqual((entry['mechanism'], entry['guest_address'], entry['guest_port']),
+                         ('ssh-remote-forward', '172.17.0.1', 8090))
+        self.assertTrue(entry['status'].startswith('planned'))
+        for key, value, fragment in (
+                ('mechanism', 'guestfwd=tcp:172.17.0.1:8090-tcp:127.0.0.1:1', 'not a guestfwd'),
+                ('status', 'enabled', 'status must start with'),
+                ('status', 'active: observed', 'cites the evidence of its qualification'),
+                ('guest_address', '172.17.0', 'docker0 gateway'),
+                ('guest_port', 22, 'guest_port must be'),
+                ('guest_port', 8000, 'guest_port must be'),
+                ('guest_port', '8090', 'guest_port must be'),
+                ('forward_owner', ' ', 'forward_owner'),
+                ('direction', 'host-to-guest', 'forward_owner')):
+            saved = entry[key]
+            entry[key] = value
+            self.assertFails(self.qemu, fragment)
+            entry[key] = saved
+        old = 'user,id=net0,restrict=on,ipv6=off,hostfwd=tcp:127.0.0.1:{ssh_port}-:22'
+        replace_arg(self.qemu, old, old + ',guestfwd=tcp:172.17.0.1:8090-tcp:127.0.0.1:4000')
+        self.assertFails(self.qemu, 'guestfwd rule count stays zero')
+        self.assertFails(self.qemu, 'active guestfwd endpoint(s) are declared')
+
+    def test_inference_composition_declarations(self):
+        entry, comp = self.inference()
+        self.assertEqual(self.errors(self.qemu), [])
+        for path, value, fragment in (
+                (('option',), 'create --provision', '.option'),
+                (('status',), 'active: x', '.status'),
+                (('default',), '', '.default: required'),
+                (('cost_map_control',), None, '.cost_map_control: required'),
+                (('sshd', 'replaces'), 'AllowTcpForwarding yes', '.sshd:'),
+                (('sshd', 'directives'), ['AllowTcpForwarding yes', 'GatewayPorts yes',
+                                          'PermitListen 172.17.0.1:8090'], '.sshd:'),
+                (('sshd', 'effective', 'permitlisten'), 'any', '.sshd:'),
+                (('sshd', 'listener_processes'), ['sshd-session'], '.sshd:'),
+                (('container_guard_allow', 'families'), ['iptables', 'ip6tables'],
+                 '.container_guard_allow'),
+                (('container_guard_allow', 'rule'), '-i docker0 -p tcp -m tcp --dport 8090 -j ACCEPT',
+                 '.container_guard_allow'),
+                (('daemon_json',), {'bip': '172.17.0.1/16'}, '.daemon_json'),
+                (('daemon_json', 'dns'), ['8.8.8.8'], '.daemon_json'),
+                (('forward_session', 'record'), 'C:/x/inference-forward.json', '.forward_session'),
+                (('job_sweep', 'edges'), [['tcp', '172.17.0.1', 8090, 'the endpoint itself']],
+                 '.job_sweep.edges'),
+                (('job_sweep', 'edges'), [['tcp', '1.1.1.1', 443, 'off-host']], '.job_sweep.edges'),
+                (('job_sweep', 'edges'), [], '.job_sweep.edges'),
+                (('job_sweep', 'rule'), '', '.job_sweep: endpoint'),
+                (('inspection',), [], '.inspection')):
+            node = comp
+            for part in path[:-1]:
+                node = node[part]
+            saved = copy.deepcopy(node.get(path[-1]))
+            node[path[-1]] = value
+            self.assertFails(self.qemu, fragment)
+            node[path[-1]] = saved
+        self.assertEqual(self.errors(self.qemu), [])
+        self.qemu['provisioning']['moby']['daemon_json']['dns'] = ['172.17.0.1']
+        self.assertFails(self.qemu, 'provisioning.moby.daemon_json must not carry')
+        del self.qemu['provisioning']['moby']['daemon_json']['dns']
+        del self.qemu['network']['inference_composition']
+        self.assertFails(self.qemu, 'network.inference_composition: required')
+        entry['status'], entry['host_port'] = 'deferred: for the test', None
+        self.qemu['network']['inference_composition'] = comp
+        self.assertFails(self.qemu, 'declared while the inference endpoint is deferred')
+        del self.qemu['network']['inference_composition']
+        self.assertNotIn('inference', ' '.join(self.errors(self.qemu)))
+
+    def test_inference_composition_states_from_the_pinned_overlay(self):
+        """Off and on, as the generator composes them: each overlay loosening is named."""
+        _, comp = self.inference()
+        tmp = self.private_tree()
+        path = tmp / comp['seed_overlay']['path']
+        original = json.loads(path.read_text(encoding='utf-8'))
+
+        def with_overlay(edit, fragment):
+            overlay = copy.deepcopy(original)
+            edit(overlay['edits'])
+            data = (json.dumps(overlay, indent=2) + '\n').encode()
+            path.write_bytes(data)
+            comp['seed_overlay']['sha256'] = check_profile.hashlib.sha256(data).hexdigest()
+            self.assertFails(self.qemu, fragment)
+
+        def edit_of(edits, ident):
+            return next(e for e in edits if e['id'] == ident)
+        with_overlay(lambda e: edit_of(e, 'sshd-forwarding')['replacement'].append(
+            '      PermitOpen any'), 'on, /etc/ssh/sshd_config.d/10-aieh.conf must be')
+        with_overlay(lambda e: edit_of(e, 'sshd-forwarding').update(
+            replacement=['      AllowTcpForwarding yes', '      GatewayPorts clientspecified',
+                         '      PermitListen {{inference_address}}:{{inference_port}}']),
+            'on, /etc/ssh/sshd_config.d/10-aieh.conf must be')
+        with_overlay(lambda e: edit_of(e, 'guard-allow')['replacement'].__setitem__(
+            3, "      INPUT_ALLOW = {'iptables': ('-d {{inference_address}}/32 -i docker0 -p tcp "
+               "-m tcp --dport {{inference_port}} -j ACCEPT',), 'ip6tables': ('-j ACCEPT',)}"),
+            'in iptables only')
+        with_overlay(lambda e: e.remove(edit_of(e, 'guard-observe')), 'install and verify the one ACCEPT')
+        with_overlay(lambda e: e.remove(edit_of(e, 'guard-install')), 'install and verify the one ACCEPT')
+        with_overlay(lambda e: e.remove(edit_of(e, 'facts-call')), 'sshd -T')
+        with_overlay(lambda e: edit_of(e, 'facts-function')['replacement'].insert(1, '      def ('),
+                     'does not compile')
+        with_overlay(lambda e: edit_of(e, 'guard-install').update(anchor=['          for x in RULES:']),
+                     'the seed overlay does not apply')
+        path.write_bytes(json.dumps(original).encode())
+        self.assertFails(self.qemu, 'does not match its pinned sha256')
+        # off: a template whose drop-in already forwards is refused
+        template = tmp / 'profiles' / 'seed' / 'user-data.tmpl'
+        text = template.read_text(encoding='utf-8').replace(
+            '      PermitTunnel no\n', '      PermitTunnel no\n      GatewayPorts yes\n')
+        template.write_bytes(text.encode())
+        self.qemu['boot_inputs']['seed']['templates']['user-data']['sha256'] = \
+            check_profile.hashlib.sha256(text.encode()).hexdigest()
+        path.write_bytes(json.dumps(original).encode())
+        comp['seed_overlay']['sha256'] = check_profile.sha256_file(path)
+        self.assertFails(self.qemu, 'off, the seed\'s /etc/ssh/sshd_config.d/10-aieh.conf')
+
+    def test_guard_rules_of_reads_the_seeded_script(self):
+        rules = check_profile.guard_rules_of(
+            "RULES = ('a', 'b')\nINPUT_ALLOW = {'iptables': ('x',)}\n"
+            "def rules(tool):\n    return RULES[:1] + INPUT_ALLOW.get(tool, ()) + RULES[1:]\n"
+            "if __name__ == '__main__':\n    raise SystemExit('never run')\n")
+        self.assertEqual(rules, {'RULES': ['a', 'b'], 'iptables': ['a', 'x', 'b'],
+                                 'ip6tables': ['a', 'b']})
+        self.assertEqual(check_profile.guard_rules_of("RULES = ('a',)\n"), {'RULES': ['a']})
 
     # guest storage and exchange (profiles P3, P4; F-03.3.1)
     def test_guest_storage_required_for_qemu(self):
@@ -911,11 +1042,20 @@ class AdmissionBlock(unittest.TestCase):
             self.assertFails(fragment)
             egress[key] = saved
         self.assertEqual(self.errors(), [])
-        # an allowlist entry is accepted only for a class the profile enables for containers
-        inference = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'inference')
-        inference['status'] = 'enabled for the test'
-        egress['allowlist'] = [{'class': 'inference', 'rule': '-d 10.0.2.100 -p tcp -j RETURN'}]
+        # an allowlist entry is accepted only for a class the profile enables for forwarded
+        # container traffic (provision, once neither deferred nor planned); never inference,
+        # whose endpoint the container guard allows on INPUT (decision 0015 section 4.2)
+        provision = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'provision')
+        provision['status'] = 'enabled for the test'
+        provision['host_port'] = None
+        egress['allowlist'] = [{'class': 'provision', 'rule': '-d 10.0.2.100 -p tcp -j RETURN'}]
         self.assertNotIn('egress_guard.allowlist', ' '.join(self.errors()))
+        egress['allowlist'] = [{'class': 'inference', 'rule': '-d 172.17.0.1 -p tcp -j RETURN'}]
+        self.assertFails('egress_guard.allowlist[0]')
+        provision['status'] = 'planned: for the test'
+        egress['allowlist'] = [{'class': 'provision', 'rule': '-d 10.0.2.100 -p tcp -j RETURN'}]
+        self.assertFails('egress_guard.allowlist[0]')
+        egress['allowlist'] = []
         daemon = self.qemu['provisioning']['moby']['daemon_json']
         for key in ('iptables', 'ip-forward'):
             daemon[key] = False

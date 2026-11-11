@@ -1,0 +1,106 @@
+{
+  "schema": "ai-engineering-harness/profiles/seed-overlay/v1",
+  "composition": "inference",
+  "decision": "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md (section 4.2 and Amendment 1)",
+  "template": "user-data",
+  "rule": "Applied by tools/nocloud_seed.py only for a guest created with create --provision --inference, never otherwise: each edit's anchor (its lines, LF-terminated) must occur exactly once in the user-data template as the previous edits left it and is replaced by the edit's lines, after {{inference_address}} and {{inference_port}} in them are replaced by the profile's inference endpoint (network.endpoints, class inference: guest_address and guest_port). Without the option the template, the rendered user-data and seed.iso are byte-identical to an ordinary provisioned guest's.",
+  "placeholders": ["inference_address", "inference_port"],
+  "edits": [
+    {
+      "id": "sshd-forwarding",
+      "why": "The sshd drop-in gains AllowTcpForwarding remote, GatewayPorts clientspecified and PermitListen <address>:<port>: the dispatcher's remote forward may bind exactly the inference endpoint; local forwarding (-L) stays refused.",
+      "anchor": [
+        "      AllowTcpForwarding no"
+      ],
+      "replacement": [
+        "      AllowTcpForwarding remote",
+        "      GatewayPorts clientspecified",
+        "      PermitListen {{inference_address}}:{{inference_port}}"
+      ]
+    },
+    {
+      "id": "guard-allow",
+      "why": "The container guard's one allow, IPv4 only (the endpoint is the docker0 gateway address).",
+      "anchor": [
+        "      EGRESS_ALLOWLIST = ()"
+      ],
+      "replacement": [
+        "      # decision 0015 section 4.2 (the opt-in inference composition): the one rule before the",
+        "      # container guard's refusals, IPv4 only: a new TCP connection from docker0 to the guest's",
+        "      # inference endpoint (the sshd remote forward the dispatcher holds) is accepted",
+        "      INPUT_ALLOW = {'iptables': ('-d {{inference_address}}/32 -i docker0 -p tcp -m tcp --dport {{inference_port}} -j ACCEPT',)}",
+        "      EGRESS_ALLOWLIST = ()"
+      ]
+    },
+    {
+      "id": "guard-rules-function",
+      "why": "The container guard's rules per family: the allow between the RETURN and the LOG, as the egress allowlist sits in its chain.",
+      "anchor": [
+        "      def egress_rules():"
+      ],
+      "replacement": [
+        "      def rules(tool):",
+        "          # the INPUT allow (decision 0015) sits between the RETURN and the LOG",
+        "          return RULES[:1] + INPUT_ALLOW.get(tool, ()) + RULES[1:]",
+        "",
+        "",
+        "      def egress_rules():"
+      ]
+    },
+    {
+      "id": "guard-install",
+      "why": "The guard installs its per-family rules.",
+      "anchor": [
+        "          for rule in RULES:"
+      ],
+      "replacement": [
+        "          for rule in rules(tool):"
+      ]
+    },
+    {
+      "id": "guard-observe",
+      "why": "The guard verifies its per-family rules (its check mode, the root step's admission step and the boot facts read this).",
+      "anchor": [
+        "          want = ['-A ' + CHAIN + ' ' + rule for rule in RULES]"
+      ],
+      "replacement": [
+        "          want = ['-A ' + CHAIN + ' ' + rule for rule in rules(tool)]"
+      ]
+    },
+    {
+      "id": "facts-function",
+      "why": "The boot facts (root) report sshd's effective forwarding directives for inspect (decision 0015 section 4.5).",
+      "anchor": [
+        "      def facts():"
+      ],
+      "replacement": [
+        "      def inference_facts():",
+        "          # decision 0015 section 4.5 (the opt-in inference composition): sshd's effective",
+        "          # forwarding directives as sshd -T (root) reports them",
+        "          rc, out, err = run(['/usr/sbin/sshd', '-T'], 60)",
+        "          keys = ('allowtcpforwarding', 'gatewayports', 'permitlisten', 'permitopen')",
+        "          if rc != 0:",
+        "              failed = {'rc': rc, 'error': tail(err, 300)}",
+        "              return {'sshd_t': failed}",
+        "          return {'sshd_t': [line for line in out.splitlines() if line.split(' ', 1)[0] in keys]}",
+        "",
+        "",
+        "      def facts():"
+      ]
+    },
+    {
+      "id": "facts-call",
+      "why": "The boot facts carry the inference section; an error is recorded, never fatal to the Moby facts.",
+      "anchor": [
+        "          data['units'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip() for u in units}"
+      ],
+      "replacement": [
+        "          data['units'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip() for u in units}",
+        "          try:",
+        "              data['inference'] = inference_facts()",
+        "          except Exception as exc:              # recorded, never fatal to the Moby facts",
+        "              data['inference'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}"
+      ]
+    }
+  ]
+}

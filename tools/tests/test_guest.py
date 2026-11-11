@@ -719,6 +719,16 @@ def passing_p5():
     }
 
 
+# The seed template's sshd drop-in, as cat prints it (decision 0015: the inference composition
+# replaces its AllowTcpForwarding line; an ordinary guest has exactly this text)
+ORDINARY_DROPIN = ('PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n'
+                   'AllowUsers agent\nAllowAgentForwarding no\nAllowTcpForwarding no\n'
+                   'X11Forwarding no\nPermitTunnel no')
+INFERENCE_DROPIN = ORDINARY_DROPIN.replace(
+    'AllowTcpForwarding no', 'AllowTcpForwarding remote\nGatewayPorts clientspecified\n'
+    'PermitListen 172.17.0.1:8090')
+
+
 def passing_observation(record):
     gib = 1024 ** 3
     kh = [fingerprint(KEY1)]
@@ -739,7 +749,7 @@ def passing_observation(record):
         'hostname': 'abc',
         'id_agent': 'uid=1000(agent) gid=1000(agent) groups=1000(agent)',
         'sudo_check': 'sudo: a password is required',
-        'sshd_dropin': 'PermitRootLogin no\nPasswordAuthentication no',
+        'sshd_dropin': ORDINARY_DROPIN,
         'host_keys': f'256 {kh[0]} root@abc (ED25519)',
         'cloud_init_query': f'{record["instance"]["instance_id"]} abc nocloud config-disk (/dev/vdc)',
         'scratch_mount': '/dev/vdb ext4 rw,relatime',
@@ -2636,6 +2646,12 @@ class CompareInspect(LaunchRecord):
         prov = provisioned_identity_record(self.record, 'one')
         prov_keys = {(p['property'], c['check']) for p in prov['properties'] for c in p['checks']}
         self.assertTrue(keys < prov_keys)                         # provisioning only adds checks
+        inf = inference_record(self.record)                       # decision 0015: opt-in
+        obs = inference_observation(inf, True, INF_LINE)
+        inf_keys = {(p['property'], c['check']) for p in guest.evaluate(PROFILE, inf, obs)
+                    for c in p['checks']}
+        self.assertTrue(prov_keys < inf_keys)                     # the composition only adds
+        prov_keys = inf_keys
         self.assertEqual(prov_keys - set(guest.CHECK_CLASSES), set())
         self.assertEqual(set(guest.CHECK_CLASSES) - prov_keys, set())   # no stale entry either
         for klass, norm in guest.CHECK_CLASSES.values():
@@ -5526,7 +5542,8 @@ class ContainmentProbe(TempState):
         bad = {c['id']: (c['verdict'], c['reason']) for c in out['cases'] if c['verdict'] != 'PASS'}
         self.assertEqual(bad, {})
         self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
-        self.assertEqual(out['totals'], {'PASS': len(CATALOGUE['cases']), 'FAIL': 0, 'UNKNOWN': 0})
+        executable = [c for c in CATALOGUE['cases'] if c['status'] == 'executable']   # planned: not run
+        self.assertEqual(out['totals'], {'PASS': len(executable), 'FAIL': 0, 'UNKNOWN': 0})
         self.assertEqual(set(out['by_category']), set(guest.load_containment_checker().CATEGORIES))
         self.assertEqual(out['primitives']['admission-probe']['result'], 'PASS')
         self.assertEqual(out['primitives']['job-access-probe']['result'], 'PASS')
@@ -5772,6 +5789,348 @@ class ContainmentProbe(TempState):
         c = conversation_container(hex_id='a' * 32, HostConfig={'Privileged': True})
         self.assertNotEqual(guest.container_inspect_digest(a, 'a' * 32, keys),
                             guest.container_inspect_digest(c, 'a' * 32, keys))
+
+
+# ---------------------------------------------------------------- the inference composition (S-03.2)
+
+INF = PROFILE['network']['inference_composition']
+INF_ENDPOINT = '172.17.0.1:8090'
+INF_LINE = (f'LISTEN 0      128       {INF_ENDPOINT}      0.0.0.0:*'
+            ' users:(("sshd-session",pid=2100,fd=9))')
+PROVIDER_FP = 'sha256:' + hashlib.sha256(b'sk-test-0123456789abcdefghijklmnopqrstuv').hexdigest()[:16]
+
+
+def inference_record(base_record):
+    """A provisioned launch record of create --provision --inference (decision 0015)."""
+    record = provisioned_record(base_record)
+    record['provisioning']['inference'] = True
+    record['inference'] = {'composition': 'inference', 'status': 'planned',
+                           'overlay': dict(INF['seed_overlay']),
+                           'endpoint': {'address': '172.17.0.1', 'port': 8090},
+                           'daemon_json': INF['daemon_json'],
+                           'container_guard_allow': INF['container_guard_allow']['rule']}
+    return record
+
+
+def inference_admission_facts(families=('iptables',)):
+    """admission_facts with the composition's one ACCEPT after the RETURN, as the composed
+    guard installs and prints it, in FAMILIES."""
+    facts = admission_facts()
+    for part in ('rules', 'guard_install'):
+        for tool in families:
+            facts[part]['families'][tool]['chain'].insert(
+                1, f"-A {GUARD['chain']} {INF['container_guard_allow']['rule']}")
+    return facts
+
+
+SSHD_T = ['allowtcpforwarding remote', 'gatewayports clientspecified',
+          f'permitlisten {INF_ENDPOINT}', 'permitopen any']
+
+
+def inference_observation(record, recorded=False, listener=None, **facts_override):
+    """provisioned_observation of an opted-in instance: the composed drop-in, the boot facts
+    with the guard's allow, daemon.json's bip and dns and sshd -T; ``listener`` adds that root
+    listener line (and its address to the agent's view) to the on-demand facts."""
+    obs = provisioned_observation(record)
+    g = obs['guest']
+    g['sshd_dropin']['out'] = INFERENCE_DROPIN
+    override = dict(agent_server=agent_server_facts('one'), admission=inference_admission_facts(),
+                    daemon_json=dict(PCONF['moby']['daemon_json'], **INF['daemon_json']),
+                    inference={'sshd_t': list(SSHD_T)})
+    override.update(facts_override)
+    g['moby_facts']['out'] = json.dumps(moby_facts(**override))
+    if listener:
+        g['conversation_facts']['out'] = json.dumps(conversation_facts_report(listeners=[listener]))
+        g['tcp_listeners']['out'] += '\n' + listener.split(' users:')[0]
+    obs['inference_forward'] = {'path': 'x/inference-forward.json', 'recorded': recorded}
+    obs['p5']['provider_key'] = {'fingerprint': PROVIDER_FP}
+    obs['p5']['summary']['provider_key_hits'] = []
+    return obs
+
+
+class InferenceInspect(unittest.TestCase):
+    """Decision 0015 section 4.5 (S-03.2 slice 2), offline: inspect verifies the state the
+    launch record names. Off (every instance): the ordinary drop-in, the four guard rules,
+    the profile's daemon.json and nothing on the endpoint's port. On: the composed drop-in,
+    sshd -T, the guard's one ACCEPT in iptables, bip and dns, the endpoint listened on by sshd
+    exactly when a forward session is recorded, and the provider key as a P5 needle."""
+
+    @classmethod
+    def setUpClass(cls):
+        base = LaunchRecord('test_record_fields')        # one launch record for the class
+        base.setUp()
+        cls.addClassCleanup(base.doCleanups)
+        cls.record = base.record
+        cls.prov = provisioned_record(cls.record)
+        cls.inf = inference_record(cls.record)
+
+    def failing(self, record, obs):
+        return sorted((p['property'], c['check'], c['verdict'])
+                      for p in guest.evaluate(PROFILE, record, obs) for c in p['checks']
+                      if c['verdict'] != 'PASS' and p['property'] != 'profiles P10')
+
+    def checks(self, record, obs):
+        return {c['check']: c for p in guest.evaluate(PROFILE, record, obs) for c in p['checks']}
+
+    def test_off_is_every_ordinary_instance(self):
+        for record, obs in ((self.record, passing_observation(self.record)),
+                            (self.prov, provisioned_observation(self.prov))):
+            checks = self.checks(record, obs)
+            self.assertEqual(checks[guest.INFERENCE_DROPIN_CHECK]['verdict'], 'PASS')
+            self.assertEqual(checks[guest.INFERENCE_DROPIN_CHECK]['declared']['state'], 'off')
+            self.assertNotIn(guest.INFERENCE_SSHD_CHECK, checks)
+            self.assertNotIn(guest.INFERENCE_KEY_CHECK, checks)
+            self.assertEqual(self.failing(record, obs), [])
+        checks = self.checks(self.prov, provisioned_observation(self.prov))
+        self.assertEqual(checks[guest.INFERENCE_LISTENER_CHECK]['observed']['listener'], [])
+        self.assertNotIn(guest.INFERENCE_LISTENER_CHECK,
+                         self.checks(self.record, passing_observation(self.record)))
+
+    def test_off_refuses_any_part_of_the_composition(self):
+        obs = provisioned_observation(self.prov)
+        obs['guest']['sshd_dropin']['out'] = INFERENCE_DROPIN
+        self.assertEqual(self.failing(self.prov, obs),
+                         [('profiles P7', guest.INFERENCE_DROPIN_CHECK, 'FAIL')])
+        obs = provisioned_observation(self.prov)
+        obs['guest']['moby_facts']['out'] = json.dumps(moby_facts(
+            agent_server=agent_server_facts('one'), admission=inference_admission_facts()))
+        self.assertEqual(self.failing(self.prov, obs),
+                         [(guest.PROVISIONING_PROPERTY, guest.ADMISSION_CHECK, 'FAIL')])
+        obs = provisioned_observation(self.prov)
+        obs['guest']['moby_facts']['out'] = json.dumps(moby_facts(
+            agent_server=agent_server_facts('one'),
+            daemon_json=dict(PCONF['moby']['daemon_json'], dns=['172.17.0.1'])))
+        self.assertEqual(self.failing(self.prov, obs),
+                         [(guest.PROVISIONING_PROPERTY, 'Moby daemon', 'FAIL')])
+        obs = inference_observation(self.prov, recorded=True, listener=INF_LINE)
+        for key in ('sshd_dropin',):
+            obs['guest'][key]['out'] = ORDINARY_DROPIN
+        obs['guest']['moby_facts']['out'] = provisioned_observation(self.prov)['guest'][
+            'moby_facts']['out']
+        self.assertEqual(self.failing(self.prov, obs),
+                         [('profiles P7', 'guest TCP listeners (Agent Server)', 'FAIL'),
+                          ('profiles P7', guest.INFERENCE_LISTENER_CHECK, 'FAIL')])
+
+    def test_on_passes_with_and_without_a_forward_session(self):
+        for recorded, listener in ((False, None), (True, INF_LINE)):
+            obs = inference_observation(self.inf, recorded, listener)
+            self.assertEqual(self.failing(self.inf, obs), [], recorded)
+            checks = self.checks(self.inf, obs)
+            self.assertEqual(checks[guest.INFERENCE_DROPIN_CHECK]['declared']['state'], 'on')
+            self.assertEqual(checks[guest.INFERENCE_LISTENER_CHECK]['observed']['listener'],
+                             [listener] if listener else [])
+            self.assertEqual(checks[guest.ADMISSION_CHECK]['declared']['chain']['iptables'][1],
+                             f"-A {GUARD['chain']} {INF['container_guard_allow']['rule']}")
+            self.assertEqual(checks[guest.ADMISSION_CHECK]['declared']['chain']['ip6tables'],
+                             [f"-A {GUARD['chain']} {r}" for r in GUARD['rules']])
+        self.assertEqual(self.checks(self.inf, obs)[guest.INFERENCE_KEY_CHECK]['verdict'], 'PASS')
+
+    def test_on_listener_follows_the_forward_session_record(self):
+        other = INF_LINE.replace('sshd-session', 'python3')
+        wide = INF_LINE.replace(INF_ENDPOINT, '0.0.0.0:8090').replace('sshd-session', 'sshd')
+        for recorded, listeners in ((True, []), (False, [INF_LINE]), (True, [other]),
+                                    (True, [wide]), (True, [INF_LINE, wide])):
+            obs = inference_observation(self.inf, recorded)
+            report = conversation_facts_report(listeners=listeners)
+            obs['guest']['conversation_facts']['out'] = json.dumps(report)
+            obs['guest']['tcp_listeners']['out'] += ''.join(
+                '\n' + line.split(' users:')[0] for line in listeners)
+            failing = [f for f in self.failing(self.inf, obs) if f[0] == 'profiles P7']
+            self.assertIn(('profiles P7', guest.INFERENCE_LISTENER_CHECK, 'FAIL'), failing,
+                          (recorded, listeners))
+        obs = inference_observation(self.inf, True, INF_LINE)
+        obs['guest']['conversation_facts']['out'] = 'not json'
+        self.assertIn(('profiles P7', guest.INFERENCE_LISTENER_CHECK, 'UNKNOWN'),
+                      self.failing(self.inf, obs))
+
+    def test_on_refuses_each_missing_or_loosened_part(self):
+        allow = inference_admission_facts(('iptables', 'ip6tables'))
+        for label, obs, want in (
+                ('ordinary drop-in', None, ('profiles P7', guest.INFERENCE_DROPIN_CHECK, 'FAIL')),
+                ('sshd -T', {'inference': {'sshd_t': SSHD_T[:1] + ['gatewayports yes'] + SSHD_T[2:]}},
+                 ('profiles P7', guest.INFERENCE_SSHD_CHECK, 'FAIL')),
+                ('no sshd -T', {'inference': {'sshd_t': {'rc': 255, 'error': 'x'}}},
+                 ('profiles P7', guest.INFERENCE_SSHD_CHECK, 'UNKNOWN')),
+                ('no guard allow', {'admission': admission_facts()},
+                 (guest.PROVISIONING_PROPERTY, guest.ADMISSION_CHECK, 'FAIL')),
+                ('allow in ip6tables', {'admission': allow},
+                 (guest.PROVISIONING_PROPERTY, guest.ADMISSION_CHECK, 'FAIL')),
+                ('no dns', {'daemon_json': dict(PCONF['moby']['daemon_json'],
+                                                bip=INF['daemon_json']['bip'])},
+                 (guest.PROVISIONING_PROPERTY, 'Moby daemon', 'FAIL'))):
+            got = inference_observation(self.inf, **(obs or {}))
+            if obs is None:
+                got['guest']['sshd_dropin']['out'] = ORDINARY_DROPIN
+            self.assertIn(want, self.failing(self.inf, got), label)
+            self.assertEqual(len(self.failing(self.inf, got)), 1, (label, self.failing(self.inf, got)))
+
+    def test_provider_key_is_a_p5_needle(self):
+        obs = inference_observation(self.inf)
+        obs['p5']['summary']['provider_key_hits'] = [{'where': 'guest:srv/scratch/x'}]
+        self.assertEqual(self.failing(self.inf, obs),
+                         [('profiles P5', guest.INFERENCE_KEY_CHECK, 'FAIL')])
+        obs['p5']['provider_key'] = {'fingerprint': None}
+        self.assertEqual(self.failing(self.inf, obs),
+                         [('profiles P5', guest.INFERENCE_KEY_CHECK, 'UNKNOWN')])
+        # an ordinary instance gets the needle only when one is given
+        obs = provisioned_observation(self.prov)
+        obs['p5']['provider_key'] = {'fingerprint': PROVIDER_FP}
+        obs['p5']['summary']['provider_key_hits'] = []
+        self.assertEqual(self.checks(self.prov, obs)[guest.INFERENCE_KEY_CHECK]['verdict'], 'PASS')
+
+    def test_fingerprint_scan_finds_only_the_whole_secret(self):
+        key = b'sk-test-0123456789abcdefghijklmnopqrstuv'
+        fps = {'provider-key': {PROVIDER_FP}}
+        for data, found in ((b'ANTHROPIC_API_KEY=' + key + b'\n', True),
+                            (b'{"api_key": "' + key + b'"}', True),
+                            (b'x' + key, False),                  # inside a longer run
+                            (key[:-1], False),
+                            (b'nothing secret here', False)):
+            self.assertEqual('provider-key' in guest.scan_bytes(data, [], {}, fps), found, data)
+        self.assertEqual(guest.scan_bytes(b'ANTHROPIC_API_KEY=' + key, [], {}), set())
+        self.assertEqual(guest.token_fingerprint(key), PROVIDER_FP)
+
+    def test_records_compare_across_start(self):
+        a = inference_observation(self.inf, True, INF_LINE)
+        b = inference_observation(self.inf, False)
+        props_a = guest.evaluate(PROFILE, self.inf, a)
+        props_b = guest.evaluate(PROFILE, self.inf, b)
+        out = guest.compare_inspect(PROFILE, {'properties': props_a}, {'properties': props_b},
+                                    'start')
+        bad = [f for f in out['fields'] if f['kind'] == 'check' and not f['ok']]
+        self.assertEqual(bad, [])
+
+    def test_create_and_cli_refusals(self):
+        for kwargs in ({'inference': True}, {'inference': True, 'provision': True, 'drill': True,
+                                             'drill_leaf': guest.DRILL_LEAVES[0]}):
+            with self.assertRaises(guest.Refused) as cm:
+                guest.create(None, 'abc', **kwargs)
+            self.assertIn('--inference needs --provision', str(cm.exception))
+        with self.assertRaises(guest.Refused):
+            guest.inspect(None, 'abc', provider_key_fingerprint='sha256:short')
+        record = self.record
+        self.assertNotIn('inference', record)
+        self.assertFalse(guest.inference_opted(record))
+        self.assertTrue(guest.inference_opted(self.inf))
+        self.assertEqual(guest.declared_daemon_json(PROFILE, False), PCONF['moby']['daemon_json'])
+        self.assertEqual(guest.declared_daemon_json(PROFILE, True),
+                         dict(PCONF['moby']['daemon_json'], **INF['daemon_json']))
+        self.assertEqual(guest.inference_record(PROFILE, {'compositions': {'inference': {
+            'overlay_sha256': INF['seed_overlay']['sha256']}}}), self.inf['inference'])
+        with self.assertRaises(guest.Refused):
+            guest.inference_record(PROFILE, {'compositions': {}})
+
+
+class FakeInferenceJobGuest(FakeJobGuest):
+    """FakeJobGuest of an instance with the inference composition: the job sweep's endpoint
+    answers 401, its edges and the resolver are refused and counted by the container guard."""
+    inference_rejects = 0
+
+    def facts(self):
+        report = super().facts()
+        rows = report['admission']['iptables']
+        rows.insert(1, {'packets': 2, 'bytes': 120, 'target': 'ACCEPT'})
+        rows[3] = dict(rows[3], packets=rows[3]['packets'] + self.inference_rejects)
+        return report
+
+    def container_output(self, cid, command):
+        script, arg = _script_of(command)
+        if script != guest.JOB_INFERENCE_SWEEP:
+            return super().container_output(cid, command)
+        spec = json.loads(base64.b64decode(arg).decode('utf-8'))
+        self.inference_specs = getattr(self, 'inference_specs', []) + [spec]
+        host, port = spec['endpoint']
+        status = 200 if self.faults.get('endpoint_open') else 401
+        results = [{'proto': 'tcp', 'host': host, 'port': port, 'what': guest.INFERENCE_ENDPOINT_WHAT,
+                    'outcome': 'ECONNREFUSED' if self.faults.get('no_forward') else 'answered',
+                    'status': None if self.faults.get('no_forward') else status}]
+        for proto, h, p, what in spec['targets']:
+            outcome = 'ECONNREFUSED'
+            if self.faults.get('edge_open') and p == port + 1:
+                outcome = 'connected'
+            if outcome == 'ECONNREFUSED' and not self.faults.get('uncounted'):
+                self.inference_rejects += 1
+            results.append({'proto': proto, 'host': h, 'port': p, 'what': what,
+                            'outcome': outcome})
+        results.append({'proto': 'dns', 'host': spec['name'], 'port': None,
+                        'what': guest.INFERENCE_LOOKUP_WHAT,
+                        'outcome': 'resolved' if self.faults.get('resolves') else 'not-resolved'})
+        return guest.JOB_MARKER + json.dumps({'results': results}) + '\n'
+
+
+class InferenceJobSweep(TempState):
+    """Decision 0015 section 4.5 from a job, offline: job-access-probe adds the inference
+    sweep for an instance with the composition only, judged by the rule fixed before."""
+
+    def setUp(self):
+        super().setUp()
+        self.idir = self.state / 'instances' / 'job'
+        self.idir.mkdir(parents=True)
+        self.record = {'provisioning': {'image_id': IMAGE_ID, 'local_tag': LOCAL_TAG,
+                                        'egress_falsification': True},
+                       'ports': {'ssh': 40001, 'qmp': 40002}}
+        patcher = mock.patch.object(guest, 'running_instance',
+                                    lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_inference(self, **faults):
+        fake = FakeInferenceJobGuest(**faults)
+        out = guest.job_access_probe(self.ctx(), 'job',
+                                     token_fingerprints=['builder=sha256:2edcc7070632f15d'],
+                                     channels=lambda rec: (fake.api, fake.facts),
+                                     ssh_fn=lambda rec: fake)
+        step = next((s for s in out['steps'] if s['step'] == guest.INFERENCE_JOB_STEP), None)
+        return out, step, fake
+
+    def test_only_an_opted_in_instance_runs_it(self):
+        out, step, fake = self.run_inference()
+        self.assertIsNone(step)
+        self.assertEqual(out['result'], 'PASS')
+        self.record['inference'] = inference_record(self.record)['inference']
+        out, step, fake = self.run_inference()
+        self.assertTrue(step['ok'], json.dumps(step, default=str)[:2000])
+        self.assertEqual(out['result'], 'PASS')
+        spec = fake.inference_specs[0]
+        self.assertEqual(spec['endpoint'], ['172.17.0.1', 8090])
+        self.assertEqual(spec['targets'], INF['job_sweep']['edges'])
+        self.assertEqual(len(step['detail']['results']), 2 * (len(spec['targets']) + 2))
+        self.assertEqual(step['detail']['counters']['refused'], 2 * len(spec['targets']))
+        self.assertTrue(step['detail']['counters']['incremented'])
+        # the catalogue's extractor reads the step
+        record = {'steps': out['steps']}
+        got = guest.extract_job(record, 'inference', {'what': guest.INFERENCE_ENDPOINT_WHAT}, {})
+        self.assertEqual({o['outcome'] for o in got}, {'answered'})
+        got = guest.extract_job(record, 'inference', {'what': 'inference allow edge (port)'}, {})
+        self.assertEqual([o['outcome'] for o in got], ['ECONNREFUSED'] * 2)
+
+    def test_each_fault_fails_or_stops(self):
+        self.record['inference'] = inference_record(self.record)['inference']
+        for fault, stops in (('endpoint_open', False), ('no_forward', False), ('edge_open', True),
+                             ('resolves', True), ('uncounted', False)):
+            out, step, _ = self.run_inference(**{fault: True})
+            self.assertFalse(step['ok'], fault)
+            self.assertEqual(out['result'], 'FAIL', fault)
+            self.assertEqual(bool(out['stop_conditions']), stops, fault)
+
+    def test_verdict_and_script(self):
+        compile(guest.JOB_INFERENCE_SWEEP, 'sweep', 'exec')
+        rows = [{'what': guest.INFERENCE_ENDPOINT_WHAT, 'outcome': 'answered', 'status': 401},
+                {'what': 'inference allow edge (udp)', 'outcome': 'ECONNREFUSED'},
+                {'what': guest.INFERENCE_LOOKUP_WHAT, 'outcome': 'not-resolved'}]
+        self.assertTrue(guest.inference_job_verdict(rows, 10, 11)[0])
+        self.assertFalse(guest.inference_job_verdict(rows, 10, 10)[0])        # not counted
+        self.assertFalse(guest.inference_job_verdict(rows, None, 11)[0])
+        self.assertFalse(guest.inference_job_verdict([], 0, 0)[0])
+        for change, stops in (({'outcome': 'timeout'}, False), ({'outcome': 'ENETUNREACH'}, False),
+                              ({'outcome': 'answered 40 bytes'}, True)):
+            bad = [rows[0], dict(rows[1], **change), rows[2]]
+            ok, _, stop, _ = guest.inference_job_verdict(bad, 10, 11)
+            self.assertFalse(ok, change)
+            self.assertEqual(bool(stop), stops, change)
+        ok, _, stop, _ = guest.inference_job_verdict([dict(rows[0], status=200)] + rows[1:], 10, 11)
+        self.assertFalse(ok)
+        self.assertEqual(stop, [])
 
 
 if __name__ == '__main__':

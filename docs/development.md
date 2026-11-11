@@ -893,6 +893,37 @@ defaults them.
   P8 group, and a `provisioning (F-04.1)` entry: version, daemon, image, containers,
   modules, leftovers, units), reading root's boot-time report
   `/run/aieh/docker-facts.json` as `agent`.
+- The guest inference endpoint's composition (S-03.2 slice 2, decision 0015 section 4) is
+  **opt-in per guest and planned**: `create --provision --inference` (never with
+  `--drill`, and never a netprobe instance) applies it, and applying it to a guest is the
+  Owner's guest hardening act, not yet authorized. **Not yet verified in a guest.**
+  The profile declares it in `network.inference_composition`: the seed overlay
+  [`profiles/seed/inference-overlay.json`](../profiles/seed/inference-overlay.json),
+  pinned by sha256, whose exact text edits `tools/nocloud_seed.py --inference` applies to
+  the user-data template (each anchor exactly once): the sshd drop-in's
+  `AllowTcpForwarding no` becomes `AllowTcpForwarding remote`,
+  `GatewayPorts clientspecified` and `PermitListen 172.17.0.1:8090`; the container guard
+  gains one ACCEPT after its RETURN, IPv4 only
+  (`-d 172.17.0.1/32 -i docker0 -p tcp -m tcp --dport 8090 -j ACCEPT`); and the boot
+  facts report `sshd -T`'s forwarding directives. The manifest's `daemon.json` gains
+  `bip` (`172.17.0.1/16`) and `dns` (`["172.17.0.1"]`), and the launch record an
+  `inference` block. **Without the option the seed, the manifest and every guest-visible
+  file are byte-identical to before** (`tools/tests/test_nocloud_seed.py` pins the
+  digests computed at `0b8af57`). The egress guard's allowlist stays empty. `inspect`
+  verifies the state the launch record names: off, the ordinary drop-in, the four guard
+  rules, the profile's `daemon.json` and nothing on the endpoint's port; on, the composed
+  drop-in, `sshd -T`, the guard's ACCEPT in iptables only, `bip` and `dns`, and the
+  endpoint listened on by sshd exactly when a forward session is recorded
+  (`<instance>\inference-forward.json`, written by the dispatcher in a later slice).
+  `inspect --provider-key-fingerprint sha256:<16 hex>` makes the provider key a P5
+  needle (every secret-shaped run of the collection and the host files is fingerprinted);
+  for an opted-in guest that check is UNKNOWN without it. `job-access-probe` on an
+  opted-in guest adds the inference sweep from both jobs: the endpoint must answer 401
+  without a token, the allow's edges (`172.17.0.1:8091`, UDP to the endpoint,
+  `10.0.2.15:8090`) and the resolver (`172.17.0.1:53`) must be refused with the
+  container guard's IPv4 REJECT counters rising, and a name lookup must fail; an edge
+  that answers or a name that resolves is a stop condition. The containment catalogue
+  declares the matching cases as `planned`.
 - The same root step installs the OpenHands Agent Server (F-04.1 slice (c)): the release
   binary as `aieh-agent-server.service` under the no-login system user `openhands`
   (group `docker`), bound to the guest's `127.0.0.1:8000` only, configured by the

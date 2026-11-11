@@ -528,7 +528,8 @@ def read_launch_record(instance_dir):
 
 
 def build_launch_record(profile, profile_path, values, name, instance_id, ports, revision,
-                        inputs, argv, env, disk_commands, validation=None, provisioning=None):
+                        inputs, argv, env, disk_commands, validation=None, provisioning=None,
+                        inference=None):
     """launch.json: every boot input with its digest, the argv and the profile revision.
     A validation instance (netprobe) also records its validation block (Owner constraint 7:
     the full effective configuration); an ordinary record has no such key. An instance
@@ -555,6 +556,8 @@ def build_launch_record(profile, profile_path, values, name, instance_id, ports,
         record['validation'] = validation
     if provisioning is not None:
         record['provisioning'] = provisioning
+    if inference is not None:
+        record['inference'] = inference      # decision 0015: the opt-in composition
     return record
 
 
@@ -1617,7 +1620,8 @@ def wait_ready(ctx, instance_dir, record, ceiling_s, need_host_keys):
 
 
 def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=None,
-           provision=False, egress_falsification=False, drill=False, drill_leaf=None):
+           provision=False, egress_falsification=False, drill=False, drill_leaf=None,
+           inference=False):
     """The create binding. ``netprobe`` is set only by the netprobe operation (a
     NetprobeSession); the ordinary create takes no validation input. ``provision`` (F-04.1)
     writes the provisioning manifest of the verified host stage into the seed; the
@@ -1627,7 +1631,15 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
     (job-access-probe); an ordinary provisioned guest never has it. ``drill`` (E-01.2.2
     slice (b), with ``provision`` only) seeds the TEST-ONLY drill helper as a second
     user-data part and records a drill validation block naming ``drill_leaf``, the plan
-    leaf the guest is created for (one of DRILL_LEAVES); an ordinary create never does."""
+    leaf the guest is created for (one of DRILL_LEAVES); an ordinary create never does.
+    ``inference`` (decision 0015, with ``provision`` only, never a drill or validation
+    instance) applies the opt-in inference composition: the profile's pinned seed overlay
+    (sshd forwarding directives, the container guard's one ACCEPT, the boot facts' sshd -T)
+    and the composition's daemon.json keys in the manifest; the launch record gains an
+    inference block. Without it the seed and the manifest are the ordinary ones."""
+    if inference and (not provision or drill or netprobe is not None):
+        raise Refused('REFUSED', '--inference needs --provision and is never a drill or '
+                      'validation instance')
     if egress_falsification and not provision:
         raise Refused('REFUSED', '--egress-falsification needs --provision')
     if drill and (not provision or netprobe is not None):
@@ -1652,7 +1664,8 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         raise Refused('TIER_UNAVAILABLE', f'{ctx.profile["name"]}: strong provider unavailable',
                       [c for c in report['checks'] if c['status'] != 'ok'])
     revision = profile_revision(ctx.repo)
-    manifest = build_provision_manifest(ctx, egress_falsification) if provision else None
+    manifest = build_provision_manifest(ctx, egress_falsification, inference) if provision \
+        else None
     instances = idir.parent
     if not instances.is_dir():
         os.mkdir(instances)
@@ -1690,7 +1703,8 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         try:
             seed = gen.generate(str(ctx.profile_path.parent), str(idir), name,
                                 str(idir / 'ssh' / 'id_ed25519.pub'),
-                                provision_manifest=manifest['bytes'] if manifest else None)
+                                provision_manifest=manifest['bytes'] if manifest else None,
+                                compositions=('inference',) if inference else ())
         except gen.Refused as exc:
             raise Refused('REFUSED', f'seed: {exc}') from exc
         ssh_port, qmp_port = allocate_ports(2)
@@ -1742,7 +1756,8 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
         provisioning = manifest['record']
     record = build_launch_record(ctx.profile, ctx.profile_path, values, name,
                                  seed['instance_id'], ports, revision, inputs, argv, env,
-                                 disk_commands, validation, provisioning)
+                                 disk_commands, validation, provisioning,
+                                 inference_record(ctx.profile, seed) if inference else None)
     write_json_exclusive(idir / 'launch.json', record)
     img_info = qemu_img_info(record, idir)
     launched = launch(ctx, idir, record, 'create')
@@ -1753,6 +1768,8 @@ def create(ctx, name, ready_timeout=READY_TIMEOUT_S, canaries=None, netprobe=Non
               'launch': launched}
     if provisioning is not None:
         result['provisioning'] = provisioning
+    if record.get('inference'):
+        result['inference'] = record['inference']
     if planted:
         result['canaries'] = {'planted_in_environment': planted,
                               'needles': canary_summary(canaries['needles'])}
@@ -2162,16 +2179,31 @@ def private_key_needles(key_path):
     return sorted(needles)
 
 
-def scan_bytes(data, literals, patterns):
-    """Labels of the literals and pattern classes found in one byte string."""
+# A secret-shaped run (a provider API key among them): searched by its fingerprint only
+TOKEN_RUN = re.compile(rb'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,512}(?![A-Za-z0-9_-])')
+
+
+def token_fingerprint(value):
+    """The reports' fingerprint of a secret (integrations/platform contract.fingerprint):
+    sha256:<the first 16 hex digits of the sha256 of its UTF-8 bytes>."""
+    return 'sha256:' + hashlib.sha256(value).hexdigest()[:16]
+
+
+def scan_bytes(data, literals, patterns, fingerprints=None):
+    """Labels of the literals and pattern classes found in one byte string; with
+    ``fingerprints`` ({label: {fingerprint, ...}}), also the labels whose fingerprint a
+    secret-shaped run of the data has (the value itself is never known here)."""
     found = {label for label, needle in literals if needle in data}
     for label, regexes in patterns.items():
         if any(re.search(rx, data) for rx in regexes):
             found.add(label)
+    if fingerprints:
+        runs = {token_fingerprint(m.group(0)) for m in TOKEN_RUN.finditer(data)}
+        found.update(label for label, fps in fingerprints.items() if runs & set(fps))
     return found
 
 
-def scan_tar(tar_bytes, literals, patterns):
+def scan_tar(tar_bytes, literals, patterns, fingerprints=None):
     """Search every member (name and content) of a gzip tar stream.
 
     Returns {'members': n, 'bytes': total, 'hits': [{'label', 'member'}], 'truncated': [..]}.
@@ -2190,7 +2222,7 @@ def scan_tar(tar_bytes, literals, patterns):
                 data += b'\n' + content
             elif member.issym() or member.islnk():
                 data += b'\n' + member.linkname.encode('utf-8', errors='replace')
-            for label in sorted(scan_bytes(data, literals, patterns)):
+            for label in sorted(scan_bytes(data, literals, patterns, fingerprints)):
                 hits.append({'label': label, 'member': member.name})
     return {'members': members, 'bytes': total, 'hits': hits, 'truncated': truncated}
 
@@ -2241,7 +2273,7 @@ def summarize_p5(scan, control_member, host_scans):
     out = {'members': scan['members'], 'bytes': scan['bytes'], 'truncated': scan['truncated'],
            'control_classes': sorted({owner_class(h['label']) for h in scan['hits']
                                       if h['member'] == control_member and owner_class(h['label'])}),
-           'owner_hits': [], 'canary_hits': [], 'key_hits': []}
+           'owner_hits': [], 'canary_hits': [], 'key_hits': [], 'provider_key_hits': []}
     for source, hits in [('guest', scan['hits'])] + [(f'host:{k}', v) for k, v in host_scans.items()]:
         for hit in hits:
             label, where = hit['label'], f'{source}:{hit.get("member", "")}'
@@ -2251,23 +2283,28 @@ def summarize_p5(scan, control_member, host_scans):
                 out['canary_hits'].append({'label': label, 'where': where})
             elif label == 'instance-private-key':
                 out['key_hits'].append({'where': where})
+            elif label == 'provider-key':
+                out['provider_key_hits'].append({'where': where})
             elif label.startswith('owner:'):
                 out['owner_hits'].append({'class': owner_class(label), 'where': where})
     return out
 
 
-def scan_host_file(path, literals, patterns, owner=True):
+def scan_host_file(path, literals, patterns, owner=True, fingerprints=None):
     data = Path(path).read_bytes()
     use = [(lab, n) for lab, n in literals if owner or not lab.startswith('owner:')]
     pats = patterns if owner else {}
-    return [{'label': lab, 'member': Path(path).name} for lab in sorted(scan_bytes(data, use, pats))]
+    return [{'label': lab, 'member': Path(path).name}
+            for lab in sorted(scan_bytes(data, use, pats, fingerprints))]
 
 
-def collect_p5(ssh, idir, record, canaries, secret_scan=None):
+def collect_p5(ssh, idir, record, canaries, secret_scan=None, provider_key_fingerprint=None):
     """The P5 test: plant the positive control, collect, remove it, scan on the host.
 
     Canary values never travel to the guest: the guest's data comes to the host and is
     searched here. The control file holds synthetic samples of each Owner class only.
+    ``provider_key_fingerprint`` (decision 0015 section 4.5) makes the provider key a
+    needle by its fingerprint: every secret-shaped run is fingerprinted and compared.
     """
     token = secrets.token_hex(6)
     control_path = f'{CONTROL_DIR}/.aieh-p5-control-{token}'
@@ -2291,8 +2328,11 @@ def collect_p5(ssh, idir, record, canaries, secret_scan=None):
     literals, patterns = p5_needles(canaries, Path(idir) / 'ssh' / 'id_ed25519',
                                     principal=record.get('host_principal'),
                                     control_account=account)
+    fingerprints = {'provider-key': {provider_key_fingerprint}} \
+        if provider_key_fingerprint else None
+    out['provider_key'] = {'fingerprint': provider_key_fingerprint}
     try:
-        scan = scan_tar(collected.stdout, literals, patterns)
+        scan = scan_tar(collected.stdout, literals, patterns, fingerprints)
         names = tar_member_names(collected.stdout)
         if secret_scan is not None:          # F-04.1: the Agent Server secrets (counts only)
             out['agent_server_secrets'] = secret_scan(collected.stdout)
@@ -2312,7 +2352,8 @@ def collect_p5(ssh, idir, record, canaries, secret_scan=None):
         # launch.json records the host principal by design (profiles P8); it is searched
         # for canaries and the private key only. The seed and the guest's serial
         # console output are searched for everything.
-        host_scans[key] = scan_host_file(path, literals, patterns, owner=key != 'launch.json')
+        host_scans[key] = scan_host_file(path, literals, patterns, owner=key != 'launch.json',
+                                         fingerprints=fingerprints)
     out['host_files'] = sorted(host)
     out['summary'] = summarize_p5(scan, control_path.lstrip('/'), host_scans)
     return out
@@ -2989,6 +3030,15 @@ def p5_checks(record, obs):
               'host: key body lines and the ed25519 seed (raw, hex, base64 at 3 alignments)',
               not summary['key_hits']),
     ]
+    fingerprint = (p5.get('provider_key') or {}).get('fingerprint')
+    if inference_opted(record) or fingerprint:
+        # decision 0015 section 4.5: the provider key's fingerprint is a P5 needle; without
+        # one (inspect --provider-key-fingerprint) the check is UNKNOWN
+        checks.append(check(INFERENCE_KEY_CHECK, {'needle': fingerprint, 'hits': []},
+                            None if not fingerprint else summary.get('provider_key_hits'),
+                            'host: every secret-shaped run of the collection, seed.iso, '
+                            'launch.json and serial.log, fingerprinted',
+                            None if not fingerprint else not summary.get('provider_key_hits')))
     return checks
 
 
@@ -3124,6 +3174,7 @@ def evaluate(profile, record, obs):
     props.append(prop('P3', p3, formal=formal))
     props.append(prop('P4', p4, formal=formal))
     agent = agent_server_checks(profile, record, obs) if record.get('provisioning') else {}
+    inference = inference_checks(profile, record, obs)
     props.append(prop('P5', p5_checks(record, obs) + agent.get('P5', []), formal=formal, note=(
         'Scanned as the unprivileged agent user: root-only files in the guest (for example '
         '/proc/1/environ, /etc/shadow and the user-data.txt of cloud-init) are not read there; '
@@ -3174,7 +3225,9 @@ def evaluate(profile, record, obs):
               rules == declared_rules),
     ] + (netprobe_checks(record, obs.get('netprobe')) if netprobe_mode
          else [enforcement_check(profile)]) +
-        (moby_p7_checks(obs, profile) if record.get('provisioning') else []) + agent.get('P7', []),
+        (moby_p7_checks(obs, profile, record) if record.get('provisioning') else []) +
+        agent.get('P7', []) +
+        inference['P7'],
         formal='F-03.3.2; S-02.1, S-02.2',
         note=('Validation instance: the netprobe checks are the F-03.3.2 test (guest root, '
               'routes, every denied path, both positive controls, decoys).' if netprobe_mode
@@ -3256,15 +3309,20 @@ def evaluate(profile, record, obs):
     ]))
     if record.get('provisioning'):
         props.append(provisioning_property(profile, record, obs, agent.get('provisioning', []) +
-                                           admission_check(profile, obs) +
+                                           admission_check(profile, obs, record) +
                                            quiesce_check(profile, obs) +
                                            start_check(profile, obs)))
     return props
 
 
-def inspect(ctx, name, canaries=None):
+def inspect(ctx, name, canaries=None, provider_key_fingerprint=None):
     """The P1-P12 record. ``canaries`` is a loaded canary set (load_canaries) or None;
-    without it the P5 canary check is UNKNOWN."""
+    without it the P5 canary check is UNKNOWN. ``provider_key_fingerprint`` (sha256:<16 hex>,
+    decision 0015) adds the provider key as a P5 needle; for an instance with the inference
+    composition its check is UNKNOWN without one."""
+    if provider_key_fingerprint is not None and \
+            not GITEA_FINGERPRINT.match(str(provider_key_fingerprint)):
+        raise Refused('REFUSED', '--provider-key-fingerprint: sha256:<16 hex digits>')
     idir = ctx.instance_dir(name)
     record = read_launch_record(idir)
     proc = running_process(idir, record['binary'])
@@ -3316,7 +3374,12 @@ def inspect(ctx, name, canaries=None):
 
         def p5_scan(tar_bytes):
             return tar_secret_scan(tar_bytes, session_key, secret_fp)
-    obs['p5'] = collect_p5(ssh, idir, record, canaries, secret_scan=p5_scan)
+    obs['p5'] = collect_p5(ssh, idir, record, canaries, secret_scan=p5_scan,
+                           provider_key_fingerprint=provider_key_fingerprint)
+    if inference_opted(record):
+        forward = inference_forward_path(ctx.profile, idir)
+        obs['inference_forward'] = {'path': None if forward is None else posix(forward),
+                                    'recorded': forward is not None and forward.is_file()}
     if record.get('provisioning'):
         mine = json.dumps(obs, sort_keys=True, default=str).encode('utf-8')
         obs['agent_server_secrets'] = {
@@ -5962,11 +6025,14 @@ def agent_server_manifest(profile, files):
                          'port': server['listener']['port']}}
 
 
-def build_provision_manifest(ctx, egress_falsification=False):
+def build_provision_manifest(ctx, egress_falsification=False, inference=False):
     """The seeded manifest of a provisioned instance, from the committed lock and the
     re-verified host stage (provision-fetch): every file to upload with its role, size
     and sha256, the packages, the image (locked config digest, the archive's tags, the
-    local immutable tag) and the declared daemon.json. Deterministic for one stage."""
+    local immutable tag) and the declared daemon.json. Deterministic for one stage.
+    ``inference`` (decision 0015, the opt-in composition) merges the composition's
+    daemon.json keys (bip, dns); without it the manifest is the ordinary one, byte for
+    byte."""
     conf = provisioning_config(ctx.profile)
     lock, lock_rel, lock_sha = provision_lock(ctx)
     items = provision_items(lock)
@@ -6010,7 +6076,8 @@ def build_provision_manifest(ctx, egress_falsification=False):
                   'manifest_digest': image['manifest_digest'],
                   'archive_repo_tags': repo_tags,
                   'local_tag': conf['image']['local_tag']},
-        'docker': {'server_version': moby['server_version'], 'daemon_json': moby['daemon_json'],
+        'docker': {'server_version': moby['server_version'],
+                   'daemon_json': declared_daemon_json(ctx.profile, inference),
                    'sysctl': moby['sysctl']['content'],
                    'containerd_config': moby['containerd_config']['content']},
         'agent_server': agent_server,
@@ -6030,7 +6097,204 @@ def build_provision_manifest(ctx, egress_falsification=False):
                        verified['seconds'],
                        'agent_server': {'version': conf['agent_server'].get('version'),
                                         'binary_sha256': agent_server['binary']['sha256']},
-                       'egress_falsification': bool(egress_falsification)}}
+                       'egress_falsification': bool(egress_falsification)}
+            | ({'inference': True} if inference else {})}
+
+
+# ---------------------------------------------------------------- inference composition (S-03.2)
+#
+# Decision 0015 section 4: the guest inference endpoint is a TCP listener on the docker0 gateway
+# address, owned by the guest's sshd as a remote forward the dispatcher holds; its guest
+# composition (the sshd forwarding directives, the container guard's one ACCEPT, daemon.json's
+# bip and dns) is opt-in per guest (create --provision --inference) and declared in the
+# profile's network.inference_composition. Applying it to a guest is the Owner's guest hardening
+# act; without the option the seed, the manifest and every guest-visible file are the ordinary
+# ones. Inspect verifies whichever state the launch record names.
+
+INFERENCE_DROPIN_CHECK = 'sshd drop-in (inference composition, decision 0015)'
+INFERENCE_SSHD_CHECK = 'sshd -T forwarding directives (inference composition)'
+INFERENCE_LISTENER_CHECK = 'inference endpoint listener (decision 0015)'
+INFERENCE_KEY_CHECK = 'provider key fingerprint (decision 0015)'
+INFERENCE_SSHD_KEYS = ('allowtcpforwarding', 'gatewayports', 'permitlisten')
+_SEED_FILES = {}
+
+
+def inference_config(profile):
+    conf = (profile.get('network') or {}).get('inference_composition')
+    return conf if isinstance(conf, dict) else {}
+
+
+def inference_endpoint(profile):
+    """(address, port) of the profile's inference endpoint, or (None, None)."""
+    for entry in (profile.get('network') or {}).get('endpoints') or []:
+        if isinstance(entry, dict) and entry.get('class') == 'inference':
+            return entry.get('guest_address'), entry.get('guest_port')
+    return None, None
+
+
+def inference_opted(record):
+    """True for an instance created with create --provision --inference."""
+    return isinstance(record.get('inference'), dict) and \
+        record['inference'].get('composition') == 'inference'
+
+
+def declared_daemon_json(profile, inference):
+    """The daemon.json of a provisioned instance: the profile's, plus the inference
+    composition's keys for an opted-in one."""
+    moby = ((profile.get('provisioning') or {}).get('moby') or {}).get('daemon_json')
+    if not inference:
+        return moby
+    extra = inference_config(profile).get('daemon_json')
+    if not isinstance(moby, dict) or not isinstance(extra, dict) or not extra:
+        raise Refused('REFUSED', 'the profile declares no inference composition daemon.json')
+    return dict(moby, **extra)
+
+
+def declared_seed_files(profile, inference):
+    """{path: content} of the user-data write_files the instance was seeded with, from the
+    pinned templates of this checkout (and the pinned overlay when ``inference``)."""
+    seed = (profile.get('boot_inputs') or {}).get('seed')
+    key = (json.dumps([seed, inference_config(profile).get('seed_overlay'),
+                       inference_endpoint(profile)], sort_keys=True, default=str), bool(inference))
+    if key not in _SEED_FILES:
+        gen = load_seed_generator()
+        try:
+            templates = gen.read_templates(profile, REPO)
+            if inference:
+                templates, _ = gen.compose_templates(profile, REPO, templates, ('inference',))
+        except gen.Refused as exc:
+            raise Refused('REFUSED', f'the declared seed cannot be composed: {exc}') from None
+        _SEED_FILES[key] = load_profile_checker().write_files_blocks(templates['user-data'])
+    return _SEED_FILES[key]
+
+
+def inference_record(profile, seed):
+    """The launch record's inference block of an opted-in instance (decision 0015)."""
+    conf = inference_config(profile)
+    composed = (seed.get('compositions') or {}).get('inference') or {}
+    if composed.get('overlay_sha256') != (conf.get('seed_overlay') or {}).get('sha256'):
+        raise Refused('REFUSED', 'seed: the inference overlay digest differs from the profile pin')
+    address, port = inference_endpoint(profile)
+    return {'composition': 'inference', 'status': str(conf.get('status', '')).split(':', 1)[0],
+            'overlay': dict(conf.get('seed_overlay') or {}),
+            'endpoint': {'address': address, 'port': port},
+            'daemon_json': conf.get('daemon_json'),
+            'container_guard_allow': (conf.get('container_guard_allow') or {}).get('rule')}
+
+
+def inference_forward_path(profile, instance_dir):
+    record = str((inference_config(profile).get('forward_session') or {}).get('record', ''))
+    if not record.startswith('{instance_dir}/'):
+        return None
+    return Path(instance_dir) / record[len('{instance_dir}/'):]
+
+
+def guard_rules_for(profile, record, tool):
+    """The container guard's declared rules for one family: the inference composition's
+    ACCEPT after the RETURN in its families when the instance opted in."""
+    guard = ((admission_config(profile).get('network') or {}).get('guard') or {})
+    rules = list(guard.get('rules') or [])
+    if record is None or not inference_opted(record):
+        return rules
+    allow = inference_config(profile).get('container_guard_allow') or {}
+    if tool in (allow.get('families') or []) and allow.get('rule'):
+        return rules[:1] + [allow['rule']] + rules[1:]
+    return rules
+
+
+def _sshd_t(facts):
+    inf = facts.get('inference') if isinstance(facts.get('inference'), dict) else {}
+    lines = inf.get('sshd_t')
+    if not isinstance(lines, list):
+        return None
+    out = {}
+    for line in lines:
+        key, _, value = str(line).partition(' ')
+        out.setdefault(key, []).append(value)
+    return out
+
+
+def inference_listener_lines(profile, record, report, forward_recorded):
+    """(allowed, others): root's listener lines on the inference endpoint's port. Allowed is
+    the one sshd line on the declared address when the instance opted in and a forward
+    session is recorded; every other line on that port is in others."""
+    address, port = inference_endpoint(profile)
+    procs = (inference_config(profile).get('sshd') or {}).get('listener_processes') or []
+    lines = (report or {}).get('tcp_listeners')
+    allowed, others = [], []
+    for line in lines if isinstance(lines, list) else []:
+        local = line.split()[3] if len(line.split()) > 3 else ''
+        if port is None or local.rpartition(':')[2] != str(port):
+            continue
+        if inference_opted(record) and forward_recorded and local == f'{address}:{port}' and \
+                _listener_process(line) in procs and not allowed:
+            allowed.append(line)
+        else:
+            others.append(line)
+    return allowed, others
+
+
+def inference_checks(profile, record, obs):
+    """Decision 0015 section 4.5, in the state the launch record names: {'P5': [...],
+    'P7': [...]}. Off (every instance): the sshd drop-in is the ordinary one (no forwarding)
+    and nothing listens on the endpoint's port. On: the drop-in is the composed one, sshd -T
+    (boot facts) reports the declared directives, and the endpoint is listened on by sshd
+    exactly when a forward session is recorded; the provider key's fingerprint is a P5
+    needle. The guard chains and daemon.json are judged by the admission and Moby checks."""
+    g = obs.get('guest', {})
+    on = inference_opted(record)
+    conf = inference_config(profile)
+    sshd = conf.get('sshd') or {}
+    dropin = sshd.get('dropin') or '/etc/ssh/sshd_config.d/10-aieh.conf'
+    try:
+        declared = declared_seed_files(profile, on).get(dropin)
+    except Refused as exc:
+        declared = None
+        error = str(exc)
+    else:
+        error = None
+    seen = (g.get('sshd_dropin') or {}).get('out')
+    lines = lambda text: str(text).rstrip('\n').split('\n')      # noqa: E731
+    p7 = [check(INFERENCE_DROPIN_CHECK,
+                {'state': 'on' if on else 'off', 'dropin': declared if declared is not None
+                 else error},
+                seen, 'guest: cat 10-aieh.conf (agent) against the seeded write_files entry',
+                None if declared is None or seen is None else lines(seen) == lines(declared))]
+    out = {'P7': p7, 'P5': []}
+    if not record.get('provisioning'):
+        return out
+    facts = _probe_json(obs, 'moby_facts') or {}
+    report = conversation_report(obs)
+    forward = obs.get('inference_forward') if isinstance(obs.get('inference_forward'), dict) else {}
+    recorded = forward.get('recorded') is True
+    allowed, others = inference_listener_lines(profile, record, report, recorded)
+    address, port = inference_endpoint(profile)
+    p7.append(check(INFERENCE_LISTENER_CHECK,
+                    {'state': 'on' if on else 'off', 'endpoint': f'{address}:{port}',
+                     'listener': 'sshd, exactly when a forward session is recorded'
+                     if on else 'none'},
+                    {'forward_session_recorded': recorded, 'listener': allowed,
+                     'other_lines_on_the_port': others},
+                    'on-demand conversation facts: ss -ltnpH (root, now); the instance '
+                    'directory\'s forward-session record',
+                    None if report is None else
+                    not others and len(allowed) == (1 if on and recorded else 0)))
+    if on:
+        want = {k: [v] for k, v in (sshd.get('effective') or {}).items()}
+        got = _sshd_t(facts)
+        p7.append(check(INFERENCE_SSHD_CHECK, want,
+                        None if got is None else {k: got.get(k) for k in INFERENCE_SSHD_KEYS},
+                        'facts: sshd -T (root, at boot)',
+                        None if got is None else
+                        {k: got.get(k) for k in INFERENCE_SSHD_KEYS} == want))
+    return out
+
+
+CHECK_CLASSES[('profiles P7', INFERENCE_DROPIN_CHECK)] = (STABLE, None)
+CHECK_CLASSES[('profiles P7', INFERENCE_SSHD_CHECK)] = (STABLE, None)
+# whether a forward session is held depends on the moment; the verdict is still compared
+CHECK_CLASSES[('profiles P7', INFERENCE_LISTENER_CHECK)] = (VOLATILE, None)
+CHECK_CLASSES[('profiles P5', INFERENCE_KEY_CHECK)] = (STABLE, None)
 
 
 def provisioning_probes(conf):
@@ -6555,11 +6819,13 @@ def moby_p6_checks(profile, obs):
     ]
 
 
-def moby_p7_checks(obs, profile=None):
+def moby_p7_checks(obs, profile=None, record=None):
     """profiles P7 for a provisioned instance: no TCP listener of Moby at boot (unix socket
     only); now, only the amended allowance (F-04.2): one docker-proxy or dockerd listener on
     127.0.0.1 at an ephemeral port per running conversation container of the Agent Server,
-    mapped to its port 8000; agent sees the same listeners as root."""
+    mapped to its port 8000; agent sees the same listeners as root. The inference endpoint's
+    sshd listener while a forward session is recorded (decision 0015) is judged by its own
+    check and left out of both views, so the record compares across a start."""
     g = obs.get('guest', {})
     facts = _probe_json(obs, 'moby_facts') or {}
     root_lines = facts.get('tcp_listeners') if isinstance(facts.get('tcp_listeners'), list) else None
@@ -6570,8 +6836,13 @@ def moby_p7_checks(obs, profile=None):
     now_lines = (report or {}).get('tcp_listeners')
     now_lines = now_lines if isinstance(now_lines, list) else None
     allowance = listener_allowance(profile or {}, report) if now_lines is not None else None
-    agent_view = _listener_addresses((g.get('tcp_listeners') or {}).get('out', '').splitlines())
-    root_view = None if now_lines is None else _listener_addresses(now_lines)
+    forward = obs.get('inference_forward') if isinstance(obs.get('inference_forward'), dict) else {}
+    held = {line.split()[3] for line in inference_listener_lines(
+        profile or {}, record or {}, report, forward.get('recorded') is True)[0]}
+    agent_view = [a for a in _listener_addresses((g.get('tcp_listeners') or {}).get('out', '')
+                                                 .splitlines()) if a not in held]
+    root_view = None if now_lines is None else [a for a in _listener_addresses(now_lines)
+                                                if a not in held]
     return [check('guest TCP listeners (Moby)',
                   {'boot': 'none owned by dockerd, containerd or docker-proxy',
                    'now': 'only the P7 allowance: one docker-proxy or dockerd listener on '
@@ -6731,9 +7002,15 @@ def agent_server_checks(profile, record, obs):
     root_lines = root_lines if isinstance(root_lines, list) else None
     allowed = {a['local'] for a in (listener_allowance(profile, report)['allowed']
                                     if root_lines is not None else [])}
+    # decision 0015: the inference endpoint's sshd listener while a forward session is
+    # recorded (its own check judges it)
+    inference_lines = set(inference_listener_lines(
+        profile, record, report,
+        (obs.get('inference_forward') or {}).get('recorded') is True)[0])
     by_process = {}
     for line in root_lines or []:
-        if (line.split()[3] if len(line.split()) > 3 else None) in allowed:
+        if (line.split()[3] if len(line.split()) > 3 else None) in allowed or \
+                line in inference_lines:
             continue
         by_process.setdefault(_listener_process(line), []).extend(_listener_addresses([line]))
     agent_view = _listener_addresses((g.get('tcp_listeners') or {}).get('out', '').splitlines())
@@ -6948,6 +7225,7 @@ def provisioning_property(profile, record, obs, extra=()):
     modules = facts.get('modules') if isinstance(facts.get('modules'), dict) else {}
     host_config = facts.get('host_config') if isinstance(facts.get('host_config'), dict) else {}
     ipv6 = facts.get('ipv6') if isinstance(facts.get('ipv6'), dict) else {}
+    want_daemon = declared_daemon_json(profile, inference_opted(record))
     checks = [
         check('root step result', {'result': 'provisioned', 'manifest_sha256':
                                    prov.get('manifest_sha256')},
@@ -6973,7 +7251,7 @@ def provisioning_property(profile, record, obs, extra=()):
                               'Driver': moby.get('storage_driver'),
                               'DefaultRuntime': moby.get('default_runtime'),
                               'SecurityOptions': f"including {moby.get('required_security_options')}",
-                              'daemon.json': moby.get('daemon_json'),
+                              'daemon.json': want_daemon,
                               'containerd config.toml': (moby.get('containerd_config') or {}).get('content'),
                               'sysctl drop-in': (moby.get('sysctl') or {}).get('content'),
                               'docker0 disable_ipv6': '1'},
@@ -6989,7 +7267,7 @@ def provisioning_property(profile, record, obs, extra=()):
               info.get('Driver') == moby.get('storage_driver') and
               info.get('DefaultRuntime') == moby.get('default_runtime') and
               set(moby.get('required_security_options') or []) <= set(security) and
-              facts.get('daemon_json') == moby.get('daemon_json') and
+              facts.get('daemon_json') == want_daemon and
               host_config.get('containerd_config') == (moby.get('containerd_config') or {}).get(
                   'content') and
               host_config.get('sysctl') == (moby.get('sysctl') or {}).get('content') and
@@ -7860,9 +8138,11 @@ def _guard_line_ok(line, want):
     return line == want or str(line).startswith(want + ' ')
 
 
-def admission_check(profile, obs):
+def admission_check(profile, obs, record=None):
     """The guard, icc and the key check of a provisioned instance against
-    provisioning.agent_server.admission, from the boot-time facts (root)."""
+    provisioning.agent_server.admission, from the boot-time facts (root). An instance that
+    opted into the inference composition (``record``, decision 0015) carries the
+    composition's one ACCEPT after the RETURN in its families."""
     conf = admission_config(profile)
     if not conf:
         return []
@@ -7872,7 +8152,11 @@ def admission_check(profile, obs):
     adm = facts.get('admission') if isinstance(facts.get('admission'), dict) else {}
     rules = adm.get('rules') if isinstance(adm.get('rules'), dict) else {}
     families = rules.get('families') if isinstance(rules.get('families'), dict) else {}
+    want_by = {tool: [f'-A {chain} {r}' for r in guard_rules_for(profile, record, tool)]
+               for tool in guard.get('families') or []}
     want = [f'-A {chain} {r}' for r in guard.get('rules') or []]
+    if any(w != want for w in want_by.values()):
+        want = want_by
     want_jumps = sorted(f'-A INPUT -i {i} -j {chain}' for i in guard.get('interfaces') or [])
     unit = adm.get('guard_unit') if isinstance(adm.get('guard_unit'), dict) else {}
     keycheck = adm.get('keycheck') if isinstance(adm.get('keycheck'), dict) else {}
@@ -7892,8 +8176,9 @@ def admission_check(profile, obs):
     def family_ok(tool):
         f = observed['families'].get(tool) or {}
         lines, jumps = f.get('chain'), f.get('input_jumps')
-        return isinstance(lines, list) and len(lines) == len(want) and \
-            all(_guard_line_ok(line, w) for line, w in zip(lines, want)) and \
+        wanted = want_by.get(tool, [])
+        return isinstance(lines, list) and len(lines) == len(wanted) and \
+            all(_guard_line_ok(line, w) for line, w in zip(lines, wanted)) and \
             isinstance(jumps, list) and sorted(jumps) == want_jumps
     ok = bool(adm) and unit.get('ActiveState') == 'active' and \
         unit.get('UnitFileState') == 'enabled' and bool(guard.get('families')) and \
@@ -8974,6 +9259,136 @@ EGRESS_REFUSED = 'ECONNREFUSED'
 EGRESS_TOPOLOGY = frozenset({'timeout', 'ENETUNREACH', 'EHOSTUNREACH'})
 EGRESS_GUARD_FAMILY = 'iptables'
 
+# Run inside a conversation container of an instance with the inference composition (decision
+# 0015 section 4.5): the inference endpoint without a token (one TCP connect and GET /, the
+# status line only), the allow's edges and the container resolver (one TCP connect or one UDP
+# datagram each, errno named), and one name lookup through the container's resolv.conf. spec:
+# base64 JSON {endpoint: [host, port], targets: [[proto, host, port, what]], name, timeout}.
+JOB_INFERENCE_SWEEP = r'''import base64, errno, json, socket, sys, time
+spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+QUERY = bytes([0x41, 0x49, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 4]) + b'aieh' + bytes([7]) + \
+    b'invalid' + bytes([0, 0, 1, 0, 1])
+def name(exc):
+    return errno.errorcode.get(exc.errno, str(exc.errno)) if exc.errno else type(exc).__name__
+def attempt(proto, host, port):
+    t0 = time.monotonic()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM if proto == 'tcp' else socket.SOCK_DGRAM)
+    s.settimeout(spec['timeout'])
+    try:
+        s.connect((host, port))
+        if proto == 'tcp':
+            outcome = 'connected'
+        else:
+            s.send(QUERY)
+            outcome = 'answered %d bytes' % len(s.recv(512))
+    except socket.timeout:
+        outcome = 'timeout'
+    except OSError as exc:
+        outcome = name(exc)
+    finally:
+        s.close()
+    return {'outcome': outcome, 'seconds': round(time.monotonic() - t0, 2)}
+def endpoint(host, port):
+    t0 = time.monotonic()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(spec['timeout'])
+    out = {'status': None}
+    try:
+        s.connect((host, port))
+        s.sendall(('GET / HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\n\r\n' % (host, port)).encode('ascii'))
+        data = b''
+        while b'\r\n' not in data and len(data) < 4096:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        parts = data.split(b'\r\n', 1)[0].decode('latin-1').split(' ')
+        out['status'] = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+        out['outcome'] = 'answered' if out['status'] is not None else 'connected'
+    except socket.timeout:
+        out['outcome'] = 'timeout'
+    except OSError as exc:
+        out['outcome'] = name(exc)
+    finally:
+        s.close()
+    out['seconds'] = round(time.monotonic() - t0, 2)
+    return out
+def lookup(host):
+    t0 = time.monotonic()
+    try:
+        socket.getaddrinfo(host, 443, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        out = {'outcome': 'resolved'}
+    except socket.gaierror as exc:
+        out = {'outcome': 'not-resolved', 'error': str(exc)[:200]}
+    out['seconds'] = round(time.monotonic() - t0, 2)
+    return out
+host, port = spec['endpoint']
+results = [dict(endpoint(host, port), proto='tcp', host=host, port=port,
+                what='inference endpoint (no token)')]
+for proto, h, p, what in spec['targets']:
+    results.append(dict(attempt(proto, h, p), proto=proto, host=h, port=p, what=what))
+results.append(dict(lookup(spec['name']), proto='dns', host=spec['name'], port=None,
+                    what='name lookup'))
+print('AIEH-JOB-JSON ' + json.dumps({'results': results}, sort_keys=True))
+'''
+INFERENCE_ENDPOINT_WHAT = 'inference endpoint (no token)'
+INFERENCE_LOOKUP_WHAT = 'name lookup'
+INFERENCE_LOOKUP_NAME = 'deb.debian.org'
+INFERENCE_JOB_STEP = 'inference endpoint, its edges and the resolver from inside each job ' \
+                     '(decision 0015)'
+
+
+def inference_job_spec(profile):
+    """The predeclared inference sweep of a job (network.inference_composition.job_sweep)."""
+    address, port = inference_endpoint(profile)
+    sweep = inference_config(profile).get('job_sweep') or {}
+    return {'endpoint': [address, port],
+            'targets': [list(e) for e in sweep.get('edges') or []],
+            'name': INFERENCE_LOOKUP_NAME, 'timeout': JOB_CONNECT_S}
+
+
+def container_guard_rejects(report):
+    """The container guard's IPv4 refusal packets (its REJECT rules) from on-demand facts."""
+    adm = report.get('admission') if isinstance(report.get('admission'), dict) else {}
+    rows = adm.get('iptables')
+    if not isinstance(rows, list):
+        return None
+    return sum(r.get('packets', 0) for r in rows
+               if isinstance(r, dict) and r.get('target') == 'REJECT')
+
+
+def inference_job_verdict(results, before, after):
+    """(ok, rows, stop, counters) of the inference sweep, by the rule fixed before observation:
+    the endpoint answers 401 without a token (reachability and admission); every edge and
+    resolver target is refused (ECONNREFUSED: the container guard's reset or ICMP reject); the
+    name lookup returns no address; the guard's IPv4 REJECT counters rise by at least the
+    refused attempts. A connection or an answer from an edge, or a resolved name, is a stop
+    condition."""
+    rows, stop, refused = [], [], 0
+    for r in results:
+        what, outcome = r.get('what'), r.get('outcome')
+        if what == INFERENCE_ENDPOINT_WHAT:
+            ok = outcome == 'answered' and r.get('status') == 401
+        elif what == INFERENCE_LOOKUP_WHAT:
+            ok = outcome == 'not-resolved'
+            if outcome == 'resolved':
+                stop.append({'condition': 'a name resolved from a job', 'target': r.get('host'),
+                             'conversation': r.get('conversation')})
+        else:
+            ok = outcome == EGRESS_REFUSED
+            refused += 1 if ok else 0
+            if outcome == 'connected' or str(outcome).startswith('answered'):
+                stop.append({'condition': 'an edge of the inference allow was reached from a '
+                                          'job', 'target': f"{r.get('proto')} {r.get('host')}:"
+                                                           f"{r.get('port')}",
+                             'conversation': r.get('conversation')})
+        rows.append(dict(r, ok=ok))
+    counters = {'before': before, 'after': after, 'refused': refused}
+    counters['incremented'] = isinstance(before, int) and isinstance(after, int) and \
+        after - before >= refused
+    ok = bool(rows) and all(r['ok'] for r in rows) and counters['incremented'] and not stop
+    return ok, rows, stop, counters
+
 
 def egress_targets(record, jobs):
     """The predeclared egress sweep of a job (S-01.4): public literals, SLIRP's aliases (the
@@ -9658,6 +10073,29 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
             requested and (detail.get('route_removed_report') or {}).get('state') == 'removed'
         return ok, detail
 
+    def inference_step():
+        """Decision 0015 section 4.5, on an instance with the inference composition only: from
+        inside each job the endpoint without a token, the allow's edges, the resolver and a
+        name lookup, the container guard's IPv4 refusal counters read before and after."""
+        spec = inference_job_spec(profile)
+        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        before = container_guard_rejects(facts())
+        results = []
+        for cid in conversations:
+            data = _job_json(in_container(cid, container_python(JOB_INFERENCE_SWEEP, arg), 300))
+            results += [dict(r, conversation=cid) for r in data.get('results') or []]
+        after = container_guard_rejects(facts())
+        ok, rows, stop, counters = inference_job_verdict(results, before, after)
+        stop_conditions.extend(stop)
+        complete = len(results) == (len(spec['targets']) + 2) * len(conversations)
+        return ok and complete, {
+            'decision_rule': 'PASS: the endpoint answers 401 without a token from every job, '
+                             'every edge and resolver target is refused (ECONNREFUSED) with the '
+                             'container guard\'s IPv4 REJECT counters up by at least the refused '
+                             'attempts, and the name lookup returns no address; STOP: an edge or '
+                             'resolver target connects or answers, or a name resolves',
+            'spec': spec, 'results': rows, 'counters': counters, 'complete': complete}
+
     def delete_step():
         out = {}
         for cid in list(state['created']):
@@ -9685,6 +10123,8 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
     run('egress sweep from inside each job (S-01.4)', egress_step,
         always=not stop_conditions and 'route-present egress falsification from inside each job '
                                        '(S-01.4)' in failed)
+    if inference_opted(record):
+        run(INFERENCE_JOB_STEP, inference_step)
     run('delete the conversations (positive control)', delete_step,
         always=bool(state['created']))
     out = {'schema': JOB_PROBE_SCHEMA, 'operation': 'job-access-probe',
@@ -10116,6 +10556,7 @@ JOB_STEPS = {
     'controls': 'hardening controls present (boot facts)',
     'egress-route': 'route-present egress falsification from inside each job (S-01.4)',
     'egress': 'egress sweep from inside each job (S-01.4)',
+    'inference': INFERENCE_JOB_STEP,
 }
 ADMISSION_STEPS = {
     'sweep': 'unauthenticated and wrong-key requests to every route',
@@ -10158,6 +10599,16 @@ def extract_job(record, extract, args, context):
                     out.append(_obs(f'{cid} {who}', 'refused' if got in ('ENOENT', 'ECONNREFUSED',
                                                                          'EACCES') else got,
                                     path=row.get('path')))
+    elif extract == 'inference':
+        d = detail_of('inference')
+        for row in (d or {}).get('results') or []:
+            if row.get('what') != args['what']:
+                continue
+            got = row.get('outcome')
+            if row.get('what') == INFERENCE_ENDPOINT_WHAT and got == 'answered':
+                got = 'answered' if row.get('status') == 401 else f"answered-{row.get('status')}"
+            out.append(_obs(row.get('conversation'), got,
+                            target=f"{row.get('proto')} {row.get('host')}:{row.get('port')}"))
     elif extract == 'tcp':
         d = detail_of('tcp')
         for cid, c in ((d or {}).get('containers') or {}).items():
@@ -10337,7 +10788,7 @@ CONTAINMENT_EXTRACTORS = {'job-access-probe': extract_job, 'admission-probe': ex
 CONTAINMENT_EXTRACT_NAMES = {
     'job-access-probe': ('socket', 'sockets-found', 'tcp', 'routes', 'tokens', 'credential-files',
                          'token-control', 'env', 'inspected', 'controls', 'egress', 'egress-route',
-                         'trusted'),
+                         'trusted', 'inference'),
     'admission-probe': tuple(ADMISSION_STEPS)}
 CONTAINMENT_OP_NAMES = ('read', 'list', 'stat', 'access-write', 'own-workspace', 'proc-root-search',
                         'mountinfo', 'writable-scan', 'canary-scan', 'unix-control', 'connect-tcp',
@@ -12985,6 +13436,10 @@ def main(argv=None):
                                 'that field of a JSON file (repeatable)')
         if op in ('create', 'inspect', 'recreate', 'conversation-smoke'):
             p.add_argument('--canaries', help='a canary set written by the canaries operation')
+        if op == 'inspect':
+            p.add_argument('--provider-key-fingerprint',
+                           help='decision 0015: sha256:<16 hex digits> of the model provider key '
+                                '(its credential receipt); a P5 needle by fingerprint only')
         if op == 'conversation-smoke':
             p.add_argument('--restart', action='store_true',
                            help='also stop and start the guest, then reopen the conversation')
@@ -13039,6 +13494,11 @@ def main(argv=None):
             p.add_argument('--drill-leaf', choices=DRILL_LEAVES,
                            help='with --drill (required): the plan leaf whose drills the guest '
                                 'is for, recorded in its launch record')
+            p.add_argument('--inference', action='store_true',
+                           help='decision 0015, with --provision: apply the opt-in inference '
+                                'composition (sshd remote-forward directives, the container '
+                                "guard's one ACCEPT, daemon.json bip and dns); the Owner's "
+                                'guest hardening act, off by default')
         if op in ('create', 'recreate', 'smoke'):
             p.add_argument('--provision', action='store_true',
                            help='F-04.1: seed the provisioning manifest of the verified host '
@@ -13082,9 +13542,11 @@ def main(argv=None):
                 raise Refused('REFUSED', '--drill needs --provision')
             if args.drill_leaf and not args.drill:
                 raise Refused('REFUSED', '--drill-leaf needs --drill')
+            if args.inference and (not args.provision or args.drill):
+                raise Refused('REFUSED', '--inference needs --provision and is never a drill')
             result = create(ctx, args.name, args.ready_timeout, canaries, provision=True,
                             egress_falsification=args.egress_falsification, drill=args.drill,
-                            drill_leaf=args.drill_leaf) \
+                            drill_leaf=args.drill_leaf, inference=args.inference) \
                 if args.provision else create(ctx, args.name, args.ready_timeout, canaries)
         elif op == 'provision':
             result = provision(ctx, args.name)
@@ -13122,7 +13584,7 @@ def main(argv=None):
             result = drill(ctx, args.name, args.kind, args.canaries, args.raw, args.out,
                            args.limit, args.ready_timeout)
         else:
-            result = inspect(ctx, args.name, canaries)
+            result = inspect(ctx, args.name, canaries, args.provider_key_fingerprint)
     except Refused as exc:
         print(f'REFUSED {exc.code}: {exc}', file=sys.stderr)
         print(json.dumps({'result': 'refused', 'code': exc.code, 'message': str(exc),

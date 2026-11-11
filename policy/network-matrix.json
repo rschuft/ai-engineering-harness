@@ -63,6 +63,9 @@
     "repo-gitea-policy": "management",
     "ci-runner-host": "credential",
     "endpoint-inference": "endpoint",
+    "listener-inference-broker": "endpoint",
+    "api-inference-control": "management",
+    "inference-forward-session": "management",
     "endpoint-provision": "endpoint"
   },
   "edges": [
@@ -1979,21 +1982,26 @@
     },
     {
       "id": "nm-job-inference",
-      "name": "A job to the inference broker (the only permitted container egress)",
+      "name": "A job to the inference broker through the guest inference endpoint (the only permitted path out of a container)",
       "from": "td-untrusted-engineering",
       "to": "td-management",
       "verdict": "allow",
-      "protocol": "tcp to a guestfwd address, then the host-side broker",
+      "protocol": "tcp from the job to the guest inference endpoint 172.17.0.1:8090 (the guest sshd's remote-forward listener on the docker0 gateway), carried by the dispatcher-held SSH session to the broker's inference listener on host 127.0.0.1",
       "endpoint": "inference",
       "credentials": [],
       "enforcement": [
         {
-          "mechanism": "egress guard allowlist entry for the inference class only",
+          "mechanism": "container guard: one ACCEPT for new TCP from docker0 to 172.17.0.1:8090 before its refusals (INPUT, IPv4 only); the egress guard's allowlist stays empty",
           "kind": "prevention",
           "where": "guest"
         },
         {
-          "mechanism": "guestfwd to the broker on host 127.0.0.1, the only path to provider credentials",
+          "mechanism": "sshd: AllowTcpForwarding remote, GatewayPorts clientspecified and PermitListen 172.17.0.1:8090 only (local forwarding refused); the listener exists only while the dispatcher holds the forward session",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "the broker admits only a per-attempt token bound to the conversation, an API family, a model list, a budget and an expiry, and it alone holds the provider credential; its control listener is never forwarded",
           "kind": "prevention",
           "where": "host"
         }
@@ -2001,6 +2009,7 @@
       "status": "planned",
       "evidence": [],
       "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
         "profiles/strong-windows-qemu-whpx/profile.json",
         "profiles/README.md",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
@@ -2012,9 +2021,12 @@
         "fd-acp-provider-auth"
       ],
       "inspection": [
-        "planned: S-03.2"
+        "planned: S-03.2 (guest.py inspect on a guest created with create --provision --inference: the drop-in, sshd -T, the endpoint listener, the guard chains, daemon.json; job-access-probe's inference sweep; the containment cases ctl-inference-endpoint, egr-inference-*, egr-resolver-docker0 and egr-name-lookup)"
       ],
-      "notes": "Designed at S-03.1; a guestfwd needs the Owner's authorization; the egress guard's first allowlist entry (S-01.4 ruling R5)."
+      "notes": "Designed at S-03.1 and decided in decision 0015 section 4, which refines the guestfwd shape and S-01.4 ruling R5: no guestfwd and no egress-guard allowlist entry. The guest composition is opt-in per guest (create --provision --inference, declared at S-03.2 slice 2, network.inference_composition) and applying it is the Owner's guest hardening act; planned until a guest observes it.",
+      "profile_endpoints": [
+        "strong-windows-qemu-whpx:inference:{broker_inference_port}"
+      ]
     },
     {
       "id": "nm-job-management",
@@ -2450,21 +2462,26 @@
     },
     {
       "id": "nm-review-inference",
-      "name": "A job to the inference broker (the only permitted container egress)",
+      "name": "A job to the inference broker through the guest inference endpoint (the only permitted path out of a container)",
       "from": "td-review",
       "to": "td-management",
       "verdict": "allow",
-      "protocol": "tcp to a guestfwd address, then the host-side broker",
+      "protocol": "tcp from the job to the guest inference endpoint 172.17.0.1:8090 (the guest sshd's remote-forward listener on the docker0 gateway), carried by the dispatcher-held SSH session to the broker's inference listener on host 127.0.0.1",
       "endpoint": "inference",
       "credentials": [],
       "enforcement": [
         {
-          "mechanism": "egress guard allowlist entry for the inference class only",
+          "mechanism": "container guard: one ACCEPT for new TCP from docker0 to 172.17.0.1:8090 before its refusals (INPUT, IPv4 only); the egress guard's allowlist stays empty",
           "kind": "prevention",
           "where": "guest"
         },
         {
-          "mechanism": "guestfwd to the broker on host 127.0.0.1, the only path to provider credentials",
+          "mechanism": "sshd: AllowTcpForwarding remote, GatewayPorts clientspecified and PermitListen 172.17.0.1:8090 only (local forwarding refused); the listener exists only while the dispatcher holds the forward session",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "the broker admits only a per-attempt token bound to the conversation, an API family, a model list, a budget and an expiry, and it alone holds the provider credential; its control listener is never forwarded",
           "kind": "prevention",
           "where": "host"
         }
@@ -2472,6 +2489,7 @@
       "status": "planned",
       "evidence": [],
       "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
         "profiles/strong-windows-qemu-whpx/profile.json",
         "profiles/README.md",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
@@ -2483,9 +2501,12 @@
         "fd-acp-provider-auth"
       ],
       "inspection": [
-        "planned: S-03.2"
+        "planned: S-03.2 (guest.py inspect on a guest created with create --provision --inference: the drop-in, sshd -T, the endpoint listener, the guard chains, daemon.json; job-access-probe's inference sweep; the containment cases ctl-inference-endpoint, egr-inference-*, egr-resolver-docker0 and egr-name-lookup)"
       ],
-      "notes": "Designed at S-03.1; a guestfwd needs the Owner's authorization; the egress guard's first allowlist entry (S-01.4 ruling R5)."
+      "notes": "Designed at S-03.1 and decided in decision 0015 section 4, which refines the guestfwd shape and S-01.4 ruling R5: no guestfwd and no egress-guard allowlist entry. The guest composition is opt-in per guest (create --provision --inference, declared at S-03.2 slice 2, network.inference_composition) and applying it is the Owner's guest hardening act; planned until a guest observes it.",
+      "profile_endpoints": [
+        "strong-windows-qemu-whpx:inference:{broker_inference_port}"
+      ]
     },
     {
       "id": "nm-review-management",
@@ -3702,11 +3723,17 @@
           "mechanism": "the provider credential stays with the broker; it never enters the guest",
           "kind": "prevention",
           "where": "host"
+        },
+        {
+          "mechanism": "egress allowlist: exactly one upstream origin, the Owner's chosen provider API host on 443 over TLS with the host's system roots (or a loopback local model server); no cost map, telemetry or update check. A control in the broker's own code, evidenced by its connection census and audit, not an OS-enforced boundary (decision 0015 sections 4.5 and 5.1)",
+          "kind": "disclosure",
+          "where": "host"
         }
       ],
       "status": "planned",
       "evidence": [],
       "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
       ],
       "builds_at": "S-03.3",

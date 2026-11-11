@@ -19,12 +19,18 @@ Implements the generator specification in ``profiles/seed/README.md``:
    root directory, 2048-byte blocks, no Rock Ridge, no El Torito. Every date is
    1970-01-01T00:00:00Z or "not specified"; the same inputs give the same bytes.
 5. Prints the sha256 of ``seed.iso`` (one JSON object on stdout) for the launch record.
+6. Applies a composition overlay only when asked (``--inference``, decision 0015 section
+   4.2): the profile pins the overlay (``network.inference_composition.seed_overlay``), whose
+   exact text edits change the user-data template before substitution, with the inference
+   endpoint's address and port (``network.endpoints``, class inference) filled in. It needs a
+   provisioning manifest whose daemon.json carries the composition's keys. Without the option
+   nothing is read from the overlay and the output is byte-identical to before.
 
 Usage (from the repository root):
     python -I -B tools/nocloud_seed.py --profile profiles/strong-windows-qemu-whpx \
         --instance-dir <state_dir>/instances/<name> --instance-name <name> \
         --public-key <state_dir>/instances/<name>/ssh/id_ed25519.pub \
-        [--instance-id <name>-<uuid>] [--provision-manifest <file>]
+        [--instance-id <name>-<uuid>] [--provision-manifest <file> [--inference]]
 
 Without ``--instance-id`` a fresh one (the instance name, ``-``, a random UUID) is
 generated and printed. Exit status 0 on success; 1 with a ``REFUSED:`` line on stderr
@@ -65,6 +71,13 @@ KEY_LINE = re.compile(r'^ssh-ed25519 ([A-Za-z0-9+/]+={0,2})(?: ([A-Za-z0-9._@+=-
 KEY_FILE_MAX = 4096
 MANIFEST_MAX = 64 * 1024
 MANIFEST_SCHEMA = 'ai-engineering-harness/profiles/provision-manifest/v1'
+OVERLAY_SCHEMA = 'ai-engineering-harness/profiles/seed-overlay/v1'
+OVERLAY_MAX = 64 * 1024
+# The compositions a guest may opt into at create, each with the placeholders its overlay
+# may carry (decision 0015: the inference endpoint's address and port).
+COMPOSITIONS = {'inference': ('inference_address', 'inference_port')}
+INFERENCE_MECHANISM = 'ssh-remote-forward'
+IPV4 = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$')
 # 7-byte directory-record date (ECMA-119 9.1.5): 1970-01-01 00:00:00, offset 0.
 DIR_DATE = bytes([70, 1, 1, 0, 0, 0, 0])
 # 17-byte volume-descriptor dates (ECMA-119 8.4.26.1).
@@ -240,6 +253,134 @@ def scratch_device(profile):
     return value
 
 
+def inference_endpoint(profile):
+    """(address, port) of the profile's inference endpoint (network.endpoints, class
+    inference): the docker0 gateway address and the declared port of the sshd remote forward
+    (decision 0015 section 4.1). Refused unless it is declared with that mechanism."""
+    found = [e for e in (profile.get('network') or {}).get('endpoints') or []
+             if isinstance(e, dict) and e.get('class') == 'inference']
+    if len(found) != 1:
+        raise Refused('network.endpoints: exactly one inference endpoint required')
+    entry = found[0]
+    address, port = entry.get('guest_address'), entry.get('guest_port')
+    if entry.get('mechanism') != INFERENCE_MECHANISM or not isinstance(address, str) or \
+            not IPV4.fullmatch(address) or isinstance(port, bool) or not isinstance(port, int) or \
+            not 1024 <= port <= 65535:
+        raise Refused(f'network.endpoints inference: mechanism {INFERENCE_MECHANISM}, an IPv4 '
+                      'guest_address and a guest_port from 1024 to 65535 required')
+    return address, port
+
+
+def read_overlay(profile, root, composition):
+    """The pinned overlay of a composition (network.<composition>_composition.seed_overlay),
+    refused unless its sha256 matches the pin and it is one overlay object for user-data."""
+    conf = (profile.get('network') or {}).get(f'{composition}_composition') or {}
+    entry = conf.get('seed_overlay') if isinstance(conf, dict) else None
+    rel, pin = (entry or {}).get('path'), (entry or {}).get('sha256')
+    if not isinstance(rel, str) or not isinstance(pin, str) or \
+            not re.fullmatch(r'[0-9a-f]{64}', pin):
+        raise Refused(f'network.{composition}_composition.seed_overlay: path and sha256 required')
+    path = (root / rel).resolve()
+    if root.resolve() not in path.parents:
+        raise Refused(f'overlay {rel}: outside the checkout')
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise Refused(f'overlay {rel}: cannot read ({exc})') from exc
+    got = sha256_bytes(raw)
+    if got != pin:
+        raise Refused(f'overlay {rel}: sha256 {got} does not match the pinned {pin}')
+    if len(raw) > OVERLAY_MAX or b'\r' in raw:
+        raise Refused(f'overlay {rel}: larger than {OVERLAY_MAX} bytes or carries CR bytes')
+    try:
+        overlay = json.loads(raw.decode('utf-8'))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise Refused(f'overlay {rel}: not one JSON document ({exc})') from exc
+    if not isinstance(overlay, dict) or overlay.get('schema') != OVERLAY_SCHEMA or \
+            overlay.get('composition') != composition or overlay.get('template') != 'user-data' \
+            or overlay.get('placeholders') != list(COMPOSITIONS[composition]):
+        raise Refused(f'overlay {rel}: not a {OVERLAY_SCHEMA} object for {composition} on '
+                      f'user-data with the placeholders {list(COMPOSITIONS[composition])}')
+    return overlay, pin
+
+
+def _lines(value, what):
+    if not isinstance(value, list) or not value or \
+            not all(isinstance(line, str) and '\n' not in line and '\r' not in line
+                    for line in value):
+        raise Refused(f'{what}: a non-empty list of single lines required')
+    return ''.join(line + '\n' for line in value)
+
+
+def apply_overlay(template, overlay, values):
+    """The user-data template with the overlay's edits applied in order: each anchor (its
+    lines, LF-terminated) must occur exactly once at line starts in the text as the previous
+    edits left it; its replacement's placeholders are filled from ``values`` first, and no
+    other placeholder may remain in a replacement."""
+    allowed = set(overlay.get('placeholders') or [])
+    edits = overlay.get('edits')
+    if not isinstance(edits, list) or not edits:
+        raise Refused('overlay: edits must be a non-empty list')
+    text = template
+    for n, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            raise Refused(f'overlay edit {n}: must be an object')
+        anchor = _lines(edit.get('anchor'), f'overlay edit {n} anchor')
+        replacement = _lines(edit.get('replacement'), f'overlay edit {n} replacement')
+        used = set(PLACEHOLDER.findall(replacement))
+        if used - allowed:
+            raise Refused(f'overlay edit {n}: unknown placeholder(s) {sorted(used - allowed)}')
+        replacement = PLACEHOLDER.sub(lambda m: str(values[m.group(1)]), replacement)
+        if '{{' in replacement or '}}' in replacement:
+            raise Refused(f'overlay edit {n}: a placeholder delimiter remains')
+        starts, at = [], text.find(anchor)
+        while at != -1:
+            if at == 0 or text[at - 1] == '\n':
+                starts.append(at)
+            at = text.find(anchor, at + 1)
+        if len(starts) != 1:
+            raise Refused(f'overlay edit {n}: the anchor occurs {len(starts)} times, not once')
+        text = text[:starts[0]] + replacement + text[starts[0] + len(anchor):]
+    return text
+
+
+def compose_templates(profile, root, templates, compositions=()):
+    """(templates, record) with the named compositions applied to the user-data template;
+    with none the templates are returned unchanged and the record is empty."""
+    record = {}
+    for composition in compositions:
+        if composition not in COMPOSITIONS:
+            raise Refused(f'composition {composition!r} is not one of {sorted(COMPOSITIONS)}')
+        if composition in record:
+            raise Refused(f'composition {composition!r} named twice')
+        overlay, pin = read_overlay(profile, root, composition)
+        address, port = inference_endpoint(profile)
+        values = {'inference_address': address, 'inference_port': port}
+        templates = dict(templates, **{'user-data': apply_overlay(templates['user-data'],
+                                                                 overlay, values)})
+        record[composition] = {'overlay_sha256': pin, 'address': address, 'port': port}
+    return templates, record
+
+
+def check_composition_manifest(profile, compositions, manifest):
+    """A composition changes the guest's Moby configuration through the provisioning
+    manifest: its daemon.json must carry the composition's keys exactly as declared
+    (network.inference_composition.daemon_json)."""
+    if not compositions:
+        return
+    if manifest is None:
+        raise Refused(f'composition(s) {list(compositions)} need a provisioning manifest')
+    data = json.loads(manifest.decode('ascii'))
+    daemon = ((data.get('docker') or {}).get('daemon_json')) if isinstance(data, dict) else None
+    for composition in compositions:
+        want = ((profile.get('network') or {}).get(f'{composition}_composition') or {}) \
+            .get('daemon_json')
+        if not isinstance(want, dict) or not want or not isinstance(daemon, dict) or \
+                any(daemon.get(k) != v for k, v in want.items()):
+            raise Refused(f'provision manifest: docker.daemon_json does not carry the {composition} '
+                          f'composition\'s {want}')
+
+
 def substitute(name, template, values):
     """Replace exactly the placeholders this template must carry; refuse anything else."""
     expected = PLACEHOLDERS[name]
@@ -410,12 +551,15 @@ def build_iso(files):
 
 
 def generate(profile_path, instance_dir, instance_name, public_key_path, instance_id=None,
-             provision_manifest=None):
+             provision_manifest=None, compositions=()):
     """Validate every input, then write <instance_dir>/seed.iso exclusively.
 
     ``provision_manifest`` is the manifest bytes of a provisioned instance (F-04.1) or None.
+    ``compositions`` names the opt-in compositions (decision 0015: ``('inference',)``); empty
+    for every other guest, whose output does not depend on any overlay.
     Returns a dict for the launch record: the seed path, its sha256, the instance id,
-    the sha256 of each template and rendered file and of the manifest (None without one).
+    the sha256 of each template and rendered file and of the manifest (None without one),
+    and, only with a composition, its overlay digest and endpoint.
     """
     profile, root = load_profile(profile_path)
     name = check_instance_name(profile, instance_name)
@@ -423,6 +567,12 @@ def generate(profile_path, instance_dir, instance_name, public_key_path, instanc
         instance_id = new_instance_id(name)
     check_instance_id(name, instance_id)
     templates = read_templates(profile, root)
+    compositions = tuple(compositions or ())
+    composed = {}
+    if compositions:
+        provision_manifest_value(provision_manifest)            # refuses a malformed one first
+        check_composition_manifest(profile, compositions, provision_manifest)
+        templates, composed = compose_templates(profile, root, templates, compositions)
     values = {
         'agent_ssh_public_key': read_public_key(public_key_path),
         'scratch_device': scratch_device(profile),
@@ -446,7 +596,7 @@ def generate(profile_path, instance_dir, instance_name, public_key_path, instanc
     os.rename(partial, target)  # fails rather than replace an existing file
     if sha256_bytes(target.read_bytes()) != sha256_bytes(image):
         raise Refused(f'{target}: written bytes differ from the generated image')
-    return {
+    out = {
         'seed_iso': str(target),
         'sha256': sha256_bytes(image),
         'size_bytes': len(image),
@@ -457,6 +607,9 @@ def generate(profile_path, instance_dir, instance_name, public_key_path, instanc
         'provision_manifest_sha256': None if provision_manifest is None
         else sha256_bytes(provision_manifest),
     }
+    if composed:
+        out['compositions'] = composed
+    return out
 
 
 def main(argv=None):
@@ -472,12 +625,16 @@ def main(argv=None):
     ap.add_argument('--instance-id', help='<name>-<uuid>; generated when omitted')
     ap.add_argument('--provision-manifest',
                     help='a provision-manifest JSON file (F-04.1); omitted for an ordinary guest')
+    ap.add_argument('--inference', action='store_true',
+                    help='decision 0015, with --provision-manifest: apply the opt-in inference '
+                         'composition (the pinned seed overlay of the profile)')
     args = ap.parse_args(argv)
     try:
         manifest = read_provision_manifest(args.provision_manifest) \
             if args.provision_manifest else None
         result = generate(args.profile, args.instance_dir, args.instance_name,
-                          args.public_key, args.instance_id, manifest)
+                          args.public_key, args.instance_id, manifest,
+                          ('inference',) if args.inference else ())
     except Refused as exc:
         print(f'REFUSED: {exc}', file=sys.stderr)
         return 1

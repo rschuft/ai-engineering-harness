@@ -678,6 +678,103 @@ def proc_stat_text(state='S', start='4242', comm='agent-server'):
     return f'1500 ({comm}) {state} ' + ' '.join(rest) + chr(10)
 
 
+def composed_files():
+    """The write_files of the user-data template with the inference composition applied
+    (decision 0015), as tools/nocloud_seed.py composes it for create --provision --inference."""
+    profile, root = nocloud_seed.load_profile(PROFILE_DIR)
+    templates = nocloud_seed.read_templates(profile, root)
+    composed, _ = nocloud_seed.compose_templates(profile, root, templates, ('inference',))
+    return write_file_entries(composed['user-data'])
+
+
+class InferenceCompositionSeed(AdmissionSeed):
+    """Decision 0015 section 4.2 (S-03.2 slice 2): the composed guard installs and verifies
+    the one ACCEPT after the RETURN in iptables only, the composed sshd drop-in and boot facts
+    carry the declared directives, and nothing else of the seeded files changes. Every test of
+    AdmissionSeed runs again against the composed files' guard (the base rules hold for
+    ip6tables there)."""
+    INF = PROFILE['network']['inference_composition']
+    COMPOSED = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.COMPOSED = composed_files()
+
+    def guard_module(self):
+        namespace = {'__name__': 'aieh_guard_test'}
+        exec(compile(self.COMPOSED[self.GUARD['script']], 'guard', 'exec'), namespace)
+        return namespace
+
+    def test_guard_installs_and_verifies_both_families(self):
+        g = self.guard_module()
+        tables = self.FakeTables()
+        g['run'] = tables.run
+        with mock.patch('builtins.print') as printed:
+            self.assertEqual(g['main']([]), 0)
+        out = json.loads(printed.call_args[0][0])
+        self.assertTrue(out['ok'] and out['egress_ok'])
+        allow = self.INF['container_guard_allow']['rule']
+        v4 = tables.table('iptables')[self.GUARD['chain']]
+        v6 = tables.table('ip6tables')[self.GUARD['chain']]
+        self.assertEqual(len(v4), len(self.GUARD['rules']) + 1)
+        self.assertEqual(v4[1], allow)
+        self.assertEqual(v4[:1] + v4[2:], v6)
+        self.assertEqual(len(v6), len(self.GUARD['rules']))
+        self.assertEqual(tables.table('iptables')[self.EGRESS['chain']],
+                         tables.table('ip6tables')[self.EGRESS['chain']])  # egress: no allow
+        self.assertEqual(list(g['EGRESS_ALLOWLIST']), [])
+        # the check accepts exactly the allow in iptables; without it, or in ip6tables, not
+        jumps = [f"-A INPUT -i {i} -j {g['CHAIN']}" for i in reversed(self.GUARD['interfaces'])]
+
+        def observed(tool, rules):
+            lines = [f"-A {g['CHAIN']} {r}" for r in rules]
+            g['run'] = lambda argv: (0, '\n'.join(lines if argv[3] == g['CHAIN'] else
+                                                  ['-P INPUT ACCEPT'] + jumps) + '\n', '')
+            return g['observe'](tool)['ok']
+        base = self.GUARD['rules']
+        self.assertTrue(observed('iptables', base[:1] + [allow] + base[1:]))
+        self.assertFalse(observed('iptables', base))
+        self.assertFalse(observed('iptables', base[:1] + ['-i docker0 -j ACCEPT'] + base[1:]))
+        self.assertTrue(observed('ip6tables', base))
+        self.assertFalse(observed('ip6tables', base[:1] + [allow] + base[1:]))
+
+    def test_only_the_declared_files_change(self):
+        changed = sorted(p for p in FILES if FILES[p] != self.COMPOSED.get(p))
+        self.assertEqual(sorted(self.COMPOSED), sorted(FILES))
+        self.assertEqual(changed, ['/etc/ssh/sshd_config.d/10-aieh.conf',
+                                   '/usr/local/sbin/aieh-container-guard',
+                                   '/usr/local/sbin/aieh-provision'])
+        dropin = self.COMPOSED['/etc/ssh/sshd_config.d/10-aieh.conf'].splitlines()
+        self.assertEqual([line for line in dropin if line.split(' ')[0] in (
+            'AllowTcpForwarding', 'GatewayPorts', 'PermitListen', 'PermitOpen')],
+            self.INF['sshd']['directives'])
+
+    def test_boot_facts_report_sshd_t(self):
+        # the script imports Linux-only modules: execute only the two functions involved
+        text = self.COMPOSED['/usr/local/sbin/aieh-provision']
+        namespace = {'__name__': 'aieh_provision_test'}
+        for node in ast.parse(text).body:
+            if isinstance(node, ast.FunctionDef) and node.name in ('inference_facts', 'tail'):
+                exec(compile(ast.get_source_segment(text, node), 'provision', 'exec'), namespace)
+        self.assertIn("        data['inference'] = inference_facts()", text)
+        sshd_t = ('port 22\nallowtcpforwarding remote\ngatewayports clientspecified\n'
+                  'permitlisten 172.17.0.1:8090\npermitopen any\nx11forwarding no\n')
+        calls = []
+
+        def run(argv, timeout=None):
+            calls.append(argv)
+            return 0, sshd_t, ''
+        namespace['run'] = run
+        self.assertEqual(namespace['inference_facts'](),
+                         {'sshd_t': ['allowtcpforwarding remote', 'gatewayports clientspecified',
+                                     'permitlisten 172.17.0.1:8090', 'permitopen any']})
+        self.assertEqual(calls, [['/usr/sbin/sshd', '-T']])
+        namespace['run'] = lambda argv, timeout=None: (255, '', 'no hostkeys available')
+        self.assertEqual(namespace['inference_facts'](),
+                         {'sshd_t': {'rc': 255, 'error': 'no hostkeys available'}})
+        self.assertNotIn('inference_facts', SCRIPT)               # off: the ordinary facts
+
+
 class Clock:
     def __init__(self, step=0.5):
         self.now, self.step, self.sleeps = 100.0, step, 0

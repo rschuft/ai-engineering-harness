@@ -2,8 +2,8 @@
   "schema": "ai-engineering-harness/security/containment-cases/v1",
   "plan_leaf": "S-02.1",
   "title": "Containment cases and the expected-denial matrix of the job environment",
-  "version": "1",
-  "as_of": "2026-11-08",
+  "version": "2",
+  "as_of": "2026-11-10",
   "inventory": "security/inventory.json",
   "properties": "profiles/properties.json",
   "matrix": "policy/network-matrix.json",
@@ -410,6 +410,45 @@
         "egress_guard",
         "pins"
       ]
+    },
+    {
+      "id": "ctl-inference-endpoint",
+      "category": "egress",
+      "kind": "permitted",
+      "name": "the guest inference endpoint answers a job, and refuses it without a token",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one TCP connect from each job to the inference endpoint 172.17.0.1:8090 (the sshd remote forward to the host-side broker) and GET / without an Authorization header (job-access-probe's inference sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inference",
+        "args": {
+          "what": "inference endpoint (no token)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "answered"
+        ],
+        "rule": "answered: the broker's 401 (reachability through the container guard's one ACCEPT and the forward, and admission by token); any other status or no answer is not the control"
+      },
+      "enforcement": [],
+      "assets": [
+        "endpoint-inference"
+      ],
+      "positive_control": null,
+      "verdict_rule": "PASS when every job's observation is answered with 401; FAIL otherwise.",
+      "carried": [],
+      "status": "planned",
+      "depends_on": [
+        "container_guard",
+        "pins"
+      ],
+      "verify_at": "S-03.2",
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
     },
     {
       "id": "ctl-trusted-side",
@@ -3791,6 +3830,268 @@
         "sock-engine-tcp-guest",
         "mgmt-from-job-routes"
       ]
+    },
+    {
+      "id": "egr-inference-edge-port",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the inference allow does not reach the next port",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one TCP connect from each job to 172.17.0.1:8091, the port beside the inference endpoint (job-access-probe's inference sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inference",
+        "args": {
+          "what": "inference allow edge (port)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ECONNREFUSED"
+        ],
+        "rule": "ECONNREFUSED: the container guard's reset (the allow names one port)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm",
+        "endpoint-inference"
+      ],
+      "positive_control": "ctl-inference-endpoint",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "planned",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ],
+      "verify_at": "S-03.2",
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+    },
+    {
+      "id": "egr-inference-edge-udp",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the inference allow does not admit UDP",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one UDP datagram from each job to 172.17.0.1:8090 (job-access-probe's inference sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inference",
+        "args": {
+          "what": "inference allow edge (udp)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ECONNREFUSED"
+        ],
+        "rule": "ECONNREFUSED: the container guard's ICMP reject (the allow is TCP only)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm",
+        "endpoint-inference"
+      ],
+      "positive_control": "ctl-inference-endpoint",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "planned",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ],
+      "verify_at": "S-03.2",
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+    },
+    {
+      "id": "egr-inference-edge-address",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the inference allow names only the docker0 address",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one TCP connect from each job to the guest's uplink address 10.0.2.15:8090 (job-access-probe's inference sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inference",
+        "args": {
+          "what": "inference allow edge (address)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ECONNREFUSED"
+        ],
+        "rule": "ECONNREFUSED: the container guard's reset (the allow names 172.17.0.1/32)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm",
+        "endpoint-inference"
+      ],
+      "positive_control": "ctl-inference-endpoint",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "planned",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ],
+      "verify_at": "S-03.2",
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+    },
+    {
+      "id": "egr-resolver-docker0",
+      "category": "egress",
+      "kind": "denial",
+      "name": "the container resolver (Moby dns, the docker0 address) refuses a job",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one TCP connect and one UDP DNS query from each job to 172.17.0.1:53, the resolver that daemon.json's dns names in the opted-in guest (job-access-probe's inference sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inference",
+        "args": {
+          "what": "container resolver (docker0)"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "ECONNREFUSED"
+        ],
+        "rule": "ECONNREFUSED: the container guard's reset or ICMP reject, counted (a policy denial, decision 0015 section 7.1)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-inference-endpoint",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "planned",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ],
+      "verify_at": "S-03.2",
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+    },
+    {
+      "id": "egr-name-lookup",
+      "category": "egress",
+      "kind": "denial",
+      "name": "a name lookup from a job fails closed",
+      "principal": {
+        "id": "engineering-agent",
+        "user": "the job default user: the server uid:gid (999:989), no supplementary group",
+        "root_attempt": false
+      },
+      "attempt": "one getaddrinfo of deb.debian.org from each job through its resolv.conf (job-access-probe's inference sweep, 4 s ceiling)",
+      "probe": {
+        "source": "job-access-probe",
+        "extract": "inference",
+        "args": {
+          "what": "name lookup"
+        }
+      },
+      "expected": {
+        "outcomes": [
+          "not-resolved"
+        ],
+        "rule": "not-resolved: no address (the resolver is refused; no resolver is reachable)"
+      },
+      "enforcement": [
+        {
+          "location": "container-guard",
+          "refs": [
+            "P7",
+            "nm-job-guest-listeners",
+            "guest-container-guard"
+          ]
+        },
+        {
+          "location": "egress-guard",
+          "refs": [
+            "P7",
+            "nm-ext-job-egress"
+          ]
+        },
+        {
+          "location": "slirp-restrict",
+          "refs": [
+            "P7",
+            "nm-ext-job-egress"
+          ]
+        }
+      ],
+      "assets": [
+        "guest-execution-vm"
+      ],
+      "positive_control": "ctl-inference-endpoint",
+      "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
+      "carried": [],
+      "status": "planned",
+      "depends_on": [
+        "docker_inspect",
+        "container_guard",
+        "pins"
+      ],
+      "verify_at": "S-03.2",
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
     },
     {
       "id": "priv-sudo",

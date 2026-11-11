@@ -126,7 +126,7 @@ EXTRACTORS = {
         'socket': ('path',), 'sockets-found': (), 'tcp': ('what',), 'routes': (),
         'tokens': ('label',), 'credential-files': (), 'token-control': (),
         'env': ('field',), 'inspected': ('field',), 'controls': ('key',),
-        'egress': ('what',), 'egress-route': (), 'trusted': ()},
+        'egress': ('what',), 'egress-route': (), 'trusted': (), 'inference': ('what',)},
     'admission-probe': {
         'sweep': (), 'network': ('what',), 'custody': (), 'keycheck': (), 'logged': (),
         'trusted': ()},

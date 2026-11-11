@@ -273,11 +273,16 @@
       "owner_authority": false,
       "independently_isolated": true,
       "identity": {
-        "planned": "The host-side broker behind the guest's `inference` endpoint class: the only path to provider credentials, which never enter the guest.",
+        "planned": "The host-side broker of decision 0015 (integrations/inference), on 127.0.0.1 only and as the Owner's account during bootstrap: the sole holder of the provider credential, which never enters the guest; it alone issues and revokes per-attempt inference tokens. Containers reach it only through the guest inference endpoint, the sshd remote forward on the docker0 gateway that the dispatcher holds.",
         "observed": null
       },
       "status": "planned",
-      "sources": ["profiles/README.md", "profiles/strong-windows-qemu-whpx/profile.json"],
+      "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "integrations/inference/README.md",
+        "profiles/README.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
       "findings": ["fd-acp-provider-auth"]
     },
     {
@@ -857,12 +862,13 @@
       "holder": "inference-broker",
       "manager": "inference-broker",
       "readable_by": [],
-      "storage": "Host side, behind the brokered `inference` endpoint; never in the guest, the seed, a container or an agent-readable file.",
+      "storage": "One entry of the OS credential provider (F-06.3; Windows Credential Manager, keyring on POSIX), name `AIEH model provider`, user the provider id, written only by an Owner-run command that reads the value from standard input; held in the broker's memory from its start. Never in config.yml, the seed, the guest, a container, the create request, a record, a log or a report: records carry its fingerprint only. Every process of the Owner's account can read the entry (fd-bootstrap-shared-identity), so it is a dedicated harness key with a spend cap at the provider (decision 0015 section 2).",
       "scope": "Model inference for engineering conversations.",
-      "lifetime": "Not defined yet.",
+      "lifetime": "Until the Owner rotates or revokes it at the provider; reloaded by re-running the set command and restarting the broker; a revocation at the provider fails every attempt closed at its next call (decision 0015 section 2.3; decision 0007 point 5).",
       "rotation_revocation_owner": "owner",
       "status": "planned",
       "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
         "profiles/README.md",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
       ],
@@ -1292,11 +1298,53 @@
       "name": "Inference endpoint class",
       "kind": "listener",
       "custodian": "inference-broker",
-      "location": "A guestfwd to a host-side broker on 127.0.0.1; deferred: the broker does not exist and enabling a guestfwd needs separate Owner authorization.",
+      "location": "A TCP listener on the guest's docker0 gateway address 172.17.0.1:8090, owned by the guest's sshd as a remote forward that the dispatcher holds over the management channel to the broker's inference listener (decision 0015 section 4.1); the only path out of a container, allowed by the container guard's one ACCEPT. Declared in the profile's opt-in inference composition (create --provision --inference); applying it is the Owner's guest hardening act.",
       "credentials": ["cred-llm-provider-key"],
       "status": "planned",
-      "sources": ["profiles/strong-windows-qemu-whpx/profile.json", "profiles/README.md"],
+      "sources": ["decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md", "profiles/strong-windows-qemu-whpx/profile.json",
+                  "profiles/README.md"],
       "findings": ["fd-acp-provider-auth"]
+    },
+    {
+      "id": "listener-inference-broker",
+      "name": "Inference broker's inference listener",
+      "kind": "listener",
+      "custodian": "inference-broker",
+      "location": "Host 127.0.0.1 at components.inference_broker.inference_port (config.yml), the only target of the guest inference endpoint's remote forward: inference requests under per-attempt tokens, the provider API passed through untranslated (decision 0015 sections 4.3 and 5.3). Reachable by any local process; admission by token.",
+      "credentials": ["cred-llm-provider-key"],
+      "status": "planned",
+      "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "integrations/inference/README.md"
+      ],
+      "findings": ["fd-host-loopback-exposure"]
+    },
+    {
+      "id": "api-inference-control",
+      "name": "Inference broker's control listener",
+      "kind": "api",
+      "custodian": "inference-broker",
+      "location": "Host 127.0.0.1 at components.inference_broker.control_port (config.yml): issue, revoke and status of per-attempt tokens for the dispatcher; never forwarded into a guest. Same-account processes can call it, disclosed under decision 0013 point 6 (decision 0015 section 4.3).",
+      "status": "planned",
+      "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "integrations/inference/README.md"
+      ],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "inference-forward-session",
+      "name": "Inference forward session",
+      "kind": "process",
+      "custodian": "management-dispatcher",
+      "location": "The host's ssh client that holds the remote forward (ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port>) over the management hostfwd with the per-instance key while attempts run, recorded beside the launch record ({instance_dir}/inference-forward.json) while held and re-established after a loss or a guest restart (decision 0015 sections 4.1, 4.3 and 4.4). During bootstrap tools/guest.py performs the dispatcher's role (S-03.2 slice 3).",
+      "credentials": ["cred-guest-ssh-key"],
+      "status": "planned",
+      "sources": [
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "findings": ["fd-bootstrap-shared-identity"]
     },
     {
       "id": "endpoint-provision",

@@ -213,7 +213,17 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   classes, which each profile enumerates with address, port and protocol:
   - `management`: the provider's control channel and SSH over the loopback forward;
   - `exchange`: repository exchange (`profiles P4`);
-  - `inference`: the brokered LLM endpoint, the only path to provider credentials;
+  - `inference`: the brokered LLM endpoint, the only path to provider credentials
+    (amended 2026-11-10, decision 0015 section 4). Its mechanism is the dispatcher-held
+    SSH remote forward inside the management channel: a TCP listener on the guest's
+    docker0 gateway address and a declared port, owned by the guest's sshd, whose
+    connections reach the host-side broker on `127.0.0.1`. It is not a `guestfwd`;
+    `launch.argv` stays unchanged. Its enforcement point inside the guest is the
+    container guard (one ACCEPT before its refusals), and the egress guard's allowlist
+    stays empty. The guest composition it needs (the sshd forwarding directives, the
+    guard's ACCEPT, `bip` and `dns` in `daemon.json`) is opt-in per guest
+    (`network.inference_composition`, `create --provision --inference`) and planned:
+    applying it is the Owner's guest hardening act;
   - `provision`: package and image sources needed while provisioning. This class may be
     phase-limited and closed after provisioning.
 - **Egress allowlist.** It is enforced **outside the guest**, and every profile names its
@@ -224,7 +234,10 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     baseline services must therefore be declared, or turned off on the bridge.
   - QEMU SLIRP `restrict=on`, with `guestfwd` to a host-side allowlisting proxy.
     `restrict=on` does not affect explicitly set forwarding rules, so each forward is an
-    enumerated endpoint.
+    enumerated endpoint. (Qualified by F-03.3.2. Amended 2026-11-10, decision 0015: a
+    guestfwd is one connection opened at QEMU's start, so the `inference` class uses the
+    management channel's SSH remote forward instead; guest-to-host traffic passes only
+    through the management channel's forwards.)
   - For Lima, see section 6. No Lima-native egress allowlist is identified, so that
     enforcement point is an open F-03.3.2 item.
 - **Containers inside the guest.** Denial must hold **from inside a container in the
@@ -237,8 +250,11 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     between two containers).
   - **Container egress** is enforced at the egress guard: every new connection that a
     container bridge forwards out of the guest is refused, except to the allowlist, which
-    is exactly the endpoint classes the profile enables for containers (`inference`, and
-    `provision` while it is open). None is enabled today, so the allowlist is empty.
+    is exactly the endpoint classes the profile enables for forwarded container traffic
+    (`provision` while it is open). None is enabled today, so the allowlist is empty.
+    `inference` is never an entry (amended 2026-11-10, decision 0015 section 4.2): its
+    endpoint is a guest listener, reached through INPUT and allowed by the container
+    guard's one ACCEPT to exactly that address and port.
 - **IPv6** is off unless the profile lists it.
 - **Guest-internal listeners (amended 2026-11-07, F-04.1).** A provisioned guest's Agent
   Server listens on the guest's own `127.0.0.1` only, at the port the profile declares
@@ -277,6 +293,16 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     names the address of a running owned container and port 8000, at most one per
     container); and no listener of any other process beyond the base image's. `agent`
     sees the same set.
+  - the `inference` composition (amended 2026-11-10, decision 0015 section 4.5), in the
+    state the launch record names: off, the seeded sshd drop-in forwards nothing, the
+    guard chains carry no allow, `daemon.json` has no `bip` or `dns`, nothing listens on
+    the endpoint's port and `launch.argv` has no guestfwd; on, the drop-in equals the
+    composed text and `sshd -T` (root, boot facts) reports the three directives, the
+    endpoint is listened on by sshd exactly when a forward session is recorded, the
+    container guard carries its one ACCEPT (IPv4) and the egress guard none, and the
+    provider key's fingerprint is a P5 needle; from a job, the endpoint answers 401
+    without a token, its edges and the resolver are refused and a name lookup fails
+    closed (`job-access-probe`).
 
 ### P8 Identity
 - **Per instance:** a unique instance name. machine-id and SSH host keys are
@@ -438,8 +464,9 @@ Each requirement cites the Owner conditions in section 9.
 - **No host filesystem share** of any kind: no `-virtfs`, no SMB, no 9p (`profiles P4`,
   C5). The NoCloud seed is a read-only configuration medium (`profiles P4`), not a share.
 - **Network:** user-mode networking with `restrict=on`. `hostfwd` binds only to
-  `127.0.0.1` (management, exchange). `guestfwd` points to host-side endpoints for
-  `inference` and `provision` (`profiles P7`, C5).
+  `127.0.0.1` (management, exchange). `guestfwd` would point to host-side endpoints for
+  `provision` (`profiles P7`, C5); `inference` uses the management channel's SSH remote
+  forward instead (decision 0015), and `launch.argv` carries no guestfwd.
 - **Agent channel:** the QEMU guest agent, if used, is declared and host→guest only
   (`profiles P6`).
 - **Accelerator:** `whpx`. The profile never relies on `/dev/kvm` inside the guest

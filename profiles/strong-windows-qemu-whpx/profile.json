@@ -557,7 +557,7 @@
             ],
             "families": ["iptables", "ip6tables"],
             "allowlist": [],
-            "allowlist_rule": "The endpoint classes this profile enables for containers: network.endpoints of class inference or provision without a deferred status. None is enabled, so the allowlist is empty and every new forwarded connection from a container bridge is refused. Its first entry belongs to S-03.x (inference, after the broker's Owner authorization); an entry sits between the RETURN and the LOG rule.",
+            "allowlist_rule": "The endpoint classes this profile enables for forwarded container traffic: network.endpoints of class provision without a deferred or planned status. None is enabled, so the allowlist is empty and every new forwarded connection from a container bridge is refused; an entry would sit between the RETURN and the LOG rule. The inference class is never an entry: its endpoint is a guest listener on the docker0 gateway address, reached through INPUT and allowed by the container guard's one ACCEPT (network.inference_composition), and the allowlist stays empty with it (decision 0015 section 4.2, which refines S-01.4 ruling R5).",
             "rule": "Guest-level, in Moby's DOCKER-USER chain of the filter table (FORWARD jumps to it first): a packet that enters from a container bridge (docker0, br-+), leaves by another interface and is not part of an established connection jumps to the chain, is logged (rate-limited, kernel log, this prefix) and is refused: TCP with a reset, anything else with an ICMP port-unreachable. A container therefore opens no connection out of the guest: not to SLIRP's 10.0.2.2 (the host's loopback) or 10.0.2.3, not to an unconfigured guestfwd address, not to an off-guest address, IPv4 or IPv6. Traffic between two containers of one bridge does not leave it and stays with icc false (the peer container); connections to the guest itself stay with the container guard (INPUT). Off-link destinations have no route in the guest (SLIRP restrict=on gives no default route), so the guest's routing answers them before FORWARD (network unreachable): that is topology, not the guard. With a route present the guard refuses them too: proved by the route-present falsification (falsification below; S-01.4 fix-forward), where 1.1.1.1:443 and 8.8.8.8:53 (TCP and UDP) were refused from both jobs with the guard's counters rising by exactly the attempts and its log showing the uplink as OUT.",
             "dockerd": "The guard runs before docker.service and creates DOCKER-USER when it is absent. It ends DOCKER-USER with the RETURN rule that Moby 26.1 adds when none exists, so Moby leaves the chain unchanged, and Moby re-inserts FORWARD's jump to DOCKER-USER at the top (IPv4). Moby 26.1 does not manage ip6tables (ip6tables off), so the guard's own FORWARD jump stands there. ip-forward is not set false (S-01.4 ruling R5).",
             "fail_closed": "Installed by the same script and unit as the container guard: if any egress rule cannot be installed the unit fails and docker.service, which Requires it, does not start. The root step's admission step (after Moby's first start), the boot facts (after docker.service at every boot, with the rules the guard printed before Moby started) and inspect verify the chain, the hook rules and FORWARD's first jump in both families.",
@@ -679,7 +679,7 @@
     "ipv6": false,
     "ipv6_statement": "IPv6 is off at the enforcement point (ipv6=off): SLIRP handles no IPv6 at all. The guest kernel has IPv6 enabled but no address on the NIC (addr_gen_mode 1, accept_ra 0, network-config dhcp6 false, link-local []). With fec0::15/64, a default route via fec0::2 and static neighbour entries sending IPv6 frames to SLIRP's MAC (all added by guest root in F-03.3.2), every IPv6 probe timed out while the NIC's tx counter rose. No IPv6 endpoint is listed.",
     "enforcement_point": {
-      "mechanism": "QEMU SLIRP restrict=on with ipv6=off. Guest-to-host traffic only through explicit guestfwd rules, each to a listener on 127.0.0.1; host-to-guest only through hostfwd bound to 127.0.0.1.",
+      "mechanism": "QEMU SLIRP restrict=on with ipv6=off. Host-to-guest only through hostfwd bound to 127.0.0.1; guest-to-host only through the management channel's forwards (the SSH remote forward that the dispatcher holds over that hostfwd, decision 0015 section 4.1); launch.argv carries no guestfwd (a test guestfwd to a listener on 127.0.0.1 exists only in a netprobe validation instance).",
       "status": "qualified",
       "qualified_by": "F-03.3.2",
       "qualified_at": "2026-11-06",
@@ -746,12 +746,19 @@
       },
       {
         "class": "inference",
-        "status": "deferred: the brokered endpoint does not exist yet, and enabling a guestfwd in this profile needs separate Owner authorization (decision 0003, 'Owner authorization: network validation')",
-        "mechanism": "guestfwd=tcp:<guest address>:<port>-tcp:127.0.0.1:<broker port> to a host-side broker (the mechanism qualified by F-03.3.2)",
+        "status": "planned: declared for the opt-in inference composition (network.inference_composition; create --provision --inference); not active until the Owner's guest hardening act (A4) and a guest qualification observe it (decision 0015)",
+        "purpose": "model inference from a conversation container to the host-side inference broker, admitted by a per-attempt token (decision 0015 sections 3 and 4.1)",
+        "direction": "guest-to-host",
+        "mechanism": "ssh-remote-forward",
+        "mechanism_detail": "a TCP listener on the docker0 gateway address, owned by the guest's sshd as a remote port forward that the dispatcher holds over the management hostfwd: ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port> with ExitOnForwardFailure=yes, keepalives, the per-instance key and ssh_client_options. Each container connection becomes one SSH channel and one connection from the host's ssh client to the broker's inference listener on 127.0.0.1. Not a guestfwd: launch.argv is unchanged (decision 0015 section 4.1).",
+        "forward_owner": "management-dispatcher (bootstrap: tools/guest.py under the Owner's account performs its role, decision 0013 point 1)",
         "protocol": "tcp",
+        "guest_address": "172.17.0.1",
+        "guest_port": 8090,
         "host_bind": "127.0.0.1",
-        "host_port": null,
-        "guest_address": null
+        "host_port": "{broker_inference_port}",
+        "host_port_source": "components.inference_broker.inference_port in config.yml (integrations/inference); the broker's control listener is never forwarded",
+        "enforcement": "the container guard's one ACCEPT (INPUT, IPv4) before its refusals; sshd PermitListen binds nothing else; the egress guard's allowlist stays empty"
       },
       {
         "class": "provision",
@@ -763,6 +770,103 @@
         "guest_address": null
       }
     ],
+    "inference_composition": {
+      "decision": "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md (sections 4.2, 4.5, 7.1 and 7.2; Amendment 1)",
+      "status": "planned: declared and checked offline (S-03.2 slice 2). Applying it to a guest is the Owner's guest hardening act (A4), not yet authorized; nothing here is observed until a guest qualification records it.",
+      "option": "create --provision --inference",
+      "default": "off. Without the option the seed (user-data, meta-data, network-config and seed.iso), the provisioning manifest (daemon.json included) and every guest-visible file are byte-identical to an ordinary provisioned guest's: no forwarding directive, no extra guard rule, no daemon.json key, no guestfwd. The launch record carries an inference block only with the option.",
+      "seed_overlay": {
+        "path": "profiles/seed/inference-overlay.json",
+        "sha256": "8602aee3c4c409861f737ab307adf2c4a3df1d724b45a4268551113fc3df5091"
+      },
+      "sshd": {
+        "dropin": "/etc/ssh/sshd_config.d/10-aieh.conf",
+        "replaces": "AllowTcpForwarding no",
+        "directives": [
+          "AllowTcpForwarding remote",
+          "GatewayPorts clientspecified",
+          "PermitListen 172.17.0.1:8090"
+        ],
+        "effective": {
+          "allowtcpforwarding": "remote",
+          "gatewayports": "clientspecified",
+          "permitlisten": "172.17.0.1:8090"
+        },
+        "listener_processes": [
+          "sshd",
+          "sshd-session"
+        ],
+        "local_forwarding": "refused (AllowTcpForwarding remote); widened only by the leaf that realizes decision 0013 point 3, with PermitOpen"
+      },
+      "container_guard_allow": {
+        "families": [
+          "iptables"
+        ],
+        "rule": "-d 172.17.0.1/32 -i docker0 -p tcp -m tcp --dport 8090 -j ACCEPT",
+        "position": "after the RETURN and before the LOG and the refusals of the container guard's chain (INPUT), as iptables -S prints it",
+        "ip6tables": "no allow: the endpoint is an IPv4 address and docker0 carries no IPv6 (provisioning.moby.sysctl)"
+      },
+      "egress_allowlist": "stays empty (provisioning.agent_server.admission.network.egress_guard.allowlist): no container opens a connection out of the guest",
+      "daemon_json": {
+        "bip": "172.17.0.1/16",
+        "dns": [
+          "172.17.0.1"
+        ]
+      },
+      "daemon_json_rule": "Merged into provisioning.moby.daemon_json in the manifest of an opted-in guest only. bip pins the docker0 address (the endpoint's address); dns replaces Moby's public default resolvers (8.8.8.8 and 8.8.4.4, F-04.2) by the docker0 address, where nothing listens and the container guard refuses the query with an ICMP reject (UDP) or a reset (TCP) and a counter: a policy denial instead of a topology one (decision 0015 section 7.1).",
+      "forward_session": {
+        "record": "{instance_dir}/inference-forward.json",
+        "written_by": "the dispatcher while it holds the forward (tools/guest.py, S-03.2 slice 3); inspect reads only whether it exists",
+        "status": "planned"
+      },
+      "job_sweep": {
+        "endpoint": "one TCP connect to the endpoint and GET / without an Authorization header: the broker answers 401 (reachability and admission)",
+        "edges": [
+          [
+            "tcp",
+            "172.17.0.1",
+            8091,
+            "inference allow edge (port)"
+          ],
+          [
+            "udp",
+            "172.17.0.1",
+            8090,
+            "inference allow edge (udp)"
+          ],
+          [
+            "tcp",
+            "10.0.2.15",
+            8090,
+            "inference allow edge (address)"
+          ],
+          [
+            "tcp",
+            "172.17.0.1",
+            53,
+            "container resolver (docker0)"
+          ],
+          [
+            "udp",
+            "172.17.0.1",
+            53,
+            "container resolver (docker0)"
+          ]
+        ],
+        "name_lookup": "one getaddrinfo of a public name through the container's resolv.conf: fails closed (no address)",
+        "rule": "PASS: the endpoint answers 401 from every job, every edge and resolver target is refused (ECONNREFUSED: the container guard's reset or ICMP reject) and the guard's IPv4 refusal counters rise; a name lookup returns no address. STOP: an edge or resolver target connects or answers. Run by job-access-probe on an opted-in guest only."
+      },
+      "inspection": [
+        "the sshd drop-in equals the declared text (the composed template's write_files entry) and sshd -T (root, boot facts) reports exactly the effective directives",
+        "ss -ltnp (root, on-demand conversation facts): the endpoint is listened on by sshd exactly when a forward session is recorded, and by nothing otherwise; no other new listener",
+        "the guard chains equal the declared rules: the container guard with its one ACCEPT in iptables, none in ip6tables; the egress guard with an empty allowlist",
+        "daemon.json (boot facts) carries the declared bip and dns",
+        "from a job (job-access-probe): the endpoint answers 401 without a token, the edges and the resolver are refused, a name lookup fails closed; the S-02 catalogue re-run keeps every compensating case PASS",
+        "the provider key's fingerprint is a P5 needle (inspect --provider-key-fingerprint)",
+        "with the option off: the drop-in carries no forwarding directive, the guard chains carry no allow, nothing listens on the endpoint, daemon.json has neither key, and launch.argv no guestfwd"
+      ],
+      "cost_map_control": "Not built (decision 0015 section 7.2): the pinned create request admits no container environment. The 1.60.1 Docker runtime builds a conversation container's environment from a fixed list (docker_runtime/registry.py, forwarded_env_names; evidence/E-01.4.3-start-race.md), and the create's secrets reach only the ACP CLI's process, which the inner server starts after its own litellm import (evidence/S-03-acp-coding-provider-recommendation.md section 1.1). The container-side limit of E-01.4.3 (finding F-2) stands: each inner server still attempts the fetch at its start and is denied at name resolution."
+    },
     "port_allocation": "{ssh_port} and {qmp_port} are free ports on 127.0.0.1 chosen at create and kept in the launch record.",
     "local_exposure": "Loopback ports are reachable by any local process of any user on the host; disclosed, not prevented (Python's standard library has no AF_UNIX socket on Windows, so QMP uses loopback TCP)."
   },

@@ -17,7 +17,15 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
   enforcement point names its status, and a qualified or failed one cites its
   evidence and, when qualified, a reachability table of permitted and denied paths;
   an endpoint that is still deferred has no port and no guest forwarding rule
-  (F-03.3.2);
+  (F-03.3.2); an inference endpoint that is not deferred is the SSH remote forward of
+  decision 0015 (the docker0 gateway address and a declared port, the forward's owner,
+  never a guestfwd: launch.argv keeps none), and its opt-in composition
+  (``network.inference_composition``) is checked in both states: off, the seed template's
+  sshd drop-in forwards nothing and its container guard has the four declared rules; on,
+  the pinned seed overlay applies once per anchor and yields exactly the declared sshd
+  directives, the one IPv4 ACCEPT before the guard's refusals, the boot facts' sshd -T
+  section, and daemon.json's bip and dns on the endpoint address, while the egress
+  guard's allowlist stays empty;
 - a provisioning block (F-04.1b) bounds the upload, names the root step's paths and
   declares Moby with no TCP socket, its data root on scratch, root-owned sockets closed
   to others, the locked docker.io version and a local immutable image tag;
@@ -47,8 +55,10 @@ profiles/*/profile.json. Exit status 0 when every profile passes, 1 otherwise.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -421,6 +431,254 @@ def check_network(report, profile, properties, root=REPO):
     if missing:
         report.fail(f'network: endpoint classes not enumerated: {sorted(missing)}')
     check_enforcement_point(report, profile, root)
+    check_inference(report, profile, root)
+
+
+# decision 0015 (S-03.2): the guest inference endpoint and its opt-in composition
+INFERENCE_MECHANISM = 'ssh-remote-forward'
+INFERENCE_STATUSES = ('planned', 'active')
+INFERENCE_OPTION = 'create --provision --inference'
+INFERENCE_SSHD_REPLACES = 'AllowTcpForwarding no'
+INFERENCE_SSHD_KEYS = ('allowtcpforwarding', 'gatewayports', 'permitlisten', 'permitopen')
+INFERENCE_FORBIDDEN_PORTS = (22, 53, 5355, 8000, 8001)
+IPV4 = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}'
+                  r'(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$')
+SWEEP_HOST = re.compile(r'^(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.')
+
+
+# compiled code by content digest: the same bytes compile once per process
+_CODE = {}
+
+
+def compiled(text, name):
+    key = (name, hashlib.sha256(text.encode('utf-8')).hexdigest())
+    if key not in _CODE:
+        _CODE[key] = compile(text, name, 'exec', dont_inherit=True)
+    return _CODE[key]
+
+
+def load_seed_generator():
+    """tools/nocloud_seed.py, the one implementation of the seed overlay (a fresh module;
+    only the compilation of the same bytes is reused)."""
+    path = Path(__file__).resolve().parent / 'nocloud_seed.py'
+    spec = importlib.util.spec_from_file_location('nocloud_seed', path)
+    module = importlib.util.module_from_spec(spec)
+    exec(compiled(path.read_text(encoding='utf-8'), str(path)), module.__dict__)
+    return module
+
+
+def inference_declared(address, port):
+    """What the composition must declare for the endpoint ADDRESS:PORT."""
+    return {'directives': ['AllowTcpForwarding remote', 'GatewayPorts clientspecified',
+                           f'PermitListen {address}:{port}'],
+            'effective': {'allowtcpforwarding': 'remote', 'gatewayports': 'clientspecified',
+                          'permitlisten': f'{address}:{port}'},
+            'rule': f'-d {address}/32 -i docker0 -p tcp -m tcp --dport {port} -j ACCEPT',
+            'daemon_json': {'bip': f'{address}/16', 'dns': [address]}}
+
+
+GUARD_FAMILIES = ('iptables', 'ip6tables')
+
+
+def guard_rules_of(script):
+    """What a seeded container-guard script installs and verifies, by defining its module (its
+    main runs only as __main__) with a stand-in for iptables: {'RULES': [...], and when it
+    defines a rule function per family, '<family>': [...]; 'installed': {family: the -A
+    arguments its install adds to its chain equal its rules}, 'verified': {family: its
+    observe accepts exactly those rules}}."""
+    namespace = {'__name__': 'aieh_container_guard'}
+    exec(compiled(script, 'aieh-container-guard'), namespace)   # noqa: S102 (seeded text)
+    rules = namespace.get('rules')
+    base = list(namespace.get('RULES') or ())
+    out = {'RULES': base}
+    if callable(rules):
+        out.update({tool: list(rules(tool)) for tool in GUARD_FAMILIES})
+    want = {tool: out.get(tool, base) for tool in GUARD_FAMILIES}
+    chain, ifaces = namespace.get('CHAIN'), namespace.get('INTERFACES') or ()
+    install, observe = namespace.get('install'), namespace.get('observe')
+    if not (callable(install) and callable(observe) and chain):
+        return out
+    out['installed'], out['verified'] = {}, {}
+    for tool in GUARD_FAMILIES:
+        added = []
+
+        def run(argv, added=added):
+            if argv[2:4] == ['-A', chain]:
+                added.append(argv[4:])
+            return (1 if '-D' in argv else 0), '', ''
+        namespace['run'] = run
+        install(tool)
+        out['installed'][tool] = added == [shlex.split(r) for r in want[tool]]
+        listing = {chain: [f'-A {chain} {r}' for r in want[tool]],
+                   'INPUT': ['-P INPUT ACCEPT'] + [f'-A INPUT -i {i} -j {chain}'
+                                                   for i in reversed(ifaces)]}
+        namespace['run'] = lambda argv, listing=listing: \
+            (0, '\n'.join(listing.get(argv[3], [])) + '\n', '')
+        out['verified'][tool] = observe(tool).get('ok') is True
+    return out
+
+
+def check_inference(report, profile, root):
+    """decision 0015 sections 4.1 and 4.2: an inference endpoint that is not deferred is the
+    dispatcher-held SSH remote forward on the docker0 gateway, never a guestfwd, and its
+    composition is declared and checked in both opt-in states."""
+    network = profile.get('network') or {}
+    entries = [e for e in network.get('endpoints') or []
+               if isinstance(e, dict) and e.get('class') == 'inference']
+    comp = network.get('inference_composition')
+    if len(entries) != 1:
+        return                                  # check_network reports the endpoint classes
+    entry, label = entries[0], 'network.endpoints inference'
+    status = str(entry.get('status', ''))
+    if status.startswith('deferred'):
+        if comp is not None:
+            report.fail('network.inference_composition: declared while the inference endpoint '
+                        'is deferred')
+        return
+    word = status.split(':', 1)[0]
+    if word not in INFERENCE_STATUSES:
+        report.fail(f'{label}: status must start with one of {list(INFERENCE_STATUSES)} or '
+                    'deferred')
+    if entry.get('mechanism') != INFERENCE_MECHANISM or \
+            'guestfwd' in str(entry.get('mechanism')):
+        report.fail(f'{label}: mechanism must be {INFERENCE_MECHANISM} (decision 0015 section '
+                    '4.1), not a guestfwd')
+    if guestfwd_rules((profile.get('launch') or {}).get('argv')):
+        report.fail(f'{label}: launch.argv must carry no guestfwd (the endpoint is a remote '
+                    'forward; the guestfwd rule count stays zero)')
+    address, port = entry.get('guest_address'), entry.get('guest_port')
+    if not isinstance(address, str) or not IPV4.match(address):
+        report.fail(f'{label}: guest_address must be the docker0 gateway\'s IPv4 address')
+        return
+    if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535 or \
+            port in INFERENCE_FORBIDDEN_PORTS:
+        report.fail(f'{label}: guest_port must be an integer from 1024 to 65535 that no guest '
+                    f'service uses ({list(INFERENCE_FORBIDDEN_PORTS)})')
+        return
+    if entry.get('direction') != 'guest-to-host' or not str(entry.get('forward_owner', '')).strip():
+        report.fail(f'{label}: direction guest-to-host and the forward\'s owner (forward_owner) '
+                    'required')
+    if word == 'active' and not (isinstance(entry.get('evidence'), str) and
+                                 EVIDENCE_PATH.match(entry['evidence']) and
+                                 (root / entry['evidence']).is_file()):
+        report.fail(f'{label}: an active endpoint cites the evidence of its qualification')
+    if not isinstance(comp, dict):
+        report.fail('network.inference_composition: required for an inference endpoint that is '
+                    'not deferred (decision 0015 section 4.2)')
+        return
+    check_inference_composition(report, profile, root, comp, word, address, port)
+
+
+def check_inference_composition(report, profile, root, comp, word, address, port):
+    label = 'network.inference_composition'
+    want = inference_declared(address, port)
+    if comp.get('option') != INFERENCE_OPTION:
+        report.fail(f'{label}.option: must be {INFERENCE_OPTION!r} (opt-in, off by default)')
+    if str(comp.get('status', '')).split(':', 1)[0] != word:
+        report.fail(f'{label}.status: must carry the endpoint\'s status ({word})')
+    for key in ('decision', 'default', 'egress_allowlist', 'cost_map_control'):
+        if not isinstance(comp.get(key), str) or not comp[key].strip():
+            report.fail(f'{label}.{key}: required')
+    sshd = comp.get('sshd') if isinstance(comp.get('sshd'), dict) else {}
+    if sshd.get('replaces') != INFERENCE_SSHD_REPLACES or \
+            sshd.get('directives') != want['directives'] or \
+            sshd.get('effective') != want['effective'] or \
+            'sshd' not in (sshd.get('listener_processes') or []):
+        report.fail(f'{label}.sshd: replaces {INFERENCE_SSHD_REPLACES!r} with exactly '
+                    f'{want["directives"]}, effective {want["effective"]}, listener processes '
+                    'including sshd')
+    allow = comp.get('container_guard_allow') if isinstance(comp.get('container_guard_allow'),
+                                                            dict) else {}
+    if allow.get('families') != ['iptables'] or allow.get('rule') != want['rule']:
+        report.fail(f'{label}.container_guard_allow: families [\'iptables\'] and the rule '
+                    f'{want["rule"]!r}')
+    if comp.get('daemon_json') != want['daemon_json']:
+        report.fail(f'{label}.daemon_json: must be {want["daemon_json"]} (bip pins the endpoint '
+                    'address; dns is that address, decision 0015 section 7.1)')
+    moby = ((profile.get('provisioning') or {}).get('moby') or {}).get('daemon_json') or {}
+    if any(k in moby for k in want['daemon_json']):
+        report.fail(f'{label}.daemon_json: provisioning.moby.daemon_json must not carry '
+                    f'{sorted(want["daemon_json"])} (they belong to the opt-in composition only)')
+    session = comp.get('forward_session') if isinstance(comp.get('forward_session'), dict) else {}
+    if not str(session.get('record', '')).startswith('{instance_dir}/') or \
+            not str(session.get('written_by', '')).strip():
+        report.fail(f'{label}.forward_session: a record under {{instance_dir}} and its writer')
+    sweep = comp.get('job_sweep') if isinstance(comp.get('job_sweep'), dict) else {}
+    edges = sweep.get('edges') if isinstance(sweep.get('edges'), list) else []
+    if not edges or not all(
+            isinstance(e, list) and len(e) == 4 and e[0] in ('tcp', 'udp') and
+            isinstance(e[1], str) and IPV4.match(e[1]) and SWEEP_HOST.match(e[1]) and
+            isinstance(e[2], int) and not isinstance(e[2], bool) and 0 < e[2] < 65536 and
+            isinstance(e[3], str) and e[3].strip() and
+            not (e[0] == 'tcp' and e[1] == address and e[2] == port) for e in edges):
+        report.fail(f'{label}.job_sweep.edges: [proto, private IPv4, port, what] rows beside, '
+                    'never on, the endpoint')
+    if not all(isinstance(sweep.get(k), str) and sweep[k].strip()
+               for k in ('endpoint', 'name_lookup', 'rule')):
+        report.fail(f'{label}.job_sweep: endpoint, name_lookup and rule required')
+    if not isinstance(comp.get('inspection'), list) or not comp['inspection']:
+        report.fail(f'{label}.inspection: the checks of decision 0015 section 4.5')
+    check_repo_file(report, root, f'{label}.seed_overlay', comp.get('seed_overlay') or {})
+    check_inference_states(report, profile, root, sshd, want)
+
+
+def check_inference_states(report, profile, root, sshd, want):
+    """Both opt-in states of the seed: the template as it is (off) and with the pinned
+    overlay applied (on), through tools/nocloud_seed.py."""
+    label = 'network.inference_composition'
+    gen = load_seed_generator()
+    try:
+        templates = gen.read_templates(profile, root)
+        composed, _ = gen.compose_templates(profile, root, templates, ('inference',))
+    except gen.Refused as exc:
+        report.fail(f'{label}: the seed overlay does not apply: {exc}')
+        return
+    off, on = write_files_blocks(templates['user-data']), write_files_blocks(composed['user-data'])
+    dropin = sshd.get('dropin')
+    base = off.get(dropin, '').split('\n')
+    if INFERENCE_SSHD_REPLACES not in base or \
+            any(line.split(' ', 1)[0].lower() in INFERENCE_SSHD_KEYS and
+                line != INFERENCE_SSHD_REPLACES for line in base):
+        report.fail(f'{label}: off, the seed\'s {dropin} must carry {INFERENCE_SSHD_REPLACES!r} '
+                    'and no other forwarding directive')
+    else:
+        at = base.index(INFERENCE_SSHD_REPLACES)
+        if on.get(dropin, '').split('\n') != base[:at] + want['directives'] + base[at + 1:]:
+            report.fail(f'{label}: on, {dropin} must be the ordinary drop-in with '
+                        f'{INFERENCE_SSHD_REPLACES!r} replaced by {want["directives"]}')
+    adm = (((profile.get('provisioning') or {}).get('agent_server') or {}).get('admission') or {})
+    guard = (adm.get('network') or {}).get('guard') or {}
+    script = guard.get('script')
+    rules = list(guard.get('rules') or [])
+    try:
+        got_off, got_on = guard_rules_of(off.get(script, '')), guard_rules_of(on.get(script, ''))
+    except Exception as exc:                       # a seeded script that does not even define
+        report.fail(f'{label}: the seeded {script} does not load ({type(exc).__name__}: {exc})')
+        return
+    every = {tool: True for tool in GUARD_FAMILIES}
+    if got_off.get('RULES') != rules or 'iptables' in got_off or \
+            got_off.get('installed') != every or got_off.get('verified') != every:
+        report.fail(f'{label}: off, {script} must install and verify exactly the declared four '
+                    'rules')
+    if got_on.get('RULES') != rules or \
+            got_on.get('iptables') != rules[:1] + [want['rule']] + rules[1:] or \
+            got_on.get('ip6tables') != rules or \
+            got_on.get('installed') != every or got_on.get('verified') != every:
+        report.fail(f'{label}: on, {script} must install and verify the one ACCEPT after the '
+                    'RETURN in iptables only')
+    provision = ((profile.get('provisioning') or {}).get('root_step') or {}).get('script')
+    text = on.get(provision, '')
+    try:
+        compiled(text, 'aieh-provision')
+    except SyntaxError as exc:
+        report.fail(f'{label}: on, {provision} does not compile ({exc})')
+        return
+    if "data['inference'] = inference_facts()" not in text or \
+            not all(f"'{k}'" in text for k in INFERENCE_SSHD_KEYS) or \
+            "['/usr/sbin/sshd', '-T']" not in text:
+        report.fail(f'{label}: on, the boot facts must report sshd -T\'s forwarding directives')
+    if 'inference_facts' in off.get(provision, ''):
+        report.fail(f'{label}: off, the boot facts must be the ordinary ones')
 
 
 ENFORCEMENT_STATUSES = ('candidate', 'qualified', 'failed')
@@ -1237,11 +1495,14 @@ def check_admission(report, profile, root, conf, server):
 
 
 def enabled_container_classes(profile):
-    """The endpoint classes the profile enables for containers: network.endpoints of class
-    inference or provision whose status is not deferred."""
+    """The endpoint classes the profile enables for forwarded container traffic (the egress
+    guard's allowlist): network.endpoints of class provision whose status is neither deferred
+    nor planned. Never inference: its endpoint is a guest listener that the container guard
+    allows on INPUT, and the egress allowlist stays empty with it (decision 0015 section 4.2)."""
     return sorted({str(e.get('class')) for e in (profile.get('network') or {}).get('endpoints') or []
                    if isinstance(e, dict) and e.get('class') in CONTAINER_CLASSES and
-                   not str(e.get('status', '')).startswith('deferred')})
+                   e.get('class') != 'inference' and
+                   not str(e.get('status', '')).startswith(('deferred', 'planned'))})
 
 
 def check_egress_guard(report, profile, guard, egress, daemon, label):
@@ -1327,6 +1588,11 @@ def seed_files(root, profile):
         text = (root / entry['path']).read_text(encoding='utf-8')
     except (OSError, KeyError, TypeError, UnicodeDecodeError):
         return {}
+    return write_files_blocks(text)
+
+
+def write_files_blocks(text):
+    """{path: content} of a user-data text's write_files block scalars (see seed_files)."""
     out, path, body, in_body = {}, None, [], False
     for line in text.split('\n'):
         if line.startswith('  - path: '):

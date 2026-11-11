@@ -117,3 +117,26 @@ The user-data template's header comment no longer names the placeholders as
 `{{…}}`: literal substitution used to copy the public key and the device path into
 that comment (F-03.2.2a defect, repaired in F-03.2.2b; the template is re-pinned in
 both profiles).
+
+## The opt-in inference composition (S-03.2 slice 2, decision 0015)
+
+A guest created with `tools/guest.py create --provision --inference` (and the generator's
+`--inference` option, which needs a provisioning manifest) gets the guest composition of
+the inference endpoint; no other guest does. **Planned, not verified in a guest:**
+applying it is the Owner's guest hardening act. The composition is the pinned overlay
+[`inference-overlay.json`](inference-overlay.json) (`network.inference_composition.seed_overlay`
+in the QEMU profile): an ordered list of exact edits to the user-data template, each an
+anchor of whole lines that must occur exactly once at the time it applies and its
+replacement, in which `{{inference_address}}` and `{{inference_port}}` are filled from the
+profile's inference endpoint before the template's own placeholders are substituted. It
+changes three seeded files only:
+
+| Path | Change |
+|---|---|
+| `/etc/ssh/sshd_config.d/10-aieh.conf` | `AllowTcpForwarding no` becomes `AllowTcpForwarding remote`, `GatewayPorts clientspecified` and `PermitListen 172.17.0.1:8090`; local forwarding stays refused |
+| `/usr/local/sbin/aieh-container-guard` | one ACCEPT after the container guard's RETURN, IPv4 only, for new TCP from `docker0` to `172.17.0.1:8090`; installed and verified per family; the egress guard's allowlist stays empty |
+| `/usr/local/sbin/aieh-provision` | the boot facts gain an `inference` section: `sshd -T`'s forwarding directives |
+
+The composition's `daemon.json` keys (`bip`, `dns`) travel in the provisioning manifest.
+Without the option nothing is read from the overlay and every file of the seed is
+byte-identical to an ordinary provisioned guest's; the template and its pin are unchanged.

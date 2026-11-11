@@ -302,9 +302,15 @@ class Acceptance(unittest.TestCase):
         # an endpoint that leaves its deferred status needs an allow row too
         profiles = copy.deepcopy(PROFILES)
         for e in profiles[QEMU]['network']['endpoints']:
-            if e['class'] == 'inference':
+            if e['class'] == 'provision':
                 e['status'] = 'enabled'
-        self.assert_code('PROFILE_ENDPOINT', fresh(), profiles=profiles, where=f'{QEMU}:inference')
+        self.assert_code('PROFILE_ENDPOINT', fresh(), profiles=profiles, where=f'{QEMU}:provision')
+        # the planned inference endpoint (decision 0015) is named by its allow rows; without
+        # them it is a failure
+        m = fresh()
+        for ident in ('nm-job-inference', 'nm-review-inference'):
+            edge(m, ident).pop('profile_endpoints')
+        self.assert_code('PROFILE_ENDPOINT', m, where=f'{QEMU}:inference')
         # a profile whose provider validation did not pass is not active
         profiles = copy.deepcopy(PROFILES)
         profiles[QEMU]['status']['provider_validation'] = 'UNKNOWN'

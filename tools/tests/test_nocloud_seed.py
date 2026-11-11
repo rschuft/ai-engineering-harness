@@ -12,6 +12,7 @@ Joliet specification; it is the round-trip check (no isoinfo or other host tool)
 """
 from pathlib import Path
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
@@ -534,6 +535,164 @@ class ProvisionManifest(SeedTestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(proc.stdout)['provision_manifest_sha256'],
                          hashlib.sha256(MANIFEST).hexdigest())
+        self.assertNotIn('compositions', json.loads(proc.stdout))     # off: no such record
+        # decision 0015: --inference composes the pinned overlay; the record names it
+        inf = self.instance('cli-inference')
+        manifest.write_bytes(inference_manifest())
+        proc = subprocess.run(
+            [sys.executable, '-I', '-B', str(GENERATOR), '--profile', str(PROFILE),
+             '--instance-dir', str(inf), '--instance-name', NAME, '--public-key',
+             str(self.key_file(KEY_A)), '--instance-id', INSTANCE_ID,
+             '--provision-manifest', str(manifest), '--inference'],
+            capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out['compositions']['inference']['overlay_sha256'],
+                         INF['seed_overlay']['sha256'])
+        data = read_iso((inf / 'seed.iso').read_bytes())['joliet']['files']['user-data'][1]
+        self.assertIn(b'PermitListen 172.17.0.1:8090', data)
+
+
+# The seed of the fixed input with MANIFEST (above), computed by the generator at 0b8af57,
+# before the opt-in compositions existed: the default output must stay these bytes.
+FIXED_MANIFEST_SHA256 = '806522dc752055e0cb0bb97a106d91abb5ab1e9d4193463a5a34ca9f2ca75fd4'
+FIXED_USER_DATA_SHA256 = {None: 'a8a9d454f877e3bcd85021ac87c12f33f6980294d4a70ad362cfafdd73cf63a6',
+                          'manifest': 'dba87d57859eb65bd9530f6857e4816ca4804aaccc7f83910ad9bdbce93f019f'}
+
+
+def inference_manifest(extra=None):
+    """MANIFEST with a docker.daemon_json that carries the composition's keys (or EXTRA)."""
+    data = json.loads(MANIFEST)
+    keys = INF['daemon_json'] if extra is None else extra
+    data['docker'] = {'daemon_json': dict(PROFILE_JSON['provisioning']['moby']['daemon_json'],
+                                          **keys)}
+    return (json.dumps(data, indent=1) + '\n').encode()
+
+
+PROFILE_JSON = json.loads((PROFILE / 'profile.json').read_text(encoding='utf-8'))
+INF = PROFILE_JSON['network']['inference_composition']
+
+
+class Compositions(unittest.TestCase):
+    """Decision 0015 (S-03.2 slice 2): the opt-in inference composition. Off, the output is
+    byte-identical to before; on, the pinned overlay's edits apply once each. Pure: nothing
+    is written."""
+    category = 'contract'
+
+    def setUp(self):
+        self.profile, self.root = nocloud_seed.load_profile(PROFILE)
+        self.templates = nocloud_seed.read_templates(self.profile, self.root)
+
+    def values(self, manifest=None):
+        return {'agent_ssh_public_key': nocloud_seed.parse_public_key(KEY_A),
+                'scratch_device': nocloud_seed.scratch_device(self.profile),
+                'provision_manifest': nocloud_seed.provision_manifest_value(manifest),
+                'instance_id': INSTANCE_ID, 'instance_name': NAME}
+
+    def test_default_output_is_byte_identical_to_before(self):
+        same, record = nocloud_seed.compose_templates(self.profile, self.root, self.templates, ())
+        self.assertIs(same, self.templates)
+        self.assertEqual(record, {})
+        for label, manifest, iso_sha in ((None, None, FIXED_INPUT_SHA256),
+                                         ('manifest', MANIFEST, FIXED_MANIFEST_SHA256)):
+            rendered = nocloud_seed.render(same, self.values(manifest))
+            self.assertEqual(hashlib.sha256(rendered['user-data']).hexdigest(),
+                             FIXED_USER_DATA_SHA256[label], label)
+            self.assertEqual(hashlib.sha256(nocloud_seed.build_iso(rendered)).hexdigest(),
+                             iso_sha, label)
+
+    def test_the_overlay_changes_only_its_anchors(self):
+        composed, record = nocloud_seed.compose_templates(self.profile, self.root, self.templates,
+                                                          ('inference',))
+        self.assertEqual(record, {'inference': {'overlay_sha256': INF['seed_overlay']['sha256'],
+                                                'address': '172.17.0.1', 'port': 8090}})
+        for name in ('meta-data', 'network-config'):
+            self.assertEqual(composed[name], self.templates[name])
+        base, on = self.templates['user-data'], composed['user-data']
+        overlay = json.loads((REPO / INF['seed_overlay']['path']).read_text(encoding='utf-8'))
+        removed = [line for e in overlay['edits'] for line in e['anchor']]
+        added = [line.replace('{{inference_address}}', '172.17.0.1')
+                 .replace('{{inference_port}}', '8090')
+                 for e in overlay['edits'] for line in e['replacement']]
+        import difflib
+        diff = [d for d in difflib.ndiff(base.split('\n'), on.split('\n')) if d[:2] in ('- ', '+ ')]
+        self.assertEqual(sorted(d[2:] for d in diff if d.startswith('- ')),
+                         sorted(line for line in removed if line not in added))
+        self.assertEqual(sorted(d[2:] for d in diff if d.startswith('+ ')),
+                         sorted(line for line in added if line not in removed))
+        self.assertIn('      AllowTcpForwarding remote\n      GatewayPorts clientspecified\n'
+                      '      PermitListen 172.17.0.1:8090\n      X11Forwarding no\n', on)
+        self.assertNotIn('AllowTcpForwarding no', on)
+        self.assertIn("'-d 172.17.0.1/32 -i docker0 -p tcp -m tcp --dport 8090 -j ACCEPT'", on)
+        rendered = nocloud_seed.render(composed, self.values(inference_manifest()))
+        self.assertNotIn(b'{{', rendered['user-data'])
+        self.assertNotEqual(hashlib.sha256(rendered['user-data']).hexdigest(),
+                            FIXED_USER_DATA_SHA256['manifest'])
+
+    def test_overlay_refusals(self):
+        overlay = json.loads((REPO / INF['seed_overlay']['path']).read_text(encoding='utf-8'))
+        values = {'inference_address': '172.17.0.1', 'inference_port': 8090}
+        base = self.templates['user-data']
+
+        def refused(fragment, edits, text=base):
+            with self.assertRaises(nocloud_seed.Refused) as ctx:
+                nocloud_seed.apply_overlay(text, dict(overlay, edits=edits), values)
+            self.assertIn(fragment, str(ctx.exception))
+        sshd = overlay['edits'][0]
+        refused('occurs 0 times', [dict(sshd, anchor=['      AllowTcpForwarding maybe'])])
+        refused('occurs 2 times', [sshd], base.replace('      PermitTunnel no',
+                                                       '      AllowTcpForwarding no'))
+        refused('occurs 0 times', [sshd, sshd])                 # an edit applies once only
+        refused('occurs 0 times', [dict(sshd, anchor=['AllowTcpForwarding no'])])  # line starts
+        refused('unknown placeholder', [dict(sshd, replacement=['      {{agent_ssh_public_key}}'])])
+        refused('delimiter remains', [dict(sshd, replacement=["      x = {'a': {'b': 1}}"])])
+        refused('single lines', [dict(sshd, replacement=['a\nb'])])
+        refused('single lines', [dict(sshd, anchor=[])])
+        refused('non-empty list', [])
+
+    def test_pins_endpoint_and_manifest_are_required(self):
+        def refused(fragment, profile=None, compositions=('inference',), manifest=None):
+            with self.assertRaises(nocloud_seed.Refused) as ctx:
+                if manifest is not None:
+                    nocloud_seed.check_composition_manifest(profile or self.profile, compositions,
+                                                            manifest)
+                else:
+                    nocloud_seed.compose_templates(profile or self.profile, self.root,
+                                                   self.templates, compositions)
+            self.assertIn(fragment, str(ctx.exception))
+        refused('is not one of', compositions=('other',))
+        refused('named twice', compositions=('inference', 'inference'))
+        tampered = copy.deepcopy(self.profile)
+        tampered['network']['inference_composition']['seed_overlay']['sha256'] = '0' * 64
+        refused('does not match the pinned', tampered)
+        outside = copy.deepcopy(self.profile)
+        outside['network']['inference_composition']['seed_overlay']['path'] = '../x.json'
+        refused('outside the checkout', outside)
+        for key, value in (('mechanism', 'guestfwd=tcp:10.0.2.100:7000-tcp:127.0.0.1:1'),
+                           ('guest_address', '172.17.0'), ('guest_port', 80),
+                           ('guest_port', True)):
+            wrong = copy.deepcopy(self.profile)
+            entry = next(e for e in wrong['network']['endpoints'] if e['class'] == 'inference')
+            entry[key] = value
+            refused('mechanism ssh-remote-forward', wrong)
+        nocloud_seed.check_composition_manifest(self.profile, ('inference',), inference_manifest())
+        nocloud_seed.check_composition_manifest(self.profile, (), None)
+        with self.assertRaises(nocloud_seed.Refused):
+            nocloud_seed.check_composition_manifest(self.profile, ('inference',), None)
+        for extra in ({}, {'bip': '172.17.0.1/16'}, {'bip': '172.18.0.1/16', 'dns': ['172.17.0.1']}):
+            refused('does not carry the inference', manifest=inference_manifest(extra))
+
+    def test_generate_refuses_before_writing(self):
+        """A composition is checked before anything is read from the key or written: the
+        instance directory here does not even exist."""
+        missing = REPO / 'tools' / 'tests' / 'no-such-instance-dir'
+        for manifest, fragment in ((None, 'need a provisioning manifest'),
+                                   (MANIFEST, 'does not carry the inference')):
+            with self.assertRaises(nocloud_seed.Refused) as ctx:
+                nocloud_seed.generate(PROFILE, missing, NAME, missing / 'key.pub', INSTANCE_ID,
+                                      manifest, ('inference',))
+            self.assertIn(fragment, str(ctx.exception))
+        self.assertFalse(missing.exists())
 
 
 if __name__ == '__main__':
