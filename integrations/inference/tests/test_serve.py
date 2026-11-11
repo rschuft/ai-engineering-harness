@@ -19,13 +19,19 @@ IB = S.IB
 
 
 class TestServe(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.upstream = S.FakeUpstream('anthropic-messages')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.upstream.close()
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-inference-serve-'))
         (self.tmp / 'logs').mkdir()
-        self.upstream = S.FakeUpstream('anthropic-messages')
 
     def tearDown(self):
-        self.upstream.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def context(self, raw, provider, wait):

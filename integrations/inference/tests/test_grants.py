@@ -6,13 +6,28 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 import broker_support as S
 
 CATEGORY = 'unit'
 IB = S.IB
+
+
+SHARED: dict = {}
+
+
+def setUpModule():
+    SHARED['dir'] = Path(tempfile.mkdtemp(prefix='aieh-inference-grants-'))
+    SHARED['db'] = SHARED['dir'] / 'integration.sqlite'
+
+
+def tearDownModule():
+    shutil.rmtree(SHARED['dir'], ignore_errors=True)
 
 
 def never(*args, **kwargs):
@@ -26,7 +41,7 @@ class Fixture(unittest.TestCase):
     def setUpClass(cls):
         raw = cls.raw if cls.raw is not None else S.component(
             {family: 'http://127.0.0.1:9' for family in S.FAMILIES})
-        cls.rig = S.Rig(raw, connect=never)
+        cls.rig = S.Rig(raw, connect=never, db=SHARED['db'])
         cls.broker = cls.rig.broker
 
     @classmethod
@@ -128,7 +143,7 @@ class TestIssue(Fixture):
 class TestReadiness(unittest.TestCase):
     def test_with_the_shipped_empty_allowlists_every_issue_is_refused(self):
         upstreams = {family: 'http://127.0.0.1:9' for family in S.FAMILIES}
-        rig = S.Rig(S.component(upstreams, models=()), connect=never)
+        rig = S.Rig(S.component(upstreams, models=()), connect=never, db=SHARED['db'])
         try:
             for family in S.FAMILIES:
                 with self.subTest(family=family):
@@ -146,7 +161,7 @@ class TestReadiness(unittest.TestCase):
         for key, expected in (((S.PROVIDER, S.KEY), {'anthropic-messages': 'FAMILY_NOT_READY',
                                                      'openai-chat': 'FAMILY_NOT_READY', 'openai-responses': None}),
                               (None, {'openai-chat': 'FAMILY_NOT_READY', 'openai-responses': None})):
-            rig = S.Rig(raw, provider_key=key, connect=never)
+            rig = S.Rig(raw, provider_key=key, connect=never, db=SHARED['db'])
             try:
                 for family, code in expected.items():
                     with self.subTest(key=key is not None, family=family):
@@ -257,7 +272,7 @@ class FlakyStore:
 class TestJournalFailure(unittest.TestCase):
     def setUp(self):
         self.switch = {'failing': False}
-        self.rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'}), connect=never,
+        self.rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'}), connect=never, db=SHARED['db'],
                          store_factory=lambda: FlakyStore(S.STORE.open_store(self.rig.db), self.switch))
 
     def tearDown(self):
@@ -325,7 +340,7 @@ class TestJournalFailure(unittest.TestCase):
         self.rig.journal = IB.Journal(lambda: S.STORE.open_store(self.rig.db), self.rig.guard)  # for tearDown
 
     def test_a_broker_without_ports_does_not_start(self):
-        rig = S.Rig({'families': {}}, connect=never)
+        rig = S.Rig({'families': {}}, connect=never, db=SHARED['db'])
         try:
             with self.assertRaises(IB.InferenceError) as caught:
                 rig.broker.start()
@@ -448,7 +463,7 @@ class TestQueryPassFamily(Fixture):
     def setUpClass(cls):
         declarations = IB.load_declarations()
         declarations['openai-chat'] = IB.dataclasses.replace(declarations['openai-chat'], query='pass')
-        cls.rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'}), connect=never)
+        cls.rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'}), connect=never, db=SHARED['db'])
         cls.rig.broker.config = IB.load_config(S.component({'openai-chat': 'http://127.0.0.1:9'}), declarations,
                                                allow_ephemeral=True)
         cls.broker = cls.rig.broker

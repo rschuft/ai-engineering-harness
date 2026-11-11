@@ -197,7 +197,7 @@ class FakeUpstream:
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         self.origin = f'http://127.0.0.1:{self.port}'
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.05},
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01},
                                        daemon=True)
         self.thread.start()
 
@@ -220,13 +220,15 @@ def component(upstreams: dict, *, models=(MODEL_A, MODEL_B, 'syn-no-usage', 'syn
 
 
 class Rig:
-    """One broker over a fixture integration store and audit directory in its own temporary directory. Its
-    clock is settable; connect stands in for connect_upstream when given."""
+    """One broker over a fixture integration store and audit directory in its own temporary directory (or a
+    store shared by the rigs of one test module). Its clock is settable; connect stands in for connect_upstream
+    when given."""
 
-    def __init__(self, raw: dict | None, *, provider_key=(PROVIDER, KEY), connect=None, store_factory=None):
+    def __init__(self, raw: dict | None, *, provider_key=(PROVIDER, KEY), connect=None, store_factory=None,
+                 db: Path | None = None):
         self.tmp = Path(tempfile.mkdtemp(prefix='aieh-inference-'))
         (self.tmp / 'logs').mkdir()
-        self.db = self.tmp / 'integration.sqlite'
+        self.db = db or self.tmp / 'integration.sqlite'   # db: a store several rigs of one module share
         self.clock = Clock()
         self.guard = IB.BrokerGuard()
         self.config = IB.load_config(raw, allow_ephemeral=True)
