@@ -217,9 +217,15 @@ class RequiredTargets(unittest.TestCase):
                                                   '- task: tools:install', '- task: test'])
         self.assertEqual(self.commands('tools:install'), ["- '{{.PYTHON}} -I -B integrations/paths/tools_install.py'"])
 
-    def test_test_runs_every_suite_under_the_tools_interpreter(self):
+    def test_test_runs_the_suites_concurrently_under_the_tools_interpreter(self):
+        # The Owner's direction of 2026-11-11: parallel by default; tools/run_tests.py runs the suites of
+        # test:serial, each in a child of the interpreter that runs it.
         self.assertEqual(self.variables('test'), TOOLS_VARS)
-        commands = self.commands('test')
+        self.assertEqual(self.commands('test'), ["- '{{.PYTHON}} -I -B tools/run_tests.py {{.CLI_ARGS}}'"])
+
+    def test_test_serial_runs_every_suite_under_the_tools_interpreter(self):
+        self.assertEqual(self.variables('test:serial'), TOOLS_VARS)
+        commands = self.commands('test:serial')
         self.assertEqual(commands[0], "- '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'")
         calls = commands[1:]
         self.assertEqual(len(calls), len(tp.select_suites([])) - 1)
@@ -228,7 +234,7 @@ class RequiredTargets(unittest.TestCase):
 
     def test_every_suite_target_resolves_the_tools_interpreter_when_run_alone(self):
         suites = [name for name in self.targets if name.endswith(':test') and name != 'owner-host:test']
-        self.assertEqual(sorted(suites), sorted(call.removeprefix('- task: ') for call in self.commands('test')[1:]))
+        self.assertEqual(sorted(suites), sorted(call.removeprefix('- task: ') for call in self.commands('test:serial')[1:]))
         for name in suites:
             with self.subTest(target=name):
                 self.assertEqual(self.variables(name), TOOLS_VARS)

@@ -121,6 +121,10 @@ class TaskfileSuitesTests(unittest.TestCase):
             tasks:
               test:
                 cmds:
+                  - '{{.PYTHON}} -I -B tools/run_tests.py'
+
+              test:serial:
+                cmds:
                   - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'
                   - task: a:test
 
@@ -152,7 +156,9 @@ class TaskfileSuitesTests(unittest.TestCase):
         with self.assertRaises(tp.ProfileError):
             tp.taskfile_suites('tasks:\n  setup:\n    cmds: []\n')
         with self.assertRaises(tp.ProfileError):
-            tp.taskfile_suites('tasks:\n  test:\n    cmds:\n      - task: b\n  b:\n    cmds: []\n')
+            tp.taskfile_suites('tasks:\n  test:serial:\n    cmds:\n      - task: b\n  b:\n    cmds: []\n')
+        with self.assertRaises(tp.ProfileError):  # the list is test:serial's, not test's
+            tp.taskfile_suites("tasks:\n  test:\n    cmds:\n      - '{{.PYTHON}} -I -B -m unittest discover -s tools/tests -v'\n")
         with self.assertRaises(tp.ProfileError):
             tp.select_suites(['no-such-suite'])
 

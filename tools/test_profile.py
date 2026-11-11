@@ -1,7 +1,8 @@
 """Profile the repository's unittest suites: counted process launches, temporary directories,
 tests and wall time, per test, class, category and suite (plan leaf F-09.1).
 
-The profile runs exactly the suites ``task test`` runs, serially, each in its own child
+The profile runs exactly the suites ``task test`` runs (Taskfile.yml's ``test:serial`` target lists
+them; ``task test`` runs them concurrently, ``tools/run_tests.py``), serially, each in its own child
 process, as ``python -I -B -m unittest discover -s <suite> -v`` would: the child calls the
 same ``unittest.main`` entry point with the same arguments, from the repository root. The
 only addition is an audit hook (``sys.addaudithook``) and a recording test result. The hook
@@ -70,6 +71,8 @@ CHILD_SCHEMA = 'ai-engineering-harness/test-profile-suite/v1'
 CATEGORIES = ('unit', 'contract', 'integration', 'e2e', 'performance')
 COUNTERS = ('launches', 'mkdtemp', 'sockets', 'chdir')
 
+# The Taskfile.yml target that lists the suites of `task test`, one unittest discovery each.
+SUITES_TARGET = 'test:serial'
 _DISCOVER = re.compile(r"^      - '\{\{\.PYTHON\}\} -I -B -m unittest discover -s (\S+) -v'$")
 _TASK_REF = re.compile(r'^      - task: (\S+)$')
 
@@ -488,9 +491,9 @@ def child_main(start_dir, out, discover_only):
 # --------------------------------------------------------------------------- the parent
 
 def taskfile_suites(text):
-    """The suites `task test` runs, in its order, read from Taskfile.yml: each command of
-    the `test` target that is a unittest discovery, directly or through one `task:` call.
-    A suite is named after its directory: `tools/tests` is `tools`, `integrations/X/tests`
+    """The suites `task test` runs, in the order of Taskfile.yml's `test:serial` target, which
+    lists them: each command of that target that is a unittest discovery, directly or through
+    one `task:` call. A suite is named after its directory: `tools/tests` is `tools`, `integrations/X/tests`
     is `X`."""
     blocks, name = {}, None
     for line in text.splitlines():
@@ -502,14 +505,14 @@ def taskfile_suites(text):
             blocks[name].append(line)
         else:
             name = None
-    if 'test' not in blocks:
-        raise ProfileError('Taskfile.yml has no test target')
+    if SUITES_TARGET not in blocks:
+        raise ProfileError(f'Taskfile.yml has no {SUITES_TARGET} target')
 
     def discovers(lines):
         return [m.group(1) for m in map(_DISCOVER.match, lines) if m]
 
     suites = []
-    for line in blocks['test']:
+    for line in blocks[SUITES_TARGET]:
         direct = _DISCOVER.match(line)
         ref = _TASK_REF.match(line)
         if direct:
@@ -527,7 +530,7 @@ def taskfile_suites(text):
                 suite = 'tools'
             suites.append((suite, start_dir))
     if not suites:
-        raise ProfileError('the Taskfile.yml test target runs no unittest discovery')
+        raise ProfileError(f'the Taskfile.yml {SUITES_TARGET} target runs no unittest discovery')
     return suites
 
 
