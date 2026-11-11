@@ -86,6 +86,6 @@ jobs:
           python3 -I -B tools/check_prereqs.py --tier basic
           python3 -I tools/verify_seed.py
           python3 -I tools/verify_seed.py --baseline seed
-          for suite in tools/tests integrations/store/tests integrations/effects/tests integrations/planning/tests integrations/lineage/tests integrations/owner/tests integrations/paths/tests integrations/platform/tests integrations/credentials/tests integrations/gitea/tests integrations/dispatch/tests integrations/repository/tests; do
+          for suite in tools/tests integrations/store/tests integrations/effects/tests integrations/planning/tests integrations/lineage/tests integrations/owner/tests integrations/paths/tests integrations/platform/tests integrations/credentials/tests integrations/gitea/tests integrations/dispatch/tests integrations/repository/tests integrations/inference/tests; do
             python3 -I -B -m unittest discover -s "$suite" -v
           done

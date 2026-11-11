@@ -14,6 +14,11 @@ from pathlib import Path
 
 import broker_support as S
 
+try:
+    import yaml
+except ImportError:  # the tools set provides it (task tools:install)
+    yaml = None
+
 CATEGORY = 'unit'
 IB = S.IB
 
@@ -226,6 +231,22 @@ class TestDecision0009Loader(unittest.TestCase):
         _, _, components = IB.paths.validate_config({'version': 1, 'components': {'inference_broker': raw}})
         self.assertEqual(IB.load_config(components['inference_broker']).families['openai-chat'].upstream.port,
                          11434)
+
+    @unittest.skipIf(yaml is None, 'PyYAML is not importable: run task tools:install')
+    def test_the_example_configuration_shows_the_shipped_defaults(self):
+        """example_config.yml sets nothing, and its commented component lines, uncommented as the template
+        says, are exactly the shipped defaults: no port, no provider, no upstream, no model."""
+        text = (S.REPO / 'example_config.yml').read_text(encoding='utf-8')
+        self.assertIsNone(yaml.safe_load(text)['components'])
+        lines = []
+        for line in text.splitlines():
+            stripped = line.lstrip(' ')
+            if stripped.startswith('#') and stripped[1:2].isalpha():
+                line = line[:len(line) - len(stripped)] + stripped[1:]
+            lines.append(line)
+        _, _, components = IB.paths.validate_config(yaml.safe_load('\n'.join(lines) + '\n'))
+        self.assertEqual(list(components), [IB.COMPONENT])
+        self.assertEqual(IB.load_config(components[IB.COMPONENT]), IB.load_config(None))
 
 
 class TestConfigCommand(unittest.TestCase):

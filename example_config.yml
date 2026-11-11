@@ -48,5 +48,17 @@ paths:
   # The execution-guest state root (decision 0003, act A3), not relocated:
   # guest_state: /absolute/path/named/by/the/Owner
 
-# Per-component settings, each validated by its own component. None is defined yet.
+# Per-component settings, each validated by its own component. Each commented line shows the
+# shipped default: uncomment it and change the value to set it.
 components:
+  # The inference broker (integrations/inference/README.md). Shipped empty: no listener port, so it
+  # does not serve, and every declared family (anthropic-messages, openai-responses, openai-chat)
+  # has no provider, no upstream and no model, so every token issue is refused. A family's provider
+  # key is never set here: it is held by the credential custody (inference_broker.py credential-set).
+  #inference_broker:
+    #control_port:                # no default; 1024-65535, required to serve
+    #inference_port:              # no default; 1024-65535, different from control_port
+    #max_request_bytes: 33554432  # 32 MiB (1 to 256 MiB)
+    #max_ttl_s: 86400             # the longest token lifetime, one day (at most 7 days)
+    #upstream_timeout_s: 600      # seconds (1 to 3600)
+    #families: {}                 # per declared family: provider, upstream (an origin) and models
