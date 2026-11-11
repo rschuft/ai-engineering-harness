@@ -410,6 +410,42 @@ dropped and `credential()` refuses.
 its Credential Manager (decision 0013 point 6). Only fakes have been used: **not yet verified** live
 ([`evidence/E-01.3.3-dispatcher-custody.md`](../../evidence/E-01.3.3-dispatcher-custody.md)).
 
+## The containment observation (S-03.3, slice 1)
+
+Plan leaf S-03.3's proof as amended on 2026-11-11 (the Owner's decision on OA-19): the ACP coding provider "and
+every process it starts, including any sub-agent or delegated session, run in the execution container as
+descendants of the inner server under the same limits, shown by the process inventory and an independent docker
+inspect, and no unexpected conversation appears on the outer server", and the evidence distinguishes the
+provider's own delegation from OpenHands' `start_child_conversation` route. The slice plan is
+[`evidence/S-03.3-slice-plan.md`](../../evidence/S-03.3-slice-plan.md).
+[`conversation_containment.py`](conversation_containment.py) is one standard-library file, sent to the guest as a
+file and run there by `python3`; its verdicts run on the host. Built and tested offline only: **not yet verified**
+in a guest, and its wiring into `tools/guest.py` is a later slice.
+
+| Vantage | Command | What it lists |
+|---|---|---|
+| Inside the conversation container, as its user (through the inner server's bash route, as the job probe runs) | `collect container` | Every process of the container's PID namespace: pid, parent, executable, `argv0`'s last segment, the first absolute path among the next three arguments (the script an interpreter runs) and the count; `Uid`, `Gid`, `Groups`, the five capability sets, `NoNewPrivs`, `Seccomp`; the cgroup v2 path. The listening TCP sockets with their owning pids (from `/proc/<pid>/fd`). The container's `memory.max`, `cpu.max` and `pids.max` |
+| The guest root | `collect host --pid <State.Pid>` | Every host process in the PID namespace of the container's init (`docker container inspect`'s `State.Pid`), with the same fields and its namespaced pids (`NSpid`); any process outside that namespace whose parent is inside; the limits of the init's cgroup |
+
+The output is one line, `AIEH-CONTAINMENT-JSON ` and the snapshot (`ai-engineering-harness/containment/snapshot/v1`).
+No other argument value, no environment, file content or socket payload is read. A process that ends while it is
+read is counted as `vanished`; a file that cannot be read is recorded as an error, never as a value.
+
+| Verdict | Fails when |
+|---|---|
+| `container_verdict(snapshot, expected=)` | PID 1 is missing or has a parent; a process other than PID 1 has parent 0 (entered from outside the namespace); not exactly one process owns the inner server's listener (port 8000); a process lacks the expected user (all four `Uid` and `Gid` values), PID 1's `Groups`, empty capability sets, `NoNewPrivs` 1 or `Seccomp` 2, or its status is unreadable; a process is outside PID 1's cgroup; a process does not descend from the inner server, or its chain is lost (the inner server's own ancestors, and the collector's own chain, which is still judged for identity and cgroup, excepted); an `npx` or `npm` process exists; the container's limits are not the admitted caps; with a provider expected, its adapter is not a direct child of the inner server (`argv0` `node`, the script `/acp-node/bin/claude-agent-acp` or `codex-acp`) or its executable is not `/acp-node/bin/node` |
+| `host_verdict(snapshot, inspect=, container=, expected=)` | the snapshot is not of the inspected init; `HostConfig` `Memory`, `NanoCpus` or `PidsLimit`, or the cgroup's files, are not the admitted caps; a member is outside the init's cgroup, lacks the identity or has no namespaced pid; a process outside the namespace has a parent inside; with a provider expected, an adapter is not seen from the guest root with the same executable (a transient provider process that ended between the two views is listed as `provider_vanished`, not failed) |
+| `sets_verdict(before, after, conversation_id=)` | a container or an **outer**-server conversation appeared during the turn; an **inner**-server conversation appeared whose `parent_conversation_id` is not the observed conversation. A new inner conversation whose parent is the observed one is classified as started through the children route (`delegation.children_route`), the route `start_child_conversation` uses, so the record distinguishes it from the provider's own processes (`provider_tree`) |
+
+`expected` holds the profile's job confinement (`uid`, `gid`, `capabilities`, `no_new_privs`, `seccomp`), the
+admitted caps (`expected_limits(memory, cpus, pids_limit)`: Docker's `--memory`, `--cpus` and `--pids-limit` as
+cgroup v2 values and as `HostConfig` values) and `provider` (`claude-code`, `codex`, or `None`). The adapter
+identities come from the pinned image's files (the image adapter check), not from a running provider; a provider
+whose real process shape differs is reported as not observed, with the inner server's children listed, never
+passed. Every verdict fails closed, and a snapshot, inspection or set that is not of its shape raises
+`ContainmentError` (`SNAPSHOT_INVALID`, `EXPECTED_INVALID`, `INSPECT_INVALID`, `SETS_INVALID`, `LIMITS_INVALID`,
+`NO_SNAPSHOT`, `MODE_INVALID`, `TARGET_INVALID`) instead of being judged.
+
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
 ```json
@@ -585,6 +621,19 @@ times wherever nothing may be called. The positive control asserts exactly one `
 | `CustodyTests` (contract) | the checked-in profile declares the bootstrap custody; another group, mode, owner, directory, path or login, or none, is `KEY_CUSTODY_UNDECLARED`; a channel of another login is `LOGIN_MISMATCH`, and `tools/guest.py`'s channel login is `Ssh.run`'s default; `for_instance` builds the instance's `Ssh` and `GuestApi` and refuses an unprovisioned instance |
 | `ProbePairTests` | a fake ssh runs the real API probe locally against a loopback fake Agent Server: the key is read from the fake guest's file and sent on the guest side only; it is never on an ssh command line, in the script, an answer, a record or a refusal; the host process never opens the host custody copy that holds the same synthetic key (negative controls: the open spy sees a read of it, and the text check finds a planted key); an answer echoing the key is redacted in the guest and refused |
 | `DispatchOverTheProbePairTests` | `dispatch` end to end over the live transport and the probe pair: `GET /server_info` and the create, each with the key on the guest side only, the attempt `confirmed` |
+
+[`tests/test_conversation_containment.py`](tests/test_conversation_containment.py) (S-03.3 slice 1, unit), over an
+in-memory `/proc` and cgroup tree shaped as the pinned image's processes are expected to be (the inner server, the
+Claude Code adapter, its CLI and a shell it started, the collector's chain through the bash route):
+
+| Class | What it shows |
+|---|---|
+| `Parsers` | `stat` read after the last parenthesis, `status` fields normalized, the cgroup v2 line, the argument summary that keeps no value but a path, the IPv4 and IPv6 listener tables |
+| `Collection` | both vantages' snapshots; processes that end while read are counted, unreadable files recorded as errors; a child outside the namespace with a parent inside is listed; the host target's errors |
+| `ContainerVerdict` | the passing view; negative controls, one fact each: the adapter missing, elsewhere or with another executable, an orphan, an entered process, a lost parent or a loop, each identity field, a cgroup, an `npx` or `npm` start, a missing or ambiguous inner server, the limits, the init; the collector's chain named but still judged |
+| `HostVerdict` | the passing view; another target, the inspected caps, the cgroup's files, a member's cgroup or identity, an escaped child, a missing namespaced pid, an adapter not seen or with another executable, two host processes for one inner pid; a transient process that ended between the views is listed, not failed |
+| `SetsVerdict` | no new container, outer conversation or foreign inner conversation; a child through the children route classified, not failed |
+| `Shapes`, `CommandLine` | malformed snapshots, expectations, limits, sets and outputs refused, not judged; `collect` prints one result line and refuses bad arguments; the file imports only the standard library |
 
 [`tests/test_attempt_tokens.py`](tests/test_attempt_tokens.py) (E-01.3.3), on the same fixture: attempts
 are dispatched through the fake Agent Server, then delivered from an in-memory credential provider

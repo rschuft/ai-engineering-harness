@@ -124,7 +124,7 @@ def parse_cgroup(text: str):
 def parse_cmdline(data: bytes) -> list:
     """The argument vector of /proc/<pid>/cmdline (NUL-separated, NUL-terminated)."""
     parts = data.split(b'\0')
-    if parts and parts[-1] == b'':
+    if parts[-1] == b'':
         parts.pop()
     return [p.decode('utf-8', 'replace') for p in parts]
 
@@ -412,9 +412,8 @@ def _identity_problems(p: dict, expected: dict, reference: dict) -> list:
     return problems
 
 
-def _check(checks: list, name: str, ok: bool, observed=None) -> bool:
+def _check(checks: list, name: str, ok: bool, observed=None) -> None:
     checks.append({'check': name, 'ok': bool(ok), 'observed': observed})
-    return bool(ok)
 
 
 def _ancestors(pid: int, parent: dict, limit: int) -> tuple:
@@ -506,11 +505,9 @@ def container_verdict(snapshot, *, expected: dict) -> dict:
     # The collector's own chain (started through the bash route for this observation) is judged for identity and
     # cgroup above, and named here, but not as a process of the attempt.
     me = snapshot.get('self')
-    collector = []
-    if me in by_pid:
-        mine = [me] + _ancestors(me, parent, len(processes))[0]
-        collector = [pid for pid in mine if pid not in (1, inner) and pid not in inner_chain]
-    out['collector'] = [_summary(by_pid[pid]) for pid in collector if pid in by_pid]
+    mine = [me] + _ancestors(me, parent, len(processes))[0]
+    collector = [pid for pid in mine if pid in by_pid and pid not in (1, inner) and pid not in inner_chain]
+    out['collector'] = [_summary(by_pid[pid]) for pid in collector]
     for p in processes:
         if p['pid'] in (1, inner) or p['pid'] in inner_chain or p['pid'] in collector:
             continue

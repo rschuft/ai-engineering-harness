@@ -134,7 +134,8 @@ TCP = ('  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrn
        '   0: 0100007F:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000   999        0 5001 1\n'
        '   1: 0100007F:A1B2 0100007F:1F40 01 00000000:00000000 00:00000000 00000000   999        0 5002 1\n')
 TCP6 = ('  sl  local_address                         remote_address                        st\n'
-        '   0: 00000000000000000000000001000000:0BB8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000   999        0 7001 1\n')
+        '   0: 00000000000000000000000001000000:0BB8 00000000000000000000000000000000:0000'
+        ' 0A 00000000:00000000 00:00000000 00000000   999        0 7001 1\n')
 
 
 def container_fs(processes=None, *, socket_owner=8):
@@ -429,8 +430,9 @@ class ContainerVerdict(unittest.TestCase):
         self.assertFails(self.verdict(fs), 'ancestry', 'cgroup', 'identity')
 
     def test_identity_each_field(self):
-        cases = {'uid': status_text(uid=0), 'gid': status_text(gid=0), 'cap': status_text(cap='0000000000000400'),
-                 'nnp': status_text(nnp='0'), 'seccomp': status_text(seccomp='0'),
+        cases = {'uid': status_text(uid=0), 'gid': status_text().replace('Gid:\t989\t', 'Gid:\t0\t'),
+                 'cap': status_text(cap='0000000000000400'), 'nnp': status_text(nnp='0'),
+                 'seccomp': status_text(seccomp='0'),
                  'groups': status_text().replace('Groups:\t989 ', 'Groups:\t989 999')}
         for name, text in cases.items():
             with self.subTest(field=name):
@@ -749,6 +751,119 @@ class SetsVerdict(unittest.TestCase):
         for conv in ('', None, 5):
             with self.assertRaises(CC.ContainmentError):
                 CC.sets_verdict(sets(), sets(), conversation_id=conv)
+
+
+class EdgeCases(unittest.TestCase):
+    """Edges each verdict and parser must hold (several added from the slice's mutation check)."""
+
+    def test_constants(self):
+        self.assertEqual((CC.ARG_MAX, CC.SCRIPT_SCAN, CC.INNER_PORT, CC.CPU_PERIOD), (256, 4, 8000, 100000))
+        self.assertEqual(CC.LIMIT_FILES, ('memory.max', 'cpu.max', 'pids.max'))
+
+    def test_error_carries_code_and_detail(self):
+        exc = CC.ContainmentError('SETS_INVALID', 'why')
+        self.assertEqual((exc.code, exc.detail, str(exc)), ('SETS_INVALID', 'why', 'SETS_INVALID: why'))
+
+    def test_stat_edges(self):
+        self.assertEqual(CC.parse_stat('42 (x) S 7'), ('S', 7))
+        with self.assertRaises(ValueError):
+            CC.parse_stat('7 8 9')
+
+    def test_status_ignores_lines_without_a_colon(self):
+        st = CC.parse_status(status_text() + 'Groups\nSeccomp\n')
+        self.assertEqual((st['Groups'], st['Seccomp']), ('989', '2'))
+
+    def test_ipv6_address_groups(self):
+        row = '   0: 000080FE00000000FFB3020229831EFE:0050 0 0A 0 0 0 0 0 0 1\n'
+        self.assertEqual(CC.parse_net_tcp('header\n' + row)[0]['address'], 'fe80:0:0:0:202:b3ff:fe1e:8329')
+
+    def test_only_socket_links_are_owners(self):
+        fs = container_fs()
+        fs.links['/proc/30/fd/5'] = 'pipe:x:[5001]'
+        fs.links['/proc/30/fd/6'] = 'socket:[5001)'
+        self.assertEqual(container_snapshot(fs)['listeners'], [{'address': '127.0.0.1', 'port': 8000, 'pids': [8]}])
+
+    def test_default_file_system(self):
+        fake = container_fs()
+        with mock.patch.object(CC, 'OsFs', return_value=fake):
+            self.assertEqual(CC.collect('container', self_pid=SELF), container_snapshot(fake))
+
+    def test_host_target_one_and_vanished(self):
+        snap = CC.collect('host', fs=host_fs(), target_pid=1)
+        self.assertEqual(sorted(p['pid'] for p in snap['processes']), [1, 4090])
+        fs = host_fs()
+        del fs.files[f'/proc/{HOST_BASE + 22}/cmdline']
+        snap = host_snapshot(fs)
+        self.assertEqual(snap['vanished'], 1)
+        self.assertNotIn(HOST_BASE + 22, [p['pid'] for p in snap['processes']])
+
+    def test_listeners_absent_or_owned_by_no_listed_process(self):
+        snap = container_snapshot()
+        snap['listeners'] = None
+        self.assertIn('inner server', failed(CC.container_verdict(snap, expected=expected())))
+        snap = container_snapshot()
+        snap['listeners'] = [{'address': '127.0.0.1', 'port': 8000, 'pids': [77]}]
+        v = CC.container_verdict(snap, expected=expected())
+        self.assertIn('inner server', failed(v))
+        self.assertIsNone(v['inner_server'])
+
+    def test_no_cgroup_anywhere_fails(self):
+        fs = container_fs()
+        for pid in CONTAINER:
+            fs.files[f'/proc/{pid}/cgroup'] = b'1:name=systemd:/\n'
+        self.assertIn('cgroup', failed(CC.container_verdict(container_snapshot(fs), expected=expected())))
+        fs = host_fs()
+        for pid in CONTAINER:
+            fs.files[f'/proc/{HOST_BASE + pid}/cgroup'] = b'1:name=systemd:/\n'
+        v = CC.host_verdict(host_snapshot(fs), inspect=copy.deepcopy(INSPECT), container=container_snapshot(),
+                            expected=expected())
+        self.assertIn('members', failed(v))
+
+    def test_host_verdict_checks_its_expectations_and_inspection(self):
+        with self.assertRaises(CC.ContainmentError) as cm:
+            CC.host_verdict(host_snapshot(), inspect=INSPECT, container=container_snapshot(), expected={})
+        self.assertEqual(cm.exception.code, 'EXPECTED_INVALID')
+        with self.assertRaises(CC.ContainmentError) as cm:
+            CC.host_verdict(host_snapshot(), inspect=None, container=container_snapshot(), expected=expected())
+        self.assertEqual(cm.exception.code, 'INSPECT_INVALID')
+        with self.assertRaises(CC.ContainmentError) as cm:
+            CC.container_verdict(container_snapshot(), expected=expected(limits={'cgroup': [], 'inspect': {}}))
+        self.assertEqual(cm.exception.code, 'EXPECTED_INVALID')
+
+    def test_cross_view_compares_every_provider_process(self):
+        fs = host_fs()
+        fs.links[f'/proc/{HOST_BASE + 21}/exe'] = '/usr/bin/other'
+        v = CC.host_verdict(host_snapshot(fs), inspect=copy.deepcopy(INSPECT), container=container_snapshot(),
+                            expected=expected())
+        self.assertEqual(failed(v), ['cross-view'])
+        self.assertEqual(v['provider_seen'], [20, 22])
+
+    def test_cross_view_needs_an_adapter_and_takes_a_lone_one(self):
+        procs = {k: v for k, v in CONTAINER.items() if k not in (21, 22)}
+        v = CC.host_verdict(host_snapshot(host_fs(procs)), inspect=copy.deepcopy(INSPECT),
+                            container=container_snapshot(container_fs(procs)), expected=expected())
+        self.assertTrue(v['ok'], failed(v))
+        self.assertEqual(v['provider_seen'], [20])
+        procs = {k: v for k, v in CONTAINER.items() if k not in (20, 21, 22)}
+        v = CC.host_verdict(host_snapshot(host_fs(procs)), inspect=copy.deepcopy(INSPECT),
+                            container=container_snapshot(container_fs(procs)), expected=expected())
+        self.assertEqual(failed(v), ['cross-view'])
+
+    def test_a_ten_field_listener_row(self):
+        row = '   0: 0100007F:1F40 00000000:0000 0A 0:0 0:0 0 999 0 5001\n'
+        self.assertEqual(CC.parse_net_tcp('header\n' + row),
+                         [{'inode': '5001', 'address': '127.0.0.1', 'port': 8000}])
+
+    def test_inner_rows_must_be_a_list(self):
+        with self.assertRaises(CC.ContainmentError) as cm:
+            CC.sets_verdict(sets(), dict(sets(), inner={}), conversation_id=CONV)
+        self.assertEqual(cm.exception.code, 'SETS_INVALID')
+
+    def test_output_is_canonical(self):
+        out = io.StringIO()
+        with mock.patch.object(CC, 'collect', return_value={'b': 1, 'a': [1, 2]}):
+            CC.main(['collect', 'container'], out=out)
+        self.assertEqual(out.getvalue(), CC.MARKER + '{"a":[1,2],"b":1}\n')
 
 
 class CommandLine(unittest.TestCase):
