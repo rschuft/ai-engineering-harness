@@ -785,8 +785,7 @@ class Launcher(RepoCase):
                                                         'import sys; sys.stdin.readline(); print("done")'])
         tree = self.tree(argv, stdin=subprocess.PIPE)
         child = Watch(self, read_pid(pidfile))
-        if os.name == 'nt':
-            self.assertTrue(child.handle, f'the child {child.pid} ended before it was watched')
+        self.assertTrue(child.alive(), f'the child {child.pid} ended before it was watched')
         out, _ = tree.process.communicate(input=b'go\n', timeout=adapter.TOOL_TIMEOUT_S)
         self.close(tree)
         self.assertEqual((tree.process.returncode, out.strip()), (0, b'done'))
