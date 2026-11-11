@@ -783,14 +783,19 @@ Filtering proxy (planned, Owner act A-4), allowed: POST `/api/actions/ping.v1.Pi
 
 ## Test budgets (F-09.1)
 
-[`test-budgets.json`](test-budgets.json) holds the enforceable test budgets, per category,
-per suite and in total, derived from the measured baseline in
-[`evidence/test-profile/`](../evidence/test-profile/): exact counters (at least the
-baseline's tests, at most its launches and `mkdtemp` calls) and median wall times with a
-tolerance. `task test:budget` (`python -I -B tools/check_test_budget.py check --run`)
-checks them; it is an acceptance obligation at every leaf acceptance and at release, never a
-hook. Changing the file is a reviewed change with the profile that justifies it
-(`check_test_budget.py propose`). The full description is in
+Since the Owner's direction of 2026-11-11 (test runtime is diagnostic, not a gate),
+[`test-budgets.json`](test-budgets.json) holds no budgets: it records the measurements of the
+reference profile in [`evidence/test-profile/`](../evidence/test-profile/) (tests, launches,
+`mkdtemp` calls and median wall times, per category, per suite and in total) and the Owner's
+investigation signals (a median roughly 50% above its measurement, a full suite above five
+minutes). `task test:budget` (`python -I -B tools/check_test_budget.py check --run`) reports
+them as notes and never fails on them; it fails on failing, removed or newly skipped tests
+(against the recorded test set,
+[`evidence/test-profile/test-ids.json`](../evidence/test-profile/test-ids.json)), on a class
+without a valid category and on a `unit` class that is not isolated. It is an acceptance
+obligation at every leaf acceptance and at release, never a hook. New tests need no change to
+either file; the recorded set is re-recorded only when tests are deliberately removed, renamed or
+skipped. The full description is in
 [docs/development.md, Testing](../docs/development.md#testing).
 
 ## Sources

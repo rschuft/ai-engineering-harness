@@ -32,15 +32,22 @@ verifies the seed in both modes, with the standard library only and offline. It 
 the hash-locked Python tools set (`task tools:install`: PyYAML, Dulwich, urllib3 and keyring, wheels only,
 under the [managed data root](#managed-data-root); it downloads from PyPI once per lock and
 reuses the verified wheels afterwards), and runs, under that set's interpreter, the tool tests, the integration store
-tests, the effects store tests, the planning adapter tests, the lineage tests, the Owner decision recorder tests, the managed data root tests, the lifecycle contract and platform adapter tests, the credential provider tests, the host Gitea tests, the dispatch tests (input resolution, create admission and the native conversation create) and the repository-access contract tests. The tests run serially; the whole of `setup` took 156 s from PowerShell on the verification host at F-10.1, with the tools set already downloaded ([Testing](#testing) has the measurements). Before your first commit, also run
+tests, the effects store tests, the planning adapter tests, the lineage tests, the Owner decision recorder tests, the managed data root tests, the lifecycle contract and platform adapter tests, the credential provider tests, the host Gitea tests, the dispatch tests (input resolution, create admission and the native conversation create) and the repository-access contract tests. The suites run concurrently, each in its own process (`task test`; `task test:serial` runs them one after another); at F-10.1, when they ran serially, the whole of `setup` took 156 s from PowerShell on the verification host, with the tools set already downloaded ([Testing](#testing) has the measurements). Before your first commit, also run
 `task hooks:install` once per clone
-(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the sixteen commands it wraps:
+(see [Publication-safety gate](#publication-safety-gate)). Without Task, run the five commands it wraps:
 
 ```
 python -I -B tools/check_prereqs.py --tier basic
 python -I tools/verify_seed.py
 python -I tools/verify_seed.py --baseline seed
 python -I -B integrations/paths/tools_install.py
+<tools python> -I -B tools/run_tests.py
+```
+
+The last runs, concurrently, the thirteen suite commands that `task test:serial` runs one after
+another (the same tests, serially):
+
+```
 <tools python> -I -B -m unittest discover -s tools/tests -v
 <tools python> -I -B -m unittest discover -s integrations/store/tests -v
 <tools python> -I -B -m unittest discover -s integrations/effects/tests -v
@@ -195,14 +202,15 @@ Only what is listed as verified has been exercised.
 
 | Task target | Command without Task | Network | Result |
 |---|---|---|---|
-| `setup` | the sixteen commands in [Quick start](#quick-start) | yes (PyPI, once per lock: `tools:install`) | Supported setup command: the basic-tier checks (offline), then `tools:install` and `test` under the tools interpreter. |
+| `setup` | the five commands in [Quick start](#quick-start) | yes (PyPI, once per lock: `tools:install`) | Supported setup command: the basic-tier checks (offline), then `tools:install` and `test` under the tools interpreter. |
 | `qualify` | `setup`, then `prereqs:components`, then `resolve` with a new temporary `WORK`, then `dev:install`, `test:all` and `hooks:verify` | yes | Full qualification smoke run, and the release run of the tests: the parallel runner, the Owner host's Vitest tests when Node.js 24 or later is present, and the gate's nested whole-tool-suite rerun. Needs the [publication-safety gate](#publication-safety-gate) installed. |
 | `prereqs` | `python -I -B tools/check_prereqs.py --tier basic` | no | Exit 0 when met. |
 | `prereqs:components` | `python -I -B tools/check_prereqs.py --tier components` | no | Reuses the resolver's own prerequisite check. |
 | `prereqs:inventory` | `python -I -B tools/check_prereqs.py --tier inventory` | no | Checks the SBOM scan's host platform. |
 | `verify` | `python -I tools/verify_seed.py` | no | Working tree against `SEED_MANIFEST.json`. Needs no git. |
 | `verify:baseline` | `python -I tools/verify_seed.py --baseline seed` | no | The original import, strictly, from git history. |
-| `test` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `owner:test`, `paths:test`, `platform:test`, `credentials:test`, `gitea:test`, `dispatch:test`, `repository:test` and `inference:test`, each of which runs under `<tools python>` too (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, Owner decision recorder tests, managed data root tests, lifecycle contract and platform adapter tests, host Gitea tests, dispatch resolution and admission tests, repository-access contract tests and inference broker tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
+| `test [-- --jobs N --suite NAME]` | `<tools python> -I -B tools/run_tests.py [--jobs N] [--suite NAME]` | no | [Testing](#testing): every suite of `test:serial` concurrently (by default all at once, at most one per processor), each in its own child process of `<tools python>` with an empty data root of its own (`AIEH_DATA_ROOT`) and `PYTHONDONTWRITEBYTECODE=1`, started with the no-window helper's flags; prints each suite's output as it ends, then each suite's result and wall time and the run's wall time, as information. Exit 0 when every suite passed, 1 otherwise, 2 could not run. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
+| `test:serial` | `<tools python> -I -B -m unittest discover -s tools/tests -v`, then `store:test`, `effects:test`, `planning:test`, `lineage:test`, `owner:test`, `paths:test`, `platform:test`, `credentials:test`, `gitea:test`, `dispatch:test`, `repository:test` and `inference:test`, each of which runs under `<tools python>` too (`<tools python>`: what `python -I -B integrations/paths/tools_install.py --python` prints) | no | Tool tests, integration store tests, effects store tests, planning adapter tests, lineage tests, Owner decision recorder tests, managed data root tests, lifecycle contract and platform adapter tests, host Gitea tests, dispatch resolution and admission tests, repository-access contract tests and inference broker tests (stdlib `unittest`), all under the Python tools set's interpreter, so that PyYAML and Dulwich are present. Needs `tools:install` (which `setup` runs); fails, naming it, otherwise. |
 | `test:profile [-- --runs N --out FILE --compact-out FILE --suite NAME]` | `<tools python> -I -B tools/test_profile.py run [options]` | no | [Testing](#testing): profiles the `test` suites serially, under the tools interpreter, and counts each test's and class's process launches, temporary directories, sockets and `chdir` calls, by category and suite; writes the profile to a new temporary directory. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `test:categories [-- --list]` | `<tools python> -I -B tools/test_profile.py categories [--list]` | no | Checks that every test class declares a valid category, under the tools interpreter: the test modules it imports need the Python tools set (the credential provider tests import keyring). Imports the test modules; runs no test. Needs `tools:install`. |
 | `dev:install` | `python -I -B integrations/paths/tools_install.py --set python-dev-tools` | yes (PyPI) | Installs the hash-locked dev tools venv (pytest, pytest-xdist and their dependencies, and the Python tools set: PyYAML, Dulwich, urllib3 and keyring with its closure, with the tools lock's hashes, [`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt)), wheels only, under the managed data root; prints its interpreter. `--set python-dev-tools --python` prints that interpreter for the current lock, creating nothing, and exits 1 when it is not installed. Not part of `setup`. |
@@ -210,7 +218,7 @@ Only what is listed as verified has been exercised.
 | `test:fast [-- ARGS]` | the same with `-m "unit or contract"` | no | The inner loop: `unit` and `contract` tests in parallel. |
 | `test:component [-- ARGS]` | the same with `-m "contract or integration"` | no | The boundary: `contract` and `integration` tests in parallel. |
 | `test:all [-- ARGS]` | the same with `-m "not e2e"`, then `owner-host:test:if-node` | no | Every suite of `test` but the live `e2e` classes, in parallel on at most 8 processes, then the Owner host's Vitest tests when Node.js 24 or later is present. Needs `dev:install` (and `owner-host:install` with Node.js 24). |
-| `test:budget [-- --counters-only]` | `<tools python> -I -B tools/check_test_budget.py check --run [--counters-only]` | no | **Acceptance obligation** at every leaf acceptance and release, never in a hook: profiles three serial runs under the tools interpreter and checks them against [`policy/test-budgets.json`](../policy/test-budgets.json). Exit 0 PASS, 1 FAIL, 2 could not run. |
+| `test:budget [-- --counters-only]` | `<tools python> -I -B tools/check_test_budget.py check --run [--counters-only]` | no | **Acceptance obligation** at every leaf acceptance and release, never in a hook: profiles three serial runs (one with `--counters-only`) under the tools interpreter and checks them against the recorded test set ([`evidence/test-profile/test-ids.json`](../evidence/test-profile/test-ids.json)): failing, removed or newly skipped tests, categories and unit isolation block; wall times and counts against [`policy/test-budgets.json`](../policy/test-budgets.json) are notes only. Exit 0 PASS, 1 FAIL, 2 could not run. |
 | `store:test` | `<tools python> -I -B -m unittest discover -s integrations/store/tests -v` | no | [Integration store](#integration-store) tests: real processes against one SQLite file, including crash, restart and concurrent-admission races; about fifteen seconds. |
 | `store:init DB=<path>` | `python -I -B integrations/store/integration_store.py init --db <path>` | no | Creates or migrates the integration store at an explicit path and prints a JSON summary. Idempotent. |
 | `store:path` | `python -I -B integrations/store/integration_store.py default-path` | no | Prints the default trusted-host store location. Creates nothing. |
@@ -321,9 +329,16 @@ items.
 
 The tests are standard-library `unittest` suites. Each lives beside the code it tests:
 `tools/tests/` for the tools and `integrations/<component>/tests/` for each integration.
-`task test` runs them serially, one `<tools python> -I -B -m unittest discover -s <suite> -v`
-per suite, in the order of the `test` target in `Taskfile.yml`, under the Python tools set's
-interpreter (`tools_install.py --python`; [Tool tiers](#tool-tiers)). Live suites against installed
+`task test` runs them concurrently (`tools/run_tests.py`; the Owner's direction of 2026-11-11:
+parallel by default wherever the tests are deterministic and independent): one
+`<tools python> -I -B -m unittest discover -s <suite> -v` per suite, the suites of the
+`test:serial` target in `Taskfile.yml`, under the Python tools set's interpreter
+(`tools_install.py --python`; [Tool tiers](#tool-tiers)). Each suite runs in its own process with
+an empty managed data root of its own (`AIEH_DATA_ROOT`), so that suites share no process, data
+root or output; each stops the processes it starts, and an interrupted run kills the suites still
+running. The tests and their outcomes are those of the serial run: `task test:serial` runs the
+same commands one after another, which is also what the profile below runs. Every suite is
+independent of the others, so none is kept serial. Live suites against installed
 tools or services are opt-in through their environment variables and are skipped, counted,
 otherwise.
 
@@ -370,32 +385,56 @@ medians, and fails when a counter or an outcome differs between runs. `python -I
 tools/test_profile.py compare --profile <full profile>` runs the plain unittest commands
 without the profiler and fails unless they give the same test ids and outcomes.
 
-**Budgets.** [`policy/test-budgets.json`](../policy/test-budgets.json) holds the enforceable
-budgets, per category, per suite and in total, from the measured baseline in
-[`evidence/test-profile/`](../evidence/test-profile/): exact counters (at least the
-baseline's tests; at most its launches and `mkdtemp` calls) and the median wall time of
-three serial runs with a 30% tolerance (never less than half a second of slack, for
-sub-second scopes). `task test:budget` (`<tools python> -I -B tools/check_test_budget.py check
---run`) profiles three runs under the tools interpreter and checks them; it fails on a failing or uncategorized test, a
-`unit` class that launches, opens a socket or changes directory, a counter above its budget,
-fewer tests, a median above its tolerance, or a suite or category the budgets do not name.
-Counts below budget pass and are reported. `python -I -B tools/check_test_budget.py propose
---profile <file>` prints the budgets a profile implies; changing the budget file is a
-reviewed change with the profile that justifies it, never automatic. The counters do not
+**Runtime is diagnostic, not a gate.** The Owner's direction of 2026-11-11 (quoted in
+[`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md), Decisions) retired the 150 s
+serial-suite requirement, the per-suite and per-category wall-clock ceilings and the exact
+launch and `mkdtemp` budgets as blockers of ordinary work. Test runtime and process counts are
+measured and reported as diagnostic information, never rebaselined per change. Investigate a
+significant, sustained regression, not a small increase from legitimate new tests: roughly 50%
+above a comparable measurement, or a full suite above five minutes, are investigation signals,
+not thresholds that block work. During development, run the affected suites; run the applicable
+broader suite at acceptance and release gates.
+
+**Recorded test set.** What does block, besides a failing test, is a test that disappears or
+starts to skip. [`evidence/test-profile/test-ids.json`](../evidence/test-profile/test-ids.json)
+records every suite's test ids and the ids that were skipped when it was recorded (from a full
+profile, with an empty data root). New tests need no change to it. It changes only in a reviewed
+change that removes, renames or skips tests deliberately: re-record it with `python -I -B
+tools/check_test_budget.py record --profile <full profile>` (a full profile is what
+`tools/test_profile.py run --out <file>` writes).
+
+**Budgets.** [`policy/test-budgets.json`](../policy/test-budgets.json) keeps its name but no
+longer holds budgets: it records the measurements of the reference profile in
+[`evidence/test-profile/`](../evidence/test-profile/) (tests, launches, `mkdtemp` calls and the
+median wall time of three serial runs, per category, per suite and in total) and the Owner's two
+investigation signals. `task test:budget` (`<tools python> -I -B tools/check_test_budget.py check
+--run`) profiles three runs under the tools interpreter and checks them. It fails on a failing
+or erroring test, a module that does not import, a test or outcome that differs between runs, a
+class without a valid category, a `unit` class that launches, opens a socket or changes
+directory, a recorded test that no longer runs, a recorded suite that is missing, and a skip the
+recorded set does not record. Everything else is a note: counts and wall medians that differ
+from the recorded measurements, counters that differ between runs, new tests and new suites, a
+median at least 50% above its recorded measurement (`WALL_SIGNAL`) and a serial total above five
+minutes (`FULL_SUITE_SIGNAL`). A compact profile (`check --profile`) has no test ids, so a suite
+with fewer tests or more skips than the recorded set fails instead. `python -I -B
+tools/check_test_budget.py propose --profile <file>` prints the measurements a profile implies;
+they need no update when tests are added. The counters do not
 depend on the shell or on which optional programs are on PATH: a test that needs one (`sh` or
 `pwsh` for the path adapters' round trips) attempts its launch in every environment and skips
 when the program is missing, and a failed attempt still counts as a launch, so PowerShell, Git
 Bash and a POSIX shell count the same launches and one profile's proposal holds in all of
 them. A test that decided to skip before launching would count one launch fewer where its
-program is missing, and budgets proposed there would fail elsewhere. The wall budgets
-belong to the baseline host (recorded in the file); on another host, check the counters
-with `-- --counters-only`, which needs one run and says that the wall time was not checked.
+program is missing, and measurements proposed there would differ elsewhere. The wall
+measurements belong to the reference host (recorded in the file); `-- --counters-only` profiles
+one run and says that the wall time was not compared.
 
-**When the budget check runs.** `task test:budget` is an acceptance obligation: it runs at
+**When the test check runs.** `task test:budget` is an acceptance obligation: it runs at
 the acceptance of every plan leaf and at every release, and its result is recorded with the
-leaf's evidence. It never runs from a git hook: it takes three full serial runs.
+leaf's evidence. It never runs from a git hook: it takes three full serial runs (one with
+`--counters-only`, which leaves out only the comparison between runs).
 
-**Wall time.** At `07c7cd5` the serial `task test` set took a median of 355 s on the
+**Wall time.** These are the recorded measurements of F-09 and F-10, kept as history; the 150 s
+ceiling they were measured against is retired. At `07c7cd5` the serial `task test` set took a median of 355 s on the
 verification host (Windows 11, 32 logical processors, CPython 3.12.10); the per-suite
 medians and the measurement are in [`evidence/F-09.1-test-baseline.md`](../evidence/F-09.1-test-baseline.md).
 At `0c0412f`, with test 7's nested rerun moved to the gate tier (F-09.2), it took a median of
@@ -487,8 +526,9 @@ launch it (plan leaf F-09.3):
   passes under a TEMP of 131 characters (F-09.4).
 
 **Parallel runner.** pytest and pytest-xdist run the same unittest suites as a second runner;
-`task test` and `task setup` stay the serial unittest run, under the Python tools set's
-interpreter. `task dev:install` installs them, hash-locked and wheels only
+`task test` and `task setup` stay the standard-library unittest run (since 2026-11-11 one
+process per suite, concurrently; `task test:serial` one after another), under the Python tools
+set's interpreter. `task dev:install` installs them, hash-locked and wheels only
 ([`composition/lock/python/dev-requirements.txt`](../composition/lock/python/dev-requirements.txt):
 pytest, pytest-xdist 3.8.0, execnet, pluggy, iniconfig, Pygments, packaging, and colorama on
 Windows, all pure-Python wheels under MIT, BSD or Apache licences; and the Python tools set,
@@ -541,7 +581,7 @@ worker, so its `setUpClass` runs once. Pass pytest options after `--`, for examp
   `task hooks:verify` (whose test run uses the tools interpreter, as `task test` does; the gate
   itself keeps the plain one), and `task qualify` at a release. Elsewhere it is reported skipped, with
   that reason.
-- **Required tiers.** `task test` (every suite, serially) and `task test:all` run every
+- **Required tiers.** `task test` (every suite, concurrently; `task test:serial` serially) and `task test:all` run every
   fail-closed security proof that runs by default; only the `e2e` classes are outside
   `test:all`.
 
@@ -1682,10 +1722,10 @@ Directories exist only when they hold real content.
 | `evidence/` | `bootstrap-log.md`: Overseer verdicts until the adopted Work system exists | Overseer |
 | `profiles/` | Execution-profile contract, platform-provider matrix and property list, the profile declarations, and per-OS packaging when added | F-03.1 |
 | `task_prompts/` | One Overseer prompt per plan leaf | seed |
-| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py`, `check_network_matrix.py`, `check_containment_cases.py`, `check_control_catalog.py`, `test_profile.py`, `check_test_budget.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1, S-01.4, S-02.1, G-01.1, F-09.1 |
+| `tools/` | `verify_seed.py`, `check_prereqs.py`, `check_profile.py`, `msys2_lock.py`, `nocloud_seed.py`, `guest.py`, `publication_gate.py`, `check_intent_record.py`, `check_security_inventory.py`, `check_role_tokens.py`, `check_network_matrix.py`, `check_containment_cases.py`, `check_control_catalog.py`, `test_profile.py`, `check_test_budget.py`, `run_tests.py` and their `tests/` | seed, F-02, F-03.2.1, F-03.2.2, F-03.3.1, F-04.1a, publication gate, P-01.1, S-01.1, S-01.2.1, S-01.4, S-02.1, G-01.1, F-09.1 |
 | `catalog/` | Agent Skills and OpenSpec schemas shipped to managed projects: `openspec/schemas/intent-driven/`, `skills/intent-normalization/` (see its [README](../catalog/README.md)) | P-01.1 |
 | `security/` | The [security inventory](#security-inventory): trust domains, principals, protected assets, credential requirements and privileged operations (`inventory.json`, `README.md`); the [containment cases](#containment-cases) (`containment-cases.json`) | S-01.1, S-02.1 |
-| `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`); the [control catalog](../policy/control-catalog.md) (`control-catalog.json`, `control-catalog.md`); the [test budgets](#testing) (`test-budgets.json`) | S-01.2.1, G-01.1, F-09.1 |
+| `policy/` | Permissions and controls: the [role-token matrix](#role-token-matrix) and revocation contract (`role-tokens.json`, `README.md`); the [control catalog](../policy/control-catalog.md) (`control-catalog.json`, `control-catalog.md`); the [recorded test measurements](#testing) (`test-budgets.json`) | S-01.2.1, G-01.1, F-09.1 |
 | `integrations/` | `paths/`: the [managed data root](#managed-data-root) resolver, its configuration loader, the tools venv installer and their `tests/`; `gitea/`: the [host Gitea](#host-gitea) lifecycle tool and its `tests/`; `store/`: the integration SQLite store, its migrations and its `tests/`; `effects/`: the privileged effect store, its migrations, custody check and `tests/`; `storecore/`: the SQLite mechanics both share; `planning/`: the OpenSpec-to-Backlog.md planning adapter, the readiness read and their `tests/`; `lineage/`: the typed lineage reference schema, the read-only resolvers, the lineage traversal, its `examples/` and their `tests/`; `dispatch/`: the trusted dispatch input resolver, the approved-input manifest's schema check, the create admission before the OpenHands create, the native conversation create (the dispatcher's order, the route-checked Agent Server client, the `/server_info` preconditions), its synthetic `examples/` and `tests/` (with the recorded Agent Server request/response fixture); `repository/`: the shared [repository-access](#repository-access) module over Dulwich and its differential contract suite with its golden corpus in `tests/fixtures/`; `owner/`: the shared Owner decision record, the [acceptance recorder](#owner-decisions) and their `tests/`; `inference/`: the [inference broker](#inference-broker), its declared API families (`families.json`) and its `tests/` | F-05.1, F-05.2, P-02.1, P-02.2, P-03.1, P-03.2, F-07.1, F-06.1, E-01.2.1, E-01.2.2, E-01.3.1, F-10.2, P-04.1, S-03.2 |
 | `apps/` | `owner-host/`: the [Owner host](#owner-host) React application, its tests, its build plugin and its own npm lock | U-01.1 |
 | `.githooks/` | The publication-safety gate's git hooks (`core.hooksPath`) | publication gate |
