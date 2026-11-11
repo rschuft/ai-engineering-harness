@@ -500,7 +500,13 @@ class BackupRestoreTests(EffectsTestCase):
         proc = start_worker('hold-open', str(self.root), ME)
         try:
             self.assertEqual(read_message(proc), {'ready': True})
-            with self.assertRaisesRegex(store_mod.RestoreRefused, 'EXCLUSIVE_CUSTODY'):
+            # The worker holds its shared lock until it is stopped, so the exclusive lock is refused
+            # whatever the busy timeout; acquire_exclusive's own timeout_ms parameter makes it 50 ms
+            # rather than the 500 ms default waited out (plan leaf F-09).
+            acquire = storecore.acquire_exclusive
+            with self.assertRaisesRegex(store_mod.RestoreRefused, 'EXCLUSIVE_CUSTODY'), \
+                    mock.patch.object(storecore, 'acquire_exclusive',
+                                      lambda path, timeout_ms=50: acquire(path, timeout_ms=timeout_ms)):
                 self.restore(self.root / 'backups' / (manifest['backup_file'] + '.manifest.json'))
         finally:
             stop_worker(proc)

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CATEGORY = 'integration'
 
@@ -43,6 +44,14 @@ INTENT = {'scoped_resources': {'repository': 'example/repo'}, 'request': {'agent
 
 def manifest_path_for(db, manifest):
     return Path(db).parent / 'backups' / (manifest['backup_file'] + '.manifest.json')
+
+
+def short_custody_timeout(timeout_ms=50):
+    """restore_store's exclusive-custody attempt (storecore.acquire_exclusive, the real function)
+    with its own timeout_ms parameter set to TIMEOUT_MS instead of its default."""
+    acquire = storecore.acquire_exclusive
+    return mock.patch.object(storecore, 'acquire_exclusive',
+                             lambda path, timeout_ms=timeout_ms: acquire(path, timeout_ms=timeout_ms))
 
 
 class OracleFixture:
@@ -168,7 +177,11 @@ class BackupRestoreTests(IntegrationBackupTestCase):
                                 stderr=subprocess.PIPE, text=True, encoding='utf-8')
         try:
             self.assertEqual(json.loads(proc.stdout.readline()), {'ready': True})  # it holds the store open
-            with self.assertRaisesRegex(store_mod.RestoreRefused, 'EXCLUSIVE_CUSTODY'):
+            # The worker holds its shared lock until it is killed, so the exclusive lock is refused
+            # whatever the busy timeout; acquire_exclusive's own timeout_ms parameter makes it 50 ms
+            # rather than the 500 ms default waited out (plan leaf F-09).
+            with self.assertRaisesRegex(store_mod.RestoreRefused, 'EXCLUSIVE_CUSTODY'), \
+                    short_custody_timeout():
                 store_mod.restore_store(self.db, manifest_path_for(self.db, manifest), actor='owner')
         finally:
             proc.kill()
