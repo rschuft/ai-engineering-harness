@@ -68,8 +68,10 @@ class CheckedInProfiles(unittest.TestCase):
 
 
 def tree_digest(root):
-    """Every file under ROOT, by relative path, with its bytes' sha256."""
-    return {path.relative_to(root).as_posix(): check_profile.sha256_file(path)
+    """Every file under ROOT, by relative path, with its bytes' sha256. Each file is read whole
+    (the profile tree's files are small): check_profile.sha256_file's 1 MiB reads took about
+    0.5 ms a file, and this digest is taken after every test of its class (plan leaf F-09)."""
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(root.rglob('*')) if path.is_file()}
 
 
