@@ -299,10 +299,68 @@ planted between the check and the `mkdir` remains a race the walk detects afterw
 prevents.
 
 **Not this leaf.** No transport for live use exists. The management key's custody and the
-per-attempt role tokens are E-01.3.3. The create body is still the F-04.2 disposable template
+per-attempt role tokens are E-01.3.3 ([below](#the-stages-role-token-e-0133)): the role tokens are
+built offline; the key's custody is not (stopped at a recorded boundary). The create body is still the F-04.2 disposable template
 (finding F3, carried to A-01.x and E-03.1). Reconciliation and the idempotent retry are E-01.4.x.
 The independent `docker inspect` of the created runtime is E-01.5. Nothing here has run against a
 live Agent Server: **not yet verified** live.
+
+## The stage's role token (E-01.3.3)
+
+Plan leaf E-01.3.3, decision 0007 point 4 and decision 0013 point 7:
+[`attempt_tokens.py`](attempt_tokens.py) delivers the stage's Gitea bot token per attempt, into the
+dispatcher's own attempt context and never into a conversation container. Untrusted code has no network
+path to Gitea; proposals leave by exchange, and the dispatcher pushes as the bot it holds custody of.
+
+| Stage | Role (`gitea_roles.ROLES`) | Bot | Credential (`policy/role-tokens.json`) | Entry |
+|---|---|---|---|---|
+| `implement` | `builder` | `aieh-bot-builder` | `cred-gitea-bot-builder` | `AIEH Gitea bot builder` |
+| `review` | `reviewer` | `aieh-bot-reviewer` | `cred-gitea-bot-reviewer` | `AIEH Gitea bot reviewer` |
+
+`STAGE_ROLES` covers exactly the store's stage set, one role each; the module refuses to load
+otherwise.
+
+```
+with attempt_role_token(store, operation_key, provider=provider, port=gitea_port) as delivery:
+    repository.push(url, refspec, credential=delivery.credential())   # the dispatcher's own push
+    log(delivery.record())                                            # fingerprints only
+```
+
+It takes no stage, role, bot or entry from its caller. The checks run in this order, and the first
+failing one refuses with `DispatchRefused` before anything later is read or sent:
+
+1. the attempt's dispatch record, re-read from the store by `stored_inputs` (the same checks as
+   `reserved_inputs`: its digest, its typed identity and its own intent), and the attempt
+   `confirmed`. Otherwise `RESERVATION_INVALID` or `ATTEMPT_NOT_CONFIRMED`, and the credential
+   provider is not read;
+2. the stored stage's one entry, read through `gitea_roles.read_token`, and no other entry. No entry is
+   `ROLE_TOKEN_MISSING`. An entry naming another account, or a value that is not a Gitea token (40
+   lower-case hexadecimal digits), is `ROLE_TOKEN_MISMATCH`. A provider that fails is
+   `ROLE_TOKEN_UNAVAILABLE`;
+3. Gitea's own view of the token, `GET /api/v1/token`, which needs no scope. A `401` is
+   `ROLE_TOKEN_REJECTED`. A lost answer, or anything but a `200` token view, is
+   `ROLE_TOKEN_UNVERIFIED`. A token that authenticates as another account, or with scopes other than
+   the role's, is `ROLE_TOKEN_MISMATCH`.
+
+Inside the context the token is held in memory only. `credential()` gives the
+[`integrations/repository`](../repository/README.md) `Credential` (`Authorization: token`, sent to the
+remote's origin only). `record()` gives `ai-engineering-harness/dispatch/role-token-delivery/v1`: the
+operation key, attempt id, stage, role, bot, entry, credential id, scopes and the token's fingerprint
+(`sha256:` and 16 hex digits), never the token. `repr` shows the fingerprint, and the object refuses to be
+copied or pickled. While the context is open, `AgentServerClient` refuses any call whose path or body
+holds the token (a 40-hex run whose sha256 is held) or its fingerprint (`ROLE_TOKEN_EXPOSURE`), before
+the transport: nothing the dispatcher sends into the guest can carry it. The holds are counted, because
+two attempts of one stage hold the same standing token. When the context ends, the token is dropped and
+`credential()` refuses.
+
+**Not built here** ([`evidence/E-01.3.3-dispatcher-custody.md`](../../evidence/E-01.3.3-dispatcher-custody.md)):
+
+- per-attempt rotation. Gitea 28.3.0 cannot bound a token to an attempt (no lifetime). The dispatcher can
+  revoke the token it holds (`DELETE /api/v1/token`), but only the site administrator can issue the next
+  one (Gitea's CLI, or the administrator's basic authentication; a Bot has no password), and the role
+  model grants the dispatcher no issuance;
+- the management key's custody and the op-as-* cut-over in the guest;
+- any live run: only the fakes have been used. **Not yet verified** live.
 
 ## Approved-input manifest: `ai-engineering-harness/dispatch/approved-inputs/v1`
 
@@ -396,6 +454,11 @@ accepted again.
 | `SERVER_PRECONDITION_FAILED` | `GET /server_info` does not show P1 to P5 (above), or was not answered; the create is not sent |
 | `RESERVATION_INVALID`, `ATTEMPT_NOT_RESERVED` | the stored reservation is not the dispatch record of its typed identity; the attempt is no longer `reserved` |
 | `CREATE_REFUSED` | the Agent Server answered the create with a `4xx` |
+| `ATTEMPT_NOT_CONFIRMED` | a role token was asked for an attempt that is not `confirmed` |
+| `ROLE_TOKEN_MISSING`, `ROLE_TOKEN_UNAVAILABLE` | no entry for the stage's bot; the credential provider failed |
+| `ROLE_TOKEN_MISMATCH` | the entry names another account or holds no Gitea token; the token authenticates as another account or with other scopes |
+| `ROLE_TOKEN_REJECTED`, `ROLE_TOKEN_UNVERIFIED` | Gitea answered `401` for the token; Gitea's answer was lost or not a token view |
+| `ROLE_TOKEN_EXPOSURE` | an Agent Server call would carry a delivered role token or its fingerprint |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. Until
 A-01.1 promotes approved catalog pins into the manifest, every request is refused
@@ -465,3 +528,12 @@ times wherever nothing may be called. The positive control asserts exactly one `
 | `ServerPreconditionTests` (unit) | the recorded `/server_info` meets P1 to P5; each precondition alone refuses (another version, a non-2xx or malformed answer, a missing capability, a local, process, case-variant or absent runtime, a selectable runtime list), and several failures are all named |
 | `CreateReceiptTests` (unit) | 201 is created, 200 existing; another, missing or hex id, other statuses and non-objects give no receipt; the execution reference parses as the lineage reader's attempt reference |
 | `DispatchTests` | the positive control (two calls, the store's three transitions and their details, `workRef` and `outcomeRef` in the reservation, nothing of the answer but its id stored, no event route called, the workspace created as plain directories); an existing conversation is confirmed as existing; the call order and the re-read record (spied: admit and `send_create` get the store's record, not the resolution's object; admission ran with no workspace, the send on a `dispatched` attempt with one); a stored intent altered in seven ways is `RESERVATION_INVALID` and failed; `reserved_inputs` on a missing, untyped or no longer reserved attempt; a resolution refusal reserves nothing; an admission refusal is failed and creates no workspace; junctions planted after admission at the category, the repository and the Work, and a file at the workspace, are refused and nothing is created through them; every precondition case refuses the create through `dispatch` (one `GET`, no `POST`, failed with `create_sent` false), as do an unanswered `/server_info` and an allowlist that no longer allows it; a 4xx is `CREATE_REFUSED` and failed; a 5xx, a 202 or another conversation's id is `unknown` (reconciliation required) and never retried; a lost answer is `unknown`, re-raised, and blocks the next attempt; the outcome reference absent, malformed, ambiguous or at two revisions is refused before any reservation |
+
+[`tests/test_attempt_tokens.py`](tests/test_attempt_tokens.py) (E-01.3.3), on the same fixture: attempts
+are dispatched through the fake Agent Server, then delivered from an in-memory credential provider
+and a fake Gitea that answers `GET /api/v1/token` as Gitea 28.3.0 does (its login and scopes).
+
+| Class | What it shows |
+|---|---|
+| `StageMappingTests` (contract) | the mapping covers exactly the store's stages; each mapped credential is in the dispatcher's `custodian_of` and is delivered by it, is granted to its role, and the other stage's credential is denied to it; the held-token guard counts holds and matches the token in a path or body and the fingerprint with or without its prefix |
+| `DeliveryTests` | `implement` reads only the builder's entry and asks Gitea about that token only; `review` the reviewer's; the record carries the fingerprint and no token, and after the context `credential()` refuses; while the builder's token is held, another attempt's create carries neither it nor its fingerprint, and four calls that would carry it are refused before the transport (and pass once the context has ended); a missing entry, an entry naming another account, malformed values, another bot's token, other scopes, a `401`, lost or malformed answers and a failing provider refuse; an unknown, failed or merely reserved attempt reads nothing |

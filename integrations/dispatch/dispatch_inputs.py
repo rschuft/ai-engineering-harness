@@ -62,6 +62,7 @@ from pathlib import Path, PurePath, PurePosixPath
 import re
 import stat
 import sys
+import threading
 from typing import Callable, Mapping, Protocol, Sequence
 
 HERE = Path(__file__).resolve().parent
@@ -205,6 +206,14 @@ REFUSALS = {
     'RESERVATION_INVALID': 'the stored reservation is not a dispatch reservation consistent with its typed identity',
     'ATTEMPT_NOT_RESERVED': 'the stored attempt is no longer in the reserved state',
     'CREATE_REFUSED': 'the Agent Server answered the create with a 4xx refusal',
+    # E-01.3.3: the stage's bot role token, in the dispatcher's attempt context only (attempt_tokens.py).
+    'ATTEMPT_NOT_CONFIRMED': 'the stored attempt is not confirmed: no role token is delivered for it',
+    'ROLE_TOKEN_MISSING': 'the credential provider holds no entry for the stage\'s bot',
+    'ROLE_TOKEN_UNAVAILABLE': 'the credential provider could not be read',
+    'ROLE_TOKEN_MISMATCH': 'the entry or its token is not exactly the stage\'s bot with its scopes',
+    'ROLE_TOKEN_REJECTED': 'Gitea refuses the stage\'s bot token (401)',
+    'ROLE_TOKEN_UNVERIFIED': 'Gitea\'s answer about the token was lost or not its token view',
+    'ROLE_TOKEN_EXPOSURE': 'an Agent Server call would carry a delivered role token or its fingerprint',
 }
 
 
@@ -1336,8 +1345,10 @@ class AgentServerClient:
 
     The transport contract: ``transport(method, path, body)`` returns the HTTP answer as
     ``{"status": <int>, "body": <parsed JSON>}`` (the shape tools/guest.py's API calls return) and
-    raises when there is no answer. No implementation for live use exists here (E-01.3.3 brings
-    the management key's custody); tests inject one."""
+    raises when there is no answer. No implementation for live use exists here: the management key's
+    custody is not built (E-01.3.3 stopped at it); tests inject one. While a role token is delivered
+    (attempt_tokens.py, E-01.3.3), a call whose path or body carries it or its fingerprint is
+    ROLE_TOKEN_EXPOSURE."""
 
     def __init__(self, routes_raw: bytes, transport: Callable[[str, str, dict | None], object], *,
                  routes_sha256: str):
@@ -1382,7 +1393,51 @@ class AgentServerClient:
             path = path.replace('{' + name + '}', value)
         if method in BODYLESS_METHODS and body is not None:
             raise DispatchRefused('BODY_MALFORMED', f'{method} {route} takes no body')
+        if _carries_held_role_token(path, body):
+            raise DispatchRefused('ROLE_TOKEN_EXPOSURE', f'{method} {route} would carry a delivered role token or its '
+                                  'fingerprint into the guest', method=method, route=route)
         return self._transport(method, path, body)
+
+
+# The role tokens open in a dispatcher attempt context (attempt_tokens.py, E-01.3.3), held here as the sha256
+# of the token and its fingerprint only. No Agent Server call may carry one: a conversation container never
+# holds a role token (decision 0013 point 7). Checked at the client, the dispatcher's one way to the server.
+# Two attempts of one stage hold the same standing token: each hold is counted.
+_HELD_ROLE_TOKENS: dict[str, list] = {}
+_HELD_LOCK = threading.Lock()
+_HEX_RUN = re.compile(r'[0-9a-f]{40,}')
+
+
+def hold_role_token(token_sha256: str, fingerprint: str) -> None:
+    with _HELD_LOCK:
+        _HELD_ROLE_TOKENS.setdefault(token_sha256, [fingerprint, 0])[1] += 1
+
+
+def release_role_token(token_sha256: str) -> None:
+    with _HELD_LOCK:
+        held = _HELD_ROLE_TOKENS.get(token_sha256)
+        if held is not None:
+            held[1] -= 1
+            if held[1] <= 0:
+                del _HELD_ROLE_TOKENS[token_sha256]
+
+
+def _carries_held_role_token(path: str, body) -> bool:
+    """Whether the call's path or body holds an open role token (any 40 consecutive lower-case hex digits,
+    wherever they stand, whose sha256 is held) or the fingerprint of one (with or without ``sha256:``)."""
+    with _HELD_LOCK:
+        held = {digest: fingerprint for digest, (fingerprint, _count) in _HELD_ROLE_TOKENS.items()}
+    if not held:
+        return False
+    try:
+        text = path + '\n' + json.dumps(body, sort_keys=True, ensure_ascii=True)
+    except (TypeError, ValueError):
+        text = path + '\n' + repr(body)
+    for run in _HEX_RUN.findall(text):
+        for start in range(len(run) - 39):
+            if hashlib.sha256(run[start:start + 40].encode('ascii')).hexdigest() in held:
+                return True
+    return any(fp in text or fp.partition(':')[2] in text for fp in held.values())
 
 
 def _json_value(value):
@@ -1426,11 +1481,24 @@ def reserved_inputs(integration_store, operation_key: str) -> ResolvedInputs:
     digest, its typed identity row and the record's own intent (``workRef``, ``outcomeRef`` and the
     identity included), and the attempt still ``reserved``. RESERVATION_INVALID or
     ATTEMPT_NOT_RESERVED otherwise."""
+    return stored_inputs(integration_store, operation_key, state='reserved')
+
+
+# The refusal of an attempt found in another state than the reader needs.
+_STATE_REFUSALS = {'reserved': 'ATTEMPT_NOT_RESERVED', 'confirmed': 'ATTEMPT_NOT_CONFIRMED'}
+
+
+def stored_inputs(integration_store, operation_key: str, *, state: str) -> ResolvedInputs:
+    """``reserved_inputs`` for an attempt that must be in STATE (``reserved``, or ``confirmed`` for the
+    role-token delivery of E-01.3.3): the same checks of the stored record; ATTEMPT_NOT_RESERVED or
+    ATTEMPT_NOT_CONFIRMED when the attempt is in another state."""
+    if state not in _STATE_REFUSALS:
+        raise ValueError(f'state must be one of {sorted(_STATE_REFUSALS)}')
     reservation = integration_store.get(operation_key)
     if reservation is None:
         raise DispatchRefused('RESERVATION_INVALID', f'no reservation under {operation_key!r}')
-    if reservation.state != 'reserved':
-        raise DispatchRefused('ATTEMPT_NOT_RESERVED', f'{operation_key!r} is {reservation.state}',
+    if reservation.state != state:
+        raise DispatchRefused(_STATE_REFUSALS[state], f'{operation_key!r} is {reservation.state}',
                               state=reservation.state)
     if _sha256(reservation.intent_json) != reservation.intent_digest:
         raise DispatchRefused('RESERVATION_INVALID', 'the stored intent does not have its digest')
