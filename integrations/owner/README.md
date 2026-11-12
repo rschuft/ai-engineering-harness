@@ -10,7 +10,7 @@ recorders:
   Objective item of an intent-driven OpenSpec change and mints the outcome id, in the form of
   [decision 0008](../../decisions/0008-outcome-identity-assignment-form-and-record.md);
 - the **Owner authorization recorder** (plan leaf P-04.2,
-  [`authorization_recorder.py`](authorization_recorder.py); decision 0012 as proposed): it records
+  [`authorization_recorder.py`](authorization_recorder.py); decision 0012): it records
   the Owner's authorization of one exact operation manifest and merges it into the protected branch
   as `aieh-owner` (below).
 
@@ -152,7 +152,7 @@ exit 2), and changes nothing: the branch, the work tree and the index are as the
 
 The record of an Owner authorization is a merge commit on the protected branch of the authorization
 repository, merged by the Gitea account `aieh-owner`; the Owner's act is a recorded decision, never a
-Gitea operation (decision 0012 as proposed). The recorder is the sole custodian of
+Gitea operation (decision 0012). The recorder is the sole custodian of
 `cred-gitea-owner-account`: it reads the credential provider entry `AIEH Gitea owner` by name, into
 memory, for each command (`integrations/credentials`, plan leaf F-06.3), and authenticates by HTTP
 basic authentication over one keep-alive connection to the managed Gitea on 127.0.0.1. It refuses an
@@ -251,9 +251,10 @@ required setting cannot be verified. The recorder calls it through a mechanism-n
   `NOT_DECLARED`); everything but `verified` and `drift` is `unverified`. The recorder is custodian of
   the auditor's entry `AIEH Gitea bot protection-audit` too; only the check reads it, by name, into
   memory, for each answer, never in the code path that reads `aieh-owner`'s password, and only once the
-  recorder's own checks have passed (a refused statement reads neither credential). **Until the auditor
-  is provisioned (an Owner act), the check answers `unverified` (`CREDENTIAL_MISSING`), so `task
-  owner:authorize -- record ...` still refuses every merge with `PROTECTION_UNVERIFIED`.**
+  recorder's own checks have passed (a refused statement reads neither credential). Without the
+  auditor's entry the check answers `unverified` (`CREDENTIAL_MISSING`) and `record` refuses the merge
+  with `PROTECTION_UNVERIFIED`. The auditor was provisioned and the check qualified live on 2026-11-12
+  (OA-16 Acts A to D; [record](../../evidence/P-04.2-protection-verifier.md)).
 - Gitea evaluates the rule again at the merge itself, and nothing spans the check and the merge: a
   rule changed between them is disclosed by the answer after the merge, not prevented (time of check
   to time of use; the Gitea README describes what Gitea enforces at merge time).
@@ -273,7 +274,7 @@ required setting cannot be verified. The recorder calls it through a mechanism-n
 | `CREDENTIAL_MISSING`, `CREDENTIAL_REFUSED`, `CREDENTIAL_REJECTED` | no entry; an entry naming another account (a bot) or holding a token-shaped or empty secret, refused before anything is sent; Gitea refuses the password |
 | `IDENTITY_NOT_OWNER`, `OWNER_IS_ADMIN`, `OWNER_HAS_TOKEN` | the credential signs in as another account; `aieh-owner` is an administrator; it holds a token |
 | `POLICY_DRIFT` | the repository or the protected branch differs from the expected policy |
-| `PROTECTION_UNVERIFIED`, `PROTECTION_DRIFT` | the protection verifier did not answer `verified` before the merge: no verifier configured, `unverified` (the command line's check: its detail names why, `CREDENTIAL_MISSING` until the auditor is provisioned), an exception or a malformed answer; or it found drift |
+| `PROTECTION_UNVERIFIED`, `PROTECTION_DRIFT` | the protection verifier did not answer `verified` before the merge: no verifier configured, `unverified` (the command line's check: its detail names why, `CREDENTIAL_MISSING` when the auditor's entry is missing), an exception or a malformed answer; or it found drift |
 | `PULL_NOT_FOUND`, `PULL_NOT_OPEN`, `PULL_BASE_WRONG`, `PULL_AUTHOR_OWNER` | no such pull request; not open; not from a branch of the repository into the protected branch; opened by `aieh-owner` |
 | `MANIFEST_NOT_SINGLE`, `MANIFEST_INVALID`, `MANIFEST_EXPIRED` | not exactly one added `operations/<id>.json`; the four fields above; the manifest's expiry has passed |
 | `HEAD_STALE`, `DIGEST_CHANGED` | the head is not the challenged one (the recorder's check, or Gitea's 409 to `head_commit_id`); the digest is not the challenged one |
@@ -392,17 +393,23 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
   would write CRLF; git's and the module's `status` report them clean (tested on a fixture).
   Filter drivers and `working-tree-encoding` on these paths: not tested.
 - Task itself (the targets' commands were run directly), Linux and macOS.
-- The authorization recorder against a real Gitea: it has run against the fake Gitea of
-  `tests/fake_gitea.py` only (in memory and over loopback HTTP), with a fixture credential provider
-  and synthetic statements. Not yet observed on Gitea 28.3.0: the 409 to a stale `head_commit_id`,
-  the trailers kept in the merge commit as written, a merge by basic authentication as `aieh-owner`,
-  the read-back fields (`merged_by`, `merge_commit_sha`, the raw file at a commit, the branch view's
-  protection fields, `status_check_contexts` as an empty list), and the audit log's events. The live
-  exercise (`test_live_authorization.py`) is opt-in and has not run.
-- Any real Owner authorization; the statement's attribution against its source (as above).
+- The authorization recorder against a real Gitea: its live exercise (`test_live_authorization.py`)
+  ran once on the S-01.2.2 fixture on 2026-11-12, on the Owner's own authorization (OA-14;
+  [record](../../evidence/P-04.2-authorization-recorder.md), section 17). Observed on Gitea 28.3.0:
+  one merge by basic authentication as `aieh-owner`, with the six trailers kept as written, the
+  approved head as the second parent and the read-back confirmed, and `aieh-owner` holding no token
+  after it; and the 409 to a stale `head_commit_id` (the stale-head control: `HEAD_STALE`, receipt
+  failed, nothing merged). The other refusals (an altered digest, a replayed or expired decision, a
+  missing or non-Owner statement, a missing challenge, a token on `aieh-owner`) have run against the
+  fake Gitea of `tests/fake_gitea.py` only; the Gitea reads they compare against ran live. Not
+  observed: the audit log's events for the merge.
+- The Owner credential's absence from job environments: the exercise's custody inspection found it in
+  no file of the managed root, the checkout or the run directory and not in the main session's process
+  environment, but no job environment existed to inspect.
+- The statement's attribution against its source (as above), for the recorded Owner authorization of
+  OA-14 too.
 - The protection rule itself: `aieh-owner` cannot read it in Gitea 28.3.0, so the allowlists of other
   accounts and the override flags are not compared by its own checks (`Policy.unobservable`). The
-  recorder fails closed on them through the protection check of OA-16, which has run against the fake
-  auditor only: the auditor is not provisioned, so on the real Gitea it answers `unverified` and the
-  recorder merges nothing. The protection check's live negative tests and qualification, and the
-  two-phase live exercise, have not run.
+  recorder fails closed on them through the protection check of OA-16, whose auditor was provisioned
+  and whose live negative tests and qualification ran on 2026-11-12 (OA-16 Acts C and D); it answered
+  `verified` before and after the live exercise's merge.
