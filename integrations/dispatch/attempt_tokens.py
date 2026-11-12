@@ -1,5 +1,6 @@
 """The stage's bot role token, delivered per attempt in the dispatcher's attempt context only (plan leaf
-E-01.3.3; decision 0007 point 4, decision 0013 point 7; policy/role-tokens.json).
+E-01.3.3; decision 0007 point 4 as amended by amendment 1, decision 0013 point 7;
+policy/role-tokens.json).
 
 Each attempt stage maps to exactly one Gitea bot of ``integrations/gitea/gitea_roles.py`` (``STAGE_ROLES``):
 ``implement`` to the builder (``aieh-bot-builder``, ``cred-gitea-bot-builder``) and ``review`` to the reviewer
@@ -35,7 +36,8 @@ Agent Server client refuses any call whose path or body carries the token or its
 (ROLE_TOKEN_EXPOSURE, ``dispatch_inputs.AgentServerClient``), so nothing the dispatcher sends into the guest
 can hold it. At the end the in-memory reference is dropped and ``credential()`` refuses.
 
-Three lifecycles are kept apart (the Owner's correction of 2026-11-11; decision 0007 point 4):
+Three lifecycles are kept apart (the Owner's correction of 2026-11-11; decision 0007 point 4 as amended by
+amendment 1):
 
 1. the standing bot credential, held in the host's credential provider, is issued, rotated and revoked only by
    the existing administrative authority (``gitea_roles.py provision``, ``rotate`` and ``retire``) on defined
