@@ -263,6 +263,40 @@ class Precondition(Phases):
                 self.assertEqual(verifier.calls, [])
         self.assertEqual(L.BASELINE_VARIABLE, 'AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE')
 
+    def test_the_live_test_passes_the_baseline_variable_to_the_phase(self):
+        """LiveExercise.test_phase, offline (the fake Gitea, a fake verifier, no custody inspection): the phase
+        gets AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE's value, and without it refuses before anything is read."""
+        real = L.Live
+
+        def offline(*args, **kw):
+            return real(*args, **{**kw, 'http': self.gitea, 'now': lambda: self.now})
+
+        for baseline, refused in ((BASELINE, None), (None, 'BASELINE_MISSING')):
+            with self.subTest(baseline=baseline):
+                self.setUp()
+                inspected = []
+                result = unittest.TestResult()
+                try:
+                    with mock.patch.multiple(
+                            L, PHASE='prepare', RUN_DIR=str(self.run_dir), BASELINE=baseline, REPORT=None, Live=offline,
+                            _live=lambda: ((self.port, self.provider), None),
+                            available_verifier=lambda port, provider: (su.FakeVerifier(), 'fake verifier'),
+                            inspect_custody=lambda provider, run_dir: inspected.append(run_dir) or {'found': [],
+                                                                                                    'unreadable': []}):
+                        unittest.TestSuite([L.LiveExercise('test_phase')]).run(result)
+                finally:
+                    for name in ('port', 'provider', 'observed'):
+                        if name in vars(L.LiveExercise):
+                            delattr(L.LiveExercise, name)
+                if refused is None:
+                    self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
+                    self.assertTrue((self.run_dir / L.PRESENTATION).exists())
+                    self.assertEqual(inspected, [self.run_dir])
+                else:
+                    self.assertEqual(len(result.failures), 1, result.errors)
+                    self.assertIn(f'PhaseRefused: {refused}: ', result.failures[0][1])
+                    self.assertEqual(self.gitea.requests, [])
+
     def test_the_protection_check_must_answer_verified_with_the_baseline(self):
         other = 'sha256:' + 'e' * 64
         cases = {
