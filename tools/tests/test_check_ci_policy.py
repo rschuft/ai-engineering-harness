@@ -184,11 +184,9 @@ class CommittedPolicy(Base):
         self.assertEqual(list(doc['on']), ['workflow_dispatch'])
 
     def test_facts_are_verified_at_source_never_live(self):
+        # A1, the runner facts, verified at source at the runner pin since Q-02.2.1
         for fact in POLICY['gitea_facts']:
-            if fact['id'] == 'A1':
-                self.assertIs(fact['verified'], False)
-            else:
-                self.assertEqual(fact['verified'], 'source', fact['id'])
+            self.assertEqual(fact['verified'], 'source', fact['id'])
         self.assertEqual([f['id'] for f in POLICY['gitea_facts']],
                          [f'G{n}' for n in range(1, 11)] + ['A1'])
 
@@ -981,7 +979,7 @@ class FactsAndRecords(Base):
         item(q['gitea_facts'], 'id', 'G4').update(verified='live', evidence=['evidence/missing.md'])
         self.assert_code('LINK_MISSING', 'G4', policy=q)
         _, q = fresh()
-        del item(q['gitea_facts'], 'id', 'A1')['verify_at']
+        item(q['gitea_facts'], 'id', 'A1')['verified'] = False
         self.assert_code('FACT_UNSUPPORTED', 'A1', policy=q)
         _, q = fresh()
         item(q['gitea_facts'], 'id', 'G1')['verified'] = True
@@ -997,6 +995,34 @@ class FactsAndRecords(Base):
         _, q = fresh()
         q['source_archive']['evidence'] = []
         self.assert_code('FACT_ARCHIVE', policy=q)
+
+    def test_the_runner_facts_name_the_runner_source_the_lock_pins(self):
+        # A1 is read in the runner's tag archive, whose commit the lock's sources entry pins.
+        a1 = item(POLICY['gitea_facts'], 'id', 'A1')
+        self.assertEqual((a1['verified'], a1['archive']), ('source', 'runner'))
+        for key, value in (('commit', '0' * 40), ('commit', 'b5305c6'), ('tag', 'v5.4.1'),
+                           ('repository', 'https://github.com/gitea/runner'), ('component', 'gitea'),
+                           ('lock', 'composition/candidates.json'), ('sha256', 'abc'),
+                           ('archive', 'https://example.org/v6.0.0.tar.gz'), ('evidence', [])):
+            _, q = fresh()
+            q['runner_source'][key] = value
+            self.assert_code('FACT_ARCHIVE', 'runner_source', policy=q)
+        _, q = fresh()
+        del q['runner_source']
+        self.assert_code('FACT_ARCHIVE', 'runner_source', policy=q)
+        _, q = fresh()
+        item(q['gitea_facts'], 'id', 'A1')['archive'] = 'act_runner'
+        self.assert_code('FACT_ARCHIVE', 'gitea_facts.A1', policy=q)
+        _, q = fresh()
+        item(q['gitea_facts'], 'id', 'A1')['source'] = [{'path': 'act/runner/run_context.go'}]
+        self.assert_code('FACT_UNSUPPORTED', 'gitea_facts.A1', policy=q)
+        # the Gitea facts stay checked against the Gitea archive alone
+        _, q = fresh()
+        q['source_archive']['sha256'] = '0' * 64
+        found, problems = self.codes(policy=q)
+        self.assertTrue(any(x.code == 'FACT_ARCHIVE' and x.where == 'source_archive'
+                            for x in problems))
+        self.assertFalse(any(x.where == 'runner_source' for x in problems))
 
     def test_revocation_rows_equal_the_role_token_matrix(self):
         _, q = fresh()

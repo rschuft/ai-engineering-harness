@@ -2123,13 +2123,14 @@
     {
       "id": "fd-ci-runner-unpinned",
       "kind": "unknown",
-      "title": "No CI runner is selected or pinned",
-      "detail": "composition/ pins Gitea but no runner. The runner's class is decided by decision 0016 (Proposed; policy/ci-runner-profile.json): act_runner in a dedicated disposable CI guest, its only path off the guest the ci-control forward to Gitea's runner RPC (an Owner act); the validation job reaches nothing, and its two task tokens are inert and permissionless (decision 0013, point 7, unchanged). Still open: the pinned runner binary and job image, the CI profile variant, the P7 ci-control class and the matrix edits (Q-02.2.1), and the act_runner facts the profile relies on (A1 of policy/ci-token-secret-policy.json).",
+      "title": "The CI runner is pinned and declared but not observed running",
+      "detail": "Narrowed at Q-02.2.1 (2026-11-12): gitea-runner 6.0.0 (act_runner, renamed upstream) and the job image docker.io/library/python:3.12-trixie are pinned in composition/lock/components.lock.json; the runner facts the profile relies on (A1 of policy/ci-token-secret-policy.json) are verified at source; the CI profile variant profiles/strong-windows-qemu-whpx-ci declares the runner's config.yaml, service, register call, seed and provision lock, checked by tools/check_ci_policy.py and tools/check_profile.py. Still open: the P7 ci-control class and the matrix edits (the Overseer's, R3), the filtering proxy (R1), the lifecycle bindings for the variant, and every behaviour live: no runner is installed, registered or run (Q-02.2.2).",
       "refs": ["ci-job", "ci-runner-service", "ci-runner-host", "cred-ci-job-token", "cred-runner-registration", "cred-runner-token", "cred-ci-runtime-token"],
       "citations": [
         "composition/candidates.json",
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#quality-pipeline",
-        "policy/ci-runner-profile.json"
+        "policy/ci-runner-profile.json",
+        "composition/lock/components.lock.json"
       ],
       "carried_to": ["Q-02.2.1", "Q-02.2.2"]
     },

@@ -197,7 +197,12 @@ PROFILE_KEYS = {'schema', 'plan_leaf', 'title', 'as_of', 'baseline_commit', 'tok
 POLICY_KEYS = {'schema', 'plan_leaf', 'title', 'as_of', 'baseline_commit', 'profile', 'inventory',
                'role_tokens', 'readme', 'checker', 'decision', 'relies_on_decisions',
                'task_tokens', 'ceilings', 'secret_rules', 'credential_lanes', 'revocation',
-               'source_archive', 'gitea_facts', 'disclosures', 'sources', 'notes'}
+               'source_archive', 'runner_source', 'gitea_facts', 'disclosures', 'sources', 'notes'}
+# A fact verified at source names the archive it was read in: the Gitea release's source
+# archive (source_archive, the default) or the runner's tag archive (runner_source).
+FACT_ARCHIVES = ('gitea', 'runner')
+HEX40 = re.compile(r'^[0-9a-f]{40}$')
+HEX64 = re.compile(r'^[0-9a-f]{64}$')
 
 CODES = ('SCHEMA', 'STATUS_INVALID', 'DANGLING_REF', 'DECISION_UNLINKED', 'MACHINE_PATH',
          'README_STALE', 'CHECKS_STALE', 'LANE_PRIVILEGED', 'LANE_JOB_CREDENTIALS',
@@ -1158,7 +1163,7 @@ class Checker(csi.Checker):
         if not isinstance(facts, list) or not facts:
             self.add('SCHEMA', 'gitea_facts', 'must be a non-empty list')
             facts = []
-        seen, sourced = set(), False
+        seen, sourced, runner_sourced = set(), False, False
         for n, fact in enumerate(facts):
             if not isinstance(fact, dict) or not isinstance(fact.get('id'), str):
                 self.add('SCHEMA', f'gitea_facts[{n}]', 'a fact needs an id')
@@ -1168,10 +1173,16 @@ class Checker(csi.Checker):
                 self.add('SCHEMA', where, 'defined twice')
             seen.add(fact['id'])
             self.keys(where, fact, {'id', 'fact', 'verified', 'source', 'verify_live_at',
-                                    'verify_at', 'evidence', 'notes'})
+                                    'verify_at', 'evidence', 'notes', 'archive'})
             verified = fact.get('verified')
+            archive = fact.get('archive', 'gitea')
+            if archive not in FACT_ARCHIVES:
+                self.add('FACT_ARCHIVE', where, f'archive {archive!r} is not one of {list(FACT_ARCHIVES)}')
             if verified == 'source':
-                sourced = True
+                if archive == 'runner':
+                    runner_sourced = True
+                else:
+                    sourced = True
                 sources = fact.get('source')
                 if not isinstance(sources, list) or not sources or not all(
                         isinstance(s, dict) and source_path_ok(s.get('path'))
@@ -1192,6 +1203,33 @@ class Checker(csi.Checker):
                          'false')
         if sourced:
             self.check_archive()
+        if runner_sourced:
+            self.check_runner_source()
+
+    def check_runner_source(self):
+        """The runner's tag archive: its commit is the one the lock's sources entry pins."""
+        source = self.policy.get('runner_source')
+        if not isinstance(source, dict):
+            self.add('FACT_ARCHIVE', 'runner_source', 'facts verified in the runner source name '
+                     'the archive (runner_source)')
+            return
+        if source.get('lock') != LOCK:
+            self.add('FACT_ARCHIVE', 'runner_source', f'the commit is pinned by {LOCK}')
+        pinned = [s for s in _dicts(_dict(self.inputs.lock).get('sources'))
+                  if s.get('id') == source.get('component')]
+        if len(pinned) != 1 or not HEX40.match(_str(source.get('commit'))) or \
+                pinned[0].get('commit') != source.get('commit') or \
+                pinned[0].get('repository') != source.get('repository') or \
+                pinned[0].get('tag') != source.get('tag'):
+            self.add('FACT_ARCHIVE', 'runner_source', f"{source.get('component')!r} at "
+                     f"{source.get('tag')!r} -> {source.get('commit')!r} is not the source {LOCK} "
+                     'pins')
+        if not HEX64.match(_str(source.get('sha256'))) or \
+                not _str(source.get('archive')).startswith(_str(source.get('repository')) + '/'):
+            self.add('FACT_ARCHIVE', 'runner_source', 'the archive read is named by its URL under '
+                     'the repository and its sha256')
+        if not self.check_links('runner_source', source, 'evidence'):
+            self.add('FACT_ARCHIVE', 'runner_source', 'the source check cites its evidence')
 
     def check_archive(self):
         archive = self.policy.get('source_archive')
