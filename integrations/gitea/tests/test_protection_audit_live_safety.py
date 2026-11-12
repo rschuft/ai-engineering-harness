@@ -15,8 +15,9 @@ fake; a later class sends none; swallowing the failure does not reopen it; a sna
 tearDownModule fails the run and reports the trip and every write not sent; a refusal other than 403 fails
 without tripping it); each write probe harmless or rejected by the modelled validation, while the bodies the
 probes used before would have created something; the current values repeated; nothing sent on an incomplete
-snapshot or a permission a PUT cannot repeat; the token probe; the push probes refused, withheld by the
-module when wrongly authorized (no update sent, the remote unchanged), a succeeding push a security failure;
+snapshot or a permission a PUT cannot repeat; the token probe; the push probes refused; a served receive-pack
+advertisement a security failure that trips the breaker (the module sent no update, no later push is sent,
+the remote unchanged); a succeeding push a security failure;
 the skip without the opt-in. Every value is synthetic.
 """
 from __future__ import annotations
@@ -571,17 +572,32 @@ class PushProbes(Fresh):
         self.assertEqual([r['status'] for r in rows], ['PUSH_REFUSED'] * 2)
         self.assertEqual([r['if accepted'] for r in rows], [L.NOT_FAST_FORWARD, L.ABSENT_DELETE])
 
-    def test_wrongly_authorized_the_module_sends_no_update(self):
+    def test_a_served_advertisement_trips_the_breaker_and_no_later_write_is_sent(self):
         self.server.accept_push = True
-        with self.assertRaises(AssertionError) as caught:
+        with self.assertRaises(L.SecurityFailure) as caught:
             self.run_push()
-        self.assertNotIsInstance(caught.exception, L.SecurityFailure)
-        self.assertIn('PUSH_REJECTED, not refused by the scope', str(caught.exception))
-        self.assertEqual([m for m, _p, _q in self.server.receive_pack()], ['GET', 'GET'])   # no POST: no update
+        self.assertNotIsInstance(caught.exception, L.BreakerOpen)
+        main, delete = L.push_probes('0' * 40, 'a')
+        self.assertIn(main.action, self.breaker.tripped_by)
+        self.assertIn('served the receive-pack advertisement', self.breaker.tripped_by)
+        self.assertIn('withheld the update (non-fast-forward): no update was sent', self.breaker.tripped_by)
+        # one advertisement read, no POST (no update), and the second push never sent
+        self.assertEqual([(m, q) for m, _p, q in self.server.receive_pack()], [('GET', 'service=git-receive-pack')])
         self.assertEqual(self.server.refs(), self.before)
-        self.assertIsNone(self.breaker.tripped_by)
+        self.assertEqual(self.breaker.withheld, [delete.action])
+        self.assertEqual(self.not_sent(), [delete.action])
         self.assertEqual([r['status'] for r in self.results if r['action'].startswith('git push')],
-                         ['PUSH_REJECTED'] * 2)
+                         ['PUSH_REJECTED', 'not sent'])
+        with self.assertRaises(L.BreakerOpen):   # and no later write probe of any class
+            self.run_live('TestWrites', WRITE_TEST, context(ProbeGitea('accept')))
+
+    def test_a_served_advertisement_for_the_delete_is_a_security_failure_too(self):
+        repo = mock.Mock()
+        repo.push.side_effect = RA.RepositoryError('PUSH_REJECTED', 'rejected', reason='remote ref does not exist')
+        case = live_case('TestWrites', PUSH_TEST, context(ProbeGitea()))
+        with self.assertRaises(L.SecurityFailure):
+            case.push_refused(RA, repo, 'http://127.0.0.1:1/x.git', None, L.push_probes('0' * 40, 'a')[1])
+        self.assertIn('withheld the update (remote ref does not exist): no update was sent', self.breaker.tripped_by)
 
     def test_once_tripped_no_push_is_sent(self):
         L.SecurityFailure('an earlier probe answered 201')

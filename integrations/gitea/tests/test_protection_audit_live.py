@@ -61,12 +61,14 @@ middleware of ``/repos``, ``/user``, ``/users`` and ``/orgs``; for git, ``CheckR
 receive-pack advertisement) runs before the route's own handlers, the first of which is the body binding
 (``bind``, answering 422). The scope's place is read at the pinned source (evidence
 P-04.2-protection-check-recommendation.md section 2.1, items 3, 6 and 9); ``bind``'s place at route level is
-Gitea's router convention, not re-read at 28.3.0. If the order were otherwise, a probe would be answered
-422, 404 or ``PUSH_REJECTED``: still nothing created, and the test fails (the scope did not refuse it); it
-never passes.
+Gitea's router convention, not re-read at 28.3.0. If the order were otherwise, an HTTP probe would be
+answered 422 or 404: still nothing created, and the test fails (the scope did not refuse it); it never
+passes. A git probe answered ``PUSH_REJECTED`` (Gitea served the receive-pack advertisement, so the write
+scope did not refuse the token; the module sent no update) is a security failure.
 
-**Security failures and the circuit breaker.** Any write that answers 2xx, a push that succeeds, a read of
-another repository's rules, or a change of the snapshot (main's head, the rules, the roster and each
+**Security failures and the circuit breaker.** Any write that answers 2xx, a push that succeeds or that the
+scope does not refuse (``PUSH_REJECTED``: the advertisement was served), a read of another repository's
+rules, or a change of the snapshot (main's head, the rules, the roster and each
 collaborator's permission, the settings, the branches and tags, the deploy keys and tokens, the webhooks,
 the teams, and the repositories the auditor sees) is a SECURITY FAILURE. The first one trips a circuit
 breaker of this module, independent of unittest: from then on every write probe, HTTP or git, in any class
@@ -586,8 +588,9 @@ class TestWrites(NegativeLive):
 
     def push_refused(self, RA, repo, url, credential, probe):
         """One git push the token must not make: PUSH_REFUSED (HTTP 401 or 403 at the receive-pack advertisement)
-        passes; a push that succeeds is a SECURITY FAILURE; PUSH_REJECTED (the advertisement was served, the
-        module or Gitea rejected the update) fails: the scope did not refuse it."""
+        passes. A SECURITY FAILURE: a push that succeeds, and PUSH_REJECTED (Gitea served the receive-pack
+        advertisement, so the write scope did not refuse the token; the module withheld the update, or Gitea
+        rejected it). Any other code fails the test."""
         action, if_accepted = probe.action, probe.if_accepted
         BREAKER.check(action)
         try:
@@ -595,6 +598,14 @@ class TestWrites(NegativeLive):
         except RA.RepositoryError as exc:
             RESULTS.append({'action': action, 'expected': 'PUSH_REFUSED', 'status': exc.code,
                             'message': R.redact(str(exc))[-200:], 'if accepted': if_accepted})
+            if exc.code == 'PUSH_REJECTED':
+                reason = exc.details.get('reason')
+                withheld = reason in ('non-fast-forward', 'remote ref does not exist', 'fetch first')
+                raise SecurityFailure(
+                    f'{action}: Gitea served the receive-pack advertisement to the read:repository token (its scope '
+                    'did not refuse the push); ' + (f'the repository module withheld the update ({reason}): no '
+                                                    'update was sent' if withheld else
+                                                    f'the update was rejected after the advertisement ({reason})'))
             self.assertEqual(exc.code, 'PUSH_REFUSED', f'{action}: {exc.code}, not refused by the scope')
             return
         RESULTS.append({'action': action, 'expected': 'PUSH_REFUSED', 'status': 'pushed', 'message': str(update),
