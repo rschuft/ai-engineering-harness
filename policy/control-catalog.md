@@ -17,8 +17,9 @@ and `#security`.
   its independent evidence sources and to the satisfied, failed, unknown and stale
   interpretation. Until then every control's assessment is **unknown**, and unknown never
   satisfies a control.
-- **Status: proposed.** The catalog is not admitted policy until the Owner signs off an exact
-  revision of it (see [Admission](#admission)).
+- **Status: admitted (2026-11-12).** The Owner signed off revision `808b5bd76d09` of
+  `policy/control-catalog.json` (see [Admission](#admission)). Admission is not proof of
+  enforcement: that qualification remains G-01.2.
 
 ## How to read it
 
@@ -55,9 +56,9 @@ and `#security`.
 ## Admission
 
 The Owner is the rule authority: the catalog changes only by the inventory's Owner-only
-policy change, `op-policy-change`. Two Owner acts remain, neither performed:
+policy change, `op-policy-change`. Of its two Owner acts, the first is performed:
 
-1. **Sign off this catalog.** The Owner approves or amends an exact revision of
+1. **Sign off this catalog (performed 2026-11-12).** The Owner approves or amends an exact revision of
    `policy/control-catalog.json`. During bootstrap the Overseer transcribes the sign-off
    verbatim into `evidence/bootstrap-log.md`, then sets `admission.status` to `admitted` with
    that quote as `approval`; the checker then requires the quote verbatim in the log.

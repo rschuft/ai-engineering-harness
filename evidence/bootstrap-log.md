@@ -1768,6 +1768,75 @@ push never implies parent acceptance.
 
 - **2026-11-12: G-01.1 reconciled with OA-20, for sign-off.** `808b5bd`: SEC-EXEC-01 alone changed (its purpose, subject scope, events, the execution point's mechanism, and decision 0015 added to its sources); it now describes host-held standing credentials used by the dispatcher, administrator-managed lifecycle on defined triggers, the attempt-scoped inference token revoked at attempt end and the disclosed same-account limitation. Every other control, the deferred controls, the exception classes (the five unsettled ones failing closed) and the admission block are equal to `20b9e24` (JSON-level comparison, checked by the Overseer). Checker PASS; its tests 13 OK. `policy/control-catalog.json` blob `648fa27d6b44fc40648053ce4376cd792f9c12e0`, sha256 `67aef72a1fd2486199abb00e0b965bbbc2371a5abbcc726289505108907ee042`; admission stays proposed.
 
+- **2026-11-12: Owner decision, G-01.1 catalog admission approved, with a test-execution clarification (verbatim).** The approved source revision is `808b5bd76d09` with `policy/control-catalog.json` at sha256 `67aef72a1fd2486199abb00e0b965bbbc2371a5abbcc726289505108907ee042`; the admission metadata is applied in a later commit, recorded separately below. Verbatim:
+
+  > Owner decision — G-01.1 catalog admission.
+  >
+  > APPROVED: Admit the governance control catalog
+  > at commit 808b5bd76d09.
+  >
+  > File:
+  > policy/control-catalog.json
+  >
+  > Approved SHA-256:
+  > 67aef72a1fd2486199abb00e0b965bbbc2371a5abbcc726289505108907ee042
+  >
+  > I approve the eight control definitions, including
+  > SEC-EXEC-01 as reconciled with OA-20.
+  >
+  > The existing five unsettled exception classes
+  > remain fail-closed until G-06.3.1.
+  >
+  > Record this Owner approval verbatim in the bootstrap
+  > log and apply the catalog admission through the
+  > established policy process.
+  >
+  > Do not change control definitions, expand authority,
+  > or treat catalog admission as proof of enforcement.
+  > That qualification remains G-01.2.
+  >
+  > After updating admission metadata, record the new
+  > committed revision and digest separately from the
+  > approved source revision.
+  >
+  > TEST EXECUTION CLARIFICATION
+  >
+  > Keep the behavioral and test-isolation checks in
+  > tools/check_test_budget.py.
+  >
+  > The current socket-using unit test is a legitimate
+  > category violation. Correct its classification or
+  > test design without weakening the assertions.
+  >
+  > However, check_test_budget.py check --run executes
+  > a complete serial test profile.
+  >
+  > Do not repeatedly run that serial profile simply
+  > because an ordinary change added tests or because
+  > the parallel test suite's runtime changed.
+  >
+  > During development, use focused affected tests and
+  > the relevant category/isolation checks. Run the
+  > complete test profile at appropriate acceptance
+  > boundaries when its evidence is actually needed.
+  >
+  > Maintain independent test categories, unit isolation,
+  > removed-test detection and meaningful failure gates.
+  >
+  > Do not reintroduce time budgets, repeat benchmarking
+  > on unchanged revisions, or create a new performance
+  > optimization workstream.
+  >
+  > Continue the active credential-storage Builder
+  > without interruption.
+  >
+  > OA-16 step (iv), the guest custody probe, and all
+  > other live acts remain separately authorized gates.
+  >
+  > Continue eligible engineering work.
+
+- **2026-11-12: OA-16 Act A storage fix built offline and verified (fix forward).** `fa37c02`: the Windows credential field limits (wincred.h: Comment 256 characters, `CRED_MAX_STRING_LENGTH`; UserName 513; TargetName 32767; blob 2560 bytes) are checked by `CredentialStore.write` before `CredWriteW` (`CREDENTIAL_FIELD_LIMIT`, nothing written) and by a pure check `gitea_roles.py` calls for every requested role before any Gitea change (`provision`: before account creation and minting; `rotate`: before revoking); every role's comment is now at most 240 characters (protection-audit 223); the fake providers enforce the same limits; a store that fails after a mint makes the new token revoke itself once (`DELETE /api/v1/token`, then 401), no retry, failing as `TOKEN_STORE_FAILED`, or as `TOKEN_ORPHANED` naming the token for an administrator when the revocation is not confirmed; no temporary entry; passing the check is not treated as a guarantee. `61b8575`: `InnerConversationsScript` declared `integration` (introduced by `e3d3fe8`; test unchanged). **Overseer verification:** the diff read; credentials 60 OK (1 skipped), gitea 210 OK (13 skipped), the driver tests OK; verify_seed PASS; the Builder's full parallel suite 13/13 and one serial profile check at this acceptance boundary PASS (no `UNIT_NOT_ISOLATED`, no removed test, no new skip). Not verified: the 256/257 boundary on the real Credential Manager; whether a `read:repository` token may revoke itself live (if not, the outcome is `TOKEN_ORPHANED`, reported, fail-safe); an interrupt (`BaseException`) between mint and store is not cleaned up. In `rotate`, a store failure leaves both tokens revoked and the role without a working credential until a rerun (fails closed).
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |

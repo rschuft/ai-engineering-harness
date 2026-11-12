@@ -85,7 +85,11 @@ class CommittedCatalog(unittest.TestCase):
             for e in c['enforcement']:
                 self.assertIn(e['boundary'], ('execution', 'git-ci', 'effect', 'evidence'), c['id'])
                 self.assertIs(principals[e['principal']]['agent_controlled'], False, c['id'])
-        self.assertEqual(catalog['admission']['status'], 'proposed')
+        # admitted by the Owner's sign-off of 2026-11-12, quoted verbatim from the bootstrap log
+        self.assertEqual(catalog['admission']['status'], 'admitted')
+        self.assertEqual(catalog['admission']['approval']['link'], 'evidence/bootstrap-log.md')
+        self.assertIn(catalog['admission']['approval']['quote'],
+                      (REPO / 'evidence' / 'bootstrap-log.md').read_text(encoding='utf-8'))
         self.assertNotEqual(catalog['admission']['performer'], 'authorization-recorder')
 
     def test_cli_lists_and_renders_the_readme_block(self):
@@ -235,11 +239,13 @@ class Mutations(unittest.TestCase):
                  (lambda c: c['admission'].update(performer='authorization-recorder'),
                   'ADMISSION_AUTHORITY'),
                  (lambda c: c['admission'].update(repository='gitea-server'), 'DANGLING_REF'),
-                 (lambda c: c['admission'].update(status='admitted'), 'OWNER_APPROVAL'),
+                 (lambda c: (c['admission'].update(status='admitted'), c['admission'].pop('approval', None)),
+                  'OWNER_APPROVAL'),
                  (lambda c: c['admission'].update(status='admitted', approval={
                      'link': 'evidence/bootstrap-log.md', 'quote': 'The Owner signs off G-01.1 '
                      'at no revision at all'}), 'OWNER_APPROVAL'),
-                 (lambda c: c['admission'].update(approval={'link': 'x', 'quote': 'y'}), 'SCHEMA'),
+                 (lambda c: c['admission'].update(status='proposed', approval={'link': 'x', 'quote': 'y'}),
+                  'SCHEMA'),
                  (lambda c: c['admission'].update(status='draft'), 'SCHEMA')]
         for n, (fn, code) in enumerate(cases):
             with self.subTest(case=n, code=code):

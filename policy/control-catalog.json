@@ -16,7 +16,11 @@
     "note": "The Owner is the rule authority: control definitions, applicability and exceptions change only by an Owner policy change. An agent may propose a control or a stricter applicability, never adopt or weaken one."
   },
   "admission": {
-    "status": "proposed",
+    "status": "admitted",
+    "approval": {
+      "link": "evidence/bootstrap-log.md",
+      "quote": "APPROVED: Admit the governance control catalog"
+    },
     "performer": "owner",
     "operation": "op-policy-change",
     "repository": "repo-gitea-policy",
