@@ -115,7 +115,7 @@
       "templates": {
         "user-data": {
           "path": "profiles/seed/user-data.tmpl",
-          "sha256": "92deb03f4c472b564f716f189de8a590ac8a8e753fc67f6023afe7a744a06fc1"
+          "sha256": "f8e3b1631a8f9b2014dc2e30436275053af1f19bff262b72a3dde94161e7522e"
         },
         "meta-data": {
           "path": "profiles/seed/meta-data.tmpl",
@@ -500,7 +500,7 @@
           "request": "/var/lib/aieh/facts-request/conversation-facts",
           "report": "/run/aieh/conversation-facts.json",
           "rate": {"interval_s": 60, "burst": 20},
-          "rule": "On demand, root, read-only. agent creates the request file in the root:agent 0730 directory (it can create, not list); the path unit starts the oneshot reporter, which removes the file without reading it (its existence is the only input), runs no container command but docker ps and docker container inspect, and writes an agent-readable report of the containers carrying owner_label (environment by name only, every secret value counted and redacted), root's TCP listeners with the docker-proxy argv, the stored conversations (files, sizes, sha256, event ids and kinds; runtime control files by name and size) and the server's journal. At most 20 runs in 60 s (TriggerLimitBurst and StartLimitBurst); beyond that the units fail closed until the next boot."
+          "rule": "On demand, root, read-only. agent creates the request file in the root:agent 0730 directory (it can create, not list); the path unit starts the oneshot reporter, which removes the file without reading it (its existence is the only input), runs no container command but docker ps and docker container inspect, and writes an agent-readable report of the containers carrying owner_label (environment by name only, every secret value counted and redacted), root's TCP listeners with the docker-proxy argv, the stored conversations (files, sizes, sha256, event ids and kinds; runtime control files by name and size), the server's journal and (S-03.3 slice 6) slice 1's guest-root process view of each running container (integrations/dispatch/conversation_containment.py collect host: per process in its PID namespace the parent, state, the status identity, capability, NoNewPrivs, Seccomp and NSpid fields, the cgroup, argv0's last segment, the first absolute path among the next three arguments and the count, the exe and ns/pid links; any process outside the namespace whose parent is inside; the limits of the init's cgroup; no environment, no other argument value or file content; at most 16 containers, 1024 members and 64 outside children each, the rest counted). At most 20 runs in 60 s (TriggerLimitBurst and StartLimitBurst); beyond that the units fail closed until the next boot."
         }
       },
       "admission": {

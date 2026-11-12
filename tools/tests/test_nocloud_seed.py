@@ -39,7 +39,7 @@ NAME = 'seed-test'
 INSTANCE_ID = 'seed-test-00000000-0000-4000-8000-000000000000'
 # The sha256 of seed.iso for the fixed input above with key_line(bytes(range(32)),
 # 'aieh-test'). It changes only when a template pin or the generator's output changes.
-FIXED_INPUT_SHA256 = 'ca1c23cbcf678cf15e0913ddb200aa2b70ed93ccde78171af5456b88a3f6ba23'
+FIXED_INPUT_SHA256 = 'ec03c507990242760bd2d184d1c59771bed740abec92564db85f492f0d881cff'
 
 
 def key_line(raw32, comment='aieh-test'):
@@ -556,10 +556,12 @@ class ProvisionManifest(SeedTestCase):
 
 
 # The seed of the fixed input with MANIFEST (above), computed by the generator at 0b8af57,
-# before the opt-in compositions existed: the default output must stay these bytes.
-FIXED_MANIFEST_SHA256 = '806522dc752055e0cb0bb97a106d91abb5ab1e9d4193463a5a34ca9f2ca75fd4'
-FIXED_USER_DATA_SHA256 = {None: 'a8a9d454f877e3bcd85021ac87c12f33f6980294d4a70ad362cfafdd73cf63a6',
-                          'manifest': 'dba87d57859eb65bd9530f6857e4816ca4804aaccc7f83910ad9bdbce93f019f'}
+# before the opt-in compositions existed: the default output must stay these bytes. Re-pinned
+# with the user-data template's own pin when the template changes (S-03.3 slice 6: the
+# conversation facts reporter's containment section); the compositions never change them.
+FIXED_MANIFEST_SHA256 = 'eec863bda3f60d2dfec8f251441ded7a08f1cb1c7652abaedf5c11645ac06ba8'
+FIXED_USER_DATA_SHA256 = {None: '027f50ad29651cac57ab8ccd953afe199ad83868b686dfe89bde35f951f3b861',
+                          'manifest': 'cd44bc5a91c6de1ec27c2a7d3664f702bd6dc32321d172778cd6aa84afd94dba'}
 
 
 def inference_manifest(extra=None):

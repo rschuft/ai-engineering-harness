@@ -15450,10 +15450,14 @@ ACP_ASSUMED = {
              '/api/conversations/search with items carrying id and parent_conversation_id',
     'agent': 'the create answer and GET /api/conversations/{id} carry agent with kind and acp_server',
 }
-ACP_HOST_VANTAGE_GAP = ('no guest-root channel: slice 1\'s collect host needs root (the PID namespace link and '
-                        '/proc/<pid>/exe of the server user\'s processes), and a guest created with --inference has '
-                        'none (no --drill helper; the root facts reporter runs a fixed script). Recorded UNKNOWN, '
-                        'never PASS (finding F-6 of evidence/S-03.3-slice5-live-driver.md)')
+# The guest-root vantage (S-03.3 slice 6, closing finding F-6 of evidence/S-03.3-slice5-live-driver.md): slice 1's
+# collect host snapshot of each running conversation container, written by the root facts reporter (the seed's
+# containment_host, its section ACP_HOST_SECTION) and read as agent through the request/report path. A field the
+# reporter does not supply makes the vantage a gap (UNKNOWN), never PASS; an older reporter has no section.
+ACP_HOST_SECTION = 'containment'
+ACP_HOST_RECORD_KEYS = ('state', 'status', 'cgroup', 'argv0', 'script', 'argc', 'exe', 'pidns')
+ACP_HOST_SNAPSHOT_KEYS = ('format', 'mode', 'self', 'vanished', 'target_pid', 'target_pidns', 'processes',
+                          'outside_children', 'limits')
 # Fixed before any run (plan leaf S-03.3; the slice plan sections 4 and 5; the dispatch for slice 5). Each step is
 # PASS, FAIL or UNKNOWN; a lost or unreadable answer is UNKNOWN, never PASS.
 ACP_QUALIFICATION_RULE = (
@@ -15544,9 +15548,58 @@ def _hex_id(value):
     return text
 
 
-def no_host_vantage(record, state_pid):
-    """The guest-root vantage of slice 1 on a guest created with --inference: there is no root channel."""
-    raise Refused('HOST_VANTAGE', ACP_HOST_VANTAGE_GAP)
+def host_snapshot_from_report(report, state_pid):
+    """slice 1's guest-root snapshot of the container whose init is ``state_pid``, from the root facts reporter's
+    section ACP_HOST_SECTION, exactly as ``collect host --pid <state_pid>`` prints it; Refused (the step's gap:
+    UNKNOWN, never PASS) when the reporter supplies no such snapshot or leaves out a field slice 1 judges: no section
+    (a guest seeded before slice 6), an error, no entry or several for that init, a truncated list, a snapshot or a
+    process record without one of its keys or status fields. A read slice 1 itself records as failed (an unreadable
+    stat or status, a missing cgroup) is passed through to its judgement unchanged."""
+    cc = containment()
+
+    def gap(why):
+        raise Refused('HOST_VANTAGE', f'the root facts report gives no guest-root view: {why}')
+    section = (report or {}).get(ACP_HOST_SECTION) if isinstance(report, dict) else None
+    if section is None:
+        gap(f'no {ACP_HOST_SECTION!r} section (a reporter seeded before S-03.3 slice 6)')
+    if not isinstance(section, dict) or 'error' in section or section.get('format') != cc.SNAPSHOT_FORMAT or \
+            not isinstance(section.get('containers'), dict):
+        gap(f'the section is not of its shape: {json.dumps(section, sort_keys=True, default=str)[:300]}')
+    found = [e for e in section['containers'].values() if isinstance(e, dict) and e.get('target_pid') == state_pid]
+    if len(found) != 1:
+        gap(f'{len(found)} entries for the container init {state_pid!r} (skipped beyond the cap: '
+            f'{section.get("skipped")!r})')
+    entry = dict(found[0])
+    if 'error' in entry:
+        gap(f'the reporter recorded {str(entry["error"])[:200]!r}')
+    truncated = entry.pop('truncated', None)
+    if not isinstance(truncated, dict) or truncated.get('processes') != 0 or \
+            truncated.get('outside_children') != 0:
+        gap(f'the lists are truncated or their count is missing ({truncated!r})')
+    missing = [k for k in ACP_HOST_SNAPSHOT_KEYS if k not in entry]
+    if missing or entry.get('mode') != 'host' or entry.get('format') != cc.SNAPSHOT_FORMAT or \
+            not isinstance(entry.get('processes'), list) or not isinstance(entry.get('outside_children'), list):
+        gap(f'the snapshot is not slice 1\'s host snapshot (missing {missing})')
+    for p in entry['processes'] + entry['outside_children']:
+        if not isinstance(p, dict) or 'pid' not in p or 'ppid' not in p:
+            gap('a process record without pid or ppid')
+        if 'error' in p:            # slice 1's own record of an unreadable stat: judged as it is
+            continue
+        lacking = [k for k in ACP_HOST_RECORD_KEYS if k not in p]
+        status = p.get('status')
+        if isinstance(status, dict) and 'error' not in status:
+            lacking += [f'status {k}' for k in cc.STATUS_FIELDS if k not in status]
+        if lacking:
+            gap(f'pid {p.get("pid")!r} lacks {lacking}')
+    return entry
+
+
+def facts_host_vantage(facts):
+    """The default guest-root vantage: a new on-demand facts report (``facts()``, as agent, after the container
+    snapshot, as slice 1 takes its host view), its snapshot of the container init ``state_pid``."""
+    def vantage(record, state_pid):
+        return host_snapshot_from_report(facts(), state_pid)
+    return vantage
 
 
 def read_real_provider_key(expected, provider_factory=None):
@@ -15687,7 +15740,6 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
     gt, cc = dispatch_transport(), containment()
     broker = broker or BrokerAccess()
     forward = forward or ForwardControl(ctx, name, broker)
-    host_vantage = host_vantage or no_host_vantage
     real_key_reader = real_key_reader or read_real_provider_key
     wait = wait or wait_until
     inspect_fn = inspect_fn or (lambda fp, key: inspect(ctx, name, None, fp, key))
@@ -15700,6 +15752,7 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
         ssh = Ssh(profile, idir, rec['ports']['ssh'])
         return GuestApi(ssh, profile), GuestFacts(ssh, profile)
     api, facts = (channels or default_channels)(record)
+    host_vantage = host_vantage or facts_host_vantage(facts)
     steps, stop_conditions, memo = [], [], {'created': False, 'echoes': [], 'surfaces': []}
     t0, started = time.time(), utc_now()
     caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError,

@@ -1058,7 +1058,11 @@ defaults them.
   requests a minute), `aieh-conversation-facts.service` removes it and writes
   `/run/aieh/conversation-facts.json` from `docker ps` and `docker container inspect` of
   the containers carrying the Agent Server's owner label (environment by name only,
-  secret values redacted), root's TCP listeners and the stored conversations. The run
+  secret values redacted), root's TCP listeners, the stored conversations and (S-03.3
+  slice 6) slice 1's guest-root process view of each running container: the snapshot
+  `conversation_containment.py collect host --pid <State.Pid>` prints, from the same
+  reads (no environment, no argument value but `argv0`'s last segment and one path; at
+  most 16 containers, 1024 members and 64 outside children each). The run
   checks the image ID, the exact mount list, the user, caps and the 127.0.0.1 port
   against `provisioning.agent_server.conversations`, and the amended profiles P7: one
   `docker-proxy` listener on `127.0.0.1` per running conversation container. `inspect`

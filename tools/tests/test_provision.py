@@ -407,6 +407,172 @@ class ConversationFactsSeed(unittest.TestCase):
         self.assertIn("data.get('containers') != []", source)
 
 
+tcc = _load('aieh_test_conversation_containment_fixtures',
+            REPO / 'integrations' / 'dispatch' / 'tests' / 'test_conversation_containment.py')
+CONTAINMENT_COPIES = ('OsFs', 'parse_stat', 'parse_status', 'parse_cgroup', 'parse_cmdline', 'summarize_argv',
+                      '_text', '_error', '_process', '_pids', '_limits')
+CONTAINMENT_CONSTANTS = ('SNAPSHOT_FORMAT', 'STATUS_FIELDS', 'LIMIT_FILES', 'ARG_MAX', 'SCRIPT_SCAN')
+ZERO = {'processes': 0, 'outside_children': 0}
+
+
+class CountingFs:
+    """slice 1's in-memory file system (tcc.FakeFs) recording every path read."""
+
+    def __init__(self, fs):
+        self.fs, self.paths = fs, []
+
+    def listdir(self, path):
+        self.paths.append(('listdir', path))
+        return self.fs.listdir(path)
+
+    def read_bytes(self, path):
+        self.paths.append(('read', path))
+        return self.fs.read_bytes(path)
+
+    def readlink(self, path):
+        self.paths.append(('readlink', path))
+        return self.fs.readlink(path)
+
+
+class ContainmentHostSeed(unittest.TestCase):
+    """S-03.3 slice 6 (finding F-6): the conversation facts reporter's guest-root section, slice 1's collect host
+    snapshot of each running conversation container, against slice 1's own collector over the same /proc tree
+    (integrations/dispatch/tests/test_conversation_containment.py), with its caps, and read back by the driver's
+    vantage (tools/guest.py host_snapshot_from_report) into slice 1's unchanged judgement."""
+
+    def seed(self, **constants):
+        ns = script_functions('containment_host', *CONTAINMENT_COPIES[1:])
+        ns.update(constants)
+        return ns
+
+    @staticmethod
+    def collect(fs, pid):
+        return tcc.CC.collect('host', fs=fs, target_pid=pid, self_pid=1)
+
+    def section(self, fs, inspected, **constants):
+        return self.seed(**constants)['containment_host'](inspected, fs=fs, self_pid=1)
+
+    def test_the_copies_and_constants_are_slice_1s_own(self):
+        source = (REPO / 'integrations' / 'dispatch' / 'conversation_containment.py').read_text(encoding='utf-8')
+        theirs = {n.name: ast.dump(n) for n in ast.parse(source).body
+                  if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        ours = {n.name: ast.dump(n) for n in script_tree().body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        for name in CONTAINMENT_COPIES:
+            with self.subTest(name):
+                self.assertEqual(ours[name], theirs[name])
+        c = script_constants()
+        for name in CONTAINMENT_CONSTANTS:
+            self.assertEqual(c[name], getattr(tcc.CC, name), name)
+        self.assertEqual((c['CONTAINMENT_CONTAINERS_MAX'], c['CONTAINMENT_PROCESSES_MAX'],
+                          c['CONTAINMENT_OUTSIDE_MAX']), (16, 1024, 64))
+        rule = ConversationFactsSeed.FACTS['rule']
+        self.assertIn('at most 16 containers, 1024 members and 64 outside children each', rule)
+
+    def test_the_section_is_collect_hosts_snapshot(self):
+        pid = tcc.HOST_BASE + 1
+        plain = tcc.host_fs()
+        escaped = tcc.host_fs()
+        tcc.add_process(escaped, 7000, tcc.HOST_BASE + 8, '/usr/bin/sleep', ['sleep', '9'], cgroup='/user.slice',
+                        pidns=tcc.HOST_NS, status=tcc.status_text(nspid=[7000]))
+        for name, fs in (('plain', plain), ('an escaped child', escaped)):
+            with self.subTest(name):
+                section = self.section(fs, [{'Id': 'a' * 64, 'State': {'Pid': pid}}])
+                self.assertEqual((section['format'], section['skipped'], section['caps']),
+                                 (tcc.CC.SNAPSHOT_FORMAT, 0, {'containers': 16, 'processes': 1024,
+                                                              'outside_children': 64}))
+                entry = dict(section['containers']['a' * 64])
+                self.assertEqual(entry.pop('truncated'), ZERO)
+                self.assertEqual(entry, self.collect(fs, pid))
+                # the driver's vantage reads it back as it is, and slice 1 judges it
+                snap = guest.host_snapshot_from_report(json.loads(json.dumps({'containment': section})), pid)
+                self.assertEqual(snap, self.collect(fs, pid))
+                verdict = tcc.CC.host_verdict(snap, inspect=tcc.INSPECT, container=tcc.container_snapshot(),
+                                              expected=tcc.expected())
+                self.assertEqual(verdict['ok'], name == 'plain', verdict['checks'])
+
+    def test_one_scan_for_every_container(self):
+        fs = tcc.host_fs()
+        other_ns = 'pid:[4026533111]'
+        tcc.add_process(fs, 6001, 4090, '/usr/bin/tini', ['tini'], cgroup='/system.slice/docker-other.scope',
+                        pidns=other_ns, status=tcc.status_text(nspid=[6001, 1]))
+        tcc.add_process(fs, 6002, 6001, '/usr/bin/python3', ['python3', '/srv/x.py', 'token'],
+                        cgroup='/system.slice/docker-other.scope', pidns=other_ns,
+                        status=tcc.status_text(nspid=[6002, 7]))
+        counting = CountingFs(fs)
+        inspected = [{'Id': 'a' * 64, 'State': {'Pid': tcc.HOST_BASE + 1}}, {'Id': 'b' * 64, 'State': {'Pid': 6001}}]
+        section = self.section(counting, inspected)
+        for cid, pid in (('a' * 64, tcc.HOST_BASE + 1), ('b' * 64, 6001)):
+            entry = dict(section['containers'][cid])
+            self.assertEqual(entry.pop('truncated'), ZERO)
+            self.assertEqual(entry, self.collect(fs, pid))
+        self.assertEqual([p['script'] for p in section['containers']['b' * 64]['processes']], [None, '/srv/x.py'])
+        self.assertNotIn('token', json.dumps(section))
+        stats = [p for kind, p in counting.paths if p.endswith('/stat')]
+        self.assertEqual(len(stats), len(set(stats)))
+        # slice 1's reads only: the listing, stat, status, cgroup, cmdline, the exe and ns/pid links, the limits
+        allowed = re.compile(r'^/proc(/\d+/(stat|status|cgroup|cmdline|exe|ns/pid))?$|'
+                             r'^/sys/fs/cgroup/system\.slice/docker-[a-z0-9]+\.scope/(memory|cpu|pids)\.max$')
+        self.assertEqual([p for kind, p in counting.paths if not allowed.match(p)], [])
+
+    def test_caps_truncate_and_count(self):
+        pid = tcc.HOST_BASE + 1
+        fs = tcc.host_fs()
+        for n in range(3):
+            tcc.add_process(fs, 7000 + n, tcc.HOST_BASE + 8, '/usr/bin/sleep', ['sleep'], cgroup='/user.slice',
+                            pidns=tcc.HOST_NS, status=tcc.status_text(nspid=[7000 + n]))
+        full = self.collect(fs, pid)
+        section = self.section(fs, [{'Id': 'a' * 64, 'State': {'Pid': pid}}],
+                               CONTAINMENT_PROCESSES_MAX=3, CONTAINMENT_OUTSIDE_MAX=2)
+        entry = section['containers']['a' * 64]
+        self.assertEqual(entry['processes'], full['processes'][:3])
+        self.assertEqual(entry['outside_children'], full['outside_children'][:2])
+        self.assertEqual(entry['truncated'], {'processes': len(full['processes']) - 3, 'outside_children': 1})
+        with self.assertRaisesRegex(guest.Refused, 'truncated'):
+            guest.host_snapshot_from_report({'containment': section}, pid)
+        inspected = [{'Id': c * 64, 'State': {'Pid': pid}} for c in 'abc']
+        section = self.section(fs, inspected, CONTAINMENT_CONTAINERS_MAX=1)
+        self.assertEqual((sorted(section['containers']), section['skipped']), (['a' * 64], 2))
+
+    def test_stopped_and_unreadable_containers_are_recorded_not_scanned(self):
+        fs = CountingFs(tcc.host_fs())
+        inspected = [{'Id': 'a' * 64, 'State': {'Pid': 0}}, {'Id': 'b' * 64, 'State': {'Pid': 4242}},
+                     {'Id': 'c' * 64, 'State': {'Pid': True}}, {'Id': 'd' * 64}]
+        section = self.section(fs, inspected)
+        self.assertEqual(section['containers'], {
+            'a' * 64: {'error': 'not running (State.Pid 0)'},
+            'b' * 64: {'error': 'TARGET_INVALID: pid 4242: FileNotFoundError', 'target_pid': 4242},
+            'c' * 64: {'error': 'not running (State.Pid True)'},
+            'd' * 64: {'error': 'not running (State.Pid None)'}})
+        self.assertEqual(fs.paths, [('readlink', '/proc/4242/ns/pid')])
+        for pid in (4242, 0):
+            with self.assertRaises(guest.Refused):
+                guest.host_snapshot_from_report({'containment': section}, pid)
+        self.assertEqual(self.section(fs, []), {'format': tcc.CC.SNAPSHOT_FORMAT, 'containers': {}, 'skipped': 0,
+                                                'caps': {'containers': 16, 'processes': 1024,
+                                                         'outside_children': 64}})
+
+    def test_the_report_gains_the_section_and_keeps_its_fields(self):
+        fn = script_function('conversation_facts')
+        data = next(n for n in ast.walk(fn) if isinstance(n, ast.Assign) and
+                    ast.unparse(n.targets[0]) == 'data' and isinstance(n.value, ast.Dict))
+        self.assertEqual([ast.literal_eval(k) for k in data.value.keys], [
+            'schema', 'boot_id', 'serial', 'started_monotonic', 'collected_at', 'request', 'owner_label', 'listed',
+            'containers', 'containers_all_count', 'container_files', 'tcp_listeners', 'proxies',
+            'ip_local_port_range', 'server_user', 'storage', 'server_journal', 'units', 'admission',
+            'containment'])
+        source = ast.unparse(fn)
+        self.assertIn('containment = containment_host(inspected_all)', source)
+        self.assertIn("containment = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}", source)
+        # it runs no command, reads no environment and does not touch the request
+        for name in ('containment_host',) + CONTAINMENT_COPIES[1:]:
+            body = script_function(name).body
+            if ast.get_docstring(script_function(name)) is not None:
+                body = body[1:]                                         # its code, not its docstring
+            text = ' '.join(ast.unparse(n) for n in body)
+            for word in ('run(', 'docker', 'environ', 'REQUEST', 'subprocess', 'open('):
+                self.assertNotIn(word, text, (name, word))
+
+
 class AdmissionSeed(unittest.TestCase):
     """S-01.3.1: the seeded container guard, its unit and docker.service drop-in, the key
     check before the Agent Server starts, and the root step's admission step and facts,

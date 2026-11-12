@@ -421,13 +421,16 @@ provider's own delegation from OpenHands' `start_child_conversation` route. The 
 [`conversation_containment.py`](conversation_containment.py) is one standard-library file, sent to the guest as a
 file and run there by `python3`; its verdicts run on the host. Built and tested offline only: **not yet verified**
 in a guest. `tools/guest.py acp-qualification` (S-03.3 slice 5, prepared, not run) sends it to the qualification
-conversation's container and judges its output; the guest-root vantage has no channel on a guest created with
-`--inference` (the slice 5 record's finding F-6), so that half is UNKNOWN there until one is decided.
+conversation's container and judges its output. The guest-root vantage (the slice 5 record's finding F-6) comes
+from the guest's root facts reporter (S-03.3 slice 6): on request it writes the snapshot `collect host` prints
+for each running conversation container, from verbatim copies of this file's readers in the seed, and the
+driver reads it as `agent` (`tools/guest.py` `host_snapshot_from_report`); a guest seeded before slice 6, a
+truncated list or a missing field is UNKNOWN, never PASS.
 
 | Vantage | Command | What it lists |
 |---|---|---|
 | Inside the conversation container, as its user (through the inner server's bash route, as the job probe runs) | `collect container` | Every process of the container's PID namespace: pid, parent, executable, `argv0`'s last segment, the first absolute path among the next three arguments (the script an interpreter runs) and the count; `Uid`, `Gid`, `Groups`, the five capability sets, `NoNewPrivs`, `Seccomp`; the cgroup v2 path. The listening TCP sockets with their owning pids (from `/proc/<pid>/fd`); the other TCP sockets (slice 5: local and remote address and port, the state's kernel name, the owning pids; no inode, no payload) and any table that could not be read. The container's `memory.max`, `cpu.max` and `pids.max` |
-| The guest root | `collect host --pid <State.Pid>` | Every host process in the PID namespace of the container's init (`docker container inspect`'s `State.Pid`), with the same fields and its namespaced pids (`NSpid`); any process outside that namespace whose parent is inside; the limits of the init's cgroup |
+| The guest root | `collect host --pid <State.Pid>`, or the same snapshot in the root facts reporter's `containment` section (slice 6) | Every host process in the PID namespace of the container's init (`docker container inspect`'s `State.Pid`), with the same fields and its namespaced pids (`NSpid`); any process outside that namespace whose parent is inside; the limits of the init's cgroup |
 
 The output is one line, `AIEH-CONTAINMENT-JSON ` and the snapshot (`ai-engineering-harness/containment/snapshot/v1`).
 No other argument value, no environment, file content or socket payload is read. A process that ends while it is

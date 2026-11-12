@@ -108,6 +108,8 @@ class FakeGuest:
         self.keep_container = False    # the container stays after the delete
         self.collector_noise = ''      # a line the collector prints before its result
         self.bash = None               # (status, body) of the bash route instead of the script's output
+        self.host_section = None       # the root reporter's containment section (None: a reporter before slice 6)
+        self.facts_calls = 0
 
     def facts(self):
         container = tg.conversation_container(hex_id=HEX)
@@ -118,8 +120,12 @@ class FakeGuest:
         containers = [container] if self.created or (self.keep_container and deleted) or self.phantom else []
         if (self.extra_when_sent and self.sent) or (self.extra_after_create and self.created):
             containers.append(tg.conversation_container(cid='f' * 64, hex_id=HEX))
-        return {'containers': containers, 'server_user': dict(SERVER_USER),
-                'admission': {'iptables': [{'target': 'REJECT', 'packets': self.rejects}]}}
+        self.facts_calls += 1
+        out = {'containers': containers, 'server_user': dict(SERVER_USER),
+               'admission': {'iptables': [{'target': 'REJECT', 'packets': self.rejects}]}}
+        if self.host_section is not None:
+            out[guest.ACP_HOST_SECTION] = self.host_section() if callable(self.host_section) else self.host_section
+        return out
 
     def answer(self, method, path, body):
         self.calls.append((method, path))
@@ -337,12 +343,14 @@ class DriverRun(unittest.TestCase):
         mech = self.step(out, 9)['detail']['mechanisms']["(c) the inner server's children route"]
         self.assertEqual(mech, {'children': [CHILD.replace('-', '')], 'observed': True})
 
-    def test_without_a_root_channel_and_with_the_search_off_the_run_is_unknown(self):
+    def test_with_an_older_reporter_and_the_search_off_the_run_is_unknown(self):
+        # the default vantage on a guest whose root reporter predates slice 6 (no containment section)
         out = self.run_driver(key_mode='off', host=None)
         self.assertEqual(out['result'], 'UNKNOWN')
         self.assertEqual((self.step(out, 5)['verdict'], self.step(out, 8)['verdict'], self.step(out, 11)['verdict']),
                          ('UNKNOWN', 'UNKNOWN', 'UNKNOWN'))
-        self.assertIn('no guest-root channel', self.step(out, 5)['detail']['host_vantage'])
+        self.assertIn("no 'containment' section", self.step(out, 5)['detail']['host_vantage'])
+        self.assertIsNone(self.step(out, 5)['detail']['host'])
         self.assertEqual(self.step(out, 11)['detail']['mode'], 'off')
         self.assertEqual(self.inspected, [])
         self.assertEqual(self.real_reads, [])
@@ -652,10 +660,11 @@ class DriverRun(unittest.TestCase):
         self.assertEqual(data['attempt_token']['fingerprint'], TOKEN_FP)
 
     def test_default_seams_never_read_a_key_or_reach_a_root_channel(self):
-        """With no seam given: the host vantage is the gap (UNKNOWN), the real key reader is the gated one, the
-        provider factory is never called in a synthetic or off run."""
-        with self.assertRaisesRegex(guest.Refused, 'no guest-root channel'):
-            guest.no_host_vantage(RECORD, 1)
+        """With no seam given: the host vantage is the root facts report read through the facts channel (a gap,
+        UNKNOWN, without its section), the real key reader is the gated one, the provider factory is never called
+        in a synthetic or off run."""
+        with self.assertRaisesRegex(guest.Refused, 'no guest-root view'):
+            guest.facts_host_vantage(lambda: {'containers': []})(RECORD, 1)
         factory = mock.Mock(side_effect=AssertionError('the credential provider was read'))
         with mock.patch.object(guest.inference_control().broker.credentials, 'select_provider', factory):
             out = self.run_driver(key_mode='off', host=None, real_key_reader=None)
@@ -893,6 +902,130 @@ class DriverRun(unittest.TestCase):
                          ('anthropic-messages', 'claude-code', 50))
         self.assertEqual(guest.ACP_TURN_CEILING_S, 1920)
         self.assertEqual(guest.ACP_TURN_END, ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation'))
+
+    def test_the_default_vantage_reads_the_reporters_section(self):
+        self.guest.host_section = host_section
+        out = self.run_driver(host=None)
+        self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
+        self.assertEqual(self.verdicts(out), ['PASS'] * 13)
+        for number in (5, 8):
+            detail = self.step(out, number)['detail']
+            self.assertEqual(detail['host_vantage'], 'guest root')
+            self.assertEqual([c['ok'] for c in detail['host']['checks']], [True] * len(detail['host']['checks']))
+        with_default = self.guest.facts_calls
+        self.setUp()
+        self.run_driver()
+        self.assertEqual(with_default - self.guest.facts_calls, 2)     # one new report per observation
+
+    def test_a_gap_in_the_reporters_section_is_unknown_never_pass(self):
+        for name, (section, fragment) in section_gaps().items():
+            with self.subTest(name):
+                self.setUp()
+                self.guest.host_section = section
+                out = self.run_driver(host=None)
+                self.assertEqual(out['result'], 'UNKNOWN', name)
+                self.assertEqual(out['stop_conditions'], [])
+                for number in (5, 8):
+                    self.assertEqual(self.step(out, number)['verdict'], 'UNKNOWN', (name, number))
+                    self.assertIn(fragment, self.step(out, number)['detail']['host_vantage'])
+
+    def test_the_reporters_view_is_judged_by_slice_1(self):
+        escaped = host_snapshot()
+        escaped['outside_children'] = [dict(escaped['processes'][3], pid=9999, pidns='pid:[1]',
+                                            ppid=tcc.HOST_BASE + 8)]
+        self.guest.host_section = host_section(escaped)
+        out = self.run_driver(host=None)
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertIn("a process outside the container's lineage (an escaped child)", self.stops(out))
+        self.assertEqual(self.step(out, 5)['verdict'], 'FAIL')
+        self.setUp()
+        unreadable = host_snapshot()
+        unreadable['processes'].append({'pid': 5000, 'ppid': None, 'error': 'stat: PermissionError'})
+        self.guest.host_section = host_section(unreadable)
+        out = self.run_driver(host=None)
+        self.assertEqual((self.step(out, 5)['verdict'], self.step(out, 8)['verdict'], out['result']),
+                         ('FAIL', 'FAIL', 'FAIL'))
+
+
+def host_section(snap=None, *, cid='0123abcd' * 8, truncated=None):
+    """The root reporter's containment section (S-03.3 slice 6, the seed's containment_host) holding one container's
+    slice 1 host snapshot."""
+    entry = dict(snap or host_snapshot(), truncated=truncated or {'processes': 0, 'outside_children': 0})
+    return {'format': CC.SNAPSHOT_FORMAT, 'containers': {cid: entry}, 'skipped': 0,
+            'caps': {'containers': 16, 'processes': 1024, 'outside_children': 64}}
+
+
+def section_gaps():
+    """{name: (section, the gap message's fragment)}: each a field slice 1 needs that the reporter left out."""
+    pid = tcc.HOST_BASE + 1
+
+    def entry_change(change):
+        section = host_section()
+        change(section['containers']['0123abcd' * 8])
+        return section
+
+    def first_process(change):
+        return entry_change(lambda e: change(e['processes'][0]))
+    second = host_section(cid='f' * 64)['containers']
+    return {
+        'the reporter recorded an error': ({'error': 'OSError: x'}, 'not of its shape'),
+        'another format': (dict(host_section(), format='other/v1'), 'not of its shape'),
+        'no container map': (dict(host_section(), containers=[]), 'not of its shape'),
+        'no entry for the init': (dict(host_section(), containers={}, skipped=3), '0 entries'),
+        'two entries for the init': (dict(host_section(), containers=dict(host_section()['containers'], **second)),
+                                     '2 entries'),
+        'the entry is an error': (dict(host_section(), containers={'x': {'error': 'TARGET_INVALID: pid 1: '
+                                                                         'PermissionError', 'target_pid': pid}}),
+                                  'TARGET_INVALID'),
+        'members truncated': (host_section(truncated={'processes': 1, 'outside_children': 0}), 'truncated'),
+        'outside children truncated': (host_section(truncated={'processes': 0, 'outside_children': 2}), 'truncated'),
+        'no truncation count': (entry_change(lambda e: e.update(truncated=None)), 'truncated'),
+        'no limits key': (entry_change(lambda e: e.pop('limits')), "missing ['limits']"),
+        'a container snapshot': (entry_change(lambda e: e.update(mode='container')), 'not slice 1'),
+        'a process without its executable': (first_process(lambda p: p.pop('exe')), "lacks ['exe']"),
+        'a process without its namespace link': (first_process(lambda p: p.pop('pidns')), "lacks ['pidns']"),
+        'a status without Seccomp': (first_process(lambda p: p['status'].pop('Seccomp')), 'status Seccomp'),
+        'a process without its parent': (first_process(lambda p: p.pop('ppid')), 'without pid or ppid'),
+    }
+
+
+class HostVantage(unittest.TestCase):
+    """host_snapshot_from_report on its own: slice 1's host snapshot out of the root reporter's section, or a gap."""
+
+    def test_the_snapshot_is_slice_1s_own(self):
+        pid = tcc.HOST_BASE + 1
+        section = host_section()
+        other = host_section(host_snapshot(), cid='e' * 64)['containers']['e' * 64]
+        other['target_pid'] = 777
+        section['containers']['e' * 64] = other
+        snap = guest.host_snapshot_from_report({'containers': [], guest.ACP_HOST_SECTION: section}, pid)
+        self.assertEqual(snap, host_snapshot())
+        self.assertIn('truncated', section['containers']['0123abcd' * 8])     # the report is not changed
+        verdict = CC.host_verdict(snap, inspect=tcc.INSPECT, container=tcc.container_snapshot(),
+                                  expected=tcc.expected())
+        self.assertTrue(verdict['ok'], verdict['checks'])
+
+    def test_each_gap_is_refused(self):
+        for name, (section, fragment) in section_gaps().items():
+            with self.subTest(name):
+                with self.assertRaises(guest.Refused) as raised:
+                    guest.host_snapshot_from_report({guest.ACP_HOST_SECTION: section}, tcc.HOST_BASE + 1)
+                self.assertEqual(raised.exception.code, 'HOST_VANTAGE')
+                self.assertIn(fragment, str(raised.exception))
+        for report in ({}, None, [], {'containers': []}):
+            with self.subTest(report=report), self.assertRaisesRegex(guest.Refused, "no 'containment' section"):
+                guest.host_snapshot_from_report(report, tcc.HOST_BASE + 1)
+
+    def test_slice_1s_own_failed_reads_pass_through(self):
+        # an unreadable stat (slice 1's error record) and an unreadable status are judged by slice 1, not refused
+        snap = host_snapshot()
+        snap['processes'].append({'pid': 5000, 'ppid': None, 'error': 'stat: PermissionError'})
+        snap['processes'][1]['status'] = {'error': 'PermissionError'}
+        got = guest.host_snapshot_from_report({guest.ACP_HOST_SECTION: host_section(snap)}, tcc.HOST_BASE + 1)
+        self.assertEqual(got, snap)
+        verdict = CC.host_verdict(got, inspect=tcc.INSPECT, container=tcc.container_snapshot(),
+                                  expected=tcc.expected())
+        self.assertFalse(verdict['ok'])
 
 
 class Delegation(unittest.TestCase):
