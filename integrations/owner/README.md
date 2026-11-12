@@ -39,8 +39,8 @@ and receipts under the managed data root (below).
 | `tests/authz_support.py` | The authorization recorder's per-test fixture: a fake Gitea, a fixture provider, the recorder's state and an integration store of its own, a fixed clock, and a fake protection verifier (`verified` unless a test scripts it) |
 | `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the protection verifier's seam (only a well-formed verdict counts), the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the command line (unit) |
 | `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; fail closed on every protection answer but `verified` (no verifier included), the verifier the last read before the receipt and the merge, the bracket after it; the command line's protection check against the fake auditor (verified, drift, every unverifiable state, a rule changed across the merge, no credential read for a refused statement); every bot token refused; no token minted; a lost answer resolved by reading (integration) |
-| `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture in two phases with the Owner's own decision between them, each skipped unless `AIEH_AUTHZ_RECORDER_LIVE` names it (`prepare`, then `record`; e2e) |
-| `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: prepare's precondition (the baseline variable, the protection check's digest, every role's identity and scopes, open pull requests and existing branches, each refused with zero writes), the auditor's control on a nonexistent pull request, the stopping rule after every control attempt, the presentation, the statement-file refusals, the expected outcome without a verifier and with one that does not verify, the stale-head control and each refusal it can observe (finding F14), the SECURITY FAILURE stops, the protection check end to end (unit) |
+| `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture in two phases with the Owner's own decision between them (and `rechallenge`, regenerating expired challenges for the operations already presented), each skipped unless `AIEH_AUTHZ_RECORDER_LIVE` names it (`prepare`, then `record`; e2e) |
+| `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: phase rechallenge (fresh challenges for the same operations with reads only, the record phase on them, every refusal leaving the run directory unchanged); prepare's precondition (the baseline variable, the protection check's digest, every role's identity and scopes, open pull requests and existing branches, each refused with zero writes), the auditor's control on a nonexistent pull request, the stopping rule after every control attempt, the presentation, the statement-file refusals, the expected outcome without a verifier and with one that does not verify, the stale-head control and each refusal it can observe (finding F14), the SECURITY FAILURE stops, the protection check end to end (unit) |
 
 ## The Owner decision record (`owner-decision/v1`)
 
@@ -322,6 +322,9 @@ AIEH_AUTHZ_RECORDER_LIVE=prepare AIEH_AUTHZ_RECORDER_RUN_DIR=<an existing, empty
 AIEH_AUTHZ_RECORDER_LIVE=record AIEH_AUTHZ_RECORDER_RUN_DIR=<the same directory> \
     AIEH_AUTHZ_RECORDER_STATEMENT=<the Owner's statement file> \
     <tools python> -I -B -m unittest discover -s integrations/owner/tests -p test_live_authorization.py -v
+AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same directory> \
+    AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE=<the expected protection digest, sha256:<64 hex>> \
+    <tools python> -I -B -m unittest discover -s integrations/owner/tests -p test_live_authorization.py -v
 ```
 
 1. **prepare**: first a precondition, before any write, each failure refusing the phase with nothing
@@ -363,6 +366,20 @@ AIEH_AUTHZ_RECORDER_LIVE=record AIEH_AUTHZ_RECORDER_RUN_DIR=<the same directory>
    protection check does not answer `verified` immediately before its merge (the auditor not
    provisioned, or the fixture not as declared) is expected to refuse `PROTECTION_UNVERIFIED` or
    `PROTECTION_DRIFT` with nothing sent**; the presentation says which, from the answer at prepare.
+4. **rechallenge** (only when the presented challenges expired unused, and only on the Owner's
+   authorization of fresh challenges; it authorizes no merge): fresh one-time challenges for the
+   operations already presented, on their existing pull requests, approved heads and manifests. It
+   sends no write to Gitea. Before generating anything it refuses (each with its code) unless every
+   presented challenge has expired and no other challenge for these operations in the run's recorder
+   state is still usable (a regeneration never leaves two live challenges for one operation); the
+   protection check answers `verified` with the baseline; every role's identity and scopes are as
+   declared; main is at the presented head; each pull request is open, not merged, into main, at the
+   presented head on the presented branch, with the presented manifest digest; and the recorder would
+   not refuse the operation (`OPERATION_NOT_NEW`, `MANIFEST_EXPIRED`). The recorder's real `prepare` then
+   issues each challenge, whose subject must equal the presented one exactly (`SUBJECT_DIFFERS`). The
+   previous presentation moves to `presentation-<k>.json` and `.txt` (nothing is overwritten); the new one
+   has the same format and keys (phase record reads it unchanged), marks the original prepare's
+   precondition and controls as not re-run, and adds `regeneration`. Then the custody inspection.
 `statement.json` is `{"text": ..., "attributedTo": "owner", "channel": ..., "reference": ...}`.
 
 ## Not yet verified
