@@ -69,11 +69,11 @@ unrelated project, which this repository does not name.
    | Role | Decides |
    |---|---|
    | Owner | Intent, constraints, and every reserved act (point 4) |
-   | Product manager (planning lead) | Outcomes, priorities and milestone selection; each milestone's acceptance criteria; milestone acceptance against its product outcome; decisions that change scope, criteria or the contract between leaves; plan amendments that preserve every obligation |
-   | Program manager (invoked by the product manager only) | The committed set; which dependencies are real; which leaf owns an acceptance clause; deferrals, each with a reconsider condition; the disposal of a blocker execution raised |
-   | Engineering manager (execution lead; the existing Overseer) | The order among ready committed leaves; dispatch; leaf verdicts (engineering completion); fix-forward; engineering decisions inside committed scope that change no criterion, no other leaf's contract and no Owner-approved policy; checkpoint pushes and publication within existing permissions |
-   | Architect (shared, gated) | Nothing: it advises whichever lead consulted it |
-   | Engineer (the existing Builder) | Local mechanics of one bounded task; a fresh engineer independently reviews each consequential change |
+   | Product manager (`product-manager`; planning lead) | Outcomes, priorities and milestone selection; each milestone's acceptance criteria; milestone acceptance against its product outcome; decisions that change scope, criteria or the contract between leaves; plan amendments that preserve every obligation |
+   | Program manager (`program-manager`; invoked by the product manager only) | The committed set; which dependencies are real; which leaf owns an acceptance clause; deferrals, each with a reconsider condition; the disposal of a blocker execution raised |
+   | Engineering manager (`engineering-manager`; execution lead, formerly the Overseer) | The order among ready committed leaves; dispatch; leaf verdicts (engineering completion); fix-forward; engineering decisions inside committed scope that change no criterion, no other leaf's contract and no Owner-approved policy; checkpoint pushes and publication within existing permissions |
+   | Architect (`architect`; shared, gated) | Nothing: it advises whichever lead consulted it |
+   | Engineer (`engineer`; formerly the Builder) | Local mechanics of one bounded task; a fresh engineer independently reviews each consequential change |
 
    Who accepts a decision follows what it changes: the engineering manager inside committed scope, the product
    manager for scope, criteria or contracts between leaves, the Owner at a reserved boundary. Every decision
