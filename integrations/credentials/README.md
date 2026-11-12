@@ -17,8 +17,8 @@ name. The platform adapter supplies the provider through this module's factory, 
 
 | Path | What |
 |---|---|
-| `credential_provider.py` | `CredentialStore` and `WindowsCredentialProvider` (Credential Manager through standard-library ctypes, moved unchanged from `integrations/platform/platform_windows.py`), `KeyringProvider` and `qualify_keyring`, the factory `select_provider`, `doctor` and its command line, and `ActReceipt`, the integration-store receipt of a credential act |
-| `tests/test_credential_provider.py` | The provider contract suite over a fake, the Windows provider (its real ctypes code over an in-memory advapi32; Windows) and `KeyringProvider` with an in-process keyring backend; the factory and its refusals; keyring's own selection and configuration shown ignored; the module's reachable names read from its syntax tree; `doctor` |
+| `credential_provider.py` | `CredentialStore` and `WindowsCredentialProvider` (Credential Manager through standard-library ctypes, moved from `integrations/platform/platform_windows.py`), the Windows credential field limits (`CREDENTIAL_LIMITS`, `check_credential_fields`), `KeyringProvider` and `qualify_keyring`, the factory `select_provider`, `doctor` and its command line, and `ActReceipt`, the integration-store receipt of a credential act |
+| `tests/test_credential_provider.py` | The provider contract suite over a fake, the Windows provider (its real ctypes code over an in-memory advapi32; Windows) and `KeyringProvider` with an in-process keyring backend; the Windows field limits over the fake and the Windows provider; the factory and its refusals; keyring's own selection and configuration shown ignored; the module's reachable names read from its syntax tree; `doctor` |
 | `tests/test_receipts.py` | `ActReceipt` on a fixture integration store; `gitea_roles.py rotate` and `retire` end to end over the fake Gitea, writing their receipts into the fixture store |
 | `tests/test_crossread.py`, `tests/crossread_support.py` | The throwaway-name cross-read: written in this process, read back by name in a separate process, deleted, checked absent in a separate process, then the I7 scan of what the processes printed. Default mode: a keyring backend of the test that keeps its entries in a temporary JSON file. Real-store mode: opt-in (below) |
 
@@ -49,6 +49,28 @@ anything of `keyring.core`, a `keyringrc`, `PYTHON_KEYRING_BACKEND`, the keyring
 `keyrings.alt` and plug-in entry points. `KeyringBackend.__init__` copies `KEYRING_PROPERTY_*` environment
 variables onto the instance; the factory removes them from it, and clears the macOS backend's
 `keychain` (taken from `KEYCHAIN_PATH` at import), and `doctor` names what it ignored.
+
+## Windows credential field limits
+
+`CREDENTIAL_LIMITS` is the one statement of the limits of a generic credential's fields that the harness
+relies on, as `wincred.h` defines them and the `CREDENTIALW` structure's documentation applies them:
+
+| Field | Limit | Source (`wincred.h`) |
+|---|---|---|
+| `TargetName` | 32767 characters | `CRED_MAX_GENERIC_TARGET_NAME_LENGTH` |
+| `UserName` | 513 characters | `CRED_MAX_USERNAME_LENGTH` (256+1+256) |
+| `Comment` | 256 characters | `CRED_MAX_STRING_LENGTH` |
+| `CredentialBlob` | 2560 bytes | `CRED_MAX_CREDENTIAL_BLOB_SIZE` (5*512) |
+
+Characters are UTF-16 code units, without the terminating NUL; the blob is the secret as the Windows
+provider stores it, UTF-16LE (`secret_blob_size`). `CredentialStore.write` checks every field before it
+calls `CredWriteW` and refuses `CREDENTIAL_FIELD_LIMIT`, naming each field over its limit, with nothing
+written; `CredWriteW` itself rejects such a field with an error of its own (an over-long comment failed
+with 1734 on 2026-11-11). A caller checks an entry it has yet to write with `check_credential_fields`
+(`credential_field_problems` lists the problems), which reads and writes no entry; `gitea_roles.py` does
+so before it mints a token. A check that passes is no guarantee that the write succeeds: `CredWriteW`'s
+own failure is still `CREDENTIAL_WRITE_FAILED` with its code. The tests' fake providers enforce the same
+limits with the same error. The keyring providers do not apply them.
 
 `KeyringProvider` keeps one entry per name: keyring's service is the entry name, its user name the
 credential's user and its password the secret. keyring has no comment field, so a comment is not stored.
@@ -108,5 +130,8 @@ deletes no other entry and never enumerates the store. Without the variable it s
   found by its name on macOS.
 - The real-store cross-read on Windows (opt-in; it needs the Owner's approval to run).
 - `CREDENTIAL_PROVIDER_LOCKED` in a real session without a credential store (fakes only).
+- The field limits against the real Credential Manager at their exact boundaries (a 256-character comment
+  accepted, 257 refused): they are checked over the in-memory advapi32 only; the real store has been seen to
+  accept a 232-character comment and to refuse a 271-character one.
 - The receipts against the running Gitea and the managed root's integration store (fakes and a fixture
   store only).

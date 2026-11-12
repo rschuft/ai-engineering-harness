@@ -11,9 +11,11 @@ Gitea's Bot type (`admin user create --user-type Bot --restricted`, no password:
 interactively). Each role's token is minted with `admin user generate-access-token --raw --scopes ...`
 using the narrowest scopes Gitea 28.3.0 can express for the role; the CLI's standard output is captured
 in memory and written by the credential provider into one entry, `AIEH Gitea bot <role>` (on Windows a
-generic Credential Manager entry, CredWriteW). A token is never printed, logged, written to a file or put on
-a command line; reports carry a fingerprint (a sha256 prefix) only. Entries are reached through
-gitea_host's CredentialProvider, which the harness's factory chooses
+generic Credential Manager entry, CredWriteW). The entry is checked against the Windows credential field
+limits before the token is minted (check_entry; nothing is written to check it), and a store that fails
+anyway after the mint makes the new token revoke itself once (store_minted). A token is never printed,
+logged, written to a file or put on a command line; reports carry a fingerprint (a sha256 prefix) only.
+Entries are reached through gitea_host's CredentialProvider, which the harness's factory chooses
 (integrations/credentials/credential_provider.py, plan leaf F-06.3).
 
 The fixture is Gitea administration (op-gitea-administration): a disposable organization with one
@@ -99,6 +101,7 @@ FIXTURE_ORG, FIXTURE_REPO, DEFAULT_BRANCH = 'aieh-authz-fixture', 'authz', 'main
 # of the protection auditor (test_protection_audit_live.py) reads its rules and must be refused.
 ESCAPE_PROBE_REPO = 'escape-probe'
 PROPOSAL_PATTERN = 'work/*'
+TOKEN_LENGTH = 40  # a Gitea access token: 40 hex digits
 TOKEN_SHAPE = re.compile(rb'[0-9a-f]{40}')
 
 
@@ -306,13 +309,61 @@ def read_token(provider, role: str) -> str | None:
     return token
 
 
-def store_token(provider, role: str, token: str, port: int) -> None:
+def entry_comment(role: str, port: int) -> str:
+    """The comment of the role's entry: the account, the scopes, the instance, and its custody. It fits the
+    Windows Comment limit (256 characters) with margin for every role and port."""
     spec = ROLES[role]
     custodian = spec.get('custodian', 'the management dispatcher')
-    provider.set(target(role), spec['user'], token,
-                 f'Gitea access token of {spec["user"]} ({role}; scopes {",".join(spec["scopes"])}) on the AIEH '
-                 f'Gitea at http://{host.LOOPBACK}:{port}/ (plan leaf S-01.2.2). Bootstrap custody: the Owner '
-                 f'account; {custodian} is its planned custodian.')
+    return (f'AIEH Gitea token of {spec["user"]} (scopes {",".join(spec["scopes"])}) at '
+            f'http://{host.LOOPBACK}:{port}/ (S-01.2.2). Bootstrap custody: the Owner account; {custodian} is its '
+            'planned custodian.')
+
+
+def check_entry(role: str, port: int) -> None:
+    """Before any token is minted: the role's entry, exactly as store_token will write it (its target, user and
+    comment, and a token's size), checked against the Windows credential field limits; CREDENTIAL_FIELD_LIMIT
+    when it does not fit. It writes nothing, and passing it is no guarantee that the store succeeds
+    (store_minted handles that failure)."""
+    credentials = host.credentials
+    credentials.check_credential_fields(target(role), ROLES[role]['user'], entry_comment(role, port),
+                                        credentials.secret_blob_size(TOKEN_LENGTH))
+
+
+def store_token(provider, role: str, token: str, port: int) -> None:
+    provider.set(target(role), ROLES[role]['user'], token, entry_comment(role, port))
+
+
+def store_minted(provider, role: str, token: str, name: str, port: int, http: Callable = None) -> None:
+    """Store a token minted just now. When the store fails, the token revokes itself once (revoke_current:
+    DELETE /api/v1/token, then its next call must get 401), with no retry of either the store or the mint, and the
+    act fails: TOKEN_STORE_FAILED when the revocation is confirmed, TOKEN_ORPHANED when it is not, naming what an
+    administrator must remove. The token's name, account and fingerprint identify it; its value is never shown,
+    and its Gitea id is not known (the CLI's --raw output is the value alone)."""
+    try:
+        store_token(provider, role, token, port)
+        return
+    except Exception as exc:  # noqa: BLE001 - every store failure leaves a minted token to clean up
+        failure = f'{getattr(exc, "code", type(exc).__name__)}: {redact(str(getattr(exc, "detail", exc)))[:200]}'
+    user = ROLES[role]['user']
+    outcome = {'role': role, 'user': user, 'entry': target(role), 'token_name': name, 'gitea_id': None,
+               'fingerprint': fingerprint(token), 'store_error': failure}
+    try:
+        outcome['cleanup'] = revoke_current(port, token, http)
+    except Exception as exc:  # noqa: BLE001 - an uncertain cleanup is reported, never retried
+        outcome['cleanup'] = {'revoked': False, 'error': type(exc).__name__}
+    del token
+    told = (f'storing the token minted for {user} in {target(role)!r} failed ({failure}); the token (name {name!r}, '
+            f'{outcome["fingerprint"]}; Gitea id not known) ')
+    cleanup = json.dumps(outcome['cleanup'], sort_keys=True)
+    if outcome['cleanup']['revoked']:
+        error = GiteaError('TOKEN_STORE_FAILED', told + f'revoked itself once: {cleanup}; nothing was stored',
+                           refusal=False)
+    else:
+        error = GiteaError('TOKEN_ORPHANED', told + f'was NOT confirmed revoked by its one attempt: {cleanup}',
+                           refusal=False, remedy=f'a Gitea administrator must delete the access token {name!r} '
+                           f'of the account {user} ({outcome["fingerprint"]}); this act does not retry it')
+    error.outcome = outcome
+    raise error
 
 
 def token_check(port: int, token: str, http: Callable = None) -> dict:
@@ -327,9 +378,13 @@ def token_check(port: int, token: str, http: Callable = None) -> dict:
 def provision(provider=None, run: Callable = subprocess.run, roles=None, http: Callable = None,
               ctx=None) -> dict:
     """Create each missing bot account, then mint and store a token for each role whose entry is
-    absent. An existing entry is kept (rotate replaces one)."""
+    absent. An existing entry is kept (rotate replaces one). Every role's entry is checked against the Windows
+    credential field limits first (check_entry), so an entry that cannot be written is refused before any Gitea
+    change, account creation included; a store that fails anyway is cleaned up by store_minted."""
     lay, pinned, port, provider, cli = ctx or context(provider, run)
     roles = list(roles or ROLES)
+    for role in roles:
+        check_entry(role, port)
     users = cli.users()
     for role in roles:
         user = ROLES[role]['user']
@@ -348,8 +403,9 @@ def provision(provider=None, run: Callable = subprocess.run, roles=None, http: C
         token = read_token(provider, role)
         minted = token is None
         if minted:
-            token = cli.mint(spec['user'], f'aieh-{role}-{now_stamp()}', spec['scopes'])
-            store_token(provider, role, token, port)
+            name = f'aieh-{role}-{now_stamp()}'
+            token = cli.mint(spec['user'], name, spec['scopes'])
+            store_minted(provider, role, token, name, port, http)
         report['tokens'][role] = {'user': spec['user'], 'entry': target(role), 'minted': minted,
                                   'requested_scopes': list(spec['scopes']), 'fingerprint': fingerprint(token),
                                   'check': token_check(port, token, http)}
@@ -557,11 +613,14 @@ def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Calla
     next call fails closed, mint a new one and replace the entry, prove the new one works. It resumes, as
     retire does: a token Gitea already refuses (401: revoked by an earlier run or on another trigger) is not
     revoked again, and the new one is minted. The act's integration-store receipt is reserved before the
-    revocation and confirmed and read back at the end."""
+    revocation and confirmed and read back at the end. The new entry is checked against the Windows credential
+    field limits before anything changes (check_entry); a store that fails anyway is cleaned up by
+    store_minted."""
     if role not in ROLES:
         raise GiteaError('ROLE_UNKNOWN', f'{role!r} is not one of {sorted(ROLES)}')
     given = ctx
     lay, pinned, port, provider, cli = ctx or context(provider, run)
+    check_entry(role, port)
     old = read_token(provider, role)
     if old is None:
         raise GiteaError('ENTRY_MISSING', f'{target(role)!r} does not exist; run provision')
@@ -580,8 +639,9 @@ def rotate(role: str, provider=None, run: Callable = subprocess.run, http: Calla
             del old
             if isinstance(report['revocation'], dict) and not report['revocation']['revoked']:
                 raise GiteaError('REVOCATION_FAILED', json.dumps(report), refusal=False)
-            new = cli.mint(ROLES[role]['user'], f'aieh-{role}-{now_stamp()}', ROLES[role]['scopes'])
-            store_token(provider, role, new, port)
+            name = f'aieh-{role}-{now_stamp()}'
+            new = cli.mint(ROLES[role]['user'], name, ROLES[role]['scopes'])
+            store_minted(provider, role, new, name, port, http)
             report.update(new_fingerprint=fingerprint(new), new_check=token_check(port, new, http))
             del new
         except BaseException as exc:

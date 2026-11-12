@@ -201,9 +201,11 @@ bot, test or ordinary Builder or Reviewer context reads either entry.
 `delete`, `exists`; the contract's interface) from `credential_provider()`. The provider is chosen by the
 harness's factory in [`integrations/credentials/`](../credentials/README.md) (F-06.3), which the
 adapter supplies: on Windows `WindowsCredentialProvider`, Credential Manager (`CredWriteW`, `CredReadW`,
-`CredDeleteW`; secrets as UTF-16LE), moved there unchanged and still importable from `gitea_host`; keyring
+`CredDeleteW`; secrets as UTF-16LE), moved there and still importable from `gitea_host`; keyring
 is never instantiated on Windows. A session without a credential store is refused with
-`CREDENTIAL_PROVIDER_LOCKED`, and no qualified provider with `NO_CREDENTIAL_PROVIDER`.
+`CREDENTIAL_PROVIDER_LOCKED`, and no qualified provider with `NO_CREDENTIAL_PROVIDER`. An entry whose
+target, user, comment or secret is over its Windows limit is refused with `CREDENTIAL_FIELD_LIMIT` before
+`CredWriteW` is called ([the limits](../credentials/README.md#windows-credential-field-limits)).
 
 **Receipts of credential acts (F-06.3).** Every rotate or retire act writes an integration-store receipt
 (decision 0007 point 5: fingerprint, role, trigger, revoker, affected attempts; fingerprints only) and
@@ -233,6 +235,20 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   captured in memory and must be exactly one token, which the credential provider writes into the
   entry `AIEH Gitea bot <role>`. Reports carry a fingerprint (`sha256:` and 16 hex digits)
   only. An existing entry is kept.
+- **The entry before the token.** `provision` checks every requested role's entry, and `rotate` the
+  role's new entry, exactly as it will be written (target, user, comment and a 40-hex-digit token's
+  size) against the [Windows credential field limits](../credentials/README.md#windows-credential-field-limits)
+  before anything changes: an entry that does not fit is refused with `CREDENTIAL_FIELD_LIMIT` before
+  any account is created, any token is minted or revoked, or any receipt is reserved. The check writes
+  nothing, and passing it is no guarantee: if the store fails after the mint all the same, the new token
+  revokes itself once (`DELETE /api/v1/token`, then its next call must get 401), with no retry of the
+  store, the revocation or the mint, and the act fails with `TOKEN_STORE_FAILED` (revocation confirmed;
+  nothing stored) or `TOKEN_ORPHANED` (not confirmed: the message names the token's name, account and
+  fingerprint, which an administrator must delete). The token's Gitea id is not known (the CLI's `--raw`
+  output is the value alone). Each entry's comment names the account, the scopes, the instance and the
+  custody, and fits the 256-character limit with at least 16 characters to spare on any port (since
+  2026-11-11, when the protection auditor's 271-character comment made `CredWriteW` fail with 1734 after
+  its token was minted).
 - **Rotation.** `rotate ROLE` revokes the token through Gitea's `DELETE /api/v1/token`, proves that
   its next call gets 401, mints a new one and replaces the entry. It resumes as `retire` does: a token
   Gitea already refuses (401, revoked earlier) is not revoked again, and the new one is minted.

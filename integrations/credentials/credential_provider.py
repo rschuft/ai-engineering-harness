@@ -8,7 +8,9 @@ integration-store receipt of a credential act.
 
 - Windows: Credential Manager generic credentials through CredWriteW, CredReadW and CredDeleteW (advapi32),
   standard-library ctypes only: the provider of plan leaves F-06.1 and S-01.2.2, moved here unchanged from
-  integrations/platform/platform_windows.py. keyring is kept off the Windows provider: the factory never
+  integrations/platform/platform_windows.py. Since 2026-11-11 a write first checks its fields against the
+  Windows limits (CREDENTIAL_LIMITS; CREDENTIAL_FIELD_LIMIT, nothing written), which a caller can check
+  without writing (check_credential_fields). keyring is kept off the Windows provider: the factory never
   imports keyring on Windows and never instantiates any keyring backend there (WinVaultKeyring included).
 - Linux and macOS: KeyringProvider over keyring 25.7.0 (MIT; hash-locked in the tools lock), with the
   backend instantiated explicitly, SecretService.Keyring() or macOS.Keyring(), and its .priority checked.
@@ -78,6 +80,52 @@ NEVER_USED = ('keyring.get_keyring() and keyring.core', 'a keyringrc file', 'PYT
 
 # ---------------------------------------------------------------- Windows Credential Manager
 
+# The Windows CREDENTIALW field limits the harness relies on, as wincred.h defines them and the CREDENTIALW
+# structure's documentation applies them to a generic credential: field -> (limit, unit, wincred.h source).
+# Strings count UTF-16 code units (WCHARs) without the terminating NUL; the blob counts bytes. CredWriteW
+# rejects a field over its limit with an error of its own (an over-long Comment failed with 1734 on
+# 2026-11-11), so CredentialStore.write checks them first and refuses CREDENTIAL_FIELD_LIMIT; a caller checks
+# an entry it has yet to write with check_credential_fields, which writes nothing. A check that passes is no
+# guarantee that the write succeeds: CredWriteW's own failure is still CREDENTIAL_WRITE_FAILED.
+CREDENTIAL_LIMITS = {
+    'TargetName': (32767, 'characters', 'CRED_MAX_GENERIC_TARGET_NAME_LENGTH (32767)'),
+    'UserName': (513, 'characters', 'CRED_MAX_USERNAME_LENGTH (256+1+256)'),
+    'Comment': (256, 'characters', 'CRED_MAX_STRING_LENGTH (256)'),
+    'CredentialBlob': (2560, 'bytes', 'CRED_MAX_CREDENTIAL_BLOB_SIZE (5*512)'),
+}
+SECRET_ENCODING = 'utf-16-le'  # how WindowsCredentialProvider stores a secret
+
+
+def secret_blob_size(secret: str | int) -> int:
+    """The CredentialBlobSize, in bytes, of a secret as WindowsCredentialProvider stores it (UTF-16LE): of the
+    secret itself, or of any secret of that many characters, none outside the Basic Multilingual Plane (the
+    bound of a secret not yet known, such as a Gitea token of 40 hex digits)."""
+    if isinstance(secret, str):
+        return len(secret.encode(SECRET_ENCODING))
+    return 2 * secret
+
+
+def _units(text: str) -> int:
+    return len(text.encode('utf-16-le')) // 2
+
+
+def credential_field_problems(target: str, user: str, comment: str, blob_size: int) -> list[str]:
+    """Each field of a generic credential that is over its CREDENTIAL_LIMITS limit ([] when none is). Pure: it
+    reads and writes no entry."""
+    measured = {'TargetName': _units(target), 'UserName': _units(user or ''), 'Comment': _units(comment or ''),
+                'CredentialBlob': blob_size}
+    return [f'{field} is {measured[field]} {unit}, over {source}'
+            for field, (limit, unit, source) in CREDENTIAL_LIMITS.items() if measured[field] > limit]
+
+
+def check_credential_fields(target: str, user: str, comment: str, blob_size: int) -> None:
+    """Refuse CREDENTIAL_FIELD_LIMIT when a field of the entry is over its Windows limit (credential_field_problems);
+    nothing is written either way."""
+    problems = credential_field_problems(target, user, comment, blob_size)
+    if problems:
+        raise LifecycleError('CREDENTIAL_FIELD_LIMIT', f'the entry {target[:80]!r} does not fit a Windows generic '
+                             'credential: ' + '; '.join(problems) + '; nothing was written')
+
 
 class CredentialStore:
     """Generic credentials through CredWriteW / CredReadW / CredDeleteW (advapi32). Values are bytes in
@@ -112,6 +160,9 @@ class CredentialStore:
                                                                'has no credential store')
 
     def write(self, target: str, user: str, secret: bytes, comment: str) -> None:
+        """CredWriteW, after the fields are checked against CREDENTIAL_LIMITS (CREDENTIAL_FIELD_LIMIT, nothing
+        written); CredWriteW's own failure is CREDENTIAL_WRITE_FAILED with its error code."""
+        check_credential_fields(target, user, comment, len(secret))
         ct = self._ct
         blob = (ct.c_ubyte * len(secret)).from_buffer_copy(secret)
         cred = self._Credential(Type=self.GENERIC, TargetName=target, Comment=comment,
@@ -160,10 +211,10 @@ class WindowsCredentialProvider(CredentialProvider):
 
     def get(self, name):
         entry = self.store.read(name)
-        return None if entry is None else (entry[0], entry[1].decode('utf-16-le'))
+        return None if entry is None else (entry[0], entry[1].decode(SECRET_ENCODING))
 
     def set(self, name, user, secret, comment=''):
-        self.store.write(name, user, secret.encode('utf-16-le'), comment)
+        self.store.write(name, user, secret.encode(SECRET_ENCODING), comment)
 
     def delete(self, name):
         return self.store.delete(name)

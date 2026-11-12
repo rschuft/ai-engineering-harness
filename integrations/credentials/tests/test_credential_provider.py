@@ -63,7 +63,8 @@ SECRET = 'synthetic-sécret-☃-value'
 
 
 class MemoryProvider(C.CredentialProvider):
-    """The fake: one dict entry per name."""
+    """The fake: one dict entry per name, under the Windows credential field limits as the Windows provider
+    checks them (CREDENTIAL_FIELD_LIMIT, nothing written)."""
     name = 'memory-fake'
 
     def __init__(self):
@@ -73,6 +74,7 @@ class MemoryProvider(C.CredentialProvider):
         return self.entries.get(name)
 
     def set(self, name, user, secret, comment=''):
+        K.check_credential_fields(name, user, comment, K.secret_blob_size(secret))
         self.entries[name] = (user, secret)
 
     def delete(self, name):
@@ -85,13 +87,14 @@ class MemoryAdvapi:
 
     def __init__(self, credential_type, error=None):
         self.Credential, self.error = credential_type, error
-        self.entries, self.freed, self._alive = {}, 0, []
+        self.entries, self.freed, self._alive, self.writes = {}, 0, [], 0
 
     def _fail(self, code):
         ctypes.set_last_error(code)
         return 0
 
     def CredWriteW(self, reference, flags):
+        self.writes += 1
         if self.error:
             return self._fail(self.error)
         cred = reference._obj
@@ -237,21 +240,119 @@ class ProviderContract:
         self.assertTrue(guard.scan_text('report', 'fingerprint ' + K.fingerprint(SECRET)))
 
 
-class TestFakeProvider(ProviderContract, unittest.TestCase):
+class WindowsFieldLimits:
+    """The Windows credential field limits (CREDENTIAL_LIMITS), enforced before anything is written by the Windows
+    provider and by the fake alike: each field at its limit is written, one past it is refused with
+    CREDENTIAL_FIELD_LIMIT and nothing is written. Strings count UTF-16 code units, the blob bytes."""
+    category = 'contract'
+    LIMITS = K.CREDENTIAL_LIMITS
+    FITS = {'name': NAME, 'user': 'aieh-synthetic-user', 'secret': 'synthetic-value', 'comment': ''}
+    AT_LIMIT = {'TargetName': {'name': 'T' * LIMITS['TargetName'][0]},
+                'UserName': {'user': 'u' * LIMITS['UserName'][0]},
+                'Comment': {'comment': '☃' * LIMITS['Comment'][0]},  # characters, not UTF-8 bytes
+                'CredentialBlob': {'secret': 's' * (LIMITS['CredentialBlob'][0] // 2)}}  # UTF-16LE: 2 bytes each
+
+    def attempts(self, provider) -> int:
+        """How many writes reached the store under the provider."""
+        raise NotImplementedError
+
+    def test_each_field_at_its_limit_is_written_and_one_past_it_refused_unwritten(self):
+        for field, at_limit in self.AT_LIMIT.items():
+            with self.subTest(field=field):
+                provider = self.make()
+                entry = {**self.FITS, **at_limit}
+                provider.set(entry['name'], entry['user'], entry['secret'], entry['comment'])
+                self.assertEqual(provider.get(entry['name']), (entry['user'], entry['secret']))
+                provider = self.make()
+                attempts = self.attempts(provider)
+                over = {**self.FITS, **{k: v + v[-1] for k, v in at_limit.items()}}
+                with self.assertRaises(C.LifecycleError) as caught:
+                    provider.set(over['name'], over['user'], over['secret'], over['comment'])
+                self.assertEqual((caught.exception.code, caught.exception.refusal), ('CREDENTIAL_FIELD_LIMIT', True))
+                self.assertIn(f'{field} is ', caught.exception.detail)
+                self.assertIn(self.LIMITS[field][2], caught.exception.detail)
+                self.assertIn('nothing was written', caught.exception.detail)
+                self.assertNotIn(over['secret'], str(caught.exception))
+                self.assertEqual(self.attempts(provider), attempts)
+                self.assertIsNone(provider.get(over['name']))
+
+    def test_the_comment_that_failed_with_1734_is_refused_before_the_write(self):
+        provider = self.make()
+        with self.assertRaises(C.LifecycleError) as caught:
+            provider.set(NAME, 'aieh-synthetic-user', 'synthetic-value', 'c' * 271)
+        self.assertEqual(caught.exception.code, 'CREDENTIAL_FIELD_LIMIT')
+        self.assertIn('Comment is 271 characters, over CRED_MAX_STRING_LENGTH (256)', caught.exception.detail)
+        self.assertEqual(self.attempts(provider), 0)
+
+
+class TestCredentialLimits(unittest.TestCase):
+    """The limits themselves and the pure check, which reads and writes no entry."""
+
+    def test_the_limits_and_their_wincred_sources(self):
+        self.assertEqual(K.CREDENTIAL_LIMITS, {
+            'TargetName': (32767, 'characters', 'CRED_MAX_GENERIC_TARGET_NAME_LENGTH (32767)'),
+            'UserName': (513, 'characters', 'CRED_MAX_USERNAME_LENGTH (256+1+256)'),
+            'Comment': (256, 'characters', 'CRED_MAX_STRING_LENGTH (256)'),
+            'CredentialBlob': (2560, 'bytes', 'CRED_MAX_CREDENTIAL_BLOB_SIZE (5*512)')})
+        self.assertEqual((256 + 1 + 256, 5 * 512), (513, 2560))
+
+    def test_the_check_measures_utf16_code_units_and_blob_bytes(self):
+        self.assertEqual(K.secret_blob_size('synthetic'), 18)
+        self.assertEqual(K.secret_blob_size('\U0001F512'), 4)  # outside the BMP: a surrogate pair
+        self.assertEqual(K.secret_blob_size(40), 80)  # a Gitea token's bound
+        self.assertEqual(K.credential_field_problems(NAME, 'u', '\U0001F512' * 128, 80), [])
+        self.assertEqual(K.credential_field_problems(NAME, 'u', '\U0001F512' * 128 + 'x', 80),
+                         ['Comment is 257 characters, over CRED_MAX_STRING_LENGTH (256)'])
+        self.assertEqual(K.credential_field_problems(NAME, 'u', '', 2561),
+                         ['CredentialBlob is 2561 bytes, over CRED_MAX_CREDENTIAL_BLOB_SIZE (5*512)'])
+        self.assertEqual(len(K.credential_field_problems('T' * 32768, 'u' * 514, 'c' * 257, 2561)), 4)
+
+    def test_the_refusal_names_each_field_over_its_limit(self):
+        with self.assertRaises(C.LifecycleError) as caught:
+            K.check_credential_fields(NAME, 'u' * 514, 'c' * 271, 80)
+        self.assertEqual(str(caught.exception), "CREDENTIAL_FIELD_LIMIT: the entry 'AIEH synthetic entry' does not fit a "
+                         'Windows generic credential: UserName is 514 characters, over CRED_MAX_USERNAME_LENGTH '
+                         '(256+1+256); Comment is 271 characters, over CRED_MAX_STRING_LENGTH (256); nothing was written')
+
+    def test_the_check_writes_nothing(self):
+        with mock.patch.object(K, 'CredentialStore', UntouchableStore):
+            K.check_credential_fields(NAME, 'u', 'a comment', 80)
+            with self.assertRaises(C.LifecycleError) as caught:
+                K.check_credential_fields('T' * 40000, 'u', 'c', 80)
+        self.assertIn("'" + 'T' * 80 + "'", caught.exception.detail)  # the name is cut at 80 characters
+        self.assertNotIn('T' * 81, caught.exception.detail)
+
+
+class TestFakeProvider(ProviderContract, WindowsFieldLimits, unittest.TestCase):
     def make(self):
         return MemoryProvider()
 
     def entries_named(self, provider, name):
         return int(name in provider.entries)
 
+    def attempts(self, provider):
+        return len(provider.entries)
+
 
 @windows_only
-class TestWindowsProvider(ProviderContract, unittest.TestCase):
+class TestWindowsProvider(ProviderContract, WindowsFieldLimits, unittest.TestCase):
     def make(self):
         return K.WindowsCredentialProvider(windows_store())
 
     def entries_named(self, provider, name):
         return int(name in provider.store._adv.entries)
+
+    def attempts(self, provider):
+        return provider.store._adv.writes
+
+    def test_a_write_that_fits_can_still_fail_with_its_own_code(self):
+        # The limits are no guarantee: CredWriteW's own refusal (1734, as on 2026-11-11) stays a write failure.
+        provider = K.WindowsCredentialProvider(windows_store(1734))
+        with self.assertRaises(C.LifecycleError) as caught:
+            provider.set(NAME, 'aieh-synthetic-user', 'synthetic-value', 'a comment that fits')
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('CREDENTIAL_WRITE_FAILED', False))
+        self.assertIn('failed (1734)', caught.exception.detail)
+        self.assertEqual(provider.store._adv.writes, 1)
 
     def test_stored_as_a_generic_utf16_credential_persisted_per_machine(self):
         provider = self.make()

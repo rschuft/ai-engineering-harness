@@ -169,8 +169,13 @@ class FakeGitea:
 
 
 class MemoryProvider(G.CredentialProvider):
-    def __init__(self, entries=None):
+    """The fake provider: enforces the Windows credential field limits as the Windows provider does
+    (CREDENTIAL_FIELD_LIMIT, nothing written); fail_set, when given, is the error every set raises after that check
+    (a store that fails although the limits hold)."""
+
+    def __init__(self, entries=None, fail_set=None):
         self.entries, self.reads, self.comments = dict(entries or {}), [], {}
+        self.fail_set, self.sets = fail_set, []
 
     def get(self, name):
         self.reads.append(name)
@@ -178,6 +183,10 @@ class MemoryProvider(G.CredentialProvider):
 
     def set(self, name, user, secret, comment=''):
         assert isinstance(secret, str)
+        self.sets.append(name)
+        G.credentials.check_credential_fields(name, user, comment, G.credentials.secret_blob_size(secret))
+        if self.fail_set is not None:
+            raise self.fail_set
         self.entries[name] = (user, secret)
         self.comments[name] = comment
 
@@ -635,6 +644,173 @@ class TestRetire(Base):
         with self.assertRaises(G.GiteaError) as caught:
             self.retire('site-admin')
         self.assertEqual(caught.exception.code, 'ROLE_UNKNOWN')
+
+
+class TestEntryLimits(Base):
+    """The role entries against the Windows credential field limits (Owner direction of 2026-11-11, after
+    CredWriteW refused the protection auditor's 271-character comment with 1734 once its token was minted): checked
+    before any token is minted, enforced by the fake as by the Windows provider, and a store that fails after the
+    mint all the same makes the new token revoke itself once."""
+
+    MARGIN = 16  # every role's comment stays this far under the Comment limit
+    PORTS = (1, 9, 99, 999, 9999, G.DEFAULT_PORT, PORT, 65535)  # each port width up to the largest port
+    WRITE_FAILED = G.GiteaError('CREDENTIAL_WRITE_FAILED', "CredWriteW('AIEH Gitea bot x') failed (1734)",
+                                refusal=False)
+
+    def mints(self):
+        return [c for c in self.cli.calls if c[:3] == ['admin', 'user', 'generate-access-token']]
+
+    def token_calls(self, method):
+        return [r for r in self.gitea.requests if r[:2] == (method, '/api/v1/token')]
+
+    def test_every_role_entry_fits_with_margin_on_every_port(self):
+        limit = G.credentials.CREDENTIAL_LIMITS['Comment'][0]
+        self.assertEqual(R.entry_comment('protection-audit', 13300),
+                         'AIEH Gitea token of aieh-bot-protection-audit (scopes read:repository) at '
+                         'http://127.0.0.1:13300/ (S-01.2.2). Bootstrap custody: the Owner account; the authorization '
+                         'recorder (its protection check) is its planned custodian.')
+        self.assertEqual((R.TOKEN_LENGTH, len(R.entry_comment('protection-audit', 13300))), (40, 223))
+        for role, spec in R.ROLES.items():
+            for port in self.PORTS:
+                with self.subTest(role=role, port=port):
+                    comment = R.entry_comment(role, port)
+                    self.assertLessEqual(len(comment.encode('utf-16-le')) // 2, limit - self.MARGIN)
+                    self.assertEqual(G.credentials.credential_field_problems(
+                        R.target(role), spec['user'], comment, G.credentials.secret_blob_size(R.TOKEN_LENGTH)), [])
+                    R.check_entry(role, port)
+                    for named in (spec['user'], ','.join(spec['scopes']), f'http://{G.LOOPBACK}:{port}/',
+                                  'Bootstrap custody: the Owner account; ',
+                                  spec.get('custodian', 'the management dispatcher') + ' is its planned custodian'):
+                        self.assertIn(named, comment)
+
+    def test_the_fake_enforces_the_limits_the_windows_provider_enforces(self):
+        limits = G.credentials.CREDENTIAL_LIMITS
+        fits = {'name': 'AIEH synthetic', 'user': 'aieh-synthetic', 'secret': 'v', 'comment': ''}
+        cases = {'TargetName': {'name': 'T' * limits['TargetName'][0]},
+                 'UserName': {'user': 'u' * limits['UserName'][0]},
+                 'Comment': {'comment': '☃' * limits['Comment'][0]},  # characters, not bytes
+                 'CredentialBlob': {'secret': 's' * (limits['CredentialBlob'][0] // 2)}}
+        for field, at_limit in cases.items():
+            with self.subTest(field=field):
+                provider = MemoryProvider()
+                entry = {**fits, **at_limit}
+                provider.set(entry['name'], entry['user'], entry['secret'], entry['comment'])
+                self.assertEqual(len(provider.entries), 1)
+                entry = {**fits, **{k: v + v[-1] for k, v in at_limit.items()}}
+                provider = MemoryProvider()
+                with self.assertRaises(G.GiteaError) as caught:
+                    provider.set(entry['name'], entry['user'], entry['secret'], entry['comment'])
+                self.assertEqual(provider.entries, {})
+                self.assertEqual((caught.exception.code, caught.exception.refusal), ('CREDENTIAL_FIELD_LIMIT', True))
+                self.assertIn(f'{field} is ', str(caught.exception))
+                self.assertIn(limits[field][2], str(caught.exception))
+                self.assertIn('nothing was written', str(caught.exception))
+                with self.assertRaises(G.GiteaError) as direct:
+                    G.credentials.check_credential_fields(entry['name'], entry['user'], entry['comment'],
+                                                          G.credentials.secret_blob_size(entry['secret']))
+                self.assertEqual(str(direct.exception), str(caught.exception))
+
+    def test_an_entry_that_does_not_fit_is_refused_before_any_gitea_change(self):
+        with mock.patch.dict(R.ROLES['protection-audit'], custodian='the ' + 'very ' * 40 + 'long custodian'):
+            with self.assertRaises(G.GiteaError) as caught:
+                self.provision()
+        self.assertEqual((caught.exception.code, caught.exception.refusal), ('CREDENTIAL_FIELD_LIMIT', True))
+        self.assertIn("'AIEH Gitea bot protection-audit'", str(caught.exception))
+        self.assertIn('Comment is ', str(caught.exception))
+        self.assertEqual((self.cli.calls, self.cli.minted, self.gitea.requests), ([], [], []))  # no account, no mint
+        self.assertEqual((self.bot_entries(), self.store.sets), ({}, []))
+
+    def test_a_rotation_whose_entry_does_not_fit_is_refused_before_the_revocation(self):
+        self.provision()
+        before, calls, sent = dict(self.store.entries), len(self.cli.calls), len(self.gitea.requests)
+        with mock.patch.dict(R.ROLES['builder'], custodian='x' * 200), self.assertRaises(G.GiteaError) as caught:
+            R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
+        self.assertEqual(caught.exception.code, 'CREDENTIAL_FIELD_LIMIT')
+        self.assertEqual((self.store.entries, self.cli.calls[calls:], self.gitea.requests[sent:]), (before, [], []))
+        self.assertEqual(self.receipts.states(), {})  # refused before anything: no receipt reserved
+
+    def test_a_store_failure_after_the_mint_revokes_the_new_token_once(self):
+        self.store.fail_set = self.WRITE_FAILED
+        with self.assertRaises(G.GiteaError) as caught:
+            self.provision()
+        error = caught.exception
+        self.assertEqual((error.code, error.refusal), ('TOKEN_STORE_FAILED', False))
+        (token,), (mint,) = self.cli.minted, self.mints()  # one mint: the first role's; no other role is minted
+        role, name = next(iter(R.ROLES)), mint[mint.index('--token-name') + 1]
+        self.assertTrue(name.startswith(f'aieh-{role}-'))
+        self.assertEqual(self.store.sets, [R.target(role)])  # one store attempt, no retry
+        self.assertEqual((len(self.token_calls('DELETE')), len(self.token_calls('GET'))), (1, 1))
+        self.assertNotIn(token, self.gitea.tokens)  # revoked
+        self.assertEqual(error.outcome, {
+            'role': role, 'user': R.ROLES[role]['user'], 'entry': R.target(role), 'token_name': name,
+            'gitea_id': None, 'fingerprint': R.fingerprint(token),
+            'store_error': "CREDENTIAL_WRITE_FAILED: CredWriteW('AIEH Gitea bot x') failed (1734)",
+            'cleanup': {'delete_status': 204, 'next_call_status': 401, 'revoked': True}})
+        self.assertEqual(str(error), (
+            f"TOKEN_STORE_FAILED: storing the token minted for {R.ROLES[role]['user']} in {R.target(role)!r} failed "
+            f"(CREDENTIAL_WRITE_FAILED: CredWriteW('AIEH Gitea bot x') failed (1734)); the token (name {name!r}, "
+            f'{R.fingerprint(token)}; Gitea id not known) revoked itself once: {{"delete_status": 204, '
+            '"next_call_status": 401, "revoked": true}; nothing was stored'))
+        self.assert_no_token(str(error) + json.dumps(error.outcome))
+        self.assertEqual(self.bot_entries(), {})
+
+    def test_a_cleanup_that_is_not_confirmed_is_reported_and_not_retried(self):
+        self.store.fail_set = self.WRITE_FAILED
+        self.gitea.fail_path = '/token'  # Gitea answers 500 to the revocation and to the check after it
+        with self.assertRaises(G.GiteaError) as caught:
+            self.provision(roles=['protection-audit'])
+        error = caught.exception
+        self.assertEqual((error.code, error.refusal), ('TOKEN_ORPHANED', False))
+        (token,) = self.cli.minted
+        self.assertIn(token, self.gitea.tokens)  # still live: the administrator must remove it
+        self.assertEqual((len(self.token_calls('DELETE')), len(self.token_calls('GET'))), (1, 1))
+        self.assertEqual(error.outcome['cleanup'], {'delete_status': 500, 'next_call_status': 500, 'revoked': False})
+        name = error.outcome['token_name']
+        self.assertTrue(name.startswith('aieh-protection-audit-'))
+        self.assertIn('NOT confirmed revoked', str(error))
+        self.assertEqual(error.remedy, f'a Gitea administrator must delete the access token {name!r} of the account '
+                                       f'aieh-bot-protection-audit ({R.fingerprint(token)}); this act does not retry it')
+        self.assertIn(error.remedy, str(error))
+        self.assert_no_token(str(error) + json.dumps(error.outcome))
+        self.assertEqual((self.bot_entries(), len(self.mints())), ({}, 1))
+
+    def test_a_cleanup_whose_connection_drops_is_reported_and_not_retried(self):
+        self.store.fail_set = self.WRITE_FAILED
+        deletes = []
+
+        def lost(port, path, method='GET', **kwargs):
+            if method == 'DELETE':
+                deletes.append(path)
+                raise ConnectionResetError('the connection was reset')
+            return self.gitea(port, path, method=method, **kwargs)
+        with self.assertRaises(G.GiteaError) as caught:
+            R.provision(http=lost, ctx=ctx(self.cli, self.store), roles=['builder'])
+        self.assertEqual(caught.exception.code, 'TOKEN_ORPHANED')
+        self.assertEqual(caught.exception.outcome['cleanup'], {'revoked': False, 'error': 'ConnectionResetError'})
+        self.assertEqual((deletes, len(self.mints())), (['/api/v1/token'], 1))
+        self.assert_no_token(str(caught.exception))
+
+    def test_a_rotation_whose_store_fails_revokes_the_new_token_and_resumes(self):
+        self.provision()
+        old = self.store.get(R.target('builder'))[1]
+        self.store.fail_set, mints = self.WRITE_FAILED, len(self.mints())
+        with self.assertRaises(G.GiteaError) as caught:
+            R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
+        self.assertEqual(caught.exception.code, 'TOKEN_STORE_FAILED')
+        self.assertTrue(caught.exception.outcome['token_name'].startswith('aieh-builder-'))
+        new = self.cli.minted[-1]
+        self.assertEqual(caught.exception.outcome['fingerprint'], R.fingerprint(new))
+        self.assertEqual(len(self.mints()), mints + 1)
+        self.assertEqual(len(self.token_calls('DELETE')), 2)  # the old token's revocation and the new one's cleanup
+        self.assertFalse({old, new} & set(self.gitea.tokens))
+        self.assertEqual(self.store.get(R.target('builder'))[1], old)  # the entry was not replaced
+        (key, states), = self.receipts.states().items()
+        self.assertEqual(states, ['reserved', 'dispatched', 'failed'])
+        self.assertEqual(json.loads(self.receipts.events(key)[-1].detail_json), {'code': 'TOKEN_STORE_FAILED'})
+        self.store.fail_set = None
+        report = R.rotate('builder', http=self.gitea, ctx=ctx(self.cli, self.store), receipts=self.receipts)
+        self.assertEqual(report['revocation'], 'already refused by Gitea (revoked earlier)')
+        self.assertEqual(report['new_check']['status'], 200)
 
 
 class TestActReceipts(Base):
