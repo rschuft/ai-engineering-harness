@@ -2049,6 +2049,134 @@ push never implies parent acceptance.
 
 - **2026-11-12: S-03.3 slice 6, the guest-root vantage (F-6) and the turn's end (F-8), offline.** [Record](S-03.3-slice6-root-vantage.md). `aa6a3a7`: the root facts reporter (`profiles/seed/user-data.tmpl`, `aieh-provision conversation-facts`) gains one key, `containment`: per owner-labelled running container exactly slice 1's `collect host --pid` snapshot, by verbatim copies of slice 1's readers (a test holds them equal), one `/proc` scan, capped (16 containers, 1024 members, 64 outside children), no command, no environment, of the arguments only the program name and one path; its only input still the request file's existence; the driver's default vantage reads it as `agent` into slice 1's unchanged `host_verdict`; every gap UNKNOWN, never PASS (an existing guest's reporter has no section). Digests: the seed template `92deb03f...` to `f8e3b163...` (pinned by both profiles), the QEMU profile `0eb5fc0a...` to `f0ef1ca4...`, the Incus profile `ab65af02...` to `fbcbf11a...`; four seed digests in `test_nocloud_seed.py` re-pinned; a live approved-input manifest listing the old profile digest would refuse it until re-approved (not read: protected). `5a4e270`: the turn ends on the image's status enum: `finished` PASS; `error`, `stuck`, `paused`, `deleting` and any value outside the enum FAIL; `waiting_for_confirmation` FAIL and a stop; the wait continues only on `idle`, `running` or no value; `ACP_ASSUMED` cites the D-1 record; a 429 stays FAIL (no retry; disclosed). `8bd4e62`: the record. **Overseer verification:** the reporter diff read (no environment, no command; the argument summary as slice 1's); `test_provision`, the driver tests, `test_nocloud_seed`, `test_check_profile` and the dispatch suite OK; `check_profile` PASS; verify_seed PASS; the Builder's full parallel suite 13/13. Not verified: anything on a guest kernel (the reporter's root reads of uid 999 processes, the status fields, the report's size). The live run needs a guest created at or after `aa6a3a7`.
 
+- **2026-11-12: Q-02.2.1 under C-3, the runner pinned and the job image chosen.** [Record](Q-02.2.1-c3-pins.md). `3e128cf`: the CI runner (act_runner, renamed upstream `gitea.com/gitea/runner`, binary `gitea-runner`) pinned at v6.0.0, commit `b5305c67...`, Linux amd64 binary sha256 `62ecab22...` (three records agree; the checksum file's OpenPGP signature not verified), MIT, compatible with Gitea 28.3.0 by its floor (1.26.2) and the six `/api/actions` methods; decision 0016's A1 facts answered from its source with citations. Endpoints: gitea.com, its storage redirect, dl.gitea.com, and three registries, all unauthenticated and read-only. **Overseer verification:** the lock diff read; the resolver's checks on the new entries, verify_seed both modes, `check_ci_policy`, `check_profile` and `test_resolve_sources` PASS. **Overseer rulings (no gate earned; each within C-3's "Proceed with the offline runner and image pinning"):** (1) the job image is `docker.io/library/python:3.12-trixie` (index `sha256:cad37dd2...`, linux/amd64 manifest `sha256:97dc788c...`, image id `sha256:37662cc6...`): an official, maintained upstream image with git and the CPython minor the tools lock targets, the CI guest's own Debian 13, without the Docker CLI or sudo; it runs under a numeric non-root `--user` with the decision 0016 container options; (2) v6.0.0 was released one day before the pin: it stands for the offline definition, and the pin is re-evaluated before any live registration (C-2); (3) the builder's six findings go to the profile-definition slice: the exchange mount, declared in `container.options` and silently dropped at v6.0.0 while `valid_volumes` is empty, moves to the runner's `container.volumes` read-only if its source confirms that path keeps `:ro` and leaves workflows unable to add mounts (the intent of decision 0016 kept), otherwise it returns to the Overseer; the IPv6 key follows its new name; the unpinned keys and runner environment are declared; the runner's own job-summary post stays denied and is disclosed; the registration token enters by file only; the job's Python tools set without network is designed there.
+
+- **2026-11-12: Owner authorization of OA-16 Act C, conditional (verbatim).**
+
+  > Owner authorization — OA-16 Act C.
+  >
+  > CONDITIONALLY APPROVED.
+  >
+  > Authorize the escape-probe repository and live
+  > negative qualification of the protection auditor,
+  > subject to the safety corrections below.
+  >
+  > TARGETS
+  >
+  > Authorization fixture:
+  > aieh-authz-fixture/authz
+  >
+  > Escape-test repository:
+  > aieh-authz-fixture/escape-probe
+  >
+  > Required protection baseline:
+  > sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42
+  >
+  > PRECONDITIONS
+  >
+  > Before executing live negative tests:
+  >
+  > 1. Confirm the Act B protection verifier still
+  >    returns verified with the approved digest.
+  >
+  > 2. Confirm the auditor's token remains scoped
+  >    exactly read:repository and its credential
+  >    remains unchanged.
+  >
+  > 3. Review the live negative tests for write probes
+  >    that could mutate state if unexpectedly accepted.
+  >
+  > 4. Correct any claim that all proposed write probes
+  >    are inherently harmless.
+  >
+  > 5. Make security failures terminate further
+  >    write probes immediately. Do not rely on
+  >    unittest subTest or ordinary failure reporting
+  >    to stop a potentially dangerous sequence.
+  >
+  > 6. Ensure repository-creation and other negative
+  >    probes cannot create unintended durable objects.
+  >    If a probe cannot be made safely non-mutating on
+  >    unexpected acceptance, leave that probe
+  >    unexercised and report the qualification gap.
+  >    Do not silently count it as passing.
+  >
+  > These test-harness corrections are authorized.
+  > Keep them focused, tested, and separate from the
+  > active D-1 Builder's working tree.
+  >
+  > AUTHORIZED LIVE EXECUTION
+  >
+  > A. Execute once:
+  >
+  > task gitea:roles -- escape-probe
+  >
+  > Create only aieh-authz-fixture/escape-probe if absent.
+  >
+  > Require it to be private, empty and without
+  > collaborators. If it exists in another state,
+  > stop without changing it.
+  >
+  > B. Execute the corrected live negative suite once.
+  >
+  > Confirm:
+  > - Auditor identity and exact read:repository scope.
+  > - Authorized reads succeed.
+  > - All exercised unauthorized writes are refused
+  >   specifically by scope.
+  > - No unauthorized repository access.
+  > - No administrator or sudo capability.
+  > - No unintended changes to protected state.
+  >
+  > C. Execute once each:
+  >
+  > task gitea:authz
+  > task gitea:transport
+  >
+  > Their existing authorized planner/builder test
+  > commits on the fixture's proposal branches are
+  > permitted. No protected merge is authorized.
+  >
+  > D. Verify the protection baseline again.
+  >
+  > Require:
+  > - verified
+  > - exactly the same baseline digest
+  > - no unexpected credentials or permissions
+  > - clean credential-exposure scan
+  >
+  > FAILURE HANDLING
+  >
+  > Any unexpected successful auditor write is a
+  > SECURITY FAILURE.
+  >
+  > Stop immediately, preserve the observed state and
+  > report the exact operation and effects.
+  >
+  > Do not automatically revoke credentials, retry
+  > tests, clean up unexpected state, or repair
+  > protection rules.
+  >
+  > Present any required recovery act separately.
+  >
+  > BOUNDARIES
+  >
+  > This approval does not authorize:
+  > - OA-16 Act D or E.
+  > - Deliberate protection drift.
+  > - Protected merges.
+  > - Changes to other repositories.
+  > - Credential issuance, rotation or revocation.
+  > - Broader Gitea administration.
+  >
+  > Record Act C's exact outcomes, including any
+  > unexercised probes, and present Act D's scope
+  > only after Act C's applicable proof is satisfied.
+  >
+  > Continue unrelated eligible engineering work.
+
+- **2026-11-12: Act C precondition review (Overseer, read-only) of `test_protection_audit_live.py`, phase `negative`.** Harmless if wrongly accepted: the declared-value PATCHes and PUTs, deletions of absent objects, the empty priorities POST, the invalid-body deploy key, deploy token and webhook, the merge of an absent pull request. Would create a durable object if wrongly accepted: the API file write on `main` (if the branch rule also failed), both repository creations, both git pushes, and the token creation with the token as a password (today revoked after the fact). The Overseer's Act C presentation had said every body was chosen so that a wrong acceptance changes nothing: corrected here. A `SecurityFailure` raised inside `subTest` is recorded and the loop continues to the next write; the before/after snapshot does not see new repositories, branches, keys, hooks or tokens. The harness correction is dispatched next; no live step has run.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
