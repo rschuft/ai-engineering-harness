@@ -1839,6 +1839,92 @@ push never implies parent acceptance.
 
 - **2026-11-12: G-01.1 catalog admitted (admission metadata applied).** Approved source revision: `808b5bd76d09` (`policy/control-catalog.json` sha256 `67aef72a1fd2486199abb00e0b965bbbc2371a5abbcc726289505108907ee042`, blob `648fa27d`). Admitted committed revision: `fb602b24fca76ec49e5a9022e032e0093cc1abaf`, where `policy/control-catalog.json` has blob `7af4a61b1e9ef860325bf3405b4e50f0018cce85` and sha256 `0aff0990cf2b05a950a3e8010ae160607f383ecb7462c8d0d6de66f65a4001f8`. The JSON differs from the approved revision only in `admission` (`status` proposed to admitted; `approval` citing the Owner's line "APPROVED: Admit the governance control catalog" in this log), checked at JSON level by the Overseer; no control definition, deferred control, exception class or authority changed; the five unsettled exception classes stay fail-closed until G-06.3.1. The page's status prose follows; the catalog tests now build the admission state each case tests (the committed-catalog test asserts the admitted state and that its quote is in this log; no assertion removed). Checker PASS ("admission admitted"); its tests OK; full parallel suite 13/13; verify_seed PASS. Admission is not proof of enforcement: that qualification remains G-01.2. The second admission act, the move into the protected policy repository, has no decided mechanism.
 
+- **2026-11-12: Owner authorization of Act A recovery step (iv), one provisioning re-run (verbatim).**
+
+  > Owner authorization — OA-16 Act A recovery,
+  > step (iv).
+  >
+  > APPROVED: Execute exactly one provisioning re-run.
+  >
+  > Command:
+  > task gitea:roles -- provision
+  >
+  > Use a clean checkout at commit:
+  > 63f836e311bba088e3177ccda0dbddca7ffe244c
+  >
+  > This authorization is limited to completing the
+  > previously failed creation of the protection
+  > auditor's credential.
+  >
+  > Required preconditions:
+  >
+  > 1. Confirm aieh-bot-protection-audit remains an
+  >    existing restricted, non-site-administrator Bot.
+  >
+  > 2. Confirm its access-token list is empty following
+  >    the approved orphan-token deletion.
+  >
+  > 3. Confirm the sixth Credential Manager entry,
+  >    AIEH Gitea bot protection-audit, is absent.
+  >
+  > 4. Confirm the other four Bot credentials remain
+  >    present and valid.
+  >
+  > 5. Confirm the corrected credential-field preflight
+  >    and post-mint cleanup code is present at the
+  >    approved revision.
+  >
+  > If any precondition differs, stop without minting.
+  >
+  > Authorized effects:
+  >
+  > - Mint exactly one token for
+  >   aieh-bot-protection-audit.
+  > - Scope it exactly read:repository.
+  > - Store it in the sixth Credential Manager entry.
+  > - Read back and verify its identity and scopes.
+  > - Read and verify the four existing credentials
+  >   without modifying them.
+  >
+  > No account creation, credential rotation, or changes
+  > to existing roles or permissions are authorized.
+  >
+  > If credential storage fails:
+  >
+  > - Permit the implementation's single bounded
+  >   self-revocation attempt for the newly minted token.
+  > - Do not retry the mint or storage operation.
+  > - If revocation is unconfirmed, record the orphan
+  >   identity and stop for separate recovery approval.
+  >
+  > After execution:
+  >
+  > - Report the account identity and token scope.
+  > - Confirm the sixth entry exists and is readable
+  >   through the credential provider.
+  > - Report fingerprints only, never token values.
+  > - Verify the four existing entries were unchanged.
+  > - Run the credential-exposure scan.
+  > - Record the observed result and exact evidence.
+  >
+  > This approval covers one execution only.
+  >
+  > OA-16 Acts B through E remain unauthorized.
+  > The E-01.3.3 guest custody probe remains unauthorized.
+  > No additional live operation is implied.
+  >
+  > Do not interrupt the active D-1 Builder or create
+  > competing changes to its working tree.
+  >
+  > Once Act A is verified successful, present the
+  > prepared exact scope of Act B for my decision.
+  >
+  > Continue unrelated eligible engineering work.
+
+- **2026-11-12: Act A step (iv) performed once: PASS; OA-16 Act A complete.** From a clean clone at `63f836e311bba088e3177ccda0dbddca7ffe244c` (the fix present). Preconditions (read-only, 01:00:55 UTC), all met: the account ID 8, Bot, restricted, not an administrator (user list and admin API); its token list empty; no entry `AIEH Gitea bot protection-audit`; the four other bot entries present and accepted by Gitea with their scopes; `check_entry` before any Gitea call and `store_minted` after the mint in `provision`, every role's entry within the limits. The run (`gitea_roles.py provision`, the command `task gitea:roles -- provision` wraps; 01:01:08 UTC; exit 0): `created_accounts` empty; one token minted, ID 15, `aieh-protection-audit-20261112T010109Z`, scope exactly `read:repository`, fingerprint `sha256:a4109cc864373ed5`, stored in the sixth entry; the other four `minted: false`; its I7 scan clean. Read-back (01:01:19 UTC): the account unchanged; exactly one token; the entry present, readable through the credential provider and accepted by Gitea as `read:repository` with the same name; the four other entries' fingerprints and checks identical before and after (planner `4d6ca761...`, builder `2edcc707...`, reviewer `89283518...`, verifier `2ccc9194...`). No token-shaped text in any output (the Overseer's scan). Evidence (session scratch): `check.py` `55fe172d...`, `pre.json` `40d3db4d...`, `provision.out` `52626129...`, `post.json` `4b11a2dd...`. Act B was presented the same day; Acts B to E unauthorized.
+
+- **2026-11-12: S-03.3 D-1 and F-8, the one Owner-approved source read of the staged image.** [Record](S-03.3-D-1-image-source-read.md). `2cfa23a`: `image-inspect` gains a bounded read-only text mode (listing, excerpts, searches, string constants, every count capped) and, because the agent server is a PyInstaller executable without `.py` source, a reader of its PYZ modules as data (its own table-of-contents and marshal walker; `marshal.loads` never called, nothing loaded as code); the earlier behaviour and its tests unchanged. `c05b946`: the record, its argument list written before the run. One run, 2026-11-12 01:06:54 to 01:07:15 UTC, `inspected`, every layer re-hashed against the lock; the same image identity as the first read. Findings: an ACP session fork starts a new CLI process under the adapter (the slice plan's 2.4 (b) differs); sub-agent output arrives on the parent CLI's stream, the sub-agent model `CLAUDE_CODE_SUBAGENT_MODEL` else the tool's, the agent's or the main model; an experimental agent-teams switch exists; the CLI reads `ANTHROPIC_BASE_URL`; the secondary model is read from `ANTHROPIC_SMALL_FAST_MODEL` or `ANTHROPIC_DEFAULT_HAIKU_MODEL` (the code names `claude-haiku-4-5`; not a model approval; how the default is derived unanswered); non-inference traffic has documented switches, but event logging and the WebFetch domain check go to a fixed Anthropic host that does not follow the base URL (refused in the guest, not switched off). F-8: six of seven assumptions confirmed; the turn-end status set differs (the SDK's terminal set is finished, error, stuck; the driver's adds paused and waiting_for_confirmation). **Overseer verification:** the new code's loading path read (no code loading); image-inspect tests 46 and the existing ones OK; the Builder's tools suite 1428 OK; verify_seed PASS; no machine path in the record. **Overseer ruling (no gate earned):** reading the agent server's PYZ modules as data is within the approved read ("Inspect ... as data"; nothing executed). Carried to the next S-03.3 slice: `ACP_ASSUMED['status']` and the driver's turn-end set, and the 429 note. Unanswered items (section 8) need a further Owner-approved read; none requested now.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
