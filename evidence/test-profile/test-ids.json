@@ -58,7 +58,7 @@
     "test_acp_qualification_driver.DriverRun.test_the_rule_passes_on_a_guest_that_holds_it",
     "test_acp_qualification_driver.DriverRun.test_the_stop_names_its_cause",
     "test_acp_qualification_driver.DriverRun.test_the_synthetic_source_is_the_launchers",
-    "test_acp_qualification_driver.DriverRun.test_without_a_root_channel_and_with_the_search_off_the_run_is_unknown",
+    "test_acp_qualification_driver.DriverRun.test_with_an_older_reporter_and_the_search_off_the_run_is_unknown",
     "test_acp_qualification_driver.InnerConversationsScript.test_an_answer_of_another_shape_leaves_items_unset",
     "test_acp_qualification_driver.InnerConversationsScript.test_no_key_no_request_and_failures_leave_items_unset",
     "test_acp_qualification_driver.InnerConversationsScript.test_pages_are_followed_and_only_ids_and_parents_kept",
