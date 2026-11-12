@@ -857,7 +857,7 @@ tasks:
       - '{{.PYTHON}} -I -B tools/guest.py provision-fetch --profile "{{.PROFILE}}" --state-dir "{{.STATE_DIR}}"'
 
   guest:image-inspect:
-    desc: "Read-only image check (S-03.3): re-verify the provision-fetch stage against the lock, then read the staged agent-server docker-archive as data (gzip layers streamed and re-hashed, applied as a union view) and report each --path: presence, type, mode, owner, size, last-writing layer, link targets, sha256, a directory's children, PATH#key#key JSON fields; extracts, runs and writes nothing (python -I -B tools/guest.py image-inspect --profile PROFILE --state-dir STATE_DIR -- --path PATH [--path ...])"
+    desc: "Read-only image check (S-03.3): re-verify the provision-fetch stage against the lock, then read the staged agent-server docker-archive as data (gzip layers streamed and re-hashed, applied as a union view) and report each --path: presence, type, mode, owner, size, last-writing layer, link targets, sha256, a directory's children, PATH#key#key JSON fields; text mode (S-03.3 D-1), every count capped: --list GLOB, --excerpt PATH START END, --search GLOB REGEX, --distinct GLOB REGEX and, for EXE!MODULEGLOB, a PyInstaller executable's PYZ modules (--strings walks their marshal data as data); extracts, runs and writes nothing (python -I -B tools/guest.py image-inspect --profile PROFILE --state-dir STATE_DIR -- [--path PATH ...] [--list GLOB ...] [--excerpt PATH START END ...] [--search GLOB REGEX ...] [--distinct GLOB REGEX ...] [--strings EXE!MODULEGLOB ...] [--context BYTES] [--max-matches N])"
     requires:
       vars: [PROFILE, STATE_DIR]
     cmds:

@@ -62,7 +62,15 @@ under the execution-profile contract (``profiles/README.md``, section 3):
                of the regular file it resolves to, a directory's children and, for
                PATH#key#key, that field of a JSON file; also the config's runtime fields and
                the history lines naming acp, claude, codex or node. Nothing is extracted,
-               run or written.
+               run or written. Text mode (S-03.3 D-1; the Owner's decision of 2026-11-11),
+               every count capped and a reached cap reported: --list GLOB (paths by glob),
+               --excerpt PATH START END (lines of a UTF-8 text file), --search GLOB REGEX
+               (matches with --context bytes around them, at most --max-matches per file),
+               --distinct GLOB REGEX (distinct matched values with counts) and, for
+               EXE!MODULEGLOB, the PYZ modules of a PyInstaller executable: listed, searched
+               after a bounded inflate, or --strings (each code object's string constants and
+               names, the marshal data walked as data, never loaded). Binary or oversized
+               content is reported, never dumped.
     provision  guest side of provisioning (F-04.1b; decision 0006): for an instance made
                with create --provision (whose seed carries the manifest of the verified
                stage and the single-use root step), re-verify the stage, SFTP the .deb
@@ -132,7 +140,11 @@ never defaulted, contract sections 4 and 11):
                                           [--out FILE]
     python -I -B tools/guest.py provision-fetch --profile PROFILE --state-dir STATE
     python -I -B tools/guest.py image-inspect --profile PROFILE --state-dir STATE
-                                          --path PATH[#key#key] [--path ...]
+                                          [--path PATH[#key#key] ...] [--list GLOB ...]
+                                          [--excerpt PATH START END ...]
+                                          [--search GLOB REGEX ...] [--distinct GLOB REGEX ...]
+                                          [--strings EXE!MODULEGLOB ...] [--context BYTES]
+                                          [--max-matches N]
     python -I -B tools/guest.py create    --profile PROFILE --state-dir STATE --name NAME --provision
     python -I -B tools/guest.py provision --profile PROFILE --state-dir STATE --name NAME
     python -I -B tools/guest.py conversation-smoke --profile PROFILE --state-dir STATE --name NAME
@@ -160,6 +172,7 @@ import argparse
 import base64
 import hashlib
 import copy
+import fnmatch
 import importlib.util
 import io
 import ipaddress
@@ -171,6 +184,7 @@ import secrets
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -5862,9 +5876,10 @@ def _layer_stream(tf, member, locked, index, consume):
                       f'lock says {locked["digest"]} ({locked["size"]} bytes)')
 
 
-def read_image_archive(handle, image, specs):
+def read_image_archive(handle, image, specs, text=None):
     """Report the requested paths of a docker-archive (an open binary file) whose config and
-    layers must match the locked image; see the section comment."""
+    layers must match the locked image; see the section comment. text: the requests of
+    parse_image_text_requests, answered under 'text' (see the text mode's section comment)."""
     with tarfile.open(fileobj=handle, mode='r:') as tf:
         by_name = {m.name: m for m in tf.getmembers()}
         try:
@@ -5894,19 +5909,36 @@ def read_image_archive(handle, image, specs):
         reports, wanted = [], {}
         for spec in specs:
             reports.append(_image_path_report(view, spec, wanted))
+        jobs, done = {}, set()
+        text_out = _image_text_plan(view, text, jobs) if text is not None else None
         contents = {}
-        for index in sorted({src[0] for src in wanted}):
+        for index in sorted({src[0] for src in wanted} | {src[0] for src in jobs}):
             def keep(ordinal, info, layer_tf, index=index):
-                if (index, ordinal) not in wanted:
+                key = (index, ordinal)
+                if key not in wanted and key not in jobs:
                     return
                 handle_ = layer_tf.extractfile(info)
                 digest, kept = hashlib.sha256(), []
+                held = [] if key in jobs and info.size <= IMAGE_TEXT_MAX_FILE else None
                 for block in iter(lambda: handle_.read(1 << 20), b''):
                     digest.update(block)
-                    if wanted[(index, ordinal)] and sum(map(len, kept)) <= IMAGE_INSPECT_MAX_JSON:
+                    if wanted.get(key) and sum(map(len, kept)) <= IMAGE_INSPECT_MAX_JSON:
                         kept.append(block)
-                contents[(index, ordinal)] = (digest.hexdigest(), b''.join(kept))
+                    if held is not None:
+                        held.append(block)
+                if key in wanted:
+                    contents[key] = (digest.hexdigest(), b''.join(kept))
+                if key in jobs:
+                    data = b''.join(held) if held is not None else None
+                    held, cache = None, {}
+                    for job in jobs[key]:
+                        job(data, digest.hexdigest(), info.size, cache)
+                    done.add(key)
             _layer_stream(tf, members[index], image['layers'][index], index, keep)
+        missed = sorted(set(jobs) - done)
+        if missed:
+            raise Refused('IMAGE_FORMAT', f'layer {missed[0][0]} entry {missed[0][1]} was not '
+                          'met again')
     for report in reports:
         src = report.pop('_src', None)
         if src is None:
@@ -5919,9 +5951,24 @@ def read_image_archive(handle, image, specs):
             selector = report.pop('_selector')
             report.update(_json_field(data, selector) if len(data) <= IMAGE_INSPECT_MAX_JSON
                           else {'field_error': 'larger than the JSON read bound'})
-    return {'config': image_config_summary(config, len(members)), 'paths': reports,
-            'anomalies': {'count': view.anomaly_count, 'examples': view.anomalies},
-            'nodes': len(view.nodes)}
+    out = {'config': image_config_summary(config, len(members)), 'paths': reports,
+           'anomalies': {'count': view.anomaly_count, 'examples': view.anomalies},
+           'nodes': len(view.nodes)}
+    if text_out is not None:
+        out['text'] = dict(_image_text_finish(text_out), bounds=_image_text_bounds(text))
+    return out
+
+
+def _image_text_bounds(text):
+    return {'context_bytes': text['context'], 'max_matches_per_file': text['max_matches'],
+            'max_matches_per_request': IMAGE_TEXT_MAX_REQUEST_MATCHES,
+            'max_count_per_file': IMAGE_TEXT_MAX_COUNT, 'max_files': IMAGE_TEXT_MAX_FILES,
+            'max_list': IMAGE_TEXT_MAX_LIST, 'max_file_bytes': IMAGE_TEXT_MAX_FILE,
+            'max_excerpt_file_bytes': IMAGE_TEXT_MAX_EXCERPT_FILE,
+            'max_module_bytes': IMAGE_TEXT_MAX_MODULE, 'max_line_chars': IMAGE_TEXT_MAX_LINE,
+            'max_match_bytes': IMAGE_TEXT_MAX_MATCH, 'max_distinct': IMAGE_TEXT_MAX_DISTINCT,
+            'max_strings_per_module': IMAGE_TEXT_MAX_STRINGS,
+            'max_string_chars': IMAGE_TEXT_MAX_TOKEN}
 
 
 def _image_path_report(view, spec, wanted):
@@ -5987,12 +6034,724 @@ def image_config_summary(config, layer_count):
             'layer_steps': steps if layer == layer_count else None}
 
 
-def image_inspect(ctx, path_specs):
-    """image-inspect: the requested paths of the staged, re-verified agent-server image."""
+# ---------------------------------------------------------------- image-inspect text mode (S-03.3 D-1)
+#
+# The Owner's decision of 2026-11-11 on S-03.3 D-1 (option A): one more read-only inspection of
+# the staged, verified archive, reading the bundled ACP adapter, its SDK and CLI, and the agent
+# server's own code, as data. The text requests read file content from the same union view, in
+# the same second pass that hashes the --path files, and report bounded data only: a listing by
+# glob, a line excerpt of a text file, the matches of a pattern with a bounded context, the
+# distinct values a pattern matches and, inside a PyInstaller executable, its PYZ modules' names,
+# matches and string constants (the zlib data is inflated under a bound and its marshal data
+# walked as data, never loaded as code). Nothing from the image is written, extracted or run;
+# every count is capped and a reached cap is reported, never passed silently.
+
+IMAGE_TEXT_MAX_REQUESTS = 96                # --list, --excerpt, --search, --distinct, --strings
+IMAGE_TEXT_MAX_LIST = 400                   # entries reported per --list
+IMAGE_TEXT_MAX_FILES = 400                  # files (or PYZ modules) read per request
+IMAGE_TEXT_MAX_SKIPPED = 50                 # non-file glob matches reported per request
+IMAGE_TEXT_MAX_FILE = 512 << 20             # bytes of one file held for text
+IMAGE_TEXT_MAX_EXCERPT_FILE = 64 << 20      # bytes of a file an excerpt decodes
+IMAGE_TEXT_MAX_MODULE = 16 << 20            # inflated bytes of one PYZ module
+IMAGE_TEXT_MAX_EXCERPT_LINES = 200
+IMAGE_TEXT_MAX_LINE = 600                   # characters of a reported line
+IMAGE_TEXT_DEFAULT_CONTEXT = 160            # bytes before and after a match
+IMAGE_TEXT_MAX_CONTEXT = 400
+IMAGE_TEXT_DEFAULT_MATCHES = 8              # matches reported per file and request
+IMAGE_TEXT_MAX_MATCHES = 50
+IMAGE_TEXT_MAX_REQUEST_MATCHES = 200        # matches reported per request over all its files
+IMAGE_TEXT_MAX_COUNT = 100000               # matches counted per file and request
+IMAGE_TEXT_MAX_MATCH = 200                  # bytes of a reported match or distinct value
+IMAGE_TEXT_MAX_DISTINCT = 400               # distinct values reported per request
+IMAGE_TEXT_MAX_DISTINCT_HELD = 20000        # distinct values held per file
+IMAGE_TEXT_MAX_PATTERN = 256
+IMAGE_TEXT_MAX_STRINGS_MODULES = 8          # PYZ modules per --strings
+IMAGE_TEXT_MAX_STRINGS = 4000               # string constants and names reported per module
+IMAGE_TEXT_MAX_TOKEN = 240                  # characters of a reported string
+IMAGE_TEXT_MARSHAL_OBJECTS = 2000000
+IMAGE_TEXT_MARSHAL_DEPTH = 200
+IMAGE_TEXT_OPS = ('list', 'excerpt', 'search', 'distinct', 'strings')
+PYI_COOKIE = b'MEI' + bytes([12, 11, 10, 11, 14])      # PyInstaller's CArchive cookie magic
+PYI_COOKIE_FORMAT = '!8sIIII64s'
+PYI_TOC_ENTRY = '!IIIIBc'
+PYI_PYZ_MAGIC = b'PYZ' + bytes([0])
+PYI_PYZ_KINDS = {0: 'module', 1: 'package', 2: 'data', 3: 'namespace package'}
+PYI_CODE_VERSIONS = (311, 312, 313)                    # the code-object layout the walker knows
+_IMAGE_NL = bytes([10])
+_IMAGE_NUL = bytes([0])
+_IMAGE_CONTROL = re.compile('[' + chr(0) + '-' + chr(8) + chr(11) + chr(12) + chr(14) + '-' +
+                            chr(31) + chr(127) + '-' + chr(159) + ']')
+_IMAGE_GLOB_CHARS = ('*', '?', '[')
+
+
+def _image_render(data):
+    """Bytes from the image as reportable text: UTF-8 where valid, every other byte and every
+    control character but tab, newline and carriage return as a backslash-x escape."""
+    text = bytes(data).decode('utf-8', 'backslashreplace')
+    return _IMAGE_CONTROL.sub(lambda m: '%sx%02x' % (chr(92), ord(m.group())), text)
+
+
+def _image_glob_component(part, spec):
+    out, i = [], 0
+    while i < len(part):
+        c = part[i]
+        if c == '*':
+            out.append('[^/]*')
+        elif c == '?':
+            out.append('[^/]')
+        elif c == '[':
+            j = part.find(']', i + 2)
+            if j < 0:
+                raise Refused('REFUSED', f'glob {spec!r}: an unclosed [')
+            body = part[i + 1:j]
+            negate = body[:1] == '!'
+            body = ''.join(re.escape(ch) if ch != '-' else '-' for ch in body[1 if negate else 0:])
+            out.append(('[^/' if negate else '[') + body + ']')
+            i = j
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return ''.join(out)
+
+
+def image_glob_regex(spec):
+    """An absolute image glob ('*', '?', '[...]' within one component, '**' for any number of
+    components) as a compiled regex over the union view's root-relative paths."""
+    if not isinstance(spec, str) or not spec.startswith('/') or '\0' in spec or len(spec) > 1024:
+        raise Refused('REFUSED', f'glob {spec!r}: needs an absolute image path or glob')
+    parts = spec.split('/')[1:]
+    if any(p in ('', '.', '..') for p in parts):
+        raise Refused('REFUSED', f'glob {spec!r}: empty, . or .. components are refused')
+    rx = []
+    for index, part in enumerate(parts):
+        last = index == len(parts) - 1
+        if part == '**':
+            rx.append('[^/]+(?:/[^/]+)*' if last else '(?:[^/]+/)*')
+        else:
+            rx.append(_image_glob_component(part, spec) + ('' if last else '/'))
+    return re.compile(''.join(rx), re.DOTALL)
+
+
+def _image_text_target(spec, what, member=None):
+    """A request's target: a path glob, or EXE!MODULEGLOB (the PYZ modules of a PyInstaller
+    executable at the exact image path EXE). member: True requires the second form."""
+    if not isinstance(spec, str):
+        raise Refused('REFUSED', f'{what}: needs a value')
+    if '!' in spec:
+        exe, _, modules = spec.partition('!')
+        if member is False:
+            raise Refused('REFUSED', f'{what} {spec!r}: takes a path, not EXE!MODULE')
+        if not exe.startswith('/') or '\0' in exe or len(exe) > 1024 or \
+                any(c in exe for c in _IMAGE_GLOB_CHARS):
+            raise Refused('REFUSED', f'{what} {spec!r}: EXE must be an exact absolute path')
+        if not modules or len(modules) > 256 or '/' in modules or '\0' in modules or \
+                '!' in modules:
+            raise Refused('REFUSED', f'{what} {spec!r}: needs a module name or glob after !')
+        return {'exe': exe, 'modules': modules}
+    if member:
+        raise Refused('REFUSED', f'{what} {spec!r}: needs EXE!MODULE (a PyInstaller executable)')
+    return {'_rx_path': image_glob_regex(spec)}
+
+
+def _image_text_pattern(pattern, what):
+    if not isinstance(pattern, str) or not pattern or len(pattern) > IMAGE_TEXT_MAX_PATTERN or \
+            '\0' in pattern:
+        raise Refused('REFUSED', f'{what}: a pattern of 1 to {IMAGE_TEXT_MAX_PATTERN} characters')
+    try:
+        rx = re.compile(pattern.encode('utf-8'))
+    except re.error as exc:
+        raise Refused('REFUSED', f'{what} {pattern!r}: not a regular expression ({exc})') from exc
+    if rx.search(b'') is not None:
+        raise Refused('REFUSED', f'{what} {pattern!r}: matches the empty string')
+    if rx.groups > 1:
+        raise Refused('REFUSED', f'{what} {pattern!r}: at most one group')
+    return rx
+
+
+def parse_image_text_requests(lists=None, excerpts=None, searches=None, distincts=None,
+                              strings=None, context=None, max_matches=None):
+    """The text requests of one image-inspect run, validated before anything is read."""
+    context = IMAGE_TEXT_DEFAULT_CONTEXT if context is None else context
+    max_matches = IMAGE_TEXT_DEFAULT_MATCHES if max_matches is None else max_matches
+    if isinstance(context, bool) or not isinstance(context, int) or \
+            not 0 <= context <= IMAGE_TEXT_MAX_CONTEXT:
+        raise Refused('REFUSED', f'--context: 0 to {IMAGE_TEXT_MAX_CONTEXT} bytes')
+    if isinstance(max_matches, bool) or not isinstance(max_matches, int) or \
+            not 1 <= max_matches <= IMAGE_TEXT_MAX_MATCHES:
+        raise Refused('REFUSED', f'--max-matches: 1 to {IMAGE_TEXT_MAX_MATCHES}')
+    requests = []
+    for spec in lists or ():
+        requests.append(dict(op='list', glob=spec, **_image_text_target(spec, '--list')))
+    for path, start, end in excerpts or ():
+        _image_text_target(path, '--excerpt', member=False)
+        if not path.startswith('/') or any(c in path for c in _IMAGE_GLOB_CHARS):
+            raise Refused('REFUSED', f'--excerpt {path!r}: an exact absolute path')
+        if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int) or \
+                not isinstance(end, int) or not 1 <= start <= end or \
+                end - start + 1 > IMAGE_TEXT_MAX_EXCERPT_LINES:
+            raise Refused('REFUSED', f'--excerpt {path!r} {start} {end}: lines START to END, '
+                          f'1 <= START <= END, at most {IMAGE_TEXT_MAX_EXCERPT_LINES} lines')
+        requests.append({'op': 'excerpt', 'path': path, 'start': start, 'end': end})
+    for op, pairs in (('search', searches), ('distinct', distincts)):
+        for spec, pattern in pairs or ():
+            requests.append(dict(op=op, glob=spec, pattern=pattern,
+                                 _rx=_image_text_pattern(pattern, f'--{op}'),
+                                 **_image_text_target(spec, f'--{op}')))
+    for spec in strings or ():
+        requests.append(dict(op='strings', glob=spec,
+                             **_image_text_target(spec, '--strings', member=True)))
+    if len(requests) > IMAGE_TEXT_MAX_REQUESTS:
+        raise Refused('REFUSED', f'at most {IMAGE_TEXT_MAX_REQUESTS} text requests')
+    return {'requests': requests, 'context': context, 'max_matches': max_matches}
+
+
+def _image_matches(data, rx, context, max_matches, lines):
+    """The first max_matches matches of rx in data with their context; all matches counted
+    up to IMAGE_TEXT_MAX_COUNT. Line numbers only for a text file."""
+    found, total, line, last = [], 0, 1, 0
+    for m in rx.finditer(data):
+        total += 1
+        if len(found) < max_matches:
+            s, e = m.span()
+            item = {'offset': s}
+            if lines:
+                line += data.count(_IMAGE_NL, last, s)
+                last = s
+                item['line'] = line
+            item['match'] = _image_render(data[s:min(e, s + IMAGE_TEXT_MAX_MATCH)])
+            if e - s > IMAGE_TEXT_MAX_MATCH:
+                item['match_truncated'] = True
+            item['before'] = _image_render(data[max(0, s - context):s])
+            item['after'] = _image_render(data[e:e + context])
+            found.append(item)
+        if total >= IMAGE_TEXT_MAX_COUNT:
+            return found, total, True
+    return found, total, False
+
+
+def _image_distinct(data, rx):
+    counts, total, full = {}, 0, False
+    for m in rx.finditer(data):
+        total += 1
+        key = (m.group(1) if rx.groups else m.group()) or b''
+        key = key[:IMAGE_TEXT_MAX_MATCH]
+        if key in counts:
+            counts[key] += 1
+        elif len(counts) < IMAGE_TEXT_MAX_DISTINCT_HELD:
+            counts[key] = 1
+        else:
+            full = True
+        if total >= IMAGE_TEXT_MAX_COUNT:
+            return counts, total, True, full
+    return counts, total, False, full
+
+
+def _image_excerpt(data, start, end):
+    if len(data) > IMAGE_TEXT_MAX_EXCERPT_FILE:
+        return {'refused': 'larger than the excerpt bound'}
+    if _IMAGE_NUL in data:
+        return {'refused': 'binary (a NUL byte)'}
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return {'refused': 'binary (not UTF-8)'}
+    lines = text.split(chr(10))
+    if lines and lines[-1] == '':
+        lines.pop()
+    out = []
+    for n in range(start, min(end, len(lines)) + 1):
+        raw = lines[n - 1].rstrip(chr(13))
+        item = {'n': n, 'text': _IMAGE_CONTROL.sub(
+            lambda m: '%sx%02x' % (chr(92), ord(m.group())), raw[:IMAGE_TEXT_MAX_LINE])}
+        if len(raw) > IMAGE_TEXT_MAX_LINE:
+            item.update(truncated=True, chars=len(raw))
+        out.append(item)
+    return {'lines_total': len(lines), 'lines': out}
+
+
+class _PyiError(ValueError):
+    """A PyInstaller archive or marshal structure this reader does not accept."""
+
+
+def _marshal_toc(buf, pos):
+    """PyInstaller's PYZ table of contents: marshal data of lists, tuples, a dict, strings and
+    ints only; anything else is refused (the stdlib marshal is not safe for untrusted data)."""
+    refs = []
+
+    def take(n):
+        nonlocal pos
+        if n < 0 or pos + n > len(buf):
+            raise _PyiError('PYZ table of contents: truncated')
+        chunk = buf[pos:pos + n]
+        pos += n
+        return bytes(chunk)
+
+    def u32():
+        return struct.unpack('<I', take(4))[0]
+
+    def obj(depth):
+        if depth > 8:
+            raise _PyiError('PYZ table of contents: nested too deep')
+        code = take(1)[0]
+        kind = chr(code & 0x7f)
+        slot = None
+        if code & 0x80:
+            slot = len(refs)
+            refs.append(None)
+        if kind in '([':
+            n = u32()
+            if n > 1000000:
+                raise _PyiError('PYZ table of contents: too many entries')
+            value = [obj(depth + 1) for _ in range(n)]
+            value = tuple(value) if kind == '(' else value
+        elif kind == ')':
+            value = tuple(obj(depth + 1) for _ in range(take(1)[0]))
+        elif kind == '{':
+            value = {}
+            while buf[pos:pos + 1] != b'0':
+                key = obj(depth + 1)
+                value[key] = obj(depth + 1)
+            take(1)
+        elif kind == 'i':
+            value = struct.unpack('<i', take(4))[0]
+        elif kind in 'zZ':
+            value = take(take(1)[0]).decode('ascii')
+        elif kind in 'aA':
+            value = take(u32()).decode('ascii')
+        elif kind in 'tu':
+            value = take(u32()).decode('utf-8', 'surrogatepass')
+        elif kind == 'r':
+            index = u32()
+            if index >= len(refs) or refs[index] is None:
+                raise _PyiError('PYZ table of contents: a bad back reference')
+            value = refs[index]
+        else:
+            raise _PyiError(f'PYZ table of contents: marshal type {kind!r} is not accepted')
+        if slot is not None:
+            refs[slot] = value
+        return value
+
+    try:
+        toc = obj(0)
+    except UnicodeDecodeError as exc:
+        raise _PyiError('PYZ table of contents: a name is not text') from exc
+    items = toc.items() if isinstance(toc, dict) else toc
+    modules = {}
+    for item in items if isinstance(items, (list, tuple, type({}.items()))) else ():
+        name, entry = item if isinstance(item, (tuple, list)) and len(item) == 2 else (None, None)
+        if not isinstance(name, str) or not isinstance(entry, (tuple, list)) or len(entry) != 3 or \
+                not all(isinstance(v, int) and not isinstance(v, bool) for v in entry):
+            raise _PyiError('PYZ table of contents: an entry is not (name, (type, offset, length))')
+        modules[name] = tuple(entry)
+    if not modules:
+        raise _PyiError('PYZ table of contents: no entries')
+    return modules
+
+
+def _pyi_archive_at(data, pos):
+    size = struct.calcsize(PYI_COOKIE_FORMAT)
+    if pos + size > len(data):
+        raise _PyiError('the cookie is truncated')
+    _, length, toc_offset, toc_length, pyver, _ = struct.unpack_from(PYI_COOKIE_FORMAT, data, pos)
+    start = pos + size - length
+    if start < 0 or toc_offset + toc_length > length:
+        raise _PyiError('the cookie does not describe the archive around it')
+    entries, at, end = [], start + toc_offset, start + toc_offset + toc_length
+    head = struct.calcsize(PYI_TOC_ENTRY)
+    while at < end:
+        entry_len, offset, dlen, ulen, flag, kind = struct.unpack_from(PYI_TOC_ENTRY, data, at)
+        if entry_len < head or at + entry_len > end or offset + dlen > length:
+            raise _PyiError('a table of contents entry is out of bounds')
+        name = bytes(data[at + head:at + entry_len]).rstrip(_IMAGE_NUL).decode('utf-8', 'replace')
+        entries.append((name, offset, dlen, ulen, flag, kind))
+        at += entry_len
+    pyz = [e for e in entries if e[5] == b'z']
+    if not pyz:
+        raise _PyiError('no PYZ entry in the archive')
+    name, offset, dlen, _, flag, _ = pyz[0]
+    blob = memoryview(data)[start + offset:start + offset + dlen]
+    if flag or bytes(blob[:4]) != PYI_PYZ_MAGIC or len(blob) < 12:
+        raise _PyiError(f'PYZ entry {name!r} is not an uncompressed PYZ archive')
+    toc_at = struct.unpack('!i', bytes(blob[8:12]))[0]
+    if not 12 <= toc_at < len(blob):
+        raise _PyiError(f'PYZ entry {name!r}: its table of contents is out of bounds')
+    return {'cookie_offset': pos, 'python': pyver, 'entries': len(entries), 'pyz_entry': name,
+            'pyz_count': len(pyz), 'pyz_magic': bytes(blob[4:8]).hex(),
+            'modules': _marshal_toc(blob, toc_at), '_pyz': blob}
+
+
+def pyi_archive(data):
+    """The PYZ archive of a PyInstaller executable (its bytes): the last cookie that describes
+    a consistent archive (the bootloader's own copy of the magic is skipped)."""
+    pos, last = data.rfind(PYI_COOKIE), 'no PyInstaller cookie'
+    for _ in range(4):
+        if pos < 0:
+            break
+        try:
+            return _pyi_archive_at(data, pos)
+        except (_PyiError, struct.error) as exc:
+            last = str(exc)
+        pos = data.rfind(PYI_COOKIE, 0, pos)
+    raise _PyiError(last)
+
+
+def pyz_module(archive, name):
+    """One PYZ entry inflated under IMAGE_TEXT_MAX_MODULE: bytes, or the reason as a str."""
+    kind, offset, length = archive['modules'][name]
+    pyz = archive['_pyz']
+    if offset < 0 or length < 0 or offset + length > len(pyz):
+        return 'its data is out of bounds'
+    inflater = zlib.decompressobj()
+    try:
+        out = inflater.decompress(pyz[offset:offset + length], IMAGE_TEXT_MAX_MODULE + 1)
+    except zlib.error as exc:
+        return f'not zlib data ({exc})'
+    if len(out) > IMAGE_TEXT_MAX_MODULE or inflater.unconsumed_tail:
+        return 'larger than the module bound'
+    return out
+
+
+class _MarshalCode:
+    __slots__ = ('qualname', 'line', 'filename', 'consts', 'names')
+
+
+class _MarshalWalk:
+    """A walk of one module's marshal data (CPython 3.11 to 3.13 code objects) that keeps the
+    string constants and names of each code object; nothing is turned into code."""
+    NULL = object()
+
+    def __init__(self, buf):
+        self.buf, self.pos, self.refs, self.count = buf, 0, [], 0
+
+    def take(self, n):
+        if n < 0 or self.pos + n > len(self.buf):
+            raise _PyiError(f'marshal data truncated at {self.pos}')
+        chunk = self.buf[self.pos:self.pos + n]
+        self.pos += n
+        return bytes(chunk)
+
+    def i32(self):
+        return struct.unpack('<i', self.take(4))[0]
+
+    def obj(self, depth=0):
+        if depth > IMAGE_TEXT_MARSHAL_DEPTH:
+            raise _PyiError('marshal data nested too deep')
+        self.count += 1
+        if self.count > IMAGE_TEXT_MARSHAL_OBJECTS:
+            raise _PyiError('marshal data has too many objects')
+        at = self.pos
+        code = self.take(1)[0]
+        kind = chr(code & 0x7f)
+        slot = None
+        if code & 0x80:
+            slot = len(self.refs)
+            self.refs.append(None)
+        value = self.value(kind, depth, at)
+        if slot is not None:
+            self.refs[slot] = value
+        return value
+
+    def value(self, kind, depth, at):
+        simple = {'0': self.NULL, 'N': None, 'T': True, 'F': False, 'S': 'StopIteration',
+                  '.': Ellipsis}
+        if kind in simple:
+            return simple[kind]
+        if kind == 'i':
+            return self.i32()
+        if kind == 'l':
+            n = self.i32()
+            digits = struct.unpack(f'<{abs(n)}H', self.take(2 * abs(n))) if n else ()
+            value = sum(d << (15 * i) for i, d in enumerate(digits))
+            return -value if n < 0 else value
+        if kind == 'g':
+            return struct.unpack('<d', self.take(8))[0]
+        if kind == 'y':
+            return complex(*struct.unpack('<dd', self.take(16)))
+        if kind in 'fx':
+            parts = [float(self.take(self.take(1)[0]).decode('ascii'))
+                     for _ in range(1 if kind == 'f' else 2)]
+            return parts[0] if kind == 'f' else complex(*parts)
+        if kind == 's':
+            return bytes(self.take(self.i32()))
+        if kind in 'zZ':
+            return self.take(self.take(1)[0]).decode('ascii', 'replace')
+        if kind in 'aAtu':
+            return self.take(self.i32()).decode('utf-8', 'surrogatepass')
+        if kind in '([<>':
+            n = self.i32()
+            if n < 0 or n > len(self.buf):
+                raise _PyiError(f'marshal sequence length {n} at {at}')
+            return tuple(self.obj(depth + 1) for _ in range(n))
+        if kind == ')':
+            return tuple(self.obj(depth + 1) for _ in range(self.take(1)[0]))
+        if kind == '{':
+            pairs = []
+            while True:
+                key = self.obj(depth + 1)
+                if key is self.NULL:
+                    return tuple(pairs)
+                pairs.append((key, self.obj(depth + 1)))
+        if kind == 'r':
+            index = struct.unpack('<I', self.take(4))[0]
+            if index >= len(self.refs) or self.refs[index] is None:
+                raise _PyiError(f'a bad marshal back reference at {at}')
+            return self.refs[index]
+        if kind == 'c':
+            node = _MarshalCode()
+            self.take(20)                    # argcount, posonly, kwonly, stacksize, flags
+            self.obj(depth + 1)              # the bytecode
+            node.consts = self.obj(depth + 1)
+            node.names = self.obj(depth + 1)
+            self.obj(depth + 1)              # localsplusnames
+            self.obj(depth + 1)              # localspluskinds
+            node.filename = self.obj(depth + 1)
+            name = self.obj(depth + 1)
+            node.qualname = self.obj(depth + 1)
+            node.qualname = node.qualname if isinstance(node.qualname, str) else name
+            node.line = self.i32()
+            self.obj(depth + 1)              # linetable
+            self.obj(depth + 1)              # exceptiontable
+            return node
+        raise _PyiError(f'marshal type {kind!r} at {at} is not accepted')
+
+
+def _pyz_strings(data):
+    """The code objects of one inflated PYZ module in source order (a parent before its nested
+    code), each with its qualified name, first line, string constants and names."""
+    walk = _MarshalWalk(memoryview(data))
+    root = walk.obj()
+    if not isinstance(root, _MarshalCode):
+        raise _PyiError('the module data is not a code object')
+    codes, budget = [], [IMAGE_TEXT_MAX_STRINGS]
+
+    def strings(values, out):
+        for v in values:
+            if isinstance(v, str):
+                if budget[0] <= 0:
+                    return
+                budget[0] -= 1
+                out.append(_image_render(v[:IMAGE_TEXT_MAX_TOKEN].encode('utf-8', 'replace')))
+            elif isinstance(v, tuple) and not isinstance(v, _MarshalCode):
+                strings(v, out)
+
+    def visit(node):
+        entry = {'code': node.qualname, 'line': node.line, 'consts': [], 'names': []}
+        strings(node.consts if isinstance(node.consts, tuple) else (), entry['consts'])
+        strings(node.names if isinstance(node.names, tuple) else (), entry['names'])
+        codes.append(entry)
+        for value in node.consts if isinstance(node.consts, tuple) else ():
+            if isinstance(value, _MarshalCode):
+                visit(value)
+
+    visit(root)
+    return {'filename': root.filename if isinstance(root.filename, str) else None,
+            'codes': codes, 'strings_truncated': budget[0] <= 0}
+
+
+def _image_resolved_file(view, path):
+    """(report, src): an exact image path resolved inside the root; src is set for a file."""
+    report = {'path': path}
+    final_path, final, hops, error = view.resolve(path, follow_last=True)
+    if error:
+        return dict(report, present=False, refused=error), None
+    if final is None:
+        return dict(report, present=False, dangling=True) if hops else \
+            dict(report, present=False), None
+    report['present'] = True
+    if hops:
+        report['real_path'] = '/' + final_path
+    report.update(_node_fields(final))
+    if final.kind != 'file':
+        return dict(report, refused=f'a {final.kind}, not a file'), None
+    return report, final.src
+
+
+def _image_text_glob(view, request):
+    """(files, skipped, total): the union paths a path glob matches, in path order."""
+    rx, files, skipped, total = request['_rx_path'], [], [], 0
+    for path in sorted(p for p in view.nodes if p and rx.fullmatch(p)):
+        node = view.nodes[path]
+        if node.kind == 'dir':
+            continue
+        if node.kind != 'file':
+            total += 1
+            if len(skipped) < IMAGE_TEXT_MAX_SKIPPED:
+                skipped.append(dict({'path': '/' + path, 'type': node.kind},
+                                    **({'link_target': node.target} if node.target else {})))
+            continue
+        files.append((path, node))
+    return files, skipped, total
+
+
+def _image_text_file_job(out, request, context, max_matches):
+    """The job that fills one searched file's entry (search or distinct) from its bytes."""
+    def job(data, sha, size, _cache):
+        out.update(sha256=sha)
+        if data is None:
+            out['refused'] = 'larger than the text bound'
+            return
+        _image_text_body(out, data, request, context, max_matches, lines=_IMAGE_NUL not in data)
+    return job
+
+
+def _image_text_body(out, data, request, context, max_matches, lines):
+    out['binary'] = not lines
+    if request['op'] == 'search':
+        found, total, capped = _image_matches(data, request['_rx'], context, max_matches, lines)
+        out.update(matches_total=total, matches=found)
+    else:
+        counts, total, capped, full = _image_distinct(data, request['_rx'])
+        out.update(matches_total=total, _counts=counts)
+        if full:
+            out['distinct_held_capped'] = True
+    if capped:
+        out['count_capped'] = True
+
+
+def _image_pyz_job(out, request, context, max_matches):
+    """The job for EXE!MODULES requests: list, search, distinct or strings over PYZ modules."""
+    def job(data, sha, size, cache):
+        out['exe'].update(sha256=sha)
+        if data is None:
+            out['refused'] = 'the executable is larger than the text bound'
+            return
+        if 'archive' not in cache:
+            try:
+                cache['archive'] = pyi_archive(data)
+            except _PyiError as exc:
+                cache['archive'] = str(exc)
+        archive = cache['archive']
+        if isinstance(archive, str):
+            out['refused'] = f'not a readable PyInstaller executable: {archive}'
+            return
+        out['pyinstaller'] = {k: v for k, v in archive.items() if not k.startswith('_')
+                              and k != 'modules'}
+        out['pyinstaller']['modules'] = len(archive['modules'])
+        names = sorted(n for n in archive['modules'] if fnmatch.fnmatchcase(n, request['modules']))
+        out['modules_total'] = len(names)
+        limit = IMAGE_TEXT_MAX_STRINGS_MODULES if request['op'] == 'strings' else \
+            IMAGE_TEXT_MAX_LIST if request['op'] == 'list' else IMAGE_TEXT_MAX_FILES
+        if len(names) > limit:
+            out['modules_truncated'] = True
+        if request['op'] == 'strings' and archive['python'] not in PYI_CODE_VERSIONS:
+            out['refused'] = f'python {archive["python"]}: the marshal walker knows ' \
+                             f'{list(PYI_CODE_VERSIONS)}'
+            return
+        modules = cache.setdefault('modules', {})
+        for name in names[:limit]:
+            kind, _, length = archive['modules'][name]
+            entry = {'path': f'{request["exe"]}!{name}', 'kind': PYI_PYZ_KINDS.get(kind, kind),
+                     'compressed': length}
+            out['files'].append(entry)
+            if request['op'] == 'list':
+                continue
+            if name not in modules:
+                modules[name] = pyz_module(archive, name)
+            body = modules[name]
+            if isinstance(body, str):
+                entry['refused'] = body
+                continue
+            entry.update(size=len(body), sha256=hashlib.sha256(body).hexdigest())
+            if request['op'] == 'strings':
+                try:
+                    entry.update(_pyz_strings(body))
+                except (_PyiError, struct.error, UnicodeDecodeError, ValueError) as exc:
+                    entry['refused'] = f'marshal walk: {exc}'
+            else:
+                _image_text_body(entry, body, request, context, max_matches, lines=False)
+    return job
+
+
+def _image_text_plan(view, text, jobs):
+    """The output skeleton of every text request, and the jobs (by layer entry) that fill it
+    from file content in the second pass."""
+    out = {key: [] for key in ('lists', 'excerpts', 'searches', 'distinct', 'strings')}
+    slot = {'list': 'lists', 'excerpt': 'excerpts', 'search': 'searches', 'distinct': 'distinct',
+            'strings': 'strings'}
+    context, max_matches = text['context'], text['max_matches']
+
+    def add(src, job):
+        jobs.setdefault(src, []).append(job)
+
+    for request in text['requests']:
+        op = request['op']
+        entry = {k: v for k, v in request.items() if not k.startswith('_') and k != 'op'}
+        out[slot[op]].append(entry)
+        if op == 'excerpt':
+            report, src = _image_resolved_file(view, request['path'])
+            entry.update(report, start=request['start'], end=request['end'])
+            if src is not None:
+                def excerpt_job(data, sha, size, _cache, entry=entry, request=request):
+                    entry['sha256'] = sha
+                    entry.update(_image_excerpt(data, request['start'], request['end'])
+                                 if data is not None else {'refused': 'larger than the text bound'})
+                add(src, excerpt_job)
+            continue
+        if 'exe' in request:
+            report, src = _image_resolved_file(view, request['exe'])
+            entry.update(exe=report, files=[])
+            if src is not None:
+                add(src, _image_pyz_job(entry, request, context, max_matches))
+            continue
+        files, skipped, not_files = _image_text_glob(view, request)
+        if op == 'list':
+            listed = [dict({'path': '/' + p}, **_node_fields(n)) for p, n in files]
+            listed += skipped
+            listed.sort(key=lambda e: e['path'])
+            entry.update(total=len(files) + not_files, entries=listed[:IMAGE_TEXT_MAX_LIST],
+                         truncated=len(files) + not_files > IMAGE_TEXT_MAX_LIST
+                         or not_files > len(skipped))
+            continue
+        entry.update(files_total=len(files), files=[], skipped=skipped, skipped_total=not_files)
+        if len(files) > IMAGE_TEXT_MAX_FILES:
+            entry['files_truncated'] = True
+        for path, node in files[:IMAGE_TEXT_MAX_FILES]:
+            item = dict({'path': '/' + path}, **_node_fields(node))
+            entry['files'].append(item)
+            add(node.src, _image_text_file_job(item, request, context, max_matches))
+    return out
+
+
+def _image_text_finish(out):
+    """Request-level caps, applied in path order once every file is read."""
+    for entry in out['searches']:
+        reported, total = 0, 0
+        for item in entry['files']:
+            total += item.get('matches_total', 0)
+            keep = max(0, IMAGE_TEXT_MAX_REQUEST_MATCHES - reported)
+            if len(item.get('matches', ())) > keep:
+                item['matches_omitted'] = len(item['matches']) - keep
+                item['matches'] = item['matches'][:keep]
+            reported += len(item.get('matches', ()))
+        entry.update(matches_total=total, matches_reported=reported,
+                     files_with_matches=sum(1 for i in entry['files'] if i.get('matches_total')))
+    for entry in out['distinct']:
+        merged, files = {}, {}
+        for item in entry['files']:
+            counts = item.pop('_counts', {})
+            for key, n in counts.items():
+                merged[key] = merged.get(key, 0) + n
+                files[key] = files.get(key, 0) + 1
+        keys = sorted(merged)
+        entry.update(distinct_total=len(keys),
+                     distinct_truncated=len(keys) > IMAGE_TEXT_MAX_DISTINCT,
+                     matches_total=sum(i.get('matches_total', 0) for i in entry['files']),
+                     values=[{'value': _image_render(k), 'count': merged[k], 'files': files[k]}
+                             for k in keys[:IMAGE_TEXT_MAX_DISTINCT]])
+    return out
+
+
+def image_inspect(ctx, path_specs, text=None):
+    """image-inspect: the requested paths of the staged, re-verified agent-server image; with
+    text (parse_image_text_requests), also the bounded text requests."""
     t0 = time.time()
     specs = [parse_image_path_spec(s) for s in path_specs]
-    if not specs or len(specs) > IMAGE_INSPECT_MAX_PATHS:
+    if text is None and (not specs or len(specs) > IMAGE_INSPECT_MAX_PATHS):
         raise Refused('REFUSED', f'image-inspect needs 1 to {IMAGE_INSPECT_MAX_PATHS} --path')
+    if text is not None and (len(specs) > IMAGE_INSPECT_MAX_PATHS or
+                             not (specs or text.get('requests'))):
+        raise Refused('REFUSED', f'image-inspect needs at most {IMAGE_INSPECT_MAX_PATHS} --path '
+                      'and at least one --path or text request')
     lock, lock_rel, lock_sha = provision_lock(ctx)
     items = provision_items(lock)
     image = provision_image(lock)
@@ -6002,7 +6761,8 @@ def image_inspect(ctx, path_specs):
         raise Refused('REFUSED', f'{staged_dir}: no stage for this lock; run provision-fetch')
     verified = verify_staged(staged_dir, lock_sha, items, image)
     with open(staged_dir / 'image' / PROVISION_IMAGE_ARCHIVE, 'rb') as handle:
-        read = read_image_archive(handle, image, specs)
+        read = read_image_archive(handle, image, specs, text) if text is not None else \
+            read_image_archive(handle, image, specs)
     return dict(read, operation='image-inspect', result='inspected', labels=labels(ctx.profile),
                 lock={'path': lock_rel, 'sha256': lock_sha},
                 image={k: image.get(k) for k in ('repository', 'index_digest', 'manifest_digest',
@@ -15509,9 +16269,32 @@ def main(argv=None):
         if op not in ('preflight', 'provision-fetch', 'image-inspect'):
             p.add_argument('--name', required=True)
         if op == 'image-inspect':
-            p.add_argument('--path', action='append', required=True,
+            p.add_argument('--path', action='append',
                            help='an absolute path in the image, optionally #key#key to report '
-                                'that field of a JSON file (repeatable)')
+                                'that field of a JSON file (repeatable; at least one --path or '
+                                'text request)')
+            p.add_argument('--list', action='append', metavar='GLOB',
+                           help='text mode: the image paths a glob matches (* ? [..] within a '
+                                'component, ** for any components), or EXE!MODULEGLOB: the PYZ '
+                                'modules of a PyInstaller executable (repeatable)')
+            p.add_argument('--excerpt', action='append', nargs=3, metavar=('PATH', 'START', 'END'),
+                           help='text mode: lines START to END of a UTF-8 text file (repeatable)')
+            p.add_argument('--search', action='append', nargs=2, metavar=('GLOB', 'REGEX'),
+                           help='text mode: the matches of a regular expression (over bytes) in '
+                                'the files, or EXE!MODULEGLOB modules, a glob names, each with '
+                                '--context bytes around it (repeatable)')
+            p.add_argument('--distinct', action='append', nargs=2, metavar=('GLOB', 'REGEX'),
+                           help='text mode: the distinct values (the group, if the pattern has '
+                                'one) a regular expression matches, with counts (repeatable)')
+            p.add_argument('--strings', action='append', metavar='EXE!MODULEGLOB',
+                           help='text mode: the string constants and names of each code object '
+                                'of PYZ modules, walked as marshal data (repeatable)')
+            p.add_argument('--context', type=int,
+                           help=f'text mode: bytes before and after a match (default '
+                                f'{IMAGE_TEXT_DEFAULT_CONTEXT}, at most {IMAGE_TEXT_MAX_CONTEXT})')
+            p.add_argument('--max-matches', type=int,
+                           help=f'text mode: matches reported per file and --search (default '
+                                f'{IMAGE_TEXT_DEFAULT_MATCHES}, at most {IMAGE_TEXT_MAX_MATCHES})')
         if op in ('create', 'inspect', 'recreate', 'conversation-smoke'):
             p.add_argument('--canaries', help='a canary set written by the canaries operation')
         if op == 'inspect':
@@ -15659,7 +16442,17 @@ def main(argv=None):
         elif op == 'provision-fetch':
             result = provision_fetch(ctx)
         elif op == 'image-inspect':
-            result = image_inspect(ctx, args.path)
+            excerpts = []
+            for path, start, end in args.excerpt or ():
+                if not (start.isdigit() and end.isdigit()):
+                    raise Refused('REFUSED', f'--excerpt {path!r} {start} {end}: line numbers')
+                excerpts.append((path, int(start), int(end)))
+            text = parse_image_text_requests(args.list, excerpts, args.search, args.distinct,
+                                             args.strings, args.context, args.max_matches)
+            if not text['requests'] and (args.context is not None or args.max_matches is not None):
+                raise Refused('REFUSED', '--context and --max-matches need a text request')
+            result = image_inspect(ctx, args.path or [], text) if text['requests'] else \
+                image_inspect(ctx, args.path or [])
         elif op == 'create':
             if args.egress_falsification and not args.provision:
                 raise Refused('REFUSED', '--egress-falsification needs --provision')
