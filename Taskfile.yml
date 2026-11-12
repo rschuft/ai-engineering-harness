@@ -78,6 +78,11 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I tools/verify_seed.py --baseline seed'
 
+  plan:commitment:
+    desc: "Report a commitment's committed set read-only: the terminal leaf's transitive dependencies in the plan, each leaf's status from the Leaves table of evidence/bootstrap-log.md, readiness and a summary (python -I -B tools/plan_commitment.py LEAF [--json]); pass -- LEAF [--json]"
+    cmds:
+      - '{{.PYTHON}} -I -B tools/plan_commitment.py {{.CLI_ARGS}}'
+
   # test runs every suite under the python-tools venv's interpreter, so that Dulwich and PyYAML are
   # present (plan leaves F-10.1 and F-10.2, decision 0014 section 9). TOOLS_PYTHON is that interpreter
   # for the current lock: locating it creates nothing and fails, naming tools:install, when the set
