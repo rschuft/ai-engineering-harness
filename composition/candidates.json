@@ -360,6 +360,33 @@
         "artifact_to_commit_evidence": "PyPI serves PEP 740 provenance whose publisher is GitHub jelmer/dulwich (workflow python-distributions.yml) and urllib3/urllib3 (publish.yml); the attestations were not verified and name no commit here",
         "signature": "not_run"
       }
+    },
+    {
+      "id": "gitea-runner",
+      "blueprint_name": "Gitea Actions runner (act_runner)",
+      "selection": "selected",
+      "selected_by": "decision 0016 (Accepted) section 2.1 and the Owner's C-3 approval of 2026-11-11 (the CI guest's composition: Moby, the runner, the job image); plan leaf Q-02.2.1 (2026-11-11). The upstream project formerly named act_runner: gitea.com/gitea/act_runner redirects (HTTP 301) to gitea.com/gitea/runner, whose binary is gitea-runner. Installed only in a CI guest, never on the Owner host",
+      "source": {"repository": "https://gitea.com/gitea/runner", "tag": "v6.0.0", "tag_type": "lightweight", "commit": "b5305c678573d84811486acdae638db9f751189a", "command": "Dulwich ls_remote of https://gitea.com/gitea/runner.git refs/tags/v6.0.0 (the resolver's source check); curl -s https://gitea.com/api/v1/repos/gitea/runner/git/refs/tags/v6.0.0"},
+      "version": "6.0.0",
+      "release_date": "2026-11-11T10:50:12Z",
+      "license": "MIT",
+      "license_evidence": "LICENSE at the tag is the MIT text (Copyright (c) 2022 The Gitea Authors); the gitea.com repository metadata lists MIT. The binary statically links third-party Go modules under their own licences; nothing is redistributed (decision 0005)",
+      "runtime": {"go_source_build": "go 1.27 (toolchain go1.27.3), module gitea.com/gitea/runner", "requires": ["Gitea 1.26.2 or newer (README.md line 10; internal/pkg/ver/version.go line 9)", "git 2.34.1 or newer and a Docker-API engine for docker labels (README.md lines 11-12)"], "os_arch": "static binaries for linux amd64, arm64, arm-5/6/7, loong64, riscv64, s390x; darwin amd64, arm64; freebsd amd64; windows amd64, arm64"},
+      "interface": {"rpc": "Connect RPC under <instance>/api/actions (internal/pkg/client/http.go line 62): Ping, Register, Declare, FetchTask, UpdateTask, UpdateLog", "breaking_in_6.0.0": "builtin:checkout removed; Gitea 1.26.2 or newer required (release notes)"},
+      "artifacts": [
+        {"channel": "gitea-release", "name": "checksums.txt", "digest": "sha256:abd21d1dace163a3d03fd18bc5b49781434a96aa790f56d46b5f24db147d6e17", "command": "curl -sL https://gitea.com/gitea/runner/releases/download/v6.0.0/checksums.txt"},
+        {"channel": "gitea-release", "name": "gitea-runner-6.0.0-linux-amd64", "digest": "sha256:62ecab223535968ba3fa46cf32f8f50279f0664ba14c6d3848c2f02210f9828e", "command": "curl -sL https://gitea.com/gitea/runner/releases/download/v6.0.0/gitea-runner-6.0.0-linux-amd64 (hashed locally) ; checksums.txt ; curl -s https://dl.gitea.com/gitea-runner/6.0.0/gitea-runner-6.0.0-linux-amd64.sha256", "added": "2026-11-11, plan leaf Q-02.2.1"}
+      ],
+      "verification": {
+        "tag_to_commit": "pass",
+        "tag_to_commit_evidence": "the resolver's ls_remote (Dulwich) and the gitea.com git/refs and tags APIs agree on b5305c6...; the tag is lightweight; the gitea.com source archive of the tag carries the same commit in its pax comment",
+        "artifact_digest": "pass",
+        "artifact_digest_evidence": "local sha256 of the downloaded binary == its checksums.txt line == dl.gitea.com .sha256; the .xz asset (its own .sha256 equal on gitea.com and dl.gitea.com) decompresses to the same bytes",
+        "artifact_to_commit": "unknown",
+        "artifact_to_commit_evidence": "the release's target_commitish is the tag commit and its release-tag goreleaser status is success at that commit, but the binary carries no verified provenance",
+        "signature": "not_run",
+        "signature_evidence": "checksums.txt.sig is a binary OpenPGP v4 signature, issuer fingerprint CC64B1DB67ABBEECAB24B6455FC346329753F4B0, created 2026-11-11T10:52:12Z; the key was not fetched and the signature was not verified"
+      }
     }
   ],
   "couplings": [
@@ -374,7 +401,9 @@
     {"a": "python-runtime", "b": "openhands-sdk/agent-server/automation + canvas launcher", "contract": "requires_python and defaults.json python.uvxRequest", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "all >=3.12; Canvas launcher caps <3.15 => CPython 3.12-3.14"},
     {"a": "openspec@1.16.0", "b": "backlog-md@1.55.3", "contract": "none upstream; cross-references are owned integration (blueprint #integration-contracts)", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "no upstream coupling exists; both are file/CLI tools in Git repositories"},
     {"a": "gitea@28.3.0", "b": "all other components", "contract": "Git hosting + REST /api/v1 + webhooks; no upstream version coupling to OpenHands, OpenSpec, Backlog.md or assistant-ui", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "no upstream declares a pairing; integration is owned"},
-    {"a": "openhands-agent-server@1.60.1", "b": "Docker Engine (conversation_runtime=docker)", "contract": "Docker API via python docker<8,>=7.1; selectable runtime gated by server config", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "selection advertised through available_conversation_runtimes only when conversation_runtime_selectable=true (default false); Moby version range not declared upstream"}
+    {"a": "openhands-agent-server@1.60.1", "b": "Docker Engine (conversation_runtime=docker)", "contract": "Docker API via python docker<8,>=7.1; selectable runtime gated by server config", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "selection advertised through available_conversation_runtimes only when conversation_runtime_selectable=true (default false); Moby version range not declared upstream"},
+    {"a": "gitea-runner@6.0.0", "b": "gitea@28.3.0", "contract": "the runner RPC under /api/actions (ping.v1.PingService, runner.v1.RunnerService: Register, Declare, FetchTask, UpdateTask, UpdateLog); the runner declares Gitea 1.26.2 or newer", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "README.md line 10 and internal/pkg/ver/version.go line 9 at v6.0.0 set the floor 1.26.2; Gitea moved from 1.27.x to 28.x (28.0.0 on 2026-09-29; compatibility-matrix.md section 5, item 7), so 28.3.0 is above it; the methods the runner calls are the ones the Q-02.1 source check found at Gitea 28.3.0 (fact G2). The shared protocol module (gitea.dev/actionslib v1.5.2 on the runner side) was not compared with Gitea's; the live check is plan leaf Q-02.2.2"},
+    {"a": "gitea-runner@6.0.0", "b": "Moby (docker.io 26.1.5, the guest provision lock)", "contract": "Docker Engine API through github.com/moby/moby/client v0.6.2", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "the runner needs a Docker-API engine for docker labels (README.md line 12) and checks API >= 1.41 for image platforms (act/container/docker_run.go lines 54-62); the client module's minimum API version was not read"}
   ],
   "exclusions": [
     {"combination": "openhands-agent-canvas@1.36.0 with openhands-agent-server < 1.59.0 (incl. the blueprint's qualification pin v1.58.2)", "reason": "below Canvas compatibility.minimumAgentServer 1.59.0; rejected at runtime by assertAgentServerVersionIsSupported()"},

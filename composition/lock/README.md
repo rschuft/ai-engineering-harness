@@ -26,7 +26,7 @@ The resolver does five things:
    and reads the installed versions back with `pip inspect --path`. It re-hashes every installed file against its RECORD.
 3. It runs `npm ci --ignore-scripts` from `npm/package-lock.json` with an isolated cache and empty npm config, so npm itself verifies each tarball's integrity. It then compares npm's hidden lockfile and `npm ls --all --json` with the lock. Every locked tarball that npm skips on this host (other OS or CPU optionals, such as `backlog.md-linux-x64` and `-arm64`) is downloaded and integrity-checked separately.
 4. It fetches each OCI index and its linux/amd64 and linux/arm64 manifests from the registry by digest and recomputes their sha256. This is a manifest-digest check. No image is pulled and nothing is run.
-5. It checks the GitHub release assets against the upstream checksum files, which it downloads and verifies by sha256. Where upstream publishes no checksum file, it uses the GitHub asset digest.
+5. It checks the release assets (GitHub releases, and the gitea-runner release on gitea.com) against the upstream checksum files, which it downloads and verifies by sha256. Where upstream publishes no checksum file, it uses the GitHub asset digest.
 
 It writes `<work>/report.json`. The main fields are:
 
@@ -62,6 +62,7 @@ Exit codes:
   - github.com and api.github.com (unauthenticated, 2 API calls)
   - ghcr.io
   - registry-1.docker.io and auth.docker.io
+  - gitea.com (the gitea-runner source tag and release checksum file, Q-02.2.1; its release downloads redirect to gitea.com's attachment storage on Cloudflare R2, `*.r2.cloudflarestorage.com`)
 
 Registry tokens are anonymous, held in memory and never printed. No credentials are used. The resolver never imports or executes installed package code.
 
@@ -69,7 +70,7 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 
 | File | Pins | Count |
 |---|---|---|
-| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin, `reviewed_sdists` and `build_requirements`</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps` (empty)</li></ul> | <ul><li>8 source tags</li><li>4 OCI indexes</li><li>13 release assets</li><li>3 tools</li></ul> |
+| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin, `reviewed_sdists` and `build_requirements`</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps` (empty)</li></ul> | <ul><li>9 source tags</li><li>4 OCI indexes</li><li>15 release assets</li><li>3 tools</li></ul> |
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |

@@ -11,7 +11,8 @@ verified digests and the versions the installers actually installed.
 Prerequisites (checked; see composition/lock/README.md): CPython 3.12 with pip
 >= 23.1, Node.js >= 24 with npm >= 11, and HTTPS access to pypi.org,
 files.pythonhosted.org, registry.npmjs.org, github.com, api.github.com,
-ghcr.io and registry-1.docker.io / auth.docker.io. The source tags (R11 of
+ghcr.io, registry-1.docker.io / auth.docker.io and gitea.com (the
+gitea-runner tag and checksum file, Q-02.2.1). The source tags (R11 of
 decision 0014) are read with the shared repository-access module over Dulwich,
 so the resolver runs under the Python tools interpreter (<tools python>: what
 `python -I -B integrations/paths/tools_install.py --python` prints); without

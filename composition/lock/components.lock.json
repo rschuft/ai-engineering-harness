@@ -5,7 +5,8 @@
   "authority": [
     "decisions/0001-agent-server-dispatch-precondition-and-version-line.md (Accepted)",
     "composition/candidates.json (F-01.1, accepted)",
-    "decisions/0002-reviewed-sdist-exception-for-resolution.md (Accepted)"
+    "decisions/0002-reviewed-sdist-exception-for-resolution.md (Accepted)",
+    "decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md (Accepted; section 2.1: the CI runner, gitea-runner, Owner confirmation C-3 of 2026-11-11)"
   ],
   "locked_at": "2026-11-06",
   "resolver": "python -I composition/resolve.py --work <empty dir outside the checkout>",
@@ -122,6 +123,13 @@
       "tag": "@assistant-ui/core@0.3.32",
       "tag_type": "lightweight",
       "commit": "2769cdf4db1b95f8e3f627910caf12b39a58216e"
+    },
+    {
+      "id": "gitea-runner",
+      "repository": "https://gitea.com/gitea/runner",
+      "tag": "v6.0.0",
+      "tag_type": "lightweight",
+      "commit": "b5305c678573d84811486acdae638db9f751189a"
     }
   ],
   "python": {
@@ -522,6 +530,22 @@
       "sha256": "a632833d5ae02a18e8f7ed79177763801604de6ef6f6d1c1405029d28de9d3a4",
       "method": "github-asset-digest",
       "release_api": "https://api.github.com/repos/go-gitea/gitea/releases/tags/v28.3.0"
+    },
+    {
+      "component": "gitea-runner",
+      "name": "checksums.txt",
+      "sha256": "abd21d1dace163a3d03fd18bc5b49781434a96aa790f56d46b5f24db147d6e17",
+      "method": "download",
+      "url": "https://gitea.com/gitea/runner/releases/download/v6.0.0/checksums.txt"
+    },
+    {
+      "component": "gitea-runner",
+      "name": "gitea-runner-6.0.0-linux-amd64",
+      "sha256": "62ecab223535968ba3fa46cf32f8f50279f0664ba14c6d3848c2f02210f9828e",
+      "method": "checksum-file-line",
+      "checksum_file": "https://gitea.com/gitea/runner/releases/download/v6.0.0/checksums.txt",
+      "url": "https://gitea.com/gitea/runner/releases/download/v6.0.0/gitea-runner-6.0.0-linux-amd64",
+      "provenance": "Three records agree (2026-11-11): the binary downloaded from the gitea.com release and hashed locally (17,703,072 bytes), its line in the release's checksums.txt, and https://dl.gitea.com/gitea-runner/6.0.0/gitea-runner-6.0.0-linux-amd64.sha256. The release's .xz asset decompresses to the same bytes. checksums.txt.sig (OpenPGP, issuer CC64B1DB67ABBEECAB24B6455FC346329753F4B0) was not verified. The CI runner of decision 0016 section 2.1 (formerly act_runner; the upstream repository gitea.com/gitea/act_runner redirects to gitea.com/gitea/runner), pinned at plan leaf Q-02.2.1 under the Owner's C-3 approval of 2026-11-11; evidence/Q-02.2.1-c3-pins.md. Installed only in a CI guest, never on the Owner host."
     }
   ],
   "tools": [

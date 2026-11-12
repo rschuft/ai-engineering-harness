@@ -226,6 +226,23 @@ Choosing between the root and rootless image variants is a deployment decision f
   - sdist `openhands_automation-1.30.1.tar.gz`: `sha256:b1fc3f93d1e05d5f5191cbc501837ba18a0784dddba708f0dae2a6f561ee620a`
 - PEP 740 provenance exists: the publisher is `OpenHands/automation`, workflow `pypi-release.yml`, and the subject equals the wheel's sha256. The statement names no commit, so the link from the artifact to the commit is **unknown**.
 
+### 2.9 Gitea runner (added 2026-11-11, plan leaf Q-02.2.1)
+
+Not part of the F-01.1 selection: added under [decision 0016](../decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md) section 2.1 and the Owner's C-3 approval of 2026-11-11, as the CI guest's runner. Evidence: [`evidence/Q-02.2.1-c3-pins.md`](../evidence/Q-02.2.1-c3-pins.md).
+
+- **Name:** the project formerly called act_runner. `https://gitea.com/gitea/act_runner` redirects (HTTP 301) to `https://gitea.com/gitea/runner`; the binary is `gitea-runner`.
+- **Source:** <https://gitea.com/gitea/runner>. The tag `v6.0.0` is lightweight and points to commit `b5305c678573d84811486acdae638db9f751189a`; the resolver's `ls_remote` and the gitea.com `git/refs` and `tags` APIs agree. Released 2026-11-11T10:50:12Z with `target_commitish` equal to the tag commit. It was the newest release, and not a pre-release, at retrieval (2026-11-11).
+- **Compatibility with Gitea 28.3.0:** the runner requires Gitea 1.26.2 or newer (`README.md` line 10, `internal/pkg/ver/version.go` line 9). Gitea moved from 1.27.x to 28.x (section 5, item 7), so 28.3.0 is above the floor. The runner calls only Ping, Register, Declare, FetchTask, UpdateTask and UpdateLog under `<instance>/api/actions`, the methods the Q-02.1 source check found at Gitea 28.3.0. Not run against a live Gitea.
+- **Breaking changes in 6.0.0** (release notes): `builtin:checkout` removed; the Gitea floor raised to 1.26.2.
+- **License:** MIT (`LICENSE` at the tag; the repository metadata).
+
+| Channel | Artifact | Digest |
+|---|---|---|
+| Release | `checksums.txt` | `sha256:abd21d1dace163a3d03fd18bc5b49781434a96aa790f56d46b5f24db147d6e17` |
+| Release | `gitea-runner-6.0.0-linux-amd64` (17,703,072 bytes) | `sha256:62ecab223535968ba3fa46cf32f8f50279f0664ba14c6d3848c2f02210f9828e` |
+
+**Artifact digests: pass.** The downloaded binary's own sha256, its line in `checksums.txt` and `https://dl.gitea.com/gitea-runner/6.0.0/gitea-runner-6.0.0-linux-amd64.sha256` agree; the release's `.xz` asset decompresses to the same bytes. Only the Linux amd64 binary is pinned. **Signature: not_run** (`checksums.txt.sig`, OpenPGP, issuer `CC64B1DB67ABBEECAB24B6455FC346329753F4B0`). **Link to the commit: unknown** beyond the release's `target_commitish`.
+
 ## 3. Pairwise compatibility
 
 "Runtime" is **not_run** for every row. Nothing in this section was installed or executed.
@@ -244,6 +261,8 @@ Choosing between the root and rootless image variants is a deployment decision f
 | OpenSpec 1.16.0 | Backlog.md 1.55.3 | None upstream; cross-references are owned integration (`#integration-contracts`) | **unknown** | No upstream coupling exists. |
 | Gitea 28.3.0 | every other component | Git hosting, REST `/api/v1`, webhooks | **unknown** | No upstream declares a pairing; the integration is ours to own. |
 | agent-server 1.60.1 | Docker Engine (`conversation_runtime=docker`) | Docker API through the `docker<8,>=7.1` client; selectable runtime is gated by server config | **unknown** | Docker selection must be enabled explicitly. Upstream declares no Moby version range. |
+| gitea-runner 6.0.0 (added Q-02.2.1) | Gitea 28.3.0 | Runner RPC under `/api/actions`; the runner's floor Gitea 1.26.2 | **compatible** | `README.md` line 10 and `internal/pkg/ver/version.go` line 9 at `v6.0.0`; 28.3.0 is past 1.27.x (section 5, item 7); the RPC methods match fact G2 of the Q-02.1 source check. The shared protocol module (`gitea.dev/actionslib` v1.5.2 on the runner side) was not compared with Gitea's. |
+| gitea-runner 6.0.0 (added Q-02.2.1) | Moby (`docker.io` 26.1.5 in the guest provision lock) | Docker Engine API through `github.com/moby/moby/client` v0.6.2 | **unknown** | The runner checks API ≥ 1.41 for image platforms (`act/container/docker_run.go` lines 54-62); the client's minimum API version was not read. |
 
 ## 4. Excluded combinations
 
@@ -386,6 +405,10 @@ curl -sL https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.
 curl -s  https://dl.gitea.com/gitea/28.3.0/gitea-28.3.0-linux-amd64.sha256
 curl -sL https://github.com/go-gitea/gitea/releases/download/v28.3.0/gitea-28.3.0-windows-amd64.exe.sha256   # F-06.1
 curl -s  https://dl.gitea.com/gitea/28.3.0/gitea-28.3.0-windows-amd64.exe.sha256                           # F-06.1
+curl -s  https://gitea.com/api/v1/repos/gitea/runner/releases?limit=15                                    # Q-02.2.1
+curl -s  https://gitea.com/api/v1/repos/gitea/runner/git/refs/tags/v6.0.0                                 # Q-02.2.1
+curl -sL https://gitea.com/gitea/runner/releases/download/v6.0.0/checksums.txt                            # Q-02.2.1
+curl -s  https://dl.gitea.com/gitea-runner/6.0.0/gitea-runner-6.0.0-linux-amd64.sha256                     # Q-02.2.1
 
 # Interface/contract sources at the candidate revision
 curl -s https://raw.githubusercontent.com/OpenHands/OpenHands/v1.36.0/config/defaults.json

@@ -82,12 +82,12 @@ class SourceTags(unittest.TestCase):
     def test_every_locked_tag_through_ls_remote_without_git(self):
         ra, calls = stand_in()
         out, checks = self.run_sources(ra)
-        self.assertEqual(len(out), 8)
+        self.assertEqual(len(out), 9)
         self.assertTrue(all(row['verified'] for row in out), out)
         self.assertEqual([row['commit'] for row in out], [s['commit'] for s in LOCK['sources']])
         self.assertEqual(calls, [(s['repository'].rstrip('/') + '.git', None, [f'refs/tags/{s["tag"]}'])
                                  for s in LOCK['sources']])
-        self.assertEqual(len(checks), 8)
+        self.assertEqual(len(checks), 9)
 
     def test_a_mismatch_an_extra_peel_or_a_failure_fails_that_source_only(self):
         annotated = next(s for s in LOCK['sources'] if s.get('tag_type') == 'annotated')
@@ -100,7 +100,7 @@ class SourceTags(unittest.TestCase):
         out, _checks = self.run_sources(ra)
         failed = {row['id'] for row in out if not row['verified']}
         self.assertEqual(failed, {annotated['id'], light[0]['id'], light[1]['id'], light[2]['id']})
-        self.assertEqual(sum(row['verified'] for row in out), 4)
+        self.assertEqual(sum(row['verified'] for row in out), 5)
 
     def test_the_failure_code_is_reported(self):
         source = LOCK['sources'][0]
