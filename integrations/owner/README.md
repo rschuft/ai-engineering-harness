@@ -35,12 +35,12 @@ and receipts under the managed data root (below).
 | `tests/test_live_openspec.py` | Live, skipped unless `AIEH_OPENSPEC` names the pinned OpenSpec 1.16.0: `validate --strict` accepts a change holding `owner-decisions/` and `x-outcomes`, `archive --yes` moves the decision record with the change byte for byte, and the outcome resolves at its archived path (e2e) |
 | `tests/owner_fixture.py` | The fixture project repository (two changes from the P-01.2 recording) and the example record; `--record` rewrites it |
 | `tests/fixtures/accept-objective.decision.json` | The example decision record (synthetic statement, fixed clock, nonce and ids) |
-| `tests/fake_gitea.py` | A fake Gitea 28.3.0 (the slice the authorization recorder uses, as read in the pinned source, and a bot's proposal routes for the live exercise's phase plumbing; the protection auditor's requests go to `integrations/gitea/tests/protection_fake.py`), callable in memory or served by an in-process HTTP server on 127.0.0.1 that can drop an answer; and a fixture credential provider |
+| `tests/fake_gitea.py` | A fake Gitea 28.3.0 (the slice the authorization recorder uses, as read in the pinned source, and a bot's proposal routes and the precondition's reads (`GET /token`, the open pull requests) for the live exercise's phase plumbing; the protection auditor's requests go to `integrations/gitea/tests/protection_fake.py`), callable in memory or served by an in-process HTTP server on 127.0.0.1 that can drop an answer; and a fixture credential provider |
 | `tests/authz_support.py` | The authorization recorder's per-test fixture: a fake Gitea, a fixture provider, the recorder's state and an integration store of its own, a fixed clock, and a fake protection verifier (`verified` unless a test scripts it) |
 | `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the protection verifier's seam (only a well-formed verdict counts), the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the command line (unit) |
 | `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; fail closed on every protection answer but `verified` (no verifier included), the verifier the last read before the receipt and the merge, the bracket after it; the command line's protection check against the fake auditor (verified, drift, every unverifiable state, a rule changed across the merge, no credential read for a refused statement); every bot token refused; no token minted; a lost answer resolved by reading (integration) |
 | `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture in two phases with the Owner's own decision between them, each skipped unless `AIEH_AUTHZ_RECORDER_LIVE` names it (`prepare`, then `record`; e2e) |
-| `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: the presentation, the statement-file refusals, the expected outcome without a verifier and with one that does not verify, the stale-head control and each refusal it can observe (finding F14), the SECURITY FAILURE stops, the protection check end to end (unit) |
+| `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: prepare's precondition (the baseline variable, the protection check's digest, every role's identity and scopes, open pull requests and existing branches, each refused with zero writes), the auditor's control on a nonexistent pull request, the stopping rule after every control attempt, the presentation, the statement-file refusals, the expected outcome without a verifier and with one that does not verify, the stale-head control and each refusal it can observe (finding F14), the SECURITY FAILURE stops, the protection check end to end (unit) |
 
 ## The Owner decision record (`owner-decision/v1`)
 
@@ -317,22 +317,35 @@ constructs an Owner statement (Owner decision OA-14):
 
 ```
 AIEH_AUTHZ_RECORDER_LIVE=prepare AIEH_AUTHZ_RECORDER_RUN_DIR=<an existing, empty directory> \
+    AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE=<the expected protection digest, sha256:<64 hex>> \
     <tools python> -I -B -m unittest discover -s integrations/owner/tests -p test_live_authorization.py -v
 AIEH_AUTHZ_RECORDER_LIVE=record AIEH_AUTHZ_RECORDER_RUN_DIR=<the same directory> \
     AIEH_AUTHZ_RECORDER_STATEMENT=<the Owner's statement file> \
     <tools python> -I -B -m unittest discover -s integrations/owner/tests -p test_live_authorization.py -v
 ```
 
-1. **prepare**: the builder bot proposes two manifests (`operations/<id>.json`) and the reviewer bot
-   approves both; each bot token's merge of each must be refused (any success, or main moving, is a
-   **SECURITY FAILURE**: the test fails naming it and stops); the recorder's real `prepare` issues each
+1. **prepare**: first a precondition, before any write, each failure refusing the phase with nothing
+   written: `AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE` present and `sha256:<64 lower-case hex>` (checked
+   before anything is read), and the protection check answering `verified` with exactly that digest;
+   `GET /token` of every role's token (the four bots and the protection auditor) naming exactly that
+   role's account and declared scopes; no open pull request on the fixture (`GET
+   .../pulls?state=open`, as the verifier bot) and neither branch the run would create present; main's
+   head recorded. No site administrator's credential is read. Then the builder bot proposes two
+   manifests (`operations/<id>.json`) and the reviewer bot approves both; each of the four bots' merge
+   of each pull request must be refused (403 or 405); the protection auditor never addresses either:
+   its control is the merge of a nonexistent pull request, confirmed absent first (404 to the verifier
+   bot), which passes only with 403 and Gitea's scope refusal. After every single attempt main's head
+   and both proposals' merged state are read: any 2xx, a proposal merged or main moving is a
+   **SECURITY FAILURE** at once (no later control, no challenge, no presentation); a control refused
+   otherwise than expected stops the phase too. The recorder's real `prepare` then issues each
    one-time challenge into the run directory's own recorder state (`<run dir>/recorder`); then
    `presentation.json` and `presentation.txt` list, per challenge, the repository, the pull request,
    the base, the approved head, the manifest and its digest, the operation id, kind, target and
    expiry, the nonce and its expiry, the protection check's answer at prepare, the effects the merge
    will have, the expected outcome and the recorder's own summary, and name the stale-head control
-   (pull request B: refused, nothing merged, main unmoved). Nothing is merged. The bot controls include
-   the protection auditor's token (refused by its scope, 403).
+   (pull request B: refused, nothing merged, main unmoved; A is the one to authorize), with the
+   precondition's results, the bot controls' statuses and the auditor's control ("nonexistent pull
+   request #n, refused by scope"). Nothing is merged.
 2. **The Owner, between the phases.** The Overseer presents the presentation. Only if the Owner then
    authorizes in his own words, naming the operation id(s), does the Overseer write that reply
    verbatim into the statement file (`{"text", "attributedTo": "owner", "channel": "main-session",
