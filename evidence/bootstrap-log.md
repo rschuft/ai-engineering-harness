@@ -2183,6 +2183,123 @@ push never implies parent acceptance.
 
 - **2026-11-12: Q-02.2.1 CI profile slice, stopped at three boundaries; the Overseer's rulings.** [Record](Q-02.2.1-ci-profile.md). `5517399`: the job image pinned in the component lock (index, linux/amd64 manifest, image id). `32277b9`, `fa2c0f4`: `policy/ci-runner-profile.json` records C-3 (ceilings decided; lifetime shared, runner persistent, no `--ephemeral`, deleted at destroy) and the runner's 6.0.0 keys: the IPv6 rule on `container.network_create_options.enable_ipv6`, `bind_workdir`, `sweep`, `tool_cache_mode`, hooks, `post_task_script`, `extra_headers`, metrics and health check pinned off or empty, no `$` in a variant's config, the runner service's environment refused for the label, token, proxy, Docker host, hook and telemetry names, the registration token by `--token-file` under `/run/` only with `--config` and no `--labels`; the job-summary post disclosed; `check_ci_policy` checks each (81 tests, 33 of 33 mutants killed). `25a074d`: the record. **Overseer verification:** the policy diff read; `check_ci_policy`, `check_profile`, `check_role_tokens`, `check_network_matrix`, `check_security_inventory` and verify_seed PASS; the Builder's full parallel suite 13/13. **Overseer rulings (no gate earned; each keeps decision 0016's stated rules):** (A) the exchange is declared in the runner's `container.volumes`, read-only, exactly, with `valid_volumes: []` kept: at 6.0.0 a source in `container.volumes` is also admitted, read-only, as a workflow volume source, so a workflow could re-mount the same read-only exchange at another target; no other host path and no write become reachable, which keeps T7 and T9; disclosed, and the checker holds `container.volumes` to exactly the declared read-only sources; (B) one anonymous, read-only registry read of the pinned linux/amd64 manifest is authorized for the layer list the provision lock needs; (C) the label names the image by its id, `aieh-validation:docker://sha256:<config digest>`, as decision 0006 item 3 loads images (the id equals the locked config digest), because a `docker load`ed image may carry no repository digest in Moby's classic store and a digest reference would then be pulled, which decision 0016 T9 forbids; the LABEL rule follows; observed at Q-02.2.2; (D) the job's Python tools set is the staged, hash-locked Linux cp312 wheels mounted read-only and installed per job with `--no-index --require-hashes --only-binary=:all:` into a job-local venv (design A): the pinned image stays unchanged and nothing persists across jobs.
 
+- **2026-11-12: Q-02.2.1, the CI profile variant declared offline under rulings A to D.** [Record](Q-02.2.1-ci-variant.md). `e6f3987`: `runner_config.volumes` exactly the read-only exchange and wheel binds, `valid_volumes` empty, mount options refused, the label by image id equal to the lock's config digest. `0f60655`: the token policy's A1 facts verified at the runner source (checked against the lock), disclosures ci-d10 (the job-summary post) and ci-d11 (the read-only re-mount), `fd-ci-runner-unpinned` narrowed to pinned and declared but not observed running. `12fa0e5`: the sibling profile `strong-windows-qemu-whpx-ci` (C-3's ceilings, launch argv, the runner as `aieh-ci-runner` in `docker` only, the seeded config, loopback-only unit left disabled, registration by `--token-file` under `/run` with no `--ephemeral`, the `ci-control` sshd lines), its seed `profiles/seed/ci/user-data.tmpl` (no Agent Server, no token), its provision lock (the job image with the 7 layers read by the one authorized registry read, the runner binary, the wheel set by the tools lock, the Debian Moby closure) and `check_profile`'s `ci_runner` branch; **its commit message is wrong** (it repeats `0f60655`'s: a retry after a refused pre-commit took the previous message); the intended subject is "CI profile variant strong-windows-qemu-whpx-ci: seed, provision lock, check_profile's ci_runner branch (Q-02.2.1)"; history is not rewritten, this entry and the record's section 8 are the correction. `cd0bec1`: the record. **Overseer verification:** `check_profile --strict` PASS on the variant and the execution profile (`strong-incus-vm` fails on its 4 declared unknown pins, unchanged); `check_ci_policy`, `check_role_tokens`, `check_network_matrix`, `check_security_inventory`, `check_containment_cases` and verify_seed PASS; `test_check_ci_policy` and `test_check_profile` OK; the seed holds no token. Remaining for the leaf: the `tools/guest.py` CI bindings and lifecycle targets, the filtering proxy (R1), the P7 class and matrix edits (R3, the Overseer's); nothing about a running CI guest is verified.
+
+- **2026-11-12: Owner authorization of OA-16 Act D, conditional (verbatim).**
+
+  > Owner authorization — OA-16 Act D.
+  >
+  > CONDITIONALLY APPROVED: Qualify live protection
+  > drift detection against the existing fixture.
+  >
+  > Repository:
+  > aieh-authz-fixture/authz
+  >
+  > Expected baseline:
+  > sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42
+  >
+  > PRECONDITION — FIX THE RESTORATION CONTROL
+  >
+  > The current drift test uses unittest.subTest around
+  > injections and restoration assertions.
+  >
+  > This must not allow a later injection to execute
+  > after any unsuccessful restoration.
+  >
+  > Before the live run:
+  >
+  > 1. Modify the test so failed or unverified
+  >    restoration stops the entire injection sequence.
+  >
+  > 2. Require independent read-back and a verified
+  >    protection verdict with the original baseline
+  >    digest after each restoration.
+  >
+  > 3. If an injection fails, still attempt bounded
+  >    restoration of that injection's effects.
+  >
+  > 4. If restoration fails or cannot be verified,
+  >    stop immediately. Do not send another injection.
+  >
+  > 5. Do not automatically retry failed mutations or
+  >    restoration operations.
+  >
+  > 6. Add focused offline tests proving that no later
+  >    injection executes after failed restoration,
+  >    unexpected verification or an uncertain outcome.
+  >
+  > Keep the correction narrowly scoped and do not
+  > interrupt the active CI Builder.
+  >
+  > LIVE EXECUTION
+  >
+  > After the correction is independently verified,
+  > authorize one controlled qualification run.
+  >
+  > Before the first mutation:
+  >
+  > - Verify the auditor's identity and read-only token.
+  > - Verify the repository's exact protection baseline.
+  > - Confirm the fixture has no unexpected drift.
+  >
+  > Execute these five scenarios, sequentially:
+  >
+  > 1. Set main.block_admin_merge_override to false.
+  > 2. Lower main's precedence below the ** rule.
+  > 3. Add the unexpected aieh-qualify/* rule.
+  > 4. Raise the verifier bot's repository permission
+  >    to admin.
+  > 5. Enable allow_squash_merge.
+  >
+  > For each scenario:
+  >
+  > - Apply only the named mutation.
+  > - Verify the auditor reports drift identifying it.
+  > - Restore the exact original configuration.
+  > - Independently verify that protection is restored
+  >   and its digest equals the original baseline.
+  > - Proceed only after all checks pass.
+  >
+  > After the fifth scenario:
+  >
+  > - Verify the complete repository declaration.
+  > - Verify the original baseline digest.
+  > - Confirm no temporary rule or changed permission
+  >   remains.
+  > - Confirm the five role credentials are unchanged.
+  > - Run the credential-exposure scan.
+  > - Record the exact operations and their results.
+  >
+  > FAILURE HANDLING
+  >
+  > On unexpected mutation, missing drift detection,
+  > failed restoration, or an uncertain outcome:
+  >
+  > - Attempt the bounded restoration needed to
+  >   return the affected fixture to its baseline.
+  > - Stop further injections.
+  > - Report the observed state and any differences.
+  > - Do not silently repair, retry, or claim PASS.
+  > - Present any additional recovery act for separate
+  >   Owner authorization.
+  >
+  > BOUNDARIES
+  >
+  > This approval covers OA-16 Act D only.
+  >
+  > It does not authorize:
+  > - Act E or OA-14's protected merge.
+  > - Credential issuance, rotation or revocation.
+  > - Changes outside aieh-authz-fixture/authz.
+  > - Any new Gitea identity or repository.
+  > - CI live execution or runner registration.
+  > - Any inference-provider or guest-network act.
+  >
+  > Record the evidence and present Act E's exact scope
+  > only after Act D has passed.
+  >
+  > Continue unrelated eligible engineering work.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
