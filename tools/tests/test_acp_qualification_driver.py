@@ -243,7 +243,9 @@ class DriverRun(unittest.TestCase):
 
     def wait(self, fetch, done, ceiling):
         value = fetch()
-        while not done(value) and self.guest.statuses[0] != 'never':
+        for _ in range(20):              # twenty more reads stand for the ceiling
+            if done(value):
+                break
             value = fetch()
         self.turn_done = done(value)
         return value, done(value)
@@ -572,7 +574,7 @@ class DriverRun(unittest.TestCase):
                 self.assertNotEqual(out['result'], 'PASS')
         # the turn never ends within the ceiling
         self.setUp()
-        self.guest.statuses = ['never']
+        self.guest.statuses = ['running']
         out = self.run_driver()
         self.assertEqual((self.step(out, 7)['verdict'], out['result']), ('UNKNOWN', 'UNKNOWN'))
         # an events page of another shape, or no event at all
@@ -902,6 +904,56 @@ class DriverRun(unittest.TestCase):
                          ('anthropic-messages', 'claude-code', 50))
         self.assertEqual(guest.ACP_TURN_CEILING_S, 1920)
         self.assertEqual(guest.ACP_TURN_END, ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation'))
+        # F-8: the enum and the SDK's terminal set as the pinned image defines them (the D-1 record, section 7)
+        self.assertEqual(guest.ACP_STATUS_VALUES, ('idle', 'running', 'paused', 'waiting_for_confirmation',
+                                                   'finished', 'error', 'stuck', 'deleting'))
+        self.assertEqual((guest.ACP_TURN_TERMINAL, guest.ACP_TURN_HALTED, guest.ACP_TURN_RUNNING),
+                         (('finished', 'error', 'stuck'), ('paused', 'waiting_for_confirmation'),
+                          ('idle', 'running')))
+        for key, text in guest.ACP_ASSUMED.items():
+            self.assertIn('evidence/S-03.3-D-1-image-source-read.md section 7', text, key)
+        self.assertIn('429', guest.ACP_ASSUMED['message'])
+        self.assertIn('retries nothing', guest.ACP_ASSUMED['message'])
+
+    # F-8: (verdict of step 7, its outcome, whether it is a stop) of each value the turn's last status can take
+    STATUS_OUTCOMES = {
+        'finished': ('PASS', 'terminal', False),
+        'error': ('FAIL', 'terminal', False),
+        'stuck': ('FAIL', 'terminal', False),
+        'paused': ('FAIL', 'halted', False),
+        'waiting_for_confirmation': ('FAIL', 'halted', True),
+        'deleting': ('FAIL', 'deleting', False),
+        'FINISHED': ('FAIL', 'outside the status enum', False),
+        'archived': ('FAIL', 'outside the status enum', False),
+        7: ('FAIL', 'outside the status enum', False),
+        'idle': ('UNKNOWN', 'not ended within the ceiling', False),
+        'running': ('UNKNOWN', 'not ended within the ceiling', False),
+        None: ('UNKNOWN', 'not ended within the ceiling', False),
+    }
+
+    def test_each_status_value_has_its_outcome(self):
+        for status, (verdict, outcome, is_stop) in self.STATUS_OUTCOMES.items():
+            with self.subTest(status=status):
+                self.setUp()
+                self.guest.statuses = ['running', status]
+                out = self.run_driver()
+                step = self.step(out, 7)
+                self.assertEqual((step['verdict'], step['detail']['outcome'], step['detail']['execution_status']),
+                                 (verdict, outcome, status))
+                self.assertEqual(step['detail']['within_ceiling'], verdict != 'UNKNOWN')
+                self.assertEqual(out['result'], 'PASS' if verdict == 'PASS' else verdict)
+                self.assertEqual(guest.ACP_CONFIRMATION_STOP in self.stops(out), is_stop)
+                if is_stop:      # the later steps are skipped; the search, the revocation and the teardown run
+                    self.assertEqual([self.step(out, n).get('skipped') for n in (8, 9, 10)],
+                                     ['a stop condition'] * 3)
+                    self.assertEqual([self.step(out, n)['verdict'] for n in (11, 12, 13)], ['PASS'] * 3)
+                else:
+                    self.assertEqual(self.stops(out), [])
+        # the wait ends on every value but idle, running and none, at the first such read
+        for status in guest.ACP_STATUS_VALUES + ('archived', 7, None):
+            self.assertEqual(guest.acp_turn_over(status), status not in ('idle', 'running', None), status)
+            self.assertEqual(guest.acp_turn_outcome(status)[0] == 'PASS', status == 'finished', status)
+        self.assertEqual(guest.acp_turn_outcome('running'), ('UNKNOWN', 'not ended'))
 
     def test_the_default_vantage_reads_the_reporters_section(self):
         self.guest.host_section = host_section

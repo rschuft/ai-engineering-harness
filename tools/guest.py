@@ -15431,24 +15431,48 @@ ACP_SYNTHETIC_SOURCE = 'stdin-qualification'        # the qualification launcher
 ACP_REAL_KEY_ACT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 ._:()/-]{0,63}$')
 ACP_REVOKER = 'tools/guest.py acp-qualification (the dispatcher\'s role during bootstrap)'
 ACP_TURN_CEILING_S = 1800 + 120     # ACPAgentSettings.acp_prompt_timeout's default (1800 s) and a margin
-ACP_TURN_END = ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation')
+# The conversation's execution_status as the pinned image defines it (F-8, evidence/S-03.3-D-1-image-source-read.md
+# section 7: state.py ConversationExecutionStatus and is_terminal). The turn's wait goes on only while the status is
+# idle or running; the SDK's terminal set ends it, and so do the halted states (not terminal: nothing resumes or
+# confirms in this run), deleting and any value outside the enum. Only finished can PASS (acp_turn_outcome).
+ACP_STATUS_VALUES = ('idle', 'running', 'paused', 'waiting_for_confirmation', 'finished', 'error', 'stuck',
+                     'deleting')
+ACP_TURN_RUNNING = ('idle', 'running')
+ACP_TURN_TERMINAL = ('finished', 'error', 'stuck')
+ACP_TURN_HALTED = ('paused', 'waiting_for_confirmation')
+ACP_TURN_END = ACP_TURN_TERMINAL + ACP_TURN_HALTED
+ACP_CONFIRMATION_STOP = ('a turn waiting for a confirmation (waiting_for_confirmation: nothing may confirm on the '
+                         'Owner\'s behalf in a qualification run)')
 ACP_EVENT_PAGES = 50
 ACP_TOOL_CALL_KIND = 'ACPToolCallEvent'
 ACP_NATIVE_CHILD_TOOL = 'start_child_conversation'
 ACP_FORK_PATHS = ('/ask_agent', '/fork', '/children')
+# The agent server's shapes the driver relies on, as read in the pinned image's own modules (F-8: confirmed, or for
+# status corrected, by evidence/S-03.3-D-1-image-source-read.md section 7); what that read did not cover is named.
+ACP_SHAPES_SOURCE = 'evidence/S-03.3-D-1-image-source-read.md section 7'
 ACP_ASSUMED = {
     'message': 'POST /api/conversations/{id}/events with {"role": "user", "content": [{"type": "text", "text": '
-               '<prompt>}], "run": true} sends the prompt and starts the turn; the outer server proxies it to the '
-               'inner server (routes.json POST /api/conversations/{conversation_id}/{tail}, dispatcher value '
-               '"validation")',
-    'status': 'GET /api/conversations/{id} answers execution_status; a turn ends in one of ' + ', '.join(ACP_TURN_END),
+               '<prompt>}], "run": true} sends the prompt and starts the turn (event_router.py send_message, '
+               'SendMessageRequest role, content, run: confirmed, ' + ACP_SHAPES_SOURCE + '); the outer server '
+               'proxies it to the inner server (routes.json POST /api/conversations/{conversation_id}/{tail}, '
+               'dispatcher value "validation": not part of that read). Disclosed: when starting the run answers 429 '
+               'the message is already saved and the server\'s documented recovery is to retry POST '
+               '/api/conversations/{id}/run; this driver sends every request once and retries nothing, so a 429 is '
+               'step (4) FAIL with its status recorded and the saved message is deleted with the conversation',
+    'status': 'GET /api/conversations/{id} answers execution_status, one of ' + ', '.join(ACP_STATUS_VALUES) +
+              ' (state.py ConversationExecutionStatus); the SDK\'s terminal set (is_terminal) is ' +
+              ', '.join(ACP_TURN_TERMINAL) + '; ' + ', '.join(ACP_TURN_HALTED) + ' are halted, not terminal (' +
+              ACP_SHAPES_SOURCE + ')',
     'events': 'GET /api/conversations/{id}/events/search?limit=100[&page_id=P] answers {items, next_page_id}; each '
               'item carries kind; an ACP tool call is kind ' + ACP_TOOL_CALL_KIND + ' (sdk/event/acp_tool_call.py) '
-              'with a title; a native tool call carries tool_name',
+              'with a title; a native tool call carries tool_name (confirmed, ' + ACP_SHAPES_SOURCE + '; the '
+              'limit\'s upper bound was not decoded)',
     'inner': 'the inner server, inside the container at 127.0.0.1:8000 with the conversation\'s own key (read '
              'there from /proc/1/environ, as job-access-probe\'s route sweep does, never sent out), answers GET '
-             '/api/conversations/search with items carrying id and parent_conversation_id',
-    'agent': 'the create answer and GET /api/conversations/{id} carry agent with kind and acp_server',
+             '/api/conversations/search with items carrying id and parent_conversation_id (the items confirmed, ' +
+             ACP_SHAPES_SOURCE + '; the address not part of that read)',
+    'agent': 'the create answer and GET /api/conversations/{id} carry agent with kind and acp_server (confirmed, ' +
+             ACP_SHAPES_SOURCE + ')',
 }
 # The guest-root vantage (S-03.3 slice 6, closing finding F-6 of evidence/S-03.3-slice5-live-driver.md): slice 1's
 # collect host snapshot of each running conversation container, written by the root facts reporter (the seed's
@@ -15476,7 +15500,9 @@ ACP_QUALIFICATION_RULE = (
     'pass; an adapter missing only after the turn already ended is UNKNOWN; (6) the job contract in the qualification '
     'conversation (D-6): every process environment carries no credential-like name but the conversation keys and '
     'the attempt token\'s admitted name with a token-shaped value, no root, and that name observed; (7) the turn ends '
-    'finished within the ceiling; (8) after the turn the container view, its connections and the guest-root view '
+    'finished within the ceiling (the wait goes on while execution_status is idle or running; the SDK\'s terminal '
+    'set finished, error and stuck ends it, and so do the halted states paused and waiting_for_confirmation, '
+    'deleting and any value outside the status enum; only finished passes, every other end is FAIL); (8) after the turn the container view, its connections and the guest-root view '
     'pass (the adapter no longer required) and the sets show no new container, no new outer conversation and every '
     'new inner conversation a child of this one; (9) the events are read in full and classify the delegation '
     'mechanisms (a) the provider\'s own processes and ACP tool calls, (b) an ACP session fork (never called by the '
@@ -15491,7 +15517,8 @@ ACP_QUALIFICATION_RULE = (
     'child); an outer-server conversation that was not expected; an npx or npm process; a credential found in a '
     'recorded surface (the attempt token or the management key echoed in an Agent Server answer, a provider-key '
     'shaped value in a process environment, the provider key found by the search); a connection that reached any '
-    'network destination other than the broker\'s inference endpoint.')
+    'network destination other than the broker\'s inference endpoint; a turn waiting for a confirmation '
+    '(waiting_for_confirmation: nothing may confirm on the Owner\'s behalf).')
 
 # Run inside the qualification conversation's container: the inner server's conversations (id and parent only),
 # with the conversation's own key read from /proc/1/environ inside the container (never printed: its occurrences
@@ -15546,6 +15573,28 @@ def _hex_id(value):
     if not re.fullmatch(r'[0-9a-f]{32}', text):
         raise Refused('SETS', 'a conversation id that is not a UUID')
     return text
+
+
+def acp_turn_over(status):
+    """Whether execution_status ends the turn's wait: any value but idle, running or none (no value read yet)."""
+    return status is not None and not (isinstance(status, str) and status in ACP_TURN_RUNNING)
+
+
+def acp_turn_outcome(status):
+    """(verdict, outcome) of the turn's last execution_status (F-8): finished PASS; error and stuck (the SDK's other
+    terminal states) FAIL; paused and waiting_for_confirmation halted, FAIL, never PASS (the latter is also a stop:
+    ACP_CONFIRMATION_STOP); deleting and any value outside the enum FAIL; idle, running or none: not ended, UNKNOWN."""
+    if not acp_turn_over(status):
+        return 'UNKNOWN', 'not ended'
+    if status == 'finished':
+        return 'PASS', 'terminal'
+    if status in ACP_TURN_TERMINAL:
+        return 'FAIL', 'terminal'
+    if status in ACP_TURN_HALTED:
+        return 'FAIL', 'halted'
+    if status == 'deleting':
+        return 'FAIL', 'deleting'
+    return 'FAIL', 'outside the status enum'
 
 
 def host_snapshot_from_report(report, state_pid):
@@ -16001,15 +16050,16 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
         return ('PASS' if admission['admitted'] else 'UNKNOWN'), detail
 
     def turn_step():
-        last, met = wait(lambda: execution_status()[1], lambda s: s in ACP_TURN_END, turn_ceiling_s)
+        last, met = wait(lambda: execution_status()[1], acp_turn_over, turn_ceiling_s)
         answer, status = execution_status()
         agent = body_of(answer).get('agent') if isinstance(body_of(answer).get('agent'), dict) else {}
-        detail = {'execution_status': status, 'within_ceiling': met, 'ceiling_s': turn_ceiling_s,
-                  'agent': {k: agent.get(k) for k in ('kind', 'acp_server', 'acp_model')},
+        verdict, outcome = acp_turn_outcome(status) if met else ('UNKNOWN', 'not ended within the ceiling')
+        detail = {'execution_status': status, 'outcome': outcome, 'within_ceiling': met,
+                  'ceiling_s': turn_ceiling_s, 'agent': {k: agent.get(k) for k in ('kind', 'acp_server', 'acp_model')},
                   'assumed': ACP_ASSUMED['status']}
-        if not met:
-            return 'UNKNOWN', detail
-        return ('PASS' if status == 'finished' else 'FAIL'), detail
+        if met and status == 'waiting_for_confirmation':
+            stop(ACP_CONFIRMATION_STOP, execution_status=status)
+        return verdict, detail
 
     def after_step():
         report = facts()
