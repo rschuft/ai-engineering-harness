@@ -2203,10 +2203,10 @@
       "id": "fd-owner-credential-custody",
       "kind": "unknown",
       "title": "Custody of the Owner's own credentials was not inspected",
-      "detail": "Credential stores are protected for this leaf, so the storage, scope and lifetime of the Owner's push credential and provider login are not established. Their existence is evident from the recorded pushes and headless runs.",
+      "detail": "Credential stores are protected for this leaf, so the storage, scope and lifetime of the Owner's push credential and provider login are not established. Their existence is evident from the recorded pushes and headless runs. Re-homed 2026-11-12 (the Owner's direction to correct OA-21's obligation mapping; plan amendment f3a6c92): the reconciliation of 2026-11-08 had carried this finding to P-04.2, whose artifact holds a different credential (cred-gitea-owner-account). Their absence from agent attempts is now S-03.3's proof; their absence from CI job environments is an explicit entry of the plan's deferred list until the CI lane (Q-02.2.x) is committed to a milestone; where the Owner's own stores keep them, and whether any file copy exists, stays not inspected and unknown (OA-21). No inspection of them is claimed.",
       "refs": ["cred-owner-github", "cred-owner-provider-login", "host-credential-stores"],
-      "citations": ["evidence/bootstrap-log.md"],
-      "carried_to": ["P-04.2"]
+      "citations": ["evidence/bootstrap-log.md", "evidence/plan-reconciliation-2026-11-08.md"],
+      "carried_to": ["S-03.3"]
     },
     {
       "id": "fd-acp-provider-auth",

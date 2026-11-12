@@ -407,8 +407,9 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
   `aieh-owner`'s password in no file of the managed root, the checkout or the run directory and not in
   the main session's process environment, but no job environment existed to inspect; carried to S-03.3
   (agent attempts) and Q-02.2.2 (CI jobs). The custody of the Owner's own credentials (the push
-  credential and the provider login, `fd-owner-credential-custody`) is not inspected: P-04.2 is blocked on
-  it.
+  credential and the provider login, `fd-owner-credential-custody`) is not inspected. On 2026-11-12 the
+  finding was re-homed from P-04.2, whose artifact does not hold them (S-03.3 for agent attempts, a plan
+  deferral for CI jobs, Owner action OA-21 for their stores), and P-04.2 passed.
 - The statement's attribution against its source (as above), for the recorded Owner authorization of
   OA-14 too.
 - The protection rule itself: `aieh-owner` cannot read it in Gitea 28.3.0, so the allowlists of other

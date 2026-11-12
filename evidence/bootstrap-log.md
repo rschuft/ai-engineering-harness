@@ -38,7 +38,7 @@ what it blocks, and its status.
 
 | Id | Origin | Act needed | Why Owner authority | Evidence and prepared material | Blocks | Status |
 |---|---|---|---|---|---|---|
-| OA-21 | P-04.2 acceptance review (2026-11-12); reconciliation row O-033 (`fd-owner-credential-custody`) | **Authorize or decline a read-only, metadata-first custody inspection** of the Owner's own credentials `cred-owner-github` (the push credential) and `cred-owner-provider-login` (the coding-assistant login): which store holds each, whether any file copy exists, and whether any agent environment carries them (by variable name); no secret value is read. A finding is either remedied or accepted by the Owner as a decision-0010 same-account limit. The alternative is the Owner's ruling that O-033 was mis-mapped onto P-04.2 and its re-homing by a plan amendment (integrity process). | The Owner's credential stores and home directory are protected; an acceptance criterion is never narrowed silently | [P-04.2 evidence](P-04.2-authorization-recorder.md) section 17; [reconciliation](plan-reconciliation-2026-11-08.md) row O-033; `security/inventory.json` `fd-owner-credential-custody` | P-04.2's acceptance, then P-04.3. Unrelated work continues. | Pending (presented 2026-11-12) |
+| OA-21 | P-04.2 acceptance review (2026-11-12); reconciliation row O-033 (`fd-owner-credential-custody`) | **Accept, as a decision-0010 same-account limit, that your push credential (`cred-owner-github`) and coding-assistant login (`cred-owner-provider-login`) stay in your own host stores, uninspected** (reconsider condition: a separate operating-system identity for the dispatcher or the development agents). **Or** authorize a read-only, metadata-first inspection: which store holds each, whether any file copy exists, by variable name only; no secret value read. | the stores are yours and protected; accepting a limit on your own credentials is yours | [P-04.2 evidence](P-04.2-authorization-recorder.md) section 17; [reconciliation](plan-reconciliation-2026-11-08.md) row O-033; `security/inventory.json` `fd-owner-credential-custody` | Nothing on the D1 path (P-04.2 accepted 2026-11-12 after the mapping correction; their absence from agent attempts is S-03.3's proof, from CI jobs an explicit deferral) | Pending (re-framed 2026-11-12) |
 | OA-14 | P-04.2 (its live proof) | **Preparation approved, merge not authorized** (Owner, 2026-11-10). The exercise is reworked so it never manufactures Owner authority: (1) prepare the fixture proposals and manifest; (2) issue the recorder's actual one-time challenge; (3) present the exact operation, head, manifest digest, effects and challenge to the Owner; (4) the Owner's subsequent explicit authorization; (5) only then the protected merge. Negative controls (bot merges, a stale head) within the fixture scope; any unexpected successful bot merge is a security failure. Custody and teardown checks kept. Only the five named Credential Manager entries. | Credential access to the Owner account's entry; a merge as the Owner-authority identity; an effect that cannot be undone without the site administrator. | [P-04.2 evidence](P-04.2-authorization-recorder.md), section 8, "The live exercise" (the steps with outcomes stated in advance); [decision 0012](../decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md). | P-04.2's live proof; P-04.3 (the promotion of dispatch inputs) after it. Unrelated work continues. | **Done 2026-11-12** on the Owner's explicit authorization of both operations (verbatim in Decisions, "Owner authorization: OA-14 operations A and B"): record phase run once; B `live-20261112t060110z-b` refused 409 `HEAD_STALE` (receipt failed, nothing merged, main unmoved); A `live-20261112t060110z-a` merged once as `75e89b28143464949c24bd46433a5d9f2197b0d0` (parents main `f18da179` and the approved head `111d20c3`), receipt confirmed, protection `verified` with the baseline before and after. The P-04.2 verdict and decision 0012 are judged separately by the Overseer. Earlier: regenerated challenges and Act E prepare 2026-11-12; held 2026-11-10 until OA-16 Acts A to D |
 | OA-19 | S-03.2 slice 3 finding 3(b); Architect consultation (gates A, G) | **Approve, amend or decline the plan amendment** in [the proposal](S-03.2-plan-amendment-proposal-child-clause.md) section 3: S-03.2's proof can no longer meet "A child conversation launched by an agent driven by the fake upstream ... No model call is made" (the 2026-11-10 re-scope removed the only create shape that lets an upstream drive an agent, and the template has no tools); the proposal shows the child's containment by a probe-created child through the same route and key, and moves the agent's own launch to S-03.3 (the ACP provider) and to the first leaf that runs an openhands-kind agent (made concrete in S-03.4); S-03.3 gains the real-key fingerprint search and a note on its create fixture | A change to the integrity-tracked plan and to acceptance criteria (Owner-reserved; never weakened silently) | The proposal (exact wording, reasoning, what was not determined); slice 3 evidence section 3.2 | S-03.2's guest qualification cannot pass as written; the offline slices continue | **Done 2026-11-11** (plan `2f973b0`, inventory `cebd3ab`, decision 0015 note with this entry): the corrected wording applied exactly; see Decisions, "OA-19 and M-5 applied" |
 | OA-18 | M-4 finding | **Approve or decline M-5**: the same blueprint reconciliation as M-4, for the passages M-4's named sections did not cover (listed in the M-5 row below), including "What the Owner sees ... Recommended: merge to activate", which asks the Owner to merge in Gitea. | A change to the integrity-tracked blueprint (Owner-reserved, as M-1 to M-4 were). | The M-5 row; the M-4 commit `31a7f8b` as the pattern. | Nothing blocks on it; the blueprint is inconsistent with decision 0012 until then. | **Done 2026-11-11** (`fee915e`): M-5 applied through the integrity process; see the M-5 row |
@@ -49,7 +49,7 @@ what it blocks, and its status.
 
 | Id | Origin | Act needed | Why Owner authority | Evidence and prepared material | Blocks | Status |
 |---|---|---|---|---|---|---|
-| OA-12 | S-03.1 (plan leaf; the Owner's 2026-11-07 decision "Model access: design it now") | **Authorize or refuse, per act**, the model-access design of Proposed decision 0015: the provider and model names, a dedicated provider-capped key and budgets (choices); A1 the provider key in one Credential Manager entry, typed by the Owner into a harness command; A2 a host broker as the Owner's account with two `127.0.0.1` listeners; A3 one guest-to-host path, an SSH remote port forward in the existing management channel to `172.17.0.1:<port>` in the guest; A4 the guest composition relaxed to exactly that address and port (sshd forwarding, one container-guard allow; optionally Moby `dns`); A5 the broker's egress to exactly one provider origin; A6 one first model call, fixed prompt, no repository content, one disposable guest. | A credential, a host service and ports, the first guest-to-host path, host egress and model usage billed to the Owner: product, security and spending authority; beyond the standing guest authorization (no LLM or model credential, no guestfwd). | [Authorization request](S-03.1-owner-authorization-request.md) (complete on its own); [decision 0015](../decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md) (Proposed; Architect design reviewed by the Overseer). Nothing performed. | **Now:** S-03.1's proof (authorized or refused by the Owner before any model run); S-03.2 and its dependants (E-03.2.2, K-02.2) wait on the answer. Unrelated work continues. | **Architecture accepted 2026-11-10; execution items pending preparation** (Owner, verbatim under Decisions). **Accepted (not to be re-presented unless new evidence contradicts it):** the ACP coding path through OpenHands `ACPAgent` as the default (OpenHands-native optional); brokered, dedicated, spend-capped API keys in principle; Claude Code first to qualify, Codex kept as a supported alternative; decision 0015 amendment 1 (applied); the plan reconciliation (to apply by the integrity process); S-03.2 offline work with synthetic credentials and fake upstreams. **Pending, each presented separately when prepared:** the exact model identifiers, including Claude Code's secondary model (verified, never from memory; no wildcards); the key, its storage and spend caps and budgets; the broker's host listeners; the guest forward and hardening change; external egress; the first model call; the image adapter result is in: both adapters and the Node runtime are present in the exact pinned image at their registry pins ([S-03.3 check](S-03.3-image-adapter-check.md), 2026-11-10; no derived image needed; the bundled CLIs not yet opened). L1 and L2 stay held, re-homed to an optional native-inference capability |
+| OA-12 | S-03.1 (plan leaf; the Owner's 2026-11-07 decision "Model access: design it now") | **Authorize or refuse, per act**, the model-access design of Proposed decision 0015: the provider and model names, a dedicated provider-capped key and budgets (choices); A1 the provider key in one Credential Manager entry, typed by the Owner into a harness command; A2 a host broker as the Owner's account with two `127.0.0.1` listeners; A3 one guest-to-host path, an SSH remote port forward in the existing management channel to `172.17.0.1:<port>` in the guest; A4 the guest composition relaxed to exactly that address and port (sshd forwarding, one container-guard allow; optionally Moby `dns`); A5 the broker's egress to exactly one provider origin; A6 one first model call, fixed prompt, no repository content, one disposable guest. | A credential, a host service and ports, the first guest-to-host path, host egress and model usage billed to the Owner: product, security and spending authority; beyond the standing guest authorization (no LLM or model credential, no guestfwd). | [Authorization request](S-03.1-owner-authorization-request.md) (complete on its own); [decision 0015](../decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md) (Proposed; Architect design reviewed by the Overseer). Nothing performed. | **Now:** S-03.1's proof (authorized or refused by the Owner before any model run); S-03.2 and its dependants (E-03.2.2, K-02.2) wait on the answer. Unrelated work continues. | **Architecture accepted 2026-11-10; execution items pending preparation** (Owner, verbatim under Decisions). **Accepted (not to be re-presented unless new evidence contradicts it):** the ACP coding path through OpenHands `ACPAgent` as the default (OpenHands-native optional); brokered, dedicated, spend-capped API keys in principle; Claude Code first to qualify, Codex kept as a supported alternative; decision 0015 amendment 1 (applied); the plan reconciliation (to apply by the integrity process); S-03.2 offline work with synthetic credentials and fake upstreams. **Pending, each presented separately when prepared:** the exact model identifiers, including Claude Code's secondary model (verified, never from memory; no wildcards); the key, its storage and spend caps and budgets; the broker's host listeners; the guest forward and hardening change; external egress; the first model call; the image adapter result is in: both adapters and the Node runtime are present in the exact pinned image at their registry pins ([S-03.3 check](S-03.3-image-adapter-check.md), 2026-11-10; no derived image needed; the bundled CLIs not yet opened). L1 and L2 stay held, re-homed to an optional native-inference capability 2026-11-12, the Owner's J3: technical model selection within an authorized provider and spending envelope is delegated; exact identifiers are verified against current provider information and presented with intended uses and expected cost before the first authorized paid operation. Still the Owner's: the provider and its single egress origin, the spending cap, and creating and entering the key. |
 
 ### 3. Future authorization
 
@@ -58,6 +58,7 @@ what it blocks, and its status.
 | OA-06 | Decisions [0004](../decisions/0004-privileged-effect-store-custody-and-restore-semantics.md) and [0010](../decisions/0010-effects-store-placement-and-governance-threat-model.md) (act A4); the F-05.1 limits | The privileged host act A4: create the executor principal and the effects-store custody root. | A privileged host act: account, elevation and custody. | The precise privileged operation and its effects. **Not authorized** (Owner, 2026-11-09). | G-04.2.1 (and the effects CLI success path). | Pending (future); reserved for its gate (Owner, 2026-11-09 and 2026-11-10) |
 | OA-07 | [Decision 0013](../decisions/0013-owner-ui-session-access-and-management-key-custody.md); the S-01.4 and F-04.2 rows | An approval for each distinct host-to-guest connection (the Owner UI, the dispatch path). | Decision 0013: no host-to-guest path opens without a recorded Owner approval. | Each connection, separately, at the leaf that first needs it. **Not authorized** (Owner, 2026-11-09). | U-01.2 and E-01.3.x, as each is reached. | Pending (future); reserved for its gate (Owner, 2026-11-09 and 2026-11-10) |
 | OA-13 | [Decision 0016](../decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md), section 10 | The CI lane's acts and confirmations, each separately: A-1 the `ci-control` forward; A-2 repository content in a CI guest; A-3 an untrusted workload there; A-4 the filtering proxy's host listener; C-1 enabling Gitea Actions for the governance repository only, with the token ceilings; C-2 the governance repository, `aieh-bot-ci`, the registration-token procedure and the live check; C-3 the CI guest variant, its ceilings and lifetime | Guest network, repository content and untrusted workloads beyond the standing guest authorization; a host listener; a configuration change of Gitea, the trusted computing base | Each act with what stays unauthorized, in the 0003 procedure. **Owner direction (2026-11-10):** no live CI runner is qualified while its registration token remains reusable and an effective reset or revocation is unverified; if the automated reset is unavailable, that is a blocking condition at the live provisioning gate, presented with the required alternative or Owner act. Accepting decision 0016 authorizes none of its acts | Q-02.2.1 (C-3, A-4), Q-02.2.2 (A-1, A-2, A-3, C-2's registration), Q-02.3.1 (C-1, C-2) | Pending (future); **not authorized** (Owner, 2026-11-10) |
+| OA-22 | D1 commitment (2026-11-12); decision 0018 (Proposed) point 5 | **The D1 standing authorization, each item separately answerable:** (a) the inference broker's loopback listeners; (b) edge `nm-guest-inference`; (c) edge `nm-job-inference`; (d) edge `nm-dispatcher-agent-server`; (e) S-03.2's guest hardening change; (f) agent attempts through the dispatcher on the D1 demo repository's content only; (g) model calls under the cap set in OA-12; (h) provisioning the demo repository and its protections on the host Gitea inside declared policy. Excludes host shares, any other egress, any Owner credential in a guest, and every other repository. Stops on any failed containment case, unexpected egress, credential finding, or the cap reached. Expires at D1's acceptance. | Each widens an Owner-approved policy record or spends | `policy/network-matrix.json` (the three edges' `owner_act`); decision 0003 (the guest authorization this extends); decision 0015 | S-03.2's guest qualification, S-03.3, E-01.3.3's probe, E-01.3.2 and D1 | Prepared 2026-11-12; presented when D1's offline leaves pass. Nothing is granted until the Owner answers. |
 
 ### 4. Optional housekeeping
 
@@ -153,7 +154,13 @@ push never implies parent acceptance.
 | F-06.2 Host-service lifecycle contract and the Windows adapter | **PASS (2026-11-10)**, Windows only (Linux F-06.4, macOS F-06.5); decision 0011 stays drafted until F-06.3 completes, as the plan sets | inventory fix `5e8b031`; contract and adapter `8a87d7d`; fixture repair `05130af`; budgets `593409a` (counters and the new `platform` suite only); evidence `204561b`; README fix `c015e6a` | [Evidence](F-06.2-platform-windows.md). `integrations/platform/` holds `platform_contract.py` and `platform_windows.py`, and `gitea_host.py` reaches every Windows call through the adapter (of 426 lines removed from `gitea_host.py`, 297 moved verbatim, 20 stayed elsewhere and 65 are the intended changes). Verbs: install, up, down, restart, status, inspect, verify; provision, rotate, retire; upgrade, recover, uninstall. Records: `aieh-platform/1`, `aieh-asset/1`, `aieh-gitea-host/1` with the optional `platform.asset_key`, `aieh-service-run/1` (still reads `aieh-gitea-run/1`), `aieh-readiness/1` (carries its platform), `aieh-service-transition/1`. The nine new refusal codes each carry a remedy, and existing messages are unchanged (each covered by a named test). **Proof:** live `gitea:verify` (19/19) and `gitea:status` byte-identical at `13f2329`, `8a87d7d` and `593409a`; the live instance is the same Gitea process throughout. An I7 no-exposure scan follows every live act (status, inspect, verify, `verify --readiness`, `gitea:authz` 18 OK with 284 probes); the live lifecycle test ran on a fixture instance in a temporary root (install through recover, a supervisor kill included; 14.6 s). Never run live: down, restart, upgrade, recover, uninstall and every credential act.<br>**Fix forward:** the new tests put the gitea suite over its wall limit (3.46 s against 3.25 s, introduced-by `8a87d7d`); `05130af` repaired it, and no wall changed. The `fd-outer-server-local-recovery` wording, in the inventory (`5e8b031`) and the security README, is corrected to match OA-03: imports and registrations come before the lease claim, and the directory creation and `git init` after it (introduced-by `e17ac2b`).<br>**Overseer verification:** `verify_seed` PASS (165/136); `cmp` of the captured before and after outputs shows them identical; live status running, with the same process; `test:budget` from Git Bash on a quiet host **PASS**, serial 142.4 s, contract 20.9 s (95% of its limit), gitea 3.1 s against 3.25 s. Builder: ten suites OK (platform 40, gitea 121 with 8 opt-in skips); pytest 1,844 passed; `hooks:verify` rendered PASS; PowerShell 150.8 s, recorded only (repository 7.78 s over its limit there, as at F-10.5).<br>**Overseer ruling (sequencing):** the plan's F-06.2 action lists the whole verb set, so the upgrade, recover and uninstall verbs and the transition record are F-06.2's code. F-06.6 keeps its full proof: the disposable-instance rehearsal (a real cross-version upgrade needs a second pinned version), reboot or sign-out behaviour, and the inspection of the egress proxy. Semantics chosen within the accepted design and recorded in the evidence: uninstall empties `ephemeral/tmp/gitea/` only; upgrade backups go in `persistent/gitea/backups/<transition id>/`; retire covers role bots only. **Not verified:** Linux, macOS, keyring; a real upgrade; retire against a running Gitea; `CREDENTIAL_PROVIDER_LOCKED` and `SUPERVISION_UNAVAILABLE` from real OS failures. **Carried:** the gitea suite has little wall headroom, so its next test is likely to need a wall re-proposal by ruling. |
 | F-06.3 Credential provider adoption (keyring for POSIX; Windows provider kept; fail closed) | **PASS (2026-11-10)**, Windows; the real-store cross-read ran once under Owner action OA-10 ([evidence](OA-10-OA-11-owner-acts-2026-11-10.md)); decision 0011 accepted | provider, factory, receipts, pins `437a578`; budgets `c3e9c0f` (counters and the new `credentials` suite only); evidence `28b7d0b` | [Evidence](F-06.3-credential-provider.md). `integrations/credentials/credential_provider.py`: the ctypes Credential Manager provider moved (methods AST-identical to `f6e82bc`), `KeyringProvider` instantiating `SecretService.Keyring()` or `macOS.Keyring()` by name with a viable `.priority`, and a fail-closed factory: Windows never imports keyring, anything else refuses `NO_CREDENTIAL_PROVIDER`, and `get_keyring()`, a keyringrc, `PYTHON_KEYRING_BACKEND`, the CLI and keyrings.alt are shown ignored by test; `doctor` reports the provider (Windows: `windows-credential-manager`, viable). **Overseer ruling:** keyring is installed in the tools set on every platform and is never the Windows provider (decision 0011 draft: "keyring kept off the Windows provider"); keyring 25.7.0 and its dependencies copied byte for byte from the F-01.2 locks into the tools and dev locks, with their `sys_platform` markers; `tools:install` installed them wheels-only. Every rotate and retire act (`gitea_roles`, and `finalize-credentials` as rotate) writes an integration-store receipt, fingerprints only, and reads it back (`CREDENTIAL_RECEIPT_UNREAD` otherwise); fixtures only. Live acts: `gitea:status`/`verify` byte-identical before and after (stdout and stderr), `gitea:authz` 18 OK, `gitea:roles -- status` (read-only, by code read first) four entries present; I7 clean after each; no live entry written, deleted or enumerated.<br>**Fix forward (introduced-by an uncommitted draft):** one test run wrote 5 synthetic receipts into the real managed root's integration store; fixed before the commit (a fixture context must bring its own store). The file remains: Owner action OA-11. **Process note:** the builder also ran `dev:install` (the product's installer; the dev lock mirrors the tools set), which the dispatch did not list.<br>**Overseer verification:** `verify_seed` PASS (165/136); `cmp` of the before and after captures identical; the credentials, gitea and platform suites run with `AIEH_DATA_ROOT` redirected to an empty directory wrote nothing there; read of the prepared real-store test; `test:budget` from Git Bash on a quiet host **PASS**, serial 143.8 s, contract 21.0 s, gitea 3.2 s against 3.25 s. Builder: eleven suites OK (credentials 51 with the opt-in skip); pytest 1,904 passed; `hooks:verify` PASS.<br>**Carried:** keyring 25.7.0's `macOS.Keyring` cannot look an entry up by name alone, so the factory refuses it: F-06.5 needs a decision on entry lookup. The gitea suite's wall has almost no headroom. **Real-store cross-read (OA-10, 2026-11-10, one run at `867381b`):** PASS: write, separate-process read by name (fingerprint only), delete, absence from a separate process and from the test, I7 clean; no other entry touched. **Not verified:** Secret Service and Keychain on real hosts (F-06.4, F-06.5); receipts against the live Gitea; `CREDENTIAL_PROVIDER_LOCKED` from a real session. |
 | P-04.1 Record Owner acceptance and mint outcome identity | **PASS (2026-11-10)**, on fixtures, Windows; no real acceptance recorded anywhere | recorder, shared record and `write_commit` `5e205f3`; budgets `43d3724` (counters and the new `owner` suite only); evidence `c0bb1df`; OpenSpec check `d415eb3`; decision 0014 amended at acceptance | [Evidence](P-04.1-acceptance-recorder.md). `integrations/owner/`: `owner_decision.py` (the shared Owner decision record `owner-decision/v1`: `decisionId` uuid4, `kind`, `subject`, `shown` {summary, nonce, expiresAt}, `statement` {text, attributedTo, channel, reference}, `recordedBy`, `recordedAt`; `authorize-operation` named and refused until P-04.2) and `acceptance_recorder.py` (`task owner:accept`: sets the item's authority and acceptance, mints the outcome UUID into `x-outcomes`, writes the record and commits in process). Refusals with stable codes and remedies, each tested with the branch, work tree and index unchanged: a missing acceptance, one authored by a model (`agent:` attribution or an `openhands:` reference), a statement not attributed to the Owner, re-minting (the uuid generator never called), and the challenge, name and reference refusals. **Proof:** a recorded acceptance resolves through the lineage objective resolver (unresolved at the previous commit); the recorder runs that check before the branch moves; `--amend` keeps the id and the earlier pinned reading still resolves. OpenSpec 1.16.0 (locked npm install in a throwaway directory): `validate --strict` accepts a change holding the record, `archive` moves `owner-decisions/` and `.openspec.yaml` byte-identical, and the resolver resolves the archived change (opt-in test `test_live_openspec.py`).<br>**Repository module:** P-04.1 is the first write, `Repository.write_commit` (decision 0014 sections 6 and 8): hooks refused before any write, a compare-and-set branch update, no launch; the census guard green with no new site. Exposed-by P-04.1 and repaired: Dulwich writes stale index extensions back, so the next `git commit` would revert the change; the write drops them (pin-sensitive, decision 0014 section 10).<br>**Overseer rulings** (the shared shape and the Owner-attribution rule are what the accepted Owner-authority design binds for P-04.1; the rest is the recorder's own form): the record lives at `openspec/changes/<change>/owner-decisions/<decisionId>.json` in the recording commit, so it moves with the change; a leading `format` field is kept, and decision 0012 lists it when committed at P-04.2; the challenge is stateless (`prepare`/`record`, single use detected from the committed records, 60-minute default expiry, 7 days at most), and the Owner's statement need not repeat the nonce. P-04.2's stricter authenticity rules (its own challenge state, a statement naming the operation id) are for merges and stay its own; the item's `acceptance` is the statement's reference; `--amend` is required to re-record; commit trailers `AIEH-Decision-Id`, `AIEH-Outcome-Id`, `AIEH-Recorder`. The recorder checks what the transcriber declares; it does not authenticate the Owner (the accepted bootstrap channel).<br>**Overseer verification:** `verify_seed` PASS (165/136); the owner and repository suites with `AIEH_DATA_ROOT` redirected to an empty directory OK and the directory still empty; census OK; `test:budget` from Git Bash on a quiet host **PASS**, serial 147.5 s, contract 21.0 s. Builder: every suite OK; pytest 1,948 passed; `hooks:verify` PASS.<br>**Carried:** the serial total is close to the 150 s gate; the next leaf adding tests needs test-runtime work first (Overseer decision). **Not verified:** a real acceptance or project repository; the statement against a conversation store (U-02.x); three recorder codes without a trigger test; Linux and macOS. |
-| P-04.2 Record Owner authorization and merge it as aieh-owner | **BLOCKED on one clause (acceptance review 2026-11-12; OA-21)**: every clause met except the custody inspection of the Owner's own credentials (reconciliation row O-033); decision 0012 Accepted (Overseer) 2026-11-12; see Decisions, 2026-11-12. Earlier, **IN PROGRESS (2026-11-10)**: the recorder fails closed (decision 0012 point 6, OA-15a): no merge without a `verified` answer from the protection verifier; the command line's verifier is now OA-16's protection check (built offline 2026-11-11), which answers `unverified` (`CREDENTIAL_MISSING`) until the auditor is provisioned, so the recorder still merges nothing; the live exercise is reworked into two phases with the Owner between (OA-14); the fixture's protection declaration is total (F-C). Open: the OA-16 live acts (provisioning, the fixture declaration, the negative tests, the qualification), then the live exercise (OA-14) | recorder, subject and suites `db212d2`; records `d67bd62`; live exercise written `024d84f`; tests from the mutation check `bcf94ce`, `32a9591`; test fixtures `538847a`; budgets `992c855`; evidence `5402a7e`; fix-forward `7970bf7`, `03bb85f`; fail-closed seam `0c57f0a`; two-phase exercise `d720fb8`; F-C `6e3a481`; tests from the mutation check `6f10385`; budgets `68a3bc2`; evidence `f14c50b`; OA-16 protection check, auditor role and wiring `20377ea`; tests from the mutation check `a63636e`; documentation `7fc6ef6`; evidence `394bfa1`; OA-16 preparation: escape-probe `e318249`, documentation `5f54be2`, records `68fae80`, tests from the mutation check `4e30564`, evidence `6384d29` | [Evidence](P-04.2-authorization-recorder.md); [decision 0012](../decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md) (Proposed). 35 stable refusal codes; one merge per decision bound to the approved head and manifest digest with six trailers and a write-ahead receipt; a lost answer resolved by reading, never by merging again; no token minted or used; mutation check 157/171 killed (14 equivalent or unreachable), `resolve` 11/11 after the fix-forward. **Overseer verification:** the STOP finding read at the pinned Gitea 28.3.0 source (`branch_protections` behind `reqToken(), reqAdmin()`); publication gate and private-path grep clean; verify_seed PASS; owner suite 86 OK; inventory and role-token checkers PASS; budget check PASS at `5402a7e` (serial 141.5 s; cleanmgr absent before and after); the code read for the credential, merge and read-back paths. **Rulings:** F4 the 15-minute settle rule rejected (an open, unmerged pull request stays `unknown`; removed `7970bf7`); F2 `planned_performer` reference-checked; F10 (approvals checked by Gitea at merge time, not before) accepted as disclosed. **Not verified:** anything against a real Gitea; the custody inspection; the protection rule's unobservable fields; any real Owner authorization **2026-11-10 (seam, phases, F-C):** `Context.verifier(repository, base, phase)` returns `ProtectionVerdict` (`verified`/`drift`/`unverified`, detail, digest); no verifier, an exception or a malformed answer is `unverified`; `record` asks it as the last read before the receipt is reserved and the merge sent and refuses `PROTECTION_DRIFT` or `PROTECTION_UNVERIFIED` (nothing sent, no receipt, no decision record); after the read-back it asks again and records a differing answer as the disclosure `PROTECTION_CHANGED_AFTER_MERGE` (the merge stands); 37 refusal codes. Phase `prepare` opens the fixture proposals, runs the bot-merge negative controls (a success is a SECURITY FAILURE) and writes the recorder's real challenges and a presentation, merging nothing; phase `record` reads the Owner's statement from a file exactly as written and checks it with the recorder's own checks before any Gitea call or credential read; the exercise never writes a statement. `protection_rules()` declares all 34 Gitea 28.3.0 BranchProtection fields (bypass allowlist disabled and empty on every rule, F-A); one value changes: `main` `block_on_outdated_branch` true (Overseer ruling: accepted; it keeps the merged tree the approved head's; not applied to the live fixture). Mutation check: recorder lines 14/14 killed; live-phase functions 39/39 after the added tests. **Overseer verification:** the diff read: the one merge call (`session.merge`) is reached only after `require_verified`; the live test constructs no statement; verify_seed PASS; owner suite 113 OK, gitea suite 134 OK (scratch data root left empty); inventory checker PASS; budget `check --run` PASS at `f14c50b` (serial 145.3 s; Disk Cleanup absent before and after); publication gate and private-path grep clean. **Rulings:** F13 (exposed-by F-C: with an outdated base B would get 405 before 409) repaired by recording the stale-head control first; F14 (inferred from source, not observed: after the hook's push Gitea re-checks the pull request and may answer 405 "try again later", or 500, before the 409 head check) carried to the verifier slice: the control's property is that nothing merges and `main` does not move; which Gitea refusal is observed is recorded, not assumed; no record can reach the merge before then. Detected, not changed: `integrations/gitea/README.md` summarizes the rules without `block_on_outdated_branch` (carried to the same slice). **OA-16 verifier (2026-11-11):** [evidence](P-04.2-protection-verifier.md). `integrations/gitea/protection_check.py` reads, as `aieh-bot-protection-audit` with a `read:repository` token, a fixed set of GETs only (any other method or path raises before sending): the token's identity and exact scope, the repository view and the auditor's `permissions.admin`, every rule (34 fields, bypass allowlists included), the exact rule set, precedence for `main` against Gitea's own `effective_branch_protection_name` (Gitea 28.3.0's order read at the pinned source: priority, then a plain name before a glob, then the earlier created), 11 repository merge settings, collaborators with Gitea's computed permission, teams and deploy keys; `drift` on any difference, `unverified` on a missing, unexpected or wrongly typed field, a list not read whole, a failed or lost read, a precedence the model cannot confirm, a rejected or wrong credential, or a missing entry (zero requests sent). The recorder's `managed_context` configures it through `protection_verifier`; no refusal code added (37). Gitea's merge-time evaluation and the remaining check-to-merge window are documented (gitea README, `fd-protection-check-toctou`). Records `planned`: `cred-gitea-protection-audit`, `op-protection-verify`, the recorder role's grants. A live negative and qualification module is prepared, environment-gated, never run. F14 carried (the stale-head control's property is that nothing merges and `main` does not move; the refusal observed is recorded); the gitea README's rule summary and the `security/README.md` row for `fd-child-conversation-tool` fixed. Mutation 108/115 killed (7 equivalent or unreachable), 4 workers, no window, 0 leftover processes. **Overseer verification:** the check's `observe`, `judge` and `verify` and the recorder wiring read (the recorder's `check_protection` turns any verifier exception into `unverified`); verify_seed and the five contract checkers PASS; owner 126 OK, gitea 188 OK; budget `check --run` PASS at `394bfa1` (serial 138.3 s; cleanmgr absent before and after). **Rulings:** P1, one lane row for the new credential in `policy/ci-token-secret-policy.json` (outside the brief's paths, required by `check_ci_policy`), accepted: the lane map must name every inventory credential, and `trusted-lane` matches `cred-gitea-owner-account`'s; P7, `provision` (identity with token) and `fixture` (collaboration with protection) bundling acts, accepted as matching the Owner's own grouping (provisioning of the identity or credential; changing collaborators or protection; live merge tests), no command split. Carried: P2, the recorder role's realization row (needs `test_check_role_tokens`'s map) to the provisioning slice; `nm-owner-gitea` does not list the new credential; the escape probe needs a repository the auditor is not a collaborator of. Process deviations disclosed by the Builder: one stat of the tools interpreter's executable under the managed data root (only executing it is allowed) and one fixed one-second sleep, both corrected in the next dispatch. Not verified: anything against the live Gitea. **OA-16 preparation (2026-11-11):** [section 13](P-04.2-protection-verifier.md). `gitea_roles.py escape-probe` (`task gitea:roles -- escape-probe`), a separate Owner act never called by `provision` or `fixture`: as the site administrator the way `fixture` acts (basic authentication, no token left), it creates the private, empty repository `aieh-authz-fixture/escape-probe` with no collaborators; one existing exactly so is reported and left unchanged, any other state refused (`ESCAPE_PROBE_STATE`); it never addresses `authz`; the live negative test uses it by default. `nm-owner-gitea` lists `cred-gitea-protection-audit`; the recorder role's realization row (planned, P-04.2) added with `test_check_role_tokens`'s map. Mutation 49/49 killed, 4 workers, no window, 0 leftover processes. **Overseer verification:** the command's code read (one write, the creation, only after a 404; read-back required); verify_seed and the four contract checkers PASS; gitea suite OK (13 live classes skipped); role-token tests 73 OK; budget `check --run` PASS at `6384d29` (serial 138.9 s; cleanmgr absent before and after). **Rulings:** the accepted existing state is exactly what the command creates (private, empty, not archived, no collaborators); finding P8 (Gitea answers 404 both for a repository the token cannot see and one that does not exist): the repository's existence is evidenced by the `escape-probe` report taken immediately before the negative phase within the same Owner act, and no site-administrator read is added to the negative phase, which keeps its credentials to the auditor's and the verifier bot's. Not verified: the command against a real Gitea (no collaborator added at creation, `empty` reported). |
+| P-04.2 Record Owner authorization and merge it as aieh-owner | **PASS (2026-11-12)**: accepted after the Owner's direction to correct OA-21's obligation mapping (Decisions, 2026-11-12). Every clause met, live or on the recorder's real code (section 17). The custody sentence covers the credential the leaf's artifact holds, `cred-gitea-owner-account`, inspected live three times. The Owner's own credentials were not inspected and are not claimed; finding `fd-owner-credential-custody` is re-homed (see Decisions). Earlier, **IN PROGRESS (2026-11-10)**: the recorder fails closed (decision 0012 point 6, OA-15a): no merge without a `verified` answer from the protection verifier; the command line's verifier is now OA-16's protection check (built offline 2026-11-11), which answers `unverified` (`CREDENTIAL_MISSING`) until the auditor is provisioned, so the recorder still merges nothing; the live exercise is reworked into two phases with the Owner between (OA-14); the fixture's protection declaration is total (F-C). Open: the OA-16 live acts (provisioning, the fixture declaration, the negative tests, the qualification), then the live exercise (OA-14) | recorder, subject and suites `db212d2`; records `d67bd62`; live exercise written `024d84f`; tests from the mutation check `bcf94ce`, `32a9591`; test fixtures `538847a`; budgets `992c855`; evidence `5402a7e`; fix-forward `7970bf7`, `03bb85f`; fail-closed seam `0c57f0a`; two-phase exercise `d720fb8`; F-C `6e3a481`; tests from the mutation check `6f10385`; budgets `68a3bc2`; evidence `f14c50b`; OA-16 protection check, auditor role and wiring `20377ea`; tests from the mutation check `a63636e`; documentation `7fc6ef6`; evidence `394bfa1`; OA-16 preparation: escape-probe `e318249`, documentation `5f54be2`, records `68fae80`, tests from the mutation check `4e30564`, evidence `6384d29` | [Evidence](P-04.2-authorization-recorder.md); [decision 0012](../decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md) (Proposed). 35 stable refusal codes; one merge per decision bound to the approved head and manifest digest with six trailers and a write-ahead receipt; a lost answer resolved by reading, never by merging again; no token minted or used; mutation check 157/171 killed (14 equivalent or unreachable), `resolve` 11/11 after the fix-forward. **Overseer verification:** the STOP finding read at the pinned Gitea 28.3.0 source (`branch_protections` behind `reqToken(), reqAdmin()`); publication gate and private-path grep clean; verify_seed PASS; owner suite 86 OK; inventory and role-token checkers PASS; budget check PASS at `5402a7e` (serial 141.5 s; cleanmgr absent before and after); the code read for the credential, merge and read-back paths. **Rulings:** F4 the 15-minute settle rule rejected (an open, unmerged pull request stays `unknown`; removed `7970bf7`); F2 `planned_performer` reference-checked; F10 (approvals checked by Gitea at merge time, not before) accepted as disclosed. **Not verified:** anything against a real Gitea; the custody inspection; the protection rule's unobservable fields; any real Owner authorization **2026-11-10 (seam, phases, F-C):** `Context.verifier(repository, base, phase)` returns `ProtectionVerdict` (`verified`/`drift`/`unverified`, detail, digest); no verifier, an exception or a malformed answer is `unverified`; `record` asks it as the last read before the receipt is reserved and the merge sent and refuses `PROTECTION_DRIFT` or `PROTECTION_UNVERIFIED` (nothing sent, no receipt, no decision record); after the read-back it asks again and records a differing answer as the disclosure `PROTECTION_CHANGED_AFTER_MERGE` (the merge stands); 37 refusal codes. Phase `prepare` opens the fixture proposals, runs the bot-merge negative controls (a success is a SECURITY FAILURE) and writes the recorder's real challenges and a presentation, merging nothing; phase `record` reads the Owner's statement from a file exactly as written and checks it with the recorder's own checks before any Gitea call or credential read; the exercise never writes a statement. `protection_rules()` declares all 34 Gitea 28.3.0 BranchProtection fields (bypass allowlist disabled and empty on every rule, F-A); one value changes: `main` `block_on_outdated_branch` true (Overseer ruling: accepted; it keeps the merged tree the approved head's; not applied to the live fixture). Mutation check: recorder lines 14/14 killed; live-phase functions 39/39 after the added tests. **Overseer verification:** the diff read: the one merge call (`session.merge`) is reached only after `require_verified`; the live test constructs no statement; verify_seed PASS; owner suite 113 OK, gitea suite 134 OK (scratch data root left empty); inventory checker PASS; budget `check --run` PASS at `f14c50b` (serial 145.3 s; Disk Cleanup absent before and after); publication gate and private-path grep clean. **Rulings:** F13 (exposed-by F-C: with an outdated base B would get 405 before 409) repaired by recording the stale-head control first; F14 (inferred from source, not observed: after the hook's push Gitea re-checks the pull request and may answer 405 "try again later", or 500, before the 409 head check) carried to the verifier slice: the control's property is that nothing merges and `main` does not move; which Gitea refusal is observed is recorded, not assumed; no record can reach the merge before then. Detected, not changed: `integrations/gitea/README.md` summarizes the rules without `block_on_outdated_branch` (carried to the same slice). **OA-16 verifier (2026-11-11):** [evidence](P-04.2-protection-verifier.md). `integrations/gitea/protection_check.py` reads, as `aieh-bot-protection-audit` with a `read:repository` token, a fixed set of GETs only (any other method or path raises before sending): the token's identity and exact scope, the repository view and the auditor's `permissions.admin`, every rule (34 fields, bypass allowlists included), the exact rule set, precedence for `main` against Gitea's own `effective_branch_protection_name` (Gitea 28.3.0's order read at the pinned source: priority, then a plain name before a glob, then the earlier created), 11 repository merge settings, collaborators with Gitea's computed permission, teams and deploy keys; `drift` on any difference, `unverified` on a missing, unexpected or wrongly typed field, a list not read whole, a failed or lost read, a precedence the model cannot confirm, a rejected or wrong credential, or a missing entry (zero requests sent). The recorder's `managed_context` configures it through `protection_verifier`; no refusal code added (37). Gitea's merge-time evaluation and the remaining check-to-merge window are documented (gitea README, `fd-protection-check-toctou`). Records `planned`: `cred-gitea-protection-audit`, `op-protection-verify`, the recorder role's grants. A live negative and qualification module is prepared, environment-gated, never run. F14 carried (the stale-head control's property is that nothing merges and `main` does not move; the refusal observed is recorded); the gitea README's rule summary and the `security/README.md` row for `fd-child-conversation-tool` fixed. Mutation 108/115 killed (7 equivalent or unreachable), 4 workers, no window, 0 leftover processes. **Overseer verification:** the check's `observe`, `judge` and `verify` and the recorder wiring read (the recorder's `check_protection` turns any verifier exception into `unverified`); verify_seed and the five contract checkers PASS; owner 126 OK, gitea 188 OK; budget `check --run` PASS at `394bfa1` (serial 138.3 s; cleanmgr absent before and after). **Rulings:** P1, one lane row for the new credential in `policy/ci-token-secret-policy.json` (outside the brief's paths, required by `check_ci_policy`), accepted: the lane map must name every inventory credential, and `trusted-lane` matches `cred-gitea-owner-account`'s; P7, `provision` (identity with token) and `fixture` (collaboration with protection) bundling acts, accepted as matching the Owner's own grouping (provisioning of the identity or credential; changing collaborators or protection; live merge tests), no command split. Carried: P2, the recorder role's realization row (needs `test_check_role_tokens`'s map) to the provisioning slice; `nm-owner-gitea` does not list the new credential; the escape probe needs a repository the auditor is not a collaborator of. Process deviations disclosed by the Builder: one stat of the tools interpreter's executable under the managed data root (only executing it is allowed) and one fixed one-second sleep, both corrected in the next dispatch. Not verified: anything against the live Gitea. **OA-16 preparation (2026-11-11):** [section 13](P-04.2-protection-verifier.md). `gitea_roles.py escape-probe` (`task gitea:roles -- escape-probe`), a separate Owner act never called by `provision` or `fixture`: as the site administrator the way `fixture` acts (basic authentication, no token left), it creates the private, empty repository `aieh-authz-fixture/escape-probe` with no collaborators; one existing exactly so is reported and left unchanged, any other state refused (`ESCAPE_PROBE_STATE`); it never addresses `authz`; the live negative test uses it by default. `nm-owner-gitea` lists `cred-gitea-protection-audit`; the recorder role's realization row (planned, P-04.2) added with `test_check_role_tokens`'s map. Mutation 49/49 killed, 4 workers, no window, 0 leftover processes. **Overseer verification:** the command's code read (one write, the creation, only after a 404; read-back required); verify_seed and the four contract checkers PASS; gitea suite OK (13 live classes skipped); role-token tests 73 OK; budget `check --run` PASS at `6384d29` (serial 138.9 s; cleanmgr absent before and after). **Rulings:** the accepted existing state is exactly what the command creates (private, empty, not archived, no collaborators); finding P8 (Gitea answers 404 both for a repository the token cannot see and one that does not exist): the repository's existence is evidenced by the `escape-probe` report taken immediately before the negative phase within the same Owner act, and no site-administrator read is added to the negative phase, which keeps its credentials to the auditor's and the verifier bot's. Not verified: the command against a real Gitea (no collaborator added at creation, `empty` reported). |
+| E-05.1 Bring up the D1 demo Work: one OpenSpec change and one Backlog.md task in the demo repository | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12) | - |
+| E-05.2 Admit the D1 stage's ACP agent block, bound to its template digest | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12) | - |
+| E-05.3 Pin a digest-bound agent assignment with no Skills for D1 | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12) | - |
+| E-05.4 Return an attempt's result to a bot work/ branch and an unreviewed draft pull request | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12) | - |
+| E-05.5 Demonstrate D1: one contained AI-assisted coding task to a verified result and a draft pull request | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12) | - |
+| P-05.1 Move the repository's own Work into Backlog.md and OpenSpec | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12) | - |
 | F-09 runtime headroom (Overseer slice under the Owner's 2026-11-08 test wall-clock directive; F-09 patterns, no new leaf) | **PASS (2026-11-10)**: serial median 147.9 to 137.2 s (builder), 137.5 s (Overseer); test code, fixtures and budgets only | gate fixtures `49e8010`; `guest.py` compiled once `c5132f4`; checker fuzz copies and verifier golden repository `cb5a751`; verifier baseline launches `98bb781`; budgets and baseline at `98bb781` `50e834a` (counters, and walls that fell only); evidence `6a70893` | [Evidence](F-09-runtime-headroom-2026-11-10.md). Opened because the serial total stood 2.5 s under the 150 s gate after P-04.1. Savings: the gate's fail-closed tests 5.5 s (the timeout test waits the gate's shortest accepted timeout, 1 s, and now asserts `timed out after 1s`; one pinned stub scanner runs each behaviour, so one golden repository pair serves all five), checker fuzz copies 1.6 s (re-parse instead of deep copy), `guest.py` compiled once per process 1.4 s (`tools/tests/module_code.py`, a new module per load, its own 3 tests), the API probe server's shutdown poll 0.9 s, the gate golden pair 0.5 s (relative origin URL, empty init template), the seeded script's syntax tree parsed once 0.5 s, the verifier's baseline tests 0.3 s. Launches 1,236 to 1,158; tests +3. No assertion removed, no test skipped, no product, integrity-tracked or record file touched.<br>**Equivalence:** the 1,973 unittest ids common to before and after have identical outcomes; pytest conformance serial and xdist PASS (1,976 ids); `-m "not e2e"` identical serially and under xdist; 12 of 12 mutations killed in a throwaway clone. Walls that fell: tools 77.5 to 71.1, lineage 18.1 to 14.0, dispatch 5.0 to 4.6, planning 12.1 to 12.0, unit 23.8 to 22.3; none rose. **Fix forward (introduced-by an uncommitted draft):** an empty init template in the owner fixture broke a hooks-refusal test, because the repository module reads hooks and `info/exclude`; reverted there and kept only for repositories git alone reads.<br>**Overseer rulings:** the ~135 s target was the Overseer's, not the Owner's gate; 12.5 s of headroom suffices for the next leaves. Both remaining options are declined: pointing `test_guest`'s Smoke and Inventory tests at a fixture repository changes what they inventory (the real checkout), and sharing one allowlist across the `WithRealScanner` pairs changes security tests' inputs. **Overseer verification:** `verify_seed` PASS both modes (165/136); all 12 suites OK with `AIEH_DATA_ROOT` redirected to an empty directory, still empty after; read of the budget and test diffs; `test:budget` from Git Bash on a quiet host (no `cleanmgr` before or after) **PASS**, serial 137.5 s, contract 21.0 s. Builder: `hooks:verify` PASS.<br>**Unrelated but detected (carried):** `task test:categories` fails under the plain interpreter it uses, because `test_credential_provider` imports keyring, which only the tools interpreter has; it passes under the tools interpreter. **Remaining structural costs:** the real-scanner gate tests 15.1 s, crash-matrix workers 7.9 s, the netprobe listener 6.7 s, the verifier 8.1 s, checker fuzz 7.8 s, the batch launcher's ceilings 3.4 s. **Not verified:** PowerShell timings; POSIX hosts. |
 | F-09 contract headroom (Overseer slice under the Owner's 2026-11-08 test wall-clock directive; F-09 patterns, no new leaf) | **PASS (2026-11-10)**: contract median 21.58 to 18.59 s (limit 22.10 s), serial 142.2 to 139.2 s (builder, interleaved); test code, one Taskfile target and budgets only | verify_seed work copy `16dbb89`; `test:categories` under the tools interpreter `8386ebf`; budgets and baseline `5f1b60d` (counters; the tools wall fell 73.0 to 72.0, none rose); evidence `5200157` | [Evidence](F-09-contract-headroom-2026-11-10.md). Opened because the contract category stood about 0.1 s under its limit after Q-02.1. **Cause, measured first:** on this host the first read of freshly written files costs about 35 ms per MB, so each writing verify_seed test paid it on a private seeded copy. **Fix:** one work copy per class, restored before each writing test and asserted equal to its source (every file's sha256 and every directory) in `setUp`; inputs, assertions and launches unchanged. **Equivalence:** the same 2,075 unittest ids and outcomes before and after; pytest conformance serial and xdist PASS; `-m "not e2e"` identical serially and under xdist; 9 of 9 mutations killed in a throwaway clone. mkdtemp 1,068 to 1,052 (the 16 private copies no longer made).<br>**Carried defect repaired forward (unrelated-but-detected at F-09 runtime headroom):** `task test:categories` imported keyring under the plain interpreter; it now finds `<tools python>` as `test:profile` and `test:budget` do, checked by `RequiredTargets`; PASS.<br>**Overseer verification:** `verify_seed` PASS both modes (165/136); the changed test files OK with `AIEH_DATA_ROOT` redirected to an empty directory, still empty after; `test:categories` PASS; read of the Taskfile and budget diffs; `test:budget` from Git Bash: a first run with Disk Cleanup starting mid-run discarded (157.8 s), the rerun on a quiet host (no Disk Cleanup before or after) **PASS**, serial 139.4 s, contract 18.7 s. Builder: all 12 suites OK; `hooks:verify` PASS.<br>**Process note:** the builder's first after-profile ran while Disk Cleanup was running and was discarded (its pre-check printed but did not stop the run). **Remaining:** the ~138 s aim is missed by about 1 s; the two remaining options change what a test reads (`test_guest` Smoke/Inventory on a fixture repository; one shared allowlist for the real-scanner gate tests) and stay declined. The gitea suite is the tightest wall (3.22 of 3.25 s). **Not verified:** PowerShell timings; POSIX hosts. |
 | F-09 gitea headroom (Overseer slice under the Owner's 2026-11-08 test wall-clock directive; F-09 patterns, no new leaf) | **PASS (2026-11-10)**: gitea suite median 3.28 to 2.33 s; wall 2.5 to 2.4 s; no wall rose; test code and budgets only | tests `c9a2db4`; budgets `86ac0b6`; evidence `057dc06`; F-2 fix-forward `1654271`, evidence `5d3bda5` | [Evidence](F-09-gitea-headroom-2026-11-10.md). Shared managed roots per starting state, restored and checked byte- and mode-exact before each test; the three job supervisors started together; same 132 ids, outcomes and digest; mutation checks killed every product and fixture break. F-1: the 1.0 s window of the job control test is a negative control's observation window, kept (Overseer ruling). F-2 (introduced-by `c9a2db4`): a failed `setUpModule` leaked its roots; repaired. **Overseer verification:** budget `check --run` PASS at `5d3bda5` (gitea 2.4 s, serial 146.9 s; Disk Cleanup was running during this run, so the pass is an upper bound under load) |
@@ -2517,6 +2524,413 @@ push never implies parent acceptance.
 - **2026-11-12: Test inventory repaired (unrelated but detected).** `f92601c`: `check_test_budget.py check --run` failed `TEST_REMOVED` for a driver test attributed to `5a4e270`; the test was renamed one commit earlier, in `aa6a3a7` (S-03.3 slice 6, F-6, recorded in its evidence section 5), to `test_with_an_older_reporter_and_the_search_off_the_run_is_unknown`. Only that id changed in `evidence/test-profile/test-ids.json` (no regeneration; `recorded_from` kept); the full profile shows exactly one id gone and no skip changed across 13 suites. **Overseer verification:** the one-line diff read; the new name exists, the old does not; the Builder's `check --run` PASS (serial 145.8 s; walls as notes); publication gate clean.
 
 - **2026-11-12: P-04.2 acceptance review: blocked on one clause; decision 0012 accepted.** `1d76344`..`67b9c5b` (records, decision 0012, [section 17](P-04.2-authorization-recorder.md)). **Met:** one merge bound to head and digest with receipt and trailers (live, A); the stale head's 409 (live, B); no token minted (live: aieh-owner holds none); every bot token refused for the merge (live, Act E) and as the recorder's input (offline, before any request); protection drift (the verifier's live drift detection, Act D, with the fail-closed seam and the live `verified` answers around A's merge); the altered digest, replayed or expired decision, missing or non-Owner statement, missing challenge and a token on aieh-owner (refusals on the recorder's real code against the fake transport, each before any merge call, over Gitea reads exercised live; not individually live: an aieh-owner token would itself mint one, and no further live exercise is authorized); decision 0012 committed; the same-account limit recorded. **Not met:** the custody clause. Plan amendment `2967d2d` added it to discharge reconciliation row O-033 (`fd-owner-credential-custody`: the Owner's push credential and provider login); the live inspection covered aieh-owner's password only (absent from the managed root, the checkout, the run directory and the main session's environment, three times; no job environment existed). Reading it as the recorder's credential alone would narrow the criterion, so P-04.2 is not accepted; OA-21 presents the minimum closing act. Job-environment custody of the aieh-owner credential is owned by S-03.3 (agent attempts) and Q-02.2.2 (CI jobs) by their plan text; not E-01.3.3 or S-03.2. **Decision 0012: Accepted (Overseer)** on its own stated conditions (point 6's check established and qualified, OA-16 Acts A to D; the live exercise run with the Owner's own authorization); a dated Current facts section; no numbered point changed. Also: two role-token realization rows verified (the owner's Gitea account, the recorder's protection auditor); S-01.3.2's job rows narrowed to what their search covered; stale Proposed/not-provisioned text corrected in the inventory, the security, policy, owner and gitea READMEs, docs and a Taskfile description. **Overseer verification:** the diffs read; verify_seed PASS; the four checkers PASS; the checker tests 514 OK; no record claims P-04.2 accepted. Left as recorded wording of intent, not verified claims: the conversation-container asset, the execution profile and decision 0016 point 4 state that jobs hold no Owner credential.
+
+- <a id="owner-direction-five-role-operating-model"></a>**2026-11-12: Owner direction: the five-role operating model.** Three Owner messages of 2026-11-12 in the main session, verbatim below (labelled msg6, msg7 and msg9 in the order given; the paste wrappers are removed, and in msg9 one bracketed substitution replaces the name of an unrelated project, which this repository does not name). Between msg7 and msg9, a further Owner message of 2026-11-12 (msg8) directed an independent architectural review of the proposal by the shared architect, as a design consultation; its findings were reconciled with the Overseer's proposal before msg9. Decision 0018 (Proposed) records the resulting responsibilities.
+
+  msg6, 2026-11-12 (D1 accepted; the five roles; design only):
+
+  > I have reviewed your strategic reassessment.
+  >
+  > I agree with the central finding: we have prioritized
+  > local engineering completeness over integrated capability
+  > delivery.
+  >
+  > I accept D1, the first contained AI-assisted coding
+  > task producing a verified result and draft pull request,
+  > as the proposed next demonstration target.
+  >
+  > However, I do not want the existing Overseer to absorb
+  > permanent responsibility for product strategy, milestone
+  > selection, critical-path management, and global priority.
+  >
+  > We are adopting a different target organizational model:
+  >
+  > PLANNING
+  > - Product Manager: accountable lead for intent refinement,
+  >   product outcomes, priorities, and milestone selection.
+  > - Program Manager: specialist responsible for work
+  >   inventory, dependencies, sequencing, readiness,
+  >   critical-path analysis, and blockers.
+  > - Architect: shared specialist for architecture,
+  >   integration strategy, technical feasibility,
+  >   and architectural coherence.
+  >
+  > EXECUTION
+  > - Engineering Manager: the current Overseer role,
+  >   accountable for executing authorized work packages,
+  >   delivery, delegation, verification, and reporting.
+  > - Engineer: the current Builder role.
+  > - Architect: the SAME shared Architect role used
+  >   by Planning, selectively invoked when needed.
+  >
+  > This is five distinct agent roles, not six.
+  >
+  > Both accountable leads selectively invoke specialists.
+  > There is no requirement to consult every specialist on
+  > every decision.
+  >
+  > Planning owns what, why, priorities, and sequencing.
+  > Execution owns delivery within accepted commitments.
+  > The Architect informs both without independently changing
+  > product priorities or Owner authority.
+  >
+  > Strategic intent, capabilities, dependencies, constraints,
+  > decisions, and evidence must be durable repository state,
+  > not conversational memory held by individual agents.
+  >
+  > Your next assignment is DESIGN ONLY:
+  >
+  > 1. Reconcile this organizational model with the existing
+  >    agent definitions, project architecture, Work model,
+  >    Workflow model, governance mechanisms, and plans.
+  >
+  > 2. Recommend the minimum changes required to introduce
+  >    a Product Manager and Program Manager while preserving
+  >    the existing execution capabilities.
+  >
+  > 3. Define the planning-to-execution contract, including
+  >    work-package dispatch, delegated authority, delivery
+  >    commitments, evidence reporting, blockers, and
+  >    replanning.
+  >
+  > 4. Identify existing mechanisms that can implement this
+  >    without introducing new infrastructure, services,
+  >    governance layers, or unnecessary artifacts.
+  >
+  > 5. Define how planning maintains strategic direction
+  >    while avoiding continuous coordination overhead.
+  >    Specialists are invoked based on need.
+  >
+  > 6. Show how the proposed structure would manage the D1
+  >    critical path, including the deferrals identified
+  >    in your assessment.
+  >
+  > 7. Distinguish changes requiring Owner authority from
+  >    changes that can be delegated after the architecture
+  >    is accepted.
+  >
+  > 8. Reassess OA-21. Determine whether GitHub credential
+  >    inspection is genuinely necessary for P-04.2 or
+  >    represents an incorrectly attached proof obligation.
+  >
+  > 9. Identify which recommendations from your previous
+  >    section F belong in the new planning roles and which
+  >    remain legitimate Engineering Manager responsibilities.
+  >
+  > 10. Propose an incremental migration that avoids
+  >     interrupting functioning implementation mechanisms
+  >     or losing existing evidence and accepted decisions.
+  >
+  > Do not implement anything yet.
+  > Do not modify agent definitions, plans, decisions,
+  > or acceptance criteria.
+  > Do not resume Q-02.2.1.
+  > Do not initiate live operations.
+  >
+  > Return a concise architectural proposal with:
+  >
+  > A. Final role definitions and decision authority.
+  > B. Planning-to-execution operating workflow.
+  > C. Durable work and dependency model.
+  > D. Minimum repository and agent-definition changes.
+  > E. D1 critical-path ownership and sequencing.
+  > F. Migration plan.
+  > G. Genuine Owner decisions needed to proceed.
+  >
+  > The goal is a reusable AI engineering operating model
+  > that maintains strategic objectives while allowing
+  > execution to proceed autonomously and efficiently.
+  >
+  > Avoid reproducing human organizational bureaucracy.
+  > Optimize for clear authority, durable state, selective
+  > agent invocation, and integrated capability delivery.
+  >
+  > Stop after presenting the proposal for review.
+
+  msg7, 2026-11-12 (the Owner's role; the corrected responsibility model; design only):
+
+  > Revise your proposed five-role AI Engineering operating model
+  > based on the following direction.
+  >
+  > My role is to supply intent, constraints, feedback, and
+  > authorization for genuinely consequential external effects.
+  > I am not the project's operational authority or project manager.
+  >
+  > The AI system owns translating my intent into plans,
+  > architecture, implementation, integration, verification,
+  > and delivery.
+  >
+  > Adopt these five roles:
+  >
+  > - Product Manager: planning lead, intent refinement,
+  >   capabilities, priorities, milestones, acceptance criteria.
+  > - Program Manager: work inventory, dependencies, critical
+  >   path, sequencing, readiness, blockers, and deferrals.
+  > - Architect: shared specialist serving planning and
+  >   execution, consulted selectively.
+  > - Engineering Manager: execution lead, delivery commitments,
+  >   delegation, implementation coordination, and verification.
+  > - Engineer: implementation, integration, and testing.
+  >
+  > The Architect should discover and selectively apply relevant
+  > skills for planning and execution consultations. Prefer
+  > existing open-source skills over building new ones. Skills
+  > provide expertise, not additional authority.
+  >
+  > Both leads invoke specialists only when needed.
+  >
+  > Separate strategic planning from engineering execution through
+  > durable state and explicit work commitments. Do not require
+  > planning involvement in routine implementation decisions.
+  >
+  > Correct the proposed responsibility model:
+  >
+  > 1. The Product Manager derives and maintains acceptance
+  >    criteria from my intent, seeking clarification only when
+  >    necessary.
+  >
+  > 2. The Product Manager selects milestones and priorities
+  >    without requiring my approval at every transition.
+  >
+  > 3. The Program Manager challenges dependencies and prevents
+  >    discovered engineering work from automatically expanding
+  >    the critical path.
+  >
+  > 4. The Engineering Manager owns ordinary engineering decisions
+  >    and publication within established permissions.
+  >
+  > 5. My explicit authorization remains necessary for actions
+  >    that cross reserved security, credential, financial,
+  >    destructive, or external-effect boundaries.
+  >
+  > 6. Preserve accepted constraints and requirements. Agents
+  >    may refine implementation and planning autonomously but
+  >    may not silently contradict or weaken my expressed intent.
+  >
+  > 7. Do not use the historical bootstrap log as the permanent
+  >    authoritative representation of current strategic state.
+  >    Recommend a minimal, declarative current-state representation
+  >    linked to the existing plans, decisions, and evidence.
+  >
+  > 8. Reconcile the proposed responsibility model with existing
+  >    authorization mechanisms so routine engineering decisions
+  >    do not unnecessarily become Owner approval requests.
+  >
+  > 9. Preserve the D1 integrated coding-agent demonstration as
+  >    the immediate delivery objective.
+  >
+  > 10. Retain your finding that OA-21 was incorrectly attached
+  >     to P-04.2. Include the proposed correction in the
+  >     revised design.
+  >
+  > This remains DESIGN ONLY.
+  >
+  > Do not modify agent definitions, repository plans,
+  > architecture records, or implementation artifacts yet.
+  > Do not resume Q-02.2.1 or initiate live operations.
+  >
+  > Return the revised operating model, minimum migration steps,
+  > and only the genuinely consequential decisions that still
+  > require my explicit authorization.
+  >
+  > Be concise and opinionated. Optimize for delivering integrated
+  > capabilities, not reproducing human organizational bureaucracy.
+  >
+  > Stop for review after presenting the revision.
+
+  msg9, 2026-11-12 (J1 to J3; the offline migration authorized, items 1 to 9):
+
+  > I have reviewed the reconciled five-role proposal and
+  > Fable's independent architectural assessment.
+  >
+  > My decisions:
+  >
+  > J1: Accept Option A.
+  > Do not introduce CURRENT_STATE.json or another parallel
+  > planning state store. Reuse existing plans, evidence,
+  > OpenSpec, and Backlog. Minimize temporary state.
+  >
+  > J2: Accept Option B.
+  > Create new, project-neutral Product Manager and Program
+  > Manager agent definitions. Do not modify the existing
+  > [unrelated project's] planning agents.
+  >
+  > Retain one shared Architect supporting both planning and
+  > execution. Preserve its existing engineering consultation
+  > capabilities while incorporating planning consultation
+  > and selective skill discovery.
+  >
+  > Skills should be discovered and loaded when relevant,
+  > preferably from existing open-source sources. External
+  > skills require appropriate source verification and must
+  > never override accepted architectural constraints.
+  >
+  > The Architect may retain nonauthoritative technical
+  > navigation knowledge, but architectural decisions,
+  > constraints, and commitments must remain in durable
+  > repository records.
+  >
+  > J3: Delegate technical model selection within an
+  > authorized provider and spending envelope.
+  >
+  > Verify exact model identifiers against current provider
+  > information. Present the selected models, intended uses,
+  > and expected cost characteristics before the first
+  > authorized paid operation. Do not require my approval
+  > for ordinary model-selection details.
+  >
+  > Operating model:
+  >
+  > - Product Manager owns intent refinement, product
+  >   outcomes, priorities, and milestone selection.
+  > - Program Manager owns dependencies, sequencing,
+  >   critical paths, readiness, blockers, and deferrals.
+  > - Engineering Manager owns execution and delivery.
+  > - Engineer implements and verifies bounded tasks.
+  > - Architect provides shared technical expertise,
+  >   invoked selectively.
+  >
+  > Planning determines what outcomes matter and which
+  > work is worth undertaking. Engineering determines
+  > how to deliver committed work.
+  >
+  > The Product Manager accepts milestones against their
+  > product outcomes. The Engineering Manager verifies
+  > engineering completion. Use independent review for
+  > consequential changes.
+  >
+  > My role is to provide intent, constraints, feedback,
+  > and authorization at genuinely reserved boundaries,
+  > not to manage routine engineering decisions.
+  >
+  > Proceed with the OFFLINE migration:
+  >
+  > 1. Create the two new planning agent definitions.
+  > 2. Consolidate the Architect's planning and execution
+  >    consultation capabilities without weakening either.
+  > 3. Narrow the existing Overseer into an Engineering
+  >    Manager operating against planning commitments.
+  > 4. Preserve the existing Engineer role.
+  > 5. Implement the minimum planning-to-execution handoff
+  >    using existing repository mechanisms.
+  > 6. Prepare decision 0018 as Proposed, documenting
+  >    responsibilities, delegated operations, reserved
+  >    boundaries, and standing authorization semantics.
+  > 7. Prepare the D1 plan changes and supporting leaves
+  >    identified through the independent review.
+  > 8. Correct OA-21's obligation mapping without claiming
+  >    that unperformed credential inspections passed.
+  > 9. Preserve existing acceptance criteria, security
+  >    boundaries, and evidence.
+  >
+  > Important:
+  >
+  > This authorizes routine offline engineering and
+  > publication within existing permissions.
+  >
+  > It does NOT authorize new live operations, changes to
+  > existing security or credential permissions, spending,
+  > external network access, or execution of proposed
+  > standing authorization classes.
+  >
+  > Do not treat proposed decision 0018 as an accepted grant
+  > of additional authority. Existing restrictions remain
+  > effective until explicitly changed.
+  >
+  > Do not resume unrelated Q-02.2.1 work.
+  >
+  > Use the existing publication and integrity mechanisms.
+  > Keep tests proportional to the changes.
+  >
+  > At completion, report:
+  >
+  > - Agent definitions created or modified.
+  > - Planning-to-execution handoff implemented.
+  > - Decision 0018 status.
+  > - D1 plan readiness and remaining critical blockers.
+  > - OA-21 and P-04.2 status.
+  > - Published commits and verification.
+  > - Genuine reserved decisions requiring my attention.
+  >
+  > Once the planning roles are operational, stop and
+  > present the handoff. Do not independently start the
+  > next execution milestone.
+
+- <a id="owner-direction-definitions-skills-instructions-state-enforcement"></a>**2026-11-12: Owner direction: definitions, skills, repository instructions, state and enforcement.** Given in the main session during the migration, verbatim (msg10; the paste wrapper is removed):
+
+  > The Engineering Manager definition exceeding the 18 KiB
+  > agent-definition limit suggests that we may be putting
+  > too much procedural knowledge into agent definitions.
+  >
+  > Do not solve this solely by compressing or deleting prose.
+  >
+  > During the current five-role migration, review the agent
+  > definitions and distinguish five concerns:
+  >
+  > 1. Agent identity, responsibilities, delegation, and
+  >    authority boundaries: agent definitions.
+  >
+  > 2. Specialized repeatable procedures and reasoning
+  >    methods: selectively loaded agent skills.
+  >
+  > 3. Repository-wide engineering rules and conventions:
+  >    AGENTS.md and related canonical instructions.
+  >
+  > 4. Current objectives, milestones, dependencies,
+  >    decisions, commitments, and evidence:
+  >    durable repository state.
+  >
+  > 5. Inviolable security, authorization, integrity,
+  >    and publication constraints:
+  >    deterministic enforcement wherever possible.
+  >
+  > Identify procedural material currently embedded in agent
+  > definitions that belongs in reusable skills.
+  >
+  > Prefer existing skill mechanisms and established
+  > open-source skills. Do not invent a new skill framework.
+  >
+  > Maintain progressive disclosure: agents should load
+  > specialized procedures only when the current task
+  > requires them.
+  >
+  > Avoid automatically loading every skill into every
+  > agent's context.
+  >
+  > Preserve all existing requirements, authority boundaries,
+  > and operational safeguards. Moving instructions must
+  > not silently weaken behavior or create conflicting
+  > authoritative copies.
+  >
+  > Keep agent definitions concise and focused on their
+  > stable responsibilities and routing to relevant skills.
+  >
+  > Use shared skills where planning and execution require
+  > the same procedure, without blurring their decision
+  > rights.
+  >
+  > Assess whether any instructions should instead become
+  > deterministic checks rather than relying on model
+  > compliance.
+  >
+  > Incorporate this separation into the current migration.
+  > Do not expand into a standalone skill-platform project.
+  >
+  > Report briefly:
+  > - What remained in agent definitions.
+  > - What moved into skills.
+  > - What belongs in shared repository instructions.
+  > - Any newly identified enforcement gaps.
+  > - Final definition sizes and verification results.
+  >
+  > Continue respecting the current authorization boundaries
+  > and existing migration scope.
+
+- **2026-11-12: The offline five-role migration (msg9 items 1 to 9, msg10).** Outside this repository, the Owner's own agent definitions now realize the five roles: a product manager and a program manager were created, the architect consolidates planning and execution consultations, the Overseer is narrowed into the engineering manager, and the Builder is kept as the engineer (not inspected from this repository). Repeatable procedures moved from those definitions into selectively loaded skills. This repository gained the plan amendment `f3a6c92` (groups E-05 and P-05, S-03.3's re-homing sentence, the CI deferral), the handoff tool `tools/plan_commitment.py` with `task plan:commitment` (`a3064e3`), decision 0018 as Proposed and the `CLAUDE.md` section "Planning and execution" (`9ed4ad7`), and these records. Nothing live was performed and no permission changed.
+
+- **2026-11-12: P-04.2 accepted (PASS); OA-21's obligation mapping corrected.** On the Owner's direction "Correct OA-21's obligation mapping without claiming that unperformed credential inspections passed" (verbatim above). **Cause (introduced-by plan amendment `2967d2d`, re-pointed `1b25112`):** reconciliation row O-033, the finding `fd-owner-credential-custody` about the Owner's push credential (`cred-owner-github`) and coding-assistant login (`cred-owner-provider-login`), was carried to P-04.2, whose artifact holds a different credential. P-04.2's sentence "An inspection shows that the Owner credential exists only in its OS credential-provider entry: no file copy, and absent from every agent and job environment" reads, in its leaf, as the recorder's credential `cred-gitea-owner-account`. That credential was inspected live three times: absent from the managed root, the checkout, the run directory and the main session's environment. Its absence from job environments, none of which existed, stays owned by S-03.3 (agent attempts) and Q-02.2.2 (CI jobs), as ruled at the acceptance review. **Re-homed, not dropped:** (1) the Owner's two credentials absent from every agent-attempt environment: S-03.3, whose proof gains, by the plan amendment `f3a6c92`, the sentence "The Owner's own credentials (cred-owner-github, cred-owner-provider-login) are absent from the attempt's container, environment and files, by name and by an in-memory value search with a positive control; an unrestricted Owner credential never enters the attempt."; (2) their absence from CI job environments: an explicit plan deferral until the CI lane is committed (amendment `f3a6c92`); (3) where the Owner's own host stores keep them, and whether any file copy exists: **not inspected, unknown**, presented as OA-21 for the Owner to accept as a decision-0010 same-account limit (reconsider condition: a separate operating-system identity for the dispatcher or the development agents) or to authorize a read-only, metadata-first inspection. The inventory's `carried_to` and the reconciliation record are corrected to match. No inspection is claimed that was not performed. **P-04.2: PASS** (Overseer, as engineering manager). P-04.3 is unblocked.
+
+- <a id="commitment-d1"></a>**2026-11-12: Commitment: D1.** Terminal leaf **E-05.5**, "Demonstrate D1: one contained AI-assisted coding task to a verified result and a draft pull request"; acceptance is its proof. Committed set, from `task plan:commitment -- E-05.5` at the amendment commit `f3a6c92`: 57 leaves, 45 passed, 12 open, 4 ready, 8 blocked. Open: S-03.1 (IN PROGRESS), P-04.2 (BLOCKED), S-03.2 (IN PROGRESS), S-03.3 (IN PROGRESS), P-04.3 (not started), E-05.1 (not started), E-05.2 (not started), E-01.3.3 (IN PROGRESS), E-05.3 (not started), E-01.3.2 (not started), E-05.4 (not started), E-05.5 (not started); ready: S-03.1, P-04.2, E-05.1, E-01.3.3. Reserved acts it depends on: OA-12 (the provider, the spending cap, the key); OA-22 (prepared, not granted); and at D1 time the two recorder decisions, the design acceptance (decision 0008) and the manifest promotion (P-04.3). Recorded on the Owner's selection of D1 (msg6) during the migration session; the product manager confirms or revises it at its first planning session. With P-04.2's verdict above recorded: 46 passed, 11 open, ready S-03.1, P-04.3, E-05.1, E-01.3.3.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
