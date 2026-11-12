@@ -116,14 +116,15 @@ REQUIRED_RULES = {
     'container.docker_host': ('must_equal', '-'),
     'container.valid_volumes': ('must_be_empty', None),
     'container.network': ('must_be_empty', None),
-    # Not a key at the 6.0.0 pin (Overseer ruling (2), 2026-11-12): the stale key is declared
-    # nowhere, and IPv6 is set off under network_create_options.
+    # Not a key at the 6.0.0 pin (the Overseer's ruling of 2026-11-12 on the C-3 record's
+    # findings): the stale key is declared nowhere, and IPv6 is set off under
+    # network_create_options.
     'container.enable_ipv6': ('must_be_empty', None),
     'container.network_create_options.enable_ipv6': ('must_equal', False),
     'container.force_pull': ('must_equal', False),
     'container.force_rebuild': ('must_equal', False),
     'container.options': ('options', None),
-    # The 6.0.0 keys the declaration must pin (Overseer ruling (3), 2026-11-12).
+    # The 6.0.0 keys the declaration must pin (the same ruling).
     'container.bind_workdir': ('must_equal', False),
     'container.sweep': ('must_equal', False),
     'runner.tool_cache_mode': ('must_equal', 'none'),
@@ -133,12 +134,13 @@ REQUIRED_RULES = {
     'metrics.enabled': ('must_equal', False),
     'health_check.enabled': ('must_equal', False),
 }
-# The runner process's environment (ruling (3)): names compared without case, and prefixes.
+# The runner process's environment (the same ruling): names compared without case, and
+# prefixes.
 REQUIRED_ENV_NAMES = ('GITEA_RUNNER_LABELS', 'GITEA_RUNNER_REGISTRATION_TOKEN', 'HTTP_PROXY',
                       'HTTPS_PROXY', 'NO_PROXY', 'DOCKER_HOST')
 REQUIRED_ENV_PREFIXES = ('ACTIONS_RUNNER_HOOK_', 'OTEL_')
-# The registration token's input (ruling (5)): a file on /run, never the command line or
-# the environment.
+# The registration token's input (the same ruling): a file on /run, never the command line
+# or the environment.
 TOKEN_FLAG = '--token-file'
 TOKEN_PATH_PREFIX = '/run/'
 TOKEN_REFUSED = ('--token', 'GITEA_RUNNER_REGISTRATION_TOKEN')

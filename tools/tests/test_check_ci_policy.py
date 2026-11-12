@@ -57,7 +57,7 @@ GOOD_CONFIG = {
     'health_check': {'enabled': False},
 }
 CONFIG_PATH = '/etc/aieh/ci-runner/config.yaml'
-# The variant's runner service and register call (rulings (3) and (5) of 2026-11-12).
+# The variant's runner service and register call (the Overseer's rulings of 2026-11-12).
 GOOD_SERVICE = {'environment': {'HOME': '/var/lib/aieh-ci-runner', 'PATH': '/usr/bin:/bin'},
                 'argv': ['/opt/aieh/ci-runner/gitea-runner', 'daemon', '--config', CONFIG_PATH]}
 GOOD_REGISTER = {'argv': ['/opt/aieh/ci-runner/gitea-runner', 'register', '--no-interactive',
@@ -366,7 +366,7 @@ class RunnerConfig(Base):
             ('container', 'enable_ipv6', True),
             ('container', 'force_pull', True),
             ('container', 'force_rebuild', True),
-            # the keys of the 6.0.0 pin (rulings (2) and (3) of 2026-11-12)
+            # the keys of the 6.0.0 pin (the Overseer's rulings of 2026-11-12)
             ('container', 'enable_ipv6', False),
             ('container', 'network_create_options', {'enable_ipv6': True}),
             ('container', 'network_create_options', {}),
@@ -451,8 +451,8 @@ class RunnerConfig(Base):
 
 
 class RunnerServiceAndRegistration(Base):
-    """The runner's environment (ruling (3)) and the registration token's input (ruling (5)),
-    2026-11-12, in the policy and in a variant's declared service and register call."""
+    """The runner's environment and the registration token's input (the Overseer's rulings of
+    2026-11-12), in the policy and in a variant's declared service and register call."""
 
     def assert_clean(self, **kwargs):
         found, problems = self.codes(**kwargs)
