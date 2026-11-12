@@ -1925,6 +1925,130 @@ push never implies parent acceptance.
 
 - **2026-11-12: S-03.3 D-1 and F-8, the one Owner-approved source read of the staged image.** [Record](S-03.3-D-1-image-source-read.md). `2cfa23a`: `image-inspect` gains a bounded read-only text mode (listing, excerpts, searches, string constants, every count capped) and, because the agent server is a PyInstaller executable without `.py` source, a reader of its PYZ modules as data (its own table-of-contents and marshal walker; `marshal.loads` never called, nothing loaded as code); the earlier behaviour and its tests unchanged. `c05b946`: the record, its argument list written before the run. One run, 2026-11-12 01:06:54 to 01:07:15 UTC, `inspected`, every layer re-hashed against the lock; the same image identity as the first read. Findings: an ACP session fork starts a new CLI process under the adapter (the slice plan's 2.4 (b) differs); sub-agent output arrives on the parent CLI's stream, the sub-agent model `CLAUDE_CODE_SUBAGENT_MODEL` else the tool's, the agent's or the main model; an experimental agent-teams switch exists; the CLI reads `ANTHROPIC_BASE_URL`; the secondary model is read from `ANTHROPIC_SMALL_FAST_MODEL` or `ANTHROPIC_DEFAULT_HAIKU_MODEL` (the code names `claude-haiku-4-5`; not a model approval; how the default is derived unanswered); non-inference traffic has documented switches, but event logging and the WebFetch domain check go to a fixed Anthropic host that does not follow the base URL (refused in the guest, not switched off). F-8: six of seven assumptions confirmed; the turn-end status set differs (the SDK's terminal set is finished, error, stuck; the driver's adds paused and waiting_for_confirmation). **Overseer verification:** the new code's loading path read (no code loading); image-inspect tests 46 and the existing ones OK; the Builder's tools suite 1428 OK; verify_seed PASS; no machine path in the record. **Overseer ruling (no gate earned):** reading the agent server's PYZ modules as data is within the approved read ("Inspect ... as data"; nothing executed). Carried to the next S-03.3 slice: `ACP_ASSUMED['status']` and the driver's turn-end set, and the 429 note. Unanswered items (section 8) need a further Owner-approved read; none requested now.
 
+- **2026-11-12: Owner authorization of OA-16 Act B (verbatim).**
+
+  > Owner authorization — OA-16 Act B.
+  >
+  > APPROVED: Apply and verify the declared protection
+  > fixture for exactly one repository:
+  >
+  > aieh-authz-fixture/authz
+  >
+  > This authorization covers one execution of:
+  >
+  > task gitea:roles -- fixture
+  >
+  > followed by one read-only verification:
+  >
+  > task gitea:protection-check -- verify
+  > aieh-authz-fixture/authz
+  >
+  > PRECONDITIONS
+  >
+  > Before making changes:
+  >
+  > 1. Confirm the organization and repository already
+  >    exist. Creating either is NOT authorized.
+  >
+  > 2. Read and record the current repository settings,
+  >    complete collaborator roster, and complete branch
+  >    protection rule set.
+  >
+  > 3. Compare the actual state against the committed
+  >    declaration and the specific changes described
+  >    in the Act B proposal.
+  >
+  > 4. If unexpected collaborators, protection rules,
+  >    repository state, or security-relevant drift
+  >    exists, stop and present the difference before
+  >    making any changes.
+  >
+  > 5. Confirm the protection auditor still has exactly
+  >    one valid read:repository token, held in its
+  >    designated Credential Manager entry.
+  >
+  > AUTHORIZED CHANGES
+  >
+  > Apply the committed declaration using the existing
+  > trusted Gitea administration path.
+  >
+  > Repository settings:
+  > - Private, not archived, default branch main.
+  > - Merge commits only.
+  > - Rebase, squash, fast-forward-only and manual
+  >   merging disabled.
+  >
+  > Collaborators:
+  > - protection-audit: repository admin
+  > - planner: write
+  > - builder: write
+  > - reviewer: read
+  > - verifier: read
+  > - aieh-owner: write
+  >
+  > Branch protection:
+  > - main: no push or force-push; only aieh-owner
+  >   merges; one approved reviewer required;
+  >   rejected reviews and outdated branches block;
+  >   administrator merge override blocked.
+  > - work/*: push restricted to planner and builder.
+  > - **: all other branch pushes prohibited.
+  >
+  > Apply all 34 fields per rule exactly as declared,
+  > including disabled and empty bypass allowlists.
+  >
+  > No additional repository, identity, credential,
+  > permission or protection changes are authorized.
+  >
+  > POSTCONDITIONS
+  >
+  > 1. Read back every repository setting, collaborator
+  >    permission and protection rule.
+  >
+  > 2. Compare the observed state against the complete
+  >    declaration, not merely the fields that changed.
+  >
+  > 3. Confirm the site administrator holds no token.
+  >
+  > 4. Run the auditor's read-only protection verifier
+  >    once against the named repository.
+  >
+  > 5. Require a verified verdict and record its
+  >    baseline digest.
+  >
+  > 6. Record the before/after differences, operations,
+  >    exact revision, verification results and
+  >    credential-exposure scan.
+  >
+  > If any operation fails or the resulting state is
+  > unexpected, stop without retrying. Preserve the
+  > observed partial state and report it for
+  > reconciliation; do not perform unapproved repairs.
+  >
+  > AUTHORIZATION BOUNDARIES
+  >
+  > - No account or token creation or rotation.
+  > - No change to any other repository.
+  > - No escape-probe creation or negative testing.
+  > - No deliberate protection drift.
+  > - No protected merge.
+  > - No authorization of Acts C, D or E.
+  >
+  > This is one execution of Act B only.
+  >
+  > Do not interrupt the active D-1 Builder. Preserve
+  > working-tree isolation and record the outcome in
+  > the bootstrap log when safe.
+  >
+  > Once Act B passes, present Act C's exact scope for
+  > the next Owner decision.
+  >
+  > Continue unrelated eligible engineering work.
+
+- **2026-11-12: OA-16 Act B performed once: PASS (`verified`).** From a clean clone at `399b68c16ab3010acc4a7ed3bcd6da3173c441b4`. Preconditions (read-only as the site administrator, 01:21:40 UTC): the organization and `aieh-authz-fixture/authz` exist; private, not archived, default branch `main`, no deploy key, the Owners team only; the complete roster planner and builder write, reviewer and verifier read, `aieh-owner` write and no one else; the rules `main`, `work/*` and `**`; the differences from the declaration exactly those the Act B proposal named (rebase, rebase-explicit, squash and fast-forward-only merges on; the auditor without access; `main` `block_on_outdated_branch` false); the auditor's one token, ID 15, `read:repository`, in its entry (`sha256:a4109cc864373ed5`) and accepted; the administrator without token. **Process deviation (Overseer):** the Overseer's precondition script first stopped on the `work/*` push list read as `[builder, planner]` against the declared `[planner, builder]`; Gitea holds that list as a set and the product's verifier compares it sorted, so the script's comparison was corrected to the verifier's and the recorded state re-evaluated offline, with no further read, before any change. The run (`gitea_roles.py fixture`, the command `task gitea:roles -- fixture` wraps; 01:22:10 UTC; exit 0): one settings PATCH, six collaborator PUTs, three rule PATCHes, each 2xx, on `authz` only; no rule created; the administrator held no token afterwards; its I7 scan clean. Read-back (01:22:19 UTC) against the whole declaration: 11 settings, the six collaborators and their permissions (the auditor admin), the Owners team, no deploy key, 3 rules x 34 fields: no difference; the auditor's token unchanged. Verification (`protection_check.py verify aieh-authz-fixture/authz`, 01:22:20 UTC, exit 0): `verified`, baseline digest `sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42`; its I7 scan clean; no token-shaped text in any output (the Overseer's scan; the one 40-hex hit was inside that 64-hex digest). Gitea 28.3.0 records no audit event for these API changes. Evidence (session scratch): `state.py` `f75b25dd...`, `pre.json` `b6c22b18...`, `fixture.out` `ea4f1769...`, `post.json` `1c006cbf...`, `verify.out` `205f5380...`. Act C presented the same day; Acts C to E unauthorized.
+
+- **2026-11-12: S-03.3 slice 6, the guest-root vantage (F-6) and the turn's end (F-8), offline.** [Record](S-03.3-slice6-root-vantage.md). `aa6a3a7`: the root facts reporter (`profiles/seed/user-data.tmpl`, `aieh-provision conversation-facts`) gains one key, `containment`: per owner-labelled running container exactly slice 1's `collect host --pid` snapshot, by verbatim copies of slice 1's readers (a test holds them equal), one `/proc` scan, capped (16 containers, 1024 members, 64 outside children), no command, no environment, of the arguments only the program name and one path; its only input still the request file's existence; the driver's default vantage reads it as `agent` into slice 1's unchanged `host_verdict`; every gap UNKNOWN, never PASS (an existing guest's reporter has no section). Digests: the seed template `92deb03f...` to `f8e3b163...` (pinned by both profiles), the QEMU profile `0eb5fc0a...` to `f0ef1ca4...`, the Incus profile `ab65af02...` to `fbcbf11a...`; four seed digests in `test_nocloud_seed.py` re-pinned; a live approved-input manifest listing the old profile digest would refuse it until re-approved (not read: protected). `5a4e270`: the turn ends on the image's status enum: `finished` PASS; `error`, `stuck`, `paused`, `deleting` and any value outside the enum FAIL; `waiting_for_confirmation` FAIL and a stop; the wait continues only on `idle`, `running` or no value; `ACP_ASSUMED` cites the D-1 record; a 429 stays FAIL (no retry; disclosed). `8bd4e62`: the record. **Overseer verification:** the reporter diff read (no environment, no command; the argument summary as slice 1's); `test_provision`, the driver tests, `test_nocloud_seed`, `test_check_profile` and the dispatch suite OK; `check_profile` PASS; verify_seed PASS; the Builder's full parallel suite 13/13. Not verified: anything on a guest kernel (the reporter's root reads of uid 999 processes, the status fields, the report's size). The live run needs a guest created at or after `aa6a3a7`.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
