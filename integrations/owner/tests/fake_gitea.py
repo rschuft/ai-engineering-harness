@@ -12,7 +12,9 @@ allow, 409 "head out of date" when ``head_commit_id`` is not the head, otherwise
 base and the head as parents and the message title, a blank line, then the message. For the live
 exercise's phase plumbing (test_live_phases.py) it also takes a bot's proposal: ``POST /contents/{path}``
 (a file on a new or existing branch; 403 on the protected branch), ``POST /pulls``, ``POST
-/pulls/{index}/reviews`` and ``PATCH /pulls/{index}`` (closing). Every request authenticated with the
+/pulls/{index}/reviews`` and ``PATCH /pulls/{index}`` (closing); and its precondition's reads: ``GET
+/token`` of each bot (its login and scopes, from ``token_views``: a view, or a status answered instead)
+and ``GET /pulls?state=...`` (the pull requests in that state). Every request authenticated with the
 protection auditor's token goes to ``audit``, the fake of the protection check's reads
 (integrations/gitea/tests/protection_fake.py: its scope rule refuses that token every write);
 ``after_merge`` (a callable) runs after a merge, before its answer.
@@ -84,6 +86,10 @@ class FakeGitea:
         self.after_merge = None       # a callable run after a merge, before its answer
         self.fail_routes = {}         # {substring of the path: HTTP status} answered instead
         self.audit = protection_fake.ProtectionGitea(_roles)  # the protection auditor's reads
+        # GET /token of each bot but the auditor (whose token the audit fake answers): a view, or a status
+        self.token_views = {spec['user']: {'id': n + 1, 'name': f'aieh-{role}-x', 'scopes': list(spec['scopes']),
+                                           'login': spec['user']}
+                            for n, (role, spec) in enumerate(_roles.ROLES.items()) if spec['user'] != AUDITOR}
         self.lock = threading.Lock()
 
     # ------------------------------------------------------------------ the repository's history
@@ -170,6 +176,17 @@ class FakeGitea:
         query = dict(urllib.parse.parse_qsl(parsed.query))
         route = parsed.path.removeprefix('/api/v1')
         repo = f'/repos/{REPOSITORY}'
+        if method == 'GET' and route == '/token' and kind == 'token':
+            view = self.token_views.get(doer)
+            if not isinstance(view, dict):
+                return self.reply(view or 404, {'message': 'a fault of the fake'})
+            return self.reply(200, {'id': view['id'], 'name': view['name'], 'scopes': list(view['scopes']),
+                                    'created_at': '2026-11-07T10:00:05Z', 'last_used_at': '2026-11-07T10:00:06Z',
+                                    'user': {'id': 9, 'login': view['login']}})
+        if method == 'GET' and route == f'{repo}/pulls':
+            state = query.get('state', 'open')
+            return self.reply(200, [self.pull_view(n) for n, pr in sorted(self.pulls.items())
+                                    if state == 'all' or pr['state'] == state])
         if method == 'GET' and route == '/user':
             return self.reply(200, {'login': doer, 'is_admin': self.users[doer]['is_admin']})
         if method == 'GET' and route.startswith('/users/') and route.endswith('/tokens'):

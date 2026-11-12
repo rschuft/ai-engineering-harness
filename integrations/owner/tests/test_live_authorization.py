@@ -13,15 +13,44 @@ Without AIEH_AUTHZ_RECORDER_LIVE set to a phase it skips: the ordinary suites ne
 write to Gitea. Each phase is an Owner-approved act. On aieh-authz-fixture/authz only:
 
 **Phase prepare** (``AIEH_AUTHZ_RECORDER_LIVE=prepare``, ``AIEH_AUTHZ_RECORDER_RUN_DIR=<an existing,
-empty directory>``):
+empty directory>``, ``AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE=<the expected protection digest,
+sha256:<64 lower-case hex>>``):
 
+0. The precondition, before any write; each failure refuses the phase (``PhaseRefused``) with nothing
+   written to Gitea:
+   a. the protection baseline: ``AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE`` absent or malformed is refused
+      before anything is read from Gitea or the credential provider (``BASELINE_MISSING``,
+      ``BASELINE_INVALID``); then the protection verifier this phase configures (``available_verifier``,
+      the one the recorder's prepare asks too) must answer ``verified`` with exactly that digest (no
+      verifier or any other answer: ``PROTECTION_UNVERIFIED``, ``PROTECTION_DRIFT``,
+      ``PROTECTION_BASELINE_DIFFERS``);
+   b. identities and credential scopes: for every role of gitea_roles.ROLES (the four bots and the
+      protection auditor), ``GET /token`` with its token (no scope needed) must answer 200 naming exactly
+      that role's account and exactly its declared scopes (``IDENTITY_UNREADABLE`` for a 401 or any
+      other unreadable answer, ``IDENTITY_MISMATCH``; an entry naming another account
+      ``CREDENTIAL_MISMATCH``). Only role entries are read: no site administrator's credential is read
+      anywhere in this exercise;
+   c. the repository: main's head is recorded; as aieh-bot-verifier, ``GET .../pulls?state=open&page=1&limit=50``
+      must answer an empty list (``PULL_REQUEST_OPEN``) and ``GET .../branches/<name>`` 404 for both
+      branch names the run would create (``BRANCH_EXISTS``); any other answer ``REPOSITORY_UNREADABLE``.
+   What was checked (the digest verified, each identity and its scopes, main's head) is in the
+   observations and the presentation.
 1. As aieh-bot-builder (its token): two proposal branches work/authz-recorder-<stamp>-a and -b, each
    adding one manifest operations/<id>.json (kind ``fixture-no-op``; it expires in 24 hours), and a pull
    request for each into main. As aieh-bot-reviewer: one approving review of each (main requires one).
-2. Negative controls, which need no Owner authority: each bot token (the protection auditor's included)
-   attempts the merge of each pull request (``Do: merge`` with its ``head_commit_id``). Expected: refused
-   (403 or 405; the auditor's read:repository token 403 by its scope) every time and main unchanged. **Any successful bot merge, or main moving, is a SECURITY FAILURE**: the test fails
-   naming it and stops; no further step runs and no presentation is written.
+2. Negative controls, which need no Owner authority. The four bots (planner, builder, reviewer, verifier)
+   each attempt the merge of each real pull request (``Do: merge`` with its ``head_commit_id``); expected:
+   refused, 403 or 405. The protection auditor never addresses either real pull request: its control is
+   the merge of a nonexistent pull request #n (n the larger proposal's index plus 1,000,000), first
+   confirmed absent by aieh-bot-verifier's ``GET .../pulls/<n>`` answering 404 (otherwise the control is
+   not exercisable and no merge is sent), then ``POST .../pulls/<n>/merge`` with the auditor's token;
+   it passes only with 403 and Gitea's scope refusal (``token does not have at least one of required
+   scope(s)``, as in Act C). A 404 (absence, not the scope), a 403 without that text, a 405 or any other
+   refusal fails the control. Any control that fails stops the phase (``ControlFailed``): no challenge,
+   no presentation. **Stopping rule: after every single attempt, main's head and both proposals' merged
+   state are read; any 2xx merge answer, either proposal merged, or main moved is a SECURITY FAILURE at
+   once**: no further control is attempted, no recorder prepare, no challenge, no presentation; the
+   observations so far are kept.
 3. The recorder's real ``prepare`` for each pull request (the real credential provider: it reads "AIEH
    Gitea owner" into memory; its own state and integration store under ``<run dir>/recorder``). It
    issues the one-time challenge (expiring in 180 minutes) and asks the protection verifier: the protection
@@ -33,8 +62,10 @@ empty directory>``):
    digest, the operation id, kind, target and expiry, the challenge nonce and its expiry, the effects the
    merge will have, the expected outcome and the recorder's own summary; which pull request is the
    stale-head control (pull request B: expected refused, nothing merged and main unmoved; Gitea's 409 is
-   expected, its 405 or 500 possible, finding F14); whether a protection verifier was available; the bot
-   controls' statuses. Nothing is merged in this phase.
+   expected, its 405 or 500 possible, finding F14); whether a protection verifier was available; the
+   precondition's results; the bot controls' statuses; the auditor's control ("nonexistent pull request
+   #n, refused by scope"). A is the pull request to authorize, B the stale-head control. Nothing is
+   merged in this phase.
 5. The custody inspection (below). Then the phase stops.
 
 **Between the phases, the Owner.** The Overseer presents the presentation to the Owner. Only if the
@@ -94,7 +125,9 @@ import json
 import os
 import re
 import sys
+import types
 import unittest
+import urllib.parse
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -112,7 +145,15 @@ PHASE = os.environ.get('AIEH_AUTHZ_RECORDER_LIVE', '')
 RUN_DIR = os.environ.get('AIEH_AUTHZ_RECORDER_RUN_DIR')
 STATEMENT = os.environ.get('AIEH_AUTHZ_RECORDER_STATEMENT')
 REPORT = os.environ.get('AIEH_AUTHZ_RECORDER_REPORT')
+BASELINE_VARIABLE = 'AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE'
+BASELINE = os.environ.get(BASELINE_VARIABLE)
+DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 REPOSITORY = f'{R.FIXTURE_ORG}/{R.FIXTURE_REPO}'
+OPEN_PULLS = f'/repos/{REPOSITORY}/pulls?state=open&page=1&limit=50'
+AUDITOR_ROLE = AR.protection.ROLE
+# Gitea 28.3.0's refusal by scope, as Act C checks it (test_protection_audit_live.SCOPE_REFUSAL)
+SCOPE_REFUSAL = 'token does not have at least one of required scope(s)'
+ABSENT_PULL_OFFSET = 1_000_000  # the auditor's control: a pull request index this far past the run's own
 PRESENTATION_FORMAT = 'aieh-authz-live-presentation/1'
 PRESENTATION, PRESENTATION_TEXT, RECORDER_DIR = 'presentation.json', 'presentation.txt', 'recorder'
 CHALLENGE_MINUTES = 180
@@ -120,6 +161,7 @@ MANIFEST_HOURS = 24
 KIND = 'fixture-no-op'
 RECORDED_BY = 'agent:live-exercise'
 AUTHORIZE, STALE = 'authorize', 'stale-head-control'
+LABELS = {AUTHORIZE: 'A', STALE: 'B'}
 BOT_REFUSALS = (403, 405)
 # Finding F14: the stale-head control's refusals (Gitea's answer to the moved head: 409, or 405 or 500 while
 # Gitea re-checks the pull request after the push) with the receipt state each leaves
@@ -145,11 +187,21 @@ class PhaseRefused(AssertionError):
         super().__init__(f'{code}: {detail}')
 
 
+class ControlFailed(AssertionError):
+    """A negative control did not give the refusal it must, or could not be exercised (a stable code and
+    its detail): the phase stops with no challenge and no presentation."""
+
+    def __init__(self, code, detail):
+        self.code = code
+        super().__init__(f'{code}: {detail}')
+
+
 class Live(NamedTuple):
     """What a phase runs against: the Gitea port (HTTP None is host loopback; a callable with
     gitea_host.http_get's signature stands in for it offline), the credential provider, the run directory,
-    the clock, the protection verifier available to this run (None until OA-16's mechanism is built) with
-    a note saying why, and the custody inspection (None offline)."""
+    the clock, the protection verifier available to this run (None: none is configured) with a note
+    saying why, the custody inspection (None offline) and the expected protection baseline digest
+    (AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE; phase prepare requires it)."""
     port: int
     provider: object
     run_dir: Path
@@ -158,6 +210,7 @@ class Live(NamedTuple):
     verifier: Callable | None = None
     verifier_note: str = AR.NO_VERIFIER
     inspect: Callable | None = None
+    baseline: str | None = None
 
 
 def available_verifier(port, provider):
@@ -178,7 +231,10 @@ def _timestamp(moment):
 
 
 def _bot(live, role):
-    token = R.read_token(live.provider, role)
+    try:
+        token = R.read_token(live.provider, role)
+    except R.GiteaError as exc:  # the entry names another account
+        raise PhaseRefused('CREDENTIAL_MISMATCH', f'{exc.code}: {exc.detail}') from None
     if token is None:
         raise PhaseRefused('CREDENTIAL_MISSING', f'no credential provider entry {R.target(role)!r}')
     return R.Api(live.port, token, live.http)
@@ -218,19 +274,121 @@ def _inspect(live, observed):
 # ---------------------------------------------------------------------------- phase prepare
 
 
+def _baseline(live):
+    """The expected protection baseline digest: refused, before anything is read, when absent or malformed."""
+    if not live.baseline:
+        raise PhaseRefused('BASELINE_MISSING', f'{BASELINE_VARIABLE} must name the expected protection baseline '
+                           'digest (sha256:<64 lower-case hex>)')
+    if not isinstance(live.baseline, str) or not DIGEST.fullmatch(live.baseline):
+        raise PhaseRefused('BASELINE_INVALID', f'{BASELINE_VARIABLE} is {str(live.baseline)[:100]!r}, not '
+                           'sha256:<64 lower-case hex>')
+    return live.baseline
+
+
+def _identity(api):
+    """GET /token with the role's token (no scope needed): (status, login, sorted scopes or None)."""
+    status, body = api.call('GET', '/token')
+    user = body.get('user') if isinstance(body, dict) else None
+    login = user.get('login') if isinstance(user, dict) else None
+    scopes = body.get('scopes') if isinstance(body, dict) else None
+    return status, login, sorted(map(str, scopes)) if isinstance(scopes, list) else None
+
+
+def precondition(live, branches, checked):
+    """Before any write: the protection baseline, every role's identity and scopes, and the repository's
+    state; PhaseRefused, with nothing written, unless each is as expected. CHECKED receives what was
+    observed. Returns ({role: Api}, main's head)."""
+    baseline = _baseline(live)
+    # the recorder's own reading of a verifier: none, an exception or a malformed answer is unverified
+    answer = AR.check_protection(types.SimpleNamespace(verifier=live.verifier), REPOSITORY, R.DEFAULT_BRANCH,
+                                 'prepare')
+    checked['protection'] = {'verdict': answer['verdict'], 'digest': answer['digest'], 'expected': baseline,
+                             'detail': answer['detail']}
+    if answer['verdict'] != 'verified':
+        raise PhaseRefused(AR.protection_code(answer), f'the protection check answered {answer["verdict"]}: '
+                           f'{answer["detail"]}')
+    if answer['digest'] != baseline:
+        raise PhaseRefused('PROTECTION_BASELINE_DIFFERS', f'the protection check answered verified with '
+                           f'{answer["digest"]}, not {BASELINE_VARIABLE} {baseline}')
+    bots, identities = {}, {}
+    checked['identities'] = identities
+    for role, spec in R.ROLES.items():
+        bots[role] = _bot(live, role)
+        status, login, scopes = _identity(bots[role])
+        identities[role] = {'status': status, 'login': login, 'scopes': scopes}
+        if status != 200 or login is None or scopes is None:
+            raise PhaseRefused('IDENTITY_UNREADABLE', f'GET /token with the {role} token answered {status} '
+                               f'(login {login!r}, scopes {scopes!r})')
+        if login != spec['user'] or scopes != sorted(spec['scopes']):
+            raise PhaseRefused('IDENTITY_MISMATCH', f'the {role} token is {login!r} with scopes {scopes}, not '
+                               f'{spec["user"]} with exactly {sorted(spec["scopes"])}')
+    main = checked['mainHead'] = _main_head(live)
+    status, pulls = bots['verifier'].call('GET', OPEN_PULLS)
+    if status != 200 or not isinstance(pulls, list):
+        raise PhaseRefused('REPOSITORY_UNREADABLE', f'GET the open pull requests answered {status}')
+    checked['openPulls'] = [p.get('number') if isinstance(p, dict) else p for p in pulls]
+    if pulls:
+        raise PhaseRefused('PULL_REQUEST_OPEN', f'pull request(s) {checked["openPulls"]} are open on {REPOSITORY}')
+    for branch in branches:
+        status, _ = bots['verifier'].call('GET', f'/repos/{REPOSITORY}/branches/{urllib.parse.quote(branch)}')
+        if status == 200:
+            raise PhaseRefused('BRANCH_EXISTS', f'the branch {branch} already exists')
+        if status != 404:
+            raise PhaseRefused('REPOSITORY_UNREADABLE', f'GET the branch {branch} answered {status}')
+    checked['branchesAbsent'] = list(branches)
+    return bots, main
+
+
+def _after_control(live, control, status, main_before, proposals, observed):
+    """The stopping rule, after every single control attempt: a 2xx answer, either proposal merged or main
+    moved is a SECURITY FAILURE at once, and nothing further is attempted."""
+    checks = observed.setdefault('controlChecks', [])
+    checks.append({'control': control, 'status': status})
+    if 200 <= status < 300:
+        raise SecurityFailure(f'{control} answered {status}')
+    main = checks[-1]['mainHead'] = _main_head(live)
+    merged = checks[-1]['merged'] = [p['pull'] for p in proposals if _pull(live, p['pull']).get('merged')]
+    if main != main_before or merged:
+        raise SecurityFailure(f'after {control} ({status}) main is at {main} (was {main_before}) and pull '
+                              f'request(s) {merged} are merged')
+
+
+def _auditor_control(live, bots, proposals, main_before, observed):
+    """The protection auditor's negative control: the merge of a nonexistent pull request, never of A or B."""
+    absent = max(p['pull'] for p in proposals) + ABSENT_PULL_OFFSET
+    control = observed['auditorControl'] = {'pull': absent}
+    control['absence'], _ = bots['verifier'].call('GET', f'/repos/{REPOSITORY}/pulls/{absent}')
+    if control['absence'] != 404:
+        raise ControlFailed('AUDITOR_CONTROL_NOT_EXERCISABLE', f'pull request #{absent} is not confirmed absent '
+                            f'(GET answered {control["absence"]}): no merge was sent')
+    status, body = bots[AUDITOR_ROLE].call('POST', f'/repos/{REPOSITORY}/pulls/{absent}/merge', {'Do': 'merge'})
+    message = body.get('message') if isinstance(body, dict) else None  # Gitea's JSON message only
+    message = message if isinstance(message, str) else ''
+    control.update(status=status, message=message[:300], refusedByScope=status == 403 and SCOPE_REFUSAL in message)
+    _after_control(live, f'the protection auditor\'s merge of the nonexistent pull request #{absent}', status,
+                   main_before, proposals, observed)
+    if not control['refusedByScope']:
+        raise ControlFailed('AUDITOR_CONTROL_FAILED', f'the protection auditor\'s merge of the nonexistent pull '
+                            f'request #{absent} answered {status} ({message[:200]!r}), not 403 with the scope '
+                            'refusal')
+    return control
+
+
 def prepare_phase(live, observed):
-    """Proposals, approvals, the bot controls, the recorder's challenges and the presentation; no merge."""
+    """The precondition, proposals, approvals, the negative controls, the recorder's challenges and the
+    presentation; no merge."""
     run_dir = Path(live.run_dir)
     if not run_dir.is_dir() or any(run_dir.iterdir()):
         raise PhaseRefused('RUN_DIR_NOT_EMPTY', f'{run_dir} must be an existing, empty directory')
     now = live.now()
     stamp = now.strftime('%Y%m%dt%H%M%Sz')
-    bots = {role: _bot(live, role) for role in R.ROLES}
-    main_before = _main_head(live)
+    planned = [(role, f'live-{stamp}-{suffix}', f'work/authz-recorder-{stamp}-{suffix}')
+               for role, suffix in ((AUTHORIZE, 'a'), (STALE, 'b'))]
+    checked = observed['precondition'] = {}
+    bots, main_before = precondition(live, [branch for _role, _operation, branch in planned], checked)
     observed['mainBefore'] = main_before
     proposals = []
-    for role, suffix in ((AUTHORIZE, 'a'), (STALE, 'b')):
-        operation, branch = f'live-{stamp}-{suffix}', f'work/authz-recorder-{stamp}-{suffix}'
+    for role, operation, branch in planned:
         manifest = su.manifest(operation, kind=KIND, target=f'{REPOSITORY} (live recorder exercise; no effect)',
                                expiresAt=_timestamp(now + datetime.timedelta(hours=MANIFEST_HOURS)))
         status, body = bots['builder'].call('POST', f'/repos/{REPOSITORY}/contents/operations/{operation}.json', {
@@ -249,22 +407,22 @@ def prepare_phase(live, observed):
         proposals.append({'role': role, 'operation': operation, 'branch': branch, 'pull': pull['number'],
                           'head': head, 'manifest': manifest})
     observed['proposals'] = [{k: v for k, v in p.items() if k != 'manifest'} for p in proposals]
-    # negative controls: every bot token's merge of every proposal must be refused
+    # negative controls: each of the four bots' merge of each real proposal must be refused; the stopping
+    # rule after every single attempt
     observed['botMerges'] = controls = {}
     for proposal in proposals:
         for role, api in bots.items():
+            if role == AUDITOR_ROLE:  # the auditor never addresses a real pull request
+                continue
             status, _ = api.call('POST', f'/repos/{REPOSITORY}/pulls/{proposal["pull"]}/merge',
                                  {'Do': 'merge', 'head_commit_id': proposal['head']})
             controls[f'{role} on #{proposal["pull"]}'] = status
-            if 200 <= status < 300:
-                raise SecurityFailure(f'the {role} bot\'s merge of pull request #{proposal["pull"]} answered {status}')
-    main_after = _main_head(live)
-    merged = [p['pull'] for p in proposals if _pull(live, p['pull']).get('merged')]
-    if main_after != main_before or merged:
-        raise SecurityFailure(f'after the bot controls main is at {main_after} (was {main_before}) and pull '
-                              f'request(s) {merged} are merged')
-    unexpected = {k: s for k, s in controls.items() if s not in BOT_REFUSALS}
-    expect(not unexpected, f'a bot merge was refused, but not with 403 or 405: {unexpected}')
+            _after_control(live, f'the {role} bot\'s merge of pull request #{proposal["pull"]}', status, main_before,
+                           proposals, observed)
+            if status not in BOT_REFUSALS:
+                raise ControlFailed('BOT_CONTROL_UNEXPECTED', f'the {role} bot\'s merge of pull request '
+                                    f'#{proposal["pull"]} was refused with {status}, not 403 or 405')
+    auditor = _auditor_control(live, bots, proposals, main_before, observed)
     # the recorder's real prepare: one challenge per proposal
     store = _open_store(live)
     try:
@@ -276,7 +434,7 @@ def prepare_phase(live, observed):
         expect(challenge['subject']['head'] == proposal['head'], f'pull request #{proposal["pull"]} moved')
         expect(challenge['subject']['digest'] == 'sha256:' + hashlib.sha256(proposal['manifest']).hexdigest(),
                'the challenged digest is not the proposed manifest\'s')
-    presentation = presentation_of(live, now, main_before, proposals, challenges, controls)
+    presentation = presentation_of(live, now, main_before, proposals, challenges, controls, checked, auditor)
     (run_dir / PRESENTATION).write_text(json.dumps(presentation, indent=2, ensure_ascii=False) + '\n',
                                         encoding='utf-8', newline='\n')
     (run_dir / PRESENTATION_TEXT).write_text(presentation_text(presentation), encoding='utf-8', newline='\n')
@@ -327,8 +485,9 @@ def _expected(c, verifier):
             '(nothing sent) if the protection check does not answer verified immediately before the merge')
 
 
-def presentation_of(live, now, main_head, proposals, challenges, controls):
-    """What the Owner is shown: the recorder's challenges, their effects and expected outcomes."""
+def presentation_of(live, now, main_head, proposals, challenges, controls, checked, auditor):
+    """What the Owner is shown: the precondition's results, the negative controls, the recorder's challenges,
+    their effects and expected outcomes."""
     shown = []
     for proposal, challenge in zip(proposals, challenges):
         subject = challenge['subject']
@@ -346,9 +505,19 @@ def presentation_of(live, now, main_head, proposals, challenges, controls):
         'base': R.DEFAULT_BRANCH, 'mainHead': main_head,
         'verifier': {'available': live.verifier is not None, 'note': live.verifier_note},
         'staleHeadControl': next(c['pull'] for c in shown if c['role'] == STALE),
+        'labels': {LABELS[c['role']]: {'role': c['role'], 'pull': c['pull'], 'operation': c['operation']}
+                   for c in shown},
         'recorder': {'state': f'{RECORDER_DIR}/state', 'store': f'{RECORDER_DIR}/integration.sqlite'},
-        'botMerges': {'statuses': dict(controls), 'expected': 'each refused (403 or 405); any success is a SECURITY '
-                                                               'FAILURE', 'mainUnchanged': True},
+        'precondition': {'checked': 'before any write', 'baselineVariable': BASELINE_VARIABLE,
+                         'protection': {k: checked['protection'][k] for k in ('verdict', 'digest', 'expected')},
+                         'identities': checked['identities'], 'mainHead': checked['mainHead'],
+                         'openPulls': checked['openPulls'], 'openPullsRead': OPEN_PULLS,
+                         'branchesAbsent': checked['branchesAbsent']},
+        'botMerges': {'statuses': dict(controls), 'expected': 'each of the four bots on each real pull request with '
+                                                               'its head_commit_id, refused (403 or 405); any success '
+                                                               'is a SECURITY FAILURE',
+                      'mainUnchanged': True, 'checkedAfterEach': "main's head and both proposals' merged state"},
+        'auditorControl': {**auditor, 'shown': f'nonexistent pull request #{auditor["pull"]}, refused by scope'},
         'challenges': shown,
         'ownerAction': 'Nothing is merged unless the Owner, having seen this, replies in his own words naming the '
                        'operation id(s) he authorizes. The Overseer writes that reply verbatim into a statement file '
@@ -356,16 +525,30 @@ def presentation_of(live, now, main_head, proposals, challenges, controls):
                        'AIEH_AUTHZ_RECORDER_STATEMENT naming it. The exercise never writes a statement.'}
 
 
+def _precondition_lines(pre):
+    identities = '; '.join(f'{role} {i["login"]} [{", ".join(i["scopes"])}]' for role, i in pre['identities'].items())
+    return ['Precondition, checked before any write:',
+            f'  protection: {pre["protection"]["verdict"]} with the expected baseline {pre["protection"]["digest"]} '
+            f'({pre["baselineVariable"]})',
+            f'  identities and scopes (GET /token): {identities}',
+            f'  main at {pre["mainHead"]}; open pull requests: {pre["openPulls"] or "none"}; branches absent: '
+            f'{", ".join(pre["branchesAbsent"])}']
+
+
 def presentation_text(p):
     lines = [f'Live authorization recorder exercise, prepared {p["preparedAt"]}', '',
              f'Repository {p["repository"]}, protected branch {p["base"]} at {p["mainHead"]}.',
              'Protection verifier: ' + ('available' if p['verifier']['available'] else 'NONE')
              + f' ({p["verifier"]["note"]}).',
-             f'Bot merge controls (each must be refused): {p["botMerges"]["statuses"]}.', '']
+             *_precondition_lines(p['precondition']),
+             f'Bot merge controls on A and B (each must be refused; main and both proposals read after each): '
+             f'{p["botMerges"]["statuses"]}.',
+             f'Protection auditor control: {p["auditorControl"]["shown"]} ({p["auditorControl"]["status"]}; '
+             f'confirmed absent first: {p["auditorControl"]["absence"]}). It never addresses A or B.', '']
     for c in p['challenges']:
         role = ('THE STALE-HEAD CONTROL (expected: refused; nothing merges and main does not move)'
                 if c['role'] == STALE else 'to authorize')
-        lines += [f'== Pull request #{c["pull"]}: {role}',
+        lines += [f'== {LABELS[c["role"]]}: pull request #{c["pull"]}, {role}',
                   f'Operation {c["operation"]} (kind {c["kind"]}); target: {c["target"]}; the manifest expires at '
                   f'{c["operationExpiresAt"]}.',
                   f'Manifest {c["manifest"]}, {c["manifestDigest"]}, at the approved head {c["approvedHead"]} '
@@ -600,7 +783,7 @@ class LiveExercise(unittest.TestCase):
             raise PhaseRefused('RUN_DIR_MISSING', 'AIEH_AUTHZ_RECORDER_RUN_DIR must name the run directory')
         verifier, note = available_verifier(self.port, self.provider)
         live = Live(self.port, self.provider, Path(RUN_DIR), verifier=verifier, verifier_note=note,
-                    inspect=inspect_custody)
+                    inspect=inspect_custody, baseline=BASELINE)
         if PHASE == 'prepare':
             prepare_phase(live, self.observed)
         else:
