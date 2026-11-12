@@ -1,6 +1,6 @@
 # 0012 - Owner authorization channel and the Gitea Owner identity
 
-Status: Proposed (Architect) - 2026-11-07, following the Owner directive of 2026-11-07 ("Owner authorization must flow through the harness's governance mechanisms, not through a requirement that I manually approve merges in Gitea"). Owner confirmations 1 to 3 given 2026-11-07 (plan notes of P-04.2). Amended at P-04.2's offline build (2026-11-10, Builder proposal for the Overseer): the record's `format` field (Overseer ruling at P-04.1), the policy check's observable scope in Gitea 28.3.0, the manifest fields the recorder reads, and the recorder's state and receipt kind. Overseer rulings (2026-11-10): the proposed lost-answer settle rule is rejected (point 8); on the protection rules `aieh-owner` cannot read, the Overseer recommended detection rather than prevention; the Owner **declined** that on 2026-11-10 (OA-15a; point 6). The record stays Proposed until the fail-closed protection check of point 6 is established and qualified, and P-04.2's live exercise has run with the Owner's own authorization.
+Status: Accepted (Overseer) - 2026-11-12, at the completion of P-04.2 ([evidence](../evidence/P-04.2-authorization-recorder.md), section 17). Its own acceptance conditions are met: the fail-closed protection check of point 6 is established and qualified (Owner decision OA-16, its Acts A to D, 2026-11-12), and P-04.2's live exercise has run with the Owner's own authorization (OA-14; `evidence/bootstrap-log.md`, `owner-authorization-oa-14-2026-11-12`). Its substance carries the Owner's confirmations of 2026-11-07 (below), OA-15a (fail closed, 2026-11-10) and OA-16 (option 2, 2026-11-11). The numbered points are unchanged; "Current facts (2026-11-12)" at the end records what is now established. Previously: Proposed (Architect) - 2026-11-07, following the Owner directive of 2026-11-07 ("Owner authorization must flow through the harness's governance mechanisms, not through a requirement that I manually approve merges in Gitea"). Owner confirmations 1 to 3 given 2026-11-07 (plan notes of P-04.2). Amended at P-04.2's offline build (2026-11-10, Builder proposal for the Overseer): the record's `format` field (Overseer ruling at P-04.1), the policy check's observable scope in Gitea 28.3.0, the manifest fields the recorder reads, and the recorder's state and receipt kind. Overseer rulings (2026-11-10): the proposed lost-answer settle rule is rejected (point 8); on the protection rules `aieh-owner` cannot read, the Overseer recommended detection rather than prevention; the Owner **declined** that on 2026-11-10 (OA-15a; point 6). The record stays Proposed until the fail-closed protection check of point 6 is established and qualified, and P-04.2's live exercise has run with the Owner's own authorization.
 
 **Gate:** architecture consultation at gates A, B and G.
 
@@ -107,3 +107,58 @@ Status: Proposed (Architect) - 2026-11-07, following the Owner directive of 2026
 - The blueprint sections cited above.
 - Gitea 28.3.0 source at the tag: `services/forms/repo_form.go` (`MergePullRequestForm.HeadCommitID`), `routers/api/v1/repo/pull.go` (`MergePullRequest`: `ErrSHADoesNotMatch` -> 409 "head out of date"; the message is the title, a blank line, then the message), `services/pull/merge.go` and `merge_prepare.go` (`createTemporaryRepoForMerge` compares the head), `services/pull/merge_merge.go` (`merge --no-ff`), `routers/api/v1/api.go` (`branch_protections` behind `reqToken(), reqAdmin()`; `/users/{username}/tokens` behind `reqSelfOrAdmin(), reqBasicOrRevProxyAuth()`), `services/convert/convert.go` (`ToBranch`), `services/convert/repository.go`, `routers/api/v1/repo/collaborators.go`; read, not exercised.
 - This consultation.
+
+## Current facts (2026-11-12)
+Added at the Overseer's acceptance. The sections above are unchanged and remain the record of 2026-11-07 to
+2026-11-11; where they speak of what is not yet built, qualified or verified, these facts apply. Records:
+[`evidence/P-04.2-authorization-recorder.md`](../evidence/P-04.2-authorization-recorder.md) (section 17, the
+acceptance), [`evidence/P-04.2-protection-verifier.md`](../evidence/P-04.2-protection-verifier.md) and
+[`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md) (Decisions, 2026-11-12).
+
+1. **Point 6's mechanism.** The trusted, read-only check point 6 requires is the protection check of Owner
+   decision OA-16 (option 2 of the protection-check recommendation),
+   [`integrations/gitea/protection_check.py`](../integrations/gitea/README.md#the-protection-check-oa-16). It
+   reads as the read-only protection auditor `aieh-bot-protection-audit`: a restricted, non-administrator Gitea
+   Bot, repository-administrator collaborator of the admitted repository only, with one token of scope exactly
+   `read:repository` (`cred-gitea-protection-audit`, whose custodian is the recorder). `aieh-owner` has no
+   administrator privilege and the recorder holds no administrator credential. On 2026-11-12 the auditor was
+   provisioned (Act A) and the fixture's total declaration applied (Act B: `verified`, baseline
+   `sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42`); the check was qualified live:
+   its negative scope (Act C: every write by the auditor's token refused by its scope, another repository's
+   rules not readable) and its drift detection (Act D: five injected drifts, each detected and its restoration
+   verified). Point 6's "the mechanism is under investigation ... until it is built and qualified the recorder
+   does not merge" and point 13's "once qualified" are thereby fulfilled.
+2. **The context superseded.** The Context sentence "no authorization repository or verifier exists" is
+   superseded: the protection verifier of point 6 exists and is qualified, and the S-01.2.2 fixture
+   (`aieh-authz-fixture/authz`) carries the first recorded authorization merge. Still to be built: the
+   authorization repository and its protected operation branch (G-03.1) and the record verifier of points 1
+   and 10 (G-04.3).
+3. **The live exercise (OA-14, P-04.2).** On the S-01.2.2 fixture, in two phases with the Owner's own decision
+   between them:
+   - prepare (OA-16 Act E, 2026-11-12): the protection check `verified` with the baseline; operations
+     `live-20261112t060110z-a` (A, pull request #31) and `live-20261112t060110z-b` (B, #32, the stale-head
+     control) proposed by the builder bot and approved by the reviewer bot; the planner, builder and reviewer
+     bots refused 405 and the verifier bot 403 on each; the protection auditor refused 403 by scope on a
+     nonexistent pull request; the recorder's real challenges issued. They expired unused and were regenerated
+     once, on the Owner's authorization of fresh challenges, with GET requests only;
+   - the Owner's authorization of A and B, verbatim, given in the main session after the fresh challenges were
+     presented (`evidence/bootstrap-log.md`, `owner-authorization-oa-14-2026-11-12`; channel `main-session`);
+   - record (2026-11-12, once): B first: its head moved after the recorder's checks, Gitea answered the merge
+     409, `HEAD_STALE`, receipt failed, nothing merged, main unmoved; then A: the protection check `verified`
+     with the baseline immediately before the merge and again after it (equal); one merge commit
+     `75e89b28143464949c24bd46433a5d9f2197b0d0`, parents `f18da179731cf906fbae4bfa62b23449363bb8aa` and the
+     approved head `111d20c342b1a4ec5bcb5c409df8c59b55ab1fd2`, merged by `aieh-owner`, the six trailers
+     (decision `d18a66d3-3072-4beb-a8dc-ac37047c1a33`), the manifest digest at the merge, receipt confirmed;
+     `aieh-owner` holding zero tokens afterwards;
+   - the custody inspection, in each of the three phases: the Owner credential in no file of the managed root,
+     the checkout's listed files and the run directory, and not in the process environment of the main
+     session; nothing unreadable.
+4. **The Consequences' "Not verified until the live exercise".** Observed live: the 409 to a changed head;
+   the trailers preserved in the merge commit; a merge by basic authentication as `aieh-owner`; the read-back
+   fields as Gitea 28.3.0 returns them; the inspection, within its limit: no job environment existed (no guest,
+   no dispatcher), so the Owner credential's absence from job environments is not shown and is carried
+   (P-04.2 section 17). Not established: the audit log's coverage of the merge (Gitea 28.3.0 recorded no audit
+   event for the API calls of OA-16 Acts B to D).
+5. **Unchanged.** The bootstrap channel proves a declared Owner decision bound to an exact revision, not an
+   authenticated Owner (point 9); `fd-owner-authorization-record` stays narrowed, not closed; the
+   same-account limit of decision 0010 and the time-of-check limit (`fd-protection-check-toctou`) stand.
