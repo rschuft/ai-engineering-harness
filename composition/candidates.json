@@ -387,6 +387,50 @@
         "signature": "not_run",
         "signature_evidence": "checksums.txt.sig is a binary OpenPGP v4 signature, issuer fingerprint CC64B1DB67ABBEECAB24B6455FC346329753F4B0, created 2026-11-11T10:52:12Z; the key was not fetched and the signature was not verified"
       }
+    },
+    {
+      "id": "ci-job-image",
+      "blueprint_name": "CI validation job image (the docker:// image of the aieh-validation runner label)",
+      "selection": "selected",
+      "selected_by": "decision 0016 (Accepted) section 2.1 (\"one job image pinned by digest and image id\") and the Owner's C-3 approval of 2026-11-11 (the CI guest's composition: Moby, the runner, the job image); chosen among three read candidates by the Overseer on 2026-11-12 (evidence/bootstrap-log.md; evidence/Q-02.2.1-c3-pins.md, section 5). Loaded into a CI guest's Moby at provisioning and run by the runner as each job's container under a numeric non-root --user; never on the Owner host",
+      "source": {
+        "registry": "docker.io/library/python",
+        "publisher": "Docker Official Images (docker-library)",
+        "base": "Debian 13.7 (trixie), buildpack-deps:trixie"
+      },
+      "version": "CPython 3.12.16 (python.org source build in /usr/local/bin) on Debian 13.7; git 2.47.3",
+      "release_date": "2026-11-05 (image built)",
+      "license": "PSF-2.0 (CPython) and the Debian packages' own licences (git: GPL-2.0)",
+      "license_evidence": "read from the image layers as data (evidence/Q-02.2.1-c3-pins.md, section 5); nothing is redistributed (decision 0005)",
+      "runtime": {
+        "platform": "linux/amd64 only (the CI guest)",
+        "default_user": "root (no User in the config); run under a numeric non-root --user",
+        "contents": "no Docker CLI or socket client, no sudo; 13 setuid/setgid binaries, inert under --cap-drop ALL and no-new-privileges"
+      },
+      "artifacts": [
+        {
+          "channel": "oci",
+          "name": "docker.io/library/python",
+          "tag": "3.12-trixie",
+          "media_type": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:cad37dd20c7cac861af9003af8796d03ea7a998ec1e3a664429740fc9d7d2691",
+          "platform_digests": {
+            "linux/amd64": "sha256:97dc788c1887c44354e700c624e7d0a7b61c6f5baf6e2ae4d767abfedc442435"
+          },
+          "config_digests": {
+            "linux/amd64": "sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd"
+          },
+          "command": "anonymous token from https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/python:pull, then the index, the linux/amd64 manifest and the config blob from https://registry-1.docker.io/v2/library/python/, each sha256 recomputed",
+          "added": "2026-11-12, plan leaf Q-02.2.1"
+        }
+      ],
+      "verification": {
+        "artifact_digest": "pass",
+        "artifact_digest_evidence": "the index, linux/amd64 manifest and config bodies' sha256 were recomputed at retrieval (2026-11-11) and every layer was downloaded and hash-checked then (evidence/Q-02.2.1-c3-pins.md, section 5); the layer list is not in this repository",
+        "artifact_to_commit": "unknown",
+        "artifact_to_commit_evidence": "no provenance attestation was read",
+        "signature": "not_run"
+      }
     }
   ],
   "couplings": [
@@ -403,7 +447,8 @@
     {"a": "gitea@28.3.0", "b": "all other components", "contract": "Git hosting + REST /api/v1 + webhooks; no upstream version coupling to OpenHands, OpenSpec, Backlog.md or assistant-ui", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "no upstream declares a pairing; integration is owned"},
     {"a": "openhands-agent-server@1.60.1", "b": "Docker Engine (conversation_runtime=docker)", "contract": "Docker API via python docker<8,>=7.1; selectable runtime gated by server config", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "selection advertised through available_conversation_runtimes only when conversation_runtime_selectable=true (default false); Moby version range not declared upstream"},
     {"a": "gitea-runner@6.0.0", "b": "gitea@28.3.0", "contract": "the runner RPC under /api/actions (ping.v1.PingService, runner.v1.RunnerService: Register, Declare, FetchTask, UpdateTask, UpdateLog); the runner declares Gitea 1.26.2 or newer", "verdict": "compatible", "runtime_verified": "not_run", "evidence": "README.md line 10 and internal/pkg/ver/version.go line 9 at v6.0.0 set the floor 1.26.2; Gitea moved from 1.27.x to 28.x (28.0.0 on 2026-09-29; compatibility-matrix.md section 5, item 7), so 28.3.0 is above it; the methods the runner calls are the ones the Q-02.1 source check found at Gitea 28.3.0 (fact G2). The shared protocol module (gitea.dev/actionslib v1.5.2 on the runner side) was not compared with Gitea's; the live check is plan leaf Q-02.2.2"},
-    {"a": "gitea-runner@6.0.0", "b": "Moby (docker.io 26.1.5, the guest provision lock)", "contract": "Docker Engine API through github.com/moby/moby/client v0.6.2", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "the runner needs a Docker-API engine for docker labels (README.md line 12) and checks API >= 1.41 for image platforms (act/container/docker_run.go lines 54-62); the client module's minimum API version was not read"}
+    {"a": "gitea-runner@6.0.0", "b": "Moby (docker.io 26.1.5, the guest provision lock)", "contract": "Docker Engine API through github.com/moby/moby/client v0.6.2", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "the runner needs a Docker-API engine for docker labels (README.md line 12) and checks API >= 1.41 for image platforms (act/container/docker_run.go lines 54-62); the client module's minimum API version was not read"},
+    {"a": "ci-job-image (python:3.12-trixie)", "b": "gitea-runner@6.0.0", "contract": "the runner label aieh-validation:docker://<image>; the governance workflow runs run: steps only (no uses:), so the image needs a shell and git, not Node", "verdict": "unknown", "runtime_verified": "not_run", "evidence": "the image holds git 2.47.3 and CPython 3.12.16 (evidence/Q-02.2.1-c3-pins.md, section 5); how the runner resolves a digest reference to an image loaded offline is open (evidence/Q-02.2.1-ci-profile.md); the live check is plan leaf Q-02.2.2"}
   ],
   "exclusions": [
     {"combination": "openhands-agent-canvas@1.36.0 with openhands-agent-server < 1.59.0 (incl. the blueprint's qualification pin v1.58.2)", "reason": "below Canvas compatibility.minimumAgentServer 1.59.0; rejected at runtime by assertAgentServerVersionIsSupported()"},

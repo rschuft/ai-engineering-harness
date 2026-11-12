@@ -6,7 +6,7 @@
     "decisions/0001-agent-server-dispatch-precondition-and-version-line.md (Accepted)",
     "composition/candidates.json (F-01.1, accepted)",
     "decisions/0002-reviewed-sdist-exception-for-resolution.md (Accepted)",
-    "decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md (Accepted; section 2.1: the CI runner, gitea-runner, Owner confirmation C-3 of 2026-11-11)"
+    "decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md (Accepted; section 2.1: the CI runner, gitea-runner, Owner confirmation C-3 of 2026-11-11; the CI job image docker.io/library/python:3.12-trixie, selected by the Overseer on 2026-11-12 under C-3)"
   ],
   "locked_at": "2026-11-06",
   "resolver": "python -I composition/resolve.py --work <empty dir outside the checkout>",
@@ -63,7 +63,7 @@
   "coverage": {
     "python": "CPython 3.12 only. Hash-locked per target: windows-x86_64 (win_amd64), linux-x86_64 and linux-aarch64 (manylinux, glibc >= 2.28). Other CPython minors and musl are not covered.",
     "npm": "One platform-independent package-lock.json (lockfileVersion 3) records every optional platform package with its integrity; npm installs only the host-matching ones. Node >= 24.",
-    "oci": "linux/amd64 and linux/arm64 platform manifests under each index digest.",
+    "oci": "linux/amd64 and linux/arm64 platform manifests under each index digest, except the CI job image (docker.io/library/python:3.12-trixie), which is locked for linux/amd64 only, the CI guest's platform.",
     "install_verification": "Only the resolving host can be install-verified. Linux-guest installation (F-03/F-04) is UNKNOWN until run there; for non-host targets the resolver downloads and hash-verifies the artifacts without installing them."
   },
   "sources": [
@@ -435,6 +435,20 @@
         "linux/arm64": "sha256:226f6b90b42e9d9158d230f7b6015d7cca72c5e3018cc0f85cdeb30294fd0aaf"
       },
       "role": "Gitea (rootless variant)"
+    },
+    {
+      "id": "docker.io/library/python:3.12-trixie",
+      "repository": "docker.io/library/python",
+      "tag_at_lock_time": "3.12-trixie",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "index_digest": "sha256:cad37dd20c7cac861af9003af8796d03ea7a998ec1e3a664429740fc9d7d2691",
+      "platform_digests": {
+        "linux/amd64": "sha256:97dc788c1887c44354e700c624e7d0a7b61c6f5baf6e2ae4d767abfedc442435"
+      },
+      "config_digests": {
+        "linux/amd64": "sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd"
+      },
+      "role": "CI validation job image (decision 0016 section 2.1: one job image pinned by digest and image id; the Overseer's selection of 2026-11-12 under C-3): the image of the aieh-validation label, loaded into a CI guest and run under a numeric non-root --user. linux/amd64 only; config_digests is the image id. Read at the registry on 2026-11-11 (evidence/Q-02.2.1-c3-pins.md, section 5)"
     }
   ],
   "release_assets": [

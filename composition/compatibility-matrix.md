@@ -243,6 +243,22 @@ Not part of the F-01.1 selection: added under [decision 0016](../decisions/0016-
 
 **Artifact digests: pass.** The downloaded binary's own sha256, its line in `checksums.txt` and `https://dl.gitea.com/gitea-runner/6.0.0/gitea-runner-6.0.0-linux-amd64.sha256` agree; the release's `.xz` asset decompresses to the same bytes. Only the Linux amd64 binary is pinned. **Signature: not_run** (`checksums.txt.sig`, OpenPGP, issuer `CC64B1DB67ABBEECAB24B6455FC346329753F4B0`). **Link to the commit: unknown** beyond the release's `target_commitish`.
 
+### 2.10 CI job image (added 2026-11-12, plan leaf Q-02.2.1)
+
+Not part of the F-01.1 selection: the image of the CI runner's single label (decision 0016 section 2.1, "one job image pinned by digest and image id"), chosen by the Overseer on 2026-11-12 under the Owner's C-3 approval among three candidates read at their registries. Evidence: [`evidence/Q-02.2.1-c3-pins.md`](../evidence/Q-02.2.1-c3-pins.md), section 5.
+
+- **Image:** `docker.io/library/python:3.12-trixie`, a Docker Official Image (docker-library), built 2026-11-05 on Debian 13.7 (`buildpack-deps:trixie`): CPython 3.12.16 from python.org source in `/usr/local/bin`, git 2.47.3; no Docker CLI and no sudo.
+- **User:** the config sets none (root); the job runs under a numeric non-root `--user` (decision 0016 section 2.3).
+- **License:** CPython PSF-2.0; the Debian packages under their own licences (git GPL-2.0).
+
+| Channel | Artifact | Digest |
+|---|---|---|
+| OCI | index (`application/vnd.oci.image.index.v1+json`) | `sha256:cad37dd20c7cac861af9003af8796d03ea7a998ec1e3a664429740fc9d7d2691` |
+| OCI | linux/amd64 manifest | `sha256:97dc788c1887c44354e700c624e7d0a7b61c6f5baf6e2ae4d767abfedc442435` |
+| OCI | linux/amd64 config (the image id) | `sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd` |
+
+**Artifact digests: pass** at retrieval (2026-11-11; the bodies' sha256 recomputed, every layer hash-checked). Only linux/amd64 is pinned. **Signature and provenance: not_run.** The layer list, which a provision lock needs, is not recorded in this repository.
+
 ## 3. Pairwise compatibility
 
 "Runtime" is **not_run** for every row. Nothing in this section was installed or executed.
@@ -263,6 +279,7 @@ Not part of the F-01.1 selection: added under [decision 0016](../decisions/0016-
 | agent-server 1.60.1 | Docker Engine (`conversation_runtime=docker`) | Docker API through the `docker<8,>=7.1` client; selectable runtime is gated by server config | **unknown** | Docker selection must be enabled explicitly. Upstream declares no Moby version range. |
 | gitea-runner 6.0.0 (added Q-02.2.1) | Gitea 28.3.0 | Runner RPC under `/api/actions`; the runner's floor Gitea 1.26.2 | **compatible** | `README.md` line 10 and `internal/pkg/ver/version.go` line 9 at `v6.0.0`; 28.3.0 is past 1.27.x (section 5, item 7); the RPC methods match fact G2 of the Q-02.1 source check. The shared protocol module (`gitea.dev/actionslib` v1.5.2 on the runner side) was not compared with Gitea's. |
 | gitea-runner 6.0.0 (added Q-02.2.1) | Moby (`docker.io` 26.1.5 in the guest provision lock) | Docker Engine API through `github.com/moby/moby/client` v0.6.2 | **unknown** | The runner checks API ≥ 1.41 for image platforms (`act/container/docker_run.go` lines 54-62); the client's minimum API version was not read. |
+| CI job image `python:3.12-trixie` (added Q-02.2.1) | gitea-runner 6.0.0 | The label `aieh-validation:docker://<image>`; `run:` steps only (no `uses:`), so a shell and git, not Node | **unknown** | The image holds git and CPython 3.12. How the runner resolves a digest reference to an image loaded offline is open ([`evidence/Q-02.2.1-ci-profile.md`](../evidence/Q-02.2.1-ci-profile.md)); not run. |
 
 ## 4. Excluded combinations
 

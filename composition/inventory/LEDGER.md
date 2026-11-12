@@ -49,6 +49,7 @@ All components are on the version line set by decision 0001, with identifiers fr
 | Backlog.md (backlog.md + platform packages) | 1.55.3 | `MrLesk/Backlog.md` v1.55.3 → `0cf4fdbc70020327f4366a29d3f405f83d180301` | MIT on the wrapper. **The platform packages declare no licence.** | npm (integrity; the linux-x64 and linux-arm64 tarballs are verified by download); release binaries via GitHub asset digest |
 | Gitea | 28.3.0 | `go-gitea/gitea` v28.3.0 (annotated `f1cd050b…`) → `4f5a3e13e5f3aca85d830e3a9024c893b0bbf1e1` | MIT | OCI `gitea:28.3.0` and `-rootless` indexes; release binaries via `.sha256`; source tarball via GitHub asset digest |
 | Gitea runner (`gitea-runner`, formerly act_runner; added 2026-11-11, Q-02.2.1, decision 0016) | 6.0.0 | `gitea.com/gitea/runner` v6.0.0 → `b5305c678573d84811486acdae638db9f751189a` | MIT (`LICENSE` at the tag; repository metadata). The static binary links third-party Go modules under their own licences; not inventoried here | Linux amd64 release binary via the release's `checksums.txt` |
+| CI job image (`docker.io/library/python:3.12-trixie`; added 2026-11-12, Q-02.2.1, decision 0016) | CPython 3.12.16 on Debian 13.7 | Docker Official Image; index `sha256:cad37dd2…`, linux/amd64 manifest `sha256:97dc788c…`, image id `sha256:37662cc6…` | CPython PSF-2.0; the Debian packages under their own licences (git GPL-2.0); read from the layers as data, not inventoried by Syft | OCI index (linux/amd64 only); not in `component-inventory.json` or an SBOM yet |
 
 ## Harness tool sets (outside the component resolution)
 

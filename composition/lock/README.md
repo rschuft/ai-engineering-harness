@@ -25,7 +25,7 @@ The resolver does five things:
    `pip install --target <work>/python/site --only-binary :all: --require-hashes --no-deps --no-index`
    and reads the installed versions back with `pip inspect --path`. It re-hashes every installed file against its RECORD.
 3. It runs `npm ci --ignore-scripts` from `npm/package-lock.json` with an isolated cache and empty npm config, so npm itself verifies each tarball's integrity. It then compares npm's hidden lockfile and `npm ls --all --json` with the lock. Every locked tarball that npm skips on this host (other OS or CPU optionals, such as `backlog.md-linux-x64` and `-arm64`) is downloaded and integrity-checked separately.
-4. It fetches each OCI index and its linux/amd64 and linux/arm64 manifests from the registry by digest and recomputes their sha256. This is a manifest-digest check. No image is pulled and nothing is run.
+4. It fetches each OCI index and its linux/amd64 and linux/arm64 manifests (linux/amd64 only for the CI job image) from the registry by digest and recomputes their sha256. This is a manifest-digest check. No image is pulled and nothing is run.
 5. It checks the release assets (GitHub releases, and the gitea-runner release on gitea.com) against the upstream checksum files, which it downloads and verifies by sha256. Where upstream publishes no checksum file, it uses the GitHub asset digest.
 
 It writes `<work>/report.json`. The main fields are:
@@ -70,7 +70,7 @@ Registry tokens are anonymous, held in memory and never printed. No credentials 
 
 | File | Pins | Count |
 |---|---|---|
-| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin, `reviewed_sdists` and `build_requirements`</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps` (empty)</li></ul> | <ul><li>9 source tags</li><li>4 OCI indexes</li><li>15 release assets</li><li>3 tools</li></ul> |
+| `components.lock.json` | The umbrella lock, with these sections:<ul><li>`sources`: tag → commit</li><li>`release_line` and `provenance_notes`</li><li>`conversation_image`</li><li>`python`: direct pins, the coupled pin, `reviewed_sdists` and `build_requirements`</li><li>`npm`: direct and pinned packages</li><li>`oci`: index and platform digests</li><li>`release_assets`</li><li>`tools`: uv, Syft and Grant, with sha256</li><li>`known_gaps` (empty)</li></ul> | <ul><li>9 source tags</li><li>5 OCI indexes</li><li>15 release assets</li><li>3 tools</li></ul> |
 | `python/requirements.in` | The four OpenHands packages, each `==1.60.1`. | 4 direct |
 | `python/excludes.txt` | `func-timeout`, which is excluded from wheel-only resolution and installed through `reviewed_sdists`. | 1 |
 | `python/build-requirements.in` / `.txt` | The hash-locked build backend for the reviewed sdist: `setuptools` 84.2.1, wheel only. | 1 pin |
@@ -97,7 +97,7 @@ Each pin lists the hashes of every file PyPI publishes for that version. Install
 |---|---|
 | Python | CPython 3.12 only. Locked targets are windows-x86_64, linux-x86_64 and linux-aarch64 (manylinux, glibc ≥ 2.28). Other CPython minor versions (the Canvas launcher allows 3.12–3.14) and musl are not covered. |
 | npm | The lockfile is platform-independent. Node ≥ 24 is required (Canvas `engines`). |
-| OCI | The linux/amd64 and linux/arm64 manifests under each index digest. |
+| OCI | The linux/amd64 and linux/arm64 manifests under each index digest; the CI job image (`python:3.12-trixie`) linux/amd64 only. |
 | Install verification | Only the resolving host can be install-verified. The F-01.2 evidence host is Windows 11 x86_64. For non-host targets, artifacts are downloaded and hash-verified but not installed. **Linux-guest installation (F-03/F-04) is unknown** until the resolver runs there. |
 
 ## conversation_image
