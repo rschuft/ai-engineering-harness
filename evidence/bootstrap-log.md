@@ -2441,6 +2441,37 @@ push never implies parent acceptance.
 
 - **2026-11-12: OA-16 Act E, the prepare phase of OA-14, performed once: PASS; stopped at the Owner's boundary.** From a clean clone at `95b5d1eedb1d1f5d6fed0d44c2f308cb155d288e`, the managed Gitea brought up first (`gitea_host.py up`: the record was stale from the previous session; non-elevated, loopback, kill-on-close job), one fresh empty run directory in session scratch, `AIEH_AUTHZ_RECORDER_LIVE=prepare`, `AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE` the required baseline; 06:01:10Z to 06:01:42Z, exit 0, run once. **Precondition before any write:** the protection check `verified` with `sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42`; `GET /token` of each role: aieh-bot-planner, aieh-bot-builder and aieh-bot-reviewer `write:repository`, aieh-bot-verifier and aieh-bot-protection-audit `read:repository`; main at `f18da179731cf906fbae4bfa62b23449363bb8aa`; no open pull request; neither run branch present. **Proposals:** the builder bot opened #31 (A, `live-20261112t060110z-a`, head `111d20c342b1a4ec5bcb5c409df8c59b55ab1fd2`) and #32 (B, the stale-head control, `live-20261112t060110z-b`, head `b2cbb2f5b900ea2931456bf509bddcccd07d9cb2`), each approved by the reviewer bot. **Negative controls:** planner, builder and reviewer 405 and verifier 403 on each of #31 and #32; the protection auditor's merge of the nonexistent #1000032 (confirmed absent first: 404) 403 "token does not have at least one of required scope(s), required=[write:repository], token scope=read:repository"; after each of the nine attempts main read `f18da179` and neither proposal merged. **Challenges** (the recorder's real prepare, 180 minutes): A `b7c663c54727651f3d8f80cf10ea4673` to 2026-11-12T09:01:14Z, manifest `sha256:847dbe5638239377efab6fe60b7ef80132b0c4ef8c7039642e77a5b7112b962d`; B `fb517570ab6464d08474b10980d597ba` to 2026-11-12T09:01:15Z, manifest `sha256:61591a548aa47f6fd0db8f46f74b0ce99f7ba97480d9e31bdb7b0e652a5b1c34`; the protection check `verified` for each at prepare. Custody inspection: the Owner account's password found nowhere (managed root, the clone's listed files, the run directory, the process environment), nothing unreadable. **Overseer verification:** the report and the presentation read; after the run `protection_check.py verify aieh-authz-fixture/authz` answered `verified` with the same baseline digest. No protected merge occurred; main unchanged. Evidence (session scratch): `presentation.json` `75d5dd37...`, `presentation.txt` `33be0a7d...`, `report.json` `e9228eb4...`, `run.out` `d93a2c65...`. No Owner statement written; the record phase not begun; presented to the Owner for a fresh, explicit decision.
 
+- **2026-11-12: Owner decision: fresh one-time challenges for OA-14's two existing operations authorized; no merge, no record phase.** The challenges of the Act E prepare expired unused (09:01:14Z and 09:01:15Z). Verbatim:
+
+  > I have reviewed Act E's prepare results for operations
+  > live-20261112t060110z-a and live-20261112t060110z-b.
+  >
+  > The original one-time challenges have expired.
+  >
+  > I authorize regeneration of fresh one-time challenges
+  > for both existing operations, limited to their already
+  > prepared pull requests, approved heads, manifest digests,
+  > and intended effects.
+  >
+  > This does not authorize either merge, modification of
+  > either approved head or manifest, creation of replacement
+  > proposals, or execution of the record phase.
+  >
+  > Before presenting the fresh challenges, verify that both
+  > proposals remain unchanged, neither has merged, main has
+  > not moved, and repository protection is still verified
+  > against the approved baseline.
+  >
+  > If fresh challenges cannot be generated safely against
+  > the existing prepared operations, stop and report the
+  > specific blocker without recreating the proposals or
+  > performing additional live operations.
+  >
+  > Present both fresh challenges and their complete
+  > authorization details for my explicit decision.
+
+- **2026-11-12: Phase rechallenge built offline and verified.** `858bac7`..`c4dc0fe` (the Builder; [P-04.2 section 16](P-04.2-authorization-recorder.md)): `AIEH_AUTHZ_RECORDER_LIVE=rechallenge` on the same run directory sends Gitea only GET requests; before any challenge it requires every earlier challenge for the two operations to be expired (`CHALLENGE_STILL_LIVE` otherwise), the protection check `verified` with the baseline, each role's identity and scopes, main at the presented head (`MAIN_MOVED`), each pull request open, unmerged, on its presented base, branch and approved head with the presented manifest digest, and the recorder's own operation and expiry checks; then the recorder's real `prepare` for each, the subject compared field by field (`SUBJECT_DIFFERS`); the earlier presentation kept as `presentation-<k>.*`, the new one marked as a regeneration whose controls were not re-run. Mutation of the changed lines: 124 of 124 killed. **Overseer verification:** the phase read (no write method); verify_seed PASS; owner suite 170 OK (2 skipped), gitea suite 282 OK (13 skipped), `AIEH_DATA_ROOT` empty and still empty after. Overseer rulings: the Builder's two stricter choices accepted (any still-usable challenge file for these operations blocks; the recorder's operation and expiry checks run for both before any challenge is written).
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
