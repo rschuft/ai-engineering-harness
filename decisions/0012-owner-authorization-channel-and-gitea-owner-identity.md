@@ -1,6 +1,6 @@
 # 0012 - Owner authorization channel and the Gitea Owner identity
 
-Status: Accepted (Overseer) - 2026-11-12, at the completion of P-04.2 ([evidence](../evidence/P-04.2-authorization-recorder.md), section 17). Its own acceptance conditions are met: the fail-closed protection check of point 6 is established and qualified (Owner decision OA-16, its Acts A to D, 2026-11-12), and P-04.2's live exercise has run with the Owner's own authorization (OA-14; `evidence/bootstrap-log.md`, `owner-authorization-oa-14-2026-11-12`). Its substance carries the Owner's confirmations of 2026-11-07 (below), OA-15a (fail closed, 2026-11-10) and OA-16 (option 2, 2026-11-11). The numbered points are unchanged; "Current facts (2026-11-12)" at the end records what is now established. Previously: Proposed (Architect) - 2026-11-07, following the Owner directive of 2026-11-07 ("Owner authorization must flow through the harness's governance mechanisms, not through a requirement that I manually approve merges in Gitea"). Owner confirmations 1 to 3 given 2026-11-07 (plan notes of P-04.2). Amended at P-04.2's offline build (2026-11-10, Builder proposal for the Overseer): the record's `format` field (Overseer ruling at P-04.1), the policy check's observable scope in Gitea 28.3.0, the manifest fields the recorder reads, and the recorder's state and receipt kind. Overseer rulings (2026-11-10): the proposed lost-answer settle rule is rejected (point 8); on the protection rules `aieh-owner` cannot read, the Overseer recommended detection rather than prevention; the Owner **declined** that on 2026-11-10 (OA-15a; point 6). The record stays Proposed until the fail-closed protection check of point 6 is established and qualified, and P-04.2's live exercise has run with the Owner's own authorization.
+Status: Accepted (Overseer) - 2026-11-12, after P-04.2's live exercise (its two acceptance conditions met; [evidence](../evidence/P-04.2-authorization-recorder.md), section 17). Its own acceptance conditions are met: the fail-closed protection check of point 6 is established and qualified (Owner decision OA-16, its Acts A to D, 2026-11-12), and P-04.2's live exercise has run with the Owner's own authorization (OA-14; `evidence/bootstrap-log.md`, `owner-authorization-oa-14-2026-11-12`). Its substance carries the Owner's confirmations of 2026-11-07 (below), OA-15a (fail closed, 2026-11-10) and OA-16 (option 2, 2026-11-11). The numbered points are unchanged; "Current facts (2026-11-12)" at the end records what is now established. Previously: Proposed (Architect) - 2026-11-07, following the Owner directive of 2026-11-07 ("Owner authorization must flow through the harness's governance mechanisms, not through a requirement that I manually approve merges in Gitea"). Owner confirmations 1 to 3 given 2026-11-07 (plan notes of P-04.2). Amended at P-04.2's offline build (2026-11-10, Builder proposal for the Overseer): the record's `format` field (Overseer ruling at P-04.1), the policy check's observable scope in Gitea 28.3.0, the manifest fields the recorder reads, and the recorder's state and receipt kind. Overseer rulings (2026-11-10): the proposed lost-answer settle rule is rejected (point 8); on the protection rules `aieh-owner` cannot read, the Overseer recommended detection rather than prevention; the Owner **declined** that on 2026-11-10 (OA-15a; point 6). The record stays Proposed until the fail-closed protection check of point 6 is established and qualified, and P-04.2's live exercise has run with the Owner's own authorization.
 
 **Gate:** architecture consultation at gates A, B and G.
 
@@ -112,7 +112,7 @@ Status: Accepted (Overseer) - 2026-11-12, at the completion of P-04.2 ([evidence
 Added at the Overseer's acceptance. The sections above are unchanged and remain the record of 2026-11-07 to
 2026-11-11; where they speak of what is not yet built, qualified or verified, these facts apply. Records:
 [`evidence/P-04.2-authorization-recorder.md`](../evidence/P-04.2-authorization-recorder.md) (section 17, the
-acceptance), [`evidence/P-04.2-protection-verifier.md`](../evidence/P-04.2-protection-verifier.md) and
+acceptance review), [`evidence/P-04.2-protection-verifier.md`](../evidence/P-04.2-protection-verifier.md) and
 [`evidence/bootstrap-log.md`](../evidence/bootstrap-log.md) (Decisions, 2026-11-12).
 
 1. **Point 6's mechanism.** The trusted, read-only check point 6 requires is the protection check of Owner
@@ -150,14 +150,15 @@ acceptance), [`evidence/P-04.2-protection-verifier.md`](../evidence/P-04.2-prote
      approved head `111d20c342b1a4ec5bcb5c409df8c59b55ab1fd2`, merged by `aieh-owner`, the six trailers
      (decision `d18a66d3-3072-4beb-a8dc-ac37047c1a33`), the manifest digest at the merge, receipt confirmed;
      `aieh-owner` holding zero tokens afterwards;
-   - the custody inspection, in each of the three phases: the Owner credential in no file of the managed root,
+   - the custody inspection, in each of the three phases: the Owner credential of this decision (`aieh-owner`'s
+     password) in no file of the managed root,
      the checkout's listed files and the run directory, and not in the process environment of the main
      session; nothing unreadable.
 4. **The Consequences' "Not verified until the live exercise".** Observed live: the 409 to a changed head;
    the trailers preserved in the merge commit; a merge by basic authentication as `aieh-owner`; the read-back
    fields as Gitea 28.3.0 returns them; the inspection, within its limit: no job environment existed (no guest,
    no dispatcher), so the Owner credential's absence from job environments is not shown and is carried
-   (P-04.2 section 17). Not established: the audit log's coverage of the merge (Gitea 28.3.0 recorded no audit
+   (P-04.2 section 17): for agent attempts to S-03.3, for CI jobs to Q-02.2.2. Not established: the audit log's coverage of the merge (Gitea 28.3.0 recorded no audit
    event for the API calls of OA-16 Acts B to D).
 5. **Unchanged.** The bootstrap channel proves a declared Owner decision bound to an exact revision, not an
    authenticated Owner (point 9); `fd-owner-authorization-record` stays narrowed, not closed; the
