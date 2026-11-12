@@ -425,7 +425,8 @@ conversation's container and judges its output. The guest-root vantage (the slic
 from the guest's root facts reporter (S-03.3 slice 6): on request it writes the snapshot `collect host` prints
 for each running conversation container, from verbatim copies of this file's readers in the seed, and the
 driver reads it as `agent` (`tools/guest.py` `host_snapshot_from_report`); a guest seeded before slice 6, a
-truncated list or a missing field is UNKNOWN, never PASS.
+truncated list or a missing field is UNKNOWN, never PASS
+([`evidence/S-03.3-slice6-root-vantage.md`](../../evidence/S-03.3-slice6-root-vantage.md)).
 
 | Vantage | Command | What it lists |
 |---|---|---|
