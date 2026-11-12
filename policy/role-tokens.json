@@ -177,13 +177,14 @@
       "realization": [
         {
           "mechanism": "A separate Gitea Owner account (aieh-owner), the only identity on the authorization branch's merge allowlist, never signed in to and holding no token; its credential is held by the authorization recorder, its sole custodian, which merges as it on a recorded Owner decision; never a personal access token in any agent or CI context.",
-          "verified": false,
+          "verified": true,
           "verify_at": "P-04.2",
           "evidence": [
             "evidence/S-01.2.2-segregated-credentials.md",
-            "evidence/F-06.1-gitea-loopback.md"
+            "evidence/F-06.1-gitea-loopback.md",
+            "evidence/P-04.2-authorization-recorder.md"
           ],
-          "notes": "Partly shown at S-01.2.2: aieh-owner is the only merge-allowlist identity of every protected-branch rule of the fixture, and it holds no access token (finalize-credentials). Decided by the accepted Owner-authority design (decision 0012, Proposed): the Owner never operates Gitea; the authorization recorder (P-04.2, integrations/owner/authorization_recorder.py) reads cred-gitea-owner-account by name from the credential provider into memory for each command and merges as aieh-owner by basic authentication, refusing an aieh-owner that is an administrator or holds a token. Not verified at P-04.2's offline build: the recorder has run against a fake Gitea only; the live exercise on the S-01.2.2 fixture is an Owner-approved act not yet run, and the authorization branch does not exist yet (fd-owner-authorization-record)."
+          "notes": "Shown at S-01.2.2: aieh-owner is the only merge-allowlist identity of every protected-branch rule of the fixture, and it holds no access token (finalize-credentials). Shown live in P-04.2's exercise (2026-11-12; decision 0012): on the Owner's authorization of OA-14 the authorization recorder merged one exact operation manifest into the fixture's protected main as aieh-owner by basic authentication (merge 75e89b28143464949c24bd46433a5d9f2197b0d0, receipt confirmed), and aieh-owner held zero tokens after the merge; the custody inspection found aieh-owner's password in no file of the managed root, the checkout or the run directory and not in the main session's process environment. No job environment existed: its absence from agent attempts is S-03.3's and from CI jobs Q-02.2.2's (evidence/P-04.2-authorization-recorder.md, section 17). This row covers the Gitea Owner account only; the custody of the Owner's own credentials (cred-owner-github, cred-owner-provider-login) is not inspected (fd-owner-credential-custody). The authorization repository of G-03.1 does not exist yet (fd-owner-authorization-record)."
         },
         {
           "mechanism": "Code merges into protected integration branches under the D-01.2 branch rules.",
@@ -206,7 +207,7 @@
           "credential": "cred-gitea-owner-account",
           "issuer": "gitea-site-admin",
           "delivered_by": null,
-          "delivery": "Created on the Gitea instance as an Owner act (F-06.1); its password is harness-held: set by credential finalization under the Owner's approval of 2026-11-07 into the credential provider entry \"AIEH Gitea owner\", which only the authorization recorder, its custodian, reads (P-04.2; decision 0012, Proposed). The Owner never signs in to Gitea (Owner directive of 2026-11-07)."
+          "delivery": "Created on the Gitea instance as an Owner act (F-06.1); its password is harness-held: set by credential finalization under the Owner's approval of 2026-11-07 into the credential provider entry \"AIEH Gitea owner\", which only the authorization recorder, its custodian, reads (P-04.2; decision 0012). The Owner never signs in to Gitea (Owner directive of 2026-11-07)."
         },
         {
           "credential": "cred-owner-ui-session",
@@ -695,13 +696,13 @@
           "notes": "Verified at S-01.2.2: direct push, force-push and push-deletion of main and a push to a non-work/* branch were declined by the pre-receive hook; merge, force-merge and squash answered 405; protection, settings, collaborator, hook, deploy-token, transfer and deletion calls answered 403; it still opened a proposal PR."
         },
         {
-          "mechanism": "The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no management, Owner, admin or bot credential in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs).",
+          "mechanism": "The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no fingerprint of the outer server's session or secret key or of a Gitea bot token, and no credential file or credential variable name, in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs).",
           "verified": true,
           "verify_at": "S-01.3.2",
           "evidence": [
             "evidence/S-01.3.2-job-daemon-and-management-access.md"
           ],
-          "notes": "Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran."
+          "notes": "Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran. The Owner's and the site administrator's credentials have no fingerprint in any record and were searched by name only; the Owner credential's absence from agent attempts is S-03.3's and from CI jobs Q-02.2.2's (evidence/P-04.2-authorization-recorder.md, section 17)."
         }
       ],
       "issuance": [
@@ -849,13 +850,13 @@
           "notes": "Failed in part at S-01.2.2. Shown: read permission on the fixture, on no merge allowlist; it submitted an approving review; its pushes were declined, its merges answered 405, its settings calls 403. Not realizable: Gitea 28.3.0 has no review-only scope (a review with read:repository answered 403, required=[write:repository]), and a read-permission collaborator can open a pull request from an existing branch (201; fd-gitea-reader-opens-pr). Neither reaches an Owner operation. Re-pointed to D-01.2 by the plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md): D-01.2 shows that the reader identity cannot open a PR, or records the residual as a limit with its reason (fd-gitea-reader-opens-pr)."
         },
         {
-          "mechanism": "The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no management, Owner, admin or bot credential in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs).",
+          "mechanism": "The job environment: a per-conversation container of the guest Agent Server with no engine socket and no engine API (Docker, containerd and the others absent; 2375 and 2376 refused at every address), no route of the outer Agent Server at any address, no host service through SLIRP, and no fingerprint of the outer server's session or secret key or of a Gitea bot token, and no credential file or credential variable name, in its files or process environments; not privileged, every capability set empty, no_new_privs, seccomp and AppArmor (provisioning.agent_server.jobs).",
           "verified": true,
           "verify_at": "S-01.3.2",
           "evidence": [
             "evidence/S-01.3.2-job-daemon-and-management-access.md"
           ],
-          "notes": "Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran."
+          "notes": "Verified live on a disposable provisioned guest (guest.py job-access-probe, before and after a guest restart) from inside two disposable conversation containers, as their default user (root is not obtainable): every declared engine socket, the engine ports and host aliases over TCP, all 193 routes at every address, and the outer key and Gitea bot token fingerprints. No agent workload, LLM or repository content ran. The Owner's and the site administrator's credentials have no fingerprint in any record and were searched by name only; the Owner credential's absence from agent attempts is S-03.3's and from CI jobs Q-02.2.2's (evidence/P-04.2-authorization-recorder.md, section 17)."
         }
       ],
       "issuance": [
@@ -1460,12 +1461,14 @@
       "realization": [
         {
           "mechanism": "The protection auditor aieh-bot-protection-audit (Owner decision OA-16): a restricted Gitea Bot without a password, repository-administrator collaborator of the admitted repository only, whose token of scope exactly read:repository (cred-gitea-protection-audit) the recorder's protection check (integrations/gitea/protection_check.py) alone reads, for the last read before each merge and the first after it; every write by that token is refused by its scope.",
-          "verified": false,
+          "verified": true,
           "verify_at": "P-04.2",
           "evidence": [
-            "evidence/P-04.2-protection-verifier.md"
+            "evidence/P-04.2-protection-verifier.md",
+            "evidence/bootstrap-log.md",
+            "evidence/P-04.2-authorization-recorder.md"
           ],
-          "notes": "Built and tested at P-04.2 against fake Gitea servers only (evidence/P-04.2-protection-verifier.md). Not verified: the auditor's account and token are not provisioned and the fixture's total declaration is not applied; it is verified by P-04.2's live acts, each an Owner act: the negative tests (the auditor reads the rules; every write by its token, a git push included, is refused 403 by its scope; another repository's rules, aieh-authz-fixture/escape-probe by default, are not readable) and the qualification (each injected drift is detected and its restoration verified)."
+          "notes": "Built and tested at P-04.2 against fake Gitea servers (evidence/P-04.2-protection-verifier.md). Verified live on 2026-11-12, each an Owner act (evidence/bootstrap-log.md, Decisions): the auditor provisioned (OA-16 Act A) and the fixture's total declaration applied (Act B: verified); the negative tests (Act C: the auditor reads the rules; every write by its token, git pushes included, refused 403 by its scope; aieh-authz-fixture/escape-probe's rules not readable); the qualification (Act D: five injected drifts, each detected and its restoration verified); and the check answering verified before and after the recorder's one live merge (evidence/P-04.2-authorization-recorder.md, section 17)."
         }
       ],
       "issuance": [
@@ -1473,7 +1476,7 @@
           "credential": "cred-gitea-protection-audit",
           "issuer": "gitea-site-admin",
           "delivered_by": null,
-          "delivery": "Planned (Owner decision OA-16): minted by the site administrator through Gitea's CLI (gitea_roles.py provision: generate-access-token --raw, scope read:repository) for the restricted Bot aieh-bot-protection-audit, a repository-administrator collaborator of the admitted repository only, and written by the credential provider into the entry \"AIEH Gitea bot protection-audit\"; the recorder's protection check reads it by name, into memory, for one check. Never in an agent context, a guest, a log or a record (fingerprints only)."
+          "delivery": "Provisioned on 2026-11-12 (Owner decision OA-16, Act A): minted by the site administrator through Gitea's CLI (gitea_roles.py provision: generate-access-token --raw, scope read:repository) for the restricted Bot aieh-bot-protection-audit, a repository-administrator collaborator of the admitted repository only, and written by the credential provider into the entry \"AIEH Gitea bot protection-audit\"; the recorder's protection check reads it by name, into memory, for one check. Never in an agent context, a guest, a log or a record (fingerprints only)."
         }
       ],
       "revocation": [
@@ -1490,13 +1493,14 @@
           "rotation_owner": "gitea-site-admin"
         }
       ],
-      "target": "Custodian of cred-gitea-owner-account, the delegated performer of op-protected-merge, whose principal stays the Owner: on a recorded Owner decision it merges one exact operation manifest into the protected authorization branch as aieh-owner (Do: merge with head_commit_id; merge commits only; the decision trailers; a write-ahead receipt in the integration store), by HTTP basic authentication with the password read from the credential provider into memory for each command. It never mints or sends a token and never uses sudo, force_merge or auto-merge; it refuses an entry naming another account or holding a token, and an aieh-owner that is an administrator or holds a token. It has no agent-callable or MCP surface and runs only in the main session on an Owner decision (decision 0012, Proposed). Its protection check (Owner decision OA-16; decision 0012 point 6, Proposed) is the last read before each merge and the first after it: as aieh-bot-protection-audit, a restricted Gitea Bot with repository-administrator collaboration on the admitted repository only and a token of scope exactly read:repository (cred-gitea-protection-audit, whose custodian it is), it reads every protection rule (34 fields each), the exact rule set and the effective rule, the merge settings, the collaborators with their permissions, the teams and the deploy keys, and refuses the merge on drift or on anything it cannot verify (integrations/gitea/protection_check.py). Planned realization, verified at P-04.2's live qualification: the auditor reads the rules and every write by its token is refused.",
+      "target": "Custodian of cred-gitea-owner-account, the delegated performer of op-protected-merge, whose principal stays the Owner: on a recorded Owner decision it merges one exact operation manifest into the protected authorization branch as aieh-owner (Do: merge with head_commit_id; merge commits only; the decision trailers; a write-ahead receipt in the integration store), by HTTP basic authentication with the password read from the credential provider into memory for each command. It never mints or sends a token and never uses sudo, force_merge or auto-merge; it refuses an entry naming another account or holding a token, and an aieh-owner that is an administrator or holds a token. It has no agent-callable or MCP surface and runs only in the main session on an Owner decision (decision 0012). Its protection check (Owner decision OA-16; decision 0012 point 6) is the last read before each merge and the first after it: as aieh-bot-protection-audit, a restricted Gitea Bot with repository-administrator collaboration on the admitted repository only and a token of scope exactly read:repository (cred-gitea-protection-audit, whose custodian it is), it reads every protection rule (34 fields each), the exact rule set and the effective rule, the merge settings, the collaborators with their permissions, the teams and the deploy keys, and refuses the merge on drift or on anything it cannot verify (integrations/gitea/protection_check.py). Verified at P-04.2's live qualification (OA-16 Acts C and D, 2026-11-12): the auditor reads the rules and every write by its token is refused.",
       "bootstrap": {
-        "observed_performer": null,
+        "observed_performer": "owner-os-account",
         "evidence": [
-          "integrations/owner/README.md"
+          "integrations/owner/README.md",
+          "evidence/P-04.2-authorization-recorder.md"
         ],
-        "note": "Built at P-04.2 (task owner:authorize) and exercised against a fake Gitea only; it has merged nothing on a real Gitea. During bootstrap it runs as a process of the Owner's account, which the host-side bootstrap agents share (fd-bootstrap-shared-identity; decision 0010). Its protection check is built and tested against a fake Gitea only (OA-16); the auditor's account and token are not provisioned, so the check answers unverified and the recorder refuses every merge."
+        "note": "Built at P-04.2 (task owner:authorize); on a real Gitea it has merged once, on the S-01.2.2 fixture on the Owner's authorization of OA-14 (2026-11-12), run as a process of the Owner's account in the main session. During bootstrap it runs as a process of the Owner's account, which the host-side bootstrap agents share (fd-bootstrap-shared-identity; decision 0010). Its protection check reads as the protection auditor, provisioned and qualified live on 2026-11-12 (OA-16 Acts A to D)."
       },
       "status": "planned",
       "sources": [

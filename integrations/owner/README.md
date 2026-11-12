@@ -403,9 +403,12 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
   missing or non-Owner statement, a missing challenge, a token on `aieh-owner`) have run against the
   fake Gitea of `tests/fake_gitea.py` only; the Gitea reads they compare against ran live. Not
   observed: the audit log's events for the merge.
-- The Owner credential's absence from job environments: the exercise's custody inspection found it in
-  no file of the managed root, the checkout or the run directory and not in the main session's process
-  environment, but no job environment existed to inspect.
+- The Owner credential's absence from job environments: the exercise's custody inspection found
+  `aieh-owner`'s password in no file of the managed root, the checkout or the run directory and not in
+  the main session's process environment, but no job environment existed to inspect; carried to S-03.3
+  (agent attempts) and Q-02.2.2 (CI jobs). The custody of the Owner's own credentials (the push
+  credential and the provider login, `fd-owner-credential-custody`) is not inspected: P-04.2 is blocked on
+  it.
 - The statement's attribution against its source (as above), for the recorded Owner authorization of
   OA-14 too.
 - The protection rule itself: `aieh-owner` cannot read it in Gitea 28.3.0, so the allowlists of other

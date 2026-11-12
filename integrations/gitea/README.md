@@ -309,8 +309,8 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
 Owner decision OA-16 (2026-11-11; [recommendation](../../evidence/P-04.2-protection-check-recommendation.md),
 option 2; record [`evidence/P-04.2-protection-verifier.md`](../../evidence/P-04.2-protection-verifier.md)).
 Decision [0012](../../decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md) was
-accepted on 2026-11-12, at the completion of P-04.2. `protection_check.py` is a bounded read-only adapter
-of this integration, not a policy service:
+accepted on 2026-11-12, after P-04.2's live exercise. `protection_check.py` is a bounded read-only
+adapter of this integration, not a policy service:
 the authorization recorder ([`integrations/owner`](../owner/README.md)) asks it in process as the last read
 before each merge and once more after the read-back, and merges only on `verified`.
 

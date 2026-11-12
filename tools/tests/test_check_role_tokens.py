@@ -35,9 +35,6 @@ AGENT_ROLES = ('planner', 'builder', 'reviewer', 'ci-job')
 # (role, mechanism prefix) -> the open leaf an unverified realization was re-pointed to by the
 # plan reconciliation of 2026-11-08 (evidence/plan-reconciliation-2026-11-08.md)
 REPOINTED = {
-    ('owner', 'A separate Gitea Owner account'): 'P-04.2',
-    # Owner decision OA-16 (evidence/P-04.2-protection-verifier.md): the recorder's protection auditor
-    ('authorization-recorder', 'The protection auditor'): 'P-04.2',
     ('gitea-site-admin', 'Issues Gitea identities'): 'Q-02.2.1',
     ('reviewer', 'A dedicated Gitea bot account'): 'D-01.2',
     ('ci-job', 'The Gitea Actions job token'): 'Q-02.3.1',
@@ -126,13 +123,21 @@ class CommittedMatrix(unittest.TestCase):
         rows = [(r['id'], m) for r in POLICY['roles'] for m in r['realization']]
         self.assertTrue(rows)
         self.assertEqual(sorted(rid for rid, m in rows if m['verified'] is True),
-                         ['authorization-verifier', 'builder', 'builder', 'builder',
-                          'gitea-site-admin', 'management-dispatcher', 'planner', 'reviewer'])
+                         ['authorization-recorder', 'authorization-verifier', 'builder', 'builder',
+                          'builder', 'gitea-site-admin', 'management-dispatcher', 'owner', 'planner',
+                          'reviewer'])
         for rid, m in rows:
             admission = rid == 'management-dispatcher' and m['mechanism'].startswith('Admission')
             job = m['mechanism'].startswith('The job environment')
             ci_job = rid == 'ci-job' and m['mechanism'].startswith('The runner containment')
-            if m['verified'] is True:
+            # verified by P-04.2's live exercise and OA-16's live acts (2026-11-12)
+            p_04_2 = any(rid == r_id and m['mechanism'].startswith(prefix) for r_id, prefix in
+                         (('owner', 'A separate Gitea Owner account'),
+                          ('authorization-recorder', 'The protection auditor')))
+            if p_04_2:
+                self.assertIs(m['verified'], True, m['mechanism'])
+                self.assertIn('evidence/P-04.2-authorization-recorder.md', m['evidence'])
+            elif m['verified'] is True:
                 self.assertIn('evidence/S-01.3.1-management-api-admission.md' if admission else
                               'evidence/S-01.3.2-job-daemon-and-management-access.md' if job else
                               'evidence/S-01.2.2-segregated-credentials.md', m['evidence'])
@@ -150,6 +155,8 @@ class CommittedMatrix(unittest.TestCase):
                 if rid == r_id and m['mechanism'].startswith(prefix):
                     self.assertIs(m['verified'], False, m['mechanism'])
                     carried[rid] = leaf
+            if p_04_2:
+                carried[rid] = 'P-04.2'
             if admission:
                 carried[rid] = 'S-01.3.1'
             if job:
