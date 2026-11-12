@@ -543,11 +543,29 @@ class Contract(unittest.TestCase):
         row(role(pol, 'gitea-site-admin')['revocation'], 'cred-gitea-admin')['triggers'] = ['expiry']
         self.assert_code('TRIGGER_INVALID', pol)
 
-    def test_agent_tokens_end_with_the_attempt(self):
-        pol = fresh()
-        r = row(role(pol, 'ci-job')['revocation'], 'cred-ci-job-token')
-        r['triggers'].remove('attempt-end')
-        self.assert_code('TRIGGER_INVALID', pol)
+    def test_agent_tokens_issued_for_one_attempt_end_with_it(self):
+        for role_id, cid in (('ci-job', 'cred-ci-job-token'), ('builder', 'cred-inference-attempt-token'),
+                             ('planner', 'cred-conversation-keys')):
+            with self.subTest(credential=cid):
+                pol = fresh()
+                row(role(pol, role_id)['revocation'], cid)['triggers'].remove('attempt-end')
+                self.assert_code('TRIGGER_INVALID', pol)
+
+    def test_a_standing_credential_never_ends_with_the_attempt(self):
+        """Decision 0007 points 4 and 5, amendment 1: a standing credential the Gitea site administrator issues
+        is released at attempt end, never revoked; attempt end is not among its triggers, on an agent role's
+        row or any other."""
+        for role_id, cid in (('builder', 'cred-gitea-bot-builder'), ('reviewer', 'cred-gitea-bot-reviewer'),
+                             ('planner', 'cred-gitea-bot-planner'), ('ci-lane-coordinator', 'cred-gitea-bot-ci'),
+                             ('authorization-verifier', 'cred-verifier-read')):
+            with self.subTest(credential=cid):
+                pol = fresh()
+                r = row(role(pol, role_id)['revocation'], cid)
+                self.assertNotIn('attempt-end', r['triggers'])
+                r['triggers'].append('attempt-end')
+                self.assert_code('TRIGGER_INVALID', pol)
+        # an agent role's standing credential is not required to end with the attempt (the committed rows pass)
+        self.assertEqual(codes(fresh())[1], [])
 
     def test_revoker_is_the_issuers_role(self):
         pol = fresh()
@@ -563,7 +581,7 @@ class Contract(unittest.TestCase):
     def test_rotation_owner_must_match_the_inventory(self):
         pol = fresh()
         row(role(pol, 'builder')['revocation'], 'cred-gitea-bot-builder')['rotation_owner'] = \
-            'gitea-site-admin'
+            'management-dispatcher'
         self.assert_code('ROTATION_MISMATCH', pol)
         inv = fresh_inventory()
         inv_entry(inv, 'credentials', 'cred-verifier-read')['rotation_revocation_owner'] = 'owner'

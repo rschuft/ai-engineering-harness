@@ -22,8 +22,11 @@ It fails when:
 - a granted operation's inventory principal is not the role's principal;
 - an agent-controlled role omits a baseline denial, or grants what it denies;
 - a credential's issuance or revocation row is missing, names another issuer than the
-  inventory, has a revoker other than the issuer's role, uses an unknown trigger, or
-  has a rotation owner that is null without a finding or differs from the inventory,
+  inventory, has a revoker other than the issuer's role, uses an unknown trigger, omits
+  suspected exposure or Owner direction, omits attempt end on an agent role's credential
+  issued for a single attempt, names attempt end on a standing credential the Gitea site
+  administrator issues (decision 0007, amendment 1), or has a rotation owner that is null
+  without a finding or differs from the inventory,
   or sends a receipt to the effects store for anything but an executor credential;
 - a realization marked verified lacks evidence;
 - the sunset map misses a planned operation that the Owner's account performs today;
@@ -59,7 +62,12 @@ DEFAULT_INVENTORY = csi.DEFAULT_INVENTORY
 TRIGGERS = ('attempt-end', 'suspected-exposure', 'definition-revocation', 'policy-revision',
             'expiry', 'owner-direction')
 REQUIRED_TRIGGERS = ('suspected-exposure', 'owner-direction')
+# Decision 0007 points 4 and 5, amendment 1 (OA-20): attempt end ends a credential issued for that single
+# attempt (an agent role's inference token, conversation keys, CI job tokens), so it is required there; a
+# credential the Gitea site administrator issues is standing (Gitea 28.3.0 gives a token no lifetime and the
+# dispatcher no replacement), rotated and revoked only on the other triggers, so attempt end is forbidden there.
 AGENT_REQUIRED_TRIGGERS = ('attempt-end',)
+STANDING_ISSUERS = ('gitea-site-admin',)
 NEW_DISPATCH = 'immediate-refusal'
 RECEIPT_STORES = ('integration-store', 'effects-store')
 
@@ -442,11 +450,16 @@ class Checker(csi.Checker):
                     or any(t not in TRIGGERS for t in triggers):
                 self.add('TRIGGER_INVALID', w, f'triggers must be a non-empty subset of {TRIGGERS}')
                 triggers = []
-            required = REQUIRED_TRIGGERS + (AGENT_REQUIRED_TRIGGERS if agent else ())
+            cred = self.credentials.get(cid) or {}
+            standing = cred.get('issuer') in STANDING_ISSUERS
+            required = REQUIRED_TRIGGERS + (AGENT_REQUIRED_TRIGGERS if agent and not standing else ())
             missing = [t for t in required if t not in triggers]
             if missing:
                 self.add('TRIGGER_INVALID', w, f'triggers must include {missing}')
-            cred = self.credentials.get(cid) or {}
+            if standing and 'attempt-end' in triggers:
+                self.add('TRIGGER_INVALID', w, 'attempt-end is not a trigger of a standing credential the Gitea '
+                         'site administrator issues: releasing it at attempt end is not revocation (decision 0007 '
+                         'points 4 and 5, amendment 1)')
             store = row.get('receipt_store', 'integration-store')
             if store not in RECEIPT_STORES:
                 self.add('SCHEMA', w, f'receipt_store must be one of {RECEIPT_STORES}')

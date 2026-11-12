@@ -9,7 +9,7 @@
   "checker": "tools/check_role_tokens.py",
   "decision": "decisions/0007-role-token-matrix-and-revocation-contract.md",
   "trigger_classes": {
-    "attempt-end": "The attempt that holds the credential ends, in any outcome.",
+    "attempt-end": "The attempt that holds a credential issued for that single attempt ends, in any outcome. Never a trigger of a standing credential that the Gitea site administrator issues (decision 0007, amendment 1, point 3).",
     "suspected-exposure": "The credential may have been read or used outside its role.",
     "definition-revocation": "The agent or Skill definition the attempt runs is revoked.",
     "policy-revision": "A policy revision changes what the role may hold.",
@@ -546,7 +546,7 @@
           "credential": "cred-gitea-bot-planner",
           "issuer": "gitea-site-admin",
           "delivered_by": "management-dispatcher",
-          "delivery": "Delivered per attempt by the dispatcher into the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime), so it is rotated at attempt end. Never in an image, seed, repository, log or record (fingerprints only)."
+          "delivery": "Used per attempt by the dispatcher in the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7; decision 0007 points 4 and 5, amendment 1). The standing token is obtained only for a confirmed attempt of the mapped role, held in memory for the bounded operation and released when it ends; releasing the in-memory reference is not Gitea revocation. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime) and gives the dispatcher no replacement mechanism, so the token is issued, rotated and revoked only by the site administrator's lifecycle (gitea_roles.py provision, rotate, retire). Never in an image, seed, repository, log or record (fingerprints only). No stage is mapped to the planner yet (integrations/dispatch/attempt_tokens.py maps implement and review)."
         },
         {
           "credential": "cred-conversation-keys",
@@ -565,7 +565,6 @@
         {
           "credential": "cred-gitea-bot-planner",
           "triggers": [
-            "attempt-end",
             "suspected-exposure",
             "definition-revocation",
             "policy-revision",
@@ -573,8 +572,8 @@
             "owner-direction"
           ],
           "revoker": "gitea-site-admin",
-          "method": "The site administrator revokes the bot's tokens (observed at S-01.2.2: it lists and deletes another account's token, which then answers 401) or disables the bot account; per attempt, the dispatcher rotates the token at attempt end, since Gitea 28.3.0 has no token lifetime; DELETE /api/v1/token also revokes the authenticating token (observed).",
-          "rotation_owner": "management-dispatcher",
+          "method": "Three lifecycles (decision 0007 points 4 and 5, amendment 1; E-01.3.3, the Owner's correction of 2026-11-11). (1) The standing token is rotated and revoked only by the site administrator's lifecycle, on defined security and lifecycle triggers and never on routine attempt completion, so attempt end is not among its triggers: gitea_roles.py rotate (revokes through DELETE /api/v1/token, proves the next call answers 401, re-issues with Gitea's CLI and replaces the entry; it resumes over a token Gitea already refuses) and retire; the site administrator can also list and delete another account's token, which then answers 401 (observed at S-01.2.2), or disable the bot account. (2) At attempt end the dispatcher only releases its in-memory reference, which is not Gitea revocation; a token Gitea refuses is not delivered (ROLE_TOKEN_REJECTED) until the administrative lifecycle replaces it. (3) The per-attempt inference token is a separate credential, revoked at attempt end (decision 0015). Residual, recorded as a limit: concurrent attempts of one role share one standing token, and re-issue is an administration act between attempts, because Gitea 28.3.0 has no token lifetime and gives the dispatcher no replacement mechanism (the dispatcher is granted no issuance). Disclosed same-account limit: during bootstrap the Owner's account can read the standing token in its Credential Manager (decision 0013 point 6).",
+          "rotation_owner": "gitea-site-admin",
           "findings": [
             "fd-gitea-version-docs"
           ]
@@ -710,7 +709,7 @@
           "credential": "cred-gitea-bot-builder",
           "issuer": "gitea-site-admin",
           "delivered_by": "management-dispatcher",
-          "delivery": "Used per attempt by the dispatcher in the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). The standing token is obtained only for a confirmed attempt of the mapped stage, held in memory for the bounded operation and released when it ends; releasing the in-memory reference is not Gitea revocation, and concurrent attempts of the stage share the one standing token. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime) and gives the dispatcher no replacement mechanism, so the token is issued, rotated and revoked only by the site administrator's lifecycle (gitea_roles.py provision, rotate, retire). Never in an image, seed, repository, log or record (fingerprints only). E-01.3.3 (offline, not yet verified live): integrations/dispatch/attempt_tokens.py."
+          "delivery": "Used per attempt by the dispatcher in the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7; decision 0007 points 4 and 5, amendment 1). The standing token is obtained only for a confirmed attempt of the mapped stage, held in memory for the bounded operation and released when it ends; releasing the in-memory reference is not Gitea revocation, and concurrent attempts of the stage share the one standing token. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime) and gives the dispatcher no replacement mechanism, so the token is issued, rotated and revoked only by the site administrator's lifecycle (gitea_roles.py provision, rotate, retire). Never in an image, seed, repository, log or record (fingerprints only). E-01.3.3 (offline, not yet verified live): integrations/dispatch/attempt_tokens.py."
         },
         {
           "credential": "cred-conversation-keys",
@@ -729,7 +728,6 @@
         {
           "credential": "cred-gitea-bot-builder",
           "triggers": [
-            "attempt-end",
             "suspected-exposure",
             "definition-revocation",
             "policy-revision",
@@ -737,8 +735,8 @@
             "owner-direction"
           ],
           "revoker": "gitea-site-admin",
-          "method": "Three lifecycles (E-01.3.3; the Owner's correction of 2026-11-11). (1) The standing token is rotated and revoked only by the site administrator's lifecycle, on defined security and lifecycle triggers and never on routine attempt completion: gitea_roles.py rotate (revokes through DELETE /api/v1/token, proves the next call answers 401, re-issues with Gitea's CLI and replaces the entry; it resumes over a token Gitea already refuses) and retire; the site administrator can also list and delete another account's token, which then answers 401 (observed at S-01.2.2), or disable the bot account. (2) At attempt end the dispatcher only releases its in-memory reference, which is not Gitea revocation; a token Gitea refuses is not delivered (ROLE_TOKEN_REJECTED) until the administrative lifecycle replaces it. (3) The per-attempt inference token is a separate credential, revoked at attempt end (decision 0015). Residual, recorded as a limit: concurrent attempts of one stage share one standing token, and re-issue is an administration act between attempts, because Gitea 28.3.0 has no token lifetime and gives the dispatcher no replacement mechanism (the dispatcher is granted no issuance). Disclosed same-account limit: during bootstrap the Owner's account can read the standing token in its Credential Manager (decision 0013 point 6).",
-          "rotation_owner": "management-dispatcher",
+          "method": "Three lifecycles (decision 0007 points 4 and 5, amendment 1; E-01.3.3, the Owner's correction of 2026-11-11). (1) The standing token is rotated and revoked only by the site administrator's lifecycle, on defined security and lifecycle triggers and never on routine attempt completion, so attempt end is not among its triggers: gitea_roles.py rotate (revokes through DELETE /api/v1/token, proves the next call answers 401, re-issues with Gitea's CLI and replaces the entry; it resumes over a token Gitea already refuses) and retire; the site administrator can also list and delete another account's token, which then answers 401 (observed at S-01.2.2), or disable the bot account. (2) At attempt end the dispatcher only releases its in-memory reference, which is not Gitea revocation; a token Gitea refuses is not delivered (ROLE_TOKEN_REJECTED) until the administrative lifecycle replaces it. (3) The per-attempt inference token is a separate credential, revoked at attempt end (decision 0015). Residual, recorded as a limit: concurrent attempts of one stage share one standing token, and re-issue is an administration act between attempts, because Gitea 28.3.0 has no token lifetime and gives the dispatcher no replacement mechanism (the dispatcher is granted no issuance). Disclosed same-account limit: during bootstrap the Owner's account can read the standing token in its Credential Manager (decision 0013 point 6).",
+          "rotation_owner": "gitea-site-admin",
           "findings": [
             "fd-gitea-version-docs"
           ]
@@ -865,7 +863,7 @@
           "credential": "cred-gitea-bot-reviewer",
           "issuer": "gitea-site-admin",
           "delivered_by": "management-dispatcher",
-          "delivery": "Used per attempt by the dispatcher in the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7). The standing token is obtained only for a confirmed attempt of the mapped stage, held in memory for the bounded operation and released when it ends; releasing the in-memory reference is not Gitea revocation, and concurrent attempts of the stage share the one standing token. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime) and gives the dispatcher no replacement mechanism, so the token is issued, rotated and revoked only by the site administrator's lifecycle (gitea_roles.py provision, rotate, retire). Never in an image, seed, repository, log or record (fingerprints only). E-01.3.3 (offline, not yet verified live): integrations/dispatch/attempt_tokens.py."
+          "delivery": "Used per attempt by the dispatcher in the attempt environment only: the dispatcher's attempt context, never the conversation container (decision 0013, point 7; decision 0007 points 4 and 5, amendment 1). The standing token is obtained only for a confirmed attempt of the mapped stage, held in memory for the bounded operation and released when it ends; releasing the in-memory reference is not Gitea revocation, and concurrent attempts of the stage share the one standing token. Gitea 28.3.0 cannot bound a token to an attempt (no token lifetime) and gives the dispatcher no replacement mechanism, so the token is issued, rotated and revoked only by the site administrator's lifecycle (gitea_roles.py provision, rotate, retire). Never in an image, seed, repository, log or record (fingerprints only). E-01.3.3 (offline, not yet verified live): integrations/dispatch/attempt_tokens.py."
         },
         {
           "credential": "cred-inference-attempt-token",
@@ -878,7 +876,6 @@
         {
           "credential": "cred-gitea-bot-reviewer",
           "triggers": [
-            "attempt-end",
             "suspected-exposure",
             "definition-revocation",
             "policy-revision",
@@ -886,8 +883,8 @@
             "owner-direction"
           ],
           "revoker": "gitea-site-admin",
-          "method": "Three lifecycles (E-01.3.3; the Owner's correction of 2026-11-11). (1) The standing token is rotated and revoked only by the site administrator's lifecycle, on defined security and lifecycle triggers and never on routine attempt completion: gitea_roles.py rotate (revokes through DELETE /api/v1/token, proves the next call answers 401, re-issues with Gitea's CLI and replaces the entry; it resumes over a token Gitea already refuses) and retire; the site administrator can also list and delete another account's token, which then answers 401 (observed at S-01.2.2), or disable the bot account. (2) At attempt end the dispatcher only releases its in-memory reference, which is not Gitea revocation; a token Gitea refuses is not delivered (ROLE_TOKEN_REJECTED) until the administrative lifecycle replaces it. (3) The per-attempt inference token is a separate credential, revoked at attempt end (decision 0015). Residual, recorded as a limit: concurrent attempts of one stage share one standing token, and re-issue is an administration act between attempts, because Gitea 28.3.0 has no token lifetime and gives the dispatcher no replacement mechanism (the dispatcher is granted no issuance). Disclosed same-account limit: during bootstrap the Owner's account can read the standing token in its Credential Manager (decision 0013 point 6).",
-          "rotation_owner": "management-dispatcher",
+          "method": "Three lifecycles (decision 0007 points 4 and 5, amendment 1; E-01.3.3, the Owner's correction of 2026-11-11). (1) The standing token is rotated and revoked only by the site administrator's lifecycle, on defined security and lifecycle triggers and never on routine attempt completion, so attempt end is not among its triggers: gitea_roles.py rotate (revokes through DELETE /api/v1/token, proves the next call answers 401, re-issues with Gitea's CLI and replaces the entry; it resumes over a token Gitea already refuses) and retire; the site administrator can also list and delete another account's token, which then answers 401 (observed at S-01.2.2), or disable the bot account. (2) At attempt end the dispatcher only releases its in-memory reference, which is not Gitea revocation; a token Gitea refuses is not delivered (ROLE_TOKEN_REJECTED) until the administrative lifecycle replaces it. (3) The per-attempt inference token is a separate credential, revoked at attempt end (decision 0015). Residual, recorded as a limit: concurrent attempts of one stage share one standing token, and re-issue is an administration act between attempts, because Gitea 28.3.0 has no token lifetime and gives the dispatcher no replacement mechanism (the dispatcher is granted no issuance). Disclosed same-account limit: during bootstrap the Owner's account can read the standing token in its Credential Manager (decision 0013 point 6).",
+          "rotation_owner": "gitea-site-admin",
           "findings": [
             "fd-gitea-version-docs"
           ]
@@ -1185,8 +1182,8 @@
             "owner-direction"
           ],
           "revoker": "gitea-site-admin",
-          "method": "As the other bot tokens: rotated by gitea_roles.py rotate; the site administrator revokes it.",
-          "rotation_owner": "ci-lane-coordinator",
+          "method": "As the other bot tokens, a standing credential (decision 0007 points 4 and 5, amendment 1): rotated by the site administrator's lifecycle (gitea_roles.py rotate) on defined security and lifecycle triggers, never at attempt end; the site administrator revokes it.",
+          "rotation_owner": "gitea-site-admin",
           "findings": [
             "fd-gitea-version-docs"
           ]
