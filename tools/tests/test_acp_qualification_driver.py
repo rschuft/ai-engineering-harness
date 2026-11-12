@@ -964,6 +964,7 @@ class InnerServer(http.server.ThreadingHTTPServer):
 class InnerConversationsScript(unittest.TestCase):
     """ACP_INNER_CONVERSATIONS itself, in this process: the key from an in-memory /proc/1/environ, the inner server a
     loopback fake. Ids and parents only; the key never printed, its echoes counted."""
+    category = 'integration'  # its class fixture serves a loopback HTTP socket: not unit (docs/development.md)
 
     @classmethod
     def setUpClass(cls):
