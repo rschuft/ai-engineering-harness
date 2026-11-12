@@ -38,6 +38,12 @@ Checks each ``profiles/<name>/profile.json`` against the execution-profile contr
   block declares the container guard (S-01.3.1) and the container egress guard in Moby's
   DOCKER-USER chain (S-01.4: the declared rules, both families, the container bridges, the
   same seeded unit, and an allowlist of the classes the profile enables for containers);
+- a ci_runner block (Q-02.2.1, decision 0016 section 2: a CI profile variant) installs the
+  lock's runner binary under a no-login service user in group docker, declares the runner's
+  config.yaml, unit, register call, ci-control sshd directives, read-only volumes and wheel
+  set, and is checked against the seed template (the same text, unit, directives, script
+  paths and guards; no Agent Server; no registration token at rest) and the provision lock
+  (the runner binary, the job image whose id the label names, the hash-locked wheel set);
 - ceilings are declared and match the provider configuration (profiles P2);
 - exactly one accelerator and no TCG fallback (contract section 4);
 - the lifecycle is the contract's closed set (contract section 3).
@@ -54,6 +60,7 @@ PROFILE is a profile directory or its profile.json; the default is every
 profiles/*/profile.json. Exit status 0 when every profile passes, 1 otherwise.
 """
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -866,6 +873,9 @@ PROVISIONED_DIRECTORY_ROLES = ('moby-data-root', 'provisioning-state', 'facts-re
 # The Agent Server's scratch directories (F-04.1 slice (c)): several, each provisioned_only,
 # on the scratch disk and owned by its service user.
 AGENT_SERVER_ROLE = 'agent-server'
+# The CI runner's directories (Q-02.2.1): its state (the runner file), its work directory and
+# the wheel set jobs mount read-only; each provisioned_only and only with provisioning.ci_runner.
+CI_DIRECTORY_ROLES = ('ci-runner', 'ci-runner-work', 'ci-wheels')
 STORAGE_FILE = re.compile(r'^(\{instance_dir\}/[A-Za-z0-9._-]+|\{input:[a-z_]+\})$')
 
 
@@ -998,7 +1008,8 @@ def check_guest_storage(report, profile):
                         '(profiles P4)')
         if any('provisioned_only' in e for e in by_role.get(role, [])):
             report.fail(f'guest_storage.directories: the {role} directory is never provisioned_only')
-    known = set(DIRECTORY_ROLES) | set(PROVISIONED_DIRECTORY_ROLES) | {AGENT_SERVER_ROLE}
+    known = set(DIRECTORY_ROLES) | set(PROVISIONED_DIRECTORY_ROLES) | {AGENT_SERVER_ROLE} | \
+        set(CI_DIRECTORY_ROLES)
     if set(by_role) - known:
         report.fail(f'guest_storage.directories: unknown roles {sorted(set(by_role) - known)}')
     server_dirs = by_role.get(AGENT_SERVER_ROLE, [])
@@ -1015,6 +1026,13 @@ def check_guest_storage(report, profile):
                     'provisioning.agent_server')
     if len({e.get('path') for e in server_dirs}) != len(server_dirs):
         report.fail(f'guest_storage.directories: repeated {AGENT_SERVER_ROLE} path')
+    for role in CI_DIRECTORY_ROLES:
+        entries = by_role.get(role, [])
+        if len(entries) > 1 or any(e.get('provisioned_only') is not True for e in entries):
+            report.fail(f'guest_storage.directories: at most one {role} directory, marked '
+                        'provisioned_only: true')
+        if entries and not isinstance((profile.get('provisioning') or {}).get('ci_runner'), dict):
+            report.fail(f'guest_storage.directories: a {role} directory needs provisioning.ci_runner')
     for role in PROVISIONED_DIRECTORY_ROLES:
         entries = by_role.get(role, [])
         if len(entries) > 1 or any(e.get('provisioned_only') is not True for e in entries):
@@ -1094,7 +1112,7 @@ def check_qemu_storage(report, profile, devices, virtio):
 
 
 LOCAL_TAG = re.compile(r'^[a-z0-9]+(?:[._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$')
-PROVISION_UPLOAD_ROLES = {'deb', 'image-archive', 'release-binary'}
+PROVISION_UPLOAD_ROLES = {'deb', 'image-archive', 'release-binary', 'wheel'}
 
 
 def check_provisioning(report, profile, root=REPO):
@@ -1195,8 +1213,15 @@ def check_provisioning(report, profile, root=REPO):
     if not LOCAL_TAG.match(tag) or tag.endswith(':latest') or '.' in repo.split('/')[0] or             '/' not in repo:
         report.fail('provisioning.image.local_tag: a local repository:tag with no registry '
                     'host and no "latest"')
+    if 'agent_server' in conf and 'ci_runner' in conf:
+        report.fail('provisioning: a guest holds the Agent Server or the CI runner, never both '
+                    '(decision 0016 section 2.1)')
     if 'agent_server' in conf:
         check_agent_server(report, profile, root, conf)
+    if 'wheel' in (up.get('roles') or []) and 'ci_runner' not in conf:
+        report.fail('provisioning.upload.roles: the wheel role belongs to a ci_runner block')
+    if 'ci_runner' in conf:
+        check_ci_runner(report, profile, root, conf)
     entry = provider.get('provision_lock') or {}
     try:
         lock = json.loads((root / entry['path']).read_text(encoding='utf-8'))
@@ -1364,6 +1389,290 @@ def check_agent_server(report, profile, root, conf):
         return                                   # reported by check_repo_file
     for problem in fixture_problems(body):
         report.fail(f'{label}.fixture: {problem}')
+
+
+# The CI runner of a CI profile variant (Q-02.2.1; decision 0016 sections 2 and 3).
+CI_RUNNER_COMPONENT = 'gitea-runner'
+CI_SSHD_REQUIRED = ['PermitRootLogin no', 'PasswordAuthentication no',
+                    'KbdInteractiveAuthentication no', 'AllowUsers agent', 'AllowAgentForwarding no',
+                    'AllowTcpForwarding remote', 'GatewayPorts clientspecified', 'X11Forwarding no',
+                    'PermitTunnel no']
+CI_HARDENING_REQUIRED = ('NoNewPrivileges=yes', 'CapabilityBoundingSet=', 'AmbientCapabilities=',
+                         'ProtectSystem=strict', 'PrivateTmp=yes', 'IPAddressDeny=any',
+                         'IPAddressAllow=localhost')
+CI_EXCHANGE_TARGET = '/aieh/exchange'
+CI_WHEELS_TARGET = '/aieh/wheels'
+CI_SEED_FORBIDDEN = ('aieh-agent-server', 'openhands', 'GITEA_RUNNER_REGISTRATION_TOKEN',
+                     'registration-token')
+CI_SCRIPT_CONSTANTS = {'RUNNER_USER': ('user', 'name'), 'RUNNER_BINARY': ('binary', 'path'),
+                       'RUNNER_CONFIG': ('config_file', 'path'),
+                       'RUNNER_STATE': ('runner_file', 'directory'),
+                       'RUNNER_UNIT': ('service', 'unit'), 'WHEELS_DIR': ('wheels', 'guest_dir')}
+CI_SCRIPT = '/usr/local/sbin/aieh-provision'
+
+
+def ci_config_text(config):
+    """The declared config.yaml's bytes as the seed carries them (JSON, which the runner reads
+    as YAML)."""
+    return json.dumps(config, indent=2) + '\n'
+
+
+def script_constants(script):
+    """{NAME: value} of a seeded script's top-level string constants (literal or NAME + '...')."""
+    out = {}
+    try:
+        tree = ast.parse(script)
+    except SyntaxError:
+        return out
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
+                isinstance(node.targets[0], ast.Name):
+            value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                out[node.targets[0].id] = value.value
+            elif isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add) and \
+                    isinstance(value.left, ast.Name) and value.left.id in out and \
+                    isinstance(value.right, ast.Constant) and isinstance(value.right.value, str):
+                out[node.targets[0].id] = out[value.left.id] + value.right.value
+            elif node.targets[0].id == 'STEPS' and isinstance(value, ast.Tuple):
+                out['STEPS'] = [e.elts[0].value for e in value.elts
+                                if isinstance(e, ast.Tuple) and e.elts and
+                                isinstance(e.elts[0], ast.Constant)]
+    return out
+
+
+def flag_value(argv, flag):
+    value = None
+    for n, token in enumerate(argv):
+        if token == flag:
+            value = argv[n + 1] if n + 1 < len(argv) else ''
+        elif token.startswith(flag + '='):
+            value = token.split('=', 1)[1]
+    return value
+
+
+def requirement_blocks(text):
+    """The requirement entries of a hash-locked requirements file: (requirement line, hashes)."""
+    blocks, current = [], None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('--hash='):
+            if current is None:
+                return None
+            current[1].append(line.rstrip(' \\'))
+            continue
+        current = (line.rstrip(' \\'), [])
+        blocks.append(current)
+    return blocks
+
+
+def check_ci_runner(report, profile, root, conf):
+    """provisioning.ci_runner (Q-02.2.1): the runner's binary, user, config.yaml, unit, register
+    call, control forward, volumes, wheel set and guards, each against the seed template and the
+    provision lock; no Agent Server and no registration token at rest in the seed."""
+    label = 'provisioning.ci_runner'
+    ci = conf.get('ci_runner')
+    if not isinstance(ci, dict):
+        report.fail(f'{label}: must be an object')
+        return
+    storage = profile.get('guest_storage') or {}
+    dirs = {d.get('role'): d for d in storage.get('directories') or [] if isinstance(d, dict)}
+    try:
+        lock = json.loads((root / ((profile.get('provider') or {}).get('provision_lock') or {})
+                           ['path']).read_text(encoding='utf-8'))
+    except (OSError, ValueError, KeyError, TypeError):
+        lock = {}                                # reported by check_provision_lock
+    seed_entry = (((profile.get('boot_inputs') or {}).get('seed') or {}).get('templates') or {}) \
+        .get('user-data') or {}
+    try:
+        seed_text = (root / seed_entry['path']).read_text(encoding='utf-8')
+    except (OSError, KeyError, TypeError, UnicodeDecodeError):
+        seed_text = ''
+        report.fail(f'{label}: the seed template cannot be read')
+    files = write_files_blocks(seed_text)
+
+    def part(name):
+        value = ci.get(name)
+        if not isinstance(value, dict):
+            report.fail(f'{label}.{name}: must be an object')
+            return {}
+        return value
+
+    binary, user, cfile, rfile = part('binary'), part('user'), part('config_file'), part('runner_file')
+    service, register, forward = part('service'), part('register'), part('control_forward')
+    volumes, wheels, config = part('volumes'), part('wheels'), part('config')
+    release = lock.get('release_binary') or {}
+    if ci.get('component') != CI_RUNNER_COMPONENT or release.get('component') != CI_RUNNER_COMPONENT \
+            or binary.get('upload_name') != release.get('name') or \
+            not str(binary.get('path', '')).startswith('/opt/') or binary.get('owner') != 'root' or \
+            binary.get('mode') != '755':
+        report.fail(f'{label}.binary: the lock\'s {CI_RUNNER_COMPONENT} release binary, installed '
+                    'root-owned (755) under /opt')
+    locked = [a for a in _components_release_assets(root) if a.get('name') == release.get('name')]
+    if len(locked) != 1 or locked[0].get('sha256') != release.get('sha256'):
+        report.fail(f'{label}.binary: the provision lock\'s release binary is not the one '
+                    'composition/lock/components.lock.json pins')
+    state, work = dirs.get('ci-runner') or {}, dirs.get('ci-runner-work') or {}
+    wheel_dir = dirs.get('ci-wheels') or {}
+    if user.get('system') is not True or user.get('groups') != ['docker'] or \
+            user.get('shell') != '/usr/sbin/nologin' or user.get('name') in (None, 'root', 'agent') or \
+            user.get('home') != work.get('path') or work.get('owner') != user.get('name') or \
+            state.get('owner') != 'root' or state.get('group') != user.get('name') or \
+            str(state.get('mode')) != '750':
+        report.fail(f'{label}.user: a system user (no login shell) in group docker only, its home '
+                    'the ci-runner-work directory it owns; the ci-runner directory root-owned, '
+                    'its group, 750')
+    want_text = ci_config_text(config) if config else None
+    if want_text is None or cfile.get('owner') != 'root' or cfile.get('mode') != '644' or \
+            cfile.get('sha256') != hashlib.sha256(want_text.encode('utf-8')).hexdigest() or \
+            files.get(cfile.get('path')) != want_text.rstrip('\n'):
+        report.fail(f'{label}.config_file: the seed writes exactly json.dumps(config, indent=2) '
+                    'at its path, root-owned 644, and sha256 is that text\'s digest')
+    runner = config.get('runner') if isinstance(config.get('runner'), dict) else {}
+    container = config.get('container') if isinstance(config.get('container'), dict) else {}
+    image = lock.get('image') or {}
+    if rfile.get('directory') != state.get('path') or runner.get('file') != rfile.get('path') or \
+            not str(rfile.get('path', '')).startswith(str(state.get('path')) + '/'):
+        report.fail(f'{label}.runner_file: runner.file is the runner file, inside the ci-runner '
+                    'directory')
+    if runner.get('labels') != [f'aieh-validation:docker://{image.get("image_id")}'] or \
+            not DIGEST.match(str(image.get('image_id', ''))):
+        report.fail(f'{label}.config: the one label names the provision lock\'s job image by its '
+                    'id (aieh-validation:docker://sha256:<config digest>)')
+    exchange_dir = (profile.get('exchange') or {}).get('guest_dir')
+    want_volumes = [f'{exchange_dir}:{CI_EXCHANGE_TARGET}:ro',
+                    f'{wheel_dir.get("path")}:{CI_WHEELS_TARGET}:ro']
+    if container.get('volumes') != want_volumes or \
+            (volumes.get('exchange') or {}).get('source') != exchange_dir or \
+            (volumes.get('wheels') or {}).get('source') != wheel_dir.get('path'):
+        report.fail(f'{label}.config: container.volumes is exactly {want_volumes}, the exchange and '
+                    'the ci-wheels directory, read-only')
+    host_parent = str((config.get('host') or {}).get('workdir_parent', '')) \
+        if isinstance(config.get('host'), dict) else ''
+    if not host_parent.startswith(str(work.get('path')) + '/'):
+        report.fail(f'{label}.config: host.workdir_parent lies in the ci-runner-work directory')
+    # the unit
+    unit = files.get(f'/etc/systemd/system/{service.get("unit")}')
+    directives = unit_directives(unit or '')
+    lines = [line.strip() for line in str(unit or '').splitlines()]
+    env = service.get('environment') if isinstance(service.get('environment'), dict) else None
+    argv = service.get('argv') if isinstance(service.get('argv'), list) else []
+    if unit is None or env is None or not argv or argv[0] != binary.get('path') or \
+            directives.get('ExecStart') != argv or \
+            directives.get('User') != [user.get('name')] or \
+            directives.get('Group') != [user.get('name')] or \
+            directives.get('SupplementaryGroups') != ['docker'] or \
+            sorted(line[len('Environment='):] for line in lines if line.startswith('Environment=')) \
+            != sorted(f'{k}={v}' for k, v in env.items()) or \
+            any(line.startswith('EnvironmentFile') for line in lines) or \
+            not {binary.get('path'), rfile.get('path')} <= set(directives.get('ConditionPathExists') or []) \
+            or 'docker.service' not in (directives.get('Requires') or []):
+        report.fail(f'{label}.service: the seeded unit runs argv as the runner user (group docker), '
+                    'with exactly the declared environment and no environment file, on the binary and '
+                    'the runner file only, and Requires docker.service')
+    hardening = service.get('hardening') if isinstance(service.get('hardening'), list) else []
+    missing = [h for h in CI_HARDENING_REQUIRED if h not in hardening] + \
+        [h for h in hardening if h not in lines]
+    if missing:
+        report.fail(f'{label}.service.hardening: declared and seeded, including '
+                    f'{list(CI_HARDENING_REQUIRED)} (missing {missing})')
+    # the register call
+    rargv = register.get('argv') if isinstance(register.get('argv'), list) else []
+    token = register.get('token_file')
+    if not rargv or rargv[0] != binary.get('path') or \
+            flag_value(rargv, '--config') != cfile.get('path') or \
+            flag_value(rargv, '--token-file') != token or not str(token).startswith('/run/') or \
+            flag_value(rargv, '--instance') != forward.get('instance_url'):
+        report.fail(f'{label}.register: the runner binary on the declared config, the ci-control '
+                    'instance and the token file under /run (tmpfs)')
+    # the control forward and the sshd drop-in
+    bind = str(forward.get('bind', ''))
+    sshd = forward.get('sshd_config') if isinstance(forward.get('sshd_config'), list) else []
+    seeded = [line for line in str(files.get('/etc/ssh/sshd_config.d/10-aieh.conf', '')).splitlines()
+              if line.strip()]
+    listens = [line for line in sshd if line.startswith('PermitListen')]
+    if forward.get('class') != 'ci-control' or not bind.startswith('127.0.0.1:') or \
+            forward.get('instance_url') != f'http://{bind}' or seeded != sshd or \
+            any(line not in sshd for line in CI_SSHD_REQUIRED) or listens != [f'PermitListen {bind}'] or \
+            not forward.get('owner_act'):
+        report.fail(f'{label}.control_forward: the seeded sshd drop-in is exactly sshd_config: '
+                    f'{CI_SSHD_REQUIRED} and PermitListen on the loopback bind only, the instance '
+                    'URL that bind, an Owner act')
+    # the wheel set
+    lock_wheels = lock.get('wheels') if isinstance(lock.get('wheels'), dict) else {}
+    check_repo_file(report, root, 'provider.provision_lock wheels.lock', lock_wheels.get('lock') or {})
+    try:
+        blocks = requirement_blocks((root / lock_wheels['lock']['path']).read_text(encoding='utf-8'))
+    except (OSError, KeyError, TypeError, UnicodeDecodeError):
+        blocks = None
+    target = lock_wheels.get('target') or {}
+    if not blocks or any(not hashes for _, hashes in blocks) or \
+            lock_wheels.get('guest_dir') != wheel_dir.get('path') or \
+            wheels.get('guest_dir') != wheel_dir.get('path') or lock_wheels.get('role') != 'wheel' or \
+            'wheel' not in ((conf.get('upload') or {}).get('roles') or []) or \
+            target.get('os') != 'linux' or target.get('abi') != 'cp312' or \
+            wheel_dir.get('owner') != 'root' or str(wheel_dir.get('mode')) != '755':
+        report.fail(f'{label}.wheels: the provision lock names a committed, hash-locked '
+                    'requirements file for linux cp312, staged with the wheel role into the '
+                    'root-owned (755) ci-wheels directory')
+    # the provisioning script and the seed as a whole
+    script = files.get(CI_SCRIPT, '')
+    consts = script_constants(script)
+    for name, (block, key) in CI_SCRIPT_CONSTANTS.items():
+        want = (ci.get(block) or {}).get(key) if isinstance(ci.get(block), dict) else None
+        if consts.get(name) != want:
+            report.fail(f'{label}: the seeded {CI_SCRIPT} sets {name} to {consts.get(name)!r}, '
+                        f'the profile declares {want!r}')
+    sequence = ((conf.get('root_step') or {}).get('sequence')) or []
+    if consts.get('STEPS', []) + ['facts', 'cleanup'] != sequence or \
+            'ci-runner-install' not in sequence or 'wheels' not in sequence:
+        report.fail(f'{label}: the seeded script\'s STEPS, then facts and cleanup, are '
+                    'provisioning.root_step.sequence, ci-runner-install and wheels included')
+    present = [word for word in CI_SEED_FORBIDDEN if word in seed_text]
+    if present:
+        report.fail(f'{label}: the seed holds no Agent Server and no registration token '
+                    f'({present} found)')
+    if token and any(str(path).startswith(str(token).rsplit('/', 1)[0]) for path in files):
+        report.fail(f'{label}: the seed writes nothing beside the registration token file')
+    # the guards, verbatim from the execution profile the variant is of
+    adm = ci.get('admission') if isinstance(ci.get('admission'), dict) else {}
+    guard = check_guards(report, profile, conf, adm, f'{label}.admission')
+    of = (profile.get('variant') or {}).get('of')
+    try:
+        base = json.loads((root / of).read_text(encoding='utf-8'))
+        base_files = seed_files(root, base)
+    except (OSError, ValueError, TypeError):
+        base_files = {}
+        report.fail(f'{label}: variant.of names no readable profile')
+    for path in (guard.get('script'), f'/etc/systemd/system/{guard.get("unit")}',
+                 guard.get('docker_dropin')):
+        if not path or files.get(path) is None or files.get(path) != base_files.get(path):
+            report.fail(f'{label}.admission: the seed carries {path} as the execution profile\'s '
+                        'seed does (the same guards, decision 0016 section 2.1)')
+    rules = guard_rules_of(files.get(guard.get('script'), '')) if guard.get('script') else {}
+    if rules.get('RULES') != GUARD_RULES or not all((rules.get('installed') or {}).values()) or \
+            not all((rules.get('verified') or {}).values()) or len(rules.get('installed') or {}) != 2:
+        report.fail(f'{label}.admission: the seeded guard installs and verifies the declared rules '
+                    'in both families')
+    check_ci_constraints(report, (ci.get('jobs') or {}).get('ci') if isinstance(ci.get('jobs'), dict)
+                         else None, f'{label}.jobs.ci')
+    lifetime = ci.get('lifetime') if isinstance(ci.get('lifetime'), dict) else {}
+    ephemeral = '--ephemeral' in rargv
+    if lifetime.get('mode') not in ('shared', 'per-validation') or \
+            ephemeral != (lifetime.get('mode') == 'per-validation') or not lifetime.get('owner_act'):
+        report.fail(f'{label}.lifetime: shared or per-validation (the Owner\'s C-3), the register '
+                    'call ephemeral exactly for per-validation')
+
+
+def _components_release_assets(root):
+    try:
+        lock = json.loads((root / 'composition' / 'lock' / 'components.lock.json')
+                          .read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return []
+    return [a for a in lock.get('release_assets') or [] if isinstance(a, dict)]
 
 
 # The 1.60.1 Docker runtime's mount targets inside a conversation container
@@ -1562,6 +1871,16 @@ def check_admission(report, profile, root, conf, server):
             not str(key.get('start_check', '')).startswith('/usr/local/sbin/'):
         report.fail(f'{label}.session_key: header X-Session-API-Key and a seeded start check '
                     'under /usr/local/sbin (fail closed without a key)')
+    check_guards(report, profile, conf, adm, label)
+    dispatcher = adm.get('dispatcher') or {}
+    if not dispatcher.get('principal') or not dispatcher.get('bootstrap') or \
+            not dispatcher.get('owner_ui'):
+        report.fail(f'{label}.dispatcher: name the principal, the bootstrap performer and the '
+                    'Owner UI path (planned or unknown)')
+
+
+def check_guards(report, profile, conf, adm, label):
+    """The container guard (S-01.3.1) and the egress guard (S-01.4) of an admission block."""
     guard = (adm.get('network') or {}).get('guard') or {}
     if guard.get('rules') != GUARD_RULES:
         report.fail(f'{label}.network.guard.rules: must be {GUARD_RULES}')
@@ -1582,11 +1901,7 @@ def check_admission(report, profile, root, conf, server):
                     'container-to-container connection on the default bridge)')
     check_egress_guard(report, profile, guard, (adm.get('network') or {}).get('egress_guard'),
                        daemon, f'{label}.network.egress_guard')
-    dispatcher = adm.get('dispatcher') or {}
-    if not dispatcher.get('principal') or not dispatcher.get('bootstrap') or \
-            not dispatcher.get('owner_ui'):
-        report.fail(f'{label}.dispatcher: name the principal, the bootstrap performer and the '
-                    'Owner UI path (planned or unknown)')
+    return guard
 
 
 def enabled_container_classes(profile):
@@ -1883,13 +2198,18 @@ def check_jobs(report, conf, server):
                     "server's docker CLI inherits it)")
     if ((server.get('config') or {}).get('content') or {}).get('enable_browser') is not False:
         report.fail(f'{label}: provisioning.agent_server.config enable_browser must be false')
-    ci = jobs.get('ci') if isinstance(jobs.get('ci'), dict) else {}
+    check_ci_constraints(report, jobs.get('ci'), f'{label}.ci')
+
+
+def check_ci_constraints(report, ci, label):
+    """The CI job constraints carried to the runner containment leaves (S-01.3.2)."""
+    ci = ci if isinstance(ci, dict) else {}
     if ci.get('status') != 'planned' or \
             [c.get('id') for c in ci.get('constraints') or [] if isinstance(c, dict)] != \
             JOB_CI_CONSTRAINTS or not all(c.get('rule') for c in ci.get('constraints') or []
                                           if isinstance(c, dict)) or \
             not set(JOB_CI_CARRIED_TO) <= set(ci.get('carried_to') or []):
-        report.fail(f'{label}.ci: status planned, the constraints {JOB_CI_CONSTRAINTS} and '
+        report.fail(f'{label}: status planned, the constraints {JOB_CI_CONSTRAINTS} and '
                     f'carried to {list(JOB_CI_CARRIED_TO)}')
 
 

@@ -1,0 +1,311 @@
+{
+  "schema": "ai-engineering-harness/profiles/provision-lock/v1",
+  "profile": "strong-windows-qemu-whpx-ci",
+  "plan_leaf": "Q-02.2.1",
+  "decision": "decisions/0016-hostile-ci-threat-model-validation-and-promotion-lanes-and-runner-reach.md",
+  "captured_utc": "2026-11-12",
+  "distribution": "Decision 0005: every artifact is downloaded from its original upstream onto the user's machine and checked against this lock; nothing is redistributed.",
+  "consumer": "tools/guest.py provision-fetch stages the artifacts of a provision lock under {state_dir}/provision/<sha256 of this file>/ (its CI bindings, the wheel set among them, are a later slice of Q-02.2.1). Nothing here is unpacked or executed on the host except the pinned crane.",
+  "debian": {
+    "snapshot": {
+      "service": "https://snapshot.debian.org/",
+      "timestamp": "20261106T143859Z",
+      "rule": "One timestamp for every suite: snapshot.debian.org serves, per archive, the latest snapshot at or before it (it redirects to /file/<hash>/...)."
+    },
+    "suites": [
+      {
+        "archive": "debian",
+        "suite": "trixie",
+        "component": "main",
+        "architecture": "amd64",
+        "base_url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/",
+        "release": {
+          "origin": "Debian",
+          "suite": "stable",
+          "version": "13.7",
+          "codename": "trixie",
+          "date": "Sat, 12 Sep 2026 07:55:41 UTC"
+        },
+        "signed_by_reported": [
+          "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+          "41587F7DB8C774BCCF131416762F67A0B2C39DE4",
+          "B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8"
+        ],
+        "files": [
+          {
+            "path": "dists/trixie/InRelease",
+            "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/dists/trixie/InRelease",
+            "size": 140421,
+            "sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"
+          },
+          {
+            "path": "dists/trixie/main/binary-amd64/Packages.xz",
+            "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/dists/trixie/main/binary-amd64/Packages.xz",
+            "size": 9678380,
+            "sha256": "7778d3e3f303b7ddb8ce0fe7c8d57473a076c6bf2e8f241f75421d2396352498"
+          }
+        ]
+      },
+      {
+        "archive": "debian-security",
+        "suite": "trixie-security",
+        "component": "main",
+        "architecture": "amd64",
+        "base_url": "https://snapshot.debian.org/archive/debian-security/20261106T143859Z/",
+        "release": {
+          "origin": "Debian",
+          "suite": "stable-security",
+          "version": "13",
+          "codename": "trixie-security",
+          "date": "Thu, 05 Nov 2026 18:22:29 UTC",
+          "valid_until": "Thu, 12 Nov 2026 18:22:29 UTC"
+        },
+        "signed_by_reported": [
+          "05AB90340C0C5E797F44A8C8254CF3B5AEC0A8F0",
+          "5E04A1E3223A19A20706E20F9904613D4CCE68C6"
+        ],
+        "files": [
+          {
+            "path": "dists/trixie-security/InRelease",
+            "url": "https://snapshot.debian.org/archive/debian-security/20261106T143859Z/dists/trixie-security/InRelease",
+            "size": 43409,
+            "sha256": "d0dbede32d80c3e9462e037ede87b138bdd5e44be10145acf46c9f643388836d"
+          },
+          {
+            "path": "dists/trixie-security/main/binary-amd64/Packages.xz",
+            "url": "https://snapshot.debian.org/archive/debian-security/20261106T143859Z/dists/trixie-security/main/binary-amd64/Packages.xz",
+            "size": 298120,
+            "sha256": "5f9fc5aa45642005a7d58bf8782e6fe1a483b9082f4e1918dfb186fa490d2a20"
+          }
+        ]
+      }
+    ],
+    "resolution": {
+      "requested": [
+        "docker.io",
+        "docker-cli"
+      ],
+      "install_recommends": false,
+      "command": "apt-get -qq --print-uris install --no-install-recommends docker.io docker-cli",
+      "where": "a disposable ordinary guest of this profile (base image build 20261103-2651, Debian 13.7), as agent (uid 1000), no network",
+      "apt": "apt 3.0.3; signature verifier sqv 1.3.0-3+b2; keyring debian-archive-keyring 2025.1",
+      "sources": [
+        "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp check-valid-until=no by-hash=no] file:<pushed copy>/debian trixie main",
+        "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp check-valid-until=no by-hash=no] file:<pushed copy>/debian-security trixie-security main"
+      ],
+      "apt_options": [
+        "Dir::State=<scratch>/state",
+        "Dir::State::status=/var/lib/dpkg/status",
+        "Dir::Cache=<scratch>/cache",
+        "Dir::Etc::SourceList=<scratch>/etc/sources.list",
+        "Dir::Etc::SourceParts=<scratch>/etc/sources.list.d (empty)",
+        "Dir::Etc::PreferencesParts=<scratch>/etc/preferences.d (empty)",
+        "Debug::NoLocking=1",
+        "Acquire::Languages=none"
+      ],
+      "base": "The closure is relative to the guest image's installed set (/var/lib/dpkg/status); a different base image needs a new resolution.",
+      "sha256_source": "apt-cache show --no-all-versions over the signature-verified lists; apt 3.0.3 --print-uris prints MD5Sum only (it agreed with the same records). Cross-checked on the host against the pinned Packages.xz.",
+      "security_suite": "Included because the image's own sources pair trixie with trixie-security and a security fix would supersede a closure member. At this timestamp the main-only resolution gave the identical set and versions.",
+      "evidence": "evidence/F-04.1a-provision-pins-fetch.md"
+    },
+    "packages": [
+      {
+        "name": "runc",
+        "version": "1.1.15+ds1-2+b4",
+        "architecture": "amd64",
+        "source": "runc (1.1.15+ds1-2)",
+        "filename": "runc_1.1.15+ds1-2+b4_amd64.deb",
+        "pool_path": "pool/main/r/runc/runc_1.1.15+ds1-2+b4_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/r/runc/runc_1.1.15%2Bds1-2%2Bb4_amd64.deb",
+        "size": 3229748,
+        "sha256": "fad4f807a369677f0954bd4c61e56ddb2dd8b3f4aec30c3834c3165fc6d3c19f",
+        "apt_origin": "Debian:13.7/stable",
+        "present_in": [
+          "debian"
+        ]
+      },
+      {
+        "name": "containerd",
+        "version": "1.7.24~ds1-6+deb13u1",
+        "architecture": "amd64",
+        "source": "containerd",
+        "filename": "containerd_1.7.24~ds1-6+deb13u1_amd64.deb",
+        "pool_path": "pool/main/c/containerd/containerd_1.7.24~ds1-6+deb13u1_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/c/containerd/containerd_1.7.24~ds1-6%2Bdeb13u1_amd64.deb",
+        "size": 32784720,
+        "sha256": "ed708deb96fe476a3bce4efa5c0538dfbcf717ab9a7c7944ba7260342c25899c",
+        "apt_origin": "Debian:13.7/stable, Debian-Security:13/stable-security",
+        "present_in": [
+          "debian",
+          "debian-security"
+        ]
+      },
+      {
+        "name": "tini",
+        "version": "0.19.0-3+b8",
+        "architecture": "amd64",
+        "source": "tini (0.19.0-3)",
+        "filename": "tini_0.19.0-3+b8_amd64.deb",
+        "pool_path": "pool/main/t/tini/tini_0.19.0-3+b8_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/t/tini/tini_0.19.0-3%2Bb8_amd64.deb",
+        "size": 280384,
+        "sha256": "a443b12107331f67836a64cb6efe1dd92d2765e15568eb4567dccb409a8cd2a0",
+        "apt_origin": "Debian:13.7/stable",
+        "present_in": [
+          "debian"
+        ]
+      },
+      {
+        "name": "docker.io",
+        "version": "26.1.5+dfsg1-9+deb13u1",
+        "architecture": "amd64",
+        "source": "docker.io",
+        "filename": "docker.io_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "pool_path": "pool/main/d/docker.io/docker.io_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/d/docker.io/docker.io_26.1.5%2Bdfsg1-9%2Bdeb13u1_amd64.deb",
+        "size": 23037844,
+        "sha256": "142fe32f839a20720b2e6074b8d28d883b01bc45345f7315586b0c2d348dae87",
+        "apt_origin": "Debian:13.7/stable, Debian-Security:13/stable-security",
+        "present_in": [
+          "debian",
+          "debian-security"
+        ]
+      },
+      {
+        "name": "docker-cli",
+        "version": "26.1.5+dfsg1-9+deb13u1",
+        "architecture": "amd64",
+        "source": "docker.io",
+        "filename": "docker-cli_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "pool_path": "pool/main/d/docker.io/docker-cli_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+        "url": "https://snapshot.debian.org/archive/debian/20261106T143859Z/pool/main/d/docker.io/docker-cli_26.1.5%2Bdfsg1-9%2Bdeb13u1_amd64.deb",
+        "size": 7337444,
+        "sha256": "e78ac35b7a21652546ca1a739f63e4f31fe52e4385a9baf7020be400c594f23d",
+        "apt_origin": "Debian:13.7/stable, Debian-Security:13/stable-security",
+        "present_in": [
+          "debian",
+          "debian-security"
+        ]
+      }
+    ]
+  },
+  "image": {
+    "repository": "docker.io/library/python",
+    "ref": "docker.io/library/python@sha256:cad37dd20c7cac861af9003af8796d03ea7a998ec1e3a664429740fc9d7d2691",
+    "index_digest": "sha256:cad37dd20c7cac861af9003af8796d03ea7a998ec1e3a664429740fc9d7d2691",
+    "index_media_type": "application/vnd.oci.image.index.v1+json",
+    "platform": "linux/amd64",
+    "manifest_digest": "sha256:97dc788c1887c44354e700c624e7d0a7b61c6f5baf6e2ae4d767abfedc442435",
+    "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
+    "manifest_size": 2319,
+    "config_digest": "sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd",
+    "config_size": 6525,
+    "image_id": "sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd",
+    "config_facts": {
+      "created": "2026-11-05T09:32:59Z",
+      "version": "3.12.16-trixie",
+      "source": "https://github.com/docker-library/python.git#3d7e95597e56a415d9e4abc0f15877e005d2cb2e:3.12/trixie",
+      "base_name": "buildpack-deps:trixie",
+      "base_digest": "sha256:0bcdd861dae13860b1e82e6d5357521e2e618fbd589590d8b2ce316dbacc6712",
+      "from": "the linux/amd64 manifest's annotations (the config blob was not read)"
+    },
+    "layers_count": 7,
+    "layers_total_bytes": 411931458,
+    "layers": [
+      {
+        "digest": "sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f",
+        "size": 49412508,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:e8a88afca2bd37d4058d4b33d9d4d29b0557f8b811bb8c106942b5b51e1e4aad",
+        "size": 25634385,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:411d2dc8717dbb4bb0d3cfa27e6e0275fca455c5220029d7a14dc7a75fbe8665",
+        "size": 67818699,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:696c1fe91c64662be9b13aa92628d62d6685ab94c0b55d185258a8f762133deb",
+        "size": 237233076,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:5ac0faf5954b65dead8505b22e45fab58d546b801db37d7b94fc6eeb4f453a87",
+        "size": 6085541,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:4ed680595f4b68f3c08c2ca8a5bc07d4df1b9034aca038855dfa730147309c80",
+        "size": 25747000,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "digest": "sha256:685e2037ccfc56ac319cf8aa33027e54511544cd48a588992514e9a76e2d38ae",
+        "size": 249,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      }
+    ],
+    "archive": {
+      "file": "ci-job.tar",
+      "format": "docker-archive (crane pull, default --format tarball)",
+      "command": "crane pull --platform linux/amd64 docker.io/library/python@sha256:cad37dd20c7cac861af9003af8796d03ea7a998ec1e3a664429740fc9d7d2691 ci-job.tar",
+      "verification": "manifest.json names the config and the layers; the config member hashes to config_digest and each layer member, in order, to its layer digest and size"
+    },
+    "read": "the linux/amd64 manifest read once, anonymously, at https://registry-1.docker.io/v2/library/python/manifests/sha256:97dc788c1887c44354e700c624e7d0a7b61c6f5baf6e2ae4d767abfedc442435 (token from auth.docker.io) on 2026-11-12, the Overseer's ruling B: its sha256 and its Docker-Content-Digest equal the pinned digest, and its config descriptor names the pinned image id; the layer digests and sizes are the manifest's (no layer was downloaded). The index and config digests are the C-3 record's reads (evidence/Q-02.2.1-c3-pins.md, section 5)."
+  },
+  "release_binary": {
+    "component": "gitea-runner",
+    "name": "gitea-runner-6.0.0-linux-amd64",
+    "url": "https://gitea.com/gitea/runner/releases/download/v6.0.0/gitea-runner-6.0.0-linux-amd64",
+    "size": 17703072,
+    "sha256": "62ecab223535968ba3fa46cf32f8f50279f0664ba14c6d3848c2f02210f9828e",
+    "checksum_file": "https://gitea.com/gitea/runner/releases/download/v6.0.0/checksums.txt",
+    "source": "composition/lock/components.lock.json release_assets (checksum-file-line); dl.gitea.com .sha256 matched (evidence/Q-02.2.1-c3-pins.md, section 3)"
+  },
+  "wheels": {
+    "set": "python-tools",
+    "lock": {
+      "path": "composition/lock/python/tools-requirements.txt",
+      "sha256": "b1846ac4621dd1b862c9606a8733722620d8d57ccb1ddf10089b30a9466410ef"
+    },
+    "target": {
+      "os": "linux",
+      "arch": "x86_64",
+      "implementation": "cp",
+      "python": "3.12",
+      "abi": "cp312",
+      "libc": "glibc 2.41 (Debian 13.7, the job image)"
+    },
+    "selection": "every requirement of the lock whose marker holds for sys_platform linux, wheels only: the job installs them with pip install --no-index --find-links /aieh/wheels --require-hashes --only-binary=:all: --no-cache-dir -r tools-requirements.txt into a job-local venv, so a wheel is admitted only when its sha256 is one the lock lists for that requirement",
+    "guest_dir": "/srv/scratch/aieh-ci-wheels",
+    "role": "wheel",
+    "fetch": "a later slice of Q-02.2.1 (tools/guest.py CI bindings): download the wheels from PyPI for the target above, each checked against the lock's hashes before it is staged; pip's markers must be evaluated for the target, not the host"
+  },
+  "tools": {
+    "crane": {
+      "project": "https://github.com/google/go-containerregistry",
+      "license": "Apache-2.0",
+      "version": "v0.22.1",
+      "published_at": "2026-09-04T00:17:00Z",
+      "asset": "go-containerregistry_Windows_x86_64.tar.gz",
+      "url": "https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Windows_x86_64.tar.gz",
+      "size": 16978582,
+      "sha256": "0e073ea8192c3b8442ec8aaf44d53c1050a09084669fae3a6ceb0f2026cf8b21",
+      "checksums_source": {
+        "url": "https://github.com/google/go-containerregistry/releases/download/v0.22.1/checksums.txt",
+        "sha256": "889e6996ef939c12d613f4cae657cc2ecce822e69ea74a58a453a95d723a857d",
+        "note": "the archive line matched; the GitHub asset digest matched. The SLSA provenance (multiple.intoto.jsonl) is not verified."
+      },
+      "member": {
+        "name": "crane.exe",
+        "size": 12295168,
+        "sha256": "e22e47202cece45d09fe92919bdb683f56f548d360cb96f6a852defd965c935d"
+      },
+      "install_dir": "{state_dir}/tools/crane/v0.22.1",
+      "use": "host only, without installation: crane manifest and crane pull of the image above, with a scrubbed environment and an empty DOCKER_CONFIG (anonymous pull)"
+    }
+  }
+}

@@ -1,0 +1,1238 @@
+#cloud-config
+# Seed template for the CI guest (plan leaf Q-02.2.1, decision 0016 section 2): the user-data
+# of the CI profile variant strong-windows-qemu-whpx-ci, in the pattern of the execution
+# guest's (profiles P5, P8). It holds only the per-instance public key and non-secret
+# configuration. The generator substitutes exactly three placeholders: the agent's public
+# key, the profile's scratch device and the provisioning manifest (base64; empty for an
+# ordinary guest). profiles/seed/README.md names them. This comment names none of them.
+# No Agent Server. The sshd drop-in admits the one remote-forward listener of the ci-control
+# endpoint (127.0.0.1:13300); the forward is the dispatcher's and an Owner act (A-1). The
+# provisioning files are inert without a manifest, and the runner unit starts only after
+# registration (Q-02.2.2): no registration token is ever written here.
+users:
+  - name: agent
+    gecos: AI Engineering Harness agent
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{agent_ssh_public_key}}
+disable_root: true
+ssh_pwauth: false
+ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]
+package_update: false
+package_upgrade: false
+timezone: Etc/UTC
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-aieh.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AllowUsers agent
+      AllowAgentForwarding no
+      AllowTcpForwarding remote
+      GatewayPorts clientspecified
+      PermitListen 127.0.0.1:13300
+      X11Forwarding no
+      PermitTunnel no
+  - path: /etc/aieh/provision.json
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: "{{provision_manifest}}"
+  - path: /usr/local/sbin/aieh-provision
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/python3
+      # aieh-provision for the CI guest (plan leaf Q-02.2.1; decision 0016 section 2.1 and the
+      # decision 0006 pattern): the single-use root provisioning step of a CI profile variant.
+      # Seeded by cloud-init; never downloaded. Modes:
+      #   provision  run once by aieh-provision.service when the host's READY marker appears:
+      #              copy the upload into a root-only staging directory, verify every sha256
+      #              against the seeded manifest, write daemon.json and the sysctl drop-in,
+      #              install the packages with apt from the local files, replace containerd's
+      #              packaged config (CRI plugin off), check the container and egress guards,
+      #              docker load the job image, check its ID, fix its tag, run it once, install
+      #              the CI runner (its system user in group docker, the release binary, its state
+      #              and work directories; the seeded config.yaml checked against the manifest),
+      #              copy the hash-locked wheel set into the root-owned directory jobs mount
+      #              read-only, enable the facts unit, delete the staging directory and the
+      #              upload, disable the trigger, then write RESULT.json (last).
+      #   facts      run at every boot by aieh-docker-facts.service: a read-only report of the
+      #              daemon, the image store, the sockets, the guards and the runner for inspect.
+      # It reads only the seeded manifest and the files it names. It prints step names and
+      # outcomes only (journal and console). It never reads, writes or receives a registration
+      # token or the runner token: registration (Q-02.2.2) and the runner's unit come later, and
+      # the runner file is reported by its metadata only.
+      import grp
+      import hashlib
+      import json
+      import os
+      import pwd
+      import re
+      import shutil
+      import stat
+      import subprocess
+      import sys
+      import time
+
+      MANIFEST = '/etc/aieh/provision.json'
+      UPLOAD = '/srv/scratch/agent/provision'
+      READY = 'READY'
+      STAGING = '/var/lib/aieh/provision-staging'
+      RESULT_DIR = '/var/lib/aieh/provision'
+      RESULT = RESULT_DIR + '/RESULT.json'
+      FACTS_DIR = '/run/aieh'
+      FACTS = FACTS_DIR + '/docker-facts.json'
+      DAEMON_JSON = '/etc/docker/daemon.json'
+      SYSCTL_FILE = '/etc/sysctl.d/90-aieh-moby.conf'
+      CONTAINERD_CONFIG = '/etc/containerd/config.toml'
+      MOBY_PROCESSES = ('dockerd', 'containerd', 'docker-proxy', 'containerd-shim')
+      PATH_UNIT = 'aieh-provision.path'
+      PATH_UNIT_FILE = '/etc/systemd/system/' + PATH_UNIT
+      FACTS_UNIT = 'aieh-docker-facts.service'
+      AGENT = 'agent'
+      MANIFEST_SCHEMA = 'ai-engineering-harness/profiles/provision-manifest/v1'
+      RESULT_SCHEMA = 'ai-engineering-harness/profiles/provision-result/v1'
+      NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._+~-]{0,200}$')
+      HEX64 = re.compile(r'^[0-9a-f]{64}$')
+      DIGEST = re.compile(r'^sha256:[0-9a-f]{64}$')
+      MODULES = ('overlay', 'br_netfilter', 'bridge', 'veth', 'nf_tables', 'nf_nat', 'nft_chain_nat',
+                 'iptable_nat', 'xt_MASQUERADE')
+      MOBY_SOCKET_DIRS = ('/run/docker', '/run/containerd')
+      MOBY_SOCKETS = ('/run/docker.sock',)
+      ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/root',
+             'DEBIAN_FRONTEND': 'noninteractive', 'DEBCONF_NONINTERACTIVE_SEEN': 'true'}
+      GO_JSON = '{' + '{json .}' + '}'
+      GUARD = '/usr/local/sbin/aieh-container-guard'
+      GUARD_UNIT = 'aieh-container-guard.service'
+      GUARD_CHAIN = 'AIEH-CONTAINER-GUARD'
+      GUARD_LOG_PREFIX = 'aieh-container-guard: '
+      GUARD_TOOLS = ('iptables', 'ip6tables')
+      GUARD_DROPIN = '/etc/systemd/system/docker.service.d/10-aieh-container-guard.conf'
+      EGRESS_CHAIN = 'AIEH-EGRESS-GUARD'
+      EGRESS_HOOK = 'DOCKER-USER'
+      EGRESS_LOG_PREFIX = 'aieh-egress-guard: '
+      UNIT_STATE =('LoadState', 'ActiveState', 'SubState', 'Result', 'UnitFileState')
+      FACTS_SCHEMA = 'ai-engineering-harness/profiles/ci-moby-facts/v1'
+      ROLES = ('deb', 'image-archive', 'release-binary', 'wheel')
+      # The CI runner (Q-02.2.1): paths equal provisioning.ci_runner of the profile.
+      RUNNER_USER = 'aieh-ci-runner'
+      RUNNER_SHELL = '/usr/sbin/nologin'
+      RUNNER_BINARY = '/opt/aieh/ci-runner/gitea-runner'
+      RUNNER_CONFIG = '/etc/aieh/ci-runner/config.yaml'
+      RUNNER_STATE = '/var/lib/aieh/ci-runner'
+      RUNNER_FILE = RUNNER_STATE + '/.runner'
+      RUNNER_WORK = '/srv/scratch/aieh-ci-runner'
+      RUNNER_UNIT = 'aieh-ci-runner.service'
+      # the hash-locked wheel set each job mounts read-only (the Overseer's ruling D, 2026-11-12)
+      WHEELS_DIR = '/srv/scratch/aieh-ci-wheels'
+      WHEEL_NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.whl$')
+
+
+      class Failed(Exception):
+          pass
+
+
+      def now():
+          return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+      def say(text):
+          print('aieh-provision: ' + text, flush=True)
+
+
+      def tail(text, limit=2000):
+          text = (text or '').strip()
+          return text[-limit:]
+
+
+      def run(argv, timeout, cwd=None):
+          try:
+              r = subprocess.run(argv, cwd=cwd, env=ENV, stdin=subprocess.DEVNULL,
+                                 capture_output=True, timeout=timeout, check=False)
+          except subprocess.TimeoutExpired:
+              return 124, '', argv[0] + ': timed out after ' + str(timeout) + ' s'
+          except OSError as exc:
+              return 127, '', argv[0] + ': ' + str(exc)
+          return r.returncode, r.stdout.decode('utf-8', 'replace'), r.stderr.decode('utf-8', 'replace')
+
+
+      def must(step, argv, timeout, cwd=None):
+          rc, out, err = run(argv, timeout, cwd)
+          if rc != 0:
+              raise Failed(step + ': ' + ' '.join(argv[:3]) + ' exited ' + str(rc) + ': ' +
+                           tail(err or out, 600))
+          return out
+
+
+      def json_lines(text):
+          return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+      def write_json(path, data, mode):
+          tmp = path + '.partial'
+          if os.path.lexists(tmp):
+              os.unlink(tmp)
+          fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+          with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+              json.dump(data, handle, indent=2, sort_keys=True)
+              handle.write('\n')
+              handle.flush()
+              os.fsync(handle.fileno())
+          os.chmod(tmp, mode)
+          os.rename(tmp, path)
+
+
+      def sha256_path(path):
+          digest = hashlib.sha256()
+          fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+          with os.fdopen(fd, 'rb') as handle:
+              for block in iter(lambda: handle.read(1 << 20), b''):
+                  digest.update(block)
+          return digest.hexdigest()
+
+
+      def read_text(path):
+          try:
+              with open(path, encoding='utf-8') as handle:
+                  return handle.read()
+          except OSError as exc:
+              return 'unreadable: ' + str(exc)
+
+
+      def ipv6_state():
+          rc, out, err = run(['ip', '-6', '-o', 'addr', 'show'], 30)
+          lines = [line for line in out.splitlines() if line.split()[1:2] != ['lo']]
+          return {'docker0_disable_ipv6': read_text('/proc/sys/net/ipv6/conf/docker0/disable_ipv6').strip(),
+                  'addresses': lines if rc == 0 else ['ip exited ' + str(rc) + ': ' + tail(err, 300)]}
+
+
+      def moby_tcp_listeners():
+          rc, out, err = run(['ss', '-ltnpH'], 30)
+          if rc != 0:
+              raise Failed('listeners: ss exited ' + str(rc) + ': ' + tail(err, 300))
+          lines = out.splitlines()
+          return lines, [line for line in lines if any('(("' + p in line for p in MOBY_PROCESSES)]
+
+
+      def loaded_modules():
+          names = set()
+          with open('/proc/modules', encoding='ascii') as handle:
+              for line in handle:
+                  names.add(line.split(' ', 1)[0])
+          with open('/proc/filesystems', encoding='ascii') as handle:
+              overlay_fs = any(line.split()[-1] == 'overlay' for line in handle if line.strip())
+          return {'loaded': sorted(m for m in MODULES if m in names), 'overlay_filesystem': overlay_fs}
+
+
+      def socket_facts():
+          out = []
+          paths = list(MOBY_SOCKETS)
+          for top in MOBY_SOCKET_DIRS:
+              for dirpath, dirnames, filenames in os.walk(top):
+                  for name in sorted(dirnames + filenames):
+                      path = os.path.join(dirpath, name)
+                      try:
+                          if stat.S_ISSOCK(os.lstat(path).st_mode):
+                              paths.append(path)
+                      except OSError:
+                          pass
+          for path in sorted(set(paths)):
+              try:
+                  st = os.lstat(path)
+              except OSError:
+                  out.append({'path': path, 'state': 'absent'})
+                  continue
+              out.append({'path': path, 'state': 'socket' if stat.S_ISSOCK(st.st_mode) else 'other',
+                          'owner': pwd.getpwuid(st.st_uid).pw_name,
+                          'group': grp.getgrgid(st.st_gid).gr_name,
+                          'mode': format(stat.S_IMODE(st.st_mode), 'o')})
+          return out
+
+
+      def docker_json(argv, many=False):
+          rc, out, err = run(['docker'] + argv, 120)
+          if rc != 0:
+              return {'rc': rc, 'error': tail(err or out, 600)}
+          try:
+              return json_lines(out) if many else json.loads(out)
+          except ValueError:
+              return {'rc': rc, 'error': 'unparsable: ' + tail(out, 600)}
+
+
+      def stat_entry(path):
+          try:
+              st = os.lstat(path)
+          except OSError:
+              return {'path': path, 'state': 'absent'}
+          kind = 'directory' if stat.S_ISDIR(st.st_mode) else 'file' if stat.S_ISREG(st.st_mode) \
+              else 'other'
+          try:
+              owner = pwd.getpwuid(st.st_uid).pw_name
+          except KeyError:
+              owner = str(st.st_uid)
+          try:
+              group = grp.getgrgid(st.st_gid).gr_name
+          except KeyError:
+              group = str(st.st_gid)
+          return {'path': path, 'state': kind, 'owner': owner, 'group': group,
+                  'mode': format(stat.S_IMODE(st.st_mode), 'o')}
+
+
+      def unit_show(unit, names):
+          rc, out, err = run(['systemctl', 'show', unit] + ['--property=' + n for n in names], 60)
+          props = {}
+          for line in out.splitlines():
+              key, sep, value = line.partition('=')
+              if sep:
+                  props[key] = value
+          return props
+
+
+      def copy_upload(manifest, agent_uid):
+          st = os.lstat(UPLOAD)
+          if not stat.S_ISDIR(st.st_mode) or st.st_uid != agent_uid:
+              raise Failed('copy: ' + UPLOAD + ' is not a directory owned by agent (or is a link)')
+          dirfd = os.open(UPLOAD, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+          copied = []
+          try:
+              extra = sorted(set(os.listdir(dirfd)) - {f['name'] for f in manifest['files']} - {READY})
+              for entry in manifest['files']:
+                  name, size = entry['name'], entry['size']
+                  src = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
+                  try:
+                      if not stat.S_ISREG(os.fstat(src).st_mode):
+                          raise Failed('copy: ' + name + ' is not a regular file')
+                      dst = os.open(os.path.join(STAGING, name),
+                                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                      count = 0
+                      with os.fdopen(dst, 'wb') as out:
+                          while True:
+                              block = os.read(src, 1 << 20)
+                              if not block:
+                                  break
+                              count += len(block)
+                              if count > size:
+                                  raise Failed('copy: ' + name + ' is larger than the manifest says')
+                              out.write(block)
+                          out.flush()
+                          os.fsync(out.fileno())
+                  finally:
+                      os.close(src)
+                  if count != size:
+                      raise Failed('copy: ' + name + ' has ' + str(count) + ' bytes, the manifest says ' +
+                                   str(size))
+                  copied.append(name)
+          finally:
+              os.close(dirfd)
+          return {'copied': copied, 'ignored_extra_names': extra}
+
+
+      def verify_staging(manifest):
+          out = []
+          for entry in manifest['files']:
+              path = os.path.join(STAGING, entry['name'])
+              st = os.lstat(path)
+              got = sha256_path(path)
+              ok = stat.S_ISREG(st.st_mode) and st.st_size == entry['size'] and got == entry['sha256']
+              out.append({'name': entry['name'], 'role': entry['role'], 'size': st.st_size,
+                          'sha256': got, 'match': ok})
+              if not ok:
+                  raise Failed('verify: ' + entry['name'] + ' has sha256 ' + got + ', the manifest says ' +
+                               entry['sha256'])
+          return {'files': out}
+
+
+      def write_daemon_json(manifest):
+          if os.path.lexists(DAEMON_JSON):
+              raise Failed('daemon-json: ' + DAEMON_JSON + ' already exists')
+          os.makedirs(os.path.dirname(DAEMON_JSON), mode=0o755, exist_ok=True)
+          write_json(DAEMON_JSON, manifest['docker']['daemon_json'], 0o644)
+          return {'path': DAEMON_JSON, 'content': manifest['docker']['daemon_json']}
+
+
+      def write_text(path, text):
+          tmp = path + '.partial'
+          if os.path.lexists(tmp):
+              os.unlink(tmp)
+          fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+          with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+              handle.write(text)
+              handle.flush()
+              os.fsync(handle.fileno())
+          os.chmod(tmp, 0o644)
+          os.rename(tmp, path)
+
+
+      def write_sysctl(manifest):
+          """Before the install: no IPv6 on Moby's bridge and veth interfaces (profiles P7),
+          applied by udev's systemd-sysctl rule as each interface appears."""
+          if os.path.lexists(SYSCTL_FILE):
+              raise Failed('sysctl: ' + SYSCTL_FILE + ' already exists')
+          write_text(SYSCTL_FILE, manifest['docker']['sysctl'])
+          return {'path': SYSCTL_FILE, 'content': manifest['docker']['sysctl']}
+
+
+      def apt_install(manifest):
+          debs = ['./' + f['name'] for f in manifest['files'] if f['role'] == 'deb']
+          before = loaded_modules()
+          out = must('apt-install', ['apt-get', 'install', '-y', '--no-install-recommends'] + debs,
+                     1800, cwd=STAGING)
+          names = [p['name'] for p in manifest.get('packages') or []]
+          query = must('apt-install', ['dpkg-query', '-W', '-f', '${Package} ${Version} ${Status}\\n']
+                       + names, 60)
+          installed = {}
+          for line in query.splitlines():
+              parts = line.split(' ', 2)
+              if len(parts) == 3:
+                  installed[parts[0]] = {'version': parts[1], 'status': parts[2]}
+          for p in manifest.get('packages') or []:
+              got = installed.get(p['name']) or {}
+              if got.get('version') != p['version'] or got.get('status') != 'install ok installed':
+                  raise Failed('apt-install: ' + p['name'] + ' is ' + repr(got) + ', the manifest says ' +
+                               p['version'])
+          return {'debs': debs, 'installed': installed, 'modules_before': before,
+                  'output_tail': tail(out, 1500)}
+
+
+      def containerd_config(manifest):
+          """After the install: replace containerd's packaged config.toml (a conffile, so it is
+          not written before dpkg) with the declared one, which turns the CRI plugin and its
+          TCP streaming listener off; then restart containerd and the daemon."""
+          query = must('containerd-config', ['dpkg-query', '-W', '-f', '${Conffiles}\\n',
+                                             'containerd'], 60)
+          packaged = {}
+          for line in query.splitlines():
+              parts = line.split()
+              if len(parts) >= 2:
+                  packaged[parts[0]] = parts[1]
+          with open(CONTAINERD_CONFIG, 'rb') as handle:
+              before = hashlib.md5(handle.read()).hexdigest()
+          if packaged.get(CONTAINERD_CONFIG) != before:
+              raise Failed('containerd-config: ' + CONTAINERD_CONFIG + ' is not the packaged file')
+          write_text(CONTAINERD_CONFIG, manifest['docker']['containerd_config'])
+          must('containerd-config', ['systemctl', 'restart', 'containerd.service'], 300)
+          must('containerd-config', ['systemctl', 'restart', 'docker.service'], 300)
+          return {'path': CONTAINERD_CONFIG, 'replaced_packaged_md5': before,
+                  'content': manifest['docker']['containerd_config']}
+
+
+      def docker_ready(manifest):
+          must('docker-ready', ['systemctl', 'start', 'docker.service'], 300)
+          version = json.loads(must('docker-ready', ['docker', 'version', '--format', GO_JSON], 120))
+          server = (version.get('Server') or {}).get('Version')
+          if server != manifest['docker']['server_version']:
+              raise Failed('docker-ready: server version ' + repr(server) + ', the manifest says ' +
+                           manifest['docker']['server_version'])
+          listeners, moby_owned = moby_tcp_listeners()
+          if moby_owned:
+              raise Failed('docker-ready: a TCP listener of Moby: ' + repr(moby_owned))
+          return {'server_version': server, 'client_version': (version.get('Client') or {}).get('Version'),
+                  'modules_after_start': loaded_modules(), 'tcp_listeners': listeners}
+
+
+      def check_admission(manifest):
+          """S-01.3.1, right after Moby's first start and before the Agent Server exists: the
+          container guard is active with the declared rules in both families, docker.service
+          requires it, and the default bridge has icc off. S-01.4: the egress guard's chain,
+          its DOCKER-USER hooks and FORWARD's first jump survived Moby's start in both families."""
+          step = 'admission'
+          must(step, ['systemctl', 'enable', GUARD_UNIT], 60)
+          found = admission_facts()
+          if (found['guard_unit'].get('ActiveState') != 'active' or
+                  not found['rules'].get('ok') or found['rules'].get('egress_ok') is not True or
+                  not found['docker_requires_guard'] or
+                  not found['docker_after_guard'] or found['bridge_enable_icc'] != 'false'):
+              raise Failed(step + ': ' + json.dumps(found, sort_keys=True)[:1500])
+          return found
+
+
+      def inspect_image(ref):
+          data = json.loads(must('image', ['docker', 'image', 'inspect', ref], 120))
+          if not isinstance(data, list) or len(data) != 1:
+              raise Failed('image: docker image inspect ' + ref + ' did not return one image')
+          return {k: data[0].get(k) for k in ('Id', 'RepoTags', 'RepoDigests')}
+
+
+      def load_image(manifest):
+          archive = os.path.join(STAGING, manifest['image']['archive'])
+          out = must('docker-load', ['docker', 'load', '--input', archive], 1800)
+          return {'output': tail(out, 1000)}
+
+
+      def check_image_id(manifest):
+          image = manifest['image']
+          found = [inspect_image(tag) for tag in image['archive_repo_tags']]
+          ids = sorted({f['Id'] for f in found})
+          if ids != [image['id']]:
+              raise Failed('image-id: the loaded image ID is ' + repr(ids) + ', the manifest says ' +
+                           image['id'])
+          return {'id': ids[0], 'loaded_as': found}
+
+
+      def fix_tag(manifest):
+          image = manifest['image']
+          must('tag', ['docker', 'tag', image['id'], image['local_tag']], 120)
+          removed = []
+          for tag in image['archive_repo_tags']:
+              if tag != image['local_tag']:
+                  must('tag', ['docker', 'image', 'rm', tag], 120)
+                  removed.append(tag)
+          now_tagged = inspect_image(image['local_tag'])
+          if now_tagged['Id'] != image['id'] or now_tagged['RepoTags'] != [image['local_tag']]:
+              raise Failed('tag: ' + image['local_tag'] + ' is ' + repr(now_tagged))
+          ids = must('tag', ['docker', 'image', 'ls', '--all', '--quiet', '--no-trunc'], 120).split()
+          if sorted(set(ids)) != [image['id']]:
+              raise Failed('tag: the image store holds ' + repr(sorted(set(ids))))
+          return {'removed_tags': removed, 'image': now_tagged, 'store': sorted(set(ids))}
+
+
+      def verify_run(manifest):
+          tag = manifest['image']['local_tag']
+          argv = ['docker', 'run', '--rm', '--entrypoint', 'true', tag]
+          t0 = time.time()
+          rc, out, err = run(argv, 300)
+          left = must('run', ['docker', 'ps', '--all', '--quiet', '--no-trunc'], 60).split()
+          ipv6 = ipv6_state()
+          result = {'argv': argv, 'rc': rc, 'seconds': round(time.time() - t0, 1),
+                    'output': tail(out + err, 600), 'containers_left': left, 'ipv6_after': ipv6}
+          if rc != 0 or left:
+              raise Failed('run: ' + ' '.join(argv) + ' exited ' + str(rc) + ' (containers left ' +
+                           repr(left) + '): ' + tail(err or out, 400))
+          if ipv6['docker0_disable_ipv6'] != '1' or ipv6['addresses']:
+              raise Failed('run: IPv6 on a Moby interface after the run: ' + repr(ipv6))
+          return result
+
+
+      def cleanup():
+          shutil.rmtree(STAGING)
+          st = os.lstat(UPLOAD)
+          if not stat.S_ISDIR(st.st_mode):
+              raise Failed('cleanup: ' + UPLOAD + ' is not a directory')
+          shutil.rmtree(UPLOAD)
+          left = [p for p in (STAGING, UPLOAD) if os.path.lexists(p)]
+          if left:
+              raise Failed('cleanup: still present ' + repr(left))
+          return {'removed': [STAGING, UPLOAD]}
+
+
+      def disable_trigger():
+          """Single use in every outcome: the trigger is disabled, stopped and removed."""
+          out = {}
+          out['disable'] = run(['systemctl', 'disable', '--now', PATH_UNIT], 120)[0]
+          if os.path.lexists(PATH_UNIT_FILE):
+              os.unlink(PATH_UNIT_FILE)
+          out['daemon_reload'] = run(['systemctl', 'daemon-reload'], 120)[0]
+          out['path_unit_file'] = 'present' if os.path.lexists(PATH_UNIT_FILE) else 'absent'
+          out['is_enabled'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip()
+                               for u in (PATH_UNIT, 'aieh-provision.service')}
+          return out
+
+
+      def load_manifest():
+          st = os.lstat(MANIFEST)
+          if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077:
+              raise Failed('manifest: ' + MANIFEST + ' is not a root-only regular file')
+          with open(MANIFEST, encoding='utf-8') as handle:
+              manifest = json.load(handle)
+          if manifest.get('schema') != MANIFEST_SCHEMA:
+              raise Failed('manifest: schema is not ' + MANIFEST_SCHEMA)
+          files = manifest.get('files')
+          if not isinstance(files, list) or not files:
+              raise Failed('manifest: no files')
+          names = set()
+          for entry in files:
+              name, size, digest = entry.get('name'), entry.get('size'), entry.get('sha256')
+              if not isinstance(name, str) or not NAME.match(name) or name == READY or name in names:
+                  raise Failed('manifest: bad or repeated file name ' + repr(name))
+              if not isinstance(size, int) or size < 0 or not HEX64.match(str(digest)):
+                  raise Failed('manifest: ' + name + ' needs a size and a sha256')
+              if entry.get('role') not in ROLES:
+                  raise Failed('manifest: ' + name + ' has an unknown role')
+              if entry.get('role') == 'wheel' and not WHEEL_NAME.match(name):
+                  raise Failed('manifest: ' + name + ' is not a wheel file name')
+              names.add(name)
+          image = manifest.get('image') or {}
+          if not DIGEST.match(str(image.get('id'))) or image.get('archive') not in names or \
+                  not isinstance(image.get('local_tag'), str) or \
+                  not isinstance(image.get('archive_repo_tags'), list):
+              raise Failed('manifest: image needs id, archive, local_tag and archive_repo_tags')
+          docker = manifest.get('docker') or {}
+          if not isinstance(docker.get('daemon_json'), dict) or not docker.get('server_version') or \
+                  not isinstance(docker.get('sysctl'), str) or \
+                  not isinstance(docker.get('containerd_config'), str):
+              raise Failed('manifest: docker needs daemon_json, server_version, sysctl and '
+                           'containerd_config')
+          if 'agent_server' in manifest:
+              raise Failed('manifest: a CI guest installs no Agent Server')
+          runner = manifest.get('ci_runner') or {}
+          binary = runner.get('binary') or {}
+          by_name = {f['name']: f for f in files}
+          if by_name.get(binary.get('name'), {}).get('role') != 'release-binary' or \
+                  by_name[binary['name']]['sha256'] != binary.get('sha256'):
+              raise Failed('manifest: ci_runner.binary must name the release-binary file')
+          if not HEX64.match(str(runner.get('config_sha256'))):
+              raise Failed('manifest: ci_runner needs the config_sha256 of the seeded config.yaml')
+          if not any(f['role'] == 'wheel' for f in files):
+              raise Failed('manifest: the wheel set is missing')
+          return manifest
+
+
+      def admission_facts():
+          """S-01.3.1 and S-01.4 in the CI guest: the container guard (unit, rules of both
+          families, docker.service's dependency on it) and the default bridge's icc."""
+          rc, out, err = run(['/usr/bin/python3', '-I', GUARD, 'check'], 120)
+          try:
+              rules = json.loads(out.strip().splitlines()[-1])
+          except (IndexError, ValueError):
+              rules = {'ok': False, 'error': tail(err or out, 300)}
+          deps = unit_show('docker.service', ('Requires', 'After'))
+          bridge = docker_json(['network', 'inspect', 'bridge', '--format', GO_JSON])
+          options = bridge.get('Options') if isinstance(bridge, dict) else None
+          rc, text, err = run(['journalctl', '-b', '-u', GUARD_UNIT, '-o', 'cat', '--no-pager'], 60)
+          install = None
+          for line in text.splitlines() if rc == 0 else []:
+              try:
+                  value = json.loads(line)
+              except ValueError:
+                  continue
+              if isinstance(value, dict) and value.get('mode') == 'install':
+                  install = value
+          order = {'guard_exit_monotonic': unit_show(GUARD_UNIT, (
+                       'ExecMainExitTimestampMonotonic',)).get('ExecMainExitTimestampMonotonic'),
+                   'docker_start_monotonic': unit_show('docker.service', (
+                       'ExecMainStartTimestampMonotonic',)).get('ExecMainStartTimestampMonotonic')}
+          return {'guard_unit': unit_show(GUARD_UNIT, UNIT_STATE), 'rules': rules,
+                  'guard_install': install, 'order': order,
+                  'dropin': stat_entry(GUARD_DROPIN),
+                  'docker_requires_guard': GUARD_UNIT in str(deps.get('Requires', '')).split(),
+                  'docker_after_guard': GUARD_UNIT in str(deps.get('After', '')).split(),
+                  'bridge_enable_icc': (options or {}).get('com.docker.network.bridge.enable_icc')
+                  if isinstance(options, dict) else bridge}
+
+
+      def runner_facts():
+          """The runner's user, binary, config, directories, unit and wheel set; the runner file
+          by its metadata only (it holds the runner token: never read)."""
+          try:
+              user = pwd.getpwnam(RUNNER_USER)
+              groups = sorted(g.gr_name for g in grp.getgrall() if RUNNER_USER in g.gr_mem)
+              user_facts = {'name': user.pw_name, 'uid': user.pw_uid, 'home': user.pw_dir,
+                            'shell': user.pw_shell, 'supplementary_groups': groups}
+          except KeyError:
+              user_facts = {'name': RUNNER_USER, 'state': 'absent'}
+          try:
+              docker_members = sorted(grp.getgrnam('docker').gr_mem)
+          except KeyError:
+              docker_members = None
+          files = {}
+          for path in (RUNNER_BINARY, RUNNER_CONFIG):
+              entry = stat_entry(path)
+              if entry.get('state') == 'file':
+                  entry['sha256'] = sha256_path(path)
+              files[path] = entry
+          wheels = stat_entry(WHEELS_DIR)
+          if wheels.get('state') == 'directory':
+              wheels['files'] = sorted(os.listdir(WHEELS_DIR))
+          return {'user': user_facts, 'docker_group_members': docker_members, 'files': files,
+                  'state_dir': stat_entry(RUNNER_STATE), 'runner_file': stat_entry(RUNNER_FILE),
+                  'work_dir': stat_entry(RUNNER_WORK), 'wheels': wheels,
+                  'unit': unit_show(RUNNER_UNIT, UNIT_STATE)}
+
+
+      def facts():
+          manifest = load_manifest()
+          tag = manifest['image']['local_tag']
+          with open('/proc/sys/kernel/random/boot_id', encoding='ascii') as handle:
+              boot_id = handle.read().strip()
+          info = docker_json(['info', '--format', GO_JSON])
+          keep = ('ServerVersion', 'DockerRootDir', 'Driver', 'DefaultRuntime', 'SecurityOptions',
+                  'Runtimes', 'CgroupDriver', 'CgroupVersion', 'NCPU', 'MemTotal', 'Images',
+                  'Containers', 'LoggingDriver', 'KernelVersion', 'OperatingSystem', 'Warnings',
+                  'IPv4Forwarding', 'BridgeNfIptables', 'BridgeNfIp6tables', 'LiveRestoreEnabled')
+          if isinstance(info, dict) and 'rc' not in info:
+              info = {k: info.get(k) for k in keep}
+              if isinstance(info.get('Runtimes'), dict):
+                  info['Runtimes'] = sorted(info['Runtimes'])
+          image = docker_json(['image', 'inspect', tag])
+          if isinstance(image, list) and len(image) == 1:
+              image = {k: image[0].get(k) for k in ('Id', 'RepoTags', 'RepoDigests', 'Created')}
+          try:
+              with open(DAEMON_JSON, encoding='utf-8') as handle:
+                  daemon_json = json.load(handle)
+          except (OSError, ValueError) as exc:
+              daemon_json = {'error': str(exc)}
+          rc, listeners, err = run(['ss', '-ltnpH'], 30)
+          data = {'schema': FACTS_SCHEMA, 'boot_id': boot_id, 'collected_at': now(),
+                  'version': docker_json(['version', '--format', GO_JSON]), 'info': info,
+                  'images': docker_json(['image', 'ls', '--all', '--no-trunc', '--format', GO_JSON],
+                                        many=True),
+                  'image': image, 'containers': docker_json(
+                      ['ps', '--all', '--no-trunc', '--format', GO_JSON], many=True),
+                  'networks': docker_json(['network', 'ls', '--no-trunc', '--format', GO_JSON],
+                                          many=True),
+                  'daemon_json': daemon_json, 'tcp_listeners': listeners.splitlines() if rc == 0
+                  else {'rc': rc, 'error': tail(err, 600)},
+                  'sockets': socket_facts(), 'modules': loaded_modules(), 'ipv6': ipv6_state()}
+          data['host_config'] = {'sysctl': read_text(SYSCTL_FILE),
+                                 'containerd_config': read_text(CONTAINERD_CONFIG)}
+          units = ('docker.service', 'docker.socket', 'containerd.service', FACTS_UNIT, GUARD_UNIT,
+                   RUNNER_UNIT)
+          data['units'] = {u: run(['systemctl', 'is-enabled', u], 30)[1].strip() for u in units}
+          for key, func in (('ci_runner', runner_facts), ('admission', admission_facts)):
+              try:
+                  data[key] = func()
+              except Exception as exc:              # recorded, never fatal to the Moby facts
+                  data[key] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
+          os.makedirs(FACTS_DIR, mode=0o755, exist_ok=True)
+          write_json(FACTS, data, 0o644)
+          say('facts written for boot ' + boot_id)
+          return 0
+
+
+      def copy_file(src, dst, mode):
+          """A regular file copied without following links into a new file (no overwrite)."""
+          fd_in = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+          try:
+              if not stat.S_ISREG(os.fstat(fd_in).st_mode):
+                  raise Failed('copy: ' + src + ' is not a regular file')
+              tmp = dst + '.partial'
+              fd_out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+              with os.fdopen(fd_out, 'wb') as out:
+                  while True:
+                      block = os.read(fd_in, 1 << 20)
+                      if not block:
+                          break
+                      out.write(block)
+                  out.flush()
+                  os.fsync(out.fileno())
+          finally:
+              os.close(fd_in)
+          os.chmod(tmp, mode)
+          if os.path.lexists(dst):
+              raise Failed('copy: ' + dst + ' already exists')
+          os.rename(tmp, dst)
+
+
+      def make_dir(path, uid, gid, mode):
+          os.mkdir(path, mode)
+          os.chown(path, uid, gid, follow_symlinks=False)
+          os.chmod(path, mode)
+          return stat_entry(path)
+
+
+      def install_ci_runner(manifest):
+          """The runner's system user (no login shell, group docker), its root-owned state
+          directory (the runner file, written at registration), its work directory on scratch and
+          the release binary (copied from the verified staging copy and hashed again). The seeded
+          config.yaml must have the manifest's digest. The unit stays disabled and stopped: it
+          starts only after registration (Q-02.2.2); no registration token is read or written."""
+          conf = manifest['ci_runner']
+          step = 'ci-runner-install'
+          try:
+              pwd.getpwnam(RUNNER_USER)
+              raise Failed(step + ': user ' + RUNNER_USER + ' already exists (single use)')
+          except KeyError:
+              pass
+          try:
+              grp.getgrnam('docker')
+          except KeyError:
+              raise Failed(step + ': group docker does not exist')
+          for path in (RUNNER_BINARY, os.path.dirname(RUNNER_BINARY), RUNNER_STATE, RUNNER_WORK):
+              if os.path.lexists(path):
+                  raise Failed(step + ': ' + path + ' already exists (single use)')
+          st = os.lstat(RUNNER_CONFIG)
+          got = sha256_path(RUNNER_CONFIG)
+          if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022 or \
+                  got != conf['config_sha256']:
+              raise Failed(step + ': ' + RUNNER_CONFIG + ' is not the root-owned seeded config with '
+                           'the manifest\'s sha256 (' + got + ')')
+          must(step, ['useradd', '--system', '--user-group', '--groups', 'docker', '--home-dir',
+                      RUNNER_WORK, '--no-create-home', '--shell', RUNNER_SHELL, '--comment',
+                      'Gitea runner (AIEH CI guest)', RUNNER_USER], 60)
+          user = pwd.getpwnam(RUNNER_USER)
+          agent_groups = must(step, ['id', '-nG', AGENT], 30).split()
+          if 'docker' in agent_groups:
+              raise Failed(step + ': ' + AGENT + ' is in group docker (P6)')
+          made = [make_dir(RUNNER_STATE, 0, user.pw_gid, 0o750),
+                  make_dir(RUNNER_WORK, user.pw_uid, user.pw_gid, 0o700)]
+          os.makedirs(os.path.dirname(RUNNER_BINARY), mode=0o755)
+          copy_file(os.path.join(STAGING, conf['binary']['name']), RUNNER_BINARY, 0o755)
+          binary = sha256_path(RUNNER_BINARY)
+          if binary != conf['binary']['sha256']:
+              raise Failed(step + ': ' + RUNNER_BINARY + ' has sha256 ' + binary + ', the manifest says ' +
+                           conf['binary']['sha256'])
+          must(step, ['systemctl', 'daemon-reload'], 120)
+          unit = unit_show(RUNNER_UNIT, UNIT_STATE)
+          if unit.get('ActiveState') != 'inactive' or unit.get('UnitFileState') != 'disabled':
+              raise Failed(step + ': ' + RUNNER_UNIT + ' must be inactive and disabled before '
+                           'registration: ' + json.dumps(unit, sort_keys=True))
+          return {'user': {'name': user.pw_name, 'uid': user.pw_uid, 'home': user.pw_dir,
+                           'shell': user.pw_shell,
+                           'groups': must(step, ['id', '-nG', RUNNER_USER], 30).split()},
+                  'agent_groups': agent_groups, 'directories': made,
+                  'binary': dict(stat_entry(RUNNER_BINARY), sha256=binary),
+                  'config': dict(stat_entry(RUNNER_CONFIG), sha256=got), 'unit': unit,
+                  'runner_file': stat_entry(RUNNER_FILE)}
+
+
+      def install_wheels(manifest):
+          """The Overseer's ruling D (2026-11-12): the staged, hash-locked wheel set copied (and
+          hashed again) into the root-owned directory each job mounts read-only; nothing is
+          installed in the guest, and a job installs from it with pip --no-index --require-hashes."""
+          step = 'wheels'
+          if os.path.lexists(WHEELS_DIR):
+              raise Failed(step + ': ' + WHEELS_DIR + ' already exists (single use)')
+          made = make_dir(WHEELS_DIR, 0, 0, 0o755)
+          out = []
+          for entry in manifest['files']:
+              if entry['role'] != 'wheel':
+                  continue
+              dst = os.path.join(WHEELS_DIR, entry['name'])
+              copy_file(os.path.join(STAGING, entry['name']), dst, 0o644)
+              got = sha256_path(dst)
+              if got != entry['sha256']:
+                  raise Failed(step + ': ' + dst + ' has sha256 ' + got + ', the manifest says ' +
+                               entry['sha256'])
+              out.append({'name': entry['name'], 'sha256': got})
+          return {'directory': made, 'wheels': out, 'listing': sorted(os.listdir(WHEELS_DIR))}
+
+
+      def enable_facts():
+          must('facts', ['systemctl', 'enable', FACTS_UNIT], 60)
+          must('facts', ['systemctl', 'start', FACTS_UNIT], 300)
+          with open(FACTS, encoding='utf-8') as handle:
+              data = json.load(handle)
+          runner = data.get('ci_runner') or {}
+          return {'unit': FACTS_UNIT, 'enabled': run(['systemctl', 'is-enabled', FACTS_UNIT], 30)[1].strip(),
+                  'boot_id': data.get('boot_id'), 'info': data.get('info'),
+                  'sockets': data.get('sockets'), 'tcp_listeners': data.get('tcp_listeners'),
+                  'modules': data.get('modules'),
+                  'ci_runner': dict((k, runner.get(k)) for k in ('unit', 'runner_file', 'error'))}
+
+
+      STEPS = (('copy', None), ('verify', verify_staging), ('daemon-json', write_daemon_json),
+               ('sysctl', write_sysctl), ('apt-install', apt_install),
+               ('containerd-config', containerd_config), ('docker-ready', docker_ready),
+               ('admission', check_admission), ('docker-load', load_image), ('image-id', check_image_id),
+               ('tag', fix_tag), ('run', verify_run), ('ci-runner-install', install_ci_runner),
+               ('wheels', install_wheels))
+
+
+      def provision():
+          t0 = time.time()
+          result = {'schema': RESULT_SCHEMA, 'started_at': now(), 'steps': [], 'result': 'failed',
+                    'failed_step': None, 'error': None}
+          step = 'start'
+          try:
+              if os.path.lexists(RESULT) or os.path.lexists(STAGING):
+                  raise Failed('start: provisioning already ran on this instance (single use)')
+              step = 'manifest'
+              manifest = load_manifest()
+              result['manifest'] = {'sha256': sha256_path(MANIFEST), 'lock_sha256':
+                                    manifest.get('lock_sha256'), 'files': len(manifest['files'])}
+              agent_uid = pwd.getpwnam(AGENT).pw_uid
+              os.makedirs(os.path.dirname(STAGING), mode=0o755, exist_ok=True)
+              os.mkdir(STAGING, 0o700)
+              for step, func in STEPS + (('facts', None), ('cleanup', None)):
+                  s = time.time()
+                  say('step ' + step)
+                  if step == 'copy':
+                      detail = copy_upload(manifest, agent_uid)
+                  elif step == 'facts':
+                      detail = enable_facts()
+                  elif step == 'cleanup':
+                      detail = cleanup()
+                  else:
+                      detail = func(manifest)
+                  result['steps'].append({'step': step, 'ok': True,
+                                          'seconds': round(time.time() - s, 1), 'detail': detail})
+              result['result'] = 'provisioned'
+          except Exception as exc:              # every failure is recorded with its step
+              result['failed_step'] = step
+              result['error'] = (type(exc).__name__ + ': ' + str(exc))[:2000]
+              say('FAILED at step ' + step)
+          finally:
+              try:
+                  result['trigger'] = disable_trigger()
+              except Exception as exc:
+                  result['trigger'] = {'error': (type(exc).__name__ + ': ' + str(exc))[:500]}
+              result['upload_present'] = os.path.lexists(UPLOAD)
+              result['staging_present'] = os.path.lexists(STAGING)
+              result['ended_at'] = now()
+              result['seconds'] = round(time.time() - t0, 1)
+              os.makedirs(RESULT_DIR, mode=0o755, exist_ok=True)
+              write_json(RESULT, result, 0o644)
+              say('result ' + result['result'] + ' in ' + str(result['seconds']) + ' s')
+          return 0 if result['result'] == 'provisioned' else 1
+
+
+      def main(argv):
+          if os.geteuid() != 0:
+              say('must run as root (from its systemd unit)')
+              return 2
+          os.umask(0o022)
+          if argv == ['provision']:
+              return provision()
+          if argv == ['facts']:
+              return facts()
+          say('usage: aieh-provision provision|facts')
+          return 2
+
+
+      if __name__ == '__main__':
+          sys.exit(main(sys.argv[1:]))
+  - path: /etc/systemd/system/aieh-provision.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH single-use provisioning step (F-04.1, decision 0006)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      ConditionPathExists=!/var/lib/aieh/provision/RESULT.json
+      RequiresMountsFor=/srv/scratch /var/lib
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision provision
+      StandardOutput=journal+console
+      StandardError=journal+console
+      TimeoutStartSec=3600
+  - path: /etc/systemd/system/aieh-provision.path
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH provisioning trigger: the host's READY marker (single use)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      ConditionPathExists=!/var/lib/aieh/provision/RESULT.json
+
+      [Path]
+      PathExists=/srv/scratch/agent/provision/READY
+      Unit=aieh-provision.service
+
+      [Install]
+      WantedBy=paths.target
+  - path: /etc/systemd/system/aieh-docker-facts.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH read-only Moby, guard and runner facts for inspect (CI guest; written at every boot)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-provision facts
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/sbin/aieh-container-guard
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/python3
+      # aieh-container-guard (S-01.3.1): no new connection from a container bridge to the guest
+      # itself. In the filter table's INPUT chain, a packet from docker0 or a br-* bridge that
+      # does not belong to a connection the guest opened jumps to AIEH-CONTAINER-GUARD: it is
+      # logged (rate-limited, kernel log at the LOG target's default level warning, this
+      # prefix) and refused, TCP with a reset, anything
+      # else with an ICMP port-unreachable. IPv4 and IPv6 alike.
+      # Egress guard (S-01.4): no new forwarded connection from a container bridge to any other
+      # interface. Moby's DOCKER-USER chain (created here when absent: this unit runs before
+      # docker.service) sends a packet that enters from docker0 or a br-* bridge and leaves by
+      # another interface to AIEH-EGRESS-GUARD, which has the same four rules with its own log
+      # prefix; the allowlist is empty (its first entry belongs to S-03.x, inference). Traffic
+      # between two containers on one bridge stays with icc false (S-01.3.1). DOCKER-USER ends
+      # with the RETURN that Moby would add, so Moby finds it and changes nothing, and FORWARD
+      # jumps to DOCKER-USER first (Moby re-inserts that jump at the top for IPv4).
+      # Run by aieh-container-guard.service, which docker.service requires (fail closed: no
+      # rules, no Moby). Modes: (none) install and verify; check: verify only. Prints one JSON
+      # line: the rules as iptables -S prints them, and whether they are the declared ones.
+      import json
+      import shlex
+      import subprocess
+      import sys
+
+      CHAIN = 'AIEH-CONTAINER-GUARD'
+      INTERFACES = ('docker0', 'br-+')
+      LOG_PREFIX = 'aieh-container-guard: '
+      TOOLS = ('iptables', 'ip6tables')
+      RULES = ('-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+               '-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "' + LOG_PREFIX + '"',
+               '-p tcp -j REJECT --reject-with tcp-reset',
+               '-j REJECT')
+      EGRESS_CHAIN = 'AIEH-EGRESS-GUARD'
+      EGRESS_HOOK = 'DOCKER-USER'
+      EGRESS_LOG_PREFIX = 'aieh-egress-guard: '
+      EGRESS_ALLOWLIST = ()
+      EGRESS_RULES = ('-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+                      '-m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "' +
+                      EGRESS_LOG_PREFIX + '"',
+                      '-p tcp -j REJECT --reject-with tcp-reset',
+                      '-j REJECT')
+      ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
+
+
+      def run(argv):
+          r = subprocess.run(argv, capture_output=True, text=True, timeout=60, env=ENV, check=False)
+          return r.returncode, r.stdout, r.stderr
+
+
+      def must(argv):
+          rc, out, err = run(argv)
+          if rc != 0:
+              raise RuntimeError(' '.join(argv) + ' exited ' + str(rc) + ': ' + err.strip()[-300:])
+          return out
+
+
+      def install(tool):
+          if run([tool, '-w', '-n', '-L', CHAIN])[0] != 0:
+              must([tool, '-w', '-N', CHAIN])
+          must([tool, '-w', '-F', CHAIN])
+          for rule in RULES:
+              must([tool, '-w', '-A', CHAIN] + shlex.split(rule))
+          for iface in INTERFACES:
+              while run([tool, '-w', '-D', 'INPUT', '-i', iface, '-j', CHAIN])[0] == 0:
+                  pass
+              must([tool, '-w', '-I', 'INPUT', '1', '-i', iface, '-j', CHAIN])
+
+
+      def egress_rules():
+          # the allowlist (empty in S-01.4) would sit between the RETURN and the LOG
+          return EGRESS_RULES[:1] + tuple(EGRESS_ALLOWLIST) + EGRESS_RULES[1:]
+
+
+      def egress_hook_rules():
+          return ['-A ' + EGRESS_HOOK + ' -i ' + i + ' ! -o ' + i + ' -j ' + EGRESS_CHAIN
+                  for i in INTERFACES] + ['-A ' + EGRESS_HOOK + ' -j RETURN']
+
+
+      def install_egress(tool):
+          for chain in (EGRESS_HOOK, EGRESS_CHAIN):
+              if run([tool, '-w', '-n', '-L', chain])[0] != 0:
+                  must([tool, '-w', '-N', chain])
+          must([tool, '-w', '-F', EGRESS_CHAIN])
+          for rule in egress_rules():
+              must([tool, '-w', '-A', EGRESS_CHAIN] + shlex.split(rule))
+          must([tool, '-w', '-F', EGRESS_HOOK])
+          for line in egress_hook_rules():
+              must([tool, '-w'] + shlex.split(line))
+          while run([tool, '-w', '-D', 'FORWARD', '-j', EGRESS_HOOK])[0] == 0:
+              pass
+          must([tool, '-w', '-I', 'FORWARD', '1', '-j', EGRESS_HOOK])
+
+
+      def observe_egress(tool):
+          rc, out, err = run([tool, '-w', '-S', EGRESS_CHAIN])
+          chain = [line for line in out.splitlines() if line.startswith('-A ')] if rc == 0 else None
+          rc2, out2, _ = run([tool, '-w', '-S', EGRESS_HOOK])
+          hook = [line for line in out2.splitlines() if line.startswith('-A ')] if rc2 == 0 else None
+          rc3, out3, _ = run([tool, '-w', '-S', 'FORWARD'])
+          forward = out3.splitlines() if rc3 == 0 else []
+          rules = [line for line in forward if line.startswith('-A ')]
+          jumps = [line for line in rules if line.endswith(' -j ' + EGRESS_HOOK)]
+          want = ['-A ' + EGRESS_CHAIN + ' ' + rule for rule in egress_rules()]
+          ok = chain is not None and len(chain) == len(want) and \
+              all(line == w or line.startswith(w + ' ') for line, w in zip(chain, want)) and \
+              hook == egress_hook_rules() and rules[:1] == ['-A FORWARD -j ' + EGRESS_HOOK] and \
+              len(jumps) == 1
+          return {'chain': chain, 'hook': hook, 'forward_head': rules[:4],
+                  'forward_jumps': len(jumps) if rc3 == 0 else None,
+                  'forward_policy': next((line for line in forward if line.startswith('-P ')), None),
+                  'ok': ok, 'error': None if rc == 0 else err.strip()[-300:]}
+
+
+      def observe(tool):
+          rc, out, err = run([tool, '-w', '-S', CHAIN])
+          chain = [line for line in out.splitlines() if line.startswith('-A ')] if rc == 0 else None
+          rc2, out2, _ = run([tool, '-w', '-S', 'INPUT'])
+          jumps = [line for line in out2.splitlines() if line.endswith('-j ' + CHAIN)] \
+              if rc2 == 0 else None
+          want = ['-A ' + CHAIN + ' ' + rule for rule in RULES]
+          ok = chain is not None and len(chain) == len(want) and \
+              all(line == w or line.startswith(w + ' ') for line, w in zip(chain, want)) and \
+              jumps is not None and sorted(jumps) == sorted(
+                  '-A INPUT -i ' + i + ' -j ' + CHAIN for i in INTERFACES) and \
+              out2.splitlines()[1:1 + len(INTERFACES)] == [
+                  '-A INPUT -i ' + i + ' -j ' + CHAIN for i in reversed(INTERFACES)]
+          return {'chain': chain, 'input_jumps': jumps, 'ok': ok,
+                  'error': None if rc == 0 else err.strip()[-300:]}
+
+
+      def main(argv):
+          out = {'mode': 'check' if argv == ['check'] else 'install'}
+          try:
+              if argv not in ([], ['check']):
+                  raise RuntimeError('usage: aieh-container-guard [check]')
+              if not argv:
+                  for tool in TOOLS:
+                      install(tool)
+                      install_egress(tool)
+              out['families'] = {tool: dict(observe(tool), egress=observe_egress(tool))
+                                 for tool in TOOLS}
+              out['egress_ok'] = all(f['egress']['ok'] for f in out['families'].values())
+              out['ok'] = all(f['ok'] for f in out['families'].values()) and out['egress_ok']
+          except Exception as exc:
+              out['ok'], out['error'] = False, (type(exc).__name__ + ': ' + str(exc))[:600]
+          print(json.dumps(out, sort_keys=True), flush=True)
+          return 0 if out['ok'] else 1
+
+
+      if __name__ == '__main__':
+          sys.exit(main(sys.argv[1:]))
+  - path: /etc/systemd/system/aieh-container-guard.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AIEH container guard: no new connection from a container bridge to the guest (S-01.3.1) or out of it (S-01.4)
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      DefaultDependencies=no
+      After=local-fs.target
+      Before=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/bin/python3 -I /usr/local/sbin/aieh-container-guard
+      StandardOutput=journal+console
+      StandardError=journal+console
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/docker.service.d/10-aieh-container-guard.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # S-01.3.1, S-01.4: Moby starts only after the container guard's and the egress guard's rules
+      # are in place (fail closed).
+      [Unit]
+      Requires=aieh-container-guard.service
+      After=aieh-container-guard.service
+  - path: /etc/aieh/ci-runner/config.yaml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      {
+        "log": {
+          "level": "info"
+        },
+        "runner": {
+          "file": "/var/lib/aieh/ci-runner/.runner",
+          "capacity": 1,
+          "envs": {},
+          "env_file": "",
+          "timeout": "3h",
+          "labels": [
+            "aieh-validation:docker://sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd"
+          ],
+          "tool_cache_mode": "none",
+          "hooks": {},
+          "post_task_script": "",
+          "extra_headers": {}
+        },
+        "cache": {
+          "enabled": false
+        },
+        "container": {
+          "network": "",
+          "network_create_options": {
+            "enable_ipv6": false
+          },
+          "privileged": false,
+          "options": "--cap-drop=ALL --security-opt=no-new-privileges --user=1001:1001 --pids-limit=512 --memory=4g --cpus=2 --ulimit=core=0",
+          "valid_volumes": [],
+          "volumes": [
+            "/home/agent/exchange:/aieh/exchange:ro",
+            "/srv/scratch/aieh-ci-wheels:/aieh/wheels:ro"
+          ],
+          "docker_host": "-",
+          "force_pull": false,
+          "force_rebuild": false,
+          "bind_workdir": false,
+          "sweep": false
+        },
+        "host": {
+          "workdir_parent": "/srv/scratch/aieh-ci-runner/act"
+        },
+        "metrics": {
+          "enabled": false
+        },
+        "health_check": {
+          "enabled": false
+        }
+      }
+  - path: /etc/systemd/system/aieh-ci-runner.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Gitea runner 6.0.0 (AIEH CI guest, Q-02.2.1): enabled only after registration
+      ConditionFileNotEmpty=/etc/aieh/provision.json
+      ConditionPathExists=/opt/aieh/ci-runner/gitea-runner
+      ConditionPathExists=/var/lib/aieh/ci-runner/.runner
+      Requires=docker.service
+      After=docker.service
+      RequiresMountsFor=/srv/scratch
+
+      [Service]
+      Type=exec
+      User=aieh-ci-runner
+      Group=aieh-ci-runner
+      SupplementaryGroups=docker
+      Environment=HOME=/srv/scratch/aieh-ci-runner
+      Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+      Environment=LANG=C.UTF-8
+      WorkingDirectory=/srv/scratch/aieh-ci-runner
+      ExecStart=/opt/aieh/ci-runner/gitea-runner daemon --config /etc/aieh/ci-runner/config.yaml
+      Restart=on-failure
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      NoNewPrivileges=yes
+      CapabilityBoundingSet=
+      AmbientCapabilities=
+      ProtectSystem=strict
+      ReadWritePaths=/srv/scratch/aieh-ci-runner
+      ProtectHome=read-only
+      PrivateTmp=yes
+      PrivateDevices=yes
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectKernelLogs=yes
+      ProtectControlGroups=yes
+      ProtectClock=yes
+      ProtectHostname=yes
+      RestrictSUIDSGID=yes
+      RestrictRealtime=yes
+      LockPersonality=yes
+      SystemCallArchitectures=native
+      RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+      IPAddressDeny=any
+      IPAddressAllow=localhost
+      UMask=0077
+
+      [Install]
+      WantedBy=multi-user.target
+fs_setup:
+  - label: scratch
+    filesystem: ext4
+    device: {{scratch_device}}
+    partition: none
+mounts:
+  - [LABEL=scratch, /srv/scratch, ext4, "defaults,nofail", "0", "2"]
+runcmd:
+  - [install, -d, -o, agent, -g, agent, -m, "0750", /srv/scratch/agent]
+  - [install, -d, -o, agent, -g, agent, -m, "0755", /home/agent/exchange]
+  - [sh, -c, "if [ -s /etc/aieh/provision.json ]; then install -d -o root -g root -m 0755 /var/lib/aieh /var/lib/aieh/provision && systemctl enable --now aieh-provision.path; fi"]

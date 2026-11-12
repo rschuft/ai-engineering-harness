@@ -53,6 +53,7 @@ class CheckedInProfiles(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f'PASS {QEMU}\n', result.stdout)
         self.assertIn(f'PASS {INCUS} (', result.stdout)
+        self.assertIn(f'PASS {CI}\n', result.stdout)            # the CI variant (Q-02.2.1)
         self.assertNotIn('FAIL', result.stdout)
 
     def test_strict_passes_qemu_and_fails_incus_only_on_unknown_pins(self):
@@ -1398,6 +1399,514 @@ class JobsBlock(unittest.TestCase):
         self.assertEqual(self.errors(), [])
         self.server['jobs'] = []
         self.assertFails('provisioning.agent_server.jobs: must be an object')
+
+
+CI = 'strong-windows-qemu-whpx-ci'
+# The functions the CI seed's provisioning script copies verbatim from the execution seed's.
+CI_SHARED_FUNCTIONS = ('Failed', 'now', 'say', 'tail', 'run', 'must', 'json_lines', 'write_json',
+                       'sha256_path', 'read_text', 'ipv6_state', 'moby_tcp_listeners',
+                       'loaded_modules', 'socket_facts', 'docker_json', 'stat_entry', 'unit_show',
+                       'copy_upload', 'verify_staging', 'write_daemon_json', 'write_text',
+                       'write_sysctl', 'apt_install', 'containerd_config', 'docker_ready',
+                       'check_admission', 'inspect_image', 'load_image', 'check_image_id',
+                       'fix_tag', 'verify_run', 'cleanup', 'disable_trigger', 'provision')
+
+
+def script_defs(text):
+    import ast
+    return {node.name: ast.dump(node) for node in ast.parse(text).body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+
+
+class CIRunnerBlock(unittest.TestCase):
+    """Q-02.2.1: the CI profile variant's provisioning.ci_runner against its seed template and its
+    provision lock; each mutation must FAIL naming the rule. One read-only copy of profiles/ and
+    the two locks the check reads; a mutated seed template or lock is written under a new name
+    in the copy and the in-memory profile is pointed at it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(tempfile.mkdtemp(prefix='aieh-profile-ci-'))
+        cls.addClassCleanup(shutil.rmtree, cls.root, ignore_errors=True)
+        shutil.copytree(REPO / 'profiles', cls.root / 'profiles')
+        for rel in ('composition/lock/components.lock.json',
+                    'composition/lock/python/tools-requirements.txt'):
+            (cls.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(REPO / rel, cls.root / rel)
+        cls.count = 0
+
+    def setUp(self):
+        self.ci = load(CI, self.root)
+        self.block = self.ci['provisioning']['ci_runner']
+        self.seed_rel = self.ci['boot_inputs']['seed']['templates']['user-data']['path']
+        self.seed = (self.root / self.seed_rel).read_text(encoding='utf-8')
+        self.lock_rel = self.ci['provider']['provision_lock']['path']
+        self.lock = json.loads((self.root / self.lock_rel).read_text(encoding='utf-8'))
+
+    def errors(self, profile=None):
+        return check_profile.check(profile or self.ci, self.root).errors
+
+    def assertFails(self, fragment, profile=None):
+        errors = self.errors(profile)
+        self.assertTrue(any(fragment in e for e in errors),
+                        f'expected an error containing {fragment!r}, got {errors}')
+
+    def new_name(self, suffix):
+        type(self).count += 1
+        return f'profiles/mutated-{type(self).count}{suffix}'
+
+    def with_seed(self, text):
+        rel = self.new_name('.tmpl')
+        (self.root / rel).write_bytes(text.encode('utf-8'))
+        self.ci['boot_inputs']['seed']['templates']['user-data'] = {
+            'path': rel, 'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+
+    def with_lock(self, lock):
+        rel = self.new_name('.json')
+        data = (json.dumps(lock, indent=2) + '\n').encode('utf-8')
+        (self.root / rel).write_bytes(data)
+        self.ci['provider']['provision_lock'] = {'path': rel,
+                                                 'sha256': hashlib.sha256(data).hexdigest()}
+
+    def seed_replace(self, old, new, count=1):
+        self.assertEqual(self.seed.count(old), count, old)
+        self.with_seed(self.seed.replace(old, new))
+
+    def test_committed_variant_passes_strict(self):
+        # --strict fails on an unresolved pin; the variant has none
+        report = check_profile.check(self.ci, self.root)
+        self.assertEqual((report.errors, report.unresolved), ([], []))
+
+    def test_the_seed_copies_the_execution_seeds_functions(self):
+        files = check_profile.write_files_blocks
+        ci = files(self.seed)['/usr/local/sbin/aieh-provision']
+        base = files((REPO / 'profiles/seed/user-data.tmpl').read_text(encoding='utf-8'))[
+            '/usr/local/sbin/aieh-provision']
+        ci_defs, base_defs = script_defs(ci), script_defs(base)
+        for name in CI_SHARED_FUNCTIONS:
+            self.assertEqual(ci_defs[name], base_defs[name], name)
+        for name in ('install_agent_server', 'agent_server_secrets', 'start_agent_server',
+                     'conversation_facts', 'egress_route'):
+            self.assertNotIn(name, ci_defs)
+        compile(ci, 'aieh-provision', 'exec')
+
+    def test_binary_and_user(self):
+        for key, value in (('upload_name', 'agent-server-1.60.1-linux-x86_64'), ('owner', 'agent'),
+                           ('mode', '775'), ('path', '/home/agent/gitea-runner')):
+            ci = copy.deepcopy(self.ci)
+            ci['provisioning']['ci_runner']['binary'][key] = value
+            self.assertFails('ci_runner.binary', ci)
+        for key, value in (('groups', ['docker', 'sudo']), ('shell', '/bin/bash'), ('name', 'agent'),
+                           ('system', False), ('home', '/var/lib/other-runner')):
+            ci = copy.deepcopy(self.ci)
+            ci['provisioning']['ci_runner']['user'][key] = value
+            self.assertFails('ci_runner.user', ci)
+        ci = copy.deepcopy(self.ci)
+        state = next(d for d in ci['guest_storage']['directories'] if d['role'] == 'ci-runner')
+        state['mode'] = '755'
+        self.assertFails('ci_runner.user', ci)
+        lock = copy.deepcopy(self.lock)
+        lock['release_binary']['sha256'] = '0' * 64
+        self.with_lock(lock)
+        self.assertFails('not the one composition/lock/components.lock.json pins')
+
+    def test_the_config_is_the_seeded_text(self):
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['config']['runner']['capacity'] = 2
+        self.assertFails('ci_runner.config_file', ci)
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['config_file']['sha256'] = '0' * 64
+        self.assertFails('ci_runner.config_file', ci)
+        self.seed_replace('"capacity": 1,', '"capacity": 2,')
+        self.assertFails('ci_runner.config_file')
+
+    def test_config_against_the_variant(self):
+        cases = [
+            (('runner', 'labels'), ['aieh-validation:docker://sha256:' + 'a' * 64], 'one label names'),
+            (('runner', 'file'), '/srv/scratch/aieh-ci-runner/.runner', 'runner_file'),
+            (('container', 'volumes'), ['/home/agent/exchange:/aieh/exchange:ro'], 'container.volumes'),
+            (('container', 'volumes'), ['/srv/scratch/aieh-ci-wheels:/aieh/wheels:ro',
+                                        '/home/agent/exchange:/aieh/exchange:ro'], 'container.volumes'),
+            (('host', 'workdir_parent'), '/root/.cache/act', 'host.workdir_parent'),
+        ]
+        for (section, key), value, fragment in cases:
+            ci = copy.deepcopy(self.ci)
+            config = ci['provisioning']['ci_runner']['config']
+            config[section][key] = value
+            text = check_profile.ci_config_text(config)
+            ci['provisioning']['ci_runner']['config_file']['sha256'] = \
+                hashlib.sha256(text.encode('utf-8')).hexdigest()
+            self.assertFails(fragment, ci)
+
+    def test_the_unit(self):
+        cases = [
+            ('Environment=LANG=C.UTF-8\n', 'Environment=LANG=C.UTF-8\n      Environment=HTTP_PROXY=x\n'),
+            ('User=aieh-ci-runner\n', 'User=root\n'),
+            ('SupplementaryGroups=docker\n', 'SupplementaryGroups=docker adm\n'),
+            ('ExecStart=/opt/aieh/ci-runner/gitea-runner daemon --config',
+             'ExecStart=/opt/aieh/ci-runner/gitea-runner daemon --once --config'),
+            ('ConditionPathExists=/var/lib/aieh/ci-runner/.runner\n', ''),
+            ('Requires=docker.service\n      After=docker.service\n      RequiresMountsFor',
+             'After=docker.service\n      RequiresMountsFor'),
+            ('IPAddressDeny=any\n', ''),
+            ('WorkingDirectory=', 'EnvironmentFile=/etc/aieh/ci-runner/env\n      WorkingDirectory='),
+        ]
+        for old, new in cases:
+            self.setUp()
+            self.seed_replace(old, new)
+            self.assertFails('ci_runner.service')
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['service']['hardening'].remove('PrivateTmp=yes')
+        self.assertFails('ci_runner.service.hardening', ci)
+
+    def test_register_and_forward(self):
+        for flag, value in (('--token-file', '/tmp/token'), ('--config', '/tmp/config.yaml'),
+                            ('--instance', 'http://10.0.2.2:3000')):
+            ci = copy.deepcopy(self.ci)
+            argv = ci['provisioning']['ci_runner']['register']['argv']
+            argv[argv.index(flag) + 1] = value
+            self.assertFails('ci_runner.register', ci)
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['register']['token_file'] = '/var/lib/aieh/token'
+        self.assertFails('ci_runner.register', ci)
+        for key, value in (('bind', '0.0.0.0:13300'), ('instance_url', 'http://127.0.0.1:3000'),
+                           ('class', 'management'), ('owner_act', None)):
+            ci = copy.deepcopy(self.ci)
+            ci['provisioning']['ci_runner']['control_forward'][key] = value
+            self.assertFails('ci_runner.control_forward', ci)
+        for old, new in (('      PermitListen 127.0.0.1:13300\n', '      PermitListen 0.0.0.0:13300\n'),
+                         ('      AllowTcpForwarding remote\n', '      AllowTcpForwarding yes\n'),
+                         ('      AllowUsers agent\n', ''),
+                         ('      PermitTunnel no\n', '      PermitTunnel no\n      PermitListen 127.0.0.1:2375\n')):
+            self.setUp()
+            self.seed_replace(old, new)
+            self.assertFails('ci_runner.control_forward')
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['control_forward']['sshd_config'].append(
+            'PermitListen 127.0.0.1:2375')
+        self.assertFails('ci_runner.control_forward', ci)
+
+    def test_the_wheel_set(self):
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['wheels']['guest_dir'] = '/srv/scratch/other'
+        self.assertFails('ci_runner.wheels', ci)
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['upload']['roles'].remove('wheel')
+        self.assertFails('ci_runner.wheels', ci)
+        for key, value in (('target', {'os': 'linux', 'abi': 'cp313'}), ('role', 'deb'),
+                           ('lock', {'path': 'composition/lock/python/tools-requirements.txt',
+                                     'sha256': '0' * 64})):
+            self.setUp()
+            lock = copy.deepcopy(self.lock)
+            lock['wheels'][key] = value
+            self.with_lock(lock)
+            self.assertFails('wheels')
+        unhashed = self.root / self.new_name('.txt')
+        unhashed.write_text('dulwich==1.2.21\n', encoding='utf-8')
+        lock = copy.deepcopy(self.lock)
+        lock['wheels']['lock'] = {'path': unhashed.relative_to(self.root).as_posix(),
+                                  'sha256': check_profile.sha256_file(unhashed)}
+        self.with_lock(lock)
+        self.assertFails('ci_runner.wheels')
+
+    def test_the_seed_script_and_its_contents(self):
+        for old, new in (("RUNNER_USER = 'aieh-ci-runner'", "RUNNER_USER = 'agent'"),
+                         ("WHEELS_DIR = '/srv/scratch/aieh-ci-wheels'", "WHEELS_DIR = '/tmp/w'"),
+                         ("         ('wheels', install_wheels))", "         )")):
+            self.setUp()
+            self.seed_replace(old, new)
+            self.assertFails('provisioning.ci_runner')
+        for addition in ('openhands', 'aieh-agent-server', 'GITEA_RUNNER_REGISTRATION_TOKEN'):
+            self.setUp()
+            self.seed_replace('# No Agent Server.', f'# No Agent Server. {addition}')
+            self.assertFails('no Agent Server and no registration token')
+        self.setUp()
+        self.seed_replace("              '-j REJECT')\n      EGRESS_CHAIN",
+                          "              '-j ACCEPT')\n      EGRESS_CHAIN")
+        self.assertFails('ci_runner.admission')
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['root_step']['sequence'].remove('wheels')
+        self.assertFails('root_step.sequence', ci)
+
+    def test_lifetime_jobs_and_exclusivity(self):
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['lifetime']['mode'] = 'per-validation'
+        self.assertFails('ci_runner.lifetime', ci)
+        ci['provisioning']['ci_runner']['register']['argv'].append('--ephemeral')
+        self.assertEqual([e for e in self.errors(ci) if 'lifetime' in e], [])
+        ci = copy.deepcopy(self.ci)
+        del ci['provisioning']['ci_runner']['jobs']
+        self.assertFails('ci_runner.jobs.ci', ci)
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['agent_server'] = {}
+        self.assertFails('never both', ci)
+        qemu = load(QEMU, self.root)
+        qemu['provisioning']['upload']['roles'].append('wheel')
+        self.assertFails('the wheel role belongs to a ci_runner block', qemu)
+        qemu = load(QEMU, self.root)
+        qemu['guest_storage']['directories'].append(
+            {'role': 'ci-wheels', 'path': '/srv/scratch/aieh-ci-wheels', 'owner': 'root',
+             'group': 'root', 'mode': '755', 'mount': '/srv/scratch', 'provisioned_only': True})
+        self.assertFails('needs provisioning.ci_runner', qemu)
+        ci = copy.deepcopy(self.ci)
+        next(d for d in ci['guest_storage']['directories'] if d['role'] == 'ci-wheels')[
+            'provisioned_only'] = False
+        self.assertFails('at most one ci-wheels directory', ci)
+
+    def test_more_single_rules(self):
+        # each case breaks one rule while every other stays satisfied
+        ci = copy.deepcopy(self.ci)
+        ci['provisioning']['ci_runner']['component'] = 'act_runner'
+        self.assertFails('ci_runner.binary', ci)
+        ci = copy.deepcopy(self.ci)
+        block = ci['provisioning']['ci_runner']
+        argv = block['register']['argv']
+        argv[argv.index('--token-file') + 1] = block['register']['token_file'] = '/tmp/ci/token'
+        self.assertFails('ci_runner.register', ci)
+        self.setUp()
+        self.seed_replace('      PermitListen 127.0.0.1:13300\n', '      PermitListen 0.0.0.0:13300\n')
+        block = self.ci['provisioning']['ci_runner']
+        forward = block['control_forward']
+        forward['sshd_config'] = ['PermitListen 0.0.0.0:13300' if line.startswith('PermitListen')
+                                  else line for line in forward['sshd_config']]
+        forward['bind'], forward['instance_url'] = '0.0.0.0:13300', 'http://0.0.0.0:13300'
+        argv = block['register']['argv']
+        argv[argv.index('--instance') + 1] = 'http://0.0.0.0:13300'
+        self.assertFails('ci_runner.control_forward')
+        self.setUp()
+        lock = copy.deepcopy(self.lock)
+        lock['wheels']['guest_dir'] = '/srv/scratch/other'
+        self.with_lock(lock)
+        self.assertFails('ci_runner.wheels')
+
+    def test_the_guards_are_the_execution_seeds(self):
+        # a textual difference that keeps the rules: only the verbatim comparison sees it
+        self.seed_replace('      # aieh-container-guard (S-01.3.1): no new connection',
+                          '      # aieh-container-guard (S-01.3.1, CI): no new connection')
+        self.assertFails('as the execution profile\'s seed does')
+        # the same weakened guard in both seeds: only the rules check sees it
+        self.setUp()
+        old = "              '-j REJECT')\n      EGRESS_CHAIN"
+        new = "              '-j ACCEPT')\n      EGRESS_CHAIN"
+        self.seed_replace(old, new)
+        base = load(QEMU, self.root)
+        base_rel = base['boot_inputs']['seed']['templates']['user-data']['path']
+        base_text = (self.root / base_rel).read_text(encoding='utf-8')
+        self.assertEqual(base_text.count(old), 1)
+        rel = self.new_name('.tmpl')
+        (self.root / rel).write_bytes(base_text.replace(old, new).encode('utf-8'))
+        base['boot_inputs']['seed']['templates']['user-data'] = {
+            'path': rel, 'sha256': check_profile.sha256_file(self.root / rel)}
+        profile_rel = self.new_name('.profile.json')
+        (self.root / profile_rel).write_text(json.dumps(base), encoding='utf-8')
+        self.ci['variant']['of'] = profile_rel
+        errors = self.errors()
+        self.assertFalse(any('as the execution profile\'s seed does' in e for e in errors), errors)
+        self.assertTrue(any('installs and verifies the declared rules' in e for e in errors), errors)
+
+    def test_helpers(self):
+        self.assertEqual(check_profile.flag_value(['--a', 'b', '--a=c'], '--a'), 'c')
+        self.assertIsNone(check_profile.flag_value(['--ab', 'c'], '--a'))
+        self.assertIsNone(check_profile.requirement_blocks('--hash=sha256:00\n'))
+        self.assertEqual(check_profile.requirement_blocks('# c\nx==1 \\\n    --hash=sha256:ab\n'),
+                         [('x==1', ['--hash=sha256:ab'])])
+        consts = check_profile.script_constants("A = '/x'\nB = A + '/y'\nC = 5\n"
+                                                "STEPS = (('a', f), ('b', g))\n")
+        self.assertEqual(consts, {'A': '/x', 'B': '/x/y', 'STEPS': ['a', 'b']})
+        self.assertEqual(check_profile.script_constants('def ('), {})
+
+
+class CISeedScript(unittest.TestCase):
+    """Q-02.2.1: the CI seed's own root-step functions (the script is Linux- and root-only:
+    each function runs alone, its system calls replaced by recording stand-ins)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        ci = load(CI)
+        text = (REPO / ci['boot_inputs']['seed']['templates']['user-data']['path']).read_text(
+            encoding='utf-8')
+        cls.script = check_profile.write_files_blocks(text)['/usr/local/sbin/aieh-provision']
+        cls.tree = ast.parse(cls.script)
+        cls.ci = ci
+
+    def namespace(self, *names, **extra):
+        import ast
+        import re as re_module
+        ns = {'json': json, 're': re_module, 'os': os, 'hashlib': hashlib, 'stat': __import__('stat')}
+        for node in self.tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
+                    isinstance(node.targets[0], ast.Name) and node.targets[0].id != 'STEPS':
+                try:
+                    exec(compile(ast.Module([node], []), 'seed', 'exec'), ns)
+                except Exception:
+                    pass
+        wanted = set(names) | {'Failed'}
+        for node in self.tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted:
+                exec(compile(ast.Module([node], []), 'seed', 'exec'), ns)
+        ns.update(extra)
+        return ns
+
+    def test_constants_equal_the_profile(self):
+        ns = self.namespace()
+        block = self.ci['provisioning']['ci_runner']
+        self.assertEqual(ns['RUNNER_FILE'], block['runner_file']['path'])
+        self.assertEqual(ns['RUNNER_WORK'], block['user']['home'])
+        self.assertEqual(ns['ROLES'], tuple(self.ci['provisioning']['upload']['roles']))
+        self.assertEqual(ns['RUNNER_SHELL'], block['user']['shell'])
+
+    def manifest(self, tmp, **changes):
+        data = {'schema': 'ai-engineering-harness/profiles/provision-manifest/v1',
+                'files': [{'name': 'ci-job.tar', 'role': 'image-archive', 'size': 1, 'sha256': 'a' * 64},
+                          {'name': 'gitea-runner-6.0.0-linux-amd64', 'role': 'release-binary',
+                           'size': 1, 'sha256': 'b' * 64},
+                          {'name': 'dulwich-1.2.21-cp312-cp312-manylinux_2_28_x86_64.whl',
+                           'role': 'wheel', 'size': 1, 'sha256': 'c' * 64}],
+                'image': {'id': 'sha256:' + 'd' * 64, 'archive': 'ci-job.tar',
+                          'local_tag': 'aieh/ci-job:x', 'archive_repo_tags': []},
+                'docker': {'daemon_json': {}, 'server_version': '26.1.5', 'sysctl': '',
+                           'containerd_config': ''},
+                'ci_runner': {'binary': {'name': 'gitea-runner-6.0.0-linux-amd64',
+                                         'sha256': 'b' * 64}, 'config_sha256': 'e' * 64}}
+        data.update(changes)
+        path = Path(tmp) / 'provision.json'
+        path.write_text(json.dumps(data), encoding='utf-8')
+        return str(path)
+
+    def root_only_os(self):
+        import types
+        fake = types.SimpleNamespace(st_mode=0o100600, st_uid=0)
+        return types.SimpleNamespace(lstat=lambda path: fake, path=os.path)
+
+    def test_load_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns = self.namespace('load_manifest', os=self.root_only_os())
+            ns['MANIFEST'] = self.manifest(tmp)
+            self.assertEqual(ns['load_manifest']()['ci_runner']['config_sha256'], 'e' * 64)
+            cases = [
+                {'agent_server': {}},
+                {'ci_runner': {'binary': {'name': 'ci-job.tar', 'sha256': 'a' * 64},
+                               'config_sha256': 'e' * 64}},
+                {'ci_runner': {'binary': {'name': 'gitea-runner-6.0.0-linux-amd64',
+                                          'sha256': 'b' * 64}}},
+                {'files': [{'name': 'ci-job.tar', 'role': 'image-archive', 'size': 1,
+                            'sha256': 'a' * 64},
+                           {'name': 'gitea-runner-6.0.0-linux-amd64', 'role': 'release-binary',
+                            'size': 1, 'sha256': 'b' * 64}]},
+                {'files': [{'name': 'x.tar.gz', 'role': 'wheel', 'size': 1, 'sha256': 'c' * 64}]},
+            ]
+            for change in cases:
+                ns['MANIFEST'] = self.manifest(tmp, **change)
+                with self.assertRaises(ns['Failed'], msg=change):
+                    ns['load_manifest']()
+
+    def test_install_wheels_copies_and_hashes_the_wheel_role_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            staging, wheels = Path(tmp) / 'staging', Path(tmp) / 'wheels'
+            staging.mkdir()
+            wheel = staging / 'a-1-py3-none-any.whl'
+            wheel.write_bytes(b'wheel')
+            (staging / 'pkg.deb').write_bytes(b'deb')
+            made = []
+
+            def make_dir(path, uid, gid, mode):
+                os.mkdir(path)
+                made.append((path, uid, gid, oct(mode)))
+                return {'path': path}
+
+            ns = self.namespace('install_wheels', 'sha256_path',
+                                make_dir=make_dir, copy_file=lambda s, d, m: shutil.copy(s, d))
+            ns.update(STAGING=str(staging), WHEELS_DIR=str(wheels),
+                      sha256_path=lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest())
+            manifest = {'files': [
+                {'name': 'pkg.deb', 'role': 'deb', 'sha256': 'x'},
+                {'name': wheel.name, 'role': 'wheel',
+                 'sha256': hashlib.sha256(b'wheel').hexdigest()}]}
+            out = ns['install_wheels'](manifest)
+            self.assertEqual(out['listing'], [wheel.name])
+            self.assertEqual(made, [(str(wheels), 0, 0, '0o755')])
+            with self.assertRaises(ns['Failed']):           # single use
+                ns['install_wheels'](manifest)
+            shutil.rmtree(wheels)
+            manifest['files'][1]['sha256'] = '0' * 64       # hashed again after the copy
+            with self.assertRaises(ns['Failed']):
+                ns['install_wheels'](manifest)
+
+    def test_install_ci_runner_refusals_and_order(self):
+        import types
+        calls = []
+        groups = {'agent': 'agent sudo'}
+        users = {}
+
+        def must(step, argv, timeout, cwd=None):
+            calls.append(argv)
+            if argv[0] == 'useradd':
+                users[argv[-1]] = types.SimpleNamespace(pw_name=argv[-1], pw_uid=990, pw_gid=990,
+                                                        pw_dir=argv[argv.index('--home-dir') + 1],
+                                                        pw_shell=argv[argv.index('--shell') + 1])
+            if argv[:2] == ['id', '-nG']:
+                return groups.get(argv[2], 'aieh-ci-runner docker')
+            return ''
+
+        def getpwnam(name):
+            if name not in users:
+                raise KeyError(name)
+            return users[name]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / 'config.yaml'
+            config.write_text('{}', encoding='utf-8')
+            fake_stat = types.SimpleNamespace(st_mode=0o100644, st_uid=0)
+            fake_os = types.SimpleNamespace(
+                lstat=lambda p: fake_stat, path=os.path,
+                makedirs=lambda *a, **k: calls.append(['makedirs', a[0]]))
+            ns = self.namespace('install_ci_runner', os=fake_os, must=must,
+                                pwd=types.SimpleNamespace(getpwnam=getpwnam),
+                                grp=types.SimpleNamespace(getgrnam=lambda n: n),
+                                make_dir=lambda path, uid, gid, mode: (calls.append(
+                                    ['mkdir', path, uid, gid, oct(mode)]) or {'path': path}),
+                                copy_file=lambda s, d, m: calls.append(['copy', s, d, oct(m)]),
+                                unit_show=lambda unit, names: {'ActiveState': 'inactive',
+                                                               'UnitFileState': 'disabled'},
+                                stat_entry=lambda p: {'path': p})
+            digest = hashlib.sha256(b'{}').hexdigest()
+            binary = {'name': 'gitea-runner-6.0.0-linux-amd64', 'sha256': 'b' * 64}
+            ns.update(RUNNER_CONFIG=str(config), RUNNER_BINARY=str(Path(tmp) / 'opt' / 'gitea-runner'),
+                      RUNNER_STATE=str(Path(tmp) / 'state'), RUNNER_WORK=str(Path(tmp) / 'work'),
+                      sha256_path=lambda p: digest if p == str(config) else 'b' * 64)
+            manifest = {'ci_runner': {'binary': binary, 'config_sha256': digest}}
+            out = ns['install_ci_runner'](manifest)
+            useradd = next(c for c in calls if c[0] == 'useradd')
+            self.assertEqual(useradd[useradd.index('--groups') + 1], 'docker')
+            self.assertEqual(useradd[useradd.index('--shell') + 1], '/usr/sbin/nologin')
+            self.assertIn(['mkdir', ns['RUNNER_STATE'], 0, 990, '0o750'], calls)
+            self.assertIn(['mkdir', ns['RUNNER_WORK'], 990, 990, '0o700'], calls)
+            self.assertEqual(out['binary']['sha256'], 'b' * 64)
+            self.assertFalse(any('register' in c or 'enable' in c for c in calls))
+            # refusals: the user exists, a wrong config, agent in docker, a started unit
+            with self.assertRaises(ns['Failed']):
+                ns['install_ci_runner'](manifest)
+            users.clear()
+            with self.assertRaises(ns['Failed']):
+                ns['install_ci_runner']({'ci_runner': {'binary': binary, 'config_sha256': '0' * 64}})
+            self.assertEqual(users, {})                      # refused before useradd
+            groups['agent'] = 'agent docker'
+            with self.assertRaises(ns['Failed']):
+                ns['install_ci_runner'](manifest)
+            users.clear()
+            groups['agent'] = 'agent'
+            ns['unit_show'] = lambda unit, names: {'ActiveState': 'active', 'UnitFileState': 'enabled'}
+            with self.assertRaises(ns['Failed']):
+                ns['install_ci_runner'](manifest)
+
+    def test_main_has_no_registration_or_agent_server_mode(self):
+        for word in ('register', 'conversation-facts', 'egress-route', 'agent_server_secrets'):
+            self.assertNotIn(f"argv == ['{word}']", self.script)
+        import ast
+        imports = [a.name for node in self.tree.body if isinstance(node, ast.Import)
+                   for a in node.names]
+        self.assertNotIn('secrets', imports)
 
 
 class OpenApiSubset(unittest.TestCase):

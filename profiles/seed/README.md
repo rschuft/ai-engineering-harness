@@ -140,3 +140,25 @@ changes three seeded files only:
 The composition's `daemon.json` keys (`bip`, `dns`) travel in the provisioning manifest.
 Without the option nothing is read from the overlay and every file of the seed is
 byte-identical to an ordinary provisioned guest's; the template and its pin are unchanged.
+
+## The CI guest seed (Q-02.2.1)
+
+[`ci/user-data.tmpl`](ci/user-data.tmpl) is the user-data template of the CI profile variant
+[`strong-windows-qemu-whpx-ci`](../strong-windows-qemu-whpx-ci/README.md) (decision 0016
+section 2), pinned by that profile with the shared `meta-data.tmpl` and `network-config.yaml`.
+It has the same three placeholders and the same generator, and it follows the pattern above:
+the user `agent`, the scratch disk, the inert-without-a-manifest provisioning files, and the
+container and egress guards with their units, byte for byte. It differs in:
+
+| Path | Content |
+|---|---|
+| `/etc/ssh/sshd_config.d/10-aieh.conf` | `AllowTcpForwarding remote`, `GatewayPorts clientspecified` and `PermitListen 127.0.0.1:13300`: the one listener of the `ci-control` remote forward, which the dispatcher holds (an Owner act, A-1); local forwarding stays refused |
+| `/usr/local/sbin/aieh-provision` | the CI root step: the execution seed's functions for the upload, Moby, the guards and the image, verbatim (a test compares them), then `ci-runner-install` (the system user `aieh-ci-runner` in group `docker`, the release binary hashed again, its state and work directories; the seeded `config.yaml` checked against the manifest; the unit left disabled) and `wheels` (the hash-locked wheel set copied, hashed again, into the root-owned directory jobs mount read-only). Modes `provision` and `facts` only; no secret is generated, read or written |
+| `/etc/systemd/system/aieh-docker-facts.service` | after `docker.service` only; the report holds the guards and the runner, the runner file by its metadata |
+| `/etc/aieh/ci-runner/config.yaml` | the runner's declared configuration (`provisioning.ci_runner.config`), as `json.dumps(config, indent=2)` |
+| `/etc/systemd/system/aieh-ci-runner.service` | the runner as `aieh-ci-runner`, hardened, the loopback only; conditional on the runner file that registration writes (Q-02.2.2) |
+| runcmd | the exchange directory is `0755`, so that a job's non-root user reads the staged bundle through its read-only mount |
+
+There is no Agent Server, no conversation-facts or egress-route unit, and no registration token
+anywhere in the seed. **Not verified in a guest**: no CI guest has been created (the CI
+bindings of `tools/guest.py` are a later slice).
