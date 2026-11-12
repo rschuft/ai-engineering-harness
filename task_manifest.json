@@ -687,14 +687,14 @@
     },
     {
       "id": "E-01.3.3",
-      "title": "Realize dispatcher credential custody and per-attempt role tokens",
+      "title": "Realize dispatcher credential custody and per-attempt role-token use",
       "phase": 1,
       "deps": [
         "E-01.3.1",
         "F-06.3"
       ],
       "path": "task_prompts/E-01.3.3.md",
-      "sha256": "8211a2a893eef29e07348778796489e192aa2a2b16ab493cd4c79008ef31b1f5"
+      "sha256": "991de667fdf8377e099c0ac615f89eb020dc42080c8976f68581f99f159032c1"
     },
     {
       "id": "E-01.3.2",
