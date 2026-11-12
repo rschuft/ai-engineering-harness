@@ -83,14 +83,30 @@ auditor can see. The site administrator's snapshot outside this test covers the 
 ``DELETE /api/v1/token`` is never sent: it needs no scope and would revoke the token itself.
 
 **Phase ``qualify``** (``AIEH_PROTECTION_AUDIT_LIVE=qualify``; site administration as aieh-site-admin by
-basic authentication with its harness-held password, as ``gitea_roles.py fixture`` does): the protection
-check (protection_check.verify) must answer ``verified`` on the fixture as declared (its digest the
-baseline); then each injected drift is detected, naming it, and restored: main's
-``block_admin_merge_override`` false, main's priority 5 (Gitea then enforces ``**`` on main: precedence), an
-extra rule ``aieh-qualify/*``, the verifier bot raised to admin, squash merges allowed. After each
-restoration (``gitea_roles.apply_fixture`` re-applies the total declaration; the extra rule is deleted) the
-check answers ``verified`` with the baseline digest. The restorations run in a ``finally`` too. These API
-changes leave no audit event at Gitea 28.3.0 (finding F-B).
+basic authentication with its harness-held password, as ``gitea_roles.py fixture`` does) runs one explicit
+sequence (``Qualification``; Owner authorization OA-16 Act D), not a ``subTest`` loop:
+
+- *precondition*, before any mutation: ``GET /token`` with the auditor's token names its login and exactly
+  ``read:repository``; the protection check (protection_check.verify) answers ``verified``, its digest the
+  baseline: AIEH_PROTECTION_AUDIT_BASELINE when set (it must then be ``sha256:<64 hex>`` and equal), else the
+  first verdict's (the report names the source); the site administrator's read-back (``gitea_roles.read_fixture``
+  and the collaborator roster) equals the complete declaration (the settings, the collaborator permissions,
+  the rule set and all 34 fields of every rule, list fields compared sorted as the check does);
+- *five scenarios*, in order, each only after the previous passed every check: main's
+  ``block_admin_merge_override`` false; main's priority 5 (Gitea then enforces ``**`` on main: precedence); an
+  extra rule ``aieh-qualify/*``; the verifier bot raised to admin; squash merges allowed. Each injection is
+  sent once (2xx required); the check must answer ``drift`` with a problem naming it; one restoration follows
+  (the extra rule deleted if present, then one ``gitea_roles.apply_fixture``, the total declaration); then the
+  independent read-back must equal the declaration and the check must answer ``verified`` with the baseline
+  digest;
+- *after the fifth*: the complete declaration read back, the baseline digest, no ``aieh-qualify/*`` rule, the
+  verifier bot back to ``read``.
+
+Any failed check, an injection answering other than 2xx, or any exception (an uncertain outcome) sets a stop
+latch: no later injection is ever sent. When the stop follows a sent injection, one restoration attempt is made
+for it unless one was already made; the final state is then read once (read-back and verdict) and reported,
+with the failed check and the injections not sent, and the test fails. No mutation or restoration is retried.
+These API changes leave no audit event at Gitea 28.3.0 (finding F-B).
 """
 from __future__ import annotations
 
@@ -98,6 +114,7 @@ import base64
 import importlib.util
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -644,58 +661,357 @@ class TestNoEscape(NegativeLive):
                 self.assertIn(status, (403, 404), message(payload))
 
 
+# ---------------------------------------------------------------- the qualify phase (OA-16 Act D)
+
+QUALIFY_RULE = 'aieh-qualify/*'
+BASELINE_VARIABLE = 'AIEH_PROTECTION_AUDIT_BASELINE'
+BASELINE = os.environ.get(BASELINE_VARIABLE)
+DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
+
+
+class Injection(NamedTuple):
+    label: str
+    names: str     # what one of the check's drift problems must contain: the drift identified
+    method: str
+    path: str
+    body: object
+
+
+def injections() -> list[Injection]:
+    """The five drifts the qualify phase injects as the site administrator, in order, each one request."""
+    verifier = R.ROLES['verifier']['user']
+    return [
+        Injection('main.block_admin_merge_override false', 'main.block_admin_merge_override is False', 'PATCH',
+                  f'{REPO}/branch_protections/main', {'block_admin_merge_override': False}),
+        Injection('main lowered below the catch-all (precedence)', "Gitea enforces the rule '**' on main", 'PATCH',
+                  f'{REPO}/branch_protections/main', {'priority': 5}),
+        Injection('an extra rule', f"rule '{QUALIFY_RULE}'", 'POST', f'{REPO}/branch_protections',
+                  R._total_rule(QUALIFY_RULE, 9)),
+        Injection('the verifier bot raised to admin', f'collaborator {verifier}: admin', 'PUT',
+                  f'{REPO}/collaborators/{verifier}', {'permission': 'admin'}),
+        Injection('squash merges allowed', "the repository's allow_squash_merge is True", 'PATCH', REPO,
+                  {'allow_squash_merge': True}),
+    ]
+
+
+def read_back(admin) -> dict:
+    """The fixture as the site administrator reads it, independently of the protection check:
+    gitea_roles.read_fixture (the settings, each declared collaborator's permission, every rule's 34 fields)
+    and the collaborator roster (an undeclared collaborator)."""
+    observed = R.read_fixture(admin)
+    status, roster = admin.call('GET', f'{REPO}/collaborators?{PC.PAGE}')
+    if status != 200 or not isinstance(roster, list) or not all(isinstance(c, dict) for c in roster):
+        observed['roster'] = {'unreadable': status, 'message': message(roster)}
+    else:
+        observed['roster'] = sorted(str(c.get('login')) for c in roster)
+    return observed
+
+
+def _normal_rule(rule) -> dict:
+    """A rule's 34 fields, list fields sorted (null equal to []), as the protection check compares them."""
+    normal = {}
+    for field in R.PROTECTION_FIELDS:
+        value = rule.get(field)
+        if field in PC.LIST_FIELDS and isinstance(value if value is not None else [], list):
+            value = sorted(value or [], key=str)
+        normal[field] = value
+    return normal
+
+
+def declaration_differences(observed) -> list[str]:
+    """How a read_back differs from the complete declaration (gitea_roles: repository_settings(),
+    collaborators(), protection_rules(), every field of every rule); empty when it equals it."""
+    differences = []
+    full_name = (observed.get('repository') or {}).get('full_name')
+    if full_name != REPOSITORY:
+        differences.append(f'the repository answers as {full_name!r}, not {REPOSITORY}')
+    for key, want in R.repository_settings().items():
+        got = observed['settings'].get(key)
+        if got != want:
+            differences.append(f"the repository's {key} is {got!r}, declared {want!r}")
+    declared = R.collaborators()
+    for user, want in declared.items():
+        got = observed['collaborator_permissions'].get(user)
+        if got != want:
+            differences.append(f'collaborator {user}: {got!r}, declared {want!r}')
+    roster = observed['roster']
+    if roster != sorted(declared):
+        differences.append(f'the collaborators are {roster!r}, declared {sorted(declared)}')
+    rules = observed['branch_protections']
+    for name, size in (('the collaborators', len(roster) if isinstance(roster, list) else 0),
+                       ('the rules', len(rules))):
+        if size >= LIST_LIMIT:
+            differences.append(f'{name}: {size} entries, a full page (may be incomplete)')
+    want_rules = {r['rule_name']: _normal_rule(r) for r in R.protection_rules()}
+    seen = {}
+    for rule in rules:
+        name = rule.get('rule_name')
+        if name in seen:
+            differences.append(f'the rule {name!r} is listed twice')
+        seen[name] = _normal_rule(rule)
+    for name in sorted(set(seen) - set(want_rules), key=str):
+        differences.append(f'rule {name!r} is not declared')
+    for name in sorted(set(want_rules) - set(seen)):
+        differences.append(f'the declared rule {name!r} is missing')
+    for name in sorted(set(want_rules) & set(seen)):
+        for field in R.PROTECTION_FIELDS:
+            if seen[name][field] != want_rules[name][field]:
+                differences.append(f'{name}.{field} is {seen[name][field]!r}, declared {want_rules[name][field]!r}')
+    return differences
+
+
+def describe(exc) -> str:
+    return f'{type(exc).__name__}: {R.redact(str(exc))[:300]}'
+
+
+def verdict_row(verdict, baseline=None) -> dict:
+    row = {'status': verdict.status, 'code': verdict.code, 'digest': verdict.digest,
+           'problems': [R.redact(str(p))[:300] for p in verdict.problems]}
+    if baseline is not None:
+        row['digest_equals_baseline'] = verdict.digest == baseline
+    return row
+
+
+class QualificationStopped(AssertionError):
+    """The qualify phase stopped: a check failed or an outcome was uncertain; no later injection was sent."""
+
+
+class RestorationFailed(Exception):
+    pass
+
+
+class Recording:
+    """The site administrator's API, recording each call it makes (method, path, then status or exception)."""
+
+    def __init__(self, api, log):
+        self.api, self.log = api, log
+
+    def call(self, method, path, body=None, headers=None):
+        entry = {'method': method, 'path': path}
+        self.log.append(entry)
+        try:
+            status, payload = self.api.call(method, path, body, headers)
+        except Exception as exc:
+            entry['status'] = 'uncertain: ' + describe(exc)
+            raise
+        entry['status'] = status
+        return status, payload
+
+
+class Qualification:
+    """The qualify phase's sequence (Owner authorization OA-16 Act D), independent of unittest.
+
+    ``run`` checks the baseline precondition, then for each of SCENARIOS in order: checks the stop latch, sends
+    the one injection once, requires drift naming it, restores once (the probe rule deleted if present, then one
+    gitea_roles.apply_fixture), then requires both an independent read-back as the site administrator equal to
+    the complete declaration and a ``verified`` verdict with the baseline digest. After the last it checks the
+    complete declaration, the baseline digest, no probe rule and the verifier bot's declared permission.
+
+    Any failed check, non-2xx injection or exception sets the latch (``stopped``) and raises
+    QualificationStopped: no later injection is ever sent. A stop after an injection was sent makes one
+    restoration attempt for it unless one was already made; then the final state is read once and reported.
+    Nothing is retried, and nothing is repaired beyond that one restoration.
+
+    ADMIN: the site administrator's API (``call(method, path, body)``); VERIFY: the protection check, a
+    Verdict; TOKEN_VIEW: ``GET /token`` with the auditor's token, (status, payload); BASELINE: the expected
+    baseline digest (AIEH_PROTECTION_AUDIT_BASELINE), or None to take the first verdict's; ROWS: the report rows
+    (RESULTS by default)."""
+
+    def __init__(self, admin, verify, token_view, baseline=None, rows=None, scenarios=None):
+        self.admin, self.verify, self.token_view = admin, verify, token_view
+        self.expected_baseline = baseline
+        self.rows = RESULTS if rows is None else rows
+        self.scenarios = injections() if scenarios is None else list(scenarios)
+        self.baseline = None
+        self.stopped = None        # the latch: the failed check, once set
+        self.sent = []             # the labels of the injections sent
+        self.restorations = []     # the labels of the injections a restoration was attempted for
+
+    def run(self):
+        self.latch(None)
+        self.precondition()
+        for scenario in self.scenarios:
+            self.scenario(scenario)
+        self.final()
+        return self.baseline
+
+    def latch(self, scenario):
+        if self.stopped is not None:
+            raise QualificationStopped(f'the qualification stopped earlier ({self.stopped["check"]}): '
+                                       + (f'{scenario.label!r} is not sent' if scenario else 'nothing more runs'))
+
+    def checked(self, row, scenario, check, step):
+        """STEP's result; any exception is an uncertain outcome that stops the sequence."""
+        try:
+            return step()
+        except Exception as exc:  # noqa: BLE001 - every failure stops; none is retried
+            self.stop(row, scenario, check, f'uncertain outcome: {describe(exc)}')
+
+    def precondition(self):
+        """Before any mutation: the auditor's identity and read-only scope, ``verified`` with the expected
+        baseline digest, and the read-back equal to the declaration."""
+        row = {'action': 'qualify: baseline precondition (no mutation is sent unless it passes)'}
+        self.rows.append(row)
+        def token_view():
+            status, payload = self.token_view()
+            return status, payload
+
+        status, body = self.checked(row, None, 'auditor identity', token_view)
+        user = body.get('user') if isinstance(body, dict) else None
+        login = user.get('login') if isinstance(user, dict) else None
+        scopes = body.get('scopes') if isinstance(body, dict) else None
+        scopes = sorted(map(str, scopes)) if isinstance(scopes, list) else scopes
+        row['auditor'] = {'status': status, 'login': login, 'scopes': scopes}
+        if (status, login, scopes) != (200, PC.AUDITOR, PC.SCOPES):
+            self.stop(row, None, 'auditor identity', f'GET /token answered {status}, login {login!r}, scopes '
+                      f'{scopes!r}; expected 200, {PC.AUDITOR}, exactly {PC.SCOPES}')
+        expected = self.expected_baseline
+        if expected is not None and not DIGEST.fullmatch(expected):
+            self.stop(row, None, 'baseline digest', f'{BASELINE_VARIABLE} is {expected!r}, not sha256:<64 hex>')
+        verdict = self.checked(row, None, 'baseline verdict', self.verify)
+        row['verdict'] = verdict_row(verdict, expected)
+        if verdict.status != 'verified':
+            self.stop(row, None, 'baseline verdict', f'the check answered {verdict.status} ({verdict.code}), not '
+                      'verified')
+        if expected is not None and verdict.digest != expected:
+            self.stop(row, None, 'baseline digest', f'the digest {verdict.digest} is not {BASELINE_VARIABLE} '
+                      f'{expected}')
+        self.baseline = expected or verdict.digest
+        row['baseline'] = {'digest': self.baseline,
+                           'source': BASELINE_VARIABLE if expected is not None else 'the first verdict'}
+        differences = self.checked(row, None, 'baseline read-back',
+                                   lambda: declaration_differences(read_back(self.admin)))
+        row['read_back'] = differences
+        if differences:
+            self.stop(row, None, 'baseline read-back', f'the fixture differs from the declaration: {differences}')
+        row['result'] = 'passed'
+
+    def scenario(self, scenario):
+        self.latch(scenario)
+        row = {'action': f'inject: {scenario.label}', 'expected': f'drift naming {scenario.names!r}',
+               'injection': {'method': scenario.method, 'path': scenario.path}}
+        self.rows.append(row)
+        self.sent.append(scenario.label)
+        try:
+            status, payload = self.admin.call(scenario.method, scenario.path, scenario.body)
+        except Exception as exc:  # noqa: BLE001 - sent or not, its outcome is unknown: restore and stop
+            row['injection']['status'] = 'uncertain: ' + describe(exc)
+            self.stop(row, scenario, 'injection', f'uncertain outcome: the injection raised {describe(exc)}; whether '
+                      'Gitea applied it is unknown')
+        row['injection'].update(status=status, message=message(payload))
+        if not (isinstance(status, int) and 200 <= status < 300):
+            self.stop(row, scenario, 'injection', f'the injection answered {status}, not 2xx')
+        drift = self.checked(row, scenario, 'drift detection', self.verify)
+        row['drift'] = verdict_row(drift)
+        if drift.status != 'drift':
+            self.stop(row, scenario, 'drift detection', f'the check answered {drift.status} ({drift.code}), not '
+                      'drift')
+        if not any(scenario.names in str(p) for p in drift.problems):
+            self.stop(row, scenario, 'drift detection', f'no drift problem names the injection ({scenario.names!r})')
+        failure = self.restore(row, scenario)
+        if failure is not None:
+            self.stop(row, scenario, 'restoration', failure)
+        differences = self.checked(row, scenario, 'read-back',
+                                   lambda: declaration_differences(read_back(self.admin)))
+        row['read_back'] = differences
+        if differences:
+            self.stop(row, scenario, 'read-back', f'the fixture differs from the declaration after the restoration: '
+                      f'{differences}')
+        restored = self.checked(row, scenario, 'restored verdict', self.verify)
+        row['verdict'] = verdict_row(restored, self.baseline)
+        if (restored.status, restored.digest) != ('verified', self.baseline):
+            self.stop(row, scenario, 'restored verdict', f'the check answered {restored.status} ({restored.code}) '
+                      f'with digest {restored.digest}, not verified with the baseline {self.baseline}')
+        row['result'] = 'passed'
+
+    def restore(self, row, scenario):
+        """One bounded restoration for SCENARIO: delete the probe rule if present, then one apply_fixture. The
+        first failure ends it; nothing is retried. None, or what failed."""
+        self.restorations.append(scenario.label)
+        api = Recording(self.admin, row.setdefault('restoration', []))
+        try:
+            status, rules = api.call('GET', f'{REPO}/branch_protections')
+            if status != 200 or not isinstance(rules, list):
+                raise RestorationFailed(f'GET the rules answered {status}')
+            if QUALIFY_RULE in {r.get('rule_name') for r in rules if isinstance(r, dict)}:
+                status, payload = api.call('DELETE',
+                                           f'{REPO}/branch_protections/{urllib.parse.quote(QUALIFY_RULE, safe="")}')
+                if status not in (200, 204):
+                    raise RestorationFailed(f'DELETE the rule {QUALIFY_RULE!r} answered {status} ({message(payload)})')
+            R.apply_fixture(api)
+        except Exception as exc:  # noqa: BLE001 - a restoration that fails is reported, never retried
+            row['restoration_failed'] = describe(exc)
+            return f'the restoration failed: {describe(exc)}'
+        return None
+
+    def final(self):
+        """After the last injection: the complete declaration, the baseline digest, no probe rule, the verifier
+        bot's declared permission."""
+        row = {'action': 'qualify: after the last injection'}
+        self.rows.append(row)
+        observed = self.checked(row, None, 'final read-back', lambda: read_back(self.admin))
+        differences = self.checked(row, None, 'final read-back', lambda: declaration_differences(observed))
+        verifier = R.ROLES['verifier']['user']
+        rules = [r.get('rule_name') for r in observed['branch_protections']]
+        permission = observed['collaborator_permissions'].get(verifier)
+        row.update(read_back=differences, probe_rule_present=QUALIFY_RULE in rules, verifier_permission=permission)
+        if differences or QUALIFY_RULE in rules or permission != R.ROLES['verifier']['permission']:
+            self.stop(row, None, 'final read-back', f'differences {differences}; the rule {QUALIFY_RULE!r} '
+                      f'{"present" if QUALIFY_RULE in rules else "absent"}; {verifier}: {permission!r}')
+        verdict = self.checked(row, None, 'final verdict', self.verify)
+        row['verdict'] = verdict_row(verdict, self.baseline)
+        if (verdict.status, verdict.digest) != ('verified', self.baseline):
+            self.stop(row, None, 'final verdict', f'the check answered {verdict.status} ({verdict.code}) with digest '
+                      f'{verdict.digest}, not verified with the baseline {self.baseline}')
+        row['result'] = 'passed'
+
+    def stop(self, row, scenario, check, detail):
+        """Set the latch, make the one restoration attempt still owed, read the final state once, report, and
+        raise QualificationStopped."""
+        self.stopped = {'check': check, 'scenario': scenario.label if scenario else None, 'detail': detail}
+        row['result'] = f'stopped: {check}'
+        report = {'action': 'qualify: STOPPED', 'failed_check': check,
+                  'scenario': scenario.label if scenario else None, 'detail': detail}
+        if scenario is None or scenario.label not in self.sent:
+            report['restoration_after_stop'] = 'none owed: no injection of this step was sent'
+        elif scenario.label in self.restorations:
+            report['restoration_after_stop'] = 'not attempted again: its one restoration was already attempted'
+        else:
+            failure = self.restore(row, scenario)
+            report['restoration_after_stop'] = failure or 'attempted once and completed (final state below)'
+        state = {}
+        try:
+            state['read_back'] = declaration_differences(read_back(self.admin))
+        except Exception as exc:  # noqa: BLE001 - reported, not retried
+            state['read_back'] = 'unreadable: ' + describe(exc)
+        try:
+            state['verdict'] = verdict_row(self.verify(), self.baseline)
+        except Exception as exc:  # noqa: BLE001
+            state['verdict'] = 'unverifiable: ' + describe(exc)
+        report['final_state'] = state
+        report['not_sent'] = [s.label for s in self.scenarios if s.label not in self.sent]
+        self.rows.append(report)
+        for label in report['not_sent']:
+            self.rows.append({'action': f'inject: {label}', 'status': 'not sent',
+                              'message': f'the qualification stopped earlier ({check}); this injection was not sent'})
+        raise QualificationStopped(f'the qualify phase STOPPED at {check}'
+                                   + (f' ({scenario.label})' if scenario else '') + f': {detail}. Restoration after '
+                                   f'the stop: {report["restoration_after_stop"]}. Final state: {state}. Not sent: '
+                                   f'{report["not_sent"]}. Not a PASS; report the observed state.')
+
+
 class QualifyLive(Live):
     """The verifier qualification: drift injected as the site administrator is detected, then restored."""
     PHASE_OF_CLASS = 'qualify'
 
     def verify(self):
-        return PC.verify(self.ctx.provider, self.ctx.port, REPOSITORY, R.DEFAULT_BRANCH)
+        return PC.verify(self.ctx.provider, self.ctx.port, REPOSITORY, R.DEFAULT_BRANCH,
+                         http=getattr(self.ctx, 'http', None))
 
     def test_injected_drift_is_detected_and_restored(self):
-        baseline = self.verify()
-        RESULTS.append({'action': 'baseline', 'status': baseline.status, 'code': baseline.code,
-                        'digest': baseline.digest})
-        self.assertEqual(baseline.status, 'verified', baseline.detail)
-        admin = R.admin_api(self.ctx.provider, self.ctx.port)
-        repo = REPO
-        probe_rule = 'aieh-qualify/*'
-
-        def restore():
-            names = {r.get('rule_name') for r in admin.call('GET', f'{repo}/branch_protections')[1] or []}
-            if probe_rule in names:
-                admin.call('DELETE', f'{repo}/branch_protections/{urllib.parse.quote(probe_rule, safe="")}')
-            R.apply_fixture(admin)
-
-        injections = [
-            ('main.block_admin_merge_override false', 'main.block_admin_merge_override is False',
-             lambda: admin.call('PATCH', f'{repo}/branch_protections/main', {'block_admin_merge_override': False})),
-            ('main lowered below the catch-all (precedence)', "Gitea enforces the rule '**' on main",
-             lambda: admin.call('PATCH', f'{repo}/branch_protections/main', {'priority': 5})),
-            ('an extra rule', f"rule '{probe_rule}'",
-             lambda: admin.call('POST', f'{repo}/branch_protections', R._total_rule(probe_rule, 9))),
-            ('the verifier bot raised to admin', f'collaborator {R.ROLES["verifier"]["user"]}: admin',
-             lambda: admin.call('PUT', f'{repo}/collaborators/{R.ROLES["verifier"]["user"]}', {'permission': 'admin'})),
-            ('squash merges allowed', "the repository's allow_squash_merge is True",
-             lambda: admin.call('PATCH', repo, {'allow_squash_merge': True})),
-        ]
-        try:
-            for label, expected, inject in injections:
-                with self.subTest(injection=label):
-                    status = inject()[0]
-                    drift = self.verify()
-                    restore()
-                    restored = self.verify()
-                    RESULTS.append({'action': f'inject: {label}', 'status': status, 'drift': drift.status,
-                                    'problems': list(drift.problems), 'restored': restored.status,
-                                    'digest_equal': restored.digest == baseline.digest})
-                    self.assertIn(status, (200, 201, 204))
-                    self.assertEqual(drift.status, 'drift', drift.detail)
-                    self.assertTrue(any(expected in p for p in drift.problems), drift.problems)
-                    self.assertEqual((restored.status, restored.digest), ('verified', baseline.digest))
-        finally:
-            restore()
-        final = self.verify()
-        self.assertEqual((final.status, final.digest), ('verified', baseline.digest))
+        admin = R.admin_api(self.ctx.provider, self.ctx.port, getattr(self.ctx, 'http', None))
+        auditor = R.Api(self.ctx.port, self.ctx.token, self.http())
+        Qualification(admin, self.verify, lambda: auditor.call('GET', '/token'), BASELINE).run()
 
 
 if __name__ == '__main__':
