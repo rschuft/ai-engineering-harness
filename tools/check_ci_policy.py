@@ -23,7 +23,12 @@ It fails when:
 - a runner-configuration invariant is missing or weakened, or a profile variant's declared
   ``config.yaml`` (``provisioning.ci_runner.config``) violates one (a ``host`` or ``lxc``
   label, environment injection, the cache, privileged mode, the engine socket, volumes, the
-  host network, pulls, or a ``container.options`` token outside the declared list);
+  host network, IPv6, pulls, a host workspace, a shared tool cache, hooks, a post-task script,
+  extra headers, the metrics listener, the health check, or a ``container.options`` token
+  outside the declared list) or holds ``$`` (the runner expands ``${NAME}`` from its
+  environment); the variant's runner service sets a forbidden environment variable (the label
+  override, the registration token, a proxy, the engine host, the job hooks, telemetry) or
+  overrides the labels;
 - a workflow under ``policy/ci/workflows/`` breaks decision 0016 section 7.3: a trigger other
   than ``workflow_dispatch`` with exactly the three inputs; a missing or non-empty top-level
   ``permissions:`` or any other ``permissions:``; ``uses:``; a ``secrets.`` or ``vars.``
@@ -37,7 +42,11 @@ It fails when:
 - the proxy allowlist is not exactly the runner RPC; the registration procedure does not reset
   the token before it is read and after registration, its fallback (a token standing between
   provisionings) is in force, or its live gate does not block a live runner until Q-02.2.2
-  proves the reset invalidates the delivered value (the Owner's direction of 2026-11-10);
+  proves the reset invalidates the delivered value (the Owner's direction of 2026-11-10); the
+  token may enter other than by ``--token-file`` from ``/run/``; or a variant's register call
+  passes ``--token``, the token's environment variable or ``--labels``, omits ``--config``,
+  names another instance than the ``ci-control`` endpoint, or is ephemeral other than exactly
+  when the chosen lifetime is per-validation;
 - an Owner act lacks its requesting leaf or claims ``observed`` without a verbatim bootstrap-log
   approval; a forward or host listener names no Owner act;
 - a fact verified at source lacks its paths and lines or the archive the lock pins, a live one
@@ -107,11 +116,32 @@ REQUIRED_RULES = {
     'container.docker_host': ('must_equal', '-'),
     'container.valid_volumes': ('must_be_empty', None),
     'container.network': ('must_be_empty', None),
-    'container.enable_ipv6': ('must_equal', False),
+    # Not a key at the 6.0.0 pin (Overseer ruling (2), 2026-11-12): the stale key is declared
+    # nowhere, and IPv6 is set off under network_create_options.
+    'container.enable_ipv6': ('must_be_empty', None),
+    'container.network_create_options.enable_ipv6': ('must_equal', False),
     'container.force_pull': ('must_equal', False),
     'container.force_rebuild': ('must_equal', False),
     'container.options': ('options', None),
+    # The 6.0.0 keys the declaration must pin (Overseer ruling (3), 2026-11-12).
+    'container.bind_workdir': ('must_equal', False),
+    'container.sweep': ('must_equal', False),
+    'runner.tool_cache_mode': ('must_equal', 'none'),
+    'runner.hooks': ('must_be_empty', None),
+    'runner.post_task_script': ('must_be_empty', None),
+    'runner.extra_headers': ('must_be_empty', None),
+    'metrics.enabled': ('must_equal', False),
+    'health_check.enabled': ('must_equal', False),
 }
+# The runner process's environment (ruling (3)): names compared without case, and prefixes.
+REQUIRED_ENV_NAMES = ('GITEA_RUNNER_LABELS', 'GITEA_RUNNER_REGISTRATION_TOKEN', 'HTTP_PROXY',
+                      'HTTPS_PROXY', 'NO_PROXY', 'DOCKER_HOST')
+REQUIRED_ENV_PREFIXES = ('ACTIONS_RUNNER_HOOK_', 'OTEL_')
+# The registration token's input (ruling (5)): a file on /run, never the command line or
+# the environment.
+TOKEN_FLAG = '--token-file'
+TOKEN_PATH_PREFIX = '/run/'
+TOKEN_REFUSED = ('--token', 'GITEA_RUNNER_REGISTRATION_TOKEN')
 REQUIRED_OPTIONS = ('--cap-drop=ALL', '--security-opt=no-new-privileges', '--ulimit=core=0')
 REQUIRED_OPTION_PREFIXES = ('--user=', '--pids-limit=', '--memory=', '--cpus=')
 # Option names that weaken the job container; the declared exchange mount and
@@ -160,7 +190,8 @@ CODES = ('SCHEMA', 'STATUS_INVALID', 'DANGLING_REF', 'DECISION_UNLINKED', 'MACHI
          'WORKFLOW_RUNS_ON', 'WORKFLOW_CONTAINER', 'WORKFLOW_INTERPOLATION',
          'WORKFLOW_FIRST_STEPS', 'WORKFLOW_ALLOWLIST', 'GITEA_ACTIONS_SCOPE', 'GITEA_PUBLIC_REPO',
          'GITEA_PROTECTION', 'GITEA_TOKEN_MODE', 'GITEA_CEILING', 'GITEA_CROSS_REPO',
-         'GITEA_SECRETS', 'PROXY_ALLOWLIST', 'REGISTRATION_RESET', 'OWNER_ACT',
+         'GITEA_SECRETS', 'PROXY_ALLOWLIST', 'REGISTRATION_RESET', 'REGISTRATION_INPUT',
+         'RUNNER_ENVIRONMENT', 'OWNER_ACT',
          'FORWARD_OWNER_ACT', 'FACT_UNSUPPORTED', 'FACT_ARCHIVE', 'REVOCATION_MISMATCH')
 # Codes the inventory checker's link helpers emit, reported under ci-refs.
 LINK_CODES = ('LINK_INVALID', 'LINK_MISSING', 'ANCHOR_MISSING')
@@ -713,6 +744,19 @@ class Checker(csi.Checker):
         placement = _dict(placement)
         for key in ('ceilings', 'lifetime_choice'):
             self.statement(f'placement.{key}', placement.get(key))
+        choice = _dict(placement.get('lifetime_choice'))
+        if 'mode' in choice:
+            rows = {r['mode']: r for r in map(_dict, _list(placement.get('lifetimes')))
+                    if isinstance(r.get('mode'), str)}
+            row = rows.get(choice.get('mode')) if isinstance(choice.get('mode'), str) else None
+            if row is None or row.get('runner') != choice.get('runner'):
+                self.add('SCHEMA', 'placement.lifetime_choice', 'the chosen mode and runner are one '
+                         f'of placement.lifetimes ({sorted(rows)})')
+
+    def lifetime_mode(self):
+        """The chosen lifetime's mode (shared or per-validation), or None."""
+        mode = _dict(_dict(self.profile.get('placement')).get('lifetime_choice')).get('mode')
+        return mode if isinstance(mode, str) else None
 
     def check_runner_config(self):
         cfg = self.profile.get('runner_config')
@@ -757,23 +801,110 @@ class Checker(csi.Checker):
             reason = forbidden_option(token, mount)
             if reason:
                 self.add('RUNNER_RULE_WEAK', 'runner_config.options', f'{token}: {reason}')
+        env = cfg.get('environment')
+        self.statement('runner_config.environment', env)
+        env = _dict(env)
+        names = {n.upper() for n in _strs(env.get('forbidden_names'))}
+        prefixes = {p.upper() for p in _strs(env.get('forbidden_prefixes'))}
+        missing = [n for n in REQUIRED_ENV_NAMES if n not in names] + \
+            [p for p in REQUIRED_ENV_PREFIXES if p not in prefixes]
+        if missing or env.get('config_expansion') != 'refused' or not _str(env.get('service_key')):
+            self.add('RUNNER_RULE_WEAK', 'runner_config.environment', 'the runner service\'s '
+                     f'environment refuses {list(REQUIRED_ENV_NAMES)} and the prefixes '
+                     f'{list(REQUIRED_ENV_PREFIXES)} (missing {missing}), names its service_key, and '
+                     'config_expansion is refused')
+
+    def env_problems(self, environment):
+        """The forbidden names in one declared environment mapping (names without case)."""
+        env = _dict(_dict(self.profile.get('runner_config')).get('environment'))
+        names = {n.upper() for n in _strs(env.get('forbidden_names'))} | set(REQUIRED_ENV_NAMES)
+        prefixes = tuple({p.upper() for p in _strs(env.get('forbidden_prefixes'))}
+                         | set(REQUIRED_ENV_PREFIXES))
+        if not isinstance(environment, dict):
+            return ['the environment must be a mapping of names to values']
+        return [f'{name!r} must not be set' for name in sorted(map(str, environment))
+                if name.upper() in names or name.upper().startswith(prefixes)]
 
     def check_variants(self):
-        key = _str(_dict(self.profile.get('runner_config')).get('profile_key'))
+        cfg = _dict(self.profile.get('runner_config'))
+        key = _str(cfg.get('profile_key'))
         if not key:
             self.add('SCHEMA', 'runner_config.profile_key', 'names where a profile variant '
                      'declares its config.yaml')
             return
-        options = _dict(_dict(self.profile.get('runner_config')).get('options'))
+        options = _dict(cfg.get('options'))
         declared = _strs(options.get('declared'))
+        service_key = _str(_dict(cfg.get('environment')).get('service_key'))
+        register_key = _str(_dict(_dict(self.profile.get('registration')).get('token_input'))
+                            .get('register_key'))
         for name, variant in sorted(self.variants.items()):
-            config = variant
-            for part in key.split('.'):
-                config = _dict(config).get(part) if isinstance(config, dict) else None
+            config = _get(variant, key) if isinstance(variant, dict) else None
             if config is None:
                 continue
             for message in runner_config_violations(config, declared, options.get('exchange_mount')):
                 self.add('RUNNER_CONFIG', f'profiles/{name}:{key}', message)
+            for path in expansions(config):
+                self.add('RUNNER_CONFIG', f'profiles/{name}:{key}', f'{path} holds $: the runner '
+                         'expands ${NAME} from its environment when it loads the config')
+            where = f'profiles/{name}:{service_key}'
+            service = _get(variant, service_key) if service_key else None
+            if not isinstance(service, dict):
+                self.add('RUNNER_ENVIRONMENT', where, 'a variant declares its runner service '
+                         '(environment and argv)')
+            else:
+                for message in self.env_problems(service.get('environment')):
+                    self.add('RUNNER_ENVIRONMENT', where, f'environment: {message}')
+                argv = service.get('argv')
+                if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+                    self.add('RUNNER_ENVIRONMENT', where, 'argv must be a list of strings')
+                else:
+                    if 'daemon' not in argv or flag_value(argv, '--config') in (None, ''):
+                        self.add('RUNNER_ENVIRONMENT', where, 'argv runs the daemon with --config '
+                                 '<the declared config.yaml>')
+                    if has_flag(argv, '--labels'):
+                        self.add('RUNNER_ENVIRONMENT', where, 'argv: --labels overrides the '
+                                 'registered labels; the labels come from the config only')
+            self.check_register(name, variant, register_key)
+
+    def check_register(self, name, variant, register_key):
+        where = f'profiles/{name}:{register_key}'
+        register = _get(variant, register_key) if register_key else None
+        if not isinstance(register, dict):
+            self.add('REGISTRATION_INPUT', where, 'a variant declares its register call (argv)')
+            return
+        for message in self.env_problems(register.get('environment', {})):
+            self.add('REGISTRATION_INPUT', where, f'environment: {message}')
+        argv = register.get('argv')
+        if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+            self.add('REGISTRATION_INPUT', where, 'argv must be a list of strings')
+            return
+        token_input = _dict(_dict(self.profile.get('registration')).get('token_input'))
+        prefix = _str(token_input.get('path_prefix')) or TOKEN_PATH_PREFIX
+        token_file = flag_value(argv, TOKEN_FLAG)
+        if 'register' not in argv or '--no-interactive' not in argv:
+            self.add('REGISTRATION_INPUT', where, 'argv is a non-interactive register call')
+        if not isinstance(token_file, str) or not token_file.startswith(prefix) or \
+                '..' in token_file.split('/'):
+            self.add('REGISTRATION_INPUT', where, f'the token enters by {TOKEN_FLAG} <a file under '
+                     f'{prefix}>')
+        if has_flag(argv, '--token'):
+            self.add('REGISTRATION_INPUT', where, 'the token never enters by --token (the command '
+                     'line)')
+        if flag_value(argv, '--config') in (None, ''):
+            self.add('REGISTRATION_INPUT', where, 'register reads the declared config (--config): '
+                     'without it the runner registers its default labels')
+        if has_flag(argv, '--labels'):
+            self.add('REGISTRATION_INPUT', where, 'the labels come from the config only (no '
+                     '--labels)')
+        instance = _dict(self.profile.get('endpoint')).get('runner_instance_url')
+        if flag_value(argv, '--instance') != instance:
+            self.add('REGISTRATION_INPUT', where, f'--instance is the ci-control endpoint '
+                     f'{instance!r}')
+        mode = self.lifetime_mode()
+        ephemeral = has_flag(argv, '--ephemeral')
+        if mode is None or ephemeral != (mode == 'per-validation'):
+            self.add('REGISTRATION_INPUT', where, f'--ephemeral is given exactly when the chosen '
+                     f'lifetime is per-validation (chosen: {mode!r})')
 
     def check_registration(self):
         reg = self.profile.get('registration')
@@ -802,6 +933,17 @@ class Checker(csi.Checker):
                      'live proof that the reset invalidates the delivered value (verify_at '
                      'Q-02.2.2); unverified, it blocks (on_unverified: block) and names its '
                      'alternatives')
+        token_input = reg.get('token_input')
+        self.statement('registration.token_input', token_input)
+        token_input = _dict(token_input)
+        refused = _strs(token_input.get('refused'))
+        if token_input.get('flag') != TOKEN_FLAG or token_input.get('path_prefix') != \
+                TOKEN_PATH_PREFIX or any(r not in refused for r in TOKEN_REFUSED) or \
+                not _str(token_input.get('register_key')):
+            self.add('REGISTRATION_INPUT', 'registration.token_input', f'the registration token '
+                     f'enters by {TOKEN_FLAG} from a file under {TOKEN_PATH_PREFIX} only, '
+                     f'{list(TOKEN_REFUSED)} are refused, and register_key names where a variant '
+                     'declares its register call')
 
     def governance(self):
         repos = [r for r in _dicts(_dict(self.profile.get('gitea')).get('repositories'))
@@ -1260,6 +1402,40 @@ def _get(config, path):
     return value
 
 
+def has_flag(argv, flag):
+    """Whether ARGV gives FLAG, as '--flag' or '--flag=value'."""
+    return any(a == flag or a.startswith(flag + '=') for a in argv)
+
+
+def flag_value(argv, flag):
+    """The value ARGV gives FLAG (the last one, as the command parser takes it): '' for a
+    flag without a value, None when it is absent."""
+    value = None
+    for n, token in enumerate(argv):
+        if token == flag:
+            value = argv[n + 1] if n + 1 < len(argv) else ''
+        elif token.startswith(flag + '='):
+            value = token.split('=', 1)[1]
+    return value
+
+
+def expansions(value, path=''):
+    """The paths of the string values (and keys) of a declared config that hold '$'."""
+    out = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            sub = f'{path}.{key}' if path else str(key)
+            if '$' in str(key):
+                out.append(sub)
+            out.extend(expansions(item, sub))
+    elif isinstance(value, list):
+        for n, item in enumerate(value):
+            out.extend(expansions(item, f'{path}[{n}]'))
+    elif isinstance(value, str) and '$' in value:
+        out.append(path or '<config>')
+    return out
+
+
 def runner_config_violations(config, declared, mount):
     """The violations of the decided invariants in one declared act_runner config (a JSON
     mirror of its config.yaml)."""
@@ -1359,6 +1535,14 @@ def render(profile, policy):
                 f"{_leaves(options.get('verify_at'))}): {_ids(options.get('declared'))}. Label: "
                 f"`{_dict(cfg.get('label')).get('name')}` on "
                 f"{_cell(_str(_dict(cfg.get('label')).get('image_rule')))}."]
+    env = _dict(cfg.get('environment'))
+    token_input = _dict(_dict(profile.get('registration')).get('token_input'))
+    out += ['', f"Runner service environment ({env.get('status')}): never "
+                f"{_ids(env.get('forbidden_names'))} or a name starting "
+                f"{_ids(env.get('forbidden_prefixes'))}; config expansion "
+                f"{env.get('config_expansion')}. Registration token ({token_input.get('status')}): "
+                f"`{token_input.get('flag')}` under `{token_input.get('path_prefix')}` only; refused: "
+                f"{_ids(token_input.get('refused'))}."]
     gitea = _dict(profile.get('gitea'))
     out += ['', '### Gitea-side configuration', '',
             '| Repository | Role | Private | Actions | Status | Verify at |',

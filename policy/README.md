@@ -617,8 +617,12 @@ specifies separate validation and trusted promotion lanes.
    domain's lane;
 3. the validation job reaches nothing, and each task token's reach is none and is never relied
    on;
-4. every runner-configuration invariant is declared at its decided value, and any profile
-   variant's declared `config.yaml` (`provisioning.ci_runner.config`) satisfies them;
+4. every runner-configuration invariant is declared at its decided value (the keys of the
+   pinned gitea-runner 6.0.0 included), and any profile variant's declared `config.yaml`
+   (`provisioning.ci_runner.config`) satisfies them and holds no `$` (the runner expands
+   `${NAME}` from its environment); the variant's runner service
+   (`provisioning.ci_runner.service`) sets none of the forbidden environment variables and does
+   not override the labels;
 5. every workflow under `policy/ci/workflows/` obeys decision 0016 section 7.3, read in a strict
    YAML subset;
 6. Actions is enabled on the governance repository only, no repository is public, the token
@@ -627,7 +631,11 @@ specifies separate validation and trusted promotion lanes.
 7. the filtering proxy admits exactly the runner RPC, the registration token is reset before it
    is read and after every registration, the fallback (a token standing between provisionings)
    is never in force, and the live gate blocks a live runner until Q-02.2.2 proves the reset
-   invalidates the delivered value (the Owner's direction of 2026-11-10);
+   invalidates the delivered value (the Owner's direction of 2026-11-10); the token enters by
+   `--token-file` from `/run/` only, and a variant's register call
+   (`provisioning.ci_runner.register`) reads the declared config, names the `ci-control`
+   instance, passes no `--token` or `--labels` and is ephemeral exactly when the chosen lifetime
+   is per-validation;
 8. every Owner act names its requesting leaf, an observed one cites its approval verbatim, and
    every forward and host listener names an Owner act;
 9. every fact verified at source names its paths and lines in the archive the lock pins, and the
@@ -703,12 +711,23 @@ The negative cases are in
 | `container.docker_host` | must_equal | "-" | decided |
 | `container.valid_volumes` | must_be_empty | - | decided |
 | `container.network` | must_be_empty | - | decided |
-| `container.enable_ipv6` | must_equal | false | decided |
+| `container.enable_ipv6` | must_be_empty | - | decided |
+| `container.network_create_options.enable_ipv6` | must_equal | false | decided |
+| `container.bind_workdir` | must_equal | false | decided |
+| `container.sweep` | must_equal | false | decided |
 | `container.force_pull` | must_equal | false | decided |
 | `container.force_rebuild` | must_equal | false | decided |
 | `container.options` | options | - | decided |
+| `runner.tool_cache_mode` | must_equal | "none" | decided |
+| `runner.hooks` | must_be_empty | - | decided |
+| `runner.post_task_script` | must_be_empty | - | decided |
+| `runner.extra_headers` | must_be_empty | - | decided |
+| `metrics.enabled` | must_equal | false | decided |
+| `health_check.enabled` | must_equal | false | decided |
 
 Declared `container.options` (planned, verify at Q-02.2.1): `--volume=/home/agent/exchange:/aieh/exchange:ro`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--user=1001:1001`, `--pids-limit=512`, `--memory=4g`, `--cpus=2`, `--ulimit=core=0`. Label: `aieh-validation` on pinned by digest (docker://<image>@sha256:<64 hex>) at Q-02.2.1.
+
+Runner service environment (decided): never `GITEA_RUNNER_LABELS`, `GITEA_RUNNER_REGISTRATION_TOKEN`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `DOCKER_HOST` or a name starting `ACTIONS_RUNNER_HOOK_`, `OTEL_`; config expansion refused. Registration token (decided): `--token-file` under `/run/` only; refused: `--token`, `GITEA_RUNNER_REGISTRATION_TOKEN`.
 
 ### Gitea-side configuration
 
@@ -748,7 +767,7 @@ Filtering proxy (planned, Owner act A-4), allowed: POST `/api/actions/ping.v1.Pi
 | A-4 | The host-side filtering proxy listener on 127.0.0.1 (proxy allowlist). | Owner act (a host listener; the decision 0015 precedent) | Q-02.2.1 | planned |
 | C-1 | Enable Gitea Actions instance-wide (ENABLED = true, DEFAULT_ACTIONS_URL = self, a restart through the lifecycle contract) to serve the governance repository only, and apply the token configuration (restricted mode, all-none ceilings, no cross-repository grants, no public repository). | Owner confirmation (a configuration change of the trusted computing base) | Q-02.3.1 | planned |
 | C-2 | Create the private governance repository and the aieh-bot-ci identity; set the protections; operate the registration token by the reset-read-deliver-reset procedure; run the live check's two read-only oracles. | Owner confirmation of the product shape, performed by the harness | Q-02.3.1 | planned |
-| C-3 | A CI guest variant beside the execution guest: its composition (Moby, act_runner, the job image; no Agent Server), its ceilings and its lifetime (shared with a persistent runner, or per validation with an ephemeral runner). | Owner confirmation (a new guest composition and footprint) | Q-02.2.1 | planned |
+| C-3 | A CI guest variant beside the execution guest: its composition (Moby, act_runner, the job image; no Agent Server), its ceilings and its lifetime (shared with a persistent runner, or per validation with an ephemeral runner). | Owner confirmation (a new guest composition and footprint) | Q-02.2.1 | observed |
 
 ### Gitea Actions facts at the pin
 
@@ -774,13 +793,13 @@ Filtering proxy (planned, Owner act A-4), allowed: POST `/api/actions/ping.v1.Pi
 | `ci-lane-map` | `LANE_MAP_INCOMPLETE`, `LANE_MAP_MISMATCH` | Every inventory credential has exactly one lane, and a credential held in a CI domain is in that domain's lane. |
 | `ci-job-reach` | `JOB_REACH` | The validation job reaches nothing, and every task token's reach is none and is never relied on. |
 | `ci-task-tokens` | `TOKEN_ROW` | Each task token row names an inventory credential of the validation job with a permissionless effective permission on the governance repository. |
-| `ci-runner-config` | `RUNNER_RULE_MISSING`, `RUNNER_RULE_WEAK`, `RUNNER_CONFIG` | Every runner-configuration invariant is declared at its decided value, and a profile variant's declared config.yaml satisfies them. |
+| `ci-runner-config` | `RUNNER_RULE_MISSING`, `RUNNER_RULE_WEAK`, `RUNNER_CONFIG`, `RUNNER_ENVIRONMENT` | Every runner-configuration invariant is declared at its decided value, and a profile variant's declared config.yaml satisfies them and carries no environment expansion; the variant's runner service sets no forbidden environment variable and no label override. |
 | `ci-workflow` | `WORKFLOW_MISSING`, `WORKFLOW_SYNTAX`, `WORKFLOW_SCHEMA`, `WORKFLOW_TRIGGER`, `WORKFLOW_PERMISSIONS`, `WORKFLOW_USES`, `WORKFLOW_SECRETS`, `WORKFLOW_RUNS_ON`, `WORKFLOW_CONTAINER`, `WORKFLOW_INTERPOLATION`, `WORKFLOW_FIRST_STEPS`, `WORKFLOW_ALLOWLIST` | Every workflow under policy/ci/workflows obeys decision 0016 section 7.3. |
 | `ci-gitea-scope` | `GITEA_ACTIONS_SCOPE`, `GITEA_PUBLIC_REPO`, `GITEA_PROTECTION` | Actions is enabled on the governance repository only, no repository is public, and the governance protections are complete. |
 | `ci-gitea-ceiling` | `GITEA_TOKEN_MODE`, `GITEA_CEILING`, `GITEA_CROSS_REPO` | Restricted mode and an all-none ceiling at the governance owner and repository; no cross-repository grant anywhere. |
 | `ci-gitea-secrets` | `GITEA_SECRETS` | No Actions secret or variable is allowed anywhere. |
 | `ci-proxy` | `PROXY_ALLOWLIST` | The filtering proxy admits exactly the runner RPC, Register only in the provisioning window. |
-| `ci-registration` | `REGISTRATION_RESET` | The registration procedure resets the token before it is read and after registration; the fallback is never in force; a live runner waits on the live reset proof, and its absence blocks (Owner direction, 2026-11-10). |
+| `ci-registration` | `REGISTRATION_RESET`, `REGISTRATION_INPUT` | The registration procedure resets the token before it is read and after registration; the fallback is never in force; a live runner waits on the live reset proof, and its absence blocks (Owner direction, 2026-11-10); the token enters by file only, and a variant's register call reads the declared config, names the ci-control instance and is ephemeral exactly when the chosen lifetime is per-validation. |
 | `ci-owner-acts` | `OWNER_ACT` | Every Owner act names its requesting leaf, and an observed one cites its bootstrap-log approval verbatim. |
 | `ci-forward-owner-act` | `FORWARD_OWNER_ACT` | Every forward and host listener names an Owner act. |
 | `ci-facts` | `FACT_UNSUPPORTED`, `FACT_ARCHIVE` | A fact verified at source names its paths and lines in the archive the lock pins; a live one cites evidence; an unverified one names its leaf. |

@@ -45,12 +45,25 @@ INPUTS = ccp.load_inputs(REPO, PROFILE)
 DIGEST = 'a' * 64
 GOOD_CONFIG = {
     'runner': {'labels': [f'aieh-validation:docker://registry.example/job@sha256:{DIGEST}'],
-               'envs': {}, 'env_file': '', 'capacity': 1, 'timeout': '1h'},
+               'envs': {}, 'env_file': '', 'capacity': 1, 'timeout': '1h',
+               'tool_cache_mode': 'none', 'hooks': {}, 'post_task_script': '',
+               'extra_headers': {}},
     'cache': {'enabled': False},
     'container': {'privileged': False, 'docker_host': '-', 'valid_volumes': [], 'network': '',
-                  'enable_ipv6': False, 'force_pull': False, 'force_rebuild': False,
+                  'network_create_options': {'enable_ipv6': False}, 'force_pull': False,
+                  'force_rebuild': False, 'bind_workdir': False, 'sweep': False,
                   'options': ' '.join(PROFILE['runner_config']['options']['declared'])},
+    'metrics': {'enabled': False},
+    'health_check': {'enabled': False},
 }
+CONFIG_PATH = '/etc/aieh/ci-runner/config.yaml'
+# The variant's runner service and register call (rulings (3) and (5) of 2026-11-12).
+GOOD_SERVICE = {'environment': {'HOME': '/var/lib/aieh-ci-runner', 'PATH': '/usr/bin:/bin'},
+                'argv': ['/opt/aieh/ci-runner/gitea-runner', 'daemon', '--config', CONFIG_PATH]}
+GOOD_REGISTER = {'argv': ['/opt/aieh/ci-runner/gitea-runner', 'register', '--no-interactive',
+                          '--config', CONFIG_PATH, '--instance', 'http://127.0.0.1:13300',
+                          '--token-file', '/run/aieh/ci-runner/registration-token',
+                          '--name', 'aieh-ci']}
 
 
 def fresh():
@@ -65,8 +78,14 @@ def item(rows, key, value):
     raise AssertionError(f'fixture has no row {key}={value!r}')
 
 
-def variant(config):
-    return {'ci-variant': {'provisioning': {'ci_runner': {'config': config}}}}
+def variant(config, service=None, register=None):
+    """A profile variant declaring CONFIG, with the good service and register call unless given
+    (a value of False leaves that block out)."""
+    block = {'config': config,
+             'service': copy.deepcopy(GOOD_SERVICE) if service is None else service,
+             'register': copy.deepcopy(GOOD_REGISTER) if register is None else register}
+    return {'ci-variant': {'provisioning': {'ci_runner': {k: v for k, v in block.items()
+                                                         if v is not False}}}}
 
 
 def run_cli(*args):
@@ -347,11 +366,71 @@ class RunnerConfig(Base):
             ('container', 'enable_ipv6', True),
             ('container', 'force_pull', True),
             ('container', 'force_rebuild', True),
+            # the keys of the 6.0.0 pin (rulings (2) and (3) of 2026-11-12)
+            ('container', 'enable_ipv6', False),
+            ('container', 'network_create_options', {'enable_ipv6': True}),
+            ('container', 'network_create_options', {}),
+            ('container', 'bind_workdir', True),
+            ('container', 'bind_workdir', 0),
+            ('container', 'sweep', True),
+            ('runner', 'tool_cache_mode', 'shared'),
+            ('runner', 'tool_cache_mode', ''),
+            ('runner', 'hooks', {'job_started': '/hooks/started.sh'}),
+            ('runner', 'hooks', {'job_completed': ''}),
+            ('runner', 'post_task_script', '/usr/local/bin/after.sh'),
+            ('runner', 'extra_headers', {'X-Extra': 'value'}),
+            ('metrics', 'enabled', True),
+            ('health_check', 'enabled', True),
         ]
         for section, key, value in mutations:
             config = copy.deepcopy(GOOD_CONFIG)
             config[section][key] = value
             self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant', profiles=variant(config))
+        for section, key in (('container', 'network_create_options'), ('container', 'bind_workdir'),
+                             ('container', 'sweep'), ('runner', 'tool_cache_mode'),
+                             ('metrics', 'enabled'), ('health_check', 'enabled')):
+            config = copy.deepcopy(GOOD_CONFIG)
+            del config[section][key]
+            self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant', profiles=variant(config))
+        for section in ('metrics', 'health_check'):
+            config = copy.deepcopy(GOOD_CONFIG)
+            del config[section]
+            self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant', profiles=variant(config))
+
+    def test_variant_config_holds_no_environment_expansion(self):
+        # The runner replaces ${NAME} in config.yaml values from its environment at load.
+        for section, key, value in (('runner', 'timeout', '${TIMEOUT}'),
+                                    ('container', 'network', '$NETWORK'),
+                                    ('runner', 'labels', [f'aieh-validation:docker://${{IMAGE}}'
+                                                          f'@sha256:{DIGEST}'])):
+            config = copy.deepcopy(GOOD_CONFIG)
+            config[section][key] = value
+            problems = self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant',
+                                        profiles=variant(config))
+            self.assertTrue(any('holds $' in x.message for x in problems))
+        config = copy.deepcopy(GOOD_CONFIG)
+        config['runner']['envs'] = {'${KEY}': ''}
+        problems = self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant', profiles=variant(config))
+        self.assertTrue(any('holds $' in x.message for x in problems))
+
+    def test_the_policy_declares_the_6_0_0_keys(self):
+        p, _ = fresh()
+        item(p['runner_config']['rules'], 'path',
+             'container.network_create_options.enable_ipv6')['value'] = True
+        self.assert_code('RUNNER_RULE_WEAK', 'network_create_options.enable_ipv6', profile=p)
+        p, _ = fresh()
+        stale = item(p['runner_config']['rules'], 'path', 'container.enable_ipv6')
+        stale['rule'], stale['value'] = 'must_equal', False
+        self.assert_code('RUNNER_RULE_WEAK', 'container.enable_ipv6', profile=p)
+        for path in ('container.bind_workdir', 'container.sweep', 'runner.tool_cache_mode',
+                     'runner.hooks', 'runner.post_task_script', 'runner.extra_headers',
+                     'metrics.enabled', 'health_check.enabled'):
+            p, _ = fresh()
+            p['runner_config']['rules'] = [r for r in p['runner_config']['rules'] if r['path'] != path]
+            self.assert_code('RUNNER_RULE_MISSING', path, profile=p)
+        p, _ = fresh()
+        item(p['runner_config']['rules'], 'path', 'runner.tool_cache_mode')['value'] = 'shared'
+        self.assert_code('RUNNER_RULE_WEAK', 'runner.tool_cache_mode', profile=p)
 
     def test_variant_options_outside_the_declared_list_fail(self):
         for extra in ('--privileged', '--cap-add=NET_ADMIN', '--device=/dev/kvm', '--pid=host',
@@ -369,6 +448,163 @@ class RunnerConfig(Base):
         p, _ = fresh()
         p['runner_config']['profile_key'] = ''
         self.assert_code('SCHEMA', 'runner_config.profile_key', profile=p)
+
+
+class RunnerServiceAndRegistration(Base):
+    """The runner's environment (ruling (3)) and the registration token's input (ruling (5)),
+    2026-11-12, in the policy and in a variant's declared service and register call."""
+
+    def assert_clean(self, **kwargs):
+        found, problems = self.codes(**kwargs)
+        self.assertEqual(problems, [], '\n'.join(map(str, problems)))
+
+    def test_the_good_service_and_register_call_pass_in_either_spelling(self):
+        register = copy.deepcopy(GOOD_REGISTER)
+        register['argv'] = [a for a in register['argv'] if a not in ('--config', CONFIG_PATH,
+                                                                    '--instance',
+                                                                    'http://127.0.0.1:13300')]
+        register['argv'] += [f'--config={CONFIG_PATH}', '--instance=http://127.0.0.1:13300']
+        self.assert_clean(profiles=variant(copy.deepcopy(GOOD_CONFIG), register=register))
+        service = copy.deepcopy(GOOD_SERVICE)
+        service['environment'] = {}
+        self.assert_clean(profiles=variant(copy.deepcopy(GOOD_CONFIG), service=service))
+
+    def test_a_forbidden_service_environment_fails(self):
+        for name in ('GITEA_RUNNER_LABELS', 'GITEA_RUNNER_REGISTRATION_TOKEN', 'HTTP_PROXY',
+                     'https_proxy', 'No_Proxy', 'DOCKER_HOST', 'ACTIONS_RUNNER_HOOK_JOB_STARTED',
+                     'OTEL_EXPORTER_OTLP_ENDPOINT', 'otel_sdk_disabled'):
+            service = copy.deepcopy(GOOD_SERVICE)
+            service['environment'][name] = 'x'
+            self.assert_code('RUNNER_ENVIRONMENT', 'provisioning.ci_runner.service',
+                             profiles=variant(copy.deepcopy(GOOD_CONFIG), service=service))
+
+    def test_the_service_runs_the_daemon_on_the_declared_config(self):
+        cases = [False, 'x', {'environment': ['A=1'], 'argv': GOOD_SERVICE['argv']},
+                 {'environment': {}, 'argv': 'gitea-runner daemon'},
+                 {'environment': {}, 'argv': ['gitea-runner', 'daemon']},
+                 {'environment': {}, 'argv': ['gitea-runner', 'daemon', '--config']},
+                 {'environment': {}, 'argv': ['gitea-runner', '--config', CONFIG_PATH]},
+                 {'environment': {}, 'argv': GOOD_SERVICE['argv'] + ['--labels', 'x:host']},
+                 {'environment': {}, 'argv': GOOD_SERVICE['argv'] + ['--labels=x:host']}]
+        for service in cases:
+            self.assert_code('RUNNER_ENVIRONMENT', 'provisioning.ci_runner.service',
+                             profiles=variant(copy.deepcopy(GOOD_CONFIG), service=service))
+
+    def test_the_register_call(self):
+        good = GOOD_REGISTER['argv']
+
+        def without(*tokens):
+            return [a for a in good if a not in tokens]
+
+        def swap(old, new):
+            self.assertEqual(good.count(old), 1)
+            return [new if a == old else a for a in good]
+
+        token = '/run/aieh/ci-runner/registration-token'
+        cases = [
+            without('--token-file', token),
+            swap(token, '/tmp/token'),
+            without('--token-file', token) + ['--token-file=/var/lib/token'],
+            swap(token, '/run/../etc/token'),
+            good + ['--token', 'abc'],
+            good + ['--token=abc'],
+            without('--config', CONFIG_PATH),
+            good + ['--labels', 'aieh-validation:host'],
+            without('--instance', 'http://127.0.0.1:13300'),
+            swap('http://127.0.0.1:13300', 'http://gitea.example:3000'),
+            good + ['--ephemeral'],
+            good + ['--ephemeral=true'],
+            without('--no-interactive'),
+            without('register'),
+        ]
+        for argv in cases:
+            self.assert_code('REGISTRATION_INPUT', 'provisioning.ci_runner.register',
+                             profiles=variant(copy.deepcopy(GOOD_CONFIG), register={'argv': argv}))
+        for register in (False, 'x', {'argv': ' '.join(good)},
+                         {'argv': good, 'environment': {'GITEA_RUNNER_REGISTRATION_TOKEN': 'x'}},
+                         {'argv': good, 'environment': {'gitea_runner_registration_token': 'x'}},
+                         {'argv': good, 'environment': 'TOKEN=x'}):
+            self.assert_code('REGISTRATION_INPUT', 'provisioning.ci_runner.register',
+                             profiles=variant(copy.deepcopy(GOOD_CONFIG), register=register))
+
+    def test_ephemeral_follows_the_chosen_lifetime(self):
+        p, _ = fresh()
+        p['placement']['lifetime_choice'].update(mode='per-validation', runner='ephemeral')
+        self.assert_code('REGISTRATION_INPUT', 'provisioning.ci_runner.register', profile=p,
+                         profiles=variant(copy.deepcopy(GOOD_CONFIG)))
+        register = copy.deepcopy(GOOD_REGISTER)
+        register['argv'].append('--ephemeral')
+        self.assert_clean(profile=p, profiles=variant(copy.deepcopy(GOOD_CONFIG), register=register))
+        p, _ = fresh()
+        del p['placement']['lifetime_choice']['mode']
+        self.assert_code('REGISTRATION_INPUT', 'provisioning.ci_runner.register', profile=p,
+                         profiles=variant(copy.deepcopy(GOOD_CONFIG)))
+
+    def test_the_chosen_lifetime_is_a_declared_one(self):
+        for mode, runner in (('forever', 'persistent'), ('shared', 'ephemeral'), (['shared'], None),
+                             ('per-validation', 'persistent')):
+            p, _ = fresh()
+            p['placement']['lifetime_choice'].update(mode=mode, runner=runner)
+            self.assert_code('SCHEMA', 'placement.lifetime_choice', profile=p)
+
+    def test_the_policy_declares_the_environment_rule(self):
+        def env(p):
+            return p['runner_config']['environment']
+
+        mutations = [lambda e: e['forbidden_names'].remove('DOCKER_HOST'),
+                     lambda e: e['forbidden_names'].remove('GITEA_RUNNER_LABELS'),
+                     lambda e: e['forbidden_prefixes'].remove('OTEL_'),
+                     lambda e: e.update(forbidden_prefixes=[]),
+                     lambda e: e.update(config_expansion='allowed'),
+                     lambda e: e.pop('service_key')]
+        for mutate in mutations:
+            p, _ = fresh()
+            mutate(env(p))
+            self.assert_code('RUNNER_RULE_WEAK', 'runner_config.environment', profile=p)
+        # The checker's own names and prefixes stay the floor for a variant even when the policy
+        # drops one.
+        for name in ('DOCKER_HOST', 'OTEL_TRACES_EXPORTER'):
+            p, _ = fresh()
+            env(p)['forbidden_names'].remove('DOCKER_HOST')
+            env(p)['forbidden_prefixes'].remove('OTEL_')
+            service = copy.deepcopy(GOOD_SERVICE)
+            service['environment'][name] = 'x'
+            self.assert_code('RUNNER_ENVIRONMENT', 'provisioning.ci_runner.service', profile=p,
+                             profiles=variant(copy.deepcopy(GOOD_CONFIG), service=service))
+        p, _ = fresh()
+        env(p)['forbidden_names'] = [n.lower() for n in env(p)['forbidden_names']]
+        found, problems = self.codes(profile=p)
+        self.assertNotIn('RUNNER_RULE_WEAK', found, '\n'.join(map(str, problems)))
+        p, _ = fresh()
+        env(p)['status'] = 'assumed'
+        self.assert_code('STATUS_INVALID', 'runner_config.environment', profile=p)
+
+    def test_the_policy_declares_the_token_input(self):
+        def token_input(p):
+            return p['registration']['token_input']
+
+        mutations = [lambda t: t.update(flag='--token'), lambda t: t.update(path_prefix='/tmp/'),
+                     lambda t: t['refused'].remove('GITEA_RUNNER_REGISTRATION_TOKEN'),
+                     lambda t: t['refused'].remove('--token'), lambda t: t.pop('register_key')]
+        for mutate in mutations:
+            p, _ = fresh()
+            mutate(token_input(p))
+            self.assert_code('REGISTRATION_INPUT', 'registration.token_input', profile=p)
+        p, _ = fresh()
+        del p['registration']['token_input']
+        self.assert_code('SCHEMA', 'registration.token_input', profile=p)
+        self.assert_code('REGISTRATION_INPUT', 'registration.token_input', profile=p)
+
+    def test_flag_helpers(self):
+        self.assertEqual(ccp.flag_value(['a', '--x', 'v'], '--x'), 'v')
+        self.assertEqual(ccp.flag_value(['--x=v'], '--x'), 'v')
+        self.assertEqual(ccp.flag_value(['--x'], '--x'), '')
+        self.assertEqual(ccp.flag_value(['--x', 'a', '--x=b'], '--x'), 'b')
+        self.assertIsNone(ccp.flag_value(['--xy', 'v'], '--x'))
+        self.assertTrue(ccp.has_flag(['--token=v'], '--token'))
+        self.assertFalse(ccp.has_flag(['--token-file', 'v'], '--token'))
+        self.assertEqual(ccp.expansions({'a': ['x', '$y'], '$b': 1, 'c': {'d': 'e$'}}),
+                         ['a[1]', '$b', 'c.d'])
 
 
 class Workflow(Base):
@@ -629,7 +865,11 @@ class ProxyRegistrationActs(Base):
     def test_an_observed_owner_act_cites_its_approval_verbatim(self):
         quote = 'The Owner approves the ci-control forward for one CI guest.'
         inputs = copy.copy(INPUTS)
-        inputs.files = FakeFiles(INPUTS.files, f'# log\n\n> {quote}\n')
+        # The committed profile's own observed act (C-3) cites the log too.
+        committed = [a['approval']['quote'] for a in PROFILE['owner_acts']
+                     if a.get('status') == 'observed']
+        inputs.files = FakeFiles(INPUTS.files, '# log\n\n' + ''.join(
+            f'> {q}\n' for q in [quote] + committed))
         p, _ = fresh()
         act = item(p['owner_acts'], 'id', 'A-1')
         act['status'] = 'observed'

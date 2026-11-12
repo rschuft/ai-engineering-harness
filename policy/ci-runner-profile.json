@@ -63,15 +63,15 @@
   ],
   "shared_object": "The exact revision: the proposal SHA and the sha256 of the bundle that carried it. The promotion lane reads Gitea's run record and never consumes a file a job wrote.",
   "placement": {
-    "runner": "act_runner, unpinned (fd-ci-runner-unpinned): pinned at Q-02.2.1 as a new component resolution (the Linux amd64 release binary with its checksum, and one job image by digest and image id).",
+    "runner": "gitea-runner 6.0.0 (act_runner, renamed upstream), pinned at Q-02.2.1 in composition/lock/components.lock.json: the Linux amd64 release binary with its checksum; the job image docker.io/library/python:3.12-trixie by index, linux/amd64 manifest and image id (the Overseer's selection of 2026-11-12 under C-3).",
     "host": "A dedicated disposable CI guest: a CI variant of profiles/strong-windows-qemu-whpx (same provider, accelerator, image, seed pattern, guards, lifecycle verbs and P1 to P12 contract), provisioned by the decision 0006 pattern with Moby, the runner and the job image, and without the Agent Server.",
     "never": ["the Owner host", "the execution guest"],
-    "ceilings": {"vcpus": 4, "memory_gib": 6, "root_gib": 20, "scratch_gib": 40, "status": "planned", "verify_at": "Q-02.2.1", "owner_act": "C-3"},
+    "ceilings": {"vcpus": 4, "memory_gib": 6, "root_gib": 20, "scratch_gib": 40, "status": "decided", "verify_at": "Q-02.2.1", "owner_act": "C-3", "notes": "Confirmed by the Owner at C-3 on 2026-11-11: 4 vCPU, 6 GiB memory, 20 GiB system disk, 40 GiB working disk. The CI profile variant declares them."},
     "lifetimes": [
       {"mode": "shared", "runner": "persistent", "detail": "Reused for successive jobs within a session; recreated at every policy or pin revision, after any failed containment probe, when the runner is deleted and at least at each unit boundary; the runner is deleted at destroy."},
       {"mode": "per-validation", "runner": "ephemeral", "detail": "One guest per validation; the runner record and its token die with the single task (G2)."}
     ],
-    "lifetime_choice": {"status": "planned", "verify_at": "Q-02.2.1", "owner_act": "C-3", "notes": "The Owner chooses at C-3."},
+    "lifetime_choice": {"mode": "shared", "runner": "persistent", "status": "decided", "verify_at": "Q-02.2.1", "owner_act": "C-3", "notes": "The Owner's C-3 answer of 2026-11-11: one guest reused within a validation session, with the disposable per-job containers, networks, storage isolation, disabled caches and mandatory recreation conditions of the shared lifetime; the guest is destroyed at the session's end, and a compromised or unverified guest is never reused. The runner registers without --ephemeral and is deleted at destroy."},
     "runner_user": "A dedicated guest service user in the CI guest's docker group (root-equivalent inside the CI guest only); the agent login stays out of the docker group (P6).",
     "status": "decided",
     "verify_at": ["Q-02.2.1", "Q-02.2.2"]
@@ -90,10 +90,19 @@
       {"path": "container.docker_host", "rule": "must_equal", "value": "-", "status": "decided", "verify_at": "Q-02.2.1"},
       {"path": "container.valid_volumes", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1"},
       {"path": "container.network", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Empty: one network per job, behind the guards (br-+); never host."},
-      {"path": "container.enable_ipv6", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.enable_ipv6", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Not a key at 6.0.0 (internal/pkg/config/config.go 176-194, 204-207); an unknown key only warns (config.go 291). Ruling (2) of 2026-11-12: the rule follows container.network_create_options.enable_ipv6, and the stale key is declared nowhere."},
+      {"path": "container.network_create_options.enable_ipv6", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1", "notes": "Decision 0016 section 2.3 (container.enable_ipv6: false) at the 6.0.0 key (config.go 204-207; internal/app/run/runner.go 609-611); declared explicitly, not left to Docker's default."},
+      {"path": "container.bind_workdir", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. True mounts the workspace from a host directory and adds it to the valid volumes (act/runner/run_context.go 278-280; config.example.yaml 300-305)."},
+      {"path": "container.sweep", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. It acts on what a job creates through its Docker proxy, which docker_host \"-\" never gives a job (config.example.yaml 309-311)."},
       {"path": "container.force_pull", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
       {"path": "container.force_rebuild", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
-      {"path": "container.options", "rule": "options", "status": "decided", "verify_at": "Q-02.2.1"}
+      {"path": "container.options", "rule": "options", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "runner.tool_cache_mode", "rule": "must_equal", "value": "none", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. shared mounts one tool cache volume that successive jobs reuse: cross-job poisoning (config.go 196-202, 380-385; internal/app/run/runner.go 629-630)."},
+      {"path": "runner.hooks", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. Hook scripts run inside the job before its first step and after its last (config.go 101-105; act/runner/job_hooks.go 29-35). Their ACTIONS_RUNNER_HOOK_JOB_* fallbacks are read from runner.envs and env_file, both empty (job_hooks.go 30, 34; docs/job-hooks.md line 17)."},
+      {"path": "runner.post_task_script", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. A script run on the runner host after each task (config.go 94; internal/app/run/runner.go 310)."},
+      {"path": "runner.extra_headers", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. Headers added to every runner request to Gitea, Register included (config.go 74; internal/app/cmd/register.go 346-353; daemon.go 180)."},
+      {"path": "metrics.enabled", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. A Prometheus listener of the runner (config.go 241-246; daemon.go 240)."},
+      {"path": "health_check.enabled", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1", "notes": "Ruling (3) of 2026-11-12 (the Overseer): a key of the pinned 6.0.0 config the declaration must pin; decision 0016 sections 2.3 and 11. Opt-in task admission, with an optional script run on the runner host (config.go 248-256; internal/app/run/runner.go 813, 894)."}
     ],
     "options": {
       "declared": [
@@ -109,7 +118,16 @@
       "exchange_mount": "--volume=/home/agent/exchange:/aieh/exchange:ro",
       "status": "planned",
       "verify_at": "Q-02.2.1",
-      "notes": "The option names are decided; the user id, the limits and the mount's guest path are proposals that Q-02.2.1 fixes with the profile variant and the job image."
+      "notes": "The option names are decided; the user id, the limits and the mount's guest path are proposals that Q-02.2.1 fixes with the profile variant and the job image. At the 6.0.0 pin a bind given in container.options passes the valid-volume filter and is dropped while valid_volumes is empty (act/container/docker_run.go 653, 1126-1159); ruling (1) of 2026-11-12 moves the exchange mount to container.volumes only on a source condition the record evidence/Q-02.2.1-ci-profile.md finds unmet, so the mount's placement is the Overseer's."
+    },
+    "environment": {
+      "service_key": "provisioning.ci_runner.service",
+      "forbidden_names": ["GITEA_RUNNER_LABELS", "GITEA_RUNNER_REGISTRATION_TOKEN", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "DOCKER_HOST"],
+      "forbidden_prefixes": ["ACTIONS_RUNNER_HOOK_", "OTEL_"],
+      "config_expansion": "refused",
+      "status": "decided",
+      "verify_at": "Q-02.2.1",
+      "notes": "Ruling (3) of 2026-11-12: the runner process's environment is declared (the variant's service block: its environment and argv) and checked, names compared without case. GITEA_RUNNER_LABELS is the daemon's --labels default, which overrides the registered labels (internal/app/cmd/cmd.go 56); GITEA_RUNNER_REGISTRATION_TOKEN is the register token's environment path (register.go 88, 205-208); HTTP(S)_PROXY and NO_PROXY reach every job (internal/app/run/proxy.go 19-67; runner.go 508-509); DOCKER_HOST would replace the guest's own socket the runner finds (daemon.go 381-403); OTEL_* configures trace export (internal/pkg/telemetry/telemetry.go 66-91); ACTIONS_RUNNER_HOOK_* is refused as a stale form (the runner reads it from runner.envs only). config_expansion: ${NAME} in a config.yaml value is replaced from the runner's environment at load (config.go 510-531), so the declared config carries no $."
     },
     "status": "decided",
     "verify_at": ["Q-02.2.1", "Q-02.2.2"]
@@ -121,9 +139,10 @@
       {"step": "reset", "detail": "Reset the governance repository's registration token through the web settings route (POST /{owner}/{repo}/settings/actions/runners/reset_registration_token) under a site-administrator web session (the F-06.1 sign-in flow, with CSRF); every older token for the scope is invalidated."},
       {"step": "read", "detail": "Read the fresh token with gitea actions generate-runner-token --scope <org>/<repo> into memory, never to a log or file."},
       {"step": "deliver", "detail": "Hand it to the dispatcher in memory for one delivery over the management channel to the CI guest's provisioning step."},
-      {"step": "register", "detail": "act_runner register in the CI guest (ephemeral for a per-validation guest); the guest keeps only the runner token."},
+      {"step": "register", "detail": "gitea-runner register --no-interactive --config <the declared config.yaml> --instance http://127.0.0.1:13300 --token-file <a root-only file on /run, removed after the call> in the CI guest: no --ephemeral in the shared lifetime chosen at C-3; the labels come from the config only. The guest keeps only the runner token."},
       {"step": "reset", "detail": "Reset again immediately after a successful registration or a failed delivery: the delivered value is dead before any job runs."}
     ],
+    "token_input": {"register_key": "provisioning.ci_runner.register", "flag": "--token-file", "path_prefix": "/run/", "refused": ["--token", "GITEA_RUNNER_REGISTRATION_TOKEN"], "status": "decided", "verify_at": ["Q-02.2.1", "Q-02.2.2"], "owner_act": "C-2", "notes": "Ruling (5) of 2026-11-12: the registration token enters by file only, never the command line (--token, visible in the process list) or the environment (GITEA_RUNNER_REGISTRATION_TOKEN); the file lives on /run (tmpfs), root-only, and is removed after the call, so no registration token is at rest. At 6.0.0 --token-file takes precedence and its content is trimmed (internal/app/cmd/cmd.go 36-37; register.go 196-216); --config must be given, or register falls back to four default ubuntu labels (register.go 90-95, 304-313)."},
     "fallback": {"in_force": false, "detail": "Never in force for a live runner (the Owner's direction of 2026-11-10, decision 0016's dated note, point 1): a registration token that stays active between provisionings, read at each one and reset only on revision or exposure, is not admitted as a residual."},
     "live_gate": {
       "rule": "No live runner is registered or qualified until the reset is verified live to invalidate the delivered value: after the second reset, the delivered registration token is refused by Register (the negative probe).",
@@ -189,6 +208,7 @@
       {"method": "POST", "path": "/api/actions/runner.v1.RunnerService/UpdateLog"}
     ],
     "deny": ["/api/actions_pipeline/*", "/twirp/github.actions.results.api.v1.ArtifactService/*", "/api/v1/*", "git smart HTTP", "the web", "everything else"],
+    "notes": "Ruling (4) of 2026-11-12, disclosed: the runner itself posts each step's job summary to <ACTIONS_RUNTIME_URL>/_apis/pipelines/workflows/<run>/jobs/<job>/steps/ (under /api/actions_pipeline/) with the job's runtime token when Gitea advertises the capability (act/runner/job_executor.go 540-575). The proxy denies it; the upload is best effort and does not fail the job (job_executor.go 666), so job summaries are not available. Whether Gitea 28.3.0 advertises the capability is not read.",
     "owner_act": "A-4",
     "status": "planned",
     "verify_at": "Q-02.2.1"
@@ -222,20 +242,20 @@
     {"id": "A-4", "act": "The host-side filtering proxy listener on 127.0.0.1 (proxy allowlist).", "class": "Owner act (a host listener; the decision 0015 precedent)", "requested_at": "Q-02.2.1", "status": "planned"},
     {"id": "C-1", "act": "Enable Gitea Actions instance-wide (ENABLED = true, DEFAULT_ACTIONS_URL = self, a restart through the lifecycle contract) to serve the governance repository only, and apply the token configuration (restricted mode, all-none ceilings, no cross-repository grants, no public repository).", "class": "Owner confirmation (a configuration change of the trusted computing base)", "requested_at": "Q-02.3.1", "status": "planned"},
     {"id": "C-2", "act": "Create the private governance repository and the aieh-bot-ci identity; set the protections; operate the registration token by the reset-read-deliver-reset procedure; run the live check's two read-only oracles.", "class": "Owner confirmation of the product shape, performed by the harness", "requested_at": "Q-02.3.1", "status": "planned"},
-    {"id": "C-3", "act": "A CI guest variant beside the execution guest: its composition (Moby, act_runner, the job image; no Agent Server), its ceilings and its lifetime (shared with a persistent runner, or per validation with an ephemeral runner).", "class": "Owner confirmation (a new guest composition and footprint)", "requested_at": "Q-02.2.1", "status": "planned"}
+    {"id": "C-3", "act": "A CI guest variant beside the execution guest: its composition (Moby, act_runner, the job image; no Agent Server), its ceilings and its lifetime (shared with a persistent runner, or per validation with an ephemeral runner).", "class": "Owner confirmation (a new guest composition and footprint)", "requested_at": "Q-02.2.1", "status": "observed", "approval": {"link": "evidence/bootstrap-log.md", "quote": "Accept these ceilings for the dedicated CI guest:"}, "notes": "Answered 2026-11-11 (option 1): the ceilings, one guest reused within a validation session, destroyed at the session's end, never reused when compromised or unverified; it authorizes no live registration, Actions activation, guest network change, untrusted workload or other OA-13 act."}
   ],
   "checks": [
     {"id": "ci-lanes", "codes": ["LANE_PRIVILEGED", "LANE_JOB_CREDENTIALS", "LANE_RUNNER_CREDENTIALS", "LANE_HOLDS_MISMATCH"], "what": "No validation lane holds an owner, admin, executor or management credential; the job holds exactly the two task tokens and the runner host exactly the runner token; the profile's lanes equal the token policy's map."},
     {"id": "ci-lane-map", "codes": ["LANE_MAP_INCOMPLETE", "LANE_MAP_MISMATCH"], "what": "Every inventory credential has exactly one lane, and a credential held in a CI domain is in that domain's lane."},
     {"id": "ci-job-reach", "codes": ["JOB_REACH"], "what": "The validation job reaches nothing, and every task token's reach is none and is never relied on."},
     {"id": "ci-task-tokens", "codes": ["TOKEN_ROW"], "what": "Each task token row names an inventory credential of the validation job with a permissionless effective permission on the governance repository."},
-    {"id": "ci-runner-config", "codes": ["RUNNER_RULE_MISSING", "RUNNER_RULE_WEAK", "RUNNER_CONFIG"], "what": "Every runner-configuration invariant is declared at its decided value, and a profile variant's declared config.yaml satisfies them."},
+    {"id": "ci-runner-config", "codes": ["RUNNER_RULE_MISSING", "RUNNER_RULE_WEAK", "RUNNER_CONFIG", "RUNNER_ENVIRONMENT"], "what": "Every runner-configuration invariant is declared at its decided value, and a profile variant's declared config.yaml satisfies them and carries no environment expansion; the variant's runner service sets no forbidden environment variable and no label override."},
     {"id": "ci-workflow", "codes": ["WORKFLOW_MISSING", "WORKFLOW_SYNTAX", "WORKFLOW_SCHEMA", "WORKFLOW_TRIGGER", "WORKFLOW_PERMISSIONS", "WORKFLOW_USES", "WORKFLOW_SECRETS", "WORKFLOW_RUNS_ON", "WORKFLOW_CONTAINER", "WORKFLOW_INTERPOLATION", "WORKFLOW_FIRST_STEPS", "WORKFLOW_ALLOWLIST"], "what": "Every workflow under policy/ci/workflows obeys decision 0016 section 7.3."},
     {"id": "ci-gitea-scope", "codes": ["GITEA_ACTIONS_SCOPE", "GITEA_PUBLIC_REPO", "GITEA_PROTECTION"], "what": "Actions is enabled on the governance repository only, no repository is public, and the governance protections are complete."},
     {"id": "ci-gitea-ceiling", "codes": ["GITEA_TOKEN_MODE", "GITEA_CEILING", "GITEA_CROSS_REPO"], "what": "Restricted mode and an all-none ceiling at the governance owner and repository; no cross-repository grant anywhere."},
     {"id": "ci-gitea-secrets", "codes": ["GITEA_SECRETS"], "what": "No Actions secret or variable is allowed anywhere."},
     {"id": "ci-proxy", "codes": ["PROXY_ALLOWLIST"], "what": "The filtering proxy admits exactly the runner RPC, Register only in the provisioning window."},
-    {"id": "ci-registration", "codes": ["REGISTRATION_RESET"], "what": "The registration procedure resets the token before it is read and after registration; the fallback is never in force; a live runner waits on the live reset proof, and its absence blocks (Owner direction, 2026-11-10)."},
+    {"id": "ci-registration", "codes": ["REGISTRATION_RESET", "REGISTRATION_INPUT"], "what": "The registration procedure resets the token before it is read and after registration; the fallback is never in force; a live runner waits on the live reset proof, and its absence blocks (Owner direction, 2026-11-10); the token enters by file only, and a variant's register call reads the declared config, names the ci-control instance and is ephemeral exactly when the chosen lifetime is per-validation."},
     {"id": "ci-owner-acts", "codes": ["OWNER_ACT"], "what": "Every Owner act names its requesting leaf, and an observed one cites its bootstrap-log approval verbatim."},
     {"id": "ci-forward-owner-act", "codes": ["FORWARD_OWNER_ACT"], "what": "Every forward and host listener names an Owner act."},
     {"id": "ci-facts", "codes": ["FACT_UNSUPPORTED", "FACT_ARCHIVE"], "what": "A fact verified at source names its paths and lines in the archive the lock pins; a live one cites evidence; an unverified one names its leaf."},
