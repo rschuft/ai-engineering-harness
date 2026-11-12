@@ -2304,6 +2304,141 @@ push never implies parent acceptance.
 
 - **2026-11-12: OA-16 Act D performed once: PASS.** From a clean clone at `4bc611e2d3bd2297f3fdb9fa6a0ba8feac1bbb21`, 04:08 UTC, with `AIEH_PROTECTION_AUDIT_BASELINE` the Act B baseline. Precondition passed (the auditor's identity and scope, `verified` with `sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42`, the read-back equal to the declaration). The five scenarios in order, each injection accepted (200, 200, 201, 204, 200), each detected as drift naming it (`main.block_admin_merge_override is False`; `main.priority is 5` with the rules matching main in Gitea's order `['**', 'main']`; `rule 'aieh-qualify/*' (priority 9) is not declared`; `collaborator aieh-bot-verifier: admin, declared read`; `allow_squash_merge is True`), each restored by one bounded restoration (the extra rule's DELETE 204, then the full declaration, every call 2xx), each followed by a read-back with no difference and `verified` with the baseline digest. After the fifth: the complete declaration, no `aieh-qualify/*` rule, the verifier bot `read`, `verified` with the baseline digest. A separate final `verify`: `verified`, the same digest. The site administrator's snapshots before and after are byte-identical (sha256 `87059ee3...`, also equal to Act C's final): every user's token list, the auditor's fingerprint `sha256:a4109cc864373ed5`, collaborators, branches, hooks and keys unchanged. The Overseer's exact-value exposure scan against the five role tokens: 0 in every output. Evidence (session scratch): `run-report.json` `4170e033...`, `run.out` `616bebd1...`, `final-verify.out` `205f5380...`. Gitea 28.3.0 records no audit event for these API calls. Act E unauthorized.
 
+- **2026-11-12: Owner decision: OA-16 Act E, the PREPARE PHASE ONLY of OA-14's live exercise, approved; the record phase, any Owner statement and any protected merge not authorized.** Verbatim (the Owner's resume message, its Act E part):
+
+  > OA-16 ACT E — OWNER DECISION
+  >
+  > APPROVED: The PREPARE PHASE ONLY of OA-14's live
+  > authorization-recorder qualification.
+  >
+  > This approval authorizes preparation of the
+  > fixture proposals, negative bot merge controls,
+  > one-time challenges and Owner presentation.
+  >
+  > It does NOT authorize the RECORD PHASE, an Owner
+  > statement, or a protected merge.
+  >
+  > TARGET REPOSITORY
+  >
+  > aieh-authz-fixture/authz
+  >
+  > REQUIRED PROTECTION BASELINE
+  >
+  > sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42
+  >
+  > PREPARATION REQUIREMENTS
+  >
+  > 1. Verify the exact protection baseline, the
+  >    expected repository state and the required
+  >    identities and credential scopes.
+  >
+  > 2. Correct the auditor's negative merge control
+  >    before live execution.
+  >
+  >    It must target a nonexistent pull request
+  >    rather than either real proposal.
+  >
+  >    Require refusal by scope, not merely the
+  >    absence of the pull request.
+  >
+  >    Act C already independently established the
+  >    auditor's read-only scope.
+  >
+  > 3. Preserve the four other bots' real merge
+  >    refusal controls.
+  >
+  >    Any successful unauthorized merge or movement
+  >    of protected main is a SECURITY FAILURE.
+  >
+  >    Stop immediately on such a result, without
+  >    attempting remaining controls.
+  >
+  > 4. Add or update focused offline tests for the
+  >    auditor-control correction and stopping rules.
+  >    Verify them before running live.
+  >
+  > 5. Use one fresh, empty, isolated run directory.
+  >
+  > 6. Execute the PREPARE phase once using the
+  >    existing P-04.2 live exercise.
+  >
+  > AUTHORIZED PREPARE EFFECTS
+  >
+  > - Builder proposes two fixture-no-op manifests
+  >   on separate work/authz-recorder branches.
+  > - Builder creates the two corresponding pull
+  >   requests.
+  > - Reviewer approves each exact proposal head.
+  > - The four other bots attempt their specified
+  >   negative merge controls.
+  > - The recorder creates the two one-time challenges.
+  > - The preparation produces presentation.json and
+  >   presentation.txt.
+  > - The custody inspection runs.
+  >
+  > The recorder may read the harness-held Owner
+  > credential in its trusted host context only
+  > as required by the existing preparation contract.
+  > No Owner credential may enter an agent context.
+  >
+  > REQUIRED PRESENTATION
+  >
+  > Report each proposed operation's:
+  >
+  > - Exact operation ID
+  > - Repository and pull request
+  > - Approved head SHA
+  > - Manifest digest
+  > - Challenge and expiration
+  > - Intended effects
+  > - Expected result
+  > - Protection verification result
+  >
+  > Identify which operation is A, the intended
+  > successful fixture merge, and which is B,
+  > the stale-head negative control.
+  >
+  > Confirm that no protected merge occurred during
+  > preparation and that main remains unchanged.
+  >
+  > STOP AFTER PREPARE
+  >
+  > Do not write or synthesize any Owner authorization
+  > statement.
+  >
+  > Do not begin the record phase.
+  >
+  > Do not infer that this approval authorizes either
+  > operation.
+  >
+  > Present the exact prepared challenge information
+  > to me for a fresh, explicit Owner decision.
+  >
+  > If the challenges expire before I respond, report
+  > the expiration; do not regenerate them or rerun
+  > the preparation without further authorization.
+  >
+  > OTHER WORK
+  >
+  > Continue independently eligible offline work
+  > without interrupting active Builders.
+  >
+  > The guest custody probe, inference live acts,
+  > CI live acts and privileged-host operations
+  > remain separately gated.
+  >
+  > Preserve the existing Owner-action queue and
+  > report unresolved decisions at handoff.
+  >
+  > Do not create new architectural work or perform
+  > unnecessary test-runtime optimization.
+  >
+  > Proceed with the authorized Act E preparation,
+  > then present the result and stop at the
+  > Owner-authorization boundary.
+
+- **2026-11-12: Act E preparation, offline correction verified.** `33f54cc`..`e6e452e` (the Builder; [P-04.2 section 15](P-04.2-authorization-recorder.md)): prepare now checks, before any write, the protection baseline (`AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE`, `verified` with exactly that digest), every role's `GET /token` login and scopes, no open pull request and neither run branch present; the protection auditor's control is the merge of a nonexistent pull request (absence read first as aieh-bot-verifier; PASS only 403 with Gitea's scope refusal), never of A or B; the four bots keep their real controls; main and both proposals are read after every attempt and any 2xx, merge or movement of main is a SECURITY FAILURE with no further control. Mutation of the changed lines: 92 of 92 killed. **Overseer verification:** the diff read; verify_seed PASS; owner suite 146 OK (2 skipped), gitea suite 282 OK (13 skipped), `AIEH_DATA_ROOT` an empty directory, still empty after. **Unrelated but detected:** `check_test_budget.py check --run` fails `TEST_REMOVED` for `test_acp_qualification_driver.DriverRun.test_without_a_root_channel_and_with_the_search_off_the_run_is_unknown`, removed by `5a4e270` (S-03.3) without re-recording `evidence/test-profile/test-ids.json`; carried as a fix-forward. Choice recorded: a drift answer at the recorder's own prepare after a verified precondition still yields a presentation stating the expected refusal (no merge is possible without `verified` at record).
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
