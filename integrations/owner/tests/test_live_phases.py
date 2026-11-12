@@ -25,6 +25,7 @@ statement here is SYNTHETIC and no Owner decision: it stands in, in a fixture, f
 live phase reads from a file.
 """
 import ast
+import datetime
 import hashlib
 import json
 import re
@@ -113,6 +114,29 @@ class Phases(su.Fixture):
             return rule(method, path, headers or {}, answer) or answer
         return http
 
+    def live_test(self, phase, baseline, inspected):
+        """LiveExercise.test_phase for PHASE, offline (the fake Gitea, a fake verifier, the custody inspection
+        recorded in INSPECTED): its unittest result."""
+        real = L.Live
+
+        def offline(*args, **kw):
+            return real(*args, **{**kw, 'http': self.gitea, 'now': lambda: self.now})
+
+        result = unittest.TestResult()
+        try:
+            with mock.patch.multiple(
+                    L, PHASE=phase, RUN_DIR=str(self.run_dir), BASELINE=baseline, REPORT=None, Live=offline,
+                    _live=lambda: ((self.port, self.provider), None),
+                    available_verifier=lambda port, provider: (su.FakeVerifier(), 'fake verifier'),
+                    inspect_custody=lambda provider, run_dir: inspected.append(run_dir) or {'found': [],
+                                                                                            'unreadable': []}):
+                unittest.TestSuite([L.LiveExercise('test_phase')]).run(result)
+        finally:
+            for name in ('port', 'provider', 'observed'):
+                if name in vars(L.LiveExercise):
+                    delattr(L.LiveExercise, name)
+        return result
+
     def assertNothingPrepared(self):
         self.assertFalse((self.run_dir / L.PRESENTATION).exists())
         self.assertFalse((self.run_dir / L.RECORDER_DIR).exists())
@@ -193,6 +217,8 @@ class Prepare(Phases):
         self.assertIn(f'== B: pull request #{stale["pull"]}, THE STALE-HEAD CONTROL (expected: refused; nothing '
                       'merges and main does not move)', text)
         self.assertIn('Protection verifier: available', text)
+        self.assertNotIn('From the original prepare', text)
+        self.assertNotIn('REGENERATION', text)
         self.assertIn(f'Bot merge controls on A and B (each must be refused; main and both proposals read after '
                       f'each): {presentation["botMerges"]["statuses"]}.', text)
         # the exercise wrote no statement, and no secret reached the run directory
@@ -266,28 +292,11 @@ class Precondition(Phases):
     def test_the_live_test_passes_the_baseline_variable_to_the_phase(self):
         """LiveExercise.test_phase, offline (the fake Gitea, a fake verifier, no custody inspection): the phase
         gets AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE's value, and without it refuses before anything is read."""
-        real = L.Live
-
-        def offline(*args, **kw):
-            return real(*args, **{**kw, 'http': self.gitea, 'now': lambda: self.now})
-
         for baseline, refused in ((BASELINE, None), (None, 'BASELINE_MISSING')):
             with self.subTest(baseline=baseline):
                 self.setUp()
                 inspected = []
-                result = unittest.TestResult()
-                try:
-                    with mock.patch.multiple(
-                            L, PHASE='prepare', RUN_DIR=str(self.run_dir), BASELINE=baseline, REPORT=None, Live=offline,
-                            _live=lambda: ((self.port, self.provider), None),
-                            available_verifier=lambda port, provider: (su.FakeVerifier(), 'fake verifier'),
-                            inspect_custody=lambda provider, run_dir: inspected.append(run_dir) or {'found': [],
-                                                                                                    'unreadable': []}):
-                        unittest.TestSuite([L.LiveExercise('test_phase')]).run(result)
-                finally:
-                    for name in ('port', 'provider', 'observed'):
-                        if name in vars(L.LiveExercise):
-                            delattr(L.LiveExercise, name)
+                result = self.live_test('prepare', baseline, inspected)
                 if refused is None:
                     self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
                     self.assertTrue((self.run_dir / L.PRESENTATION).exists())
@@ -816,6 +825,392 @@ class Record(Phases):
         self.assertEqual(self.gitea.head(stale['pull']), stale['approvedHead'])
         self.assertEqual(self.gitea.merge_count(), 1)
         self.assertEqual(self.gitea.pulls[stale['pull']]['state'], 'closed')
+
+
+AFTER_EXPIRY = su.NOW + datetime.timedelta(minutes=L.CHALLENGE_MINUTES + 1)
+
+
+class Rechallenge(Phases):
+    """Phase rechallenge: fresh one-time challenges for the operations already presented, once their challenges
+    expired, after reads only; the previous presentation kept as presentation-<k>.*; every refusal leaves no
+    new challenge file and the presentation unchanged (but SUBJECT_DIFFERS and a recorder refusal after a
+    first fresh challenge, which report the files written and never present them)."""
+
+    def setUp(self):
+        super().setUp()
+        self.verifier = su.FakeVerifier()
+        self.presentation, _ = self.prepared(self.verifier)
+        self.now = AFTER_EXPIRY
+        self.sent = len(self.gitea.requests)
+
+    def files(self):
+        """The run directory's files but the integration store (bytes), by relative name."""
+        return {p.relative_to(self.run_dir).as_posix(): p.read_bytes() for p in self.run_dir.rglob('*')
+                if p.is_file() and '.sqlite' not in p.name}
+
+    def challenge_files(self):
+        return sorted(p.name for p in (self.run_dir / L.RECORDER_DIR / 'state' / 'challenges').glob('*.json'))
+
+    def non_gets(self):
+        return [r for r in self.gitea.requests[self.sent:] if r['method'] != 'GET']
+
+    def rechallenge(self, **kw):
+        observed = {}
+        kw.setdefault('verifier', self.verifier)
+        return L.rechallenge_phase(self.live(**kw), observed), observed
+
+    def assertRefusedUnchanged(self, code, **kw):
+        before = self.files()
+        with self.assertRaises(L.PhaseRefused) as caught:
+            self.rechallenge(**kw)
+        self.assertEqual(caught.exception.code, code, str(caught.exception))
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.non_gets(), [])
+        return caught.exception
+
+    def test_fresh_challenges_for_the_same_operations(self):
+        old_json = (self.run_dir / L.PRESENTATION).read_bytes()
+        old_text = (self.run_dir / L.PRESENTATION_TEXT).read_bytes()
+        presentation, observed = self.rechallenge()
+        self.assertEqual(self.non_gets(), [])
+        self.assertEqual((self.run_dir / 'presentation-1.json').read_bytes(), old_json)
+        self.assertEqual((self.run_dir / 'presentation-1.txt').read_bytes(), old_text)
+        self.assertEqual(json.loads((self.run_dir / L.PRESENTATION).read_text(encoding='utf-8')), presentation)
+        old = self.presentation
+        self.assertEqual(list(presentation), [*old, 'regeneration'])
+        self.assertEqual(presentation['format'], L.PRESENTATION_FORMAT)
+        self.assertEqual(presentation['preparedAt'], '2026-11-10T15:01:00Z')
+        for before, after in zip(old['challenges'], presentation['challenges']):
+            with self.subTest(pull=before['pull']):
+                self.assertEqual(tuple(after), L.CHALLENGE_KEYS)
+                self.assertNotEqual(after['nonce'], before['nonce'])
+                self.assertEqual(after['challengeExpiresAt'], '2026-11-10T18:01:00Z')
+                for key in ('role', 'repository', 'pull', 'base', 'branch', 'approvedHead', 'manifest',
+                            'manifestDigest', 'operation', 'kind', 'target', 'operationExpiresAt', 'expectedOutcome'):
+                    self.assertEqual(after[key], before[key], key)
+                # the same effects; the receipt they name is the fresh challenge's
+                self.assertEqual([e.replace(after['nonce'], before['nonce']) for e in after['effects']],
+                                 before['effects'])
+                self.assertTrue(any(after['nonce'] in e for e in after['effects']))
+                self.assertEqual(after['protectionAtPrepare']['verdict'], 'verified')
+                issued = json.loads((self.run_dir / L.RECORDER_DIR / 'state' / 'challenges'
+                                     / f'{after["nonce"]}.json').read_text(encoding='utf-8'))
+                self.assertEqual(issued['shown']['summary'], after['summary'])
+        self.assertEqual((presentation['labels'], presentation['staleHeadControl'], presentation['mainHead']),
+                         (old['labels'], old['staleHeadControl'], old['mainHead']))
+        note = f'from the original prepare of {old["preparedAt"]}; not re-run'
+        for key in ('precondition', 'botMerges', 'auditorControl'):
+            self.assertEqual(presentation[key], {**old[key], 'from': note}, key)
+        regen = presentation['regeneration']
+        self.assertEqual({k: v for k, v in regen.items() if k != 'verifiedBeforeRegeneration'}, {
+            'of': [c['nonce'] for c in old['challenges']], 'previousFile': 'presentation-1.json',
+            'originalPreparedAt': old['preparedAt'], 'authority': L.REGENERATION_AUTHORITY})
+        verified = regen['verifiedBeforeRegeneration']
+        self.assertEqual(verified, observed['regeneration'])
+        self.assertEqual((verified['protection']['verdict'], verified['protection']['digest'], verified['mainHead']),
+                         ('verified', BASELINE, old['mainHead']))
+        self.assertEqual(set(verified['identities']), set(R.ROLES))
+        self.assertEqual([c['nonce'] for c in verified['previousChallenges']], regen['of'])
+        self.assertEqual(verified['pulls'], {
+            str(c['pull']): {'state': 'open', 'merged': False, 'base': 'main', 'head': c['approvedHead'],
+                             'branch': c['branch'], 'manifestDigest': c['manifestDigest']}
+            for c in old['challenges']})
+        self.assertEqual(observed['written'], [f'recorder/state/challenges/{c["nonce"]}.json'
+                                               for c in presentation['challenges']])
+        text = (self.run_dir / L.PRESENTATION_TEXT).read_text(encoding='utf-8')
+        self.assertIn('THIS IS A REGENERATION of the one-time challenges for the existing operations', text)
+        self.assertIn('the bot and auditor merge controls were NOT re-run', text)
+        self.assertIn(f'It replaces the challenges {", ".join(regen["of"])}, all expired (previous presentation '
+                      'presentation-1.json).', text)
+        self.assertIn('From the original prepare, not re-run: Precondition, checked before any write:', text)
+        self.assertEqual(text.count('From the original prepare, not re-run: '), 3)
+        self.assertIn('From the original prepare, not re-run: Bot merge controls on A and B', text)
+        self.assertIn('From the original prepare, not re-run: Protection auditor control: nonexistent pull request',
+                      text)
+        for c in presentation['challenges']:
+            self.assertIn(f'Challenge nonce {c["nonce"]}, expires at {c["challengeExpiresAt"]}.', text)
+            self.assertIn(f'#{c["pull"]} open, not merged, base main, head {c["approvedHead"]} on {c["branch"]}, '
+                          f'manifest {c["manifestDigest"]}', text)
+        self.assertIn('== B: pull request #2, THE STALE-HEAD CONTROL', text)
+        self.assertNotIn('THIS IS A REGENERATION', old_text.decode('utf-8'))
+
+    def test_phase_record_then_runs_on_the_regenerated_presentation(self):
+        presentation, _ = self.rechallenge()
+        authorize, stale = presentation['challenges']
+        observed = L.record_phase(self.live(self.verifier), self.statement_file(
+            self.synthetic(*self.operations(presentation))), {})
+        merged = observed['outcomes'][authorize['operation']]
+        self.assertEqual(merged['receipt']['state'], 'confirmed')
+        self.assertEqual(merged['merge']['parents'], [presentation['mainHead'], authorize['approvedHead']])
+        refused = observed['outcomes'][stale['operation']]
+        self.assertEqual((refused['code'], refused['moved'], refused['receipt'], refused['merged'],
+                          refused['mainMoved']), ('HEAD_STALE', [201], 'failed', False, False))
+        self.assertEqual([b['head_commit_id'] for b in self.gitea.merge_bodies[-2:]],
+                         [stale['approvedHead'], authorize['approvedHead']])
+        self.assertEqual(self.gitea.merge_count(), 1)
+
+    def test_a_second_regeneration_keeps_both_earlier_presentations(self):
+        first, _ = self.rechallenge()
+        self.now = AFTER_EXPIRY + datetime.timedelta(minutes=L.CHALLENGE_MINUTES + 1)
+        second, _ = self.rechallenge()
+        self.assertEqual(json.loads((self.run_dir / 'presentation-2.json').read_text(encoding='utf-8')), first)
+        self.assertTrue((self.run_dir / 'presentation-1.json').exists())
+        self.assertEqual(second['regeneration']['of'], [c['nonce'] for c in first['challenges']])
+        self.assertEqual(second['regeneration']['previousFile'], 'presentation-2.json')
+        self.assertEqual(second['regeneration']['originalPreparedAt'], self.presentation['preparedAt'])
+        self.assertEqual(second['botMerges'], first['botMerges'])
+
+    def test_the_live_test_runs_the_phase(self):
+        inspected = []
+        result = self.live_test('rechallenge', BASELINE, inspected)
+        self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
+        self.assertEqual(inspected, [self.run_dir])
+        self.assertIn('regeneration', json.loads((self.run_dir / L.PRESENTATION).read_text(encoding='utf-8')))
+        self.assertEqual(self.non_gets(), [])
+        self.assertEqual(L.PHASES, ('prepare', 'record', 'rechallenge'))
+
+    def test_a_missing_or_incomplete_presentation_is_refused_before_anything(self):
+        (self.run_dir / L.PRESENTATION).rename(self.run_dir / 'elsewhere.json')
+        self.assertRefusedUnchanged('PRESENTATION_MISSING')
+        (self.run_dir / 'elsewhere.json').rename(self.run_dir / L.PRESENTATION)
+        for damage in ({'botMerges': None}, {'mainHead': ''}, {'auditorControl': {}},
+                       {'challenges': [{**self.presentation['challenges'][0], 'role': L.STALE},
+                                       self.presentation['challenges'][1]]}):
+            with self.subTest(damage=list(damage)):
+                (self.run_dir / L.PRESENTATION).write_text(json.dumps({**self.presentation, **damage}),
+                                                           encoding='utf-8')
+                self.assertRefusedUnchanged('PRESENTATION_INVALID')
+        self.assertEqual(self.gitea.requests[self.sent:], [])
+
+    def test_an_unexpired_challenge_is_refused(self):
+        self.now = AFTER_EXPIRY - datetime.timedelta(minutes=2)  # 14:59: the presented challenges are usable
+        refused = self.assertRefusedUnchanged('CHALLENGE_STILL_LIVE')
+        self.assertIn(self.presentation['challenges'][0]['nonce'], str(refused))
+        self.assertEqual(self.gitea.requests[self.sent:], [])
+        self.now = AFTER_EXPIRY - datetime.timedelta(minutes=1)  # 15:00: expired at its expiry
+        self.rechallenge()
+
+    def test_another_unexpired_challenge_for_the_operation_is_refused(self):
+        """A challenge in the run's recorder state for a presented operation, not presented (one a refused
+        regeneration wrote), still usable: refused until it expires."""
+        store = L._open_store(self.live(self.verifier))
+        try:
+            stray = AR.prepare(L._context(self.live(self.verifier), store), fg.REPOSITORY,
+                               self.presentation['challenges'][1]['pull'], expires_in_minutes=L.CHALLENGE_MINUTES)
+        finally:
+            store.close()
+        self.sent = len(self.gitea.requests)
+        refused = self.assertRefusedUnchanged('CHALLENGE_STILL_LIVE')
+        self.assertIn(stray['shown']['nonce'], str(refused))
+        self.now = AFTER_EXPIRY + datetime.timedelta(minutes=L.CHALLENGE_MINUTES)
+        self.rechallenge()
+
+    def test_an_unexpired_challenge_for_another_operation_does_not_block(self):
+        challenges = self.run_dir / L.RECORDER_DIR / 'state' / 'challenges'
+        source = json.loads((challenges / f'{self.presentation["challenges"][0]["nonce"]}.json').read_text(
+            encoding='utf-8'))
+        other = 'e' * 32
+        source['subject'].update(operation='live-other', manifest='operations/live-other.json')
+        source['shown'].update(nonce=other, expiresAt='2026-11-11T00:00:00Z')
+        (challenges / f'{other}.json').write_text(json.dumps(source), encoding='utf-8')
+        self.rechallenge()
+
+    def test_an_invalid_or_missing_challenge_file_is_refused(self):
+        challenges = self.run_dir / L.RECORDER_DIR / 'state' / 'challenges'
+        nonce = self.presentation['challenges'][1]['nonce']
+        (challenges / f'{nonce}.json').rename(self.dir / 'aside.json')
+        refused = self.assertRefusedUnchanged('CHALLENGE_STATE_INVALID')
+        self.assertIn(nonce, str(refused))
+        (self.dir / 'aside.json').rename(challenges / f'{nonce}.json')
+        (challenges / 'not-a-nonce.json').write_text('{}', encoding='utf-8')
+        self.assertRefusedUnchanged('CHALLENGE_STATE_INVALID')
+        self.assertEqual(self.gitea.requests[self.sent:], [])
+
+    def test_a_presented_expiry_that_does_not_parse_is_refused(self):
+        for field in ('challengeExpiresAt', 'operationExpiresAt'):
+            with self.subTest(field=field):
+                challenges = [{**c, field: 'soon'} for c in self.presentation['challenges']]
+                (self.run_dir / L.PRESENTATION).write_text(json.dumps({**self.presentation, 'challenges': challenges}),
+                                                           encoding='utf-8')
+                self.assertRefusedUnchanged('PRESENTATION_INVALID')
+
+    def test_the_baseline_and_the_protection_check(self):
+        cases = {'missing': ('BASELINE_MISSING', {'baseline': None}),
+                 'differs': ('PROTECTION_BASELINE_DIFFERS', {'baseline': 'sha256:' + 'e' * 64}),
+                 'drift': ('PROTECTION_DRIFT', {'verifier': su.FakeVerifier(default=su.DRIFT)}),
+                 'no verifier': ('PROTECTION_UNVERIFIED', {'verifier': None})}
+        for name, (code, kw) in cases.items():
+            with self.subTest(case=name):
+                self.assertRefusedUnchanged(code, **kw)
+                self.assertEqual(self.gitea.requests[self.sent:], [])
+
+    def test_a_presented_expiry_later_than_the_recorder_s_is_refused(self):
+        challenges = [{**c, 'challengeExpiresAt': '2026-11-10T16:00:00Z'} for c in self.presentation['challenges']]
+        (self.run_dir / L.PRESENTATION).write_text(json.dumps({**self.presentation, 'challenges': challenges}),
+                                                   encoding='utf-8')
+        refused = self.assertRefusedUnchanged('CHALLENGE_STILL_LIVE')
+        self.assertIn('the presented challenge', str(refused))
+
+    def test_a_presented_base_other_than_main_is_refused(self):
+        challenges = [dict(c) for c in self.presentation['challenges']]
+        challenges[1]['base'] = 'work/other'
+        (self.run_dir / L.PRESENTATION).write_text(json.dumps({**self.presentation, 'challenges': challenges}),
+                                                   encoding='utf-8')
+        self.assertRefusedUnchanged('PULL_BASE_DIFFERS')
+
+    def test_a_pull_request_view_without_base_or_head_objects_is_refused(self):
+        for side, code in (('base', 'PULL_BASE_DIFFERS'), ('head', 'HEAD_MOVED')):
+            with self.subTest(side=side):
+                self.setUp()
+
+                def rule(method, path, headers, response):
+                    if path.endswith('/pulls/1') and 'token ' in str(headers):
+                        status, sent, data = response
+                        return status, sent, json.dumps({**json.loads(data), side: 'main'}).encode()
+                    return None
+                self.assertRefusedUnchanged(code, http=self.scripted(rule))
+
+    def test_a_missing_presentation_text_is_no_obstacle(self):
+        (self.run_dir / L.PRESENTATION_TEXT).unlink()
+        self.rechallenge()
+        self.assertTrue((self.run_dir / 'presentation-1.json').exists())
+        self.assertFalse((self.run_dir / 'presentation-1.txt').exists())
+        self.assertTrue((self.run_dir / L.PRESENTATION_TEXT).exists())
+
+    def test_the_live_test_runs_record_for_phase_record(self):
+        result = self.live_test('record', BASELINE, [])
+        self.assertEqual(len(result.failures), 1, result.errors)
+        self.assertIn('PhaseRefused: STATEMENT_MISSING: ', result.failures[0][1])
+
+    def test_without_a_verifier_the_presentation_says_none(self):
+        shown = self.presentation['challenges']
+        self.assertEqual(L._identified(self.live(None), shown)['verifier'], {'available': False,
+                                                                            'note': AR.NO_VERIFIER})
+
+    def test_an_identity_mismatch_is_refused(self):
+        self.gitea.token_views[R.ROLES['builder']['user']]['login'] = 'aieh-bot-other'
+        self.assertRefusedUnchanged('IDENTITY_MISMATCH')
+
+    def test_main_moved_is_refused(self):
+        self.gitea.advance_main({'x.txt': b'moved\n'})
+        self.assertRefusedUnchanged('MAIN_MOVED')
+
+    def test_each_pull_request_change_is_refused(self):
+        def head_moved(pull):
+            self.gitea.push_to_head(pull, {'operations/late.txt': b'late\n'})
+
+        def merged(pull):
+            self.gitea.pulls[pull].update(merged=True, state='closed')
+
+        def closed(pull):
+            self.gitea.pulls[pull]['state'] = 'closed'
+
+        def branch(pull):
+            self.gitea.branches['work/other'] = self.gitea.head(pull)
+            self.gitea.pulls[pull]['head_ref'] = 'work/other'
+
+        def base(pull):
+            self.gitea.pulls[pull]['base'] = 'work/other'
+            self.gitea.branches['work/other'] = self.gitea.branches['main']
+
+        def digest(pull):
+            c = next(c for c in self.presentation['challenges'] if c['pull'] == pull)
+            self.gitea.commits[self.gitea.head(pull)]['tree'][c['manifest']] += b' '
+
+        def manifest_gone(pull):
+            c = next(c for c in self.presentation['challenges'] if c['pull'] == pull)
+            del self.gitea.commits[self.gitea.head(pull)]['tree'][c['manifest']]
+
+        cases = {'HEAD_MOVED': head_moved, 'PULL_MERGED': merged, 'PULL_NOT_OPEN': closed, 'BRANCH_DIFFERS': branch,
+                 'PULL_BASE_DIFFERS': base, 'MANIFEST_DIGEST_DIFFERS': digest, 'MANIFEST_UNREADABLE': manifest_gone}
+        for code, change in cases.items():
+            for pull in (1, 2):
+                with self.subTest(code=code, pull=pull):
+                    self.setUp()
+                    change(pull)
+                    refused = self.assertRefusedUnchanged(code)
+                    self.assertIn(f'pull request #{pull} ', str(refused) + ' ')
+
+    def test_an_unreadable_pull_request_or_one_that_is_not_an_object_is_refused(self):
+        for answer in ((500, b'{}'), (200, b'[]'), (404, b'{"message": "no"}')):
+            with self.subTest(answer=answer):
+                self.setUp()
+
+                def rule(method, path, headers, response):
+                    return (answer[0], {}, answer[1]) if path.endswith('/pulls/2') and 'token ' in str(headers) \
+                        else None
+                self.assertRefusedUnchanged('PULL_UNREADABLE', http=self.scripted(rule))
+
+    def test_a_pull_request_without_its_merged_state_is_refused(self):
+        def rule(method, path, headers, response):
+            if path.endswith('/pulls/1') and 'token ' in str(headers):
+                status, sent, data = response
+                view = json.loads(data)
+                del view['merged']
+                return status, sent, json.dumps(view).encode()
+            return None
+        self.assertRefusedUnchanged('PULL_MERGED', http=self.scripted(rule))
+
+    def test_the_recorder_s_own_refusals_come_before_any_challenge(self):
+        # an operation already recorded: a receipt that is not failed (here unknown: the merge's answer lost)
+        verifier = self.verifier
+        self.now = su.NOW
+        authorize = self.presentation['challenges'][1]  # B: A is not reached before the refusal
+        self.gitea.fail_routes['/merge'] = 500
+        store = L._open_store(self.live(verifier))
+        try:
+            with self.assertRaises(AR.RecorderError) as caught:
+                AR.record(L._context(self.live(verifier), store), authorize['nonce'],
+                          self.synthetic(authorize['operation']), recorded_by=L.RECORDED_BY)
+            self.assertEqual(caught.exception.code, 'OUTCOME_UNKNOWN')
+        finally:
+            store.close()
+        del self.gitea.fail_routes['/merge']
+        self.now, self.sent = AFTER_EXPIRY, len(self.gitea.requests)
+        refused = self.assertRefusedUnchanged('OPERATION_NOT_NEW')
+        self.assertIn(authorize['operation'], str(refused))
+        # the phase closed the run's store: it can be moved (Windows refuses to move an open file)
+        stored = self.run_dir / L.RECORDER_DIR / 'integration.sqlite'
+        stored.rename(self.dir / 'moved.sqlite')
+        (self.dir / 'moved.sqlite').rename(stored)
+        # the operation's manifest expired (24 hours after prepare)
+        self.setUp()
+        self.now = su.NOW + datetime.timedelta(hours=L.MANIFEST_HOURS, minutes=1)
+        refused = self.assertRefusedUnchanged('MANIFEST_EXPIRED')
+        self.assertIn(self.presentation['challenges'][0]['operation'], str(refused))
+
+    def test_a_change_between_the_reads_and_the_recorder_is_refused_and_reported(self):
+        """A head moving, or a pull request closing, after the phase's reads and before the recorder's: the
+        recorder's own reads see it; the challenge files written are reported and never presented."""
+        def owner_reads(change):
+            done = []
+
+            def http(port, path, *, method='GET', body=None, headers=None, timeout=5.0):
+                if path.endswith('/pulls/2') and 'Basic ' in str(headers) and not done:
+                    done.append(path)
+                    change()
+                return self.gitea(port, path, method=method, body=body, headers=headers, timeout=timeout)
+            return http
+
+        cases = {'SUBJECT_DIFFERS': lambda: self.gitea.push_to_head(2, {}),  # a new head, the same manifest
+                 'PULL_NOT_OPEN': lambda: self.gitea.pulls[2].update(state='closed')}
+        for code, change in cases.items():
+            with self.subTest(code=code):
+                self.setUp()
+                before = self.files()
+                observed = {}
+                with self.assertRaises(L.PhaseRefused) as caught:
+                    L.rechallenge_phase(self.live(self.verifier, http=owner_reads(change)), observed)
+                self.assertEqual(caught.exception.code, code)
+                written = observed['written']
+                self.assertEqual(len(written), 2 if code == 'SUBJECT_DIFFERS' else 1)
+                self.assertIn(str(written), str(caught.exception))
+                if code == 'SUBJECT_DIFFERS':
+                    self.assertIn("['head']", str(caught.exception))
+                after = self.files()
+                self.assertEqual(sorted(set(after) - set(before)), sorted(written))
+                self.assertEqual({k: v for k, v in after.items() if k in before}, before)
+                self.assertEqual(self.non_gets(), [])
 
 
 class ProtectionCheckEndToEnd(Phases):

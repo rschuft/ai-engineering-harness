@@ -1,5 +1,6 @@
 """The Owner authorization recorder on the live S-01.2.2 fixture (plan leaf P-04.2): opt-in, never by default,
-in two separately invoked phases with the Owner's own decision between them (Owner decision OA-14).
+in two separately invoked phases with the Owner's own decision between them (Owner decision OA-14), and a
+third, ``rechallenge``, that only regenerates expired challenges for the operations already presented.
 
 The exercise never constructs, defaults, templates or paraphrases an Owner statement. The Owner sees the
 exact operations the recorder challenged (phase ``prepare``), decides, and his reply, written verbatim
@@ -106,6 +107,40 @@ attempt that the exercise makes stale on purpose.
    work/ branches stay (protected branches cannot be deleted).
 4. The custody inspection.
 
+**Phase rechallenge** (``AIEH_AUTHZ_RECORDER_LIVE=rechallenge``, the same ``AIEH_AUTHZ_RECORDER_RUN_DIR``,
+``AIEH_AUTHZ_RECORDER_PROTECTION_BASELINE``): fresh one-time challenges for the operations already presented,
+when the presented challenges expired unused. It sends no write to Gitea (no proposal, review, push, merge or
+control), only reads; the recorder's prepare writes the fresh challenges to the run's recorder state. Each
+check refuses (``PhaseRefused``) before any challenge is generated:
+
+1. The presentation (``PRESENTATION_MISSING``, ``PRESENTATION_INVALID``: also without the original prepare's
+   main head, precondition and controls, or without one challenge each of A and B). Every presented
+   challenge must have expired, and no challenge in the run's recorder state for these operations may still
+   be usable (``CHALLENGE_STILL_LIVE``): a regeneration never leaves two live challenges for one operation.
+   A presented challenge missing from the recorder state, or a file there that is not one of its
+   challenges, is ``CHALLENGE_STATE_INVALID``.
+2. The protection check ``verified`` with exactly the baseline, and every role's identity and scopes, as in
+   prepare's precondition; main's head equal to the presented one (``MAIN_MOVED``); as aieh-bot-verifier,
+   each presented pull request open (``PULL_NOT_OPEN``), not merged (``PULL_MERGED``), into main
+   (``PULL_BASE_DIFFERS``), at the presented approved head (``HEAD_MOVED``) on the presented branch
+   (``BRANCH_DIFFERS``), its manifest at that head read raw with the presented digest
+   (``MANIFEST_DIGEST_DIFFERS``, ``MANIFEST_UNREADABLE``; ``PULL_UNREADABLE``); and the recorder's own
+   refusals, with the run's store: no receipt names the operation (``OPERATION_NOT_NEW``) and its manifest
+   has not expired (``MANIFEST_EXPIRED``).
+3. For each presented challenge in order, the recorder's real ``prepare`` (180 minutes); its subject
+   (repository, pull request, base, head, manifest, digest, operation, kind, target, operation expiry) must
+   equal the presented one exactly (``SUBJECT_DIFFERS``, naming the fields); a refusal of the recorder
+   carries its own code. Either reports the challenge files already written, which are never presented
+   (a later rechallenge refuses until they expire).
+4. ``presentation.json`` and ``.txt`` move to ``presentation-<k>.json`` and ``.txt`` (k the next free
+   integer; nothing is overwritten or deleted) and the new presentation is written in the same format with
+   the same keys, so phase record reads it as before: the fresh challenges with their effects and expected
+   outcomes, A and B, the original prepare's precondition and control results marked ``from`` the original
+   prepare (not re-run), and ``regeneration`` (``of``: the replaced nonces, ``previousFile``,
+   ``originalPreparedAt``, ``verifiedBeforeRegeneration``: the reads above, ``authority``). Its text says it is
+   a regeneration and that the controls were not re-run.
+5. The custody inspection.
+
 **The custody inspection** (each phase): the password of aieh-owner (read once more from its entry, in
 memory) is searched for, as UTF-8 and UTF-16LE, in every file of the managed data root, every file git
 lists in the checkout, the run directory, and this process's environment (inherited from the session
@@ -140,7 +175,7 @@ import authz_support as su  # noqa: E402
 AR = su.AR
 R = AR.roles
 G = AR.host
-PHASES = ('prepare', 'record')
+PHASES = ('prepare', 'record', 'rechallenge')
 PHASE = os.environ.get('AIEH_AUTHZ_RECORDER_LIVE', '')
 RUN_DIR = os.environ.get('AIEH_AUTHZ_RECORDER_RUN_DIR')
 STATEMENT = os.environ.get('AIEH_AUTHZ_RECORDER_STATEMENT')
@@ -298,30 +333,8 @@ def precondition(live, branches, checked):
     """Before any write: the protection baseline, every role's identity and scopes, and the repository's
     state; PhaseRefused, with nothing written, unless each is as expected. CHECKED receives what was
     observed. Returns ({role: Api}, main's head)."""
-    baseline = _baseline(live)
-    # the recorder's own reading of a verifier: none, an exception or a malformed answer is unverified
-    answer = AR.check_protection(types.SimpleNamespace(verifier=live.verifier), REPOSITORY, R.DEFAULT_BRANCH,
-                                 'prepare')
-    checked['protection'] = {'verdict': answer['verdict'], 'digest': answer['digest'], 'expected': baseline,
-                             'detail': answer['detail']}
-    if answer['verdict'] != 'verified':
-        raise PhaseRefused(AR.protection_code(answer), f'the protection check answered {answer["verdict"]}: '
-                           f'{answer["detail"]}')
-    if answer['digest'] != baseline:
-        raise PhaseRefused('PROTECTION_BASELINE_DIFFERS', f'the protection check answered verified with '
-                           f'{answer["digest"]}, not {BASELINE_VARIABLE} {baseline}')
-    bots, identities = {}, {}
-    checked['identities'] = identities
-    for role, spec in R.ROLES.items():
-        bots[role] = _bot(live, role)
-        status, login, scopes = _identity(bots[role])
-        identities[role] = {'status': status, 'login': login, 'scopes': scopes}
-        if status != 200 or login is None or scopes is None:
-            raise PhaseRefused('IDENTITY_UNREADABLE', f'GET /token with the {role} token answered {status} '
-                               f'(login {login!r}, scopes {scopes!r})')
-        if login != spec['user'] or scopes != sorted(spec['scopes']):
-            raise PhaseRefused('IDENTITY_MISMATCH', f'the {role} token is {login!r} with scopes {scopes}, not '
-                               f'{spec["user"]} with exactly {sorted(spec["scopes"])}')
+    _verify_protection(live, checked)
+    bots = _verify_identities(live, checked)
     main = checked['mainHead'] = _main_head(live)
     status, pulls = bots['verifier'].call('GET', OPEN_PULLS)
     if status != 200 or not isinstance(pulls, list):
@@ -337,6 +350,40 @@ def precondition(live, branches, checked):
             raise PhaseRefused('REPOSITORY_UNREADABLE', f'GET the branch {branch} answered {status}')
     checked['branchesAbsent'] = list(branches)
     return bots, main
+
+
+def _verify_protection(live, checked):
+    """The baseline variable (refused before anything is read), then the protection check answering
+    verified with exactly that digest."""
+    baseline = _baseline(live)
+    # the recorder's own reading of a verifier: none, an exception or a malformed answer is unverified
+    answer = AR.check_protection(types.SimpleNamespace(verifier=live.verifier), REPOSITORY, R.DEFAULT_BRANCH,
+                                 'prepare')
+    checked['protection'] = {'verdict': answer['verdict'], 'digest': answer['digest'], 'expected': baseline,
+                             'detail': answer['detail']}
+    if answer['verdict'] != 'verified':
+        raise PhaseRefused(AR.protection_code(answer), f'the protection check answered {answer["verdict"]}: '
+                           f'{answer["detail"]}')
+    if answer['digest'] != baseline:
+        raise PhaseRefused('PROTECTION_BASELINE_DIFFERS', f'the protection check answered verified with '
+                           f'{answer["digest"]}, not {BASELINE_VARIABLE} {baseline}')
+
+
+def _verify_identities(live, checked):
+    """GET /token of every role's token: exactly that role's account and declared scopes. Returns {role: Api}."""
+    bots, identities = {}, {}
+    checked['identities'] = identities
+    for role, spec in R.ROLES.items():
+        bots[role] = _bot(live, role)
+        status, login, scopes = _identity(bots[role])
+        identities[role] = {'status': status, 'login': login, 'scopes': scopes}
+        if status != 200 or login is None or scopes is None:
+            raise PhaseRefused('IDENTITY_UNREADABLE', f'GET /token with the {role} token answered {status} '
+                               f'(login {login!r}, scopes {scopes!r})')
+        if login != spec['user'] or scopes != sorted(spec['scopes']):
+            raise PhaseRefused('IDENTITY_MISMATCH', f'the {role} token is {login!r} with scopes {scopes}, not '
+                               f'{spec["user"]} with exactly {sorted(spec["scopes"])}')
+    return bots
 
 
 def _after_control(live, control, status, main_before, proposals, observed):
@@ -485,28 +532,37 @@ def _expected(c, verifier):
             '(nothing sent) if the protection check does not answer verified immediately before the merge')
 
 
+def _shown(live, role, branch, challenge):
+    """One challenge as the Owner is shown it (CHALLENGE_KEYS): the recorder's challenge, its effects and its
+    expected outcome."""
+    subject = challenge['subject']
+    c = {'role': role, 'repository': subject['repository'], 'pull': subject['pull'],
+         'base': subject['base'], 'branch': branch, 'approvedHead': subject['head'],
+         'manifest': subject['manifest'], 'manifestDigest': subject['digest'], 'operation': subject['operation'],
+         'kind': subject['operationKind'], 'target': subject['target'], 'operationExpiresAt': subject['expiresAt'],
+         'nonce': challenge['shown']['nonce'], 'challengeExpiresAt': challenge['shown']['expiresAt'],
+         'protectionAtPrepare': challenge['protection']}
+    c.update(effects=_effects(c), expectedOutcome=_expected(c, live.verifier), summary=challenge['shown']['summary'])
+    return {key: c[key] for key in CHALLENGE_KEYS}
+
+
+def _identified(live, shown):
+    """The presentation's verifier, stale-head control and A/B labels for the shown challenges."""
+    return {'verifier': {'available': live.verifier is not None, 'note': live.verifier_note},
+            'staleHeadControl': next(c['pull'] for c in shown if c['role'] == STALE),
+            'labels': {LABELS[c['role']]: {'role': c['role'], 'pull': c['pull'], 'operation': c['operation']}
+                       for c in shown}}
+
+
 def presentation_of(live, now, main_head, proposals, challenges, controls, checked, auditor):
     """What the Owner is shown: the precondition's results, the negative controls, the recorder's challenges,
     their effects and expected outcomes."""
-    shown = []
-    for proposal, challenge in zip(proposals, challenges):
-        subject = challenge['subject']
-        c = {'role': proposal['role'], 'repository': subject['repository'], 'pull': subject['pull'],
-             'base': subject['base'], 'branch': proposal['branch'], 'approvedHead': subject['head'],
-             'manifest': subject['manifest'], 'manifestDigest': subject['digest'], 'operation': subject['operation'],
-             'kind': subject['operationKind'], 'target': subject['target'], 'operationExpiresAt': subject['expiresAt'],
-             'nonce': challenge['shown']['nonce'], 'challengeExpiresAt': challenge['shown']['expiresAt'],
-             'protectionAtPrepare': challenge['protection']}
-        c.update(effects=_effects(c), expectedOutcome=_expected(c, live.verifier),
-                 summary=challenge['shown']['summary'])
-        shown.append({key: c[key] for key in CHALLENGE_KEYS})
+    shown = [_shown(live, proposal['role'], proposal['branch'], challenge)
+             for proposal, challenge in zip(proposals, challenges)]
     return {
         'format': PRESENTATION_FORMAT, 'preparedAt': _timestamp(now), 'repository': REPOSITORY,
         'base': R.DEFAULT_BRANCH, 'mainHead': main_head,
-        'verifier': {'available': live.verifier is not None, 'note': live.verifier_note},
-        'staleHeadControl': next(c['pull'] for c in shown if c['role'] == STALE),
-        'labels': {LABELS[c['role']]: {'role': c['role'], 'pull': c['pull'], 'operation': c['operation']}
-                   for c in shown},
+        **_identified(live, shown),
         'recorder': {'state': f'{RECORDER_DIR}/state', 'store': f'{RECORDER_DIR}/integration.sqlite'},
         'precondition': {'checked': 'before any write', 'baselineVariable': BASELINE_VARIABLE,
                          'protection': {k: checked['protection'][k] for k in ('verdict', 'digest', 'expected')},
@@ -535,15 +591,38 @@ def _precondition_lines(pre):
             f'{", ".join(pre["branchesAbsent"])}']
 
 
+def _regeneration_lines(regen):
+    """What a regenerated presentation says first: what it replaces, what was verified before it, and that the
+    original prepare's controls were not re-run."""
+    verified = regen['verifiedBeforeRegeneration']
+    pulls = '; '.join(f'#{n} {v["state"]}, not merged, base {v["base"]}, head {v["head"]} on {v["branch"]}, manifest '
+                      f'{v["manifestDigest"]}' for n, v in verified['pulls'].items())
+    return ['THIS IS A REGENERATION of the one-time challenges for the existing operations (authority: '
+            f'{regen["authority"]}). Nothing was proposed, approved, pushed or merged, and the bot and auditor '
+            'merge controls were NOT re-run: their results below are from the original prepare of '
+            f'{regen["originalPreparedAt"]}.',
+            f'It replaces the challenges {", ".join(regen["of"])}, all expired (previous presentation '
+            f'{regen["previousFile"]}).',
+            'Verified before the regeneration (reads only):',
+            f'  protection: {verified["protection"]["verdict"]} with the expected baseline '
+            f'{verified["protection"]["digest"]}',
+            '  identities and scopes (GET /token): ' + '; '.join(
+                f'{role} {i["login"]} [{", ".join(i["scopes"])}]' for role, i in verified['identities'].items()),
+            f'  main at {verified["mainHead"]}, as presented; pull requests: {pulls}', '']
+
+
 def presentation_text(p):
+    regen = p.get('regeneration')
+    original = 'From the original prepare, not re-run: ' if regen else ''
     lines = [f'Live authorization recorder exercise, prepared {p["preparedAt"]}', '',
+             *(_regeneration_lines(regen) if regen else []),
              f'Repository {p["repository"]}, protected branch {p["base"]} at {p["mainHead"]}.',
              'Protection verifier: ' + ('available' if p['verifier']['available'] else 'NONE')
              + f' ({p["verifier"]["note"]}).',
-             *_precondition_lines(p['precondition']),
-             f'Bot merge controls on A and B (each must be refused; main and both proposals read after each): '
-             f'{p["botMerges"]["statuses"]}.',
-             f'Protection auditor control: {p["auditorControl"]["shown"]} ({p["auditorControl"]["status"]}; '
+             *((original + line if n == 0 else line) for n, line in enumerate(_precondition_lines(p['precondition']))),
+             f'{original}Bot merge controls on A and B (each must be refused; main and both proposals read after '
+             f'each): {p["botMerges"]["statuses"]}.',
+             f'{original}Protection auditor control: {p["auditorControl"]["shown"]} ({p["auditorControl"]["status"]}; '
              f'confirmed absent first: {p["auditorControl"]["absence"]}). It never addresses A or B.', '']
     for c in p['challenges']:
         role = ('THE STALE-HEAD CONTROL (expected: refused; nothing merges and main does not move)'
@@ -742,13 +821,190 @@ def record_phase(live, statement_path, observed):
     return observed
 
 
+# ---------------------------------------------------------------------------- phase rechallenge
+
+
+REGENERATION_AUTHORITY = ('Owner authorization of fresh challenges for the existing operations; no merge '
+                          'authorized')
+# (the fresh challenge's subject field, the presented challenge's field): each must be equal
+SUBJECT_PAIRS = (('repository', 'repository'), ('pull', 'pull'), ('base', 'base'), ('head', 'approvedHead'),
+                 ('manifest', 'manifest'), ('digest', 'manifestDigest'), ('operation', 'operation'),
+                 ('operationKind', 'kind'), ('target', 'target'), ('expiresAt', 'operationExpiresAt'))
+FROM_PREPARE = ('mainHead', 'precondition', 'botMerges', 'auditorControl')
+
+
+def _presented(run_dir):
+    """The current presentation, with what a regeneration carries over from the original prepare."""
+    previous = load_presentation(run_dir)
+    missing = [key for key in FROM_PREPARE if not previous.get(key)]
+    roles = sorted(str(c['role']) for c in previous['challenges'])
+    if missing or roles != sorted(LABELS):
+        raise PhaseRefused('PRESENTATION_INVALID', f'the presentation lacks {missing} or presents {roles}, not one '
+                           f'challenge each of {sorted(LABELS)}: run phase prepare')
+    return previous
+
+
+def _expired_challenges(live, previous, now):
+    """Every presented challenge is no longer usable, and no challenge in this run's recorder state for these
+    operations is unexpired: a regeneration never leaves two live challenges for one operation. Returns the
+    presented challenges' nonces and expiries."""
+    state = types.SimpleNamespace(state_dir=Path(live.run_dir) / RECORDER_DIR / 'state')
+    issued = {}
+    for path in sorted((state.state_dir / 'challenges').glob('*.json')):
+        try:
+            issued[path.stem] = AR.load_challenge(state, path.stem)
+        except AR.RecorderError as exc:
+            raise PhaseRefused('CHALLENGE_STATE_INVALID', f'{path.name}: {exc.code}') from None
+    presented = []
+    for c in previous['challenges']:
+        if c['nonce'] not in issued:
+            raise PhaseRefused('CHALLENGE_STATE_INVALID', f'the presented challenge {c["nonce"]!r} is not in this '
+                               'run\'s recorder state')
+        expiry = AR.parse_timestamp(c['challengeExpiresAt'])
+        if expiry is None or AR.parse_timestamp(c['operationExpiresAt']) is None:
+            raise PhaseRefused('PRESENTATION_INVALID', f'the challenge {c["nonce"]} has no valid expiry')
+        presented.append({'nonce': c['nonce'], 'operation': c['operation'], 'expiresAt': c['challengeExpiresAt']})
+        if now < expiry:
+            raise PhaseRefused('CHALLENGE_STILL_LIVE', f'the presented challenge {c["nonce"]} ({c["operation"]}) is '
+                               f'usable until {c["challengeExpiresAt"]}: regenerate only after it expired')
+    operations = {c['operation'] for c in previous['challenges']}
+    for nonce, challenge in issued.items():
+        expires = challenge['shown']['expiresAt']
+        if challenge['subject']['operation'] in operations and now < AR.parse_timestamp(expires):
+            raise PhaseRefused('CHALLENGE_STILL_LIVE', f'the challenge {nonce} for {challenge["subject"]["operation"]} '
+                               f'in this run\'s recorder state is usable until {expires}')
+    return presented
+
+
+def _raw(api, path):
+    """(status, bytes) of a raw file read with the bot's token (gitea_roles.Api parses JSON)."""
+    status, _headers, data = (api.http)(api.port, '/api/v1' + path, method='GET',
+                                        headers={'Authorization': 'token ' + api.token}, timeout=30.0)
+    return status, data
+
+
+def _verify_proposals(live, bots, previous, checked):
+    """As the verifier bot: each presented pull request open, not merged, into main, at the approved head on the
+    presented branch, its manifest at that head with the presented digest."""
+    pulls = checked['pulls'] = {}
+    for c in previous['challenges']:
+        status, pr = bots['verifier'].call('GET', f'/repos/{REPOSITORY}/pulls/{c["pull"]}')
+        if status != 200 or not isinstance(pr, dict):
+            raise PhaseRefused('PULL_UNREADABLE', f'GET pull request #{c["pull"]} answered {status}')
+        base = pr.get('base') if isinstance(pr.get('base'), dict) else {}
+        head = pr.get('head') if isinstance(pr.get('head'), dict) else {}
+        seen = pulls[str(c['pull'])] = {'state': pr.get('state'), 'merged': pr.get('merged'), 'base': base.get('ref'),
+                                   'head': head.get('sha'), 'branch': head.get('ref')}
+        if seen['merged'] is not False:
+            raise PhaseRefused('PULL_MERGED', f'pull request #{c["pull"]} has merged {seen["merged"]!r}')
+        if seen['state'] != 'open':
+            raise PhaseRefused('PULL_NOT_OPEN', f'pull request #{c["pull"]} is {seen["state"]!r}')
+        if seen['base'] != R.DEFAULT_BRANCH or c['base'] != R.DEFAULT_BRANCH:
+            raise PhaseRefused('PULL_BASE_DIFFERS', f'pull request #{c["pull"]} goes into {seen["base"]!r}')
+        if seen['head'] != c['approvedHead']:
+            raise PhaseRefused('HEAD_MOVED', f'pull request #{c["pull"]} is at {seen["head"]}, not the presented '
+                               f'{c["approvedHead"]}')
+        if seen['branch'] != c['branch']:
+            raise PhaseRefused('BRANCH_DIFFERS', f'pull request #{c["pull"]} is from {seen["branch"]!r}, not the '
+                               f'presented {c["branch"]}')
+        status, blob = _raw(bots['verifier'], f'/repos/{REPOSITORY}/raw/{c["manifest"]}?ref={c["approvedHead"]}')
+        if status != 200 or not isinstance(blob, bytes):
+            raise PhaseRefused('MANIFEST_UNREADABLE', f'{c["manifest"]} of pull request #{c["pull"]} at '
+                               f'{c["approvedHead"]} answered {status}')
+        seen['manifestDigest'] = 'sha256:' + hashlib.sha256(blob).hexdigest()
+        if seen['manifestDigest'] != c['manifestDigest']:
+            raise PhaseRefused('MANIFEST_DIGEST_DIFFERS', f'{c["manifest"]} of pull request #{c["pull"]} is '
+                               f'{seen["manifestDigest"]}, not the presented {c["manifestDigest"]}')
+
+
+def _keep_previous(run_dir):
+    """Move presentation.json/.txt to presentation-<k>.json/.txt, k the next free integer (nothing is
+    overwritten or deleted); returns the moved presentation's name."""
+    k = 1
+    while (run_dir / f'presentation-{k}.json').exists() or (run_dir / f'presentation-{k}.txt').exists():
+        k += 1
+    kept = f'presentation-{k}.json'
+    (run_dir / PRESENTATION).rename(run_dir / kept)
+    if (run_dir / PRESENTATION_TEXT).exists():
+        (run_dir / PRESENTATION_TEXT).rename(run_dir / f'presentation-{k}.txt')
+    return kept
+
+
+def regenerated_presentation(live, now, previous, fresh, checked, kept):
+    """The previous presentation with fresh challenges (same format and keys, so phase record reads it as
+    before), the original prepare's precondition and controls labelled as such, and ``regeneration``."""
+    shown = [_shown(live, c['role'], c['branch'], challenge) for c, challenge in zip(previous['challenges'], fresh)]
+    original = (previous.get('regeneration') or {}).get('originalPreparedAt', previous['preparedAt'])
+    note = f'from the original prepare of {original}; not re-run'
+    return {**previous, 'preparedAt': _timestamp(now), 'mainHead': checked['mainHead'], **_identified(live, shown),
+            'precondition': {**previous['precondition'], 'from': note},
+            'botMerges': {**previous['botMerges'], 'from': note},
+            'auditorControl': {**previous['auditorControl'], 'from': note},
+            'challenges': shown,
+            'regeneration': {'of': [c['nonce'] for c in previous['challenges']], 'previousFile': kept,
+                             'originalPreparedAt': original, 'verifiedBeforeRegeneration': checked,
+                             'authority': REGENERATION_AUTHORITY}}
+
+
+def rechallenge_phase(live, observed):
+    """Fresh one-time challenges for the operations already presented, after their earlier challenges expired;
+    reads only: no proposal, review, push, merge or control is sent to Gitea."""
+    run_dir = Path(live.run_dir)
+    previous = _presented(run_dir)
+    now = live.now()
+    checked = observed['regeneration'] = {}
+    checked['previousChallenges'] = _expired_challenges(live, previous, now)
+    _verify_protection(live, checked)
+    bots = _verify_identities(live, checked)
+    checked['mainHead'] = _main_head(live)
+    if checked['mainHead'] != previous['mainHead']:
+        raise PhaseRefused('MAIN_MOVED', f'main is at {checked["mainHead"]}, not the presented {previous["mainHead"]}')
+    _verify_proposals(live, bots, previous, checked)
+    written = observed['written'] = []
+    store = _open_store(live)
+    try:
+        for c in previous['challenges']:  # the recorder's own refusals, before any challenge is written
+            try:
+                AR.check_new_operation(store, REPOSITORY, c['operation'])
+                AR.check_unexpired(now, {'expiresAt': c['operationExpiresAt']})
+            except AR.RecorderError as exc:
+                raise PhaseRefused(exc.code, f'{c["operation"]}: {exc.detail}') from None
+        checked['recorderChecks'] = 'no receipt names either operation; neither manifest has expired'
+        ctx = _context(live, store)
+        fresh = []
+        for c in previous['challenges']:
+            try:
+                challenge = AR.prepare(ctx, REPOSITORY, c['pull'], expires_in_minutes=CHALLENGE_MINUTES)
+            except AR.RecorderError as exc:
+                raise PhaseRefused(exc.code, f'the recorder refused pull request #{c["pull"]}: {exc.detail}; '
+                                   f'challenge files written, never presented: {written}') from None
+            written.append(f'{RECORDER_DIR}/state/challenges/{challenge["shown"]["nonce"]}.json')
+            differs = [f for f, p in SUBJECT_PAIRS if challenge['subject'][f] != c[p]]
+            if differs:
+                raise PhaseRefused('SUBJECT_DIFFERS', f'the fresh challenge for pull request #{c["pull"]} differs in '
+                                   f'{differs}; challenge files written, never presented: {written}')
+            fresh.append(challenge)
+    finally:
+        store.close()
+    kept = _keep_previous(run_dir)
+    presentation = regenerated_presentation(live, now, previous, fresh, checked, kept)
+    with open(run_dir / PRESENTATION, 'x', encoding='utf-8', newline='\n') as handle:
+        handle.write(json.dumps(presentation, indent=2, ensure_ascii=False) + '\n')
+    with open(run_dir / PRESENTATION_TEXT, 'x', encoding='utf-8', newline='\n') as handle:
+        handle.write(presentation_text(presentation))
+    observed['challenges'] = [{'operation': c['operation'], 'nonce': c['nonce']} for c in presentation['challenges']]
+    _inspect(live, observed)
+    return presentation
+
+
 # ---------------------------------------------------------------------------- the live test
 
 
 def _live():
     if PHASE not in PHASES:
-        return None, ('the live recorder exercise is opt-in and runs in two phases, each an Owner-approved act: '
-                      'AIEH_AUTHZ_RECORDER_LIVE=prepare, then (after the Owner\'s own reply) =record')
+        return None, ('the live recorder exercise is opt-in and runs in phases, each an Owner-approved act: '
+                      'AIEH_AUTHZ_RECORDER_LIVE=prepare, then (after the Owner\'s own reply) =record; =rechallenge '
+                      'regenerates expired challenges')
     if os.name != 'nt':
         return None, 'the credentials are in Windows Credential Manager'
     try:
@@ -786,6 +1042,8 @@ class LiveExercise(unittest.TestCase):
                     inspect=inspect_custody, baseline=BASELINE)
         if PHASE == 'prepare':
             prepare_phase(live, self.observed)
+        elif PHASE == 'rechallenge':
+            rechallenge_phase(live, self.observed)
         else:
             record_phase(live, STATEMENT, self.observed)
 
