@@ -21,9 +21,10 @@ It fails when:
 - an inventory credential has no lane, or a credential held in a CI domain is in another lane;
 - the validation job reaches anything, or a task token reaches anything or is relied on;
 - a runner-configuration invariant is missing or weakened, or a profile variant's declared
-  ``config.yaml`` (``provisioning.ci_runner.config``) violates one (a ``host`` or ``lxc``
-  label, environment injection, the cache, privileged mode, the engine socket, volumes, the
-  host network, IPv6, pulls, a host workspace, a shared tool cache, hooks, a post-task script,
+  ``config.yaml`` (``provisioning.ci_runner.config``) violates one (a label other than the one
+  naming the job image by its locked id, a ``host`` or ``lxc`` label, environment injection,
+  the cache, privileged mode, the engine socket, valid volumes, ``container.volumes`` other
+  than exactly the declared read-only sources, a mount in the options, the host network, IPv6, pulls, a host workspace, a shared tool cache, hooks, a post-task script,
   extra headers, the metrics listener, the health check, or a ``container.options`` token
   outside the declared list) or holds ``$`` (the runner expands ``${NAME}`` from its
   environment); the variant's runner service sets a forbidden environment variable (the label
@@ -115,6 +116,8 @@ REQUIRED_RULES = {
     'container.privileged': ('must_equal', False),
     'container.docker_host': ('must_equal', '-'),
     'container.valid_volumes': ('must_be_empty', None),
+    # Exactly the declared read-only sources (the Overseer's ruling A of 2026-11-12).
+    'container.volumes': ('volumes', None),
     'container.network': ('must_be_empty', None),
     # Not a key at the 6.0.0 pin (the Overseer's ruling of 2026-11-12 on the C-3 record's
     # findings): the stale key is declared nowhere, and IPv6 is set off under
@@ -146,12 +149,25 @@ TOKEN_PATH_PREFIX = '/run/'
 TOKEN_REFUSED = ('--token', 'GITEA_RUNNER_REGISTRATION_TOKEN')
 REQUIRED_OPTIONS = ('--cap-drop=ALL', '--security-opt=no-new-privileges', '--ulimit=core=0')
 REQUIRED_OPTION_PREFIXES = ('--user=', '--pids-limit=', '--memory=', '--cpus=')
-# Option names that weaken the job container; the declared exchange mount and
-# --security-opt=no-new-privileges are the only volume and security options admitted.
+# Option names that weaken the job container; --security-opt=no-new-privileges is the only
+# security option admitted, and no mount is an option (ruling A: the mounts are
+# container.volumes).
 FORBIDDEN_OPTIONS = ('--privileged', '--cap-add', '--device', '--pid', '--network', '--net',
                      '--userns', '--ipc', '--uts', '--security-opt', '-v', '--volume', '--mount',
                      '--group-add', '--runtime', '--cgroupns', '--add-host')
-LABEL = re.compile(r'^aieh-validation:docker://[^@\s]+@sha256:[0-9a-f]{64}$')
+# The label names the job image by its id, the locked config digest (the Overseer's ruling C of
+# 2026-11-12): never a tag or a repository digest.
+LABEL = re.compile(r'^aieh-validation:docker://sha256:[0-9a-f]{64}$')
+IMAGE_ID = re.compile(r'^sha256:[0-9a-f]{64}$')
+# Host paths a declared volume may not be, and trees it may not be in: the engine's sockets
+# and state, the kernel's interfaces, the configuration, root's home and the guest's own
+# provisioning state (the runner token among it).
+VOLUME_FORBIDDEN_SOURCES = ('/', '/home', '/run', '/srv', '/srv/scratch', '/usr', '/var',
+                            '/var/lib', '/var/run', '/opt', '/tmp')
+VOLUME_FORBIDDEN_TREES = ('/run/docker', '/run/docker.sock', '/var/run/docker',
+                          '/var/run/docker.sock', '/run/containerd', '/var/lib/docker',
+                          '/srv/scratch/docker', '/var/lib/aieh', '/etc', '/root', '/proc', '/sys',
+                          '/dev', '/boot')
 
 # The filtering proxy's allowlist (decision 0016 section 3.5): (method, path) -> window.
 PROXY_ALLOW = {
@@ -785,14 +801,31 @@ class Checker(csi.Checker):
         if label.get('name') != 'aieh-validation' or label.get('scheme') != 'docker':
             self.add('RUNNER_RULE_WEAK', 'runner_config.label', 'one label, aieh-validation, '
                      'backed by docker')
+        self.statement('runner_config.label', cfg.get('label'))
+        image_id = self.locked_image_id(label.get('lock_entry'))
+        if not IMAGE_ID.match(_str(label.get('image'))) or label.get('image') != image_id:
+            self.add('RUNNER_RULE_WEAK', 'runner_config.label', 'the label names the job image by '
+                     'its id (sha256:<64 hex>), the linux/amd64 config digest of the lock entry '
+                     f"{label.get('lock_entry')!r} ({image_id!r})")
         options = cfg.get('options')
         self.statement('runner_config.options', options)
         declared = _strs(_dict(options).get('declared'))
-        mount = _dict(options).get('exchange_mount')
-        if not isinstance(mount, str) or mount not in declared or \
-                not mount.startswith('--volume=') or not mount.endswith(':ro'):
-            self.add('RUNNER_RULE_WEAK', 'runner_config.options', 'the exchange mount is declared, '
-                     'read-only (--volume=...:ro)')
+        volumes = cfg.get('volumes')
+        self.statement('runner_config.volumes', volumes)
+        volumes = _dict(volumes)
+        declared_volumes = _list(volumes.get('declared'))
+        for spec in declared_volumes:
+            for message in volume_problems(spec):
+                self.add('RUNNER_RULE_WEAK', 'runner_config.volumes', message)
+        targets = [volume_target(s) for s in declared_volumes]
+        exchange = volumes.get('exchange_target')
+        if not isinstance(exchange, str) or targets.count(exchange) != 1 or \
+                len(set(map(str, targets))) != len(targets):
+            self.add('RUNNER_RULE_WEAK', 'runner_config.volumes', 'distinct targets, one of them '
+                     'the exchange_target')
+        if not _str(volumes.get('disclosure')).strip():
+            self.add('RUNNER_RULE_WEAK', 'runner_config.volumes', 'the workflow re-mount of a '
+                     'read-only source is disclosed (disclosure)')
         for token in REQUIRED_OPTIONS:
             if token not in declared:
                 self.add('RUNNER_RULE_WEAK', 'runner_config.options', f'{token} must be declared')
@@ -800,7 +833,7 @@ class Checker(csi.Checker):
             if not any(t.startswith(prefix) for t in declared):
                 self.add('RUNNER_RULE_WEAK', 'runner_config.options', f'{prefix}... must be declared')
         for token in declared:
-            reason = forbidden_option(token, mount)
+            reason = forbidden_option(token)
             if reason:
                 self.add('RUNNER_RULE_WEAK', 'runner_config.options', f'{token}: {reason}')
         env = cfg.get('environment')
@@ -815,6 +848,14 @@ class Checker(csi.Checker):
                      f'environment refuses {list(REQUIRED_ENV_NAMES)} and the prefixes '
                      f'{list(REQUIRED_ENV_PREFIXES)} (missing {missing}), names its service_key, and '
                      'config_expansion is refused')
+
+    def locked_image_id(self, entry_id):
+        """The linux/amd64 config digest (the image id) of the lock's oci entry ENTRY_ID, or None."""
+        for entry in _dicts(_dict(self.inputs.lock).get('oci')):
+            if isinstance(entry_id, str) and entry.get('id') == entry_id:
+                found = _dict(entry.get('config_digests')).get('linux/amd64')
+                return found if isinstance(found, str) else None
+        return None
 
     def env_problems(self, environment):
         """The forbidden names in one declared environment mapping (names without case)."""
@@ -836,6 +877,8 @@ class Checker(csi.Checker):
             return
         options = _dict(cfg.get('options'))
         declared = _strs(options.get('declared'))
+        volumes = _list(_dict(cfg.get('volumes')).get('declared'))
+        image_id = self.locked_image_id(_dict(cfg.get('label')).get('lock_entry'))
         service_key = _str(_dict(cfg.get('environment')).get('service_key'))
         register_key = _str(_dict(_dict(self.profile.get('registration')).get('token_input'))
                             .get('register_key'))
@@ -843,7 +886,7 @@ class Checker(csi.Checker):
             config = _get(variant, key) if isinstance(variant, dict) else None
             if config is None:
                 continue
-            for message in runner_config_violations(config, declared, options.get('exchange_mount')):
+            for message in runner_config_violations(config, declared, volumes, image_id):
                 self.add('RUNNER_CONFIG', f'profiles/{name}:{key}', message)
             for path in expansions(config):
                 self.add('RUNNER_CONFIG', f'profiles/{name}:{key}', f'{path} holds $: the runner '
@@ -1377,10 +1420,8 @@ def source_path_ok(path):
         '..' not in path.split('/') and not csi.machine_path(path)
 
 
-def forbidden_option(token, mount):
+def forbidden_option(token):
     """Why a container.options token weakens the job container, or None."""
-    if token == mount and isinstance(mount, str) and mount.endswith(':ro'):
-        return None
     if token == '--security-opt=no-new-privileges':
         return None
     name = token.split('=', 1)[0]
@@ -1438,9 +1479,34 @@ def expansions(value, path=''):
     return out
 
 
-def runner_config_violations(config, declared, mount):
+def volume_target(spec):
+    parts = spec.split(':') if isinstance(spec, str) else []
+    return parts[1] if len(parts) == 3 else None
+
+
+def volume_problems(spec):
+    """Why one container.volumes spec is not an admissible read-only source:target:ro."""
+    parts = spec.split(':') if isinstance(spec, str) else []
+    if len(parts) != 3 or parts[2] != 'ro':
+        return [f'{spec!r} is not one source:target:ro']
+    source, target = parts[0], parts[1]
+    out = []
+    for name, value in (('source', source), ('target', target)):
+        segments = value.split('/')
+        if not value.startswith('/') or value != '/' + '/'.join(s for s in segments if s) or \
+                '..' in segments or '.' in segments:
+            out.append(f'{spec!r}: the {name} is a plain absolute path')
+    if source in VOLUME_FORBIDDEN_SOURCES or any(
+            source == tree or source.startswith(tree + '/') for tree in VOLUME_FORBIDDEN_TREES):
+        out.append(f"{spec!r}: the source names an engine socket, the engine's or the guest's "
+                   'state, a kernel interface or a whole system tree')
+    return out
+
+
+def runner_config_violations(config, declared, volumes=(), image_id=None):
     """The violations of the decided invariants in one declared act_runner config (a JSON
-    mirror of its config.yaml)."""
+    mirror of its config.yaml): VOLUMES are the declared read-only sources, IMAGE_ID the
+    locked image id the label must name."""
     out = []
     if not isinstance(config, dict):
         return ['the declared config is not a mapping']
@@ -1453,10 +1519,16 @@ def runner_config_violations(config, declared, mount):
         elif kind == 'must_be_set' and (value in (None, '', 0, [], {}) or isinstance(value, bool)):
             out.append(f'{path} must be set')
         elif kind == 'labels':
+            want = f'aieh-validation:docker://{image_id}' if image_id else None
             if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], str) \
-                    or not LABEL.match(value[0]):
-                out.append(f'{path} must be exactly one label aieh-validation:docker://<image>'
-                           f'@sha256:<digest> (no host or lxc label), not {value!r}')
+                    or not LABEL.match(value[0]) or (want is not None and value[0] != want):
+                out.append(f'{path} must be exactly one label aieh-validation:docker://sha256:'
+                           f'<the locked image id> ({want}; no tag, repository digest, host or lxc '
+                           f'label), not {value!r}')
+        elif kind == 'volumes':
+            if not volumes or value != list(volumes):
+                out.append(f'{path} must be exactly the declared read-only sources '
+                           f'{list(volumes)}, not {value!r}')
         elif kind == 'options':
             if value is None:
                 value = ''
@@ -1469,7 +1541,7 @@ def runner_config_violations(config, declared, mount):
                 out.append(f'{path} cannot be split: {exc}')
                 continue
             for token in tokens:
-                reason = forbidden_option(token, mount)
+                reason = forbidden_option(token)
                 if reason or token not in declared:
                     out.append(f'{path}: {token!r} is not a declared option'
                                + (f' ({reason})' if reason else ''))
@@ -1536,7 +1608,12 @@ def render(profile, policy):
     out += ['', f"Declared `container.options` ({options.get('status')}, verify at "
                 f"{_leaves(options.get('verify_at'))}): {_ids(options.get('declared'))}. Label: "
                 f"`{_dict(cfg.get('label')).get('name')}` on "
-                f"{_cell(_str(_dict(cfg.get('label')).get('image_rule')))}."]
+                f"{_cell(_str(_dict(cfg.get('label')).get('image_rule')))}: "
+                f"`{_dict(cfg.get('label')).get('image')}`."]
+    volumes = _dict(cfg.get('volumes'))
+    out += ['', f"Declared `container.volumes` ({volumes.get('status')}), exactly: "
+                f"{_ids(volumes.get('declared'))}; `valid_volumes` stays empty. Disclosed: "
+                f"{_cell(_str(volumes.get('disclosure')))}"]
     env = _dict(cfg.get('environment'))
     token_input = _dict(_dict(profile.get('registration')).get('token_input'))
     out += ['', f"Runner service environment ({env.get('status')}): never "

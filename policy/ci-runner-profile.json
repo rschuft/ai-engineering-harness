@@ -78,7 +78,7 @@
   },
   "runner_config": {
     "profile_key": "provisioning.ci_runner.config",
-    "label": {"name": "aieh-validation", "scheme": "docker", "image": null, "image_rule": "pinned by digest (docker://<image>@sha256:<64 hex>) at Q-02.2.1"},
+    "label": {"name": "aieh-validation", "scheme": "docker", "image": "sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd", "lock_entry": "docker.io/library/python:3.12-trixie", "image_rule": "the image id: docker://sha256:<the linux/amd64 config digest of the lock entry>; never a tag or a repository digest", "status": "decided", "verify_at": ["Q-02.2.1", "Q-02.2.2"], "notes": "The Overseer's ruling C of 2026-11-12: decision 0006 item 3 loads images by docker load and checks that the image id equals the locked config digest; a loaded image may carry no repository digest in Moby's classic store, and the runner pulls an image its reference does not find (act/container/docker_images.go 19-42; docker_pull.go 33-47, 77-85), which decision 0016 T9 forbids. The label's argument after docker:// is the image reference (internal/pkg/labels/labels.go 30-50, 58-80). That the reference resolves to the loaded image is observed at Q-02.2.2."},
     "rules": [
       {"path": "runner.labels", "rule": "labels", "status": "decided", "verify_at": "Q-02.2.1"},
       {"path": "runner.envs", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1"},
@@ -89,6 +89,7 @@
       {"path": "container.privileged", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1"},
       {"path": "container.docker_host", "rule": "must_equal", "value": "-", "status": "decided", "verify_at": "Q-02.2.1"},
       {"path": "container.valid_volumes", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1"},
+      {"path": "container.volumes", "rule": "volumes", "status": "decided", "verify_at": "Q-02.2.1", "notes": "The Overseer's ruling A of 2026-11-12 (the exchange mount): exactly the declared read-only sources (runner_config.volumes)."},
       {"path": "container.network", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Empty: one network per job, behind the guards (br-+); never host."},
       {"path": "container.enable_ipv6", "rule": "must_be_empty", "status": "decided", "verify_at": "Q-02.2.1", "notes": "Not a key at 6.0.0 (internal/pkg/config/config.go 176-194, 204-207); an unknown key only warns (config.go 291). The Overseer's ruling of 2026-11-12 on the C-3 record's findings (the IPv6 key): the rule follows container.network_create_options.enable_ipv6, and the stale key is declared nowhere."},
       {"path": "container.network_create_options.enable_ipv6", "rule": "must_equal", "value": false, "status": "decided", "verify_at": "Q-02.2.1", "notes": "Decision 0016 section 2.3 (container.enable_ipv6: false) at the 6.0.0 key (config.go 204-207; internal/app/run/runner.go 609-611); declared explicitly, not left to Docker's default."},
@@ -106,7 +107,6 @@
     ],
     "options": {
       "declared": [
-        "--volume=/home/agent/exchange:/aieh/exchange:ro",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--user=1001:1001",
@@ -115,10 +115,17 @@
         "--cpus=2",
         "--ulimit=core=0"
       ],
-      "exchange_mount": "--volume=/home/agent/exchange:/aieh/exchange:ro",
-      "status": "planned",
+      "status": "decided",
       "verify_at": "Q-02.2.1",
-      "notes": "The option names are decided; the user id, the limits and the mount's guest path are proposals that Q-02.2.1 fixes with the profile variant and the job image. At the 6.0.0 pin a bind given in container.options passes the valid-volume filter and is dropped while valid_volumes is empty (act/container/docker_run.go 653, 1126-1159); the Overseer's ruling of 2026-11-12 on the C-3 record's findings moves the exchange mount to container.volumes only on a source condition the record evidence/Q-02.2.1-ci-profile.md finds unmet, so the mount's placement is the Overseer's."
+      "notes": "The option names are decided (decision 0016 section 2.3); the user id and the limits are fixed by the CI profile variant (Q-02.2.1). No mount is an option: at the 6.0.0 pin a bind given in container.options passes the valid-volume filter and is dropped while valid_volumes is empty (act/container/docker_run.go 653, 1126-1159), so the exchange moved to container.volumes (runner_config.volumes)."
+    },
+    "volumes": {
+      "declared": ["/home/agent/exchange:/aieh/exchange:ro", "/srv/scratch/aieh-ci-wheels:/aieh/wheels:ro"],
+      "exchange_target": "/aieh/exchange",
+      "status": "decided",
+      "verify_at": ["Q-02.2.1", "Q-02.2.2"],
+      "disclosure": "At the 6.0.0 pin each container.volumes source is also admitted, read-only, as a source a workflow's own volumes may use (act/runner/run_context.go 284, 290-301; act/container/docker_run.go 1311-1331; the upstream test run_context_test.go 311-312), so a workflow could re-mount the same read-only exchange or wheel set at another target; no other host path and no write become reachable, which keeps T7 and T9. The governance workflow's checked rules (no container:, services: or uses:) leave the one workflow that runs unable to declare a volume.",
+      "notes": "The Overseer's ruling A of 2026-11-12 (the exchange mount) and ruling D (the job's Python tools set): container.volumes holds exactly these read-only sources, valid_volumes stays empty. Each spec is appended verbatim to the job's binds, :ro kept (run_context.go 303-313; config.go 328-332); it also reaches service and Docker-action containers, which the governance workflow never declares."
     },
     "environment": {
       "service_key": "provisioning.ci_runner.service",

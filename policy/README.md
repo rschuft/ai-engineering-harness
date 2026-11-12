@@ -618,7 +618,9 @@ specifies separate validation and trusted promotion lanes.
 3. the validation job reaches nothing, and each task token's reach is none and is never relied
    on;
 4. every runner-configuration invariant is declared at its decided value (the keys of the
-   pinned gitea-runner 6.0.0 included), and any profile variant's declared `config.yaml`
+   pinned gitea-runner 6.0.0 included), the label names the job image by its locked id
+   (`docker://sha256:<config digest>`), `container.volumes` holds exactly the declared read-only
+   sources (no mount is an option), and any profile variant's declared `config.yaml`
    (`provisioning.ci_runner.config`) satisfies them and holds no `$` (the runner expands
    `${NAME}` from its environment); the variant's runner service
    (`provisioning.ci_runner.service`) sets none of the forbidden environment variables and does
@@ -710,6 +712,7 @@ The negative cases are in
 | `container.privileged` | must_equal | false | decided |
 | `container.docker_host` | must_equal | "-" | decided |
 | `container.valid_volumes` | must_be_empty | - | decided |
+| `container.volumes` | volumes | - | decided |
 | `container.network` | must_be_empty | - | decided |
 | `container.enable_ipv6` | must_be_empty | - | decided |
 | `container.network_create_options.enable_ipv6` | must_equal | false | decided |
@@ -725,7 +728,9 @@ The negative cases are in
 | `metrics.enabled` | must_equal | false | decided |
 | `health_check.enabled` | must_equal | false | decided |
 
-Declared `container.options` (planned, verify at Q-02.2.1): `--volume=/home/agent/exchange:/aieh/exchange:ro`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--user=1001:1001`, `--pids-limit=512`, `--memory=4g`, `--cpus=2`, `--ulimit=core=0`. Label: `aieh-validation` on pinned by digest (docker://<image>@sha256:<64 hex>) at Q-02.2.1.
+Declared `container.options` (decided, verify at Q-02.2.1): `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--user=1001:1001`, `--pids-limit=512`, `--memory=4g`, `--cpus=2`, `--ulimit=core=0`. Label: `aieh-validation` on the image id: docker://sha256:<the linux/amd64 config digest of the lock entry>; never a tag or a repository digest: `sha256:37662cc6e5410e27e5e3b3c92b7fd7c3afd7f69faa430623a1f822f3f59c6ccd`.
+
+Declared `container.volumes` (decided), exactly: `/home/agent/exchange:/aieh/exchange:ro`, `/srv/scratch/aieh-ci-wheels:/aieh/wheels:ro`; `valid_volumes` stays empty. Disclosed: At the 6.0.0 pin each container.volumes source is also admitted, read-only, as a source a workflow's own volumes may use (act/runner/run_context.go 284, 290-301; act/container/docker_run.go 1311-1331; the upstream test run_context_test.go 311-312), so a workflow could re-mount the same read-only exchange or wheel set at another target; no other host path and no write become reachable, which keeps T7 and T9. The governance workflow's checked rules (no container:, services: or uses:) leave the one workflow that runs unable to declare a volume.
 
 Runner service environment (decided): never `GITEA_RUNNER_LABELS`, `GITEA_RUNNER_REGISTRATION_TOKEN`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `DOCKER_HOST` or a name starting `ACTIONS_RUNNER_HOOK_`, `OTEL_`; config expansion refused. Registration token (decided): `--token-file` under `/run/` only; refused: `--token`, `GITEA_RUNNER_REGISTRATION_TOKEN`.
 

@@ -43,8 +43,11 @@ INPUTS = ccp.load_inputs(REPO, PROFILE)
 
 # An act_runner config.yaml (as JSON) that satisfies every invariant, for the variant cases.
 DIGEST = 'a' * 64
+# The label names the job image by the lock's image id (the Overseer's ruling C of 2026-11-12).
+IMAGE_ID = PROFILE['runner_config']['label']['image']
+VOLUMES = PROFILE['runner_config']['volumes']['declared']
 GOOD_CONFIG = {
-    'runner': {'labels': [f'aieh-validation:docker://registry.example/job@sha256:{DIGEST}'],
+    'runner': {'labels': [f'aieh-validation:docker://{IMAGE_ID}'],
                'envs': {}, 'env_file': '', 'capacity': 1, 'timeout': '1h',
                'tool_cache_mode': 'none', 'hooks': {}, 'post_task_script': '',
                'extra_headers': {}},
@@ -52,6 +55,7 @@ GOOD_CONFIG = {
     'container': {'privileged': False, 'docker_host': '-', 'valid_volumes': [], 'network': '',
                   'network_create_options': {'enable_ipv6': False}, 'force_pull': False,
                   'force_rebuild': False, 'bind_workdir': False, 'sweep': False,
+                  'volumes': list(VOLUMES),
                   'options': ' '.join(PROFILE['runner_config']['options']['declared'])},
     'metrics': {'enabled': False},
     'health_check': {'enabled': False},
@@ -340,7 +344,7 @@ class RunnerConfig(Base):
             p['runner_config']['options']['declared'] = options
             self.assert_code('RUNNER_RULE_WEAK', 'runner_config.options', profile=p)
         p, _ = fresh()
-        p['runner_config']['options']['exchange_mount'] = '--volume=/home/agent/exchange:/aieh/exchange'
+        p['runner_config']['options']['declared'].append('--volume=/home/agent/exchange:/aieh/exchange:ro')
         self.assert_code('RUNNER_RULE_WEAK', 'runner_config.options', profile=p)
 
     def test_a_good_variant_config_passes(self):
@@ -353,6 +357,20 @@ class RunnerConfig(Base):
             ('runner', 'labels', ['aieh-validation:lxc://debian']),
             ('runner', 'labels', [f'aieh-validation:docker://job@sha256:{DIGEST}', 'ubuntu:host']),
             ('runner', 'labels', ['aieh-validation:docker://job:latest']),
+            # the tag and repository-digest forms (ruling C), and another image id
+            ('runner', 'labels', [f'aieh-validation:docker://registry.example/job@sha256:{DIGEST}']),
+            ('runner', 'labels', [f'aieh-validation:docker://docker.io/library/python@{IMAGE_ID}']),
+            ('runner', 'labels', ['aieh-validation:docker://python:3.12-trixie']),
+            ('runner', 'labels', [f'aieh-validation:docker://sha256:{DIGEST}']),
+            ('runner', 'labels', [f'aieh-validation:docker://{IMAGE_ID.upper()}']),
+            # container.volumes: exactly the declared read-only sources (ruling A)
+            ('container', 'volumes', []),
+            ('container', 'volumes', VOLUMES[:1]),
+            ('container', 'volumes', [v.replace(':ro', ':rw') for v in VOLUMES]),
+            ('container', 'volumes', [v[:-3] for v in VOLUMES]),
+            ('container', 'volumes', VOLUMES + ['/var/run/docker.sock:/var/run/docker.sock:ro']),
+            ('container', 'volumes', list(reversed(VOLUMES))),
+            ('container', 'volumes', ' '.join(VOLUMES)),
             ('runner', 'envs', {'TOKEN': 'x'}),
             ('runner', 'env_file', '.env'),
             ('runner', 'capacity', 4),
@@ -401,8 +419,7 @@ class RunnerConfig(Base):
         # The runner replaces ${NAME} in config.yaml values from its environment at load.
         for section, key, value in (('runner', 'timeout', '${TIMEOUT}'),
                                     ('container', 'network', '$NETWORK'),
-                                    ('runner', 'labels', [f'aieh-validation:docker://${{IMAGE}}'
-                                                          f'@sha256:{DIGEST}'])):
+                                    ('runner', 'labels', ['aieh-validation:docker://${IMAGE}'])):
             config = copy.deepcopy(GOOD_CONFIG)
             config[section][key] = value
             problems = self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant',
@@ -443,6 +460,64 @@ class RunnerConfig(Base):
         config = copy.deepcopy(GOOD_CONFIG)
         config['container']['options'] = '--cap-drop=ALL'
         self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant', profiles=variant(config))
+
+    def test_the_label_names_the_locked_image_id(self):
+        lock_entry = PROFILE['runner_config']['label']['lock_entry']
+        entry = item(INPUTS.lock['oci'], 'id', lock_entry)
+        self.assertEqual(IMAGE_ID, entry['config_digests']['linux/amd64'])
+        for key, value in (('image', f'sha256:{DIGEST}'), ('image', None),
+                           ('image', f'docker.io/library/python@{IMAGE_ID}'),
+                           ('lock_entry', 'docker.io/gitea/gitea:28.3.0'), ('lock_entry', None)):
+            p, _ = fresh()
+            p['runner_config']['label'][key] = value
+            self.assert_code('RUNNER_RULE_WEAK', 'runner_config.label', profile=p)
+        p, _ = fresh()
+        p['runner_config']['label']['status'] = 'assumed'
+        self.assert_code('STATUS_INVALID', 'runner_config.label', profile=p)
+        # a lock entry without a linux/amd64 config digest names no image id
+        inputs = copy.copy(INPUTS)
+        inputs.lock = copy.deepcopy(INPUTS.lock)
+        del item(inputs.lock['oci'], 'id', lock_entry)['config_digests']
+        self.assert_code('RUNNER_RULE_WEAK', 'runner_config.label', inputs=inputs)
+        # without a locked id the label's form alone still refuses a tag
+        config = copy.deepcopy(GOOD_CONFIG)
+        config['runner']['labels'] = ['aieh-validation:docker://python:3.12-trixie']
+        self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant', inputs=inputs,
+                         profiles=variant(config))
+
+    def test_the_declared_volumes_are_exact_read_only_sources(self):
+        def volumes(p):
+            return p['runner_config']['volumes']
+
+        cases = [[], ['/home/agent/exchange:/aieh/exchange'], ['/home/agent/exchange:/aieh/exchange:rw'],
+                 ['/home/agent/exchange:/aieh/exchange:ro,nocopy'], ['exchange:/aieh/exchange:ro'],
+                 ['/home/agent/../exchange:/aieh/exchange:ro'], ['/home/agent//exchange:/aieh/exchange:ro'],
+                 ['/home/agent/exchange:aieh/exchange:ro'], ['/var/run/docker.sock:/aieh/exchange:ro'],
+                 ['/run/docker.sock:/aieh/exchange:ro'], ['/:/aieh/exchange:ro'],
+                 ['/home:/aieh/exchange:ro'], ['/etc/ssh:/aieh/exchange:ro'],
+                 ['/var/lib/aieh/ci-runner:/aieh/exchange:ro'], ['/srv/scratch/docker/x:/aieh/exchange:ro'],
+                 ['/proc/1:/aieh/exchange:ro'], ['/home/agent/exchange:/aieh/wheels:ro'],
+                 VOLUMES + [VOLUMES[0]], [VOLUMES[0], VOLUMES[0].replace('/home/agent/exchange', '/srv/x')],
+                 VOLUMES + [VOLUMES[1].replace('/srv/scratch/aieh-ci-wheels', '/srv/scratch/x')]]
+        for declared in cases:
+            p, _ = fresh()
+            volumes(p)['declared'] = declared
+            self.assert_code('RUNNER_RULE_WEAK', 'runner_config.volumes', profile=p)
+        for key, value in (('exchange_target', '/aieh/other'), ('exchange_target', None),
+                           ('disclosure', ''), ('disclosure', None)):
+            p, _ = fresh()
+            volumes(p)[key] = value
+            self.assert_code('RUNNER_RULE_WEAK', 'runner_config.volumes', profile=p)
+        p, _ = fresh()
+        p['runner_config']['rules'] = [r for r in p['runner_config']['rules']
+                                       if r['path'] != 'container.volumes']
+        self.assert_code('RUNNER_RULE_MISSING', 'container.volumes', profile=p)
+        # the variant follows the policy's list
+        p, _ = fresh()
+        volumes(p)['declared'] = VOLUMES[:1]
+        self.assert_code('RUNNER_CONFIG', 'profiles/ci-variant', profile=p,
+                         profiles=variant(copy.deepcopy(GOOD_CONFIG)))
+        self.assertEqual(ccp.volume_problems(VOLUMES[0]), [])
 
     def test_the_variant_key_is_declared(self):
         p, _ = fresh()
