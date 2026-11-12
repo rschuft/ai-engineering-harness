@@ -188,12 +188,12 @@
       "id": "SEC-EXEC-01",
       "title": "Owner credentials out of agent reach",
       "category": "credentials",
-      "purpose": "Agent execution cannot access Owner credentials: an agent run holds only its own role's scoped credentials and can read no Owner, administrator, executor or management credential.",
+      "purpose": "Agent execution cannot access Owner credentials: an agent run holds only credentials issued for that single attempt and can read no Owner, administrator, executor, management or standing Gitea bot credential; its role's standing bot credential stays on the trusted host and only the dispatcher uses it, on the run's behalf.",
       "subject": {
         "kinds": [
           "attempt"
         ],
-        "scope": "Every agent run, with the credentials delivered to it."
+        "scope": "Every agent run, with the credentials issued for it and the dispatcher's use of its stage's standing credential on its behalf."
       },
       "applicability": {
         "profiles": [
@@ -201,7 +201,8 @@
         ],
         "events": [
           "every agent run",
-          "every issuance of a role credential to an attempt"
+          "every borrowing of a stage's standing bot credential by the dispatcher for a confirmed attempt",
+          "every issuance of a credential for a single attempt"
         ]
       },
       "enforcement": [
@@ -211,7 +212,7 @@
           "assets": [
             "conversation-container"
           ],
-          "mechanism": "No Owner secrets or host home mounts: the dispatcher, sole custodian of the standing bot credentials, delivers each role token per attempt into its own attempt context, never into the conversation container (decision 0013 point 7).",
+          "mechanism": "No Owner secrets or host home mounts. The standing Gitea bot credentials stay on the trusted host in the OS credential provider; for a confirmed attempt the dispatcher borrows only the stage's mapped credential into its own in-memory attempt context, uses it there and releases it when the operation ends, which is not Gitea revocation; a standing credential never enters a guest, an agent environment, a container, a conversation, a conversation record or the UI, and records carry fingerprints only. Issuance, rotation and revocation of a standing credential are the Gitea site administrator's, on defined security and lifecycle triggers (suspected exposure, definition revocation, policy revision, expiry, Owner direction), never on routine attempt completion; the dispatcher issues, rotates and revokes none. The per-attempt inference token is issued by the inference broker and revoked at attempt end (decision 0015). Disclosed, not prevented: during bootstrap the Owner's account can read the standing credentials in the credential provider (decision 0013 point 6). Decision 0007 points 4 and 5, amendment 1; decision 0013 point 7.",
           "builds_at": [
             "E-01.3.3",
             "E-01.3.2"
@@ -236,6 +237,7 @@
         "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#security",
         "decisions/0007-role-token-matrix-and-revocation-contract.md",
         "decisions/0013-owner-ui-session-access-and-management-key-custody.md",
+        "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
         "policy/role-tokens.json"
       ]
     },
