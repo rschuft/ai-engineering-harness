@@ -3641,7 +3641,7 @@ push never implies parent acceptance.
     - A-01.2's proof never named `secrets`. The general obligation lived only in S-03.3's notes and decision 0015's note.
     - No D1 leaf issued or revoked the attempt token for a real attempt (decision 0015 section 3.3). Only S-03.3's qualification driver uses the broker's `issue` and `revoke`.
     - `AdmittedCreate.to_json()` emits the full body, so a filled token would reach any record built from it.
-  - **Placed (decision 0018 point 3, the program manager's challenge):** new leaf **E-05.6** "Carry the D1 stage's attempt-scoped inference token and broker endpoint in the create", carved from A-01.2 for the D1 stage only, as E-05.2 was.
+  - **Placed (decision 0018 point 3, the program manager's challenge):** new leaf **E-05.6** "Admit the D1 stage's create secrets: the attempt's inference token and endpoint", carved from A-01.2 for the D1 stage only, as E-05.2 was.
     - Deps: E-01.2.2 and E-01.3.1 (both PASS). E-05.5 gains it.
     - Its proof holds every custody boundary:
       - exactly the registry's two names, StaticSecret only, `secrets_encrypted` false;
