@@ -799,6 +799,19 @@ class CheckoutForms(Base):
         self.assertEqual(P._comparable(PureWindowsPath('C:/A /b'), 'win32'), 'c:\\a\\b')
         self.assertEqual(P._comparable('/a/./b/', 'linux'), '/a/b')
 
+    def test_an_alternate_data_stream_is_a_stream_of_its_file(self):
+        """N-A: on Windows name:stream (any ':' after the drive) is compared as name; on POSIX ':' is a name."""
+        env, repo = self.case('win32')
+        text = str(P._norm('win32', repo))
+        for candidate, expected in ((text + ':ads.json', True), (text + ' :ads', True), (text + BS + 'x.json:ads', True),
+                                    (text + ':$DATA', True), (text + '-other:ads', False)):
+            with self.subTest(candidate=candidate):
+                self.assertIs(P.inside_or_around(candidate, text, 'win32'), expected)
+        self.assertEqual(P._comparable('C:\\a:s\\b.json::$DATA', 'win32'), 'c:\\a\\b.json')
+        self.assertFalse(P.inside_or_around('/srv/src/aieh:ads', '/srv/src/aieh', 'linux'))
+        self.assertRefused('PATH_INSIDE_CHECKOUT', P.resolve, env, platform='win32', repo_root=repo,
+                           config={'version': 1, 'paths': {'cache': text + ':ads'}})
+
 
 if __name__ == '__main__':
     unittest.main()

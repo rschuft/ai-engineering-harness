@@ -152,8 +152,10 @@ def _overlaps(a: PurePath, b: PurePath) -> bool:
 
 def _comparable(path, platform: str | None = None) -> str:
     """PATH as the file system resolves it, for comparison only. On Windows (PLATFORM win32; default this host): a
-    leading \\\\?\\ or \\\\.\\ removed and \\\\?\\UNC\\ made \\\\, '/' made '\\', the trailing spaces and dots Windows
-    ignores removed from every component, then normpath and normcase. Elsewhere: normpath."""
+    leading \\\\?\\ or \\\\.\\ removed and \\\\?\\UNC\\ made \\\\, '/' made '\\', an alternate data stream suffix
+    (':stream', any ':' after the drive) and the trailing spaces and dots Windows ignores removed from every
+    component, then normpath and normcase. Elsewhere: normpath. This is the lexical half: a link, a volume-GUID or a
+    GLOBALROOT form is caught only by comparing the realpath as well, which every caller does."""
     text = os.fspath(path) if not isinstance(path, PurePath) else str(path)
     if (platform or sys.platform) != 'win32':
         return posixpath.normpath(text)
@@ -163,6 +165,7 @@ def _comparable(path, platform: str | None = None) -> str:
     elif text[:4] in (BS * 2 + '?' + BS, BS * 2 + '.' + BS):
         text = text[4:]
     drive, rest = ntpath.splitdrive(text)
+    rest = BS.join(part.split(':', 1)[0] for part in rest.split(BS))      # name:stream is a stream of name
     rest = BS.join(part if part in ('.', '..') else part.rstrip(' .') for part in rest.split(BS))
     return ntpath.normcase(ntpath.normpath(drive + rest))
 
