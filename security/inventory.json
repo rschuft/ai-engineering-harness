@@ -1247,9 +1247,9 @@
       "name": "Integration store (integration.sqlite)",
       "kind": "store",
       "custodian": "owner-os-account",
-      "location": "Default per-user location under the local application-data folder; Owner-session custody during bootstrap; custody moves to the Integration Service identity later.",
+      "location": "Default per-user location under the local application-data folder; Owner-session custody during bootstrap; custody moves to the Integration Service identity later. Beside the recorders' receipts it holds the inference broker's ledger of a broker-enforced provider envelope (inference/envelope/<nonce>/run/<k> and its close; decision 0021) and the model-selection series of op-model-selection (model-selection/v1/<n>).",
       "status": "planned",
-      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md", "integrations/store/README.md"],
+      "sources": ["decisions/0004-privileged-effect-store-custody-and-restore-semantics.md", "integrations/store/README.md", "decisions/0021-provider-envelope-model-selection-and-broker-enforced-cap.md"],
       "findings": ["fd-bootstrap-shared-identity"]
     },
     {
@@ -1769,6 +1769,20 @@
       "findings": ["fd-bootstrap-shared-identity"]
     },
     {
+      "id": "op-model-selection",
+      "name": "Select the models inside a provider envelope",
+      "mechanism": "Record the exact model identifiers the broker may serve inside the Owner's provider-envelope authorization (select-models), resting on the governing provider-envelope receipt, as a write-ahead receipt at the next position of the one series model-selection/v1/<n> in the integration store; the broker starts and admits only the selected models",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": [],
+      "assets": ["store-integration"],
+      "planned_performer": "authorization-recorder",
+      "performed_via": "The Owner selects the models in the provider envelope itself (selection: envelope), inside the digest the Owner authorizes through the authorization recorder. Delegated by decision 0018 (accepted 2026-11-12) point 3: the engineering manager selects the exact identifiers inside an authorized model-access envelope (selection: delegation), recorded by the selection recorder (S-03.5; integrations/owner/selection_recorder.py; decision 0021, Proposed) as a delegated-decision/v1 record of kind select-models naming decision 0018 point 3 and resting on the governing, unexpired provider-envelope receipt of the authorization recorder; the product manager never selects; never recorded as an Owner decision; a selection does not carry to a new envelope; a provider, origin, limit or model outside the envelope is an Owner decision per act. Not performed live: throwaway repositories and stores only.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-03.5", "decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md", "decisions/0021-provider-envelope-model-selection-and-broker-enforced-cap.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
       "id": "op-gitea-administration",
       "name": "Administer Gitea",
       "mechanism": "Branch protection, merge allowlists, bot accounts, token maxima, audit settings, impersonation",
@@ -1961,13 +1975,13 @@
     {
       "id": "op-inference-call",
       "name": "Call a model provider",
-      "mechanism": "The brokered inference endpoint; the provider credential stays with the broker",
+      "mechanism": "The brokered inference endpoint; the provider credential stays with the broker. For a family whose upstream is not loopback, serve starts only on the start precondition of S-03.5 (decision 0021, Proposed): the governing, confirmed, unexpired provider-envelope receipt of the authorization recorder in the integration store, whose target is the canonical digest of the live envelope and whose manifest is its canonical manifest; a model selection by the envelope itself or by a delegated select-models record naming that receipt (op-model-selection); and, when the broker enforces the cap, a per-run ledger that fails closed when the cap is reached or usage is unknown. Checked before the key is read and the listeners open; not performed live",
       "principal": "inference-broker",
       "owner_only": false,
       "credentials": ["cred-llm-provider-key"],
       "assets": ["endpoint-inference"],
       "status": "planned",
-      "sources": ["profiles/README.md"],
+      "sources": ["profiles/README.md", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#S-03.5", "decisions/0021-provider-envelope-model-selection-and-broker-enforced-cap.md"],
       "findings": ["fd-acp-provider-auth"]
     }
   ],

@@ -3771,13 +3771,19 @@
           "mechanism": "egress allowlist: exactly one upstream origin, the Owner's chosen provider API host on 443 over TLS with the host's system roots (or a loopback local model server); no cost map, telemetry or update check. A control in the broker's own code, evidenced by its connection census and audit, not an OS-enforced boundary (decision 0015 sections 4.5 and 5.1)",
           "kind": "disclosure",
           "where": "host"
+        },
+        {
+          "mechanism": "start precondition (S-03.5, decision 0021): for a family whose upstream is not loopback, serve refuses before it reads the provider key or opens a listener unless the integration store holds the governing, confirmed, unexpired provider-envelope receipt of the authorization recorder whose target is the canonical digest of the live envelope (provider, the one origin, limit, expiry, model selection) and whose manifest is its canonical manifest; a request for a model outside the selection, after the expiry or, for a broker-enforced cap, past the cap or with usage unknown is refused at admission. A code-path control in the broker at start, bound to the recorder's receipt; the OS does not enforce it, and a process of the Owner's account can write the store or read the credential entry (decision 0010 point 1)",
+          "kind": "disclosure",
+          "where": "host"
         }
       ],
       "status": "planned",
       "evidence": [],
       "sources": [
         "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
-        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture"
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#containment-architecture",
+        "decisions/0021-provider-envelope-model-selection-and-broker-enforced-cap.md"
       ],
       "builds_at": "S-03.3",
       "verify_at": "S-03.3",

@@ -163,6 +163,7 @@
           "op-protected-merge",
           "op-design-acceptance",
           "op-manifest-promotion",
+          "op-model-selection",
           "op-effect-store-custody"
         ],
         "capabilities": [
@@ -423,6 +424,7 @@
         "op-protected-merge",
         "op-design-acceptance",
         "op-manifest-promotion",
+        "op-model-selection",
         "cap-code-merge-integration",
         "cap-protected-ref-push"
       ],
@@ -507,6 +509,7 @@
         "op-protected-merge",
         "op-design-acceptance",
         "op-manifest-promotion",
+        "op-model-selection",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -663,6 +666,7 @@
         "op-protected-merge",
         "op-design-acceptance",
         "op-manifest-promotion",
+        "op-model-selection",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -827,6 +831,7 @@
         "op-protected-merge",
         "op-design-acceptance",
         "op-manifest-promotion",
+        "op-model-selection",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -957,6 +962,7 @@
         "op-protected-merge",
         "op-design-acceptance",
         "op-manifest-promotion",
+        "op-model-selection",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -1171,6 +1177,7 @@
         "op-protected-merge",
         "op-design-acceptance",
         "op-manifest-promotion",
+        "op-model-selection",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-ci-administration",
@@ -1395,6 +1402,7 @@
         "op-protected-merge",
         "op-design-acceptance",
         "op-manifest-promotion",
+        "op-model-selection",
         "op-effect-apply"
       ],
       "realization": [

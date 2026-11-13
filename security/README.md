@@ -67,10 +67,10 @@ custody only, and locations are described generically.
   and in the guest root, the service user `openhands` and the operator login `agent`.
   One, the release job environment, is unknown. The other ten are planned.
 - **Credentials (27), assets (42), findings (21:** 6 unknown, 2 open risks, 13 limits).
-- **Privileged operations (39), each with exactly one principal.** 8 Owner-only,
-  all assigned to `owner`. 14 observed, 24 planned, 1 unknown. By principal:
+- **Privileged operations (40), each with exactly one principal.** 9 Owner-only,
+  all assigned to `owner`. 14 observed, 25 planned, 1 unknown. By principal:
   `management-dispatcher` 9 (the Agent Server management API and the CI dispatch; planned, no
-  dispatcher yet); `owner` 8; `owner-os-account` 5 (guest lifecycle, exec, exchange,
+  dispatcher yet); `owner` 9; `owner-os-account` 5 (guest lifecycle, exec, exchange,
   session-key export, provisioning fetch); `guest-root` 3; `privileged-executor` 2;
   `gitea-site-admin` 2 (Gitea administration and the CI lane's administration);
   `guest-service-openhands` 1 (the guest's Docker API); and one each for
@@ -165,6 +165,7 @@ in the evidence.
 | `op-protected-merge` Authorize an operation by protected merge | Owner-only merge of an exact operation manifest into the protected authorization branch; delegated performer (planned): `authorization-recorder`, which merges as aieh-owner on a recorded Owner decision (P-04.2, decision 0012) | `owner` | yes | `cred-gitea-owner-account` | - | planned |
 | `op-design-acceptance` Accept a design for dispatch | Record the acceptance of an OpenSpec change's design at an exact revision (accept-design) as a write-ahead receipt in the integration store; delegated performer (planned): `authorization-recorder`, its dispatch-input commands (P-04.3, decision 0020); delegated by decision 0018 point 3.2 to the product manager inside a recorded commitment, never as an Owner decision | `owner` | yes | - | - | planned |
 | `op-manifest-promotion` Promote an approved-input manifest | Record the promotion of an approved-input manifest bound to its digest and its design acceptances, then the only write of the live manifest; delegated performer (planned): `authorization-recorder`, its dispatch-input commands (P-04.3, decision 0020); delegated by decision 0018 point 3.3 to the product manager inside an Owner standing authorization; the engineering manager never promotes | `owner` | yes | - | - | planned |
+| `op-model-selection` Select the models inside a provider envelope | Record the exact model identifiers the broker may serve inside the Owner's provider-envelope authorization (select-models) as a write-ahead receipt in the integration store; by the Owner in the envelope itself, or delegated by decision 0018 point 3 to the engineering manager on the governing envelope receipt (S-03.5, decision 0021; delegated performer (planned): the selection recorder of the authorization recorder's family); the product manager never selects | `owner` | yes | - | - | planned |
 | `op-gitea-administration` Administer Gitea | Branch protection, merge allowlists, bot accounts, token maxima, audit settings, impersonation | `gitea-site-admin` | no | `cred-gitea-admin` | `owner-os-account` | observed |
 | `op-open-proposal-pr` Push a proposal branch and open a PR | Gitea API or git push with the builder's bot token | `engineering-agent` | no | `cred-gitea-bot-builder` | - | planned |
 | `op-submit-review` Submit an independent review | Gitea review with the reviewer's bot token | `reviewer-agent` | no | `cred-gitea-bot-reviewer` | - | planned |
@@ -179,7 +180,7 @@ in the evidence.
 | `op-effect-receipt-write` Write effect receipts | effects.sqlite under OS-enforced custody | `privileged-executor` | no | `cred-executor-identity` | - | planned |
 | `op-effect-store-custody` Create the effect store's custody, or restore the store | A4 (effects root, executor principal) and each restore, as elevated Owner acts with the executor stopped | `owner` | yes | `cred-uac-consent` | - | planned |
 | `op-integration-store-write` Write the integration store | integration.sqlite: coordination receipts and rebuildable projections | `integration-service` | no | - | - | planned |
-| `op-inference-call` Call a model provider | The brokered inference endpoint; the provider credential stays with the broker | `inference-broker` | no | `cred-llm-provider-key` | - | planned |
+| `op-inference-call` Call a model provider | The brokered inference endpoint; the provider credential stays with the broker; for a family whose upstream is not loopback, serve starts only on the governing provider-envelope receipt, the model selection and (a broker-enforced cap) the ledger (S-03.5, decision 0021) | `inference-broker` | no | `cred-llm-provider-key` | - | planned |
 
 Every Agent Server route is listed in the route inventory of S-01.3.1,
 [`profiles/strong-windows-qemu-whpx/agent-server/routes.json`](../profiles/strong-windows-qemu-whpx/agent-server/routes.json):
@@ -259,7 +260,7 @@ Hosts, guests, processes, sockets, listeners, APIs, durable stores and repositor
 | `store-agent-server-scratch` Agent Server data on guest scratch | store | `guest-service-openhands` | /srv/scratch/openhands: conversations, persistence (runtime-control with encrypted key material, runtime-data with workspaces), home and tmp; owner openhands, 0711/0700. | observed |
 | `store-moby-data-root` Moby data root | store | `guest-root` | /srv/scratch/docker, root-only; never a conversation mount source. | observed |
 | `store-effects` Privileged effect store (effects.sqlite) | store | `privileged-executor` | An explicit, Owner-designated root on a local fixed volume outside the repository, every profile, the guest-state root and the integration tree. Interim custody: owner Administrators, DACL SYSTEM and Administrators only; the executor added as one Modify entry at A4. | planned |
-| `store-integration` Integration store (integration.sqlite) | store | `owner-os-account` | Default per-user location under the local application-data folder; Owner-session custody during bootstrap; custody moves to the Integration Service identity later. | planned |
+| `store-integration` Integration store (integration.sqlite) | store | `owner-os-account` | Default per-user location under the local application-data folder; Owner-session custody during bootstrap; custody moves to the Integration Service identity later. It also holds the broker's envelope ledger (`inference/envelope/...`) and the model-selection series (`model-selection/v1/...`; decision 0021). | planned |
 | `store-approved-inputs` The live approved-input manifest (approved-inputs.json) | store | `owner-os-account` | `<state>/dispatch/approved-inputs.json` of the managed data root; written only by `op-manifest-promotion`; loaded by `load_manifest` only when the integration store holds a confirmed promotion of its version and digest. | planned |
 | `repo-owner-local` The Owner's local repositories | repository | `owner-os-account` | This checkout and the Owner's other durable repositories on the host; never mounted into a guest, never written by exchange pull, never deleted automatically. | observed |
 | `repo-github-public` Public GitHub repository | repository | `owner` | The public origin of this repository; protected by the publication-safety gate before commit and push. | observed |
