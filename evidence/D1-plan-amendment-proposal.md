@@ -104,7 +104,38 @@ Add four entries to the plan's `deferred` list, each with a reconsider condition
    consumed by a process the Owner's session does not oversee. Until then, an authorization that must be enforced
    independently goes through the recorder (decision 0018 revision 2, point 7; item 3 above).
 
-## 5. Not determined
+5. "A mechanical projection-vs-plan agreement check (a generator or the verifier), with a round-trip test":
+   reconsider at the first plan-projection drift found, at a plan amendment applied without the recorded check
+   below, or when P-05.1 is committed. Today `tools/verify_seed.py` checks hashes, the graph and the manifest,
+   but does not compare prompt, CSV or HTML text with the plan. No generator is tracked.
+
+## Applying it (for execution, on approval)
+
+These rules come from tracked files, so no memory is needed. The program manager computed them, and the product
+manager checked the first two at `cee138f`:
+- **Plan JSON:** `json.dumps(plan, indent=2, ensure_ascii=False) + "\n"`, with LF line endings.
+- **Task prompts:** `task_prompts/<id>.md` is `overseer_prompt + "\n"` (173 of 173).
+- **CSV:** written with `csv.writer` defaults (CRLF line endings, minimal quoting, UTF-8 without a BOM) and the
+  fixed 20-column header.
+  - `ancestor_ids` and `deps` are joined with `;`.
+  - Each `acceptance_gates` entry is written as `parent_id: original_proof`, and entries are joined with ` | `.
+  - `agent_inputs` and `agent_guardrails` come from `agent_contract`, joined with ` | `.
+- **HTML:**
+  - `planData` is `json.dumps(plan, separators=(',',':'), ensure_ascii=False)`.
+  - Cards follow `work_packages` order, and each card's textarea is `html.escape(overseer_prompt, quote=False)`.
+  - A sibling card is the model for the rest of the card.
+- **Precedents:**
+  - `1f506f6`: a dependency only (item 1).
+  - `1ccdf02`, `2f973b0`: a proof together with its prompt (item 2). The commit message of `1ccdf02` lists every
+    part an amendment touches.
+  - `13cb939`, `f3a6c92`: new leaves with the "Step n/N" and `Next:` ripple, the counts, and `deferred` entries
+    (items 3 and 4). For S-03.5: `slice_count` 4 to 5 across S-03; `decomposition.leaf_count`,
+    `added_leaf_count`, `phase_counts["1"]`, `task_prompt_count`, both `task_count` fields and the four "173"
+    mentions in the HTML.
+- **The check:** run the agreement check at the base, where it must pass, and again after the change. A fresh
+  engineer reruns it, and the commit message records the result.
+
+## 6. Not determined
 
 - The exact canonical form of the provider envelope and the name of its operation kind are execution's design
   inside S-03.5.
