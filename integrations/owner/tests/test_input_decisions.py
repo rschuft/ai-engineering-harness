@@ -236,7 +236,8 @@ class Delegated(unittest.TestCase):
                 G.check_delegation('promote-manifest', fi.EM, fi.envelope())
         self.assertEqual(G.FIELDS, fields)
         self.assertNotIn('select-model', G.DELEGATIONS)
-        self.assertEqual(G.check_record(record)[0], 'kind must be a delegated kind: accept-design, promote-manifest')
+        self.assertEqual(G.check_record(record)[0], 'kind must be a delegated kind: accept-design, promote-manifest, '
+                                                    'select-models')
 
 
 class StatusLine(unittest.TestCase):

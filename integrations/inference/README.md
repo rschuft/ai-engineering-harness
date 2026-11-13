@@ -169,7 +169,7 @@ another origin, provider, limit, enforcement, cap, expiry or selection); the exp
 (`ENVELOPE_EXPIRED`). Then the selection: with `selection: envelope`, the bound families' configured models are
 inside the digest, and no bound family naming one is `MODEL_SELECTION_MISSING`. **Interim, slice 1:**
 `selection: delegation` is refused at start (`MODEL_SELECTION_MISSING`: no delegated selection can be read yet;
-slice 2), and `enforced_by: broker` is refused at start (`ENVELOPE_USAGE_UNKNOWN`: the cap's usage ledger is
+slice 2 has built the act, `integrations/owner/selection_recorder.py`, but not yet its check at start), and `enforced_by: broker` is refused at start (`ENVELOPE_USAGE_UNKNOWN`: the cap's usage ledger is
 slice 3). Both fail closed and are replaced, never relaxed. A refused start exits 2, writes no receipt and no
 audit line (it may create an empty integration store where none exists).
 

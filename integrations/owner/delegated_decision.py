@@ -43,11 +43,20 @@ and the quote lies inside its verbatim block (the ``>`` lines). An absent anchor
 commitment's scope or the envelope, and the authorship of a log entry are not checked: decision 0018
 point 7 ("a log quote is checked for presence, not authorship").
 
+**A basis recorded in the integration store** (plan leaf S-03.5, slice 2): a basis type may need the store
+(``BasisType.needs_store``). ``read_authority`` passes the store it is given (a keyword); with none, such a type
+refuses (``AUTHORITY_UNAVAILABLE``), never passes. The ``envelope-receipt`` basis of ``select-models`` (decision
+0018 point 3: technical model selection inside an authorized model-access envelope, by the engineering manager)
+is ``{type, receipt}``, recorded as an authority when the store holds that receipt as a confirmed
+``provider-envelope`` authorization reserved by the authorization recorder. Its check reads the store itself,
+with the recorder's constants repeated (a test asserts them equal): this module never loads the read side.
+
 The record format and the table are standard library only and open no file; ``read_authority`` alone
 loads the repository-access module (Dulwich, from the Python tools set), when it is called.
 """
 import hashlib
 import importlib.util
+import json
 import re
 import sys
 import uuid
@@ -109,10 +118,12 @@ class HarnessView(NamedTuple):
 class BasisType(NamedTuple):
     """A kind of basis: ``problems(basis)`` lists what is wrong with its shape; ``unrecorded(basis, view)``
     answers why it is not recorded as an authority of its type at the harness's ``HEAD`` (a ``HarnessView``),
-    as ``(code, detail)``, or None when it is."""
+    as ``(code, detail)``, or None when it is. A type with NEEDS_STORE is asked ``unrecorded(basis, view,
+    store)`` with the integration store ``read_authority`` was given (None when it was given none)."""
     name: str
     problems: Callable[[object], list]
-    unrecorded: Callable[[dict, HarnessView], tuple[str, str] | None]
+    unrecorded: Callable[..., tuple[str, str] | None]
+    needs_store: bool = False
 
 
 QUOTE_FIELDS = ('type', 'link', 'quote')
@@ -245,12 +256,70 @@ def _envelope_unrecorded(basis, view):
     return None
 
 
+# The authorization recorder's receipts (authorization_recorder.RECEIPT_PREFIX, RECORDER and RECEIPT_FORMAT) and
+# the provider envelope's operation kind (inference_envelope.KIND), repeated: this module loads neither the
+# recorder nor the read side (a test asserts that they are equal).
+ENVELOPE_RECEIPT_PREFIX = 'owner-authorization/v1/'
+ENVELOPE_RECORDER = 'authorization-recorder/1'
+ENVELOPE_RECEIPT_FORMAT = 'aieh-owner-authorization/1'
+ENVELOPE_KIND = 'provider-envelope'
+RECEIPT_FIELDS = ('type', 'receipt')
+ENVELOPE_RECEIPT = re.compile(r'^owner-authorization/v1/[0-9a-f]{32}$')
+
+
+def _receipt_problems(basis):
+    """A recorder receipt ``{type, receipt}``: the type ``envelope-receipt`` and the receipt's store key."""
+    if not isinstance(basis, dict) or list(basis) != list(RECEIPT_FIELDS):
+        return [f'the basis must be exactly {{{", ".join(RECEIPT_FIELDS)}}}']
+    out = []
+    if basis['type'] != 'envelope-receipt':
+        out.append('the basis type must be envelope-receipt')
+    if not isinstance(basis['receipt'], str) or not ENVELOPE_RECEIPT.match(basis['receipt']) \
+            or '\n' in basis['receipt']:
+        out.append(f'the basis receipt must be the key {ENVELOPE_RECEIPT_PREFIX}<32 hex digits> of the provider '
+                   'envelope\'s authorization')
+    return out
+
+
+def _envelope_receipt_unrecorded(basis, view, store):
+    """An envelope receipt: the integration store holds it, reserved by the authorization recorder, as an
+    authorization of operation kind provider-envelope, and confirmed."""
+    key = basis['receipt']
+    if store is None:
+        return ('AUTHORITY_UNAVAILABLE', f'no integration store was given: {key} cannot be read')
+    reservation = store.get(key)
+    if reservation is None:
+        return ('DELEGATION_BASIS_NOT_RECORDED', f'the integration store holds no receipt {key}')
+    events = store.events(key)
+    actor = events[0].actor if events else None
+    try:
+        intent = json.loads(reservation.intent_json)
+    except (TypeError, ValueError):
+        intent = None
+    decision = intent.get('decision') if isinstance(intent, dict) else None
+    subject = decision.get('subject') if isinstance(decision, dict) else None
+    kind = subject.get('operationKind') if isinstance(subject, dict) else None
+    if actor != ENVELOPE_RECORDER or not isinstance(intent, dict) or intent.get('format') != ENVELOPE_RECEIPT_FORMAT \
+            or intent.get('recorder') != ENVELOPE_RECORDER:
+        return ('DELEGATION_BASIS_NOT_AUTHORITY', f'{key} is not a receipt the authorization recorder reserved')
+    if kind != ENVELOPE_KIND:
+        return ('DELEGATION_BASIS_NOT_AUTHORITY', f'{key} authorizes an operation of kind {kind!r}, not '
+                f'{ENVELOPE_KIND}')
+    if reservation.state != 'confirmed':
+        return ('DELEGATION_BASIS_NOT_AUTHORITY', f'{key} is {reservation.state}, not confirmed')
+    return None
+
+
 BASIS_TYPES = {
     # decision 0018 point 3.2: the log's "Commitment: <milestone>" entry whose scope the design lies in.
     'commitment': BasisType('commitment', _quote_problems('commitment', COMMITMENT_MARK), _commitment_unrecorded),
     # decision 0018 point 3.3: the Owner's standing authorization (point 5), recorded verbatim in the log as an
     # "Owner standing authorization:" entry.
     'envelope': BasisType('envelope', _quote_problems('envelope'), _envelope_unrecorded),
+    # decision 0018 point 3 (S-03.5): the Owner's authorization of the model-access envelope, a confirmed
+    # provider-envelope receipt of the authorization recorder in the integration store.
+    'envelope-receipt': BasisType('envelope-receipt', _receipt_problems, _envelope_receipt_unrecorded,
+                                  needs_store=True),
 }
 
 
@@ -272,6 +341,68 @@ def _owner_subject(kind):
     return lambda subject: D.subject_problems(kind, subject)
 
 
+# select-models (S-03.5): the subject, its grammars and the inference broker's (FAMILY_ID, MODEL_NAME, WILDCARD),
+# repeated (this module imports nothing of the broker; a test asserts that they are equal).
+SELECTION_FIELDS = ('leaf', 'models', 'verified', 'supersedes')
+SELECTED_MODEL_FIELDS = ('id', 'use', 'cost')
+VERIFIED_FIELDS = ('source', 'at')
+LEAF = re.compile(r'^[A-Z]-[0-9]{2}(?:\.[0-9]+)*$')
+FAMILY_ID = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
+MODEL_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}')
+WILDCARD = re.compile(r'[*?\[\]]')
+TEXT_MAX = 500
+
+
+def _line(value):
+    return isinstance(value, str) and bool(value.strip()) and '\n' not in value and '\r' not in value \
+        and len(value) <= TEXT_MAX
+
+
+def selection_subject_problems(subject):
+    """The problems of a ``select-models`` subject: ``leaf`` (the plan leaf that makes the paid call),
+    ``models`` (``{<family>: [{id, use, cost}]}``: exact identifiers in the broker's grammar, no wildcard, no
+    duplicate, no family empty), ``verified`` (``{source, at}``: where current provider information was read,
+    and when) and ``supersedes`` (the decisionId of the selection it replaces, or null)."""
+    if not isinstance(subject, dict) or list(subject) != list(SELECTION_FIELDS):
+        return [f'subject must have exactly {", ".join(SELECTION_FIELDS)}']
+    problems = []
+    if not isinstance(subject['leaf'], str) or not LEAF.match(subject['leaf']) or '\n' in subject['leaf']:
+        problems.append('subject.leaf must be a plan leaf id, such as S-03.3')
+    models = subject['models']
+    if not isinstance(models, dict) or not models:
+        problems.append('subject.models must be a non-empty mapping {<family>: [{id, use, cost}]}')
+    else:
+        for family, entries in models.items():
+            where = f'subject.models.{family}'
+            if not isinstance(family, str) or not FAMILY_ID.fullmatch(family):
+                problems.append(f'{where}: the family is not a declared family id')
+            if not isinstance(entries, list) or not entries:
+                problems.append(f'{where} must be a non-empty list')
+                continue
+            seen = set()
+            for entry in entries:
+                if not isinstance(entry, dict) or list(entry) != list(SELECTED_MODEL_FIELDS):
+                    problems.append(f'{where}[] must have exactly {", ".join(SELECTED_MODEL_FIELDS)}')
+                    continue
+                model = entry['id']
+                if not isinstance(model, str) or WILDCARD.search(model) or not MODEL_NAME.fullmatch(model):
+                    problems.append(f'{where}[].id must be an exact model identifier (no wildcard)')
+                elif model in seen:
+                    problems.append(f'{where} names {model} twice')
+                seen.add(model if isinstance(model, str) else None)
+                if not _line(entry['use']) or not _line(entry['cost']):
+                    problems.append(f'{where}[].use and .cost must be one line of text, at most {TEXT_MAX} '
+                                    'characters')
+    verified = subject['verified']
+    if not isinstance(verified, dict) or list(verified) != list(VERIFIED_FIELDS) or not _line(verified['source']) \
+            or not isinstance(verified['at'], str) or not D.TIMESTAMP.match(verified['at']):
+        problems.append('subject.verified must be {source (one line), at (YYYY-MM-DDTHH:MM:SSZ)}')
+    supersedes = subject['supersedes']
+    if supersedes is not None and (not isinstance(supersedes, str) or not D.UUID4.match(supersedes)):
+        problems.append('subject.supersedes must be null or a decisionId (a lower-case version 4 UUID)')
+    return problems
+
+
 DELEGATIONS = {row.kind: row for row in (
     # decision 0018 point 3.2: the product manager accepts the design of an OpenSpec change inside a recorded
     # commitment's scope, "naming this record, the commitment and the exact revision".
@@ -282,6 +413,11 @@ DELEGATIONS = {row.kind: row for row in (
     # dispatches with the manifest, never promotes one.
     Delegation('promote-manifest', 'decision:0018', '3.3', 'agent:product-manager', 'envelope',
                _owner_subject('promote-manifest')),
+    # decision 0018 point 3 (S-03.5): the engineering manager selects the exact model identifiers inside the
+    # model-access envelope the Owner authorized (a confirmed provider-envelope receipt). The product manager
+    # never selects them.
+    Delegation('select-models', 'decision:0018', '3', 'agent:engineering-manager', 'envelope-receipt',
+               selection_subject_problems),
 )}
 
 
@@ -370,9 +506,10 @@ class Authority(NamedTuple):
     basis: dict
 
 
-def read_authority(harness, kind, decided_by, basis):
+def read_authority(harness, kind, decided_by, basis, *, store=None):
     """The authority for a delegated decision of KIND by DECIDED_BY on BASIS: ``check_delegation``, then the
-    delegating record and the basis at the harness repository's ``HEAD`` (``read_harness``).
+    delegating record and the basis at the harness repository's ``HEAD`` (``read_harness``), and, for a basis
+    type that needs it, the integration store STORE (none: ``AUTHORITY_UNAVAILABLE``).
     DelegationRefused (``DELEGATION_NOT_ACCEPTED``, ``AUTHORITY_UNAVAILABLE``,
     ``DELEGATION_BASIS_NOT_RECORDED``, ``DELEGATION_BASIS_NOT_AUTHORITY``, or a code of ``check_delegation``)."""
     row = check_delegation(kind, decided_by, basis)
@@ -380,7 +517,9 @@ def read_authority(harness, kind, decided_by, basis):
     if not accepted_by_owner(view.record_text):
         raise DelegationRefused('DELEGATION_NOT_ACCEPTED', f'{view.record_path} at {view.revision} is '
                                 f'{record_status(view.record_text)!r}, not "{ACCEPTED_BY_OWNER} ..."')
-    refusal = BASIS_TYPES[row.basis_type].unrecorded(basis, view)
+    basis_type = BASIS_TYPES[row.basis_type]
+    refusal = basis_type.unrecorded(basis, view, store) if basis_type.needs_store \
+        else basis_type.unrecorded(basis, view)
     if refusal is not None:
         raise DelegationRefused(*refusal)
     return Authority(row, view.revision, view.record_digest, {name: basis[name] for name in basis})

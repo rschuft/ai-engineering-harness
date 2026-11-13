@@ -180,6 +180,52 @@ def _expiry(text):
     return datetime.datetime.strptime(text, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
 
 
+class Governing(NamedTuple):
+    """The governing authorization (CODE None) with the confirmed candidates before it, or CODE one of
+    ``ENVELOPE_RECORD_INVALID``, ``ENVELOPE_NOT_AUTHORIZED`` and ``ENVELOPE_AUTHORIZATION_UNRESOLVED`` with its
+    DETAIL."""
+    code: str | None
+    detail: str
+    candidate: Candidate | None
+    confirmed: list
+
+
+def governing(store):
+    """The governing provider-envelope authorization: the last confirmed candidate, unless a receipt cannot be
+    trusted, none is confirmed and none unsettled, or a later one is unsettled (in that order)."""
+    found, problem = candidates(store)
+    if problem is not None:
+        return Governing('ENVELOPE_RECORD_INVALID', problem, None, [])
+    confirmed = [c for c in found if c.state == 'confirmed']
+    after = found[found.index(confirmed[-1]) + 1:] if confirmed else found
+    unsettled = [c for c in after if c.state in UNSETTLED]
+    if not confirmed and not unsettled:
+        return Governing('ENVELOPE_NOT_AUTHORIZED', f'the store holds no confirmed {OPERATION_KIND} authorization '
+                         f'({len(found)} receipt(s), none confirmed or unsettled)', None, [])
+    if unsettled:
+        names = ', '.join(f'{c.key} ({c.state})' for c in unsettled)
+        return Governing('ENVELOPE_AUTHORIZATION_UNRESOLVED', f'a later {OPERATION_KIND} decision is not settled: '
+                         f'{names}; resolve it (authorization_recorder.py resolve --challenge <nonce>)', None, [])
+    return Governing(None, '', confirmed[-1], confirmed)
+
+
+def basis_problem(store, receipt, now):
+    """Why RECEIPT (a recorder receipt key) is not the governing, unexpired provider-envelope authorization at
+    NOW, or None when it is: what a model selection may rest on (decision 0018 point 3)."""
+    answer = governing(store)
+    if answer.code is not None:
+        return f'{answer.code}: {answer.detail}'
+    held = answer.candidate
+    if held.key != receipt:
+        later = 'a later authorization supersedes it' if any(c.key == receipt for c in answer.confirmed) \
+            else 'it is not a confirmed provider-envelope authorization'
+        return f'{receipt} does not govern ({later}); the governing authorization is {held.key}'
+    expires = held.decision['subject']['expiresAt']
+    if now >= _expiry(expires):
+        return f'{receipt} expired at {expires}'
+    return None
+
+
 def verify_envelope(store, target, manifest_digest: Callable[[str], str], now):
     """Whether the live envelope, whose canonical digest is TARGET (``sha256:<64 hex>``), is authorized at NOW
     (an aware datetime). MANIFEST_DIGEST(operation) gives the sha256 (``sha256:<64 hex>``) of the canonical
@@ -187,38 +233,73 @@ def verify_envelope(store, target, manifest_digest: Callable[[str], str], now):
     if not isinstance(target, str) or not D.DIGEST.match(target) or not callable(manifest_digest) \
             or not isinstance(now, datetime.datetime) or now.tzinfo is None:
         raise ValueError('verify_envelope takes the live digest, the manifest digest function and an aware time')
-    found, problem = candidates(store)
-    if problem is not None:
-        return _refused('ENVELOPE_RECORD_INVALID', problem)
-    confirmed = [c for c in found if c.state == 'confirmed']
-    after = found[found.index(confirmed[-1]) + 1:] if confirmed else found
-    unsettled = [c for c in after if c.state in UNSETTLED]
-    if not confirmed and not unsettled:
-        return _refused('ENVELOPE_NOT_AUTHORIZED', f'the store holds no confirmed {OPERATION_KIND} authorization '
-                        f'({len(found)} receipt(s), none confirmed or unsettled)')
-    if unsettled:
-        names = ', '.join(f'{c.key} ({c.state})' for c in unsettled)
-        return _refused('ENVELOPE_AUTHORIZATION_UNRESOLVED', f'a later {OPERATION_KIND} decision is not settled: '
-                        f'{names}; resolve it (authorization_recorder.py resolve --challenge <nonce>)')
-    governing = confirmed[-1]
-    subject = governing.decision['subject']
+    answer = governing(store)
+    if answer.code is not None:
+        return _refused(answer.code, answer.detail)
+    confirmed, held = answer.confirmed, answer.candidate
+    subject = held.decision['subject']
     if subject['target'] != target:
         earlier = [c for c in confirmed[:-1] if c.decision['subject']['target'] == target]
         if earlier:
             return _refused('ENVELOPE_REPLAYED', f'the live envelope {target} was authorized by {earlier[-1].key}, '
-                            f'which {governing.key} (operation {subject["operation"]}) supersedes')
+                            f'which {held.key} (operation {subject["operation"]}) supersedes')
         return _refused('ENVELOPE_MISMATCH', f'the live envelope is {target}; the governing authorization '
-                        f'{governing.key} (operation {subject["operation"]}) is for {subject["target"]}')
+                        f'{held.key} (operation {subject["operation"]}) is for {subject["target"]}')
     canonical = manifest_digest(subject['operation'])
-    if canonical != governing.intent['digest']:
-        return _refused('ENVELOPE_MISMATCH', f'the manifest merged under {governing.key} is '
-                        f'{governing.intent["digest"]}, not the canonical manifest of the live envelope '
+    if canonical != held.intent['digest']:
+        return _refused('ENVELOPE_MISMATCH', f'the manifest merged under {held.key} is '
+                        f'{held.intent["digest"]}, not the canonical manifest of the live envelope '
                         f'({canonical})')
     if now >= _expiry(subject['expiresAt']):
-        return _refused('ENVELOPE_EXPIRED', f'the authorization {governing.key} expired at {subject["expiresAt"]}')
-    return Verdict(None, '', {'receipt': governing.key, 'operation': subject['operation'],
-                              'decisionId': governing.decision['decisionId'], 'target': subject['target'],
-                              'digest': governing.intent['digest'], 'expiresAt': subject['expiresAt']})
+        return _refused('ENVELOPE_EXPIRED', f'the authorization {held.key} expired at {subject["expiresAt"]}')
+    return Verdict(None, '', {'receipt': held.key, 'operation': subject['operation'],
+                              'decisionId': held.decision['decisionId'], 'target': subject['target'],
+                              'digest': held.intent['digest'], 'expiresAt': subject['expiresAt']})
+
+
+# ---------------------------------------------------------------------------- the model-selection series
+
+
+# The model selections (decision 0018 point 3, kind select-models; S-03.5 slice 2) form ONE series: each is a
+# write-ahead receipt of the selection recorder (selection_recorder.py) at the next position of
+# model-selection/v1/<sequence>, from 1, contiguous. A position is spent once reserved. Which selection governs a
+# start, and whether its record is one the delegation admits, is the broker's check at start (not yet wired).
+SELECTION_PREFIX = 'model-selection/v1/'
+SELECTION_RECORDER = 'selection-recorder/1'
+SELECTION_FORMAT = 'aieh-model-selection/1'
+SELECTION_INTENT = ('format', 'recorder', 'series', 'decision', 'sequence', 'receipt')
+
+
+def selection_key(sequence):
+    return f'{SELECTION_PREFIX}{sequence}'
+
+
+class Selection(NamedTuple):
+    """One receipt of the model-selection series: its key, position, state and intent (None when it is not a
+    JSON object)."""
+    key: str
+    position: int
+    state: str
+    intent: dict | None
+
+
+def selections(store):
+    """The model-selection series, from position 1 to the first free one, by direct lookups."""
+    out, position = [], 1
+    while (reservation := store.get(selection_key(position))) is not None:
+        try:
+            intent = json.loads(reservation.intent_json)
+        except (TypeError, ValueError):
+            intent = None
+        out.append(Selection(reservation.operation_key, position, reservation.state,
+                             intent if isinstance(intent, dict) else None))
+        position += 1
+    return out
+
+
+def last_confirmed_selection(series):
+    """The last confirmed receipt of the series, or None."""
+    return next((s for s in reversed(series) if s.state == 'confirmed'), None)
 
 
 def verifier(store) -> Callable:

@@ -118,6 +118,37 @@ class TestEnvelopeModulesOpenNothing(unittest.TestCase):
                         self.assertNotIn(node.attr, ('environ', 'getenv', 'getproxies'))
 
 
+class TestSelectionActOpensNothing(unittest.TestCase):
+    """The model-selection act (integrations/owner/selection_recorder.py, S-03.5 slice 2) and the owner modules it
+    loads open no connection: no network or process module imported, no connector called, no environment or
+    proxy read. (It reads the harness repository through the repository-access module, outside this census.)"""
+
+    def test_the_act_and_its_owner_modules_open_nothing(self):
+        act = S.REPO / 'integrations' / 'owner' / 'selection_recorder.py'
+        modules = {act} | loaded_sources(act)
+        for module in list(modules):
+            modules |= loaded_sources(module)
+        self.assertEqual({path.name for path in modules},
+                         {'selection_recorder.py', 'owner_decision.py', 'delegated_decision.py',
+                          'envelope_decisions.py'})
+        for path in sorted(modules):
+            with self.subTest(module=path.name):
+                tree = ast.parse(path.read_text(encoding='utf-8'))
+                imported = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        imported.update(alias.name.split('.')[0] for alias in node.names)
+                    elif isinstance(node, ast.ImportFrom):
+                        imported.add((node.module or '').split('.')[0])
+                self.assertEqual(imported & set(NETWORK_MODULES), set())
+                calls = {node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', None)
+                         for node in ast.walk(tree) if isinstance(node, ast.Call)}
+                self.assertEqual(calls & CONNECTORS, set())
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Attribute):
+                        self.assertNotIn(node.attr, ('environ', 'getenv', 'getproxies'))
+
+
 class TestConnectUpstream(unittest.TestCase):
     def test_https_verifies_and_http_is_loopback_only(self):
         tls = IB.connect_upstream(IB.parse_origin('https://api.example.test'), 5)

@@ -39,6 +39,7 @@ under the managed data root and write the live manifest there.
 | `delegated_decision.py` | The delegated decision record (`delegated-decision/v1`): its fields, the delegation table (`DELEGATIONS`) and the basis types (`BASIS_TYPES`), the act's checks (`check_delegation`, and `read_authority`, which reads the delegating record and the log at the harness repository's `HEAD`), the generic `decide` and `check_record` |
 | `input_decisions.py` | The dispatch-input series (their store keys, positions and heads), the design binding of a manifest entry, and the verifier (`verify_manifest`, `verifier`) with its refusal codes; importable without the write side |
 | `envelope_decisions.py` | The provider-envelope authorizations' read side (plan leaf S-03.5, slice 1): the authorization recorder's receipts of operation kind `provider-envelope`, the governing one (the last confirmed), and the verifier the inference broker's `serve` asks (`verify_envelope`, `verifier`) with its refusal codes; importable without the recorder (no Gitea, credential or store module) |
+| `selection_recorder.py` | The model-selection recorder (plan leaf S-03.5, slice 2): `delegate` (the engineering manager's `select-models` decision under decision 0018 point 3, resting on the governing provider-envelope receipt) and `status`; the codes and remedies, the context and the command line. It imports no Gitea or credential module |
 | `input_recorder.py` | The dispatch-input commands: `design prepare`, `record` and `delegate`; `manifest prepare`, `record`, `delegate` and `resolve`; `status`; the codes and remedies, the context and the command line |
 | `acceptance_recorder.py` | `prepare` and `record`, the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
 | `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy, the protection verifier's seam and the command line's verifier (`protection_verifier`: the Gitea integration's protection check), the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
@@ -57,6 +58,7 @@ under the managed data root and write the live manifest there.
 | `tests/test_input_decisions.py` | The two new kinds and the unchanged shape of `owner-decision/v1`; `delegated-decision/v1`, its table (the engineering manager never decides either kind) and a later kind added as a row; the status parser; the codes, the admitted channels and the repeated grammars against their sources (unit) |
 | `tests/test_input_recorder.py` | Both authorities end to end with the verifier's answer; every code of the recorder table with what it leaves (a refusal reserves nothing and leaves the live manifest as it was; `PROMOTION_FAILED` and `OUTCOME_UNKNOWN` leave a receipt `manifest resolve` settles); each delegated refusal on the fixture harness repositories; the real decision 0018 at `HEAD`; the verifier's refusals; a fixture context never reaching the managed root; importing the commands loads no Gitea or credential module; the command line (integration) |
 | `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: phase rechallenge (fresh challenges for the same operations with reads only, the record phase on them, every refusal leaving the run directory unchanged); prepare's precondition (the baseline variable, the protection check's digest, every role's identity and scopes, open pull requests and existing branches, each refused with zero writes), the auditor's control on a nonexistent pull request, the stopping rule after every control attempt, the presentation, the statement-file refusals, the expected outcome without a verifier and with one that does not verify, the stale-head control and each refusal it can observe (finding F14), the SECURITY FAILURE stops, the protection check end to end (unit) |
+| `tests/test_selection_recorder.py` | The model-selection act (S-03.5 slice 2) on the fixture harness repositories, over provider-envelope receipts the real recorder writes against the fake Gitea: a selection and the one that supersedes it, each refusal leaving nothing reserved (the product manager, a basis of another shape, an unknown, unconfirmed, other-kind, superseded, expired or forged receipt, an unsettled later envelope, decision 0018 `Proposed`, no store, a malformed selection), a position taken meanwhile, a failed write, the real decision 0018 at `HEAD`, the command line, the managed context, and the act loading no Gitea or credential module (integration) |
 | `tests/test_envelope_decisions.py` | The provider-envelope read side (S-03.5) over receipts the real recorder writes against the fake Gitea: the governing authorization and its view, the expiry at its second, supersession and replay, a non-canonical manifest, other kinds ignored, a failed, unknown or reserved receipt alone or after the confirmed one, every hand-written receipt it refuses, its constants equal to the recorder's and its imports (unit) |
 
 ## The Owner decision record (`owner-decision/v1`)
@@ -321,6 +323,31 @@ digest, or the merged manifest is not the canonical manifest of the live envelop
 governing `expiresAt` reached); otherwise the governing receipt's view (`receipt`, `operation`, `decisionId`,
 `target`, `digest`, `expiresAt`). It reads the integration store only. A later provider-envelope authorization
 ends an earlier one at the broker's next start; no revocation record exists.
+
+### Model selections (plan leaf S-03.5, slice 2)
+
+Decision 0018 point 3 delegates technical model selection inside an authorized model-access envelope to the
+engineering manager. The delegation table has a third row: kind `select-models`, `decision:0018` point `3`,
+decider `agent:engineering-manager` only (the product manager is refused `DECIDER_NOT_DELEGATED`), basis type
+`envelope-receipt`. Its subject: `leaf`, `models` (`{<family>: [{id, use, cost}]}`: exact identifiers in the
+broker's grammar, no wildcard, no duplicate, no family empty), `verified` (`{source, at}`) and `supersedes`
+(set by the recorder). The basis is `{"type": "envelope-receipt", "receipt": "owner-authorization/v1/<nonce>"}`;
+it is an authority when the integration store holds that receipt, reserved by the authorization recorder, of
+operation kind `provider-envelope`, confirmed. This basis type needs the store: `read_authority` takes it as a
+keyword and, without one, refuses `AUTHORITY_UNAVAILABLE`; the record's fields and the two P-04.3 rows are
+unchanged.
+
+`selection_recorder.py delegate --selection FILE --decided-by agent:engineering-manager --basis FILE` also
+requires the basis receipt to be the governing, unexpired provider-envelope authorization
+(`DELEGATION_BASIS_NOT_AUTHORITY` for a superseded or expired one, or while a later one is unsettled), then
+writes a write-ahead receipt at the next position of the one series `model-selection/v1/<sequence>`
+(`aieh-model-selection/1`, actor `selection-recorder/1`) and a copy under
+`<state>/delegated-decisions/model-selections/`. Its own codes: `SELECTION_INVALID`, `SELECTION_POSITION_TAKEN`
+(nothing written), `SELECTION_WRITE_FAILED` (the receipt failed, its position spent; exit 1). `status` reads the
+series' head. **Checked at the act:** the row, the decider, the basis's shape, decision 0018 at `HEAD`, the basis
+receipt and that it governs, the subject's shape. **Not checked:** who ran the command; that the identifiers
+were verified against current provider information; that the costs are right; that the record was presented to
+the Owner before the first paid operation (S-03.3). The broker's start does not read the series yet.
 
 ## The dispatch-input commands (plan leaf P-04.3)
 

@@ -421,6 +421,15 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/owner/input_recorder.py manifest {{.CLI_ARGS}}'
 
+  owner:select-models:
+    desc: "The model-selection recorder (<tools python> -I -B integrations/owner/selection_recorder.py <command>; plan leaf S-03.5): pass -- delegate --selection FILE --decided-by agent:engineering-manager --basis FILE to record the technical model selection delegated by decision 0018 point 3, resting on the governing, unexpired provider-envelope authorization ({\"type\": \"envelope-receipt\", \"receipt\": ...}), or -- status to read the series' head; a receipt in the integration store (model-selection/v1/<sequence>), never an Owner record; exit 2 on a refusal, 1 on a failed write"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/owner/selection_recorder.py {{.CLI_ARGS}}'
+
   # Managed data root (plan leaf F-07.1, decision 0009): the shared path resolver, its
   # configuration and the Python tools venv (integrations/paths/README.md).
   paths:test:

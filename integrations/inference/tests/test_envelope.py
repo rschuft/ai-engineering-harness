@@ -185,6 +185,19 @@ class TheDocument(unittest.TestCase):
             self.assertIn(code, IB.CODES)
 
 
+class TheSelectionGrammars(unittest.TestCase):
+    """The select-models subject (integrations/owner/delegated_decision.py, S-03.5 slice 2) repeats the broker's
+    family and model grammars, and the broker's provider-envelope kind."""
+    category = 'unit'
+
+    def test_they_equal_the_brokers(self):
+        G = S._load('delegated_decision', S.REPO / 'integrations' / 'owner' / 'delegated_decision.py')
+        for name in ('FAMILY_ID', 'MODEL_NAME', 'WILDCARD'):
+            with self.subTest(name):
+                self.assertEqual(getattr(G, name).pattern, getattr(IB, name).pattern)
+        self.assertEqual(G.ENVELOPE_KIND, E.KIND)
+
+
 class TheEnvelopeCommand(unittest.TestCase):
     """inference_broker.py envelope: the live envelope and its manifest; it reads no credential, store, log or
     listener."""
