@@ -268,7 +268,9 @@ attempt's inference token, bound to the reserved conversation and attempt, and u
 function S-03.3's qualification admission (`acp_qualification.check_create`) also calls: one
 module, loaded under one name (`aieh_dispatch_create_secrets`), each caller passing its own
 refusal type. The codes and their meanings are the same on both sides (`create_secrets.MEANINGS`);
-the dispatcher adds a binding to the grant it holds:
+the dispatcher adds a binding to the grant it holds. No refusal detail of the shared check, for
+either caller, repeats the token, a part of it of 8 or more characters or a word shaped like a
+provider key: a reported location has each such word as `<redacted>` (`create_secrets.redact`):
 
 | Rule | Refused as |
 |---|---|
@@ -278,7 +280,7 @@ the dispatcher adds a binding to the grant it holds:
 | no key or value anywhere in the body has a provider key's shape | `SECRET_PROVIDER_KEY_SHAPED` |
 | the token has the broker's attempt-token shape | `SECRET_NOT_ATTEMPT_TOKEN` |
 | the token is the grant's (by fingerprint), and the grant is of the reserved conversation and attempt; no grant held is refused too (dispatcher only) | `SECRET_TOKEN_NOT_BOUND` |
-| the token, its body after the prefix or any token-shaped text appears nowhere but in its own secret | `TOKEN_OUTSIDE_SECRET` |
+| the token, or any part of it, appears nowhere but in its own secret: the token, its body after the prefix, any token-shaped text, or any run of 8 or more characters of its body (`create_secrets.FRAGMENT`: 48 bits of the URL-safe alphabet, so a chance match with the template's text is negligible) | `TOKEN_OUTSIDE_SECRET` |
 | the endpoint is the profile's guest inference endpoint, and no other destination appears | `DESTINATION_NOT_ENDPOINT` |
 
 **Where the values come from.** The names from the pinned registry extract
@@ -319,13 +321,20 @@ confirmed attempt keeps its grant until its end: `end_attempt(store, operation_k
 actor=)` revokes it and records the revocation as the receipt
 `dispatch/attempt/<attempt id>/inference-revocation/<n>` (confirmed, or failed with the broker's
 code and `INFERENCE_REVOCATION_FAILED` raised; a later call tries again under the next receipt).
-The broker writes its own revocation receipt; the grant's state shows it.
+Only a confirmed attempt is ended (`ATTEMPT_NOT_ENDABLE` otherwise: a refused or failed attempt's
+grant was revoked at its failure). The broker writes its own revocation receipt; the grant's state
+shows it. The receipts change no attempt's outcome: restore-epoch reconciliation and its closure
+see the same attempts with or without them, and a receipt carries no `workRef` or `outcomeRef`. A
+receipt left `dispatched` by an interrupted revocation is reconciled as itself (the oracle is asked
+about the receipt, never the attempt) and holds the restore epoch open until then, as the broker's
+own receipts do: a revocation whose outcome is unknown must be settled.
 
 **Fingerprints, never the token.** `AdmittedCreate.to_json()` carries the slot and
 `inference_grant` (`inference-grant/v1`: the token's fingerprint, conversation, attempt, family,
 models, budget, expiry); the `dispatched`, `failed` and `unknown` details, `DispatchResult`, the
 revocation records and every refusal carry the fingerprint only (a refusal's detail and context are
-scrubbed of the token, its body and any provider-key-shaped word). The dispatcher holds no provider
+redacted by `create_secrets.redact`: every word holding the token, a part of it of 8 or more
+characters, or a provider key's shape). The dispatcher holds no provider
 credential and reads none: importing it loads no inference or credential module, and the D1
 stage's own modules (`acp_qualification`, `inference_control`) are loaded on first use.
 

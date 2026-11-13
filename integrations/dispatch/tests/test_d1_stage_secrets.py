@@ -30,9 +30,11 @@ used.
 """
 from pathlib import Path
 import ast
+import base64
 import contextlib
 import copy
 import dataclasses
+import hashlib
 import importlib.util
 import io
 import itertools
@@ -40,6 +42,7 @@ import json
 import logging
 import os
 import pickle
+import sqlite3
 import sys
 import unittest
 from unittest import mock
@@ -100,13 +103,18 @@ class SpyControl:
 
 class SecretsFixture(d1.D1Fixture):
     """The E-05.2 D1 fixture (strong-d1-profile's implement stage is the D1 stage), with full dispatches. The
-    broker's random token bodies are replaced by distinct fixed ones (digits only), so that no case depends on what
-    a random body happens to contain (a provider-key-like run, or a word that picks another refusal code)."""
+    broker's random token bodies are replaced by distinct fixed ones (the URL-safe base64 of a counter's sha256), so
+    that no case depends on what a random body happens to contain (a provider-key-like run, or a word that picks
+    another refusal code)."""
 
     def setUp(self):
         super().setUp()
         bodies = itertools.count(1)
-        self.enterContext(mock.patch.object(S.IB.secrets, 'token_urlsafe', lambda n=32: f'{next(bodies):043d}'))
+
+        def body(n=32):
+            digest = hashlib.sha256(f'E-05.6 synthetic attempt token {next(bodies)}'.encode()).digest()
+            return base64.urlsafe_b64encode(digest).decode('ascii').rstrip('=')
+        self.enterContext(mock.patch.object(S.IB.secrets, 'token_urlsafe', body))
 
     def spy(self, rig='broker', **kwargs):
         return SpyControl(self.control(rig), **kwargs)
@@ -415,6 +423,47 @@ class Refusals(SecretsFixture):
                     self.assertNotIn(token[9:], text)
                     self.assertNotIn(PROVIDER_KEY, text)
         # The positive control on the same admitted create: it is sent, once.
+        self.send(admitted, resolved)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_a_part_of_the_token_outside_its_secret_is_refused(self):
+        """Any run of create_secrets.FRAGMENT (8) or more characters of the token's body outside its secret is
+        TOKEN_OUTSIDE_SECRET at admission and at the send; 7 characters are not (refused only as not the template:
+        the boundary is deliberate)."""
+        _, resolved, admitted = self.reserved_d1()
+        token, grant = admitted.inference.token(), admitted.inference
+        staged, body_of = self.staged(admitted, resolved), token[9:]
+        self.assertEqual(cs.FRAGMENT, 8)
+
+        def at_admission(body):
+            with self.assertRaises(di.DispatchRefused) as caught:
+                di.check_create_body(di._wire_body(body, staged, grant), admission=resolved.policy_inputs['admission'],
+                                     template=json.loads(admitted.template_bytes),
+                                     conversation_id=admitted.conversation_id,
+                                     secrets=staged.secrets(grant, admitted.operation_key))
+            return caught.exception
+
+        cases = {'start': body_of[:8], 'middle': body_of[17:25], 'end': body_of[-8:], 'longer': body_of[5:30]}
+        for name, part in cases.items():
+            for where in ('tag', 'tag key', 'endpoint path'):
+                with self.subTest(part=name, where=where):
+                    body = self.body_for(resolved, d1.TEST_TEMPLATE)
+                    if where == 'tag':
+                        body['tags']['aieh'] = 'x' + part + 'y'
+                    elif where == 'tag key':
+                        body['tags']['x' + part] = 'x'
+                    else:
+                        body['secrets'][ENDPOINT_NAME]['value'] = f'{ENDPOINT}/{part}'
+                    self.assertEqual(at_admission(body).code, 'TOKEN_OUTSIDE_SECRET')
+                    refusal = self.assertDenied('TOKEN_OUTSIDE_SECRET', self.send, self.tampered(admitted, body),
+                                                resolved)
+                    self.assertNotIn(part, ''.join(self.texts_of(refusal)))
+        for name, part in {'start': body_of[:7], 'middle': body_of[17:24], 'end': body_of[-7:]}.items():
+            with self.subTest(seven=name):
+                body = self.body_for(resolved, d1.TEST_TEMPLATE)
+                body['tags']['aieh'] = '.' + part + '.'   # not URL-safe: the run is exactly 7 characters
+                self.assertEqual(at_admission(body).code, 'BODY_NOT_TEMPLATE')
+                self.assertDenied('BODY_NOT_TEMPLATE', self.send, self.tampered(admitted, body), resolved)
         self.send(admitted, resolved)
         self.assertEqual(len(self.transport.calls), 1)
 
@@ -749,10 +798,11 @@ class Revocation(SecretsFixture):
         spy = self.spy()
         with self.assertRaises(di.DispatchRefused):
             self.run_dispatch(server, spy)
-        refusal = self.assertDenied('ATTEMPT_NOT_CONFIRMED', di.end_attempt, self.store,
+        refusal = self.assertDenied('ATTEMPT_NOT_ENDABLE', di.end_attempt, self.store,
                                     self.only(['failed']).operation_key, inference=self.access_for(spy),
                                     actor='e-05.6-test')
         self.assertEqual(refusal.context['state'], 'failed')
+        self.assertNotIn('role token', di.REFUSALS['ATTEMPT_NOT_ENDABLE'])   # its own meaning, not E-01.3.3's
         self.assertEqual(len(spy.revoked), 1)   # the failure's revocation only
 
     def test_a_revocation_failure_is_recorded_and_surfaced(self):
@@ -880,6 +930,84 @@ class NoProviderCredential(SecretsFixture):
         for text in texts:
             self.assertNotIn(self.SENTINEL, text)
         self.assertNotIn(S.KEY, json.dumps(server.calls))   # nor the broker's own (synthetic) key
+
+
+class RevocationReceipts(SecretsFixture):
+    """The dispatcher's revocation receipts (dispatch/attempt/<id>/inference-revocation/<n>) change no attempt's
+    outcome as the store's consumers compute it: restore-epoch reconciliation, the epoch's closure and the
+    ordinal claims see the same attempts, with or without them. A receipt carries no workRef or outcomeRef (the
+    lineage reader skips such reservations), and the owner recorders read their own key prefixes only."""
+
+    def copy_store(self, name):
+        path = self.case / name / 'integration.sqlite'
+        path.parent.mkdir()
+        target = sqlite3.connect(path)
+        try:
+            self.store.conn.backup(target)
+        finally:
+            target.close()
+        return path
+
+    def restored(self, path):
+        """The store at PATH after a backup and its restore: a restore epoch is open."""
+        held = store_mod.open_store(path)
+        manifest = held.backup(actor='owner')
+        held.close()
+        store_mod.restore_store(path, path.parent / 'backups' / (manifest['backup_file'] + '.manifest.json'),
+                                actor='owner')
+        restored = store_mod.open_store(path)
+        self.addCleanup(restored.close)
+        self.assertTrue(restored.open_epochs())
+        return restored
+
+    def reconciled(self, path, key, identity, verdict='not_performed'):
+        store, asked = self.restored(path), []
+
+        def oracle(reservation):
+            asked.append(reservation.operation_key)
+            return verdict
+        report = store.reconcile(oracle, actor='reconciler')
+        closed = store.close_restore_epoch(actor='owner')
+        claims = [(c.operation_key, c.live) for c in store.claims(identity.work_id, identity.design_revision,
+                                                                  identity.stage)]
+        return {'report': report, 'asked': asked, 'closed': bool(closed), 'state': store.get(key).state,
+                'claims': claims, 'unsettled': [a.operation_key for a in store.attempts(['dispatched', 'unknown'])]}
+
+    def test_receipts_change_no_attempt_s_reconciliation(self):
+        spy = self.spy()
+        result = self.run_dispatch(cc.FakeAgentServer(), spy)
+        key = result.operation_key
+        identity = self.store.attempt_identity(key).identity
+        before = self.copy_store('before')
+        failing = self.access_for(self.spy(revoke_error=ic.ControlError('CONTROL_UNREACHABLE', 'synthetic')))
+        with self.assertRaises(di.DispatchRefused):
+            di.end_attempt(self.store, key, inference=failing, actor='e-05.6-test')   # receipt 1: failed
+        interrupting = self.access_for(self.spy(revoke_error=KeyboardInterrupt()))
+        with self.assertRaises(KeyboardInterrupt):
+            di.end_attempt(self.store, key, inference=interrupting, actor='e-05.6-test')   # receipt 2: dispatched
+        interrupted = self.copy_store('interrupted')
+        record = di.end_attempt(self.store, key, inference=self.access_for(spy), actor='e-05.6-test')  # resumed
+        self.assertTrue(record['revoked'])
+        receipts = [f'dispatch/attempt/{result.attempt_id}/inference-revocation/{n}' for n in (1, 2)]
+        self.assertEqual([self.store.get(k).state for k in receipts], ['failed', 'confirmed'])
+        self.assertEqual(self.store.get(f'dispatch/attempt/{result.attempt_id}/inference-revocation/3'), None)
+        after = self.copy_store('after')
+        for receipt in receipts:
+            intent = json.loads(self.store.get(receipt).intent_json)
+            self.assertFalse({'workRef', 'outcomeRef', di.INTENT_KEY} & set(intent))
+        # With a confirmed and a failed receipt, the attempt reconciles as it did without them.
+        without, with_receipts = self.reconciled(before, key, identity), self.reconciled(after, key, identity)
+        self.assertEqual(without, with_receipts)
+        self.assertEqual(without['report'], {'confirmed': [], 'failed': [], 'still_unknown': []})
+        self.assertEqual((without['asked'], without['state'], without['closed'], without['unsettled']),
+                         ([], 'confirmed', True, []))
+        # A receipt left dispatched (its revocation's outcome unknown) is reconciled as itself: the oracle is asked
+        # about that receipt, never the attempt, whose state is unchanged; once settled the epoch closes.
+        uncertain = self.reconciled(interrupted, key, identity)
+        self.assertEqual(uncertain['asked'], [receipts[1]])
+        self.assertEqual(uncertain['report'], {'confirmed': [], 'failed': [receipts[1]], 'still_unknown': []})
+        self.assertEqual((uncertain['state'], uncertain['closed'], uncertain['claims']),
+                         ('confirmed', True, without['claims']))
 
 
 if __name__ == '__main__':

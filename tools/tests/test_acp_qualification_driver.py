@@ -52,7 +52,7 @@ SYNTHETIC_FP = guest.key_search().fingerprint(SYNTHETIC)
 REAL = 'sk-ant-api03-' + 'R' * 40
 REAL_FP = guest.key_search().fingerprint(REAL)
 MODEL = 'model-main'
-FAMILY = guest.ACP_QUALIFICATION_FAMILY
+FAMILY = guest.acp_qualification().ACP_FAMILY   # the one definition (acp_qualification, E-05.6)
 RECORD = {'provisioning': {'image_id': tg.IMAGE_ID}, 'ports': {'ssh': 40022, 'qmp': 40023},
           'inference': {'composition': 'inference'}}
 SERVER_USER = {'name': 'openhands', 'uid': 999, 'gid': 989}
@@ -900,7 +900,9 @@ class DriverRun(unittest.TestCase):
     def test_the_synthetic_source_is_the_launchers(self):
         source = (REPO / 'integrations' / 'inference' / 'inference_qualification.py').read_text(encoding='utf-8')
         self.assertIn(repr(guest.ACP_SYNTHETIC_SOURCE), source)
-        self.assertEqual((guest.ACP_QUALIFICATION_FAMILY, guest.ACP_QUALIFICATION_PROVIDER, guest.ACP_EVENT_PAGES),
+        self.assertFalse(hasattr(guest, 'ACP_QUALIFICATION_FAMILY'))   # one definition: acp_qualification's
+        self.assertEqual((guest.acp_qualification().ACP_FAMILY, guest.ACP_QUALIFICATION_PROVIDER,
+                          guest.ACP_EVENT_PAGES),
                          ('anthropic-messages', 'claude-code', 50))
         self.assertEqual(guest.ACP_TURN_CEILING_S, 1920)
         self.assertEqual(guest.ACP_TURN_END, ('finished', 'error', 'stuck', 'paused', 'waiting_for_confirmation'))

@@ -15421,7 +15421,8 @@ def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, ins
 ACP_QUALIFICATION_SCHEMA = 'ai-engineering-harness/profiles/acp-qualification-record/v1'
 # reserved for the qualification create; the grant the token belongs to must be bound to it
 ACP_QUALIFICATION_CONVERSATION_ID = 'a0333c00-0000-4000-8000-0000000ac0d1'
-ACP_QUALIFICATION_FAMILY = 'anthropic-messages'     # the family whose auth the registry's ANTHROPIC_* names carry
+# The grant's family is acp_qualification().ACP_FAMILY (anthropic-messages, the family whose auth the registry's
+# ANTHROPIC_* names carry): defined once there, read here when the run checks the grant (E-05.6).
 ACP_QUALIFICATION_PROVIDER = 'claude-code'
 # The fixed prompts, no repository content (A6). Whether the run asks for one delegated step is part of A6's
 # presentation (the leaf's notes): the Owner's act names one of these, never another text.
@@ -15931,6 +15932,7 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
 
     def preconditions():
         status, grant = broker.call('status'), broker.call('grant', token_fp)
+        acp_family = acp_qualification().ACP_FAMILY
         family = next((f for f in status.get('families') or []
                        if isinstance(f, dict) and f.get('id') == grant.get('family')), None) or {}
         key = status.get('provider_key') if isinstance(status.get('provider_key'), dict) else {}
@@ -15942,7 +15944,7 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
             'the forward session is held': forward.status().get('held') is True,
             'the grant is live': grant.get('state') == 'live',
             'the grant is bound to the reserved conversation': grant.get('conversation_id') == cid,
-            f'the grant\'s family is {ACP_QUALIFICATION_FAMILY}': grant.get('family') == ACP_QUALIFICATION_FAMILY,
+            f'the grant\'s family is {acp_family}': grant.get('family') == acp_family,
             'the family is ready': family.get('ready') is True,
             'the model is in the grant and the family\'s allowlist':
                 acp_model in (grant.get('models') or []) and acp_model in memo['family_models'],

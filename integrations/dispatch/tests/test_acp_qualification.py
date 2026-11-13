@@ -330,7 +330,37 @@ class SecretRefusals(Base):
                 refusal = self.refused(code, self.altered(lambda body: body['tags'].__setitem__('aieh', value)))
                 self.assertEqual(refusal.detail, detail)
         refusal = self.refused('TOKEN_OUTSIDE_SECRET', self.altered(lambda body: body['tags'].__setitem__(TOKEN, 'x')))
-        self.assertEqual(refusal.detail, 'at tags.' + TOKEN + '.#key')
+        self.assertEqual(refusal.detail, 'at tags.<redacted>.#key')   # E-05.6: a detail never repeats the token
+
+    def test_a_part_of_the_token_outside_the_api_key(self):
+        """E-05.6 (the shared check): any run of 8 or more characters of the token's body is refused outside its
+        secret, at the start, the middle or the end of the body; 7 characters are not (the boundary is
+        deliberate: 8 characters carry 48 bits)."""
+        body = TOKEN[len('aieh-inf-'):]
+        self.assertEqual(aq.secrets_check.FRAGMENT, 8)
+        for name, part in (('start', body[:8]), ('middle', body[16:24]), ('end', body[-8:]), ('longer', body[3:20])):
+            for where in ('tag', 'tag-key'):
+                with self.subTest(part=name, where=where):
+                    change = (lambda b: b['tags'].__setitem__('aieh', 'x' + part + 'y')) if where == 'tag' else \
+                        (lambda b: b['tags'].__setitem__('x' + part, 'x'))
+                    refusal = self.refused('TOKEN_OUTSIDE_SECRET', self.altered(change))
+                    self.assertNotIn(part, refusal.detail)
+        for name, part in (('start', body[:7]), ('middle', body[16:23]), ('end', body[-7:])):
+            with self.subTest(seven=name):
+                altered = self.altered(lambda b: b['tags'].__setitem__('aieh', 'x' + part + 'y'))
+                self.assertEqual(aq.secrets_check.check_secrets(
+                    altered, names=['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'], endpoint=ENDPOINT,
+                    refused=aq.QualificationRefused), TOKEN)
+                self.refused('BODY_NOT_FIXTURE', altered)   # refused only as not the fixture, not as a secret
+
+    def test_no_refusal_detail_repeats_a_secret(self):
+        """E-05.6: the shared check's details redact every word that holds the token, a part of it of 8 or more
+        characters, or a provider key's shape."""
+        for key, code in ((TOKEN, 'TOKEN_OUTSIDE_SECRET'), ('x' + TOKEN[9:17], 'TOKEN_OUTSIDE_SECRET'),
+                          (OTHER_TOKEN, 'TOKEN_OUTSIDE_SECRET'), (PROVIDER_KEY, 'SECRET_PROVIDER_KEY_SHAPED')):
+            with self.subTest(code=code, key=key[:12]):
+                refusal = self.refused(code, self.altered(lambda body: body['tags'].__setitem__(key, 'x')))
+                self.assertEqual(refusal.detail, 'at tags.<redacted>.#key')
 
     def test_the_api_key_is_one_attempt_token(self):
         for value in ('', ' ', TOKEN[:-1], TOKEN + 'a', ' ' + TOKEN, TOKEN.replace('aieh-inf-', 'aieh-inf_'),

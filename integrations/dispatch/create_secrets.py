@@ -15,8 +15,11 @@ the profile's guest inference endpoint, each a ``StaticSecret`` of exactly ``kin
 * the token secret is not one attempt token of the broker's shape: SECRET_NOT_ATTEMPT_TOKEN;
 * given a ``binding``, the token is not the grant's, or the grant is not of the reserved conversation and attempt:
   SECRET_TOKEN_NOT_BOUND (the dispatcher's D1 stage, E-05.6; the qualification passes none);
-* the token, its body after the prefix, or any token-shaped text appears anywhere but in its own secret:
-  TOKEN_OUTSIDE_SECRET;
+* the token, or any part of it, appears anywhere but in its own secret: the whole token, its body after the
+  prefix, any token-shaped text, or any run of FRAGMENT (8) or more consecutive characters of the token's body:
+  TOKEN_OUTSIDE_SECRET (E-05.6, "the token, or any part of it"). Eight characters of the body's URL-safe
+  alphabet carry 48 bits, so a chance match with the body's other text (the pinned template's fixed strings) is
+  negligible, while any part long enough to help guess the token is refused;
 * a network destination appears anywhere but in the endpoint secret, or that secret is not the endpoint:
   DESTINATION_NOT_ENDPOINT.
 
@@ -24,6 +27,9 @@ the profile's guest inference endpoint, each a ``StaticSecret`` of exactly ``kin
 ``check_secrets`` of this one module, loaded under one name (``aieh_dispatch_create_secrets``): not a copy. Each
 caller passes its own refusal type (``refused(code, detail)``), so the codes and their meanings are the same on both
 sides.
+
+A refusal's detail never carries the token, any part of it of FRAGMENT or more characters, or a word shaped like a
+provider key, for either caller: every word of a reported location that holds one is ``REDACTED`` (``redact``).
 
 Standard library only. The broker's token grammar and the fingerprint are the broker's own (decision 0015 section
 3.1), loaded on first use: importing this module loads no inference or credential module.
@@ -44,6 +50,11 @@ SECRET_FIELDS = ('secrets', 'secrets_encrypted')
 STATIC_SECRET = 'StaticSecret'
 # Provider keys as the guest's P5 needles name them (sk-ant-..., sk-proj-..., any long sk-...).
 PROVIDER_KEY_SHAPE = re.compile(r'sk-(?:ant|proj)-|sk-[A-Za-z0-9_-]{20,}')
+# The shortest part of the token's body refused outside its secret: 8 characters of the URL-safe alphabet, 48 bits
+# (module docstring).
+FRAGMENT = 8
+REDACTED = '<redacted>'
+WORD = re.compile(r'[A-Za-z0-9_-]+')   # the token's and a provider key's characters: a word holds either whole
 # The codes and their meanings, the same in acp_qualification.REFUSALS and dispatch_inputs.REFUSALS.
 MEANINGS = {
     'SECRET_NAMES': 'secrets are not exactly the registry\'s ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL',
@@ -99,8 +110,30 @@ def strings(node, where=()):
         yield where, node
 
 
-def location(where) -> str:
-    return '.'.join(str(part) for part in where)
+def fragments(token) -> frozenset:
+    """Every run of FRAGMENT characters of an attempt token's body (empty for anything else)."""
+    shapes = broker()
+    if not isinstance(token, str) or not shapes.TOKEN_SHAPE.fullmatch(token):
+        return frozenset()
+    body = token[len(shapes.TOKEN_PREFIX):]
+    return frozenset(body[i:i + FRAGMENT] for i in range(len(body) - FRAGMENT + 1))
+
+
+def _holds_secret(text: str, parts: frozenset) -> bool:
+    return bool(broker().TOKEN_SHAPE.search(text) or PROVIDER_KEY_SHAPE.search(text)
+                or any(part in text for part in parts))
+
+
+def redact(text: str, token=None) -> str:
+    """TEXT with every word that holds an attempt token, a provider key's shape or a part of TOKEN of FRAGMENT or
+    more characters replaced by REDACTED."""
+    parts = fragments(token)
+    return WORD.sub(lambda m: REDACTED if _holds_secret(m.group(), parts) else m.group(), text)
+
+
+def location(where, token=None) -> str:
+    """WHERE as a dotted path, redacted (``redact``): a key may hold what a refusal must not repeat."""
+    return redact('.'.join(str(part) for part in where), token)
 
 
 def _bound(token: str, binding: Mapping) -> str | None:
@@ -138,24 +171,25 @@ def check_secrets(body: dict, *, names, endpoint: str, refused: Callable[[str, s
     shapes = broker()
     token_name, endpoint_name = names
     token_at, endpoint_at = ('secrets', token_name, 'value'), ('secrets', endpoint_name, 'value')
+    token = secrets[token_name]['value']
     texts = list(strings(body))
     for where, text in texts:
         if PROVIDER_KEY_SHAPE.search(text) and not shapes.TOKEN_SHAPE.fullmatch(text):
-            raise refused('SECRET_PROVIDER_KEY_SHAPED', f'at {location(where)}')
-    token = secrets[token_name]['value']
+            raise refused('SECRET_PROVIDER_KEY_SHAPED', f'at {location(where, token)}')
     if not shapes.TOKEN_SHAPE.fullmatch(token):
         raise refused('SECRET_NOT_ATTEMPT_TOKEN', f'{token_name} is not an attempt token')
     if binding is not None:
         why = _bound(token, binding)
         if why is not None:
             raise refused('SECRET_TOKEN_NOT_BOUND', why)
-    body_of_token = token[len(shapes.TOKEN_PREFIX):]
+    body_of_token, parts = token[len(shapes.TOKEN_PREFIX):], fragments(token)
     for where, text in texts:
-        if where != token_at and (body_of_token in text or shapes.TOKEN_SHAPE.search(text)):
-            raise refused('TOKEN_OUTSIDE_SECRET', f'at {location(where)}')
+        if where != token_at and (body_of_token in text or shapes.TOKEN_SHAPE.search(text)
+                                  or any(part in text for part in parts)):
+            raise refused('TOKEN_OUTSIDE_SECRET', f'at {location(where, token)}')
     for where, text in texts:
         if where != endpoint_at and ('://' in text or text.startswith('//')):
-            raise refused('DESTINATION_NOT_ENDPOINT', f'a destination at {location(where)}')
+            raise refused('DESTINATION_NOT_ENDPOINT', f'a destination at {location(where, token)}')
     if secrets[endpoint_name]['value'] != endpoint:
         raise refused('DESTINATION_NOT_ENDPOINT', f'{endpoint_name} must be {endpoint}')
     return token

@@ -258,7 +258,9 @@ REFUSALS = {
                                 'declares no single guest inference endpoint',
     'INFERENCE_GRANT_UNAVAILABLE': 'the D1 stage\'s attempt token was not issued: no broker control listener was '
                                    'given, or the broker refused or did not answer the issue',
-    'INFERENCE_REVOCATION_FAILED': 'the attempt\'s inference grant was not revoked at the attempt\'s end (the broker '
+    'ATTEMPT_NOT_ENDABLE': 'the stored attempt is not confirmed: end_attempt ends a confirmed attempt\'s inference '
+                           'grant only (a refused or failed attempt\'s grant was revoked at its failure)',
+    'INFERENCE_REVOCATION_FAILED':'the attempt\'s inference grant was not revoked at the attempt\'s end (the broker '
                                    'refused or did not answer): it stays live until revoked or expired',
 }
 
@@ -1643,21 +1645,13 @@ def _check_stage_content(declared: dict, resolved: ResolvedInputs, admission: di
 
 
 def _scrubbed(refusal: DispatchRefused, token: str | None) -> DispatchRefused:
-    """REFUSAL with every attempt token, the held token's body and every word holding a provider key's shape
-    replaced in its detail and context: a refusal of a body that held the token reaches the store and the caller
-    without it."""
-    shapes = secrets_check.broker()
-    body = token[len(shapes.TOKEN_PREFIX):] if isinstance(token, str) else None
-
-    def word(match):
-        return '<provider key>' if secrets_check.PROVIDER_KEY_SHAPE.search(match.group()) else match.group()
-
+    """REFUSAL with every word that holds an attempt token, a part of the held TOKEN of
+    ``create_secrets.FRAGMENT`` or more characters, or a provider key's shape redacted in its detail and context
+    (``create_secrets.redact``, as the shared check redacts its own): a refusal of a body that held the token
+    reaches the store and the caller without it, whichever check refused it."""
     def clean(value):
         if isinstance(value, str):
-            if body:
-                value = value.replace(body, '<attempt token>')
-            value = shapes.TOKEN_SHAPE.sub('<attempt token>', value)
-            return re.sub(r'[A-Za-z0-9_-]+', word, value)
+            return secrets_check.redact(value, token)
         if isinstance(value, Mapping):
             return {clean(str(k)): clean(v) for k, v in value.items()}
         if isinstance(value, (list, tuple)):
@@ -2365,7 +2359,8 @@ def end_attempt(integration_store, operation_key: str, *, inference: InferenceAc
     """The attempt's end (decision 0015 section 3.3, E-05.6): revoke the D1 stage's inference grant of a
     confirmed attempt through the broker's control listener (trigger ``attempt end``, the access's revoker).
 
-    The attempt is re-read from the store and must be confirmed (``stored_inputs``); its grant is the one its
+    The attempt is re-read from the store and must be confirmed (ATTEMPT_NOT_ENDABLE otherwise; then
+    ``stored_inputs``); its grant is the one its
     ``dispatched`` record names, by fingerprint. Every other stage's attempt holds none: None. The revocation
     is recorded in the integration store before and after the call, as the receipt ``dispatch/attempt/<attempt
     id>/inference-revocation/<n>`` (reserved, dispatched, then confirmed with the revocation's record, or failed
@@ -2374,6 +2369,9 @@ def end_attempt(integration_store, operation_key: str, *, inference: InferenceAc
     broker writes its own revocation receipt; nothing here reads or holds the token."""
     if not isinstance(inference, InferenceAccess):
         raise TypeError('inference must be an InferenceAccess (the broker\'s control listener)')
+    held = integration_store.get(operation_key)
+    if held is not None and held.state != 'confirmed':
+        raise DispatchRefused('ATTEMPT_NOT_ENDABLE', f'{operation_key!r} is {held.state}', state=held.state)
     stored_inputs(integration_store, operation_key, state='confirmed')
     grant = _stored_grant(integration_store, operation_key)
     if grant is None:
