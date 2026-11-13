@@ -464,19 +464,13 @@ def fake_upstream(family_id: str, address: str, port: int, ctx) -> int:
 # ---------------------------------------------------------------- the proposed family pin (the reader)
 
 
-def _dispatch_inputs():
-    """integrations/dispatch/dispatch_inputs.py, for its one "inside or around the checkout" comparison
-    (inside_or_around), loaded when a proposal's --out is checked."""
-    return _load('dispatch_inputs', broker.REPO / 'integrations' / 'dispatch' / 'dispatch_inputs.py')
-
-
 def proposal_target(value) -> Path:
     """--out: a new file in an existing directory, outside the checkout (PROPOSAL_OUT_REFUSED)."""
     if not isinstance(value, str) or not value.strip():
         raise QualificationError('PROPOSAL_OUT_REFUSED', 'no path given')
     target = Path(value).resolve()
     repo = os.path.realpath(broker.REPO)
-    inside = _dispatch_inputs().inside_or_around
+    inside = broker.paths.inside_or_around          # the harness's one checkout comparison (aieh_paths)
     if os.path.lexists(target) or not target.parent.is_dir() or inside(value, repo) or inside(target, repo):
         raise QualificationError('PROPOSAL_OUT_REFUSED', f'{str(value)[:200]!r} exists, has no directory or lies '
                                                          'inside the checkout')

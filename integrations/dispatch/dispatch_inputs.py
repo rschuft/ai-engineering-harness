@@ -484,34 +484,10 @@ def _overlaps(a: PurePath, b: PurePath) -> bool:
     return a == b or a.is_relative_to(b) or b.is_relative_to(a)
 
 
-def _comparable(path) -> str:
-    """PATH as the file system resolves it, for comparison only: on Windows a leading \\\\?\\ or \\\\.\\ removed and
-    \\\\?\\UNC\\ made \\\\, '/' made '\\', the trailing spaces and dots Windows ignores removed from every component,
-    then normpath and normcase; elsewhere normpath."""
-    text = os.fspath(path)
-    if os.name != 'nt':
-        return os.path.normpath(text)
-    text = text.replace('/', '\\')
-    if text[:8].upper() == '\\\\?\\UNC\\':
-        text = '\\\\' + text[8:]
-    elif text[:4] in ('\\\\?\\', '\\\\.\\'):
-        text = text[4:]
-    drive, rest = os.path.splitdrive(text)
-    rest = '\\'.join(part if part in ('.', '..') else part.rstrip(' .') for part in rest.split('\\'))
-    return os.path.normcase(os.path.normpath(drive + rest))
-
-
-def inside_or_around(candidate, root) -> bool:
-    """Whether CANDIDATE is ROOT, lies inside it or contains it, in any form the file system resolves to the same
-    path (_comparable): the one "inside or around the checkout" comparison of load_manifest (and with it the input
-    recorder's candidate check) and of the S-03.3 proposal's --out (inference_qualification.proposal_target).
-    Paths on different drives, or one relative and one absolute, do not overlap."""
-    a, b = _comparable(candidate), _comparable(root)
-    try:
-        common = os.path.commonpath([a, b])
-    except ValueError:
-        return False
-    return common in (a, b)
+# The one "inside or around the checkout" comparison is aieh_paths' (F-07.1): load_manifest uses it, and the
+# input recorder's candidate check runs load_manifest's rules. The names stay here for this module's tests.
+inside_or_around = paths.inside_or_around
+_comparable = paths._comparable
 
 
 def _approval(manifest: ApprovedInputs, answer) -> str:
