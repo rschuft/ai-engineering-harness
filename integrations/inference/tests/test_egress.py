@@ -97,7 +97,8 @@ class TestEnvelopeModulesOpenNothing(unittest.TestCase):
 
     def test_the_census_is_the_envelope_and_its_read_side(self):
         self.assertEqual({path.name for path in self.census()},
-                         {'inference_envelope.py', 'envelope_decisions.py', 'owner_decision.py'})
+                         {'inference_envelope.py', 'envelope_decisions.py', 'owner_decision.py',
+                          'delegated_decision.py'})
 
     def test_none_of_them_imports_a_network_module_or_calls_a_connector(self):
         for path in sorted(self.census()):

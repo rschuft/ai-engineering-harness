@@ -347,7 +347,11 @@ writes a write-ahead receipt at the next position of the one series `model-selec
 series' head. **Checked at the act:** the row, the decider, the basis's shape, decision 0018 at `HEAD`, the basis
 receipt and that it governs, the subject's shape. **Not checked:** who ran the command; that the identifiers
 were verified against current provider information; that the costs are right; that the record was presented to
-the Owner before the first paid operation (S-03.3). The broker's start does not read the series yet.
+the Owner before the first paid operation (S-03.3). The broker's start reads the series through
+`envelope_decisions.verify_selection` (the decision source's `selection(receipt)`): the last confirmed position
+governs; `MODEL_SELECTION_MISSING`, `MODEL_SELECTION_NOT_AUTHORIZED` (not the selection recorder's, or not a
+well-formed `select-models` record binding its position and basis) or `MODEL_SELECTION_RECEIPT_MISMATCH`
+(another envelope receipt); otherwise the identifiers per family, never the record's revision.
 
 ## The dispatch-input commands (plan leaf P-04.3)
 

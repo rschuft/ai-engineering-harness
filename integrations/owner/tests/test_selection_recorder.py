@@ -243,6 +243,28 @@ class TheAct(Selections):
         self.assertEqual(self.delegate(receipt)['receipt']['operation_key'], 'model-selection/v1/2')
         self.assertEqual(SR.status(self.sctx())['failed'], [1])
 
+    def test_the_read_side_answers_the_governing_selection(self):
+        """envelope_decisions.verify_selection (and the source's selection): missing, the view of the last
+        confirmed position, another receipt, and the order of a stored record restored."""
+        receipt = self.envelope()
+        self.assertEqual(ED.verify_selection(self.store, receipt).code, 'MODEL_SELECTION_MISSING')
+        first = self.delegate(receipt)
+        second = self.delegate(receipt, selection(leaf='S-03.4'))
+        verdict = ED.verifier(self.store).selection(receipt)
+        self.assertIsNone(verdict.code, verdict.detail)
+        self.assertEqual(verdict.view, {'receipt': 'model-selection/v1/2',
+                                        'decisionId': second['decision']['decisionId'], 'record': 'decision:0018',
+                                        'point': '3', 'basis': receipt,
+                                        'models': {'anthropic-messages': ['syn-model-a']}})
+        self.assertNotEqual(verdict.view['decisionId'], first['decision']['decisionId'])
+        other = AR.RECEIPT_PREFIX + 'ab' * 16
+        self.assertEqual(ED.verify_selection(self.store, other).code, 'MODEL_SELECTION_RECEIPT_MISMATCH')
+        stored = json.loads(self.store.get('model-selection/v1/2').intent_json)['decision']
+        self.assertNotEqual(G.check_record(stored), [])                       # sorted keys: the order check fails
+        self.assertEqual(ED.stored_selection(stored), second['decision'])
+        self.assertEqual(list(ED.SELECTION_REFUSALS), ['MODEL_SELECTION_MISSING', 'MODEL_SELECTION_NOT_AUTHORIZED',
+                                                       'MODEL_SELECTION_RECEIPT_MISMATCH'])
+
     def test_the_real_decision_0018_at_head_delegates_the_selection(self):
         """Read-only at this checkout's HEAD: decision 0018 is Accepted (Owner), so the row is in force."""
         receipt = self.envelope()

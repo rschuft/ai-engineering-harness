@@ -40,6 +40,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_credential_set.py` | `credential-set` over an in-memory provider and a fixture store |
 | `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream`; the census of the modules `serve` loads beside the broker (the envelope and its read side): no network module, no connector |
 | `tests/envelope_support.py` | The provider envelope's fixtures (S-03.5): the real authorization recorder over the owner suite's fake Gitea (in memory) writing into a throwaway store, contexts whose provider, audit directory and wait raise if asked, a `Rig` holding a minted authorization, an injected connector |
+| `tests/test_selection.py` | S-03.5 slice 2's proof rows C2 to C7: a delegated selection recorded by the real act starts the broker (no commit id in its receipt); a head another actor reserved, the product manager decided or written as an Owner record; a selection under an earlier envelope; a configured model not selected; a decision source that reads no selection or answers badly; a request and an issuance outside the held selection refused, a selected model passed through (integration) |
 | `tests/test_envelope.py` | S-03.5 slice 1's proof rows: the block, the document, the golden digest and manifest, the `envelope` command; every start refusal of `serve` (no block, missing, unsettled, expired, replayed, another origin, limit, expiry or selection, another target, a non-canonical manifest, hand-written receipts, a decision source that raises or answers badly, unbound families, the interim selection and cap refusals); the start with its `authorization` member; the envelope kind recorded through the recorder; loopback upstreams as before; the held authorization at start and at admission, and the expiry while serving |
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
@@ -167,10 +168,18 @@ source); a later one `reserved`, `dispatched` or `unknown` (`ENVELOPE_AUTHORIZAT
 (`ENVELOPE_REPLAYED`); another digest, or a merged manifest that is not the canonical one (`ENVELOPE_MISMATCH`:
 another origin, provider, limit, enforcement, cap, expiry or selection); the expiry reached
 (`ENVELOPE_EXPIRED`). Then the selection: with `selection: envelope`, the bound families' configured models are
-inside the digest, and no bound family naming one is `MODEL_SELECTION_MISSING`. **Interim, slice 1:**
-`selection: delegation` is refused at start (`MODEL_SELECTION_MISSING`: no delegated selection can be read yet;
-slice 2 has built the act, `integrations/owner/selection_recorder.py`, but not yet its check at start), and `enforced_by: broker` is refused at start (`ENVELOPE_USAGE_UNKNOWN`: the cap's usage ledger is
-slice 3). Both fail closed and are replaced, never relaxed. A refused start exits 2, writes no receipt and no
+inside the digest, and no bound family naming one is `MODEL_SELECTION_MISSING`. With `selection: delegation`
+(slice 2) the governing selection is the last confirmed position of the one series `model-selection/v1/<n>`,
+recorded by the engineering manager under decision 0018 point 3 (`integrations/owner/selection_recorder.py`):
+none is `MODEL_SELECTION_MISSING`; a head that is not a well-formed `select-models` record of the selection
+recorder (another actor, another decider, an Owner record) is `MODEL_SELECTION_NOT_AUTHORIZED`; a head resting
+on another envelope receipt (a selection does not carry to a new envelope) is `MODEL_SELECTION_RECEIPT_MISMATCH`.
+Under either authority a configured model of a bound family that the selection does not select is
+`MODEL_NOT_SELECTED` (the configuration may not widen it), and none left is `MODEL_SELECTION_MISSING`. The held
+selection is the configured models; `issue` and admission refuse any other model of a bound family
+(`MODEL_NOT_SELECTED`, 403), after the existing checks. **Interim, slice 1:** `enforced_by: broker` is refused
+at start (`ENVELOPE_USAGE_UNKNOWN`: the cap's usage ledger is slice 3); it fails closed and is replaced, never
+relaxed. A refused start exits 2, writes no receipt and no
 audit line (it may create an empty integration store where none exists).
 
 **What the broker holds.** `authorize` returns one frozen `Authorization` (the receipt key, the operation id,
@@ -183,7 +192,8 @@ provider or upstream is not the held one (`ENVELOPE_MISMATCH`, 503), and from th
 (`ENVELOPE_EXPIRED`, 403); an answer already streaming completes, loopback families and the control listener
 keep working, and nothing is written at the moment of expiry. Supersession takes effect at the next start. The
 start receipt and the status answer carry an `authorization` member (receipt, operation, decision, digest,
-`expires_at`, the selection, the limit's enforcement) only when an envelope is bound.
+`expires_at`, the selection: `by`, `models` and, when delegated, its `record`, `point`, `receipt` and `decision`;
+the limit's enforcement) only when an envelope is bound. It never carries the selection record's revision.
 
 **What it is not.** A control against accident, convenience and a stale or edited `config.yml` at the moment of
 the act, not against a process of the Owner's account, which can write the store as the recorder does, read the
@@ -434,7 +444,9 @@ Configuration: `DECLARATION_INVALID`, `CONFIG_NOT_A_MAPPING`, `CONFIG_UNKNOWN_KE
 `CONFIG_PROVIDER_REQUIRED`, `CONFIG_ORIGIN_INVALID`, `CONFIG_MODEL_INVALID`, `CONFIG_INCOMPLETE`,
 `CONFIG_ENVELOPE_INVALID`.
 The provider envelope (S-03.5; at start `serve` exits 2): `ENVELOPE_NOT_CONFIGURED`, `ENVELOPE_FAMILIES_UNBOUND`,
-`ENVELOPE_RECORD_INVALID`, `ENVELOPE_AUTHORIZATION_UNRESOLVED`, `ENVELOPE_REPLAYED`, `MODEL_SELECTION_MISSING`;
+`ENVELOPE_RECORD_INVALID`, `ENVELOPE_AUTHORIZATION_UNRESOLVED`, `ENVELOPE_REPLAYED`, `MODEL_SELECTION_MISSING`,
+`MODEL_SELECTION_NOT_AUTHORIZED`, `MODEL_SELECTION_RECEIPT_MISMATCH`; at start, in `issue` and at admission:
+`MODEL_NOT_SELECTED` (403);
 at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403); at
 start in slice 1: `ENVELOPE_USAGE_UNKNOWN` (429 at admission from slice 3).
 Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL_CONTENT_TYPE` (415),
@@ -476,4 +488,5 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
 - The provider envelope (S-03.5 slice 1) outside a test process: a real envelope manifest, its authorization by
   the Owner through the recorder against a real Gitea, `serve` started on it, and any request through `serve` to
   a non-loopback origin (S-03.3's live step). The authorization recorder admits only the S-01.2.2 fixture
-  repository today. The delegated model selection (slice 2) and the cumulative cap (slice 3) are not built.
+  repository today. A real model selection recorded on the managed store. The cumulative cap (slice 3) is not
+  built.

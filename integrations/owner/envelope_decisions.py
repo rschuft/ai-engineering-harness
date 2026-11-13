@@ -33,8 +33,13 @@ earlier one's expiry; no revocation record is invented.
 - ``ENVELOPE_EXPIRED``: the clock has reached the governing receipt's ``expiresAt``.
 
 Otherwise the view (``VIEW_FIELDS``) of the governing receipt. It reads the integration store only, never a
-decision file, Gitea or a credential. Standard library only, plus ``owner_decision.py``'s record format; it
-imports no store module (the store is passed in: anything with ``attempts``, ``events`` and ``get``).
+decision file, Gitea or a credential. Standard library only, plus the record formats of ``owner_decision.py``
+and ``delegated_decision.py``; it imports no store module (the store is passed in: anything with
+``attempts``, ``events`` and ``get``).
+
+The model selection (slice 2): ``verify_selection`` answers the governing ``select-models`` record of the
+one series ``model-selection/v1/<sequence>`` (``SELECTION_REFUSALS``); the source that ``verifier(store)``
+returns answers both (``Source``).
 """
 import datetime
 import importlib.util
@@ -59,6 +64,7 @@ def _load(name, path):
 
 
 D = _load('owner_decision', HERE / 'owner_decision.py')
+G = _load('delegated_decision', HERE / 'delegated_decision.py')
 
 OPERATION_KIND = 'provider-envelope'
 # authorization_recorder.KIND, RECORDER, RECEIPT_FORMAT and RECEIPT_PREFIX, repeated so that the read side
@@ -262,8 +268,8 @@ def verify_envelope(store, target, manifest_digest: Callable[[str], str], now):
 
 # The model selections (decision 0018 point 3, kind select-models; S-03.5 slice 2) form ONE series: each is a
 # write-ahead receipt of the selection recorder (selection_recorder.py) at the next position of
-# model-selection/v1/<sequence>, from 1, contiguous. A position is spent once reserved. Which selection governs a
-# start, and whether its record is one the delegation admits, is the broker's check at start (not yet wired).
+# model-selection/v1/<sequence>, from 1, contiguous. A position is spent once reserved. The last confirmed
+# position governs a start (verify_selection).
 SELECTION_PREFIX = 'model-selection/v1/'
 SELECTION_RECORDER = 'selection-recorder/1'
 SELECTION_FORMAT = 'aieh-model-selection/1'
@@ -302,8 +308,99 @@ def last_confirmed_selection(series):
     return next((s for s in reversed(series) if s.state == 'confirmed'), None)
 
 
-def verifier(store) -> Callable:
-    """``verify_envelope`` over STORE, as the inference broker's ``Context.authorization`` gives it."""
-    def verify(target, manifest_digest, now):
-        return verify_envelope(store, target, manifest_digest, now)
-    return verify
+# verify_selection's refusals, in the order they are checked (beside REFUSALS: the broker's codes).
+SELECTION_REFUSALS = {
+    'MODEL_SELECTION_MISSING': 'the model-selection series has no confirmed record',
+    'MODEL_SELECTION_NOT_AUTHORIZED': 'the governing selection is not a select-models record the delegation admits, '
+                                      'written by the selection recorder',
+    'MODEL_SELECTION_RECEIPT_MISMATCH': 'the governing selection rests on another provider-envelope authorization',
+}
+SELECTION_VIEW = ('receipt', 'decisionId', 'record', 'point', 'basis', 'models')
+SELECTION_KIND = 'select-models'
+
+
+def stored_selection(decision):
+    """DECISION as read from a selection receipt, with the fields of ``delegated-decision/v1`` and of the
+    ``select-models`` subject in their order again (the store sorts an intent's keys). Nothing but the order
+    changes; a record of another format is returned as it is."""
+    if not isinstance(decision, dict) or decision.get('format') != G.FORMAT:
+        return decision
+    record = _ordered(decision, G.FIELDS)
+    delegation = record.get('delegation')
+    if isinstance(delegation, dict):
+        record['delegation'] = delegation = _ordered(delegation, G.DELEGATION_FIELDS)
+        delegation['basis'] = _ordered(delegation.get('basis'), G.RECEIPT_FIELDS)
+    subject = record.get('subject')
+    if isinstance(subject, dict):
+        record['subject'] = subject = _ordered(subject, G.SELECTION_FIELDS)
+        subject['verified'] = _ordered(subject.get('verified'), G.VERIFIED_FIELDS)
+        if isinstance(subject.get('models'), dict):
+            subject['models'] = {family: [_ordered(entry, G.SELECTED_MODEL_FIELDS) for entry in entries]
+                                 if isinstance(entries, list) else entries
+                                 for family, entries in subject['models'].items()}
+    return record
+
+
+def verify_selection(store, receipt):
+    """The governing model selection (the last confirmed position of the series) for the provider-envelope
+    authorization RECEIPT (its key), in this order: none confirmed is ``MODEL_SELECTION_MISSING``; a head not
+    reserved by the selection recorder, not its receipt format, or whose decision is not a well-formed
+    ``delegated-decision/v1`` of kind ``select-models`` (the delegation table's row: decision:0018 point 3,
+    decided by the engineering manager) binding the receipt's position and basis is
+    ``MODEL_SELECTION_NOT_AUTHORIZED``; a head resting on another receipt is
+    ``MODEL_SELECTION_RECEIPT_MISMATCH``. Otherwise the view: the selection's receipt key, its decisionId, the
+    delegating record and point, the basis receipt and the selected identifiers per family (never the record's
+    revision, a commit id)."""
+    if not isinstance(receipt, str):
+        raise ValueError('verify_selection takes the governing receipt\'s key')
+    head = last_confirmed_selection(selections(store))
+    if head is None:
+        return _refused('MODEL_SELECTION_MISSING', 'the model-selection series holds no confirmed selection')
+    events = store.events(head.key)
+    actor = events[0].actor if events else None
+    if actor != SELECTION_RECORDER:
+        return _refused('MODEL_SELECTION_NOT_AUTHORIZED', f'{head.key} was reserved by {actor!r}, not '
+                        f'{SELECTION_RECORDER}')
+    intent = head.intent
+    if intent is None or set(intent) != set(SELECTION_INTENT) or intent['format'] != SELECTION_FORMAT \
+            or intent['recorder'] != SELECTION_RECORDER or intent['series'] != 'selection' \
+            or intent['sequence'] != head.position:
+        return _refused('MODEL_SELECTION_NOT_AUTHORIZED', f'{head.key} is not an {SELECTION_FORMAT} receipt of its '
+                        'position')
+    decision = stored_selection(intent['decision'])
+    problems = G.check_record(decision) if isinstance(decision, dict) and decision.get('format') == G.FORMAT \
+        else [f'the decision is not a {G.FORMAT} record']
+    if not problems and decision['kind'] != SELECTION_KIND:
+        problems = [f'kind must be {SELECTION_KIND}']
+    if not problems and decision['delegation']['basis']['receipt'] != intent['receipt']:
+        problems = ['the decision\'s basis is not the receipt its receipt names']
+    if problems:
+        return _refused('MODEL_SELECTION_NOT_AUTHORIZED', f'{head.key}: {problems[0]}')
+    if intent['receipt'] != receipt:
+        return _refused('MODEL_SELECTION_RECEIPT_MISMATCH', f'{head.key} (decision {decision["decisionId"]}) rests on '
+                        f'{intent["receipt"]}, not the governing authorization {receipt}')
+    delegation = decision['delegation']
+    return Verdict(None, '', {'receipt': head.key, 'decisionId': decision['decisionId'],
+                              'record': delegation['record'], 'point': delegation['point'],
+                              'basis': intent['receipt'],
+                              'models': {family: [entry['id'] for entry in entries]
+                                         for family, entries in decision['subject']['models'].items()}})
+
+
+class Source:
+    """The decision source the inference broker's ``Context.authorization`` gives for one store: called as
+    ``verify_envelope`` (slice 1's protocol, unchanged), and ``selection(receipt)``: ``verify_selection``."""
+
+    def __init__(self, store):
+        self._store = store
+
+    def __call__(self, target, manifest_digest, now):
+        return verify_envelope(self._store, target, manifest_digest, now)
+
+    def selection(self, receipt):
+        return verify_selection(self._store, receipt)
+
+
+def verifier(store) -> Source:
+    """The decision source over STORE, as the inference broker's ``Context.authorization`` gives it."""
+    return Source(store)

@@ -117,7 +117,7 @@ class Constants(unittest.TestCase):
         self.assertEqual(imported, {'datetime', 'importlib.util', 'json', 'sys', 'pathlib', 'typing'})
         loaded = [node.args[0].value for node in ast.walk(tree) if isinstance(node, ast.Call)
                   and getattr(node.func, 'id', None) == '_load']
-        self.assertEqual(loaded, ['owner_decision'])
+        self.assertEqual(loaded, ['owner_decision', 'delegated_decision'])
 
 
 class Governing(ReadSide):

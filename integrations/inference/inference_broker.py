@@ -203,8 +203,18 @@ CODES = {
                                'authorize it'),
     'ENVELOPE_EXPIRED': (403, 'the Owner\'s authorization of the envelope has expired: have the Owner authorize a '
                               'new envelope'),
-    'MODEL_SELECTION_MISSING': (500, 'name the models of the families whose upstream is not loopback in the '
-                                     'envelope (selection: envelope); a delegated selection is not yet supported'),
+    'MODEL_SELECTION_MISSING': (500, 'select the models: name them in the families whose upstream is not loopback '
+                                     '(selection: envelope), or record the delegated selection on the governing '
+                                     'envelope receipt (selection_recorder.py delegate; selection: delegation)'),
+    'MODEL_SELECTION_NOT_AUTHORIZED': (500, 'the governing model selection is not a select-models record of '
+                                            'decision 0018 point 3 by agent:engineering-manager written by the '
+                                            'selection recorder: record a new selection (selection_recorder.py '
+                                            'delegate)'),
+    'MODEL_SELECTION_RECEIPT_MISMATCH': (500, 'the governing model selection rests on another envelope '
+                                              'authorization: record a selection on the governing one '
+                                              '(selection_recorder.py delegate)'),
+    'MODEL_NOT_SELECTED': (403, 'use only a model the held selection selects; configure no other model for a '
+                                'family whose upstream is not loopback'),
     'ENVELOPE_USAGE_UNKNOWN': (429, 'the cumulative usage under the envelope\'s cap cannot be established (a cap '
                                     'enforced by the broker is not yet supported): fail closed; have the Owner '
                                     'authorize a new envelope'),
@@ -535,6 +545,11 @@ def load_config(raw, declarations: dict | None = None, *, allow_ephemeral: bool 
 AUTHORIZATION_REFUSALS = ('ENVELOPE_RECORD_INVALID', 'ENVELOPE_NOT_AUTHORIZED', 'ENVELOPE_AUTHORIZATION_UNRESOLVED',
                           'ENVELOPE_REPLAYED', 'ENVELOPE_MISMATCH', 'ENVELOPE_EXPIRED')
 AUTHORIZATION_VIEW = ('receipt', 'operation', 'decisionId', 'target', 'digest', 'expiresAt')
+# The selection codes the read side (envelope_decisions.SELECTION_REFUSALS) answers, and its view; a test asserts
+# them equal.
+SELECTION_REFUSALS = ('MODEL_SELECTION_MISSING', 'MODEL_SELECTION_NOT_AUTHORIZED', 'MODEL_SELECTION_RECEIPT_MISMATCH')
+SELECTION_VIEW = ('receipt', 'decisionId', 'record', 'point', 'basis', 'models')
+SELECTION_KEY = re.compile(r'model-selection/v1/[1-9][0-9]*')
 RECEIPT_KEY = re.compile(r'owner-authorization/v1/[0-9a-f]{32}')
 DECISION_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
 SHA256_DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
@@ -589,13 +604,20 @@ class Authorization:
     models: tuple       # ((family, (model, ...)), ...)
     enforced_by: str
     cap: int | None
+    selection_record: dict | None = None    # a delegated selection: {record, point, receipt, decision}
 
     def describe(self) -> dict:
         """The start receipt's and the status answer's authorization member."""
+        selection = {'by': self.selection, 'models': {family: list(ids) for family, ids in self.models}}
+        if self.selection_record is not None:
+            selection.update(self.selection_record)
         return {'receipt': self.receipt, 'operation': self.operation, 'decision': self.decision,
-                'digest': self.digest, 'expires_at': self.expires_at,
-                'selection': {'by': self.selection, 'models': {family: list(ids) for family, ids in self.models}},
+                'digest': self.digest, 'expires_at': self.expires_at, 'selection': selection,
                 'limit': {'enforced_by': self.enforced_by, 'cap': self.cap}}
+
+    def selects(self, family: str, model: str) -> bool:
+        """Whether the held selection selects MODEL for FAMILY."""
+        return model in dict(self.models).get(family, ())
 
 
 # The Authorization objects authorize() returned in this process, by identity. A caller cannot add one:
@@ -617,7 +639,8 @@ def authorize(config: BrokerConfig, decisions: Callable | None, store_factory: C
               clock: Callable = time.time) -> Authorization:
     """The start precondition for CONFIG's bound families, before the provider key is read or a listener opened:
     the live envelope and its digest; the governing provider-envelope receipt from DECISIONS (a callable
-    ``decisions(store) -> verify(target, manifest_digest, now)``: envelope_decisions.verifier) over the store
+    ``decisions(store) -> source``: envelope_decisions.verifier, whose source is called as ``verify(target,
+    manifest_digest, now)`` and, for a delegated selection, asked ``source.selection(receipt)``) over the store
     STORE_FACTORY opens (closed again; nothing is written); the model selection; the limit's enforcement. Returns
     the Authorization the Broker holds, or raises the stable code."""
     document, digest = live_envelope(config)
@@ -625,23 +648,62 @@ def authorize(config: BrokerConfig, decisions: Callable | None, store_factory: C
         raise InferenceError('ENVELOPE_NOT_AUTHORIZED', 'no decision source was given: a family whose upstream is '
                                                         'not loopback starts only on a recorded authorization')
     now = datetime.datetime.fromtimestamp(clock(), datetime.timezone.utc)
-
-    def manifest_digest(operation: str) -> str:
-        return inference_envelope.manifest_digest(document, operation)
     store = store_factory()
-    failure = None
     try:
-        answer = decisions(store)(digest, manifest_digest, now)
-    except Exception as exc:  # noqa: BLE001 - whatever the decision source raises is an answer not to trust
-        failure = exc
+        return _authorize(config, decisions, store, document, digest, now)
     finally:
         store.close()
-    if failure is not None:
-        raise _record_invalid(f'the decision source raised {type(failure).__name__}')
+
+
+def _asked(call, *args):
+    """CALL(*ARGS); whatever the decision source raises is an answer not to trust (ENVELOPE_RECORD_INVALID)."""
+    failure = None
+    try:
+        return call(*args)
+    except Exception as exc:  # noqa: BLE001 - whatever the decision source raises is an answer not to trust
+        failure = exc
+    raise _record_invalid(f'the decision source raised {type(failure).__name__}')
+
+
+def _verdict(answer, codes: tuple):
+    """(code, detail, view) of a well-formed verdict whose code is None or one of CODES."""
     if not isinstance(answer, tuple) or len(answer) != 3 or not isinstance(answer[1], str) \
-            or answer[0] not in (None, *AUTHORIZATION_REFUSALS):
+            or answer[0] not in (None, *codes):
         raise _record_invalid(f'the decision source answered {type(answer).__name__}, not a well-formed verdict')
-    code, detail, view = answer
+    return answer
+
+
+def _selected(config: BrokerConfig, source, receipt: str, document: dict) -> tuple:
+    """(the authority that selected the models, {family: selected ids}, the delegated selection's view or None)."""
+    bound = bound_families(config)
+    if document['selection']['by'] == 'envelope':
+        return 'envelope', {f.id: set(f.models) for f in bound}, None
+    asked = getattr(source, 'selection', None)
+    if not callable(asked):
+        raise InferenceError('MODEL_SELECTION_MISSING', 'the envelope delegates the model selection (decision 0018 '
+                                                        'point 3), and the decision source reads no selection')
+    code, detail, view = _verdict(_asked(asked, receipt), SELECTION_REFUSALS)
+    if code is not None:
+        raise InferenceError(code, detail[:500])
+    models = view.get('models') if isinstance(view, dict) else None
+    if not isinstance(view, dict) or tuple(view) != SELECTION_VIEW or view['basis'] != receipt \
+            or (view['record'], view['point']) != ('decision:0018', '3') \
+            or not isinstance(view['decisionId'], str) or not DECISION_ID.fullmatch(view['decisionId']) \
+            or not isinstance(view['receipt'], str) or not SELECTION_KEY.fullmatch(view['receipt']) \
+            or not isinstance(models, dict) or not all(
+                isinstance(ids, list) and all(isinstance(m, str) and MODEL_NAME.fullmatch(m) for m in ids)
+                for ids in models.values()):
+        raise _record_invalid('the decision source answered a selection view that does not bind the governing '
+                              'authorization')
+    return 'delegation', {family: set(ids) for family, ids in models.items()}, view
+
+
+def _authorize(config: BrokerConfig, decisions: Callable, store, document: dict, digest: str,
+               now: datetime.datetime) -> Authorization:
+    def manifest_digest(operation: str) -> str:
+        return inference_envelope.manifest_digest(document, operation)
+    source = _asked(decisions, store)
+    code, detail, view = _verdict(_asked(source, digest, manifest_digest, now), AUTHORIZATION_REFUSALS)
     if code is not None:
         raise InferenceError(code, detail[:500])
     if not isinstance(view, dict) or tuple(view) != AUTHORIZATION_VIEW \
@@ -657,24 +719,26 @@ def authorize(config: BrokerConfig, decisions: Callable | None, store_factory: C
     if now >= expires:
         raise InferenceError('ENVELOPE_EXPIRED', f'the authorization {view["receipt"]} expired at '
                                                  f'{document["expires_at"]}')
-    selection = document['selection']
     bound = bound_families(config)
-    if selection['by'] != 'envelope':
-        raise InferenceError('MODEL_SELECTION_MISSING', 'the envelope delegates the model selection (decision 0018 '
-                                                        'point 3), and no delegated selection can be read yet: '
-                                                        'fail closed')
+    by, selected, chosen = _selected(config, source, view['receipt'], document)
+    outside = sorted(f'{f.id}: {m}' for f in bound for m in f.models if m not in selected.get(f.id, ()))
+    if outside:
+        raise InferenceError('MODEL_NOT_SELECTED', f'the configuration names {len(outside)} model(s) the {by} '
+                                                   f'selection does not select: {", ".join(outside)}')
     if not any(f.models for f in bound):
-        raise InferenceError('MODEL_SELECTION_MISSING', 'the envelope selects the models, and no family whose '
-                                                        'upstream is not loopback names one')
+        raise InferenceError('MODEL_SELECTION_MISSING', f'the {by} selection leaves no family whose upstream is not '
+                                                        'loopback with a selected model')
     limit = document['limit']
     if limit['enforced_by'] != 'provider':
         raise InferenceError('ENVELOPE_USAGE_UNKNOWN', 'the envelope\'s cap is enforced by the broker, whose usage '
                                                        'ledger is not yet built: fail closed')
     (provider,), (origin,) = {f.provider for f in bound}, {f.upstream for f in bound}
+    record = None if chosen is None else {'record': chosen['record'], 'point': chosen['point'],
+                                          'receipt': chosen['receipt'], 'decision': chosen['decisionId']}
     held = Authorization(view['receipt'], view['operation'], view['decisionId'], digest, view['digest'],
-                         document['expires_at'], expires.timestamp(), provider, origin, selection['by'],
+                         document['expires_at'], expires.timestamp(), provider, origin, by,
                          tuple((f.id, tuple(sorted(f.models))) for f in sorted(bound, key=lambda f: f.id)),
-                         limit['enforced_by'], limit['cap'])
+                         limit['enforced_by'], limit['cap'], record)
     _MINTED[id(held)] = held
     return held
 
@@ -1086,6 +1150,8 @@ class Broker:
         why = self.readiness(family)
         if why is not None:
             raise InferenceError('FAMILY_NOT_READY', f'{family.id}: {why}')
+        for model in models:
+            self._selected(family, model, None)
         token = TOKEN_PREFIX + secrets.token_urlsafe(32)
         self.guard.hold(token)
         issued = self.clock()
@@ -1228,6 +1294,19 @@ class Broker:
             raise self._refuse('ENVELOPE_EXPIRED', f'the authorization {held.receipt} expired at {held.expires_at}',
                                grant)
 
+    def _selected(self, family: Family, model: str, grant: Grant | None) -> None:
+        """A model of a family whose upstream is not loopback is issued and admitted only when the held selection
+        selects it (beside the allowlist and the token's list: the configuration may not widen the selection)."""
+        if family.upstream is None or family.upstream.loopback:
+            return
+        held = self.authorization
+        if not minted(held):
+            raise self._refuse('ENVELOPE_NOT_AUTHORIZED', f'{family.id}: no authorization of its envelope is held',
+                               grant)
+        if not held.selects(family.id, model):
+            raise self._refuse('MODEL_NOT_SELECTED', f'{family.id}: the model is not in the held {held.selection} '
+                                                     'selection', grant)
+
     def _live(self, grant: Grant) -> None:
         if grant.revocation is not None:
             code = 'TOKEN_EXPIRED' if grant.revocation['trigger'] == 'expiry' else 'TOKEN_REVOKED'
@@ -1296,6 +1375,7 @@ class Broker:
             raise self._refuse('MODEL_MISSING', 'no string model field', grant)
         if model not in grant.models or model not in family.models:
             raise self._refuse('MODEL_NOT_ALLOWED', "not in the token's model list", grant)
+        self._selected(family, model, grant)
         forward = self._forward_headers(headers, family)
         if token in target or any(token in value for _, value in forward) or token.encode('ascii') in body:
             raise self._refuse('TOKEN_IN_REQUEST', 'the token is in the path, a forwarded header or the body', grant)
