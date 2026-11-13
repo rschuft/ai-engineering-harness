@@ -94,7 +94,7 @@ paths = DI.paths
 ra = G._repository_access()
 
 DESIGN, PROMOTION = I.DESIGN, I.PROMOTION
-RECORDER = 'dispatch-input-recorder/1'
+RECORDER = I.RECORDER  # the actor of its receipts, which the verifier checks
 CHALLENGE_FORMAT = 'owner-dispatch-input-challenge/v1'
 CHALLENGE_FIELDS = ('format', 'kind', 'subject', 'position', 'shown', 'candidate')
 OWNER_STATE = ('owner-authorization', 'dispatch-inputs')        # decision 0012 point 4: the recorder's own state
@@ -112,8 +112,10 @@ REMEDIES = {
     'CHALLENGE_INVALID': 'pass the nonce exactly as prepare printed it, to the record command of the same kind',
     'CHALLENGE_UNKNOWN': 'this recorder did not issue that challenge: run prepare and show its summary to the Owner',
     'CHALLENGE_EXPIRED': 'run prepare again and show the new summary to the Owner',
-    'CHALLENGE_CONSUMED': 'a decision was already recorded on this challenge: read it (status), or prepare a new '
-                          'challenge for a new Owner decision',
+    'CHALLENGE_CONSUMED': 'this challenge was already used: its position holds a receipt of it, confirmed or not (the '
+                          'detail gives its state; status shows each series\' head, its failed positions and its '
+                          'unsettled ones). A challenge is single-use: prepare a new challenge for a new Owner '
+                          'decision, after manifest resolve if the receipt is an unsettled promotion',
     'CHALLENGE_STALE': 'another decision took this challenge\'s position, or the series changed after the summary was '
                        'shown: run prepare again and show the new summary to the Owner',
     'STATEMENT_MISSING': 'record only an Owner statement that exists: its text verbatim and the reference where it '
@@ -161,10 +163,20 @@ REMEDIES = {
     'DECIDER_NOT_DELEGATED': 'only the role the delegating record names decides this kind (for both P-04.3 kinds, '
                              'agent:product-manager; the engineering manager never promotes)',
     'DELEGATION_BASIS_INVALID': 'give the basis as {type, link, quote}: the type the delegation names (commitment or '
-                                'envelope), link evidence/bootstrap-log.md, and the quote verbatim (a commitment\'s '
-                                'contains "Commitment: ")',
+                                'envelope), link evidence/bootstrap-log.md#<anchor> of the Decisions entry quoted, and '
+                                'the quote verbatim (a commitment\'s contains "Commitment: ")',
     'DELEGATION_BASIS_NOT_RECORDED': 'quote the commitment or the Owner\'s standing authorization exactly as it is '
-                                     'committed in evidence/bootstrap-log.md at HEAD (the work tree is not read)',
+                                     'committed in evidence/bootstrap-log.md at HEAD, and link the anchor of its '
+                                     'Decisions entry (the work tree is not read)',
+    'DELEGATION_BASIS_NOT_AUTHORITY': 'the anchored entry is not an authority of the basis type: a commitment rests on '
+                                      'a "<date>: Commitment: ..." entry and quotes it; a promotion rests on a "<date>: '
+                                      'Owner standing authorization: ..." entry and quotes its verbatim block. Without '
+                                      'one, the decision is the Owner\'s (prepare and record)',
+    # slice 2b
+    'OWNER_ACCEPTANCE_HEAD': 'the change\'s current acceptance is the Owner\'s: a delegated acceptance cannot supersede '
+                             'it (decision 0018 point 4.8); the next acceptance is the Owner\'s (prepare and record)',
+    'IO_FAILED': 'a file could not be written or read (the detail says which); nothing was recorded unless a receipt '
+                 'is named, and a named receipt is failed and its position spent: repair the cause and act again',
 }
 
 
@@ -300,8 +312,15 @@ def _challenge_path(ctx, nonce):
 
 
 def _write_challenge(ctx, challenge):
-    _write_new(_challenge_path(ctx, challenge['shown']['nonce']), json.dumps(challenge, indent=2, ensure_ascii=False)
-               + '\n')
+    """Write the challenge to the recorder's state: IO_FAILED (nothing recorded) when it cannot be written."""
+    path = _challenge_path(ctx, challenge['shown']['nonce'])
+    failure = None
+    try:
+        _write_new(path, json.dumps(challenge, indent=2, ensure_ascii=False) + '\n')
+    except OSError as exc:
+        failure = f'the challenge {path.name} could not be written: {type(exc).__name__}'
+    if failure is not None:
+        raise RecorderError('IO_FAILED', failure)
 
 
 def load_challenge(ctx, nonce, kind):
@@ -347,7 +366,8 @@ def _check_unused(ctx, key, nonce):
     except (TypeError, ValueError, KeyError, AttributeError):
         held = None
     if held == nonce:
-        raise RecorderError('CHALLENGE_CONSUMED', f'challenge {nonce} already has receipt {key} ({existing.state})')
+        raise RecorderError('CHALLENGE_CONSUMED', f'challenge {nonce} already has receipt {key}, {existing.state}'
+                            + ('' if existing.state == 'confirmed' else ': its decision was not confirmed'))
     raise RecorderError('CHALLENGE_STALE', f'{key} holds another decision ({existing.state})')
 
 
@@ -403,17 +423,23 @@ def _guarded(call, *args):
     raise RecorderError('GIT_FAILED', str(failure))
 
 
+def _exact(check, value):
+    """CHECK(VALUE) for a string without a line break: the shared grammars end in ``$``, which also matches
+    before a final newline."""
+    return isinstance(value, str) and '\n' not in value and check(value)
+
+
 def read_design(project, repository, change, commit):
     """(content, files) of CHANGE at COMMIT of the project repository PROJECT (its work tree's root; the upward
     search stops there), read through the repository-access module (decision 0014): FILES is
     ``[(path relative to the change's folder, sha256 of its blob)]`` in ascending path order, and CONTENT
     ``sha256:`` over the lines ``<sha256>  <path>\\n`` of FILES."""
-    if not D._manifest_id(repository):
+    if not _exact(D._manifest_id, repository):
         raise ValueError(f'{repository!r} is not a manifest repository id ([a-z0-9]+(-[a-z0-9]+)*, at most '
                          f'{D.MANIFEST_ID_MAX})')
-    if not D._design_change(change):
+    if not _exact(D._design_change, change):
         raise RecorderError('CHANGE_MISSING', f'{change!r} is not an OpenSpec change id')
-    if not D._full_commit(commit):
+    if not _exact(D._full_commit, commit):
         raise RecorderError('REVISION_INVALID', f'{commit!r} is not a full commit id')
     project = Path(project)
     failure = None
@@ -499,12 +525,31 @@ def _record_design(ctx, decision, position, nonce):
     intent = {'format': I.RECEIPT_FORMAT, 'recorder': RECORDER, 'series': 'design', 'decision': decision,
               'repository': subject['repository'], 'change': subject['change'], 'sequence': position}
     _reserve(ctx, key, intent, nonce)
-    _write_copy(ctx, decision)
-    ctx.store.transition(key, 'dispatched', actor=RECORDER, reason='the decision is recorded',
-                         detail={'recordedAt': decision['recordedAt']}, expected_from='reserved')
-    ctx.store.transition(key, 'confirmed', actor=RECORDER, reason='the design acceptance is recorded',
-                         detail={'decisionId': decision['decisionId']}, expected_from='dispatched')
+    try:
+        _write_copy(ctx, decision)
+        ctx.store.transition(key, 'dispatched', actor=RECORDER, reason='the decision is recorded',
+                             detail={'recordedAt': decision['recordedAt']}, expected_from='reserved')
+        ctx.store.transition(key, 'confirmed', actor=RECORDER, reason='the design acceptance is recorded',
+                             detail={'decisionId': decision['decisionId']}, expected_from='dispatched')
+    except Exception as exc:  # noqa: BLE001 - whatever stopped the act, its position is spent: mark it failed
+        _fail_design(ctx, key, exc)
+        if isinstance(exc, OSError):
+            raise RecorderError('IO_FAILED', f'{type(exc).__name__} after {key} was reserved; the receipt is '
+                                f'{ctx.store.get(key).state} and its position spent', refusal=False,
+                                receipt=key) from None
+        raise
     return {'decision': decision, 'receipt': _receipt_report(ctx.store, key), 'authority': I.authority(decision)}
+
+
+def _fail_design(ctx, key, exc):
+    """Mark a design receipt failed when the act stopped after its reservation, when the store lets us: a design
+    acceptance has no external effect, so an unconfirmed one is simply spent."""
+    with contextlib.suppress(Exception):
+        current = ctx.store.get(key)
+        if current is not None and current.state in ('reserved', 'dispatched'):
+            ctx.store.transition(key, 'failed', actor=RECORDER, reason='the act stopped before it was confirmed',
+                                 detail={'code': 'IO_FAILED' if isinstance(exc, OSError) else 'ACT_FAILED',
+                                         'error': type(exc).__name__}, expected_from=current.state)
 
 
 def design_record(ctx, nonce, statement, *, recorded_by, new_decision_id=None):
@@ -532,7 +577,10 @@ def design_delegate(ctx, project, repository, change, commit, *, decided_by, bas
     (decision 0018 point 3.2), resting on BASIS."""
     _check_context(ctx)
     authority = _authority(ctx, DESIGN, decided_by, basis)
-    subject, position, _files, _head = _design_subject(ctx, project, repository, change, commit)
+    subject, position, _files, head = _design_subject(ctx, project, repository, change, commit)
+    if head is not None and head.intent['decision']['format'] == D.FORMAT:
+        raise RecorderError('OWNER_ACCEPTANCE_HEAD', f'{repository}/{change}\'s current acceptance '
+                            f'{head.intent["decision"]["decisionId"]} (sequence {head.position}) is the Owner\'s')
     decision = _delegated_decision(authority, subject, ctx.now(), new_decision_id)
     return _record_design(ctx, decision, position, None)
 
@@ -695,7 +743,17 @@ def _promote(ctx, decision, text, nonce):
               'schema': subject['schema'], 'version': subject['version'], 'digest': subject['digest'],
               'previous': subject['previous'], 'text': text}
     _reserve(ctx, key, intent, nonce)
-    _write_copy(ctx, decision)
+    failure = None
+    try:
+        _write_copy(ctx, decision)
+    except OSError as exc:
+        failure = exc
+    if failure is not None:  # nothing was written to the live manifest: the position is spent, the receipt failed
+        ctx.store.transition(key, 'failed', actor=RECORDER, reason='the decision copy could not be written',
+                             detail={'code': 'PROMOTION_FAILED', 'stage': 'copy', 'error': type(failure).__name__},
+                             expected_from='reserved')
+        raise RecorderError('PROMOTION_FAILED', f'copy: {type(failure).__name__}; the live manifest is as it was; '
+                            f'receipt {key} is failed', refusal=False, receipt=key)
     ctx.store.transition(key, 'dispatched', actor=RECORDER, reason='the live manifest is written',
                          detail={'sentAt': timestamp(ctx.now())}, expected_from='reserved')
     live = Path(ctx.manifest_path)
@@ -753,7 +811,11 @@ def manifest_record(ctx, nonce, statement, *, recorded_by, new_decision_id=None)
     _check_recorded_by(recorded_by)
     check_live_location(ctx)
     text = challenge['candidate']
-    approved = DI.parse_manifest(text.encode('utf-8'))
+    try:
+        approved = DI.parse_manifest(text.encode('utf-8'))
+    except DI.DispatchRefused as exc:  # a challenge altered in the recorder's state with a matching digest
+        raise RecorderError('CHALLENGE_INVALID', f'challenge {nonce}\'s candidate is not a manifest: {exc.code}') \
+            from None
     try:
         current, _head = _promotion_subject(ctx, approved)
     except RecorderError as exc:
@@ -815,8 +877,8 @@ def manifest_resolve(ctx, version):
 
 
 def status(ctx):
-    """The head of the promotion series with its authority, the unsettled promotion receipts, and each design
-    series' head. Reads only."""
+    """Each series' head with its authority, its next position, its failed positions and its unsettled ones
+    (reserved, dispatched or unknown). Reads only."""
     _check_context(ctx)
     series, head = _promotion_head(ctx)
     promotion = None if head is None else {
@@ -832,8 +894,12 @@ def status(ctx):
                             'sequence': design_head.position, 'receipt': design_head.key,
                             'commit': design_head.intent['decision']['subject']['commit'],
                             'decisionId': design_head.intent['decision']['decisionId'],
-                            'authority': I.authority(design_head.intent['decision'])}})
+                            'authority': I.authority(design_head.intent['decision'])},
+                        'failed': [r.position for r in design_series if r.state == 'failed'],
+                        'unsettled': [{'sequence': r.position, 'state': r.state} for r in design_series
+                                      if r.state not in ('confirmed', 'failed')]})
     return {'promotion': {'head': promotion, 'next': I.next_position(series),
+                          'failed': [r.position for r in series if r.state == 'failed'],
                           'unsettled': [{'version': r.position, 'state': r.state} for r in series
                                         if r.state not in ('confirmed', 'failed')]},
             'designs': designs}
@@ -926,6 +992,12 @@ def main(argv=None, out=None, err=None, context=None):
     except RecorderError as exc:
         err.write(f'input-recorder: {exc}\n')
         return 2 if exc.refusal else 1
+    except DI.DispatchRefused as exc:  # load_manifest's or parse_manifest's own refusal, by its code
+        err.write(f'input-recorder: {exc.code}: {exc.detail}\n')
+        return 2
+    except OSError as exc:  # a file outside the recorder's own handling; nothing it reports was recorded
+        err.write(f'input-recorder: IO_FAILED: {type(exc).__name__}: {exc}. Remedy: {REMEDIES["IO_FAILED"]}.\n')
+        return 2
     except (ValueError, paths.PathsError, store_module.StoreError) as exc:
         err.write(f'input-recorder: {exc}\n')
         return 2

@@ -33,10 +33,15 @@ type to ``BASIS_TYPES``); the record's fields do not change, and ``check_delegat
 **What is checked at the act** (``check_delegation`` and ``read_authority``): the row exists, the decider
 is the row's, the basis has the row's basis type's shape; the delegating record, read from the harness
 repository's ``HEAD`` commit through the repository-access module (the committed blob, never the work
-tree; decision 0014), has a ``Status:`` line beginning ``Accepted (Owner)``; and the basis is recorded
-there (for a log quote, present verbatim in ``evidence/bootstrap-log.md`` at that commit). Who ran the
-command, that the decision lies inside the commitment's scope or the envelope, and the authorship of a log
-quote are not checked: decision 0018 point 7 ("a log quote is checked for presence, not authorship").
+tree; decision 0014), has a ``Status:`` line beginning ``Status: Accepted (Owner) -``; and the basis is
+recorded there as an authority of its type, structurally: its link names an anchored entry of the log's
+Decisions (``evidence/bootstrap-log.md#<anchor>``); a ``commitment``'s entry is titled ``<date>: Commitment:
+...`` and contains the quote; an ``envelope``'s entry is titled ``<date>: Owner standing authorization: ...``
+and the quote lies inside its verbatim block (the ``>`` lines). An absent anchor or quote is
+``DELEGATION_BASIS_NOT_RECORDED``; an entry of another kind, or a quote outside it or its block, is
+``DELEGATION_BASIS_NOT_AUTHORITY`` (fail closed). Who ran the command, that the decision lies inside the
+commitment's scope or the envelope, and the authorship of a log entry are not checked: decision 0018
+point 7 ("a log quote is checked for presence, not authorship").
 
 The record format and the table are standard library only and open no file; ``read_authority`` alone
 loads the repository-access module (Dulwich, from the Python tools set), when it is called.
@@ -75,7 +80,7 @@ POINT = re.compile(r'^[1-9][0-9]*(?:\.[1-9][0-9]*)*$')
 DECISIONS_DIR = 'decisions'
 LOG = 'evidence/bootstrap-log.md'
 STATUS_PREFIX = 'Status:'
-ACCEPTED_BY_OWNER = 'Status: Accepted (Owner)'
+ACCEPTED_BY_OWNER = 'Status: Accepted (Owner) -'  # exactly this, then the date: a qualified variant is not accepted
 QUOTE_MIN = 12
 COMMITMENT_MARK = 'Commitment: '
 
@@ -103,26 +108,41 @@ class HarnessView(NamedTuple):
 
 class BasisType(NamedTuple):
     """A kind of basis: ``problems(basis)`` lists what is wrong with its shape; ``unrecorded(basis, view)``
-    says why it is not recorded at the harness's ``HEAD`` (a ``HarnessView``), or None when it is."""
+    answers why it is not recorded as an authority of its type at the harness's ``HEAD`` (a ``HarnessView``),
+    as ``(code, detail)``, or None when it is."""
     name: str
     problems: Callable[[object], list]
-    unrecorded: Callable[[dict, HarnessView], str | None]
+    unrecorded: Callable[[dict, HarnessView], tuple[str, str] | None]
 
 
 QUOTE_FIELDS = ('type', 'link', 'quote')
+ANCHOR = re.compile(r'^[a-z0-9][a-z0-9-]{0,127}$')
+DECISIONS_HEADING = '## Decisions'
+# A Decisions entry of the log: a top-level list item opening with its anchor and its bold, dated title.
+ENTRY_START = re.compile(r'^- <a id="(?P<anchor>[a-z0-9][a-z0-9-]*)"></a>\*\*(?P<title>.+?)\*\*')
+DATED_TITLE = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}: (?P<rest>.*)$')
+STANDING_TITLE = 'Owner standing authorization:'
+COMMITMENT_TITLE = 'Commitment:'
+VERBATIM_LINE = re.compile(r'^\s*>\s?(?P<text>.*)$')
+
+
+def _collapsed(text):
+    return ' '.join(text.split())
 
 
 def _quote_problems(name, mark=None):
-    """A log quote ``{type, link, quote}``, the shape of the network matrix's ``owner_approval``
-    (tools/check_network_matrix.py): the link is the log, the quote verbatim and at least 12 characters."""
+    """A log quote ``{type, link, quote}``, in the shape of the network matrix's ``owner_approval``
+    (tools/check_network_matrix.py), anchored: the link is ``evidence/bootstrap-log.md#<anchor>``, naming the
+    Decisions entry the quote is taken from; the quote is verbatim and at least 12 characters."""
     def problems(basis):
         if not isinstance(basis, dict) or list(basis) != list(QUOTE_FIELDS):
             return [f'the basis must be exactly {{{", ".join(QUOTE_FIELDS)}}}']
         out = []
         if basis['type'] != name:
             out.append(f'the basis type must be {name}')
-        if basis['link'] != LOG:
-            out.append(f'the basis link must be {LOG}')
+        link = basis['link']
+        if not isinstance(link, str) or not link.startswith(f'{LOG}#') or not ANCHOR.match(link[len(LOG) + 1:]):
+            out.append(f'the basis link must be {LOG}#<anchor>, the anchor of the Decisions entry it quotes')
         quote = basis['quote']
         if not isinstance(quote, str) or len(quote.strip()) < QUOTE_MIN:
             out.append(f'the basis quote must be the text recorded in {LOG}, verbatim, at least {QUOTE_MIN} '
@@ -133,19 +153,92 @@ def _quote_problems(name, mark=None):
     return problems
 
 
-def _quote_unrecorded(basis, view):
+class LogEntry(NamedTuple):
+    """One anchored Decisions entry of the log: its anchor, its title without the date, its whole text and its
+    verbatim block (its ``>`` lines with the prefixes stripped, joined by newlines)."""
+    anchor: str
+    title: str
+    text: str
+    verbatim: str
+
+
+def decisions_entry(log_text, anchor):
+    """The anchored entry ANCHOR of the log's Decisions section, or None. An entry starts at a top-level list
+    item ``- <a id="ANCHOR"></a>**<date>: <title>**`` and runs to the next top-level list item or heading."""
+    lines = log_text.splitlines()
+    try:
+        start = lines.index(DECISIONS_HEADING)
+    except ValueError:
+        return None
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith('#'):
+            return None  # the Decisions section ended
+        match = ENTRY_START.match(line)
+        if match is None or match.group('anchor') != anchor:
+            continue
+        end = index + 1
+        while end < len(lines) and not lines[end].startswith(('- ', '#')):
+            end += 1
+        dated = DATED_TITLE.match(match.group('title'))
+        body = lines[index:end]
+        verbatim = [m.group('text') for m in (VERBATIM_LINE.match(text) for text in body[1:]) if m]
+        return LogEntry(anchor, dated.group('rest') if dated else match.group('title'), '\n'.join(body),
+                        '\n'.join(verbatim))
+    return None
+
+
+def _anchored(basis, view):
+    """(entry, refusal): the Decisions entry the basis's link names, or why the basis is not recorded."""
     if view.log_text is None:
-        return f'{LOG} is not in the harness repository at {view.revision}'
-    if basis['quote'] not in view.log_text:
-        return f'the quote is not in {LOG} at {view.revision} (the committed log, not the work tree)'
+        return None, ('DELEGATION_BASIS_NOT_RECORDED', f'{LOG} is not in the harness repository at {view.revision}')
+    plain = '\n'.join(m.group('text') if (m := VERBATIM_LINE.match(line)) else line
+                      for line in view.log_text.splitlines())  # a verbatim block read as its words
+    if basis['quote'] not in view.log_text and _collapsed(basis['quote']) not in _collapsed(plain):
+        return None, ('DELEGATION_BASIS_NOT_RECORDED', f'the quote is not in {LOG} at {view.revision} (the committed '
+                      'log, not the work tree)')
+    anchor = basis['link'][len(LOG) + 1:]
+    entry = decisions_entry(view.log_text, anchor)
+    if entry is None:
+        return None, ('DELEGATION_BASIS_NOT_RECORDED', f'{LOG} at {view.revision} has no Decisions entry with the '
+                      f'anchor {anchor!r}')
+    return entry, None
+
+
+def _commitment_unrecorded(basis, view):
+    """A commitment: the anchored entry's title contains ``Commitment:`` and the quote lies inside the entry."""
+    entry, refusal = _anchored(basis, view)
+    if refusal is not None:
+        return refusal
+    if COMMITMENT_TITLE not in entry.title:
+        return ('DELEGATION_BASIS_NOT_AUTHORITY', f'the entry {entry.anchor!r} is {entry.title!r}, not a '
+                f'"{COMMITMENT_TITLE} <milestone>" entry')
+    if basis['quote'] not in entry.text:
+        return ('DELEGATION_BASIS_NOT_AUTHORITY', f'the quote is not inside the entry {entry.anchor!r}')
+    return None
+
+
+def _envelope_unrecorded(basis, view):
+    """A standing authorization: the anchored entry's title begins, after its date, with ``Owner standing
+    authorization:``, and the quote lies inside its verbatim block (whitespace collapsed on both sides)."""
+    entry, refusal = _anchored(basis, view)
+    if refusal is not None:
+        return refusal
+    if not entry.title.startswith(STANDING_TITLE):
+        return ('DELEGATION_BASIS_NOT_AUTHORITY', f'the entry {entry.anchor!r} is {entry.title!r}, not an '
+                f'"{STANDING_TITLE} ..." entry')
+    if not entry.verbatim.strip() or _collapsed(basis['quote']) not in _collapsed(entry.verbatim):
+        return ('DELEGATION_BASIS_NOT_AUTHORITY', f'the quote is not inside the verbatim block (the "> " lines) of '
+                f'the entry {entry.anchor!r}')
     return None
 
 
 BASIS_TYPES = {
     # decision 0018 point 3.2: the log's "Commitment: <milestone>" entry whose scope the design lies in.
-    'commitment': BasisType('commitment', _quote_problems('commitment', COMMITMENT_MARK), _quote_unrecorded),
-    # decision 0018 point 3.3: the Owner's standing authorization (point 5), verbatim in the log.
-    'envelope': BasisType('envelope', _quote_problems('envelope'), _quote_unrecorded),
+    'commitment': BasisType('commitment', _quote_problems('commitment', COMMITMENT_MARK), _commitment_unrecorded),
+    # decision 0018 point 3.3: the Owner's standing authorization (point 5), recorded verbatim in the log as an
+    # "Owner standing authorization:" entry.
+    'envelope': BasisType('envelope', _quote_problems('envelope'), _envelope_unrecorded),
 }
 
 
@@ -208,8 +301,9 @@ def record_status(text):
 
 
 def accepted_by_owner(text):
-    """Whether a decision record's text is accepted by the Owner: its ``Status:`` line begins
-    ``Status: Accepted (Owner)``."""
+    """Whether a decision record's text is accepted by the Owner: its first ``Status:`` line begins exactly
+    ``Status: Accepted (Owner) -`` (decision 0018's own line does; ``Status: Accepted (Owner), superseded ...``,
+    ``Status: Accepted (Owner)`` alone or ``Status: Accepted (Overseer) ...`` do not)."""
     status = record_status(text)
     return status is not None and status.startswith(ACCEPTED_BY_OWNER)
 
@@ -268,15 +362,15 @@ def read_authority(harness, kind, decided_by, basis):
     """The authority for a delegated decision of KIND by DECIDED_BY on BASIS: ``check_delegation``, then the
     delegating record and the basis at the harness repository's ``HEAD`` (``read_harness``).
     DelegationRefused (``DELEGATION_NOT_ACCEPTED``, ``AUTHORITY_UNAVAILABLE``,
-    ``DELEGATION_BASIS_NOT_RECORDED``, or a code of ``check_delegation``)."""
+    ``DELEGATION_BASIS_NOT_RECORDED``, ``DELEGATION_BASIS_NOT_AUTHORITY``, or a code of ``check_delegation``)."""
     row = check_delegation(kind, decided_by, basis)
     view = read_harness(harness, row.record)
     if not accepted_by_owner(view.record_text):
         raise DelegationRefused('DELEGATION_NOT_ACCEPTED', f'{view.record_path} at {view.revision} is '
                                 f'{record_status(view.record_text)!r}, not "{ACCEPTED_BY_OWNER} ..."')
-    reason = BASIS_TYPES[row.basis_type].unrecorded(basis, view)
-    if reason is not None:
-        raise DelegationRefused('DELEGATION_BASIS_NOT_RECORDED', reason)
+    refusal = BASIS_TYPES[row.basis_type].unrecorded(basis, view)
+    if refusal is not None:
+        raise DelegationRefused(*refusal)
     return Authority(row, view.revision, view.record_digest, {name: basis[name] for name in basis})
 
 

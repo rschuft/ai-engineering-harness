@@ -254,6 +254,41 @@ class StatusLine(unittest.TestCase):
         self.assertEqual(G.record_status('x\nStatus: Proposed - 1\n'), 'Status: Proposed - 1')
         self.assertIsNone(G.record_status('x\n'))
 
+    def test_only_the_exact_accepted_form_passes(self):
+        """F11 (slice 2b): "Status: Accepted (Owner) -" exactly; a qualified variant is not accepted."""
+        for line in ('Status: Accepted (Owner), superseded by decision 0021', 'Status: Accepted (Owner)',
+                     'Status: Accepted (Owner) superseded', 'Status: Accepted (Owner)- 2026-11-12',
+                     'Status: Accepted (Owner, in part) - 2026-11-12'):
+            with self.subTest(line=line):
+                self.assertFalse(G.accepted_by_owner(f'# 0018\n\n{line}\n'))
+        self.assertTrue(G.accepted_by_owner('# 0018\n\nStatus: Accepted (Owner) - 2026-11-12, revision 4\n'))
+
+
+class LogEntries(unittest.TestCase):
+    """F1 (slice 2b): the anchored Decisions entries of the log, as the basis types read them."""
+
+    LOG = fi.log().decode('utf-8')
+
+    def test_each_anchored_entry_its_title_and_its_block(self):
+        entry = G.decisions_entry(self.LOG, fi.ENVELOPE_ANCHOR)
+        self.assertEqual(entry.title, 'Owner standing authorization: the fixture-app envelope.')
+        self.assertEqual(' '.join(entry.verbatim.split()), fi.ENVELOPE)
+        self.assertNotIn(fi.DIRECTION_QUOTE.split()[0] + ' direction', entry.text)  # ends at the next entry
+        self.assertTrue(G.decisions_entry(self.LOG, fi.COMMITMENT_ANCHOR).title.startswith('Commitment: '))
+        self.assertEqual(G.decisions_entry(self.LOG, fi.COMMITMENT_ANCHOR).verbatim, '')
+        self.assertIsNone(G.decisions_entry(self.LOG, 'no-such-anchor'))
+        self.assertIsNone(G.decisions_entry(self.LOG.replace('## Decisions', '## Something else'), fi.ENVELOPE_ANCHOR))
+
+    def test_an_anchor_outside_the_decisions_section_is_no_entry(self):
+        moved = self.LOG.replace('## Decisions\n', '## Decisions\n\n## Later\n', 1)
+        self.assertIsNone(G.decisions_entry(moved, fi.ENVELOPE_ANCHOR))
+
+    def test_a_link_names_an_anchor(self):
+        for link in (G.LOG, f'{G.LOG}#', f'{G.LOG}#Upper', f'{G.LOG}#a b', f'other.md#{fi.ENVELOPE_ANCHOR}'):
+            with self.subTest(link=link), self.assertRaises(G.DelegationRefused) as caught:
+                G.check_delegation('promote-manifest', fi.PM, fi.envelope(link=link))
+            self.assertEqual(caught.exception.code, 'DELEGATION_BASIS_INVALID')
+
 
 class Codes(unittest.TestCase):
     """The commands' codes: every one raised has a remedy, and they are the work design's Q7 recorder table."""
@@ -270,7 +305,7 @@ class Codes(unittest.TestCase):
            'CANDIDATE_INSIDE_CHECKOUT', 'MANIFEST_LOCATION_INVALID', 'VERSION_NOT_NEXT', 'DESIGN_ACCEPTANCE_MISSING',
            'DECISION_REPLAYED', 'PROMOTION_FAILED', 'PROMOTION_UNRESOLVED', 'DELEGATION_NOT_ACCEPTED',
            'AUTHORITY_UNAVAILABLE', 'DELEGATION_KIND_UNKNOWN', 'DECIDER_NOT_DELEGATED', 'DELEGATION_BASIS_INVALID',
-           'DELEGATION_BASIS_NOT_RECORDED'}
+           'DELEGATION_BASIS_NOT_RECORDED', 'DELEGATION_BASIS_NOT_AUTHORITY', 'OWNER_ACCEPTANCE_HEAD', 'IO_FAILED'}
 
     def test_the_codes_are_the_recorder_table(self):
         self.assertEqual(set(IR.REMEDIES), self.SHARED | self.NEW)
@@ -285,7 +320,7 @@ class Codes(unittest.TestCase):
         decisions = (fi.OWNER / 'input_decisions.py').read_text(encoding='utf-8')
         raised = set(re.findall(r"RecorderError\('([A-Z_]+)'", body))
         raised |= {code for code in re.findall(r"'([A-Z_]+)'", body) if code in IR.REMEDIES}
-        raised |= set(re.findall(r"DelegationRefused\('([A-Z_]+)'", self.DELEGATED))
+        raised |= {code for code in re.findall(r"'([A-Z_]+)'", self.DELEGATED) if code in IR.REMEDIES}
         raised |= set(re.findall(r"DesignAnswer\('([A-Z_]+)'", decisions)) - {'DECISION_RECORD_INVALID'}
         self.assertEqual(raised - set(IR.REMEDIES), set())
         self.assertEqual(set(IR.REMEDIES) - raised, set())

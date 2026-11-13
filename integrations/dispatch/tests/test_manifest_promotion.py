@@ -112,18 +112,10 @@ class DesignEntryWithoutAnAcceptance(Proof):
     def test_a_promotion_receipt_written_by_hand_for_a_design_without_an_acceptance_receipt(self):
         self.promoted_v1()
         text = fi.manifest(version=2, designs=((REPOSITORY, fi.OTHER_CHANGE, self.repos.second),))
-        digest = f'sha256:{DI.parse_manifest(text.encode("utf-8")).sha256}'
-        intent = json.loads(self.store.get(I.promotion_key(1)).intent_json)
-        decision = intent['decision']
-        decision['subject'].update(version=2, digest=digest, previous={'version': 1, 'digest': intent['digest']},
-                                   designs=[{'repository': REPOSITORY, 'change': fi.OTHER_CHANGE,
-                                             'commit': self.repos.second, 'acceptance': D.new_decision_id(),
-                                             'sequence': 1}])
-        key = I.promotion_key(2)
-        self.store.reserve(key, {**intent, 'decision': decision, 'version': 2, 'digest': digest,
-                                 'previous': decision['subject']['previous'], 'text': text}, actor='by-hand')
-        self.store.transition(key, 'dispatched', actor='by-hand')
-        self.store.transition(key, 'confirmed', actor='by-hand')
+        # written by hand as a careful forger would: the recorder's actor, fresh ids, the right previous
+        self.hand_promotion(2, text, designs=[{'repository': REPOSITORY, 'change': fi.OTHER_CHANGE,
+                                               'commit': self.repos.second, 'acceptance': D.new_decision_id(),
+                                               'sequence': 1}])
         self.live.write_text(text, encoding='utf-8', newline='\n')
         self.assertEqual(self.refused(), 'DESIGN_ACCEPTANCE_MISSING')
 
@@ -290,6 +282,39 @@ class EnforcementCannotBeSkipped(Proof):
         with self.assertRaises(DI.DispatchRefused) as caught:
             self.parsed.approving_record('profiles', 'fixture-profile')
         self.assertEqual(caught.exception.code, 'MANIFEST_NOT_PROMOTED')
+
+    def test_only_the_object_load_manifest_returned_passes(self):
+        """F4 (slice 2b): the review's R3 forgery (a hand-built, well-formed approval view on parse_manifest's
+        result), a dataclasses.replace or a copy of a loaded manifest, and a hand-built ApprovedInputs are all
+        refused; only the object load_manifest returned in this process passes the guard."""
+        import copy
+        loaded = self.load()
+        forgeries = {
+            'R3: a well-formed view on parse_manifest\'s result':
+                DI.dataclasses.replace(self.parsed, approval_json=loaded.approval_json),
+            'replace of the loaded manifest': DI.dataclasses.replace(loaded),
+            'copy of the loaded manifest': copy.copy(loaded),
+            'hand-built': DI.ApprovedInputs(loaded.version, loaded.sha256, loaded.data_json, loaded.approval_json)}
+        for what, forged in forgeries.items():
+            with self.subTest(what=what):
+                self.assertEqual(forged, loaded)  # equal by value, not the same object
+                for call in (lambda m: DI.resolve(self.request(), manifest=m, work_sources=self.forbidden('ws'),
+                                                  next_ordinal=self.forbidden('no'),
+                                                  read_profile=self.forbidden('read_profile')),
+                             lambda m: DI.dispatch(self.request(), manifest=m, work_sources=self.forbidden('ws'),
+                                                   integration_store=self.store, workspaces=None,
+                                                   transport=self.forbidden('transport'), actor='test',
+                                                   read_profile=self.forbidden('read_profile'),
+                                                   read_artifact=self.forbidden('read_artifact'))):
+                    with self.assertRaises(DI.DispatchRefused) as caught:
+                        call(forged)
+                    self.assertEqual(caught.exception.code, 'MANIFEST_NOT_PROMOTED')
+        self.assertEqual(self.reads, [])
+        # the loaded object itself passes the guard: resolution goes on and reads the (forbidden) profile
+        with self.assertRaises(AssertionError):
+            DI.resolve(self.request(), manifest=loaded, work_sources=self.forbidden('ws'),
+                       next_ordinal=self.forbidden('no'), read_profile=self.forbidden('read_profile'))
+        self.assertEqual(self.reads, ['read_profile'])
 
 
 class LoadOrder(Proof):

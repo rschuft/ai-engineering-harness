@@ -53,6 +53,7 @@ D = _load('owner_decision', HERE / 'owner_decision.py')
 G = _load('delegated_decision', HERE / 'delegated_decision.py')
 
 DESIGN, PROMOTION = 'accept-design', 'promote-manifest'
+RECORDER = 'dispatch-input-recorder/1'  # the actor of every receipt the dispatch-input commands reserve
 RECEIPT_FORMAT = 'aieh-dispatch-input-decision/1'
 KEY_PREFIX = 'dispatch-inputs/v1/'
 PROMOTION_PREFIX = KEY_PREFIX + 'promotion/'
@@ -285,6 +286,49 @@ def design_binding(store, repository, change, commit):
 # ---------------------------------------------------------------------------- the verifier
 
 
+def reserved_by(store, key):
+    """The actor of KEY's reservation (its first event), or None."""
+    events = store.events(key)
+    return events[0].actor if events else None
+
+
+def series_problem(store, version):
+    """Why the promotion series up to VERSION is not one the recorder writes, or None. Walked by direct
+    lookups from position 1 to VERSION: every position is present (positions are contiguous), reserved by
+    the recorder (``RECORDER``) and a well-formed promotion of its position; no ``decisionId`` and no Owner
+    challenge (``shown.nonce``) appears twice; and each confirmed promotion's ``previous`` is the confirmed
+    promotion before it. A store written by hand can still satisfy all of this (decision 0010 point 1), and
+    a gap above VERSION cannot be seen without listing the store, which the verifier does not do."""
+    ids, nonces, prior = {}, {}, None
+    for position in range(1, version + 1):
+        key = promotion_key(position)
+        receipt = read_receipt(store, key, position)
+        if receipt is None:
+            return f'the promotion series has no receipt at position {position}, below version {version}'
+        if (actor := reserved_by(store, key)) != RECORDER:
+            return f'{key} was reserved by {actor!r}, not {RECORDER}'
+        problems = promotion_problems(receipt)
+        if problems:
+            return f'position {position}: {problems[0]}'
+        decision = receipt.intent['decision']
+        if decision['decisionId'] in ids:
+            return (f'position {position} repeats the decisionId {decision["decisionId"]} of position '
+                    f'{ids[decision["decisionId"]]}')
+        ids[decision['decisionId']] = position
+        nonce = decision['shown']['nonce'] if decision['format'] == D.FORMAT else None
+        if nonce is not None:
+            if nonce in nonces:
+                return f'position {position} repeats the challenge {nonce} of position {nonces[nonce]}'
+            nonces[nonce] = position
+        if receipt.state == 'confirmed':
+            if decision['subject']['previous'] != prior:
+                return (f'position {position} names previous {decision["subject"]["previous"]}, not the prior '
+                        f'confirmed promotion {prior}')
+            prior = {'version': position, 'digest': decision['subject']['digest']}
+    return None
+
+
+
 class Verdict(NamedTuple):
     """The verifier's answer: CODE None and APPROVAL the approval view
     (``ai-engineering-harness/dispatch/manifest-approval/v1``), or CODE one of ``REFUSALS`` with its
@@ -304,13 +348,14 @@ def verify_manifest(store, version, sha256, designs):
 
     In this order: no receipt at the version is ``MANIFEST_NOT_PROMOTED``; a receipt whose decision is not
     a well-formed ``promote-manifest`` record binding the receipt's version and digest is
-    ``DECISION_RECORD_INVALID``; one not confirmed is ``MANIFEST_PROMOTION_UNCONFIRMED``; another digest is
+    ``DECISION_RECORD_INVALID``, and so is a promotion series that is not one the recorder writes, walked by
+    direct lookups from position 1 to VERSION (``series_problem``); one not confirmed is ``MANIFEST_PROMOTION_UNCONFIRMED``; another digest is
     ``MANIFEST_DIGEST_MISMATCH``; a confirmed promotion at a later version is ``DECISION_REPLAYED``; a design
     entry without the confirmed acceptance the promotion bound for it is ``DESIGN_ACCEPTANCE_MISSING``.
     Otherwise the approval view: the promotion decision and each design entry's acceptance decision, with
     their receipts and authority."""
     if isinstance(version, bool) or not isinstance(version, int) or version < 1 or not isinstance(sha256, str) \
-            or not SHA256_HEX.match(sha256) or not isinstance(designs, list):
+            or not SHA256_HEX.fullmatch(sha256) or not isinstance(designs, list):
         raise ValueError('verify_manifest takes a version of at least 1, a sha256 and the designs entries')
     key = promotion_key(version)
     receipt = read_receipt(store, key, version)
@@ -319,6 +364,9 @@ def verify_manifest(store, version, sha256, designs):
     problems = promotion_problems(receipt)
     if problems:
         return _refused('DECISION_RECORD_INVALID', problems[0])
+    problem = series_problem(store, version)
+    if problem is not None:
+        return _refused('DECISION_RECORD_INVALID', problem)
     if receipt.state != 'confirmed':
         return _refused('MANIFEST_PROMOTION_UNCONFIRMED', f'{key} is {receipt.state}, not confirmed')
     decision = receipt.intent['decision']
@@ -348,6 +396,8 @@ def verify_manifest(store, version, sha256, designs):
         problems = design_problems(design, binding['repository'], binding['change'])
         if problems:
             return _refused('DECISION_RECORD_INVALID', problems[0])
+        if (actor := reserved_by(store, design.key)) != RECORDER:
+            return _refused('DECISION_RECORD_INVALID', f'{design.key} was reserved by {actor!r}, not {RECORDER}')
         accepted = design.intent['decision']
         if accepted['decisionId'] != binding['acceptance'] or accepted['subject']['commit'] != entry['commit']:
             return _refused('DESIGN_ACCEPTANCE_MISSING', f'{where}: {design.key} is not the acceptance {key} bound')

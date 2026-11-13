@@ -7,9 +7,12 @@ temporary directory outside the checkout:
 - a **project repository** holding the OpenSpec change ``fixture-change`` at two commits (``FIRST`` and
   ``SECOND``: ``design.md`` changes) and a commit that holds no change folder;
 - **fixture harness repositories**, each holding a decision 0018 and a log
-  (``evidence/bootstrap-log.md``): ``accepted`` (``Status: Accepted (Owner)``, the log quoting a commitment
-  and an envelope), ``proposed`` (the same record ``Proposed``) and ``worktree`` (accepted, but the quotes
-  are only in the log's work tree, never committed).
+  (``evidence/bootstrap-log.md``): ``accepted`` (``Status: Accepted (Owner) -``; the log's Decisions hold
+  anchored entries: a ``Commitment:``, an ``Owner standing authorization:`` with its verbatim block, an
+  ``Owner direction:`` and a per-act ``Owner authorization:``, and its Owner actions a row prepared and not
+  granted), ``proposed`` (the same record ``Proposed``), ``worktree`` (accepted, but the log's entries are
+  only in its work tree, never committed) and ``status-worktree`` (``Proposed`` committed, ``Accepted
+  (Owner)`` only in the work tree).
 
 ``Fixture`` gives each test its own state root, live manifest path, candidate directory and integration
 store (a copy of one migrated store per module), a fixed clock and the context over them. Nothing here
@@ -26,6 +29,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -54,9 +58,19 @@ PM, EM = 'agent:product-manager', 'agent:engineering-manager'
 REPOSITORY = 'fixture-app'
 CHANGE = 'fixture-change'
 OTHER_CHANGE = 'fixture-other'
-COMMITMENT = '2026-11-12: Commitment: FIXTURE-D (SYNTHETIC FIXTURE, not a commitment). Terminal leaf FIXTURE-1.'
+COMMITMENT = 'Commitment: FIXTURE-D (SYNTHETIC FIXTURE, not a commitment).'
 ENVELOPE = ('SYNTHETIC FIXTURE, not an Owner authorization: a standing authorization to promote manifests of '
             'fixture-app until 2026-12-01.')
+COMMITMENT_ANCHOR = 'commitment-fixture-d'
+ENVELOPE_ANCHOR = 'owner-standing-authorization-fixture'
+DIRECTION_ANCHOR = 'owner-direction-fixture'
+AUTHORIZATION_ANCHOR = 'owner-authorization-fixture'
+# Texts of the fixture log that are no authority of a basis type (each in the log, outside any verbatim block of
+# an "Owner standing authorization:" entry, or in an entry of another kind).
+DIRECTION_QUOTE = 'SYNTHETIC FIXTURE direction, not a standing authorization: promote fixture-app manifests.'
+AUTHORIZATION_QUOTE = 'SYNTHETIC FIXTURE per-act authorization, not standing: promote this one manifest.'
+ENVELOPE_PROSE = 'Given in the main session (SYNTHETIC FIXTURE), transcribed verbatim below'
+OA_ROW = 'Prepared, not granted (SYNTHETIC FIXTURE): (j) the manifest envelope of fixture-app'
 ACCEPTED_STATUS = ('Status: Accepted (Owner) - 2026-11-12, revision 4 (SYNTHETIC FIXTURE of decision 0018, not '
                    'the record)')
 PROPOSED_STATUS = 'Status: Proposed - 2026-11-12, revision 4 (SYNTHETIC FIXTURE of decision 0018, not the record)'
@@ -69,11 +83,11 @@ def statement(token, **changes):
 
 
 def commitment(**changes):
-    return {'type': 'commitment', 'link': G.LOG, 'quote': COMMITMENT, **changes}
+    return {'type': 'commitment', 'link': f'{G.LOG}#{COMMITMENT_ANCHOR}', 'quote': COMMITMENT, **changes}
 
 
 def envelope(**changes):
-    return {'type': 'envelope', 'link': G.LOG, 'quote': ENVELOPE, **changes}
+    return {'type': 'envelope', 'link': f'{G.LOG}#{ENVELOPE_ANCHOR}', 'quote': ENVELOPE, **changes}
 
 
 def decision_record(status):
@@ -81,9 +95,34 @@ def decision_record(status):
             '3. Delegated. 3.2 design acceptance; 3.3 manifest promotion.\n').encode('utf-8')
 
 
-def log(*quotes):
-    return ('# Bootstrap log (SYNTHETIC FIXTURE)\n\n## Decisions\n\n'
-            + ''.join(f'- {quote}\n' for quote in quotes)).encode('utf-8')
+def _block(text, width=60):
+    """TEXT as an indented verbatim block, wrapped, as the log records an Owner's words."""
+    lines, line = [], ''
+    for word in text.split():
+        if line and len(line) + 1 + len(word) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = f'{line} {word}' if line else word
+    return [f'  > {each}' for each in lines + [line]]
+
+
+def log(entries=True):
+    """The fixture log: an Owner-actions row prepared and not granted, then the Decisions entries (a commitment,
+    an Owner standing authorization with its verbatim block, an Owner direction and a per-act Owner
+    authorization, each anchored), or none."""
+    lines = ['# Bootstrap log (SYNTHETIC FIXTURE)', '', '## Owner actions', '', f'| OA-99 | {OA_ROW} | prepared |',
+             '', '## Decisions', '']
+    if entries:
+        lines += [f'- <a id="{COMMITMENT_ANCHOR}"></a>**2026-11-12: {COMMITMENT}** Terminal leaf FIXTURE-1.',
+                  f'- <a id="{ENVELOPE_ANCHOR}"></a>**2026-11-12: Owner standing authorization: the fixture-app '
+                  f'envelope.** {ENVELOPE_PROSE}:', '', *_block(ENVELOPE), '',
+                  f'- <a id="{DIRECTION_ANCHOR}"></a>**2026-11-12: Owner direction: fixture manifests.** Verbatim:',
+                  '', *_block(DIRECTION_QUOTE), '',
+                  f'- <a id="{AUTHORIZATION_ANCHOR}"></a>**2026-11-12: Owner authorization: one fixture manifest.** '
+                  'Verbatim:', '', *_block(AUTHORIZATION_QUOTE), '',
+                  '- **2026-11-12: An entry without an anchor (SYNTHETIC FIXTURE).**', '', '## Later section']
+    return ''.join(f'{line}\n' for line in lines).encode('utf-8')
 
 
 class Repositories:
@@ -117,15 +156,16 @@ def _build(root):
     repos.second = fx.commit_all(repos.project, 'The change, second revision')
     repos.harness = {}
     record = 'decisions/0018-fixture-delegation.md'
-    for name, status, quotes in (('accepted', ACCEPTED_STATUS, (COMMITMENT, ENVELOPE)),
-                                 ('proposed', PROPOSED_STATUS, (COMMITMENT, ENVELOPE)),
-                                 ('worktree', ACCEPTED_STATUS, ())):
+    for name, status, entries in (('accepted', ACCEPTED_STATUS, True), ('proposed', PROPOSED_STATUS, True),
+                                  ('worktree', ACCEPTED_STATUS, False),
+                                  ('status-worktree', PROPOSED_STATUS, True)):
         path = root / f'harness-{name}'
-        _init(path, {record: decision_record(status), G.LOG: log(*quotes),
+        _init(path, {record: decision_record(status), G.LOG: log(entries),
                      'decisions/0017-another.md': decision_record(ACCEPTED_STATUS)}, 'The fixture harness')
         repos.harness[name] = path
-    # the quotes only in the work tree: never committed
-    fx.write(repos.harness['worktree'], {G.LOG: log(COMMITMENT, ENVELOPE)})
+    # only in the work tree, never committed: the log's entries; and an Accepted (Owner) status over a Proposed one
+    fx.write(repos.harness['worktree'], {G.LOG: log(True)})
+    fx.write(repos.harness['status-worktree'], {record: decision_record(ACCEPTED_STATUS)})
     return repos
 
 
@@ -256,3 +296,45 @@ class Fixture(unittest.TestCase):
         approved = DI.parse_manifest(Path(path or self.live).read_bytes())
         designs = [{k: e[k] for k in ('repository', 'change', 'commit')} for e in approved.data['designs']]
         return I.verifier(self.store)(approved.version, approved.sha256, designs)
+
+    # -- receipts written by hand (what decision 0010 point 1 leaves possible: a same-account store write)
+
+    def hand_receipt(self, key, intent, state='confirmed', actor=None):
+        """Reserve KEY with INTENT by hand, as ACTOR (the recorder's own name by default, as a careful forger
+        would write it), and move it to STATE."""
+        self.store.reserve(key, intent, actor=actor or IR.RECORDER)
+        path = {'reserved': [], 'dispatched': ['dispatched'], 'confirmed': ['dispatched', 'confirmed'],
+                'failed': ['failed'], 'unknown': ['dispatched', 'unknown']}[state]
+        for to_state in path:
+            self.store.transition(key, to_state, actor=actor or IR.RECORDER)
+        return key
+
+    def hand_promotion(self, version, text, *, state='confirmed', actor=None, intent_changes=None, decision_id=None,
+                       nonce=None, **subject):
+        """A promotion receipt written by hand at VERSION for the manifest TEXT: a copy of version 1's Owner
+        decision with a fresh decisionId and challenge (or DECISION_ID, NONCE), its subject rebound (version,
+        digest, previous: the last confirmed promotion, SUBJECT's other changes)."""
+        intent = json.loads(self.store.get(I.promotion_key(1)).intent_json)
+        decision = I.stored_record(intent['decision'])
+        decision['decisionId'] = decision_id or D.new_decision_id()
+        decision['shown']['nonce'] = nonce or uuid.uuid4().hex
+        head = I.last_confirmed(I.promotions(self.store))
+        digest = f'sha256:{DI.parse_manifest(text.encode("utf-8")).sha256}'
+        decision['subject'].update({'version': version, 'digest': digest,
+                                    'previous': {'version': head.position, 'digest': head.intent['digest']},
+                                    **subject})
+        hand = {**intent, 'decision': decision, 'version': version, 'digest': digest,
+                'previous': decision['subject']['previous'], 'text': text, **(intent_changes or {})}
+        return self.hand_receipt(I.promotion_key(version), hand, state, actor)
+
+    def hand_design(self, sequence, commit, *, state='confirmed', actor=None, intent_changes=None):
+        """A design-acceptance receipt of CHANGE written by hand at SEQUENCE for COMMIT: a copy of sequence 1's
+        decision with a fresh decisionId and challenge. Returns the decision id."""
+        intent = json.loads(self.store.get(I.design_key(REPOSITORY, CHANGE, 1)).intent_json)
+        decision = I.stored_record(intent['decision'])
+        decision['decisionId'] = D.new_decision_id()
+        decision['shown']['nonce'] = uuid.uuid4().hex
+        decision['subject']['commit'] = commit
+        hand = {**intent, 'decision': decision, 'sequence': sequence, **(intent_changes or {})}
+        self.hand_receipt(I.design_key(REPOSITORY, CHANGE, sequence), hand, state, actor)
+        return decision['decisionId']

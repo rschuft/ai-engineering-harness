@@ -17,6 +17,7 @@ reads the real decision 0018, read-only, at this checkout's HEAD. Every statemen
 synthetic.
 """
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -460,7 +461,7 @@ class DelegationCodes(Base):
 
     def test_a_quote_only_in_the_work_tree_is_not_recorded(self):
         harness = self.repos.harness['worktree']
-        self.assertIn(fi.ENVELOPE, (harness / G.LOG).read_text(encoding='utf-8'))
+        self.assertIn(fi.COMMITMENT, (harness / G.LOG).read_text(encoding='utf-8'))
         self.ctx = self.context(harness=harness)
         self.assertUnchanged('DELEGATION_BASIS_NOT_RECORDED', self.delegate_design)
         self.accept()
@@ -536,13 +537,8 @@ class WriteOutcomes(Base):
         self.assertEqual(IR.manifest_resolve(self.ctx, 2)['receipt']['state'], 'confirmed')
 
     def test_resolve_settles_reserved_and_dispatched_receipts(self):
-        decision = json.loads(self.store.get('dispatch-inputs/v1/promotion/1').intent_json)
         for version, state in ((2, 'reserved'), (3, 'dispatched')):
-            intent = {**decision, 'version': version, 'digest': 'sha256:' + '0' * 64}
-            key = I.promotion_key(version)
-            self.store.reserve(key, intent, actor='test')
-            if state == 'dispatched':
-                self.store.transition(key, 'dispatched', actor='test')
+            self.hand_promotion(version, fi.manifest(version=version), state=state)
         self.assertEqual(IR.manifest_resolve(self.ctx, 2)['receipt']['events'], ['reserved', 'failed'])
         three = IR.manifest_resolve(self.ctx, 3)['receipt']
         self.assertEqual(three['events'], ['reserved', 'dispatched', 'unknown', 'failed'])
@@ -562,12 +558,8 @@ class WriteOutcomes(Base):
         refused = self.assertUnchanged('PROMOTION_UNRESOLVED', self.delegate_promotion, v3)
         self.assertIn('version 2 (unknown)', refused.detail)
         self.assertUnchanged('PROMOTION_UNRESOLVED', IR.manifest_prepare, self.ctx, v3)
-        decision = json.loads(self.store.get('dispatch-inputs/v1/promotion/1').intent_json)
         for version, state in ((3, 'reserved'), (4, 'dispatched')):
-            key = I.promotion_key(version)
-            self.store.reserve(key, {**decision, 'version': version}, actor='test')
-            if state == 'dispatched':
-                self.store.transition(key, 'dispatched', actor='test')
+            self.hand_promotion(version, fi.manifest(version=version), state=state)
         refused = self.assertUnchanged('PROMOTION_UNRESOLVED', self.delegate_promotion,
                                        self.candidate(name='v5.json', version=5))
         self.assertIn('version 3 (reserved), version 4 (dispatched)', refused.detail)
@@ -636,20 +628,9 @@ class Verifier(Base):
         no acceptance receipt."""
         text = fi.manifest(version=2, designs=((REPOSITORY, fi.OTHER_CHANGE, self.repos.second),))
         path = self.hand(text, 'v2.json')
-        approved = DI.parse_manifest(path.read_bytes())
-        intent = json.loads(self.store.get('dispatch-inputs/v1/promotion/1').intent_json)
-        decision = intent['decision']
-        decision['subject'].update(version=2, digest=f'sha256:{approved.sha256}',
-                                   previous={'version': 1, 'digest': intent['digest']},
-                                   designs=[{'repository': REPOSITORY, 'change': fi.OTHER_CHANGE,
-                                             'commit': self.repos.second, 'acceptance': fi.D.new_decision_id(),
-                                             'sequence': 1}])
-        hand = {**intent, 'decision': decision, 'version': 2, 'digest': decision['subject']['digest'],
-                'previous': decision['subject']['previous'], 'text': text}
-        key = I.promotion_key(2)
-        self.store.reserve(key, hand, actor='by-hand')
-        self.store.transition(key, 'dispatched', actor='by-hand')
-        self.store.transition(key, 'confirmed', actor='by-hand')
+        self.hand_promotion(2, text, designs=[{'repository': REPOSITORY, 'change': fi.OTHER_CHANGE,
+                                               'commit': self.repos.second, 'acceptance': fi.D.new_decision_id(),
+                                               'sequence': 1}])
         self.assertEqual(self.verify(path).code, 'DESIGN_ACCEPTANCE_MISSING')
 
     def test_a_hand_written_decision_is_not_well_formed(self):
@@ -688,8 +669,8 @@ class Custody(Base):
                 mock.patch.object(IR.store_module, 'open_store', side_effect=forbid), \
                 mock.patch.object(IR, 'managed_context', side_effect=forbid), \
                 mock.patch.object(DI, 'manifest_path', side_effect=forbid):
-            self.accept()
-            self.delegate_design(self.repos.second)
+            self.delegate_design()
+            self.accept(self.repos.second)  # an Owner acceptance may supersede a delegated one (not the reverse)
             self.promote(self.candidate(designs=((REPOSITORY, CHANGE, self.repos.second),)))
             IR.manifest_resolve(self.ctx, 1)
             IR.status(self.ctx)
@@ -745,6 +726,305 @@ class Custody(Base):
                            or f.endswith('authorization_recorder.py'))
         self.assertEqual(forbidden, [])
         self.assertFalse((self.dir / 'no-data-root').exists())
+
+
+# ---------------------------------------------------------------------------- slice 2b (the independent review)
+
+
+def binding(sequence, commit, acceptance):
+    return {'repository': REPOSITORY, 'change': CHANGE, 'commit': commit, 'acceptance': acceptance,
+            'sequence': sequence}
+
+
+class BasisAuthority(Base):
+    """F1: a basis is an authority of its type, structurally, or the delegated decision is refused (fail
+    closed): the anchor names a Decisions entry of the log at HEAD; a commitment's entry is titled
+    "Commitment:" and holds the quote; an envelope's is titled "Owner standing authorization:" and holds the
+    quote in its verbatim block."""
+
+    def anchored(self, factory, anchor, quote):
+        return factory(link=f'{G.LOG}#{anchor}', quote=quote)
+
+    def test_delegation_basis_not_authority(self):
+        cases = [  # (what, the basis of a promotion)
+            ('an Owner direction', self.anchored(fi.envelope, fi.DIRECTION_ANCHOR, fi.DIRECTION_QUOTE)),
+            ('a per-act Owner authorization', self.anchored(fi.envelope, fi.AUTHORIZATION_ANCHOR,
+                                                            fi.AUTHORIZATION_QUOTE)),
+            ('prose of the standing authorization outside its block',
+             self.anchored(fi.envelope, fi.ENVELOPE_ANCHOR, fi.ENVELOPE_PROSE)),
+            ('a prepared, not granted, Owner-actions row', self.anchored(fi.envelope, fi.ENVELOPE_ANCHOR, fi.OA_ROW)),
+            ('another entry\'s block, anchored at the standing authorization',
+             self.anchored(fi.envelope, fi.ENVELOPE_ANCHOR, fi.DIRECTION_QUOTE)),
+            ('a commitment', self.anchored(fi.envelope, fi.COMMITMENT_ANCHOR, fi.COMMITMENT)),
+        ]
+        self.accept()
+        for what, basis in cases:
+            with self.subTest(what=what):
+                self.assertUnchanged('DELEGATION_BASIS_NOT_AUTHORITY', self.delegate_promotion, self.candidate(),
+                                     basis=basis)
+        for anchor in (fi.ENVELOPE_ANCHOR, fi.DIRECTION_ANCHOR):
+            with self.subTest(commitment_at=anchor):
+                self.assertUnchanged('DELEGATION_BASIS_NOT_AUTHORITY', self.delegate_design, self.repos.second,
+                                     basis=self.anchored(fi.commitment, anchor, fi.COMMITMENT))
+
+    def test_an_absent_anchor_is_not_recorded_and_a_link_without_one_is_invalid(self):
+        self.assertUnchanged('DELEGATION_BASIS_NOT_RECORDED', self.delegate_design,
+                             basis=self.anchored(fi.commitment, 'no-such-entry', fi.COMMITMENT))
+        self.assertUnchanged('DELEGATION_BASIS_INVALID', self.delegate_design, basis=fi.commitment(link=G.LOG))
+        self.assertUnchanged('DELEGATION_BASIS_INVALID', self.delegate_design,
+                             basis=fi.commitment(link=f'{G.LOG}#Not An Anchor'))
+
+    def test_a_quote_of_the_block_wrapped_differently_is_its_words(self):
+        """The block is compared with runs of whitespace collapsed on both sides."""
+        self.accept()
+        quote = '  '.join(fi.ENVELOPE.split())  # other spacing than the log's wrapped lines
+        self.delegate_promotion(self.candidate(), basis=fi.envelope(quote=quote))
+        self.assertIsNone(self.verify().code)
+
+    def test_the_real_log_at_head_refuses_the_prepared_d1_envelope(self):
+        """R4b, read-only at this checkout's HEAD: OA-22 (j), the D1 manifest envelope, is prepared and not
+        granted. Anchored at any Decisions entry of the log, it is no standing authorization: a delegated
+        promotion against the real log fails closed."""
+        with ra.open_repository(fi.REPO, config='repository', ceilings=[str(fi.REPO.parent)]) as repo:
+            commit = repo.head().commit
+            text = repo.blob(commit, G.LOG).decode('utf-8')
+        start = text.index('(j) the D1 manifest envelope')
+        quote = text[start:start + 120]
+        anchors = [m.group('anchor') for m in map(G.ENTRY_START.match, text.splitlines()) if m]
+        self.assertTrue(anchors)
+        view = G.HarnessView(commit, 'decisions/0018.md', '', 'sha256:' + '0' * 64, text)
+        for anchor in anchors:
+            with self.subTest(anchor=anchor):
+                refusal = G.BASIS_TYPES['envelope'].unrecorded(self.anchored(fi.envelope, anchor, quote), view)
+                self.assertIn(refusal[0], ('DELEGATION_BASIS_NOT_AUTHORITY', 'DELEGATION_BASIS_NOT_RECORDED'))
+        with self.assertRaises(G.DelegationRefused) as caught:
+            G.read_authority(fi.REPO, I.PROMOTION, PM, self.anchored(fi.envelope, 'commitment-d1', quote))
+        self.assertEqual(caught.exception.code, 'DELEGATION_BASIS_NOT_AUTHORITY')
+
+
+class OwnerHead(Base):
+    """F8: a delegated acceptance never supersedes an Owner acceptance (decision 0018 point 4.8)."""
+
+    def test_owner_acceptance_head(self):
+        self.accept()
+        refused = self.assertUnchanged('OWNER_ACCEPTANCE_HEAD', self.delegate_design, self.repos.second)
+        self.assertIn('is the Owner\'s', refused.detail)
+
+    def test_the_other_successions_are_open(self):
+        self.delegate_design()
+        self.delegate_design(self.repos.second)  # delegated over delegated
+        self.accept()  # Owner over delegated
+        self.assertEqual([d['head']['authority']['authority'] for d in IR.status(self.ctx)['designs']], ['owner'])
+        # promotions are not gated by authority: a delegated promotion after an Owner one
+        self.promote(self.candidate())
+        self.delegate_promotion(self.candidate(name='v2.json', version=2))
+        self.assertIsNone(self.verify().code)
+
+
+class CrashPaths(Base):
+    """F7: an act that stops after its reservation leaves its receipt failed when it can, and the command line
+    answers a code, never a traceback."""
+
+    def test_io_failed_writing_a_challenge_records_nothing(self):
+        blocked = self.dir / 'state-is-a-file'
+        blocked.write_text('x', encoding='utf-8')
+        self.ctx = self.context(state_root=blocked)
+        refused = self.assertUnchanged('IO_FAILED', IR.design_prepare, self.ctx, self.repos.project, REPOSITORY,
+                                       CHANGE, self.repos.first)
+        self.assertNotIn('receipt', refused.details)
+
+    def test_a_design_act_that_stops_after_its_reservation_fails_its_receipt(self):
+        challenge = self.design_challenge()
+        with mock.patch.object(IR, '_write_copy', side_effect=OSError('disk full')):
+            refused = self.assertRefused('IO_FAILED', IR.design_record, self.ctx, challenge['shown']['nonce'],
+                                         fi.statement(CHANGE), recorded_by=fi.RECORDED_BY, refusal=False)
+        key = I.design_key(REPOSITORY, CHANGE, 1)
+        self.assertEqual(refused.details['receipt'], key)
+        self.assertEqual(self.receipts()[key], ('failed', ['reserved', 'failed']))
+        # the challenge is single-use, and the detail says its decision was not confirmed
+        again = self.assertUnchanged('CHALLENGE_CONSUMED', IR.design_record, self.ctx, challenge['shown']['nonce'],
+                                     fi.statement(CHANGE), recorded_by=fi.RECORDED_BY)
+        self.assertIn('failed: its decision was not confirmed', again.detail)
+        design = IR.status(self.ctx)['designs'][0]
+        self.assertEqual((design['head'], design['failed'], design['next']), (None, [1], 2))
+        # the position is spent; the next acceptance takes sequence 2 and supersedes nothing
+        accepted = self.accept()
+        self.assertEqual((accepted['receipt']['operation_key'][-2:], accepted['decision']['subject']['supersedes']),
+                         ('/2', None))
+
+    def test_a_delegated_design_act_that_stops_after_its_reservation_fails_its_receipt(self):
+        with mock.patch.object(IR, '_write_copy', side_effect=OSError('disk full')):
+            self.assertRefused('IO_FAILED', self.delegate_design, refusal=False)
+        self.assertEqual(self.receipts()[I.design_key(REPOSITORY, CHANGE, 1)][0], 'failed')
+
+    def test_a_promotion_whose_copy_cannot_be_written_fails_with_the_live_file_as_it_was(self):
+        self.accept()
+        with mock.patch.object(IR, '_write_copy', side_effect=OSError('disk full')):
+            refused = self.assertRefused('PROMOTION_FAILED', self.promote, self.candidate(), refusal=False)
+        self.assertIn('copy:', refused.detail)
+        self.assertEqual(self.receipts()[I.promotion_key(1)], ('failed', ['reserved', 'failed']))
+        self.assertIsNone(self.live_bytes())
+        self.assertEqual(IR.status(self.ctx)['promotion']['failed'], [1])
+
+    def test_a_tampered_challenge_and_an_os_error_are_codes_on_the_command_line(self):
+        self.accept()
+        challenge = IR.manifest_prepare(self.ctx, self.candidate())
+        nonce = challenge['shown']['nonce']
+        path = self.dir / 'state' / 'owner-authorization' / 'dispatch-inputs' / 'challenges' / f'{nonce}.json'
+        altered = json.loads(path.read_text(encoding='utf-8'))
+        altered['candidate'] = '{"schema": "tampered"}\n'
+        altered['subject']['digest'] = 'sha256:' + hashlib.sha256(altered['candidate'].encode()).hexdigest()
+        path.write_text(json.dumps(altered), encoding='utf-8')
+        statement = self.dir / 's.json'
+        statement.write_text(json.dumps(fi.statement('approved-inputs-v1')), encoding='utf-8')
+        out, err = io.StringIO(), io.StringIO()
+
+        @contextlib.contextmanager
+        def context():
+            yield self.ctx
+        code = IR.main(['manifest', 'record', '--challenge', nonce, '--statement', str(statement), '--recorded-by',
+                        fi.RECORDED_BY], out, err, context=context)
+        self.assertEqual(code, 2)
+        self.assertTrue(err.getvalue().startswith('input-recorder: CHALLENGE_INVALID: '), err.getvalue())
+
+        @contextlib.contextmanager
+        def unwritable():
+            raise PermissionError('the managed root is not writable')
+            yield  # noqa: unreachable
+        err = io.StringIO()
+        self.assertEqual(IR.main(['status'], io.StringIO(), err, context=unwritable), 2)
+        self.assertTrue(err.getvalue().startswith('input-recorder: IO_FAILED: PermissionError'), err.getvalue())
+        self.assertNotIn('Traceback', err.getvalue())
+
+
+class SeriesIntegrity(Base):
+    """F2 and F3: the verifier walks positions 1 to N by direct lookups."""
+
+    def setUp(self):
+        super().setUp()
+        self.accept()
+        self.promote(self.candidate())
+        self.v1 = json.loads(self.store.get(I.promotion_key(1)).intent_json)['decision']
+
+    def live_at(self, version):
+        self.live.write_text(fi.manifest(version=version), encoding='utf-8', newline='\n')
+
+    def refused_with(self, fragment):
+        answer = self.verify()
+        self.assertEqual(answer.code, 'DECISION_RECORD_INVALID')
+        self.assertIn(fragment, answer.detail)
+
+    def test_a_missing_position_below_the_version(self):
+        self.hand_promotion(3, fi.manifest(version=3))
+        self.live_at(3)
+        self.refused_with('no receipt at position 2')
+
+    def test_a_repeated_decision_id_or_challenge(self):
+        self.hand_promotion(2, fi.manifest(version=2), decision_id=self.v1['decisionId'])
+        self.live_at(2)
+        self.refused_with('repeats the decisionId')
+
+    def test_a_repeated_challenge(self):
+        self.hand_promotion(2, fi.manifest(version=2), nonce=self.v1['shown']['nonce'])
+        self.live_at(2)
+        self.refused_with('repeats the challenge')
+
+    def test_a_previous_that_is_not_the_prior_confirmed_promotion(self):
+        self.hand_promotion(2, fi.manifest(version=2), previous={'version': 1, 'digest': 'sha256:' + '0' * 64})
+        self.live_at(2)
+        self.refused_with('not the prior confirmed promotion')
+
+    def test_a_promotion_receipt_not_reserved_by_the_recorder(self):
+        self.hand_promotion(2, fi.manifest(version=2), actor='by-hand')
+        self.live_at(2)
+        self.refused_with("reserved by 'by-hand'")
+
+    def test_a_design_receipt_not_reserved_by_the_recorder(self):
+        decision = self.hand_design(2, self.repos.second, actor='by-hand')
+        text = fi.manifest(version=2, designs=((REPOSITORY, CHANGE, self.repos.second),))
+        self.hand_promotion(2, text, designs=[binding(2, self.repos.second, decision)])
+        self.live.write_text(text, encoding='utf-8', newline='\n')
+        self.refused_with("reserved by 'by-hand'")
+
+    def test_a_careful_hand_written_series_still_loads(self):
+        """What remains outside the threat model (decision 0010 point 1): a store written by hand with the
+        recorder's actor, fresh ids and the right previous is accepted; documented, not prevented."""
+        self.hand_promotion(2, fi.manifest(version=2))
+        self.live_at(2)
+        self.assertIsNone(self.verify().code)
+
+
+class Mutants(Base):
+    """F5: tests that kill the review's surviving mutants M4 to M9, M21, M22 and M28."""
+
+    def setUp(self):
+        super().setUp()
+        self.first = self.accept()['decision']['decisionId']
+        self.promote(self.candidate())
+
+    def promoted_by_hand(self, commit, bound):
+        text = fi.manifest(version=2, designs=((REPOSITORY, CHANGE, commit),))
+        self.hand_promotion(2, text, designs=[bound])
+        self.live.write_text(text, encoding='utf-8', newline='\n')
+        return self.verify()
+
+    def test_m4_the_bound_acceptance_id(self):
+        answer = self.promoted_by_hand(self.repos.first, binding(1, self.repos.first, fi.D.new_decision_id()))
+        self.assertEqual(answer.code, 'DESIGN_ACCEPTANCE_MISSING')
+
+    def test_m5_an_unconfirmed_design_receipt(self):
+        decision = self.hand_design(2, self.repos.second, state='reserved')
+        answer = self.promoted_by_hand(self.repos.second, binding(2, self.repos.second, decision))
+        self.assertEqual(answer.code, 'DESIGN_ACCEPTANCE_MISSING')
+
+    def test_m6_the_binding_commit(self):
+        answer = self.promoted_by_hand(self.repos.first, binding(1, self.repos.second, self.first))
+        self.assertEqual(answer.code, 'DESIGN_ACCEPTANCE_MISSING')
+
+    def test_m7_the_accepted_commit(self):
+        second = self.accept(self.repos.second)['decision']['decisionId']
+        answer = self.promoted_by_hand(self.repos.first, binding(2, self.repos.first, second))
+        self.assertEqual(answer.code, 'DESIGN_ACCEPTANCE_MISSING')
+
+    def test_m8_the_promotion_receipt_binds_its_decision(self):
+        text = fi.manifest(version=2)
+        self.hand_promotion(2, text, intent_changes={'schema': 'another/v1'})
+        self.live.write_text(text, encoding='utf-8', newline='\n')
+        self.assertEqual(self.verify().code, 'DECISION_RECORD_INVALID')
+
+    def test_m9_the_design_receipt_binds_its_decision(self):
+        decision = self.hand_design(2, self.repos.second, intent_changes={'sequence': 3})
+        answer = self.promoted_by_hand(self.repos.second, binding(2, self.repos.second, decision))
+        self.assertEqual(answer.code, 'DECISION_RECORD_INVALID')
+
+    def test_m21_the_same_commit_accepted_again_after_the_challenge(self):
+        """The review's repro2: the binding (acceptance id and sequence) changed under the challenge."""
+        challenge = IR.manifest_prepare(self.ctx, self.candidate(name='v2.json', version=2))
+        self.accept()  # the same commit again: sequence 2
+        self.assertUnchanged('CHALLENGE_STALE', IR.manifest_record, self.ctx, challenge['shown']['nonce'],
+                             fi.statement('approved-inputs-v2'), recorded_by=fi.RECORDED_BY)
+
+    def test_m22_a_design_challenge_whose_series_went_back(self):
+        """Not redundant with the position check: after a store restore the challenged position is free but is
+        no longer the next one."""
+        challenge = self.design_challenge(self.repos.second)
+        self.assertEqual(challenge['position'], 2)
+        restored = self.dir / 'restored.sqlite'
+        __import__('shutil').copyfile(self.golden, restored)
+        with IS.open_store(restored) as store:
+            self.ctx = self.context(store=store)
+            with self.assertRaises(IR.RecorderError) as caught:
+                IR.design_record(self.ctx, challenge['shown']['nonce'], fi.statement(CHANGE),
+                                 recorded_by=fi.RECORDED_BY)
+            self.assertEqual(caught.exception.code, 'CHALLENGE_STALE')
+            self.assertEqual(store.attempts(), [])
+
+    def test_m28_the_status_is_read_at_head_not_in_the_work_tree(self):
+        harness = self.repos.harness['status-worktree']
+        self.assertTrue(G.accepted_by_owner((harness / 'decisions' / '0018-fixture-delegation.md')
+                                            .read_text(encoding='utf-8')))
+        self.ctx = self.context(harness=harness)
+        self.assertUnchanged('DELEGATION_NOT_ACCEPTED', self.delegate_design, self.repos.second)
 
 
 class EveryCode(unittest.TestCase):

@@ -69,6 +69,7 @@ import re
 import stat
 import sys
 import threading
+import weakref
 from typing import Callable, Mapping, Protocol, Sequence
 
 HERE = Path(__file__).resolve().parent
@@ -553,16 +554,31 @@ def load_manifest(path, *, decisions=None, repo_root=REPO) -> ApprovedInputs:
         failure = exc
     if failure is not None:
         raise DispatchRefused('DECISION_RECORD_INVALID', f'the decision verifier raised {type(failure).__name__}')
-    return dataclasses.replace(manifest, approval_json=_approval(manifest, answer))
+    approved = dataclasses.replace(manifest, approval_json=_approval(manifest, answer))
+    _LOADED[id(approved)] = approved
+    return approved
+
+
+# The ApprovedInputs objects load_manifest returned in this process, by identity. A caller cannot add one:
+# dataclasses.replace, a copy or a hand-built ApprovedInputs is another object, which is not here. It is a guard
+# against convenience and accident (a driver that parses the file itself), not against code of the same account in
+# this process, which decision 0010 point 1 places outside the threat model.
+_LOADED: 'weakref.WeakValueDictionary[int, ApprovedInputs]' = weakref.WeakValueDictionary()
 
 
 def _require_promoted(manifest: ApprovedInputs) -> None:
-    """MANIFEST_NOT_PROMOTED unless MANIFEST carries load_manifest's approval of this version and digest."""
-    approval = manifest.approval
-    if approval is None or approval.get('version') != manifest.version \
-            or approval.get('digest') != f'sha256:{manifest.sha256}':
-        raise DispatchRefused('MANIFEST_NOT_PROMOTED', 'the manifest was not approved by load_manifest through a '
-                              'recorded decision (parse_manifest\'s result is for checking only)')
+    """MANIFEST_NOT_PROMOTED unless MANIFEST is an object load_manifest returned in this process, with its approval
+    view still well formed for this version, digest and designs."""
+    if _LOADED.get(id(manifest)) is not manifest:
+        raise DispatchRefused('MANIFEST_NOT_PROMOTED', 'the manifest was not returned by load_manifest in this '
+                              'process with a decision verifier (parse_manifest\'s result is for checking only)')
+    failure = None
+    try:
+        _approval(manifest, (None, '', manifest.approval))
+    except DispatchRefused as exc:
+        failure = exc.detail
+    if failure is not None:
+        raise DispatchRefused('MANIFEST_NOT_PROMOTED', f'the manifest\'s approval view is not well formed: {failure}')
 
 
 # ---------------------------------------------------------------------------
