@@ -492,7 +492,7 @@ process: the discovery run is the slice plan's step 6a, under the Owner's acts A
 - **`discover`** (`inference_qualification.py discover --provider ID --out FILE`, the synthetic key on standard
   input): the qualification launcher in its discovery mode. It refuses exactly as `broker` does, through the same
   code path, and also: `--out` must be a new file in an existing directory outside the checkout
-  (`PROPOSAL_OUT_REFUSED`; "outside" is the comparison `load_manifest` uses, `dispatch_inputs.inside_or_around`,
+  (`PROPOSAL_OUT_REFUSED`; "outside" is the harness's one checkout comparison, `aieh_paths.inside_or_around`, which `load_manifest` also uses,
   which sees through every form Windows resolves to the same path: a `\\?\` or `\\?\UNC\` prefix, trailing spaces
   and dots of a component, case, `/`), and each keyed family's upstream must be an IPv4 loopback literal
   (`FAKE_ADDRESS_REFUSED`) on which the command binds that family's fake upstream itself (`DISCOVERY_PORT_TAKEN`

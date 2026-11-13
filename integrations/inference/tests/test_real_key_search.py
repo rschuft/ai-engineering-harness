@@ -75,7 +75,7 @@ class RealKeySearch(unittest.TestCase):
         factory = factory or Factory({IB.ENTRY: (S.PROVIDER, key)})
         argv = ['search', '--owner-act', act, '--expect-fingerprint', fingerprint or KS.fingerprint(key)]
         for surface in surfaces or [f'instance=tree:{self.root}', f'serial=file:{self.root / "serial.log"}']:
-            argv += ['--surface', surface]
+            argv += [f'--surface={surface}']
         out, err = io.StringIO(), io.StringIO()
         with mock.patch('sys.stdin', NoStdin()):
             code = RK.main(argv, out, err, provider_factory=factory)
