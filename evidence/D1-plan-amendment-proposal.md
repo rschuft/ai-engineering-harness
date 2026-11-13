@@ -41,7 +41,7 @@ D1's first live gate. S-03.1's notes already say A1, A5 and A6 are "re-presented
   authorized the broker design (decision 0015, S-03.1's artifact) for model use, together with the acts the first
   model call needs (the provider key A1, the broker's egress to the one provider origin A5, the first model call
   A6, and the spending cap); if the Owner refuses, no model call is made." The existing sentence "the exact model
-  identifiers ... are approved by the Owner before the first paid call" stays.
+  identifiers ... are approved by the Owner before the first paid call" stays (rewritten by item 5 if that item is applied).
 - S-03.1 `notes` gain: "Plan amendment of <date>: the clause 'authorized or refused by the Owner before any model
   run' moved, unweakened, to S-03.3, the first-model-call boundary (OA-28)."
 
@@ -68,15 +68,18 @@ therefore becomes its own leaf, and S-03.3 depends on it, so the first real-key 
 **Amendment.** A new leaf **S-03.5**:
 - **Title:** "Bind the broker's real-provider start to a recorded provider-envelope authorization".
 - **Parent:** S-03. **Phase:** 1. **Size:** S.
-- **Deps:** `["S-03.1", "P-04.2"]`. S-03.3's `deps` gain `"S-03.5"`.
+- **Deps:** `["S-03.1", "P-04.2", "P-04.3"]` (P-04.3 provides the delegated decision kind used below). S-03.3's `deps` gain `"S-03.5"`.
 - **Artifact:** "The broker's fail-closed start precondition, the provider-envelope operation kind recorded through
   the authorization recorder, its refusal codes, fixtures and negative suite."
 - **Proof:** "Offline, against fixtures: started with any family whose upstream is not loopback, `serve` refuses
   before it opens a listener or reads the provider key, unless the integration store holds a confirmed, unexpired
   authorization recorder receipt (decision 0012) whose operation is the provider envelope and whose target is the
-  canonical digest of the live envelope (the provider id, the one upstream origin, the model allowlist per family as recorded (approved by the
-  Owner, or, once decision 0018 is accepted, selected and presented under its point 3), and the expiry). A missing, expired, replayed or mismatched receipt (another origin, model or digest) is refused
-  with a stable code. A request for a model outside the envelope is refused. If the Owner-authorized spending cap
+  canonical digest of the live envelope (the provider id, the one upstream origin, the spending limit and the
+  expiry). A missing, expired, replayed or mismatched receipt (another origin, limit or digest) is refused with a
+  stable code. The model selection is either part of the envelope digest the Owner authorizes, or, once decision 0018
+  point 3 applies to S-03.3 (OA-28 item 5), a delegated recorder record (P-04.3's delegated decision kind) naming
+  the envelope's receipt and decision 0018; a selection with neither authority, missing, or naming another receipt
+  is refused at start with a stable code, and a request for a model outside the selection is refused. If the Owner-authorized spending cap
   is not enforced by the provider on the dedicated key, as stated in OA-12's presentation, the envelope carries a
   cumulative cap that the broker enforces and that fails closed when reached or when usage is unknown. Loopback
   fake upstreams (the S-03.2 qualification) start as today."
@@ -109,7 +112,42 @@ Add four entries to the plan's `deferred` list, each with a reconsider condition
    below, or when P-05.1 is committed. Today `tools/verify_seed.py` checks hashes, the graph and the manifest,
    but does not compare prompt, CSV or HTML text with the plan. No generator is tracked.
 
-## Applying it (for execution, on approval)
+## 4a. Item 5: S-03.3's model selection, reconciled with decision 0018 point 3
+
+**Applied only after the Owner's recorded acceptance of decision 0018 (revision 4) and the Owner's approval of
+this item, and only together with item 3 (S-03.5), on which it depends. If any of these is missing, this item is
+withdrawn and S-03.3 stays as written.** It removes an Owner approval from a criterion, so it stays the Owner's
+under decision 0018 point 4.8 even after that decision is accepted. It comes from the Owner's
+correction of 2026-11-12 ("Reconcile S-03.3 and related acceptance criteria through the established integrity
+process so that they explicitly reflect this delegation"). A search of every field of the plan's leaves and its `deferred` list found no other criterion that requires
+the Owner's approval of model identifiers. The requirement's source, the Owner's decisions on OA-05 and OA-12 of
+2026-11-10, is reconciled by decision 0018's Consequences on acceptance; its verification and no-wildcard
+requirements stand.
+
+- S-03.3 `proof`, and the same sentence in its `agent_contract` completion evidence, its prompt, the CSV row and the
+  HTML card: "...and the exact model identifiers, including any secondary model, are approved by the Owner before
+  the first paid call." becomes "...and the exact model identifiers, including any secondary model, are selected
+  inside the model-access envelope the Owner explicitly authorized (the provider, the spending limits and the
+  permitted external effects; decision 0018 point 3), verified against current provider information, and
+  recorded with their intended uses and expected cost characteristics; that record is presented to the Owner
+  before the first paid call, the broker admits only the recorded identifiers (S-03.5), and no model, provider,
+  origin or limit outside the envelope is used without the Owner's per-act decision."
+- S-03.3 `notes`: "with the model identifiers presented for approval before A6" becomes "with the model
+  identifiers selected inside the authorized envelope and presented before A6 (decision 0018 point 3; OA-28
+  item 5)".
+
+**Kept unchanged:** the Owner's authorization of the provider, the key (A1), the egress origin (A5), the first model
+call (A6) and the spending cap before the first model call (item 2); the provider-key containment search; the
+path and model allowlist pinned from observed traffic with no wildcard; "no unapproved destination"; and S-03.5's
+independent check at broker start. What moves is only who picks the identifiers inside the authorized
+envelope; the identifiers are still verified, recorded, presented and enforced.
+
+On application, execution also updates its working documents, which are not criteria: the S-03.3 slice plan
+(row Q8 and section 5, step 6b), slice 5's live driver (step 8) and the S-03.1 authorization request (A5's
+"provider and model names"). There the model identifiers are recorded under decision 0018 point 3. **The Owner's
+approval of the provider, the egress origin and the family's exact routes is unchanged.**
+
+## 5. Applying it (for execution, on approval)
 
 These rules come from tracked files, so no memory is needed. The program manager computed them, and the product
 manager checked the first two at `cee138f`:
@@ -126,7 +164,7 @@ manager checked the first two at `cee138f`:
   - A sibling card is the model for the rest of the card.
 - **Precedents:**
   - `1f506f6`: a dependency only (item 1).
-  - `1ccdf02`, `2f973b0`: a proof together with its prompt (item 2). The commit message of `1ccdf02` lists every
+  - `1ccdf02`, `2f973b0`: a proof together with its prompt (items 2 and 5). The commit message of `1ccdf02` lists every
     part an amendment touches.
   - `13cb939`, `f3a6c92`: new leaves with the "Step n/N" and `Next:` ripple, the counts, and `deferred` entries
     (items 3 and 4). For S-03.5: `slice_count` 4 to 5 across S-03; `decomposition.leaf_count`,

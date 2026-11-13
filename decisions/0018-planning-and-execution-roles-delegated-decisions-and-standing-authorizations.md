@@ -1,10 +1,11 @@
 # 0018 - Planning and execution roles, delegated decisions and standing authorizations
 
-Status: Proposed, revision 3 - 2026-11-12. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
+Status: Proposed, revision 4 - 2026-11-12. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
 in `evidence/bootstrap-log.md`, Decisions, "Owner direction: the five-role operating model"); revised by the product
 manager on the Owner's direction of the same day (Decisions, "Owner direction: decisions on the product manager's
 first planning assessment", item 1), and refined again on the Owner's direction "finalize decision 0018 revision 2"
-(Decisions, same date). Every change is listed under "Revisions" below. **This record grants
+(Decisions, same date), and corrected on the Owner's direction "decision 0018 revision 3 accepted in principle,
+subject to the model-selection correction" (Decisions, same date). Every change is listed under "Revisions" below. **This record grants
 nothing until the Owner accepts it.** Until then every existing restriction stays in force: per-act Owner
 authorization, the integrity process's "only when your user explicitly asks", decision 0012's channel, and every
 Owner-only operation in `security/inventory.json`.
@@ -99,7 +100,7 @@ The Owner's direction for revision 2, item 1, verbatim:
    | Owner | Intent, constraints, and every reserved act (point 4) |
    | Product manager (`product-manager`; planning lead) | Outcomes, priorities and milestone selection; each milestone's acceptance criteria; milestone acceptance against its product outcome; decisions that change scope, criteria or the contract between leaves, architectural ones included; plan amendments that preserve every obligation; design acceptance inside committed scope and manifest promotion inside an Owner-granted envelope (point 3) |
    | Program manager (`program-manager`; invoked by the product manager only) | The committed set; which dependencies are real; which leaf owns an acceptance clause; deferrals, each with a reconsider condition; the disposal of a blocker execution raised |
-   | Engineering manager (`engineering-manager`; execution lead, formerly the Overseer) | The order among ready committed leaves; dispatch; leaf verdicts (engineering completion); fix-forward; engineering and architectural decisions inside committed scope that change no criterion, no other leaf's contract and no Owner-approved policy; checkpoint pushes and publication within existing permissions |
+   | Engineering manager (`engineering-manager`; execution lead, formerly the Overseer) | The order among ready committed leaves; dispatch; leaf verdicts (engineering completion); fix-forward; engineering and architectural decisions inside committed scope that change no criterion, no other leaf's contract and no Owner-approved policy; technical model selection inside an authorized model-access envelope (point 3); checkpoint pushes and publication within existing permissions |
    | Architect (`architect`; shared, gated) | Nothing: it advises whichever lead consulted it |
    | Engineer (`engineer`; formerly the Builder) | Local mechanics of one bounded task; a fresh engineer independently reviews each consequential change |
 
@@ -119,11 +120,16 @@ The Owner's direction for revision 2, item 1, verbatim:
    criterion without lowering what it proves; correcting one that cannot be met as written the same way; each
    with the reasoning recorded and the program manager's challenge. Routine publication within existing
    permissions: fast-forward checkpoint pushes of verified work to this repository's existing origin and branch,
-   never a force push, a new remote, a tag or a release. Technical model selection within an Owner-authorized
-   provider and spending envelope: exact identifiers are verified against current provider information and
-   presented, with intended uses and expected cost characteristics, before the first authorized paid operation;
-   ordinary selection details need no approval, and that presentation satisfies a criterion that asks for the
-   Owner's approval of model identifiers inside the envelope (S-03.3). And:
+   never a force push, a new remote, a tag or a release. Technical model selection inside a model-access
+   envelope the Owner has explicitly authorized: the provider, the spending limits and the permitted external
+   effects (the egress origin and what may be sent to it). Inside it, the engineering manager, for the leaf that
+   makes the paid call, selects the exact model identifiers, any secondary model included, verifies them against
+   current provider information, and records them with their intended uses and expected cost characteristics;
+   each such record is presented to the Owner before the first paid operation under it, and the broker admits only
+   the recorded identifiers. Where a leaf's acceptance criteria require the Owner's approval of model identifiers,
+   this applies to that leaf only once those criteria are amended through the integrity process to state it (for
+   S-03.3, OA-28 item 5); until then that approval is required, and a presentation never stands in for it. A
+   provider, origin, limit or model outside the envelope is an Owner decision per act. And:
    1. **Architectural decisions.** A decision record is accepted by the lead accountable for its scope under
       point 1, after the architect's consultation where a gate earned one. Accepting it authorizes none of the
       reserved acts (point 4) it names: each is presented separately, and the design does not wait for them. A
@@ -196,7 +202,8 @@ The Owner's direction for revision 2, item 1, verbatim:
    for presence, not authorship; that limit is disclosed, and an authorization that must be independently
    enforced goes through the recorder.
 
-8. **Nothing is superseded, and no enforcement is relaxed.** Decisions 0012 and 0016 are unchanged. Decision
+8. **Nothing else is superseded, and no enforcement is relaxed.** Decisions 0012 and 0016 are unchanged. The one
+   earlier Owner requirement this record changes on acceptance is named under Consequences. Decision
    0008 is applied, not amended: its point 2 already admits an acceptance delegated by an accepted decision
    record. `AGENTS.md` is unchanged for every contributor; for the five roles, a delegation of point 3 is the
    user's approval that `AGENTS.md` requires for that act (a push, a credential use, a change to an
@@ -214,6 +221,14 @@ The Owner's direction for revision 2, item 1, verbatim:
   challenge, or this record's point 3 delegation with the commitment or envelope it rests on. Until acceptance,
   only the first exists.
 - On acceptance, `CLAUDE.md`'s "Owner statements" rule is reworded to point 7.
+- On acceptance, and not before, S-03.3's acceptance criteria are reconciled with point 3's model selection
+  through the integrity process (OA-28 item 5), on the Owner's approval of that item, which stays the Owner's under
+  point 4.8. If this record is not accepted, item 5 is withdrawn and S-03.3 stays as written.
+- On acceptance, for identifiers selected inside an authorized envelope, the approval in the Owner's decisions on
+  OA-05 and OA-12 of 2026-11-10 ("Exact model identifiers, including any secondary model used by Claude Code,
+  remain to be verified and presented for approval before the first paid inference call") is replaced by point
+  3's record and presentation, once OA-28 item 5 applies. That decision's verification requirement and its "Do not
+  use wildcard model allowances or assume a model name from memory" stand.
 - At the D1 transition, acceptance contracts stay protected in the plan while the inventory and dependencies
   move to the Work system.
 
@@ -238,10 +253,19 @@ Unchanged: every other reserved act of point 4, the items that are never standin
 
 Revision 3 (product manager, 2026-11-12, on the Owner's direction to finalize revision 2, evaluated against the
 Owner's operating model): point 3 names milestone selection, priorities and commitments, ordinary criterion
-refinement, and routine publication explicitly, and states that J3's presentation satisfies S-03.3's model
-approval inside the envelope; point 3.4 delegates revoking a suspected-exposed harness credential; point 4.3
+refinement, and routine publication explicitly, and stated that J3's presentation satisfies S-03.3's model
+approval inside the envelope (withdrawn by revision 4); point 3.4 delegates revoking a suspected-exposed harness credential; point 4.3
 replaces "every acceptance the Owner reserves" with the acceptance of an objective as the Owner's intent, which
 the Owner's own statement satisfies; point 4.7 reserves widening what a policy permits, not record-keeping;
 point 8 makes a point-3 delegation the approval `AGENTS.md` requires for the five roles and states that no
 enforcement mechanism is relaxed; Consequences add `op-git-push-public`. Unchanged: every other reserved act, the
 items that are never standing, and points 2, 5, 6 and 7.
+
+Revision 4 (product manager, 2026-11-12, on the Owner's correction quoted in the log): point 3's model-selection
+sentence no longer treats a presentation as satisfying an approval a criterion requires. Model selection is
+delegated inside an envelope the Owner explicitly authorizes (provider, spending limits, permitted external
+effects), with verified identifiers, intended uses and expected costs recorded and presented before the first paid
+operation and the broker admitting only the recorded identifiers; it applies to S-03.3 only once its criteria are
+amended through the integrity process (OA-28 item 5). Consequences add that reconciliation and name the earlier Owner requirement it replaces (point 8's heading
+says so). The engineering manager is named as the one who selects (point 1's row). Nothing else changed beyond the
+Status line and the annotation of revision 3.
