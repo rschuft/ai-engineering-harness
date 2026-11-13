@@ -1,0 +1,25 @@
+{
+  "conversation_id": "00000000-0000-4000-8000-000000000000",
+  "conversation_runtime": "docker",
+  "workspace": {
+    "kind": "LocalWorkspace",
+    "working_dir": "/workspace"
+  },
+  "agent_settings": {
+    "agent_kind": "acp",
+    "acp_server": "claude-code",
+    "acp_command": ["claude-agent-acp"],
+    "acp_args": [],
+    "acp_model": "candidate-unselected",
+    "acp_session_mode": null,
+    "acp_isolate_data_dir": true,
+    "mcp_config": {}
+  },
+  "autotitle": false,
+  "container": {
+    "browser": false
+  },
+  "tags": {
+    "aieh": "e-05.2-d1-candidate"
+  }
+}

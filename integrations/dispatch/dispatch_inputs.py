@@ -1,5 +1,5 @@
 """Trusted dispatch input resolution, create admission and the native conversation create
-(plan leaves E-01.2.1, E-01.2.2 and E-01.3.1, blueprint #execution-qualification).
+(plan leaves E-01.2.1, E-01.2.2, E-01.3.1 and E-05.2, blueprint #execution-qualification).
 
 Dispatch step 01 resolves the authoritative Work and profile before anything is reserved
 or created: "Check Backlog readiness, accepted OpenSpec revision and executable
@@ -231,6 +231,12 @@ REFUSALS = {
     'ROLE_TOKEN_REJECTED': 'Gitea refuses the stage\'s bot token (401)',
     'ROLE_TOKEN_UNVERIFIED': 'Gitea\'s answer about the token was lost or not its token view',
     'ROLE_TOKEN_EXPOSURE': 'an Agent Server call would carry a delivered role token or its fingerprint',
+    # E-05.2: the D1 stage's create template (the profile's stage_create_template)
+    'STAGE_TEMPLATE_DISPOSABLE': 'the D1 stage\'s create template is a disposable fixture: the profile\'s F-04.2 '
+                                 'conversation fixture (by path or sha256), or a template tagged disposable (the '
+                                 'F-04.2 fixture\'s and the S-03.3 qualification create\'s tag)',
+    'AGENT_BLOCK_NOT_ACP': 'the D1 stage\'s pinned create template does not carry an ACP agent block '
+                           '(agent_settings with agent_kind acp)',
 }
 
 
@@ -890,7 +896,7 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
         raise DispatchRefused('CATALOG_PIN_NOT_BOUND', f'{pin!r} is not bound to {repository}/{stage}')
 
     profile_digest, declared = _check_profile(profile, profile_entry['sha256'], read_profile)
-    admission = admission_policy(declared, profile)
+    admission = admission_policy(declared, profile, stage)
 
     source = work_sources(repository)
     if source is None:
@@ -951,6 +957,13 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
 # has no parameter for a path, mount, cap, runtime, working directory, route or body field.
 # ``send_create`` validates the admitted request again against the same policy immediately before
 # it calls the injected transport, exactly once.
+#
+# The D1 stage (E-05.2): a profile may pin one stage's create template
+# (``provisioning.agent_server.stage_create_template``: stage, path, sha256). For that stage the pin
+# replaces the F-04.2 fixture as ``create_template`` (same policy shape, so the policy digest binds the
+# template's sha256), the F-04.2 fixture and any template tagged disposable are refused, the template must
+# carry an ACP agent block, and the body's agent block must be exactly the template's (BODY_NOT_TEMPLATE).
+# A profile without the declaration, and every other stage, keep E-01.2.2's behaviour.
 
 CREATE_ROUTE = {'method': 'POST', 'path': '/api/conversations'}  # docker_runtime/routers.py start_conversation
 WORKSPACE_CATEGORY = 'workspaces'      # aieh_paths category (persistent/, class C, decision 0009)
@@ -976,6 +989,12 @@ OVERRIDE_CLASSES = (
     (re.compile(r'runtime|docker|local|process|sandbox', re.IGNORECASE), 'RUNTIME_NOT_DOCKER'),
     (re.compile(r'work_?dir|workspace|path|dir', re.IGNORECASE), 'WORKING_DIR_NOT_ALLOWED'),
 )
+# E-05.2: the D1 stage's create template. One declaration per profile, for one stage (the D1 stage only;
+# A-01.2 owns the general per-stage materialization): provisioning.agent_server.stage_create_template.
+STAGE_TEMPLATE_KEY = 'stage_create_template'
+ACP_AGENT_KIND = 'acp'
+# The tag both disposable create fixtures carry: f-04.2-disposable (F-04.2) and s-03.3-disposable (S-03.3).
+DISPOSABLE_TAG_SUFFIX = '-disposable'
 ARTIFACT_PATH_RE = re.compile(r'profiles/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+')
 GUEST_PATH_RE = re.compile(r'(?:/[A-Za-z0-9._-]+)+')
 MEMORY_RE = re.compile(r'([1-9][0-9]{0,15})([bkmg]?)')
@@ -1095,11 +1114,56 @@ def check_admission_policy(policy, profile: str) -> None:
                               f'include the working directory {WORKING_DIR}', profile=profile)
 
 
-def admission_policy(declared: dict, profile: str) -> dict:
+def _check_stage_create_template(pin, fixture, profile: str) -> dict:
+    """The profile's D1 stage template declaration, normalized to ``{stage, path, sha256}`` (E-05.2); refused
+    when malformed (``PROFILE_ADMISSION_INVALID``) or when it pins the profile's F-04.2 fixture, by path or by
+    sha256 (``STAGE_TEMPLATE_DISPOSABLE``). Other keys of the declaration are descriptive and ignored."""
+    if not isinstance(pin, dict) or pin.get('stage') not in STAGES or not isinstance(pin.get('path'), str) \
+            or not ARTIFACT_PATH_RE.fullmatch(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
+            or not isinstance(pin.get('sha256'), str) or not SHA256_RE.fullmatch(pin['sha256']):
+        raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: agent_server.{STAGE_TEMPLATE_KEY} must name '
+                              f'one of {STAGES} and pin a file under profiles/{profile}/ by sha256', profile=profile)
+    if pin['path'] == fixture.get('path') or pin['sha256'] == fixture.get('sha256'):
+        raise DispatchRefused('STAGE_TEMPLATE_DISPOSABLE', f'{profile}: the {pin["stage"]} stage\'s create template '
+                              'is the profile\'s F-04.2 disposable fixture', profile=profile, stage=pin['stage'])
+    return {'stage': pin['stage'], 'path': pin['path'], 'sha256': pin['sha256']}
+
+
+def stage_create_template(declared: dict, profile: str) -> dict | None:
+    """The D1 stage's create template pin the approved profile declares (``provisioning.agent_server.
+    stage_create_template``: ``{stage, path, sha256}``), checked as ``admission_policy`` checks it, or None when
+    the profile declares none (E-01.2.2's behaviour, for every stage)."""
+    provisioning = declared.get('provisioning') if isinstance(declared, dict) else None
+    server = provisioning.get('agent_server') if isinstance(provisioning, dict) else None
+    if not isinstance(server, dict) or STAGE_TEMPLATE_KEY not in server:
+        return None
+    fixture = server.get('fixture')
+    return _check_stage_create_template(server[STAGE_TEMPLATE_KEY], fixture if isinstance(fixture, dict) else {},
+                                        profile)
+
+
+def check_stage_template(template: dict, stage: str) -> None:
+    """The D1 stage's pinned create template, read and digest-checked (E-05.2): not tagged disposable
+    (``STAGE_TEMPLATE_DISPOSABLE``), and carrying an ACP agent block (``AGENT_BLOCK_NOT_ACP``). The block's
+    content is approved by the template's digest, never re-derived here (no role-profile materialization)."""
+    tags = template.get('tags')
+    if isinstance(tags, dict) and any(isinstance(v, str) and v.endswith(DISPOSABLE_TAG_SUFFIX) for v in tags.values()):
+        raise DispatchRefused('STAGE_TEMPLATE_DISPOSABLE', f'the {stage} stage\'s create template is tagged '
+                              f'disposable ({tags})', stage=stage)
+    settings = template.get('agent_settings')
+    if not isinstance(settings, dict) or settings.get('agent_kind') != ACP_AGENT_KIND:
+        kind = settings.get('agent_kind') if isinstance(settings, dict) else None
+        raise DispatchRefused('AGENT_BLOCK_NOT_ACP', f'the {stage} stage\'s create template has agent_kind {kind!r}, '
+                              f'not {ACP_AGENT_KIND!r}', stage=stage)
+
+
+def admission_policy(declared: dict, profile: str, stage: str | None = None) -> dict:
     """The admission policy an approved, operational profile declares, normalized for
     policy_inputs v2: from ``provisioning.agent_server`` (``config.content``: runtime and caps;
     ``fixture``: the pinned create template; ``conversations``: the mount policy;
-    ``admission.routes``: the pinned route allowlist) and ``ceilings``."""
+    ``admission.routes``: the pinned route allowlist) and ``ceilings``. For the stage that the
+    profile's ``stage_create_template`` names (the D1 stage, E-05.2) the create template is that
+    pin instead of ``fixture``; the policy's shape is the same."""
     def obj(value, where: str) -> dict:
         if not isinstance(value, dict):
             raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: {where} is not declared',
@@ -1112,12 +1176,14 @@ def admission_policy(declared: dict, profile: str) -> dict:
     conversations = obj(server.get('conversations'), 'agent_server.conversations')
     routes = obj(obj(server.get('admission'), 'agent_server.admission').get('routes'), 'agent_server.admission.routes')
     ceilings = obj(declared.get('ceilings'), 'ceilings')
+    staged = stage_create_template(declared, profile)
+    template = staged if staged is not None and staged['stage'] == stage else fixture
     policy = {
         'runtime': {'conversation_runtime': config.get('conversation_runtime'),
                     'selectable': config.get('conversation_runtime_selectable')},
         'route': dict(CREATE_ROUTE),
         'routes': {'path': routes.get('path'), 'sha256': routes.get('sha256')},
-        'create_template': {'path': fixture.get('path'), 'sha256': fixture.get('sha256')},
+        'create_template': {'path': template.get('path'), 'sha256': template.get('sha256')},
         'workspace': {'category': WORKSPACE_CATEGORY, 'working_dir': WORKING_DIR},
         'caps': {'memory': config.get('conversation_container_memory'),
                  'cpus': config.get('conversation_container_cpus'),
@@ -1394,13 +1460,16 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
         raise DispatchRefused('ADMISSION_MISMATCH', 'the resolved inputs were not approved by this manifest')
     _, declared = _check_profile(resolved.profile, resolved.profile_digest, read_profile)
     admission = _resolved_admission(resolved)
-    if not _same(admission, admission_policy(declared, resolved.profile)):
+    if not _same(admission, admission_policy(declared, resolved.profile, resolved.stage)):
         raise DispatchRefused('ADMISSION_MISMATCH', 'the policy inputs do not carry the approved profile\'s '
                               'admission policy')
     key = _operation_key(resolved)
     host = workspace_host_path(resolved, workspaces, key)
     template_raw = _read_pinned(read_artifact, admission['create_template'], 'create template')
     template = _artifact_object(template_raw, 'create template')
+    staged = stage_create_template(declared, resolved.profile)
+    if staged is not None and staged['stage'] == resolved.stage:  # the D1 stage (E-05.2)
+        check_stage_template(template, resolved.stage)
     routes_raw = _read_pinned(read_artifact, admission['routes'], 'route allowlist')
     _check_route_allowlist(routes_raw, admission['route'])
     conversation_id = store.conversation_id_for(key)

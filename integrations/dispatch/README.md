@@ -203,6 +203,41 @@ mount set and caps is observed guest-side (`conversation-smoke`, and E-01.2.2 sl
 operation key, conversation id, route, body, mount set, planned and host workspace, policy
 digest and the sha256 of the template and of the route allowlist (since E-01.3.1).
 
+### The D1 stage's create template (E-05.2)
+
+Plan leaf E-05.2 extends this admission for the D1 stage only (carved from A-01.2, which still
+owns the general materialization from role profiles). An approved profile may declare one stage
+create template, `provisioning.agent_server.stage_create_template` `{stage, path, sha256}` (other
+keys descriptive). For that stage, the D1 stage, the pin replaces the F-04.2 fixture as the
+policy's `create_template`: the policy-inputs/v2 shape is unchanged, so the policy digest, and
+with it the reserved attempt identity, binds the template's sha256, and the template is reachable
+only through a profile that a promoted manifest approved by sha256 (decision 0020). Every other
+stage, and every profile without the declaration, keeps the admission above unchanged.
+
+| Rule | Where | Refused as |
+|---|---|---|
+| the declaration names a known stage and pins a file under `profiles/<id>/` by sha256 | resolution (any stage) | `PROFILE_ADMISSION_INVALID` |
+| it does not pin the profile's F-04.2 fixture (same path or same sha256) | resolution | `STAGE_TEMPLATE_DISPOSABLE` |
+| the pinned template is not tagged disposable (a tag value ending `-disposable`: the F-04.2 fixture's and the S-03.3 qualification create's) | admission | `STAGE_TEMPLATE_DISPOSABLE` |
+| the pinned template carries an ACP agent block (`agent_settings` with `agent_kind` `acp`) | admission | `AGENT_BLOCK_NOT_ACP` |
+| the body's agent block is exactly the template's (canonical JSON), as every allowlisted field | admission and `send_create` | `BODY_NOT_TEMPLATE` (field `agent_settings`) |
+| the template's bytes have the pinned sha256 | admission and `send_create` | `PROFILE_ARTIFACT_DRIFTED` |
+
+The S-03.3 qualification create cannot be pinned (its path is outside `profiles/<id>/`), is
+tagged disposable when its body is copied under a profile, and carries `secrets`
+(`BODY_FIELD_UNKNOWN`) when filled. The template's content (tag, agent kind) is checked at
+admission, where the profile is read; `send_create` re-checks the template bytes' sha256, so the
+content it sends is the content admission checked.
+
+**The candidate.** [`profiles/strong-windows-qemu-whpx/agent-server/d1-create.json`](../../profiles/strong-windows-qemu-whpx/agent-server/d1-create.json)
+is a CANDIDATE, pinned by no checked-in profile: E-01.2.2's body allowlist (no `secrets`), with
+S-03.3 slice 2's ACP block (`claude-code`, exactly `["claude-agent-acp"]`, no arguments, no MCP
+server, an isolated data directory), its `acp_model` the sentinel `candidate-unselected` (no
+model is selected before S-03.3; never a name from memory) and the tag `e-05.2-d1-candidate`.
+When S-03.3 qualifies the block, its bytes change (the model, the tag) and a profile pins its
+sha256. **Not yet verified:** any live create from it; the D1 create's inference credentials
+(the S-03.3 create's `secrets`), which E-01.2.2's allowlist refuses and E-05.2 does not add.
+
 ## The native conversation create (E-01.3.1)
 
 Plan leaf E-01.3.1, blueprint `#execution-qualification` dispatch steps 02 and 03 and decision
@@ -634,6 +669,7 @@ acceptance takes effect when a manifest naming it is promoted.
 | `ROLE_TOKEN_MISMATCH` | the entry names another account or holds no Gitea token; the token authenticates as another account or with other scopes |
 | `ROLE_TOKEN_REJECTED`, `ROLE_TOKEN_UNVERIFIED` | Gitea answered `401` for the token; Gitea's answer was lost or not a token view |
 | `ROLE_TOKEN_EXPOSURE` | an Agent Server call would carry a delivered role token or its fingerprint |
+| `STAGE_TEMPLATE_DISPOSABLE`, `AGENT_BLOCK_NOT_ACP` | the D1 stage's create template (E-05.2) is the profile's F-04.2 fixture or tagged disposable; it carries no ACP agent block |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. Until
 A-01.1 promotes approved catalog pins into the manifest, every request is refused
@@ -711,6 +747,19 @@ managed root is an `AIEH_DATA_ROOT` in the throwaway directory.
 | `WorkspaceDenialTests` | path shapes (`..`, absolute, drive, UNC, device, backslash, streams, trailing dot or space, case, look-alikes, empty or extra parts); Windows device names, from an approved repository named `con` (and `prn`, `aux`, `nul`, `com1`, `com0`, `lpt9`) through the real resolver and in any part and form; another attempt's workspace; an altered admitted host path; junctions at the category, repository, Work and attempt, and a file, at admission and planted after it; a symbolic link (skipped without the privilege); a missing or foreign-platform category |
 | `ProfilePolicyDenialTests` | an approved profile declaring a local, process, absent, case-variant or selectable runtime (refused at resolution, nothing reserved); caps times runs above the ceilings; malformed caps or ceilings, no Agent Server declaration; binds on the Docker socket, Moby's data root, outside or at the source root, around a forbidden source, with `..` or an unknown placeholder, a relative or duplicate destination, no `/workspace` bind, the socket no longer forbidden; a route allowlist marking the create `not-used` or `validation`, listing it twice or not at all; a drifted, missing, malformed or misplaced pinned artifact; a template with a local or omitted runtime, a host or remote working directory, a cap override, a pids field, volumes, an initial message or an image |
 | `TamperDenialTests` | an admitted request altered after construction and refused by `send_create`: 26 body alterations (runtime, working directory, caps, mounts, unknown fields, template fields, conversation id), non-object or non-strict JSON, the mount set (extra, missing, reordered, read-only, altered, none), the route, the template bytes, the identity and digest; resolved policy inputs altered with or without a matching digest, and forged consistent pairs breaking the ceilings, the runtime, the route, the working directory or the mount policy; provenance (another manifest, a drifted profile, a wrong profile digest, wrong types) |
+
+[`tests/test_d1_stage_admission.py`](tests/test_d1_stage_admission.py) (E-05.2), on the E-01.2.2
+fixture with one more synthetic profile that pins the candidate for `implement`; **the proof**,
+clause by clause, every refusal with the counting transport called zero times:
+
+| Class | What it shows |
+|---|---|
+| `TheCandidate` (unit) | the candidate's block is S-03.3 slice 2's but the model (a sentinel); it is an allowlisted body without `secrets`, tagged candidate, otherwise the F-04.2 fixture's runtime, workspace, title and container |
+| `AcceptsTheApprovedBlock` | the D1 stage admits exactly the pinned template (its pin in the policy, the body sent once, the template's sha256 in the record); another ACP block re-pinned is admitted as itself under another policy digest, and bytes changed without a new pin are `PROFILE_ARTIFACT_DRIFTED`; the boundary: the same profile's review stage and a profile without the declaration keep E-01.2.2's template |
+| `RefusesAnyOtherBlock` | eighteen other agent blocks in the body (the F-04.2 bare agent, another kind or server, the `npx` form, an `npx` or wrapper command, arguments, another model or session mode, a shared data dir, an MCP server, tools, an agent profile or context, a missing key, wrong types) are `BODY_NOT_TEMPLATE` at the send and in `check_create_body`; another agent source beside it is `BODY_FIELD_UNKNOWN`; an approved template without an ACP block is `AGENT_BLOCK_NOT_ACP` |
+| `RefusesTheF042Fixture` | the fixture pinned by path, by digest or both is `STAGE_TEMPLATE_DISPOSABLE` at resolution, nothing reserved; a re-serialized copy or its tag is refused at admission; a create built from it is `PROFILE_ARTIFACT_DRIFTED` (its bytes) or `BODY_NOT_TEMPLATE` (its block) |
+| `RefusesTheQualificationFixture` | its file cannot be pinned (`PROFILE_ADMISSION_INVALID`; the reader refuses its path); its body pinned is `STAGE_TEMPLATE_DISPOSABLE`, untagged `BODY_FIELD_UNKNOWN` (`secrets`); its filled create is `BODY_FIELD_UNKNOWN`, and without `secrets` `BODY_NOT_TEMPLATE` (`tags`) |
+| `DeclarationRefusals` | eleven malformed declarations are `PROFILE_ADMISSION_INVALID` for either stage; a missing pinned file is `PROFILE_ARTIFACT_MISSING` |
 
 [`tests/test_conversation_create.py`](tests/test_conversation_create.py) (E-01.3.1), on the same
 fixture, with a fake Agent Server that replays the recorded answers of
