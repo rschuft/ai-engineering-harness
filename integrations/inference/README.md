@@ -15,6 +15,11 @@ Plan leaf S-03.5 ("Bind the broker's real-provider start to a recorded provider-
 **slice 1**, adds the provider envelope and the start precondition ([below](#the-provider-envelope-plan-leaf-s-035-slice-1)):
 built and tested offline only.
 
+Plan leaf S-03.3 ("Qualify the first ACP coding provider through the broker") adds two qualification tools, built
+and tested offline only ([below](#route-and-model-discovery-s-033-slice-3-part-two) and
+[below](#the-real-key-containment-search-s-033-slice-4)): the discovery mode of the qualification launcher with the
+reader that turns a run's audit into a proposed family pin, and the real-key mode of the containment search.
+
 The broker is the host-side process of the trusted management domain (inventory principal
 `inference-broker`) that alone holds the model provider's key and alone issues inference access. Standard
 library only, under the tools interpreter; it imports no litellm and no other HTTP client.
@@ -31,8 +36,9 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `inference_envelope.py` | The provider envelope (S-03.5 slice 1): the `envelope` block's check, the canonical document, its digest and the canonical operation manifest. Standard library only; it opens nothing |
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
 | `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation, and for the qualification one grant (`issue`, slice 4); `127.0.0.1` only), an attempt token's fingerprint (`token_fingerprint`) and the `issue` command (slice 4) |
-| `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`) |
+| `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`); S-03.3 slice 3 part two: the launcher's discovery mode (`discover`) and the reader of a run's audit (`propose-pin`, `propose_pin`), which writes a proposed family pin and applies nothing |
 | `inference_key_search.py` | The provider-key containment search (S-03.2 slice 5): the synthetic key held in memory, searched for raw and in its encodings over byte surfaces, with positive controls; its command line (`search`). Standard library only; it imports nothing of the broker |
+| `inference_real_key_search.py` | The real-key containment search (S-03.3 slice 4): the key of the broker's credential entry, read through the broker's credential factory under a named Owner act, held in memory, and searched by `inference_key_search.run` (its forms, views, surfaces and controls); its command line (`search`) |
 | `tests/broker_support.py` | Synthetic fixtures: an in-memory credential provider, a settable clock, a fake upstream per family (`FakeUpstream`, an in-process server on an ephemeral `127.0.0.1` port) and `Rig` (a broker over a fixture store and audit directory) |
 | `tests/test_config.py` | The shipped declarations; every refusal of the declaration file and of `components.inference_broker`; the decision 0009 loader's refusal of secret-shaped keys under the component; the `config` command |
 | `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
@@ -48,6 +54,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
 | `tests/test_key_search.py` | `inference_key_search.py`: its forms (the standard encodings at every alignment, the body, the fragments), a copy across a read boundary, every positive control for keys of 16 to 128 body characters and each control failing when the view it controls is broken, the gzip, SQLite, HTTP, tar, tree and environment views with their incomplete cases, the command line (a pipe only, every refusal without the key, a planted copy found, nothing printed, logged or written) |
+| `tests/test_discovery.py` | S-03.3 slice 3 part two: the reader over audit records (exact routes and models with their answers and query parameter names; the flags; nothing outside the audit's grammars carried; grants, attempts and families), `propose-pin` (a new file outside the checkout only, `families.json` unchanged, its refusals), and `discover` end to end against its own fake upstream (the proposal of the run; refusals before the key is read; the port freed) |
+| `tests/test_real_key_search.py` | S-03.3 slice 4: the real-key search over a fake credential provider (a synthetic key, and a key of a provider key's shape made at run time): the entry read only after every argument is checked and under a named act, never standard input; not found, and planted copies found, on trees, files and an SQLite file; the provider's and the entry's refusals; a withheld report; no copy of the key printed or written |
 | `tests/test_key_search_boundary.py` | The search end to end at the broker's exposure boundary: the broker under the qualification launcher with the fake upstreams, every byte that crossed its listeners, its outputs, store and audit directory searched (not found; found on the bytes it sends upstream); a planted leak (a reflecting upstream, a copy in the audit directory and in a database) found where it was planted |
 
 ## The declared families
@@ -474,6 +482,88 @@ each answer it received whole (up to 64 KiB) and searches them, which is what cr
 are never recorded. The key never travels to the guest. The search command then covers the instance directory,
 the reports, the broker's store, audit directory and captured output. The prepared order is in the slice record.
 
+## Route and model discovery (S-03.3, slice 3 part two)
+
+The S-03.3 slice plan (`evidence/S-03.3-slice-plan.md`, slice 3 and step 6a) learns which routes and which model
+names (Claude Code's secondary model included) the pinned client sends, before any key or paid call, from the
+broker's audit of refused requests (the plan's D-4, above in [Audit](#audit)). **Not yet verified** outside a test
+process: the discovery run is the slice plan's step 6a, under the Owner's acts A2, A3 and A4.
+
+- **`discover`** (`inference_qualification.py discover --provider ID --out FILE`, the synthetic key on standard
+  input): the qualification launcher in its discovery mode. It refuses exactly as `broker` does, through the same
+  code path, and also: `--out` must be a new file in an existing directory outside the checkout
+  (`PROPOSAL_OUT_REFUSED`), and each keyed family's upstream must be an IPv4 loopback literal
+  (`FAKE_ADDRESS_REFUSED`) on which the command binds that family's fake upstream itself (`DISCOVERY_PORT_TAKEN`
+  when it cannot), all before the key is read. The broker's upstream is then this process's fake upstream and
+  nothing else. When the broker stops (the Owner's interrupt), it reads that run's audit file (named in the
+  broker's status) and writes the proposal (below) to `--out`, with a `discovery` member: the provider id, the
+  keyed families, the provider key's fingerprint and what each fake upstream received (requests per route and
+  answer, and whether every credential it saw was the synthetic key's fingerprint). Standard output carries
+  `serve`'s own report, standard error the proposal's summary. A key refused after the fake upstream was bound
+  leaves no audit and no proposal, and the port is freed.
+- **`propose-pin`** (`inference_qualification.py propose-pin --audit FILE --out FILE [--attempt-id UUID]`): the
+  reader, for any one broker run's audit file. It writes the proposal to `--out` (a new file outside the checkout)
+  and prints its summary. The audit file is read whole (at most 256 MiB; `AUDIT_UNREADABLE` otherwise).
+- **The proposal** (`aieh-inference-family-pin-proposal/1`): `status` `proposed`, `applied` false and a statement
+  that nothing is applied: neither `families.json` nor `config.yml` is written. Per family that a grant's request
+  named: `proposed.routes` (the exact method and path pairs observed, in the declarations' route grammar) and
+  `proposed.models` (the exact model names observed, the secondary model included); `declared` and `compared`
+  (declared and not observed, observed and not declared); `observed.routes` (per route: requests, the answer codes,
+  the query parameter names, the models, the requests without a top-level model) and `observed.models` (per model:
+  requests, routes, codes). Requests without a grant of the broker are counted apart (`unattributed`); `attempts`
+  lists the grants seen. The routes are for the Owner's approval (the slice plan's 6b); the model identifiers for
+  the engineering manager's selection inside the Owner's provider envelope (decision 0018 point 3, `select-models`
+  through `integrations/owner/selection_recorder.py`), verified against current provider information and
+  presented to the Owner before the first paid call.
+- **No wildcard, nothing outside the grammars.** Only strings inside the audit's own grammars are carried: a path
+  of at most 16 segments of `[A-Za-z0-9][A-Za-z0-9._~-]{0,31}`, parameter names of that word, a model in the
+  broker's model grammar without a wildcard character, none holding the token prefix. Anything else is counted
+  (`READER_DROPPED`). A proposal that holds the synthetic key's prefix is not written (`PROPOSAL_EXPOSURE`).
+- **Flags** (each with its family and route where it has one): `MODEL_NOT_TOP_LEVEL` (requests without a top-level
+  `model`: the broker's per-request check reads that field only, S-03.5's F7, so the route is not declared without
+  its own check), `MODEL_UNRECORDED`, `PATH_UNRECORDED`, `QUERY_NAMES_UNRECORDED`, `QUERY_OBSERVED` (a query string
+  where the family's rule is `refuse`: the declarations hold `refuse` or `pass` only, so admitting it is a decision
+  of its own), `ROUTE_NOT_DECLARABLE`, `UNATTRIBUTED_REQUESTS`, `AUDIT_LINES_WITHHELD`, `AUDIT_LINES_UNREADABLE`,
+  `BROKER_UNRECORDED`, `READER_DROPPED` and `NO_GRANT_REQUESTS`. `complete` is false when any value went
+  unrecorded, unread or withheld, or no grant's request was seen.
+- **Not shown** (the proposal's `not_shown` list): a model named in a body field other than the top-level `model`
+  of a request that has one (the audit records the top-level model only, D-4 as accepted, so the absence of
+  `MODEL_NOT_TOP_LEVEL` does not show that no request names a second model elsewhere); query values, headers and
+  bodies; what a refused request would have done; requests the client never sent because an earlier one was
+  refused.
+
+## The real-key containment search (S-03.3, slice 4)
+
+S-03.3's proof searches for the **real** provider key at its exposure boundaries, raw and encoded, by a checker that
+holds it in memory only, counts only, with a positive control; never printed or persisted. Under the engineering
+manager's acceptance of the slice plan's D-5, the key is read from the same credential entry the broker reads
+(same account, decision 0010 point 1, decision 0013 point 6). **Its live use is covered only by the Owner's act
+A1** (OA-12: the provider key in its Credential Manager entry); it is built and tested with fakes only (a fake
+credential provider holding a synthetic key) and has never read a real entry.
+
+```
+<tools python> -I -B integrations/inference/inference_real_key_search.py search --owner-act ACT \
+    --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
+```
+
+- Every argument is checked first: `--owner-act` names the Owner's act (`OWNER_ACT_REQUIRED` otherwise: a letter or
+  digit, then up to 63 letters, digits, spaces or `._:()/-`), `--expect-fingerprint` (the running broker's
+  provider-key fingerprint, from its start receipt or status) and the surfaces, as `inference_key_search.py`
+  takes them. Only then is the credential provider asked.
+- The key is read once through the broker's own credential factory (`credentials.select_provider`, the provider
+  the broker's managed context uses) from the entry `AIEH model provider`: never standard input, an argument or
+  the environment. A provider that fails (`KEY_PROVIDER_FAILED`, its error type only), an absent or malformed
+  entry (`KEY_ENTRY_ABSENT`) and another key (`FINGERPRINT_MISMATCH`) are refused without repeating what was read.
+- The search is `inference_key_search.run`: the same forms (for a key without the synthetic prefix, its body is
+  the whole key), views, surfaces, positive controls (copies planted by the standard library's encoders) and
+  verdicts. The report (`aieh-inference-real-key-search/1`, the search's own format as `search_format`) adds the
+  entry, the credential provider's name and the Owner's act; it is searched for the key before it is printed and
+  withheld if it holds one (`OUTPUT_WITHHELD`). Nothing is written, logged or kept.
+- Its surfaces for S-03.3 are the instance directory (its records included), the reports, the broker's integration
+  store and audit directory. The guest and the job's answers are searched by the prepared `tools/guest.py
+  acp-qualification` driver's step 11 with the same key (`inspect`'s P5 collection and every Agent Server answer
+  and container output of the run, in memory), read there by its own reader of the same entry.
+
 ## Commands
 
 ```
@@ -487,6 +577,12 @@ the reports, the broker's store, audit directory and captured output. The prepar
 <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID \
     --model NAME --requests N --tokens N --ttl-s SECONDS | <the command that reads the token>
 <synthetic key> | <tools python> -I -B integrations/inference/inference_key_search.py search \
+    --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
+<synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py discover --provider ID \
+    --out FILE
+<tools python> -I -B integrations/inference/inference_qualification.py propose-pin --audit FILE --out FILE \
+    [--attempt-id UUID]
+<tools python> -I -B integrations/inference/inference_real_key_search.py search --owner-act ACT \
     --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
 ```
 
@@ -525,6 +621,11 @@ Qualification (`inference_qualification.py`, beside the broker's configuration a
 side's codes and the broker's refusals): `TOKEN_STDOUT_TERMINAL`, `TOKEN_STDOUT_NOT_PIPE`. The key search (`inference_key_search.py`): `KEY_STDIN_TTY`,
 `KEY_INVALID`, `KEY_NOT_SYNTHETIC`, `FINGERPRINT_INVALID`, `FINGERPRINT_MISMATCH`, `SURFACE_INVALID` (exit 2),
 `OUTPUT_WITHHELD` (exit 1).
+Discovery and the reader (`inference_qualification.py`, S-03.3): `DISCOVERY_PORT_TAKEN`, `PROPOSAL_OUT_REFUSED`,
+`AUDIT_UNREADABLE`, `ATTEMPT_ID_INVALID` (exit 2), `PROPOSAL_EXPOSURE` (exit 1); after a discovery run, a proposal
+that cannot be read or written exits 1. The real-key search (`inference_real_key_search.py`): `OWNER_ACT_REQUIRED`,
+`KEY_PROVIDER_FAILED`, `KEY_ENTRY_ABSENT` and the key search's `FINGERPRINT_INVALID`, `FINGERPRINT_MISMATCH`,
+`SURFACE_INVALID` (exit 2), `OUTPUT_WITHHELD` (exit 1).
 A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes the connection.
 
 ## Not yet verified
@@ -536,6 +637,9 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
   families' public shapes, not from observed traffic; they are pinned at the leaf that first runs each family.
 - The provider-key search against a live broker, guest, job or instance directory (slice 5: offline only, in
   the test process); piping the token and the key as two lines into `job-access-probe` from PowerShell.
+- S-03.3's tools: `discover` against a real client (the slice plan's 6a), the routes and models a pinned client
+  actually sends, and `propose-pin` over a real audit file; the real-key search against a real credential entry
+  (Windows Credential Manager) and real surfaces (only under the Owner's act A1).
 - The guest side: the SSH remote forward (built offline in slice 3, never run against a real ssh or guest),
   the sshd and container-guard changes (slice 2, offline), the typed create's `secrets`/LLM fields (A-01.2,
   E-03.1), the containment re-run; `inference_control.py` against the broker as a supervised host service.

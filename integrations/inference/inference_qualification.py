@@ -27,18 +27,45 @@ clause.md section 5). Neither is a production path. Running either is part of th
   fingerprints of the values of the family's auth header; never a header value or a body. The qualification
   compares that fingerprint with the provider key's in the broker's start receipt.
 
+Route and model discovery (plan leaf S-03.3, slice 3 part two; the slice plan's D-4 as accepted): learning, before
+any key or paid call, which routes and which model names (any secondary model included) a pinned client sends.
+
+- discover: the qualification launcher in its discovery mode. It refuses as broker does (constraints 1 to 4 above,
+  the same code path) and also unless each keyed family's upstream is an IPv4 loopback literal on which it can
+  bind that family's fake upstream itself, before the key is read: the broker's upstream is then this process's
+  fake and nothing else. When the broker stops (the Owner's interrupt), it reads that run's audit file and writes
+  the proposed family pin (propose-pin below) to --out, a new file outside the checkout, with a summary of what
+  the fake upstreams received (route counts, and whether each credential they saw was the synthetic key's
+  fingerprint). It writes nowhere else.
+- propose-pin: the reader. It turns one broker run's audit file (persistent/logs/inference/audit-*.jsonl) into a
+  PROPOSED family pin: per family, the exact method and path pairs and the exact model names the grants' requests
+  carried (no wildcard: only strings inside the audit's own grammars are carried; anything else is counted), with
+  what each was answered, the query parameter names, and flags for what the pin cannot rest on (a request whose
+  model is not the body's top-level model, the field the broker's per-request check reads (S-03.5's F7); an
+  unrecorded or withheld value; a query string where the family refuses one; requests without a grant's token;
+  a path the declarations cannot hold). It never applies anything: families.json and config.yml are not
+  written. The routes are for the Owner's approval (slice plan 6b), the model identifiers for the engineering
+  manager's selection (decision 0018 point 3, integrations/owner/selection_recorder.py select-models).
+
   <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
   <tools python> -I -B integrations/inference/inference_qualification.py fake-upstream --family ID --port PORT
+  <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py discover --provider ID \\
+      --out FILE
+  <tools python> -I -B integrations/inference/inference_qualification.py propose-pin --audit FILE --out FILE \\
+      [--attempt-id UUID]
 
 Exit 0 done, 1 failed, 2 refused (a stable code). Standard library only.
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import copy
 import dataclasses
+import hashlib
 import http.server
 import importlib.util
+import io
 import ipaddress
 import json
 import os
@@ -85,7 +112,38 @@ CODES = {
     'FAKE_FAMILY_UNKNOWN': 'name a family declared in integrations/inference/families.json',
     'FAKE_ADDRESS_REFUSED': 'serve the fake upstream on a loopback IPv4 address (127.0.0.1)',
     'FAKE_PORT_INVALID': 'give the port as an integer from 1024 to 65535',
+    'DISCOVERY_PORT_TAKEN': 'free the configured upstream port: discovery binds its own fake upstream there, so that '
+                            'the broker reaches nothing else',
+    'PROPOSAL_OUT_REFUSED': 'give --out as a new file in an existing directory outside the checkout: a proposal is '
+                            'never written over a file, nor into the repository (families.json is never written)',
+    'AUDIT_UNREADABLE': 'give one broker run\'s audit file (persistent/logs/inference/audit-*.jsonl), a regular file '
+                        'of at most 256 MiB',
+    'ATTEMPT_ID_INVALID': 'give --attempt-id as the grant\'s attempt id, a UUID',
+    'PROPOSAL_EXPOSURE': 'nothing to do here: the proposal would have held the synthetic key and was not written',
 }
+PROPOSAL_FORMAT = 'aieh-inference-family-pin-proposal/1'
+AUDIT_LIMIT = 256 * broker.MIB
+PASSED = '(passed)'                 # the codes column of a request answered without a refusal code
+CODE_SHAPE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
+UUID_SHAPE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+OBSERVED_FIELDS = ('path', 'query_names', 'model')
+PROPOSAL_STATEMENT = (
+    'PROPOSED, never applied: read from one broker run\'s audit file; this reader writes neither families.json nor '
+    'config.yml. The exact routes are for the Owner\'s approval (S-03.3 slice plan 6b: the family\'s routes, no '
+    'wildcard); the exact model identifiers, any secondary model included, are for the engineering manager\'s '
+    'selection inside the Owner\'s provider envelope (decision 0018 point 3; integrations/owner/'
+    'selection_recorder.py select-models), verified against current provider information and presented to the '
+    'Owner before the first paid call. Every route and model below is an exact string observed in the audit.')
+NOT_SHOWN = (
+    'a model named in a body field other than the top-level "model" of a request that has one: the audit records '
+    'the top-level model only (the slice plan\'s D-4 as accepted: no body), so the absence of a MODEL_NOT_TOP_LEVEL '
+    'flag does not show that no request names a second model elsewhere; the broker\'s per-request check reads the '
+    'top-level model only (S-03.5, F7)',
+    'query parameter values, header names and values, and bodies: never recorded',
+    'what a request would have done had it been admitted: a refused request was answered by the broker, not by the '
+    'fake upstream',
+    'requests the client never sent because an earlier one was refused',
+)
 
 
 class QualificationError(Exception):
@@ -325,6 +383,324 @@ def fake_upstream(family_id: str, address: str, port: int, ctx) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- the proposed family pin (the reader)
+
+
+def proposal_target(value) -> Path:
+    """--out: a new file in an existing directory, outside the checkout (PROPOSAL_OUT_REFUSED)."""
+    if not isinstance(value, str) or not value.strip():
+        raise QualificationError('PROPOSAL_OUT_REFUSED', 'no path given')
+    target = Path(value).resolve()
+    repo = Path(os.path.realpath(broker.REPO))
+    if os.path.lexists(target) or not target.parent.is_dir() or target == repo or target.is_relative_to(repo):
+        raise QualificationError('PROPOSAL_OUT_REFUSED', f'{str(value)[:200]!r} exists, has no directory or lies '
+                                                         'inside the checkout')
+    return target
+
+
+def read_audit(path) -> tuple[list, dict]:
+    """The request records of one audit file, and what was read: its name, size and sha256, the lines, and the
+    lines that are not audit records (unreadable) or that the broker withheld (EXPOSURE_FOUND)."""
+    path = Path(path)
+    try:
+        if not path.is_file() or path.stat().st_size > AUDIT_LIMIT:
+            raise OSError('not a regular file within the limit')
+        data = path.read_bytes()
+    except OSError as exc:
+        raise QualificationError('AUDIT_UNREADABLE', f'{path.name[:120]!r}: {type(exc).__name__}') from None
+    records, counts = [], collections.Counter()
+    for raw in data.splitlines():
+        if not raw.strip():
+            continue
+        counts['lines'] += 1
+        try:
+            record = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            record = None
+        if not isinstance(record, dict) or record.get('format') != broker.AUDIT_FORMAT:
+            counts['unreadable'] += 1
+        elif 'withheld' in record:
+            counts['withheld'] += 1
+        elif record.get('event') == 'request':
+            records.append(record)
+    return records, {'audit_file': path.name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+                     'lines': counts['lines'], 'requests': len(records), 'unreadable': counts['unreadable'],
+                     'withheld': counts['withheld']}
+
+
+def _observed_path(value):
+    """VALUE when it is a path in the audit's grammar ('/' or at most 16 segments of the observed word), else None."""
+    if not isinstance(value, str) or broker.TOKEN_PREFIX in value or not value.startswith('/'):
+        return None
+    if value == '/':
+        return value
+    segments = value[1:].split('/')
+    if len(segments) > broker.OBSERVED_SEGMENTS or not all(broker.OBSERVED_WORD.fullmatch(s) for s in segments):
+        return None
+    return value
+
+
+def _observed_names(value):
+    """(names, dropped): the query parameter names in the audit's grammar, sorted; None when no query was sent."""
+    if value is None:
+        return None, 0
+    if not isinstance(value, list):
+        return [], 1
+    kept = sorted({n for n in value if isinstance(n, str) and broker.OBSERVED_WORD.fullmatch(n)
+                   and broker.TOKEN_PREFIX not in n})
+    return kept, sum(1 for n in value if n not in kept)
+
+
+def _observed_model(value):
+    """VALUE when it is an exact model name in the broker's grammar (no wildcard, no token prefix), else None."""
+    if isinstance(value, str) and broker.MODEL_NAME.fullmatch(value) and not broker.WILDCARD.search(value) \
+            and broker.TOKEN_PREFIX not in value:
+        return value
+    return None
+
+
+def _flag(code: str, detail: str, **where) -> dict:
+    return {'code': code, **where, 'detail': detail}
+
+
+def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, source: dict | None = None) -> dict:
+    """The proposed family pin of RECORDS (an audit file's request records, read_audit): per declared family, the
+    exact routes and models of the requests that presented one of its grants (of ATTEMPT_ID only, when given),
+    with their answers, query parameter names and flags; the requests without a grant counted apart. Nothing is
+    applied anywhere."""
+    families, unattributed, attempts = {}, {}, {}
+    broker_unrecorded, reader_dropped = collections.Counter(), collections.Counter()
+    for record in records:
+        attempt, fingerprint, family_id = (record.get('attempt_id'), record.get('token_fingerprint'),
+                                           record.get('family'))
+        attributed = isinstance(fingerprint, str) and broker.FINGERPRINT_SHAPE.fullmatch(fingerprint) is not None \
+            and family_id in declarations and isinstance(attempt, str) and UUID_SHAPE.fullmatch(attempt) is not None
+        if attributed and attempt_id is not None and attempt != attempt_id:
+            continue
+        method = record.get('method') if record.get('method') in broker.METHODS else 'other'
+        path = _observed_path(record.get('path'))
+        if record.get('path') is not None and path is None:
+            reader_dropped['path'] += 1
+        names, dropped = _observed_names(record.get('query_names'))
+        reader_dropped['query_names'] += dropped
+        model = _observed_model(record.get('model'))
+        if record.get('model') is not None and model is None:
+            reader_dropped['model'] += 1
+        given, unrecorded = record.get('unrecorded') or {}, {}
+        if not isinstance(given, dict):
+            reader_dropped['unrecorded'] += 1
+            given = {}
+        for field, count in given.items():
+            if field in OBSERVED_FIELDS and isinstance(count, int) and not isinstance(count, bool) and count > 0:
+                unrecorded[field] = count
+                broker_unrecorded[field] += count
+            else:
+                reader_dropped['unrecorded'] += 1
+        code = record.get('code')
+        code = PASSED if code is None else code if isinstance(code, str) and CODE_SHAPE.fullmatch(code) else '(other)'
+        if not attributed:
+            row = unattributed.setdefault((method, path), {'method': method, 'path': path, 'requests': 0,
+                                                           'query_names': set(), 'codes': collections.Counter()})
+            row['requests'] += 1
+            row['query_names'].update(names or ())
+            row['codes'][code] += 1
+            continue
+        attempts[attempt] = {'attempt_id': attempt, 'token_fingerprint': fingerprint, 'family': family_id}
+        family = families.setdefault(family_id, {'routes': {}, 'models': {}, 'unrecorded': collections.Counter()})
+        route = family['routes'].setdefault((method, path), {
+            'method': method, 'path': path, 'requests': 0, 'codes': collections.Counter(), 'with_query': 0,
+            'query_names': set(), 'models': set(), 'no_model': 0, 'model_unrecorded': 0})
+        route['requests'] += 1
+        route['codes'][code] += 1
+        if names is not None:
+            route['with_query'] += 1
+            route['query_names'].update(names)
+        family['unrecorded'].update(unrecorded)
+        if model is not None:
+            route['models'].add(model)
+            entry = family['models'].setdefault(model, {'model': model, 'requests': 0, 'routes': set(),
+                                                        'codes': collections.Counter()})
+            entry['requests'] += 1
+            entry['routes'].add(f'{method} {path}')
+            entry['codes'][code] += 1
+        elif 'model' in unrecorded or record.get('model') is not None:
+            route['model_unrecorded'] += 1
+        else:
+            route['no_model'] += 1
+    out_families, flags = [], []
+    for family_id in sorted(families):
+        family, declared = families[family_id], declarations[family_id]
+        routes, proposed_routes = [], []
+        for (method, path), route in sorted(families[family_id]['routes'].items(),
+                                            key=lambda item: (item[0][1] or '', item[0][0])):
+            where = {'family': family_id, 'route': f'{method} {path}'}
+            declarable = method != 'other' and path is not None and broker.ROUTE_PATH.fullmatch(path) is not None
+            routes.append({'method': method, 'path': path, 'requests': route['requests'],
+                           'codes': dict(sorted(route['codes'].items())), 'with_query': route['with_query'],
+                           'query_names': sorted(route['query_names']), 'models': sorted(route['models']),
+                           'no_top_level_model': route['no_model'], 'model_unrecorded': route['model_unrecorded'],
+                           'declared': (method, path) in declared.routes, 'declarable': declarable})
+            if declarable:
+                proposed_routes.append({'method': method, 'path': path})
+            elif path is None:
+                flags.append(_flag('PATH_UNRECORDED', f'{route["requests"]} request(s) whose path the audit does not '
+                                   'hold: their route cannot be proposed', **where))
+            else:
+                flags.append(_flag('ROUTE_NOT_DECLARABLE', 'the method or path is outside the declarations\' route '
+                                   'grammar', **where))
+            if route['no_model']:
+                flags.append(_flag('MODEL_NOT_TOP_LEVEL', f'{route["no_model"]} request(s) without a top-level '
+                                   '"model": the broker\'s per-request check reads that field only (S-03.5, F7), so '
+                                   'a request whose model is named elsewhere, or not at all, is not admitted; this '
+                                   'route is not declared without its own check', **where))
+            if route['model_unrecorded']:
+                flags.append(_flag('MODEL_UNRECORDED', f'{route["model_unrecorded"]} request(s) whose model is outside '
+                                   'the audit\'s grammar or was not recorded: it cannot be proposed', **where))
+            if route['with_query'] and declared.query != 'pass':
+                flags.append(_flag('QUERY_OBSERVED', f'{route["with_query"]} request(s) with a query string, names '
+                                   f'{sorted(route["query_names"])}; the family\'s query rule is {declared.query!r} '
+                                   'and the declarations hold refuse or pass only, so admitting them is a decision '
+                                   'of its own', **where))
+        if family['unrecorded']['query_names']:
+            flags.append(_flag('QUERY_NAMES_UNRECORDED', f'{family["unrecorded"]["query_names"]} query parameter '
+                               'name(s) outside the audit\'s grammar were counted, not recorded', family=family_id))
+        models = [{'model': m['model'], 'requests': m['requests'], 'routes': sorted(m['routes']),
+                   'codes': dict(sorted(m['codes'].items()))} for _, m in sorted(family['models'].items())]
+        observed = {(r['method'], r['path']) for r in proposed_routes}
+        out_families.append({
+            'family': family_id,
+            'declared': {'status': declared.status, 'query': declared.query,
+                         'routes': [{'method': m, 'path': p} for m, p in sorted(declared.routes)]},
+            'proposed': {'routes': proposed_routes, 'models': [m['model'] for m in models]},
+            'compared': {'declared_not_observed': [{'method': m, 'path': p} for m, p in sorted(declared.routes)
+                                                   if (m, p) not in observed],
+                         'observed_not_declared': [r for r in proposed_routes
+                                                   if (r['method'], r['path']) not in declared.routes]},
+            'observed': {'routes': routes, 'models': models}})
+    source = dict(source or {})
+    if unattributed:
+        flags.append(_flag('UNATTRIBUTED_REQUESTS', f'{sum(r["requests"] for r in unattributed.values())} '
+                           'request(s) presented no grant of this broker: their model is never recorded and they '
+                           'are not part of any family\'s pin'))
+    if source.get('withheld'):
+        flags.append(_flag('AUDIT_LINES_WITHHELD', f'{source["withheld"]} audit line(s) were withheld by the '
+                           'broker\'s I7 scan: what they held is unknown'))
+    if source.get('unreadable'):
+        flags.append(_flag('AUDIT_LINES_UNREADABLE', f'{source["unreadable"]} line(s) are not audit records'))
+    if +broker_unrecorded:
+        flags.append(_flag('BROKER_UNRECORDED', f'values the broker counted instead of recording: '
+                           f'{dict(sorted((+broker_unrecorded).items()))}'))
+    if +reader_dropped:
+        flags.append(_flag('READER_DROPPED', f'values outside the audit\'s grammars, not carried: '
+                           f'{dict(sorted((+reader_dropped).items()))}'))
+    if not families:
+        flags.append(_flag('NO_GRANT_REQUESTS', 'no request presented a grant: nothing is proposed'))
+    complete = bool(families) and not (+broker_unrecorded or +reader_dropped or source.get('withheld')
+                                       or source.get('unreadable'))
+    return {'format': PROPOSAL_FORMAT, 'status': 'proposed', 'applied': False, 'statement': PROPOSAL_STATEMENT,
+            'source': {**source, 'attempt_filter': attempt_id}, 'complete': complete,
+            'attempts': [attempts[a] for a in sorted(attempts)], 'families': out_families,
+            'unattributed': [{**{k: r[k] for k in ('method', 'path', 'requests')},
+                              'query_names': sorted(r['query_names']), 'codes': dict(sorted(r['codes'].items()))}
+                             for _, r in sorted(unattributed.items(), key=lambda i: (i[0][1] or '', i[0][0]))],
+            'flags': flags, 'not_shown': list(NOT_SHOWN)}
+
+
+def write_proposal(target: Path, proposal: dict) -> None:
+    """Write PROPOSAL to TARGET, a new file (never over one)."""
+    text = json.dumps(proposal, indent=2, sort_keys=True) + '\n'
+    if SYNTHETIC_PREFIX in text:
+        raise QualificationError('PROPOSAL_EXPOSURE', 'the proposal holds the synthetic key\'s prefix')
+    with open(target, 'x', encoding='utf-8', newline='\n') as handle:
+        handle.write(text)
+
+
+def proposal_summary(target: Path, proposal: dict) -> dict:
+    return {'format': PROPOSAL_FORMAT, 'out': str(target), 'complete': proposal['complete'],
+            'families': {f['family']: {'routes': len(f['proposed']['routes']), 'models': f['proposed']['models']}
+                         for f in proposal['families']},
+            'flags': sorted({flag['code'] for flag in proposal['flags']})}
+
+
+def propose_command(audit, attempt_id, out_value, out) -> int:
+    """propose-pin: read AUDIT, write the proposal to OUT_VALUE, print its summary."""
+    if attempt_id is not None and not UUID_SHAPE.fullmatch(str(attempt_id)):
+        raise QualificationError('ATTEMPT_ID_INVALID', 'not a lower-case UUID')
+    target = proposal_target(out_value)
+    records, source = read_audit(audit)
+    proposal = propose_pin(records, broker.load_declarations(), attempt_id=attempt_id, source=source)
+    write_proposal(target, proposal)
+    out.write(json.dumps(proposal_summary(target, proposal), indent=2, sort_keys=True) + '\n')
+    return 0
+
+
+# ---------------------------------------------------------------- discovery
+
+
+def upstream_summary(fakes: dict, fingerprint) -> dict:
+    """What each family's fake upstream received: requests per route and answer, and whether every credential it
+    saw was the provider key's fingerprint (the synthetic key substituted for the attempt token)."""
+    out = {}
+    for family_id, fake in sorted(fakes.items()):
+        received = [json.loads(line) for line in fake.out.getvalue().splitlines()]
+        requests = [r for r in received if r.get('event') == 'request']
+        out[family_id] = {
+            'requests': len(requests),
+            'routes': dict(sorted(collections.Counter(f'{r.get("method")} {r.get("path")} {r.get("status")}'
+                                                      for r in requests).items())),
+            'credential_is_the_synthetic_key': None if not requests else all(
+                r.get('credential_fingerprints') == [fingerprint] for r in requests)}
+    return out
+
+
+def discover(provider_id: str, out_value, ctx) -> int:
+    """The discovery mode: the launcher with each keyed family's fake upstream bound by this process on its
+    configured upstream, then the proposal of the run's audit written to OUT_VALUE."""
+    target = proposal_target(out_value)
+    if not isinstance(provider_id, str) or not broker.PROVIDER_ID.fullmatch(provider_id):
+        raise broker.InferenceError('PROVIDER_ID_INVALID', 'not a provider id')
+    raw = copy.deepcopy(ctx.component())
+    config = broker.load_config(raw, allow_ephemeral=ctx.allow_ephemeral)
+    keyed = check_upstreams(config, provider_id)
+    declarations = broker.load_declarations()
+    fakes, seen = {}, {}
+    try:
+        for family_id in keyed:
+            origin = config.families[family_id].upstream
+            address = fake_address(origin.host)
+            try:
+                fakes[family_id] = FakeUpstream(declarations[family_id], address, origin.port, io.StringIO())
+            except OSError as exc:
+                raise QualificationError('DISCOVERY_PORT_TAKEN', f'{family_id}: {origin.text()} '
+                                                                 f'({type(exc).__name__})') from None
+        for fake in fakes.values():
+            fake.start()
+
+        def wait(served):
+            status = served.status()
+            seen.update(audit=status['audit']['file'], fingerprint=(status.get('provider_key') or {}).get(
+                'fingerprint'))
+            ctx.wait(served)
+        code = launch(provider_id, dataclasses.replace(ctx, component=lambda: copy.deepcopy(raw), wait=wait))
+    finally:
+        for fake in fakes.values():
+            fake.stop()
+    if 'audit' not in seen:
+        return code                       # the broker never served: nothing was observed, nothing is proposed
+    try:
+        records, source = read_audit(Path(ctx.logs()) / seen['audit'])
+        proposal = propose_pin(records, declarations, source=source)
+        proposal['discovery'] = {'provider': provider_id, 'families': keyed,
+                                 'provider_key_fingerprint': seen['fingerprint'],
+                                 'upstream': upstream_summary(fakes, seen['fingerprint'])}
+        write_proposal(target, proposal)
+    except QualificationError as exc:     # after the run: a failure, not a refusal
+        ctx.err.write(f'inference-discovery: FAILED after the run: {exc}\n')
+        return 1
+    ctx.err.write('inference-discovery: ' + json.dumps(proposal_summary(target, proposal), sort_keys=True) + '\n')
+    return code
+
+
 # ---------------------------------------------------------------- command line
 
 
@@ -339,16 +715,31 @@ def main(argv=None, context=None) -> int:
     fake.add_argument('--family', required=True, help='a declared family id')
     fake.add_argument('--port', required=True, type=int, help='the port, 1024 to 65535')
     fake.add_argument('--address', default=broker.LOOPBACK, help='a loopback IPv4 address (default 127.0.0.1)')
+    disc = sub.add_parser('discover', help='the launcher in its discovery mode: each keyed family\'s fake upstream '
+                                           'bound by this process on its configured loopback upstream; at the stop, '
+                                           'the proposed family pin of the run\'s audit written to --out')
+    disc.add_argument('--provider', required=True, help='the provider id the keyed families name')
+    disc.add_argument('--out', required=True, help='the proposal: a new file outside the checkout')
+    pin = sub.add_parser('propose-pin', help='read one broker run\'s audit file and write the proposed family pin '
+                                             '(exact routes and models, flags); never applied')
+    pin.add_argument('--audit', required=True, help='the audit file (persistent/logs/inference/audit-*.jsonl)')
+    pin.add_argument('--out', required=True, help='the proposal: a new file outside the checkout')
+    pin.add_argument('--attempt-id', help='only the requests of this grant\'s attempt (a UUID)')
     args = parser.parse_args(argv)
     err = sys.stderr if context is None else context.err
     try:
         if args.command == 'broker':
             return launch(args.provider, context or broker.managed_context())
+        if args.command == 'discover':
+            return discover(args.provider, args.out, context or broker.managed_context())
+        if args.command == 'propose-pin':
+            return propose_command(args.audit, args.attempt_id, args.out,
+                                   sys.stdout if context is None else context.out)
         return fake_upstream(args.family, args.address, args.port, context or types.SimpleNamespace(
             out=sys.stdout, err=sys.stderr, wait=broker._wait_for_interrupt, allow_ephemeral=False))
     except QualificationError as exc:
         err.write(f'inference-qualification: {exc}\n')
-        return 2
+        return 1 if exc.code == 'PROPOSAL_EXPOSURE' else 2
     except (broker.InferenceError, contract.LifecycleError) as exc:
         err.write(f'inference-qualification: {exc}\n')
         return 2 if exc.refusal else 1
