@@ -69,7 +69,18 @@ The [plan](AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-3
 
 ## Getting started
 
-Clone the repository, open it with a coding agent such as Claude Code or Codex, and describe the change you want. The agent discovers the project's tooling, implements and verifies the change, and you review the result. [`CONTRIBUTING.md`](CONTRIBUTING.md) walks through this. Coding agents follow [`AGENTS.md`](AGENTS.md) (Claude Code reads it through [`CLAUDE.md`](CLAUDE.md)).
+Let a coding agent set the repository up for you, then describe the change you want.
+
+1. Install Git and CPython 3.12 or newer.
+2. Clone the full repository: `git clone https://github.com/rschuft/ai-engineering-harness`.
+3. Install Claude Code or Codex by its official instructions, and open the cloned folder with it.
+4. Give it this setup instruction:
+
+   > Set up this repository on my machine. Read AGENTS.md first, then follow the Quick start in docs/development.md: check the basic prerequisites, verify the repository, install the hash-locked tools set and run the tests, and install the publication-safety gate. Before any step that downloads something or changes anything outside this folder, tell me what it will do and wait for my answer. Do not change my user-level settings, agents or skills, and do not start any project work. Finish by reporting each command you ran and its result, what was installed and where, how to remove it, and what you could not verify.
+
+5. Describe the change you want. The agent discovers the project's tooling, implements and verifies the change, and you review the result. [`CONTRIBUTING.md`](CONTRIBUTING.md) walks through this.
+
+Coding agents follow [`AGENTS.md`](AGENTS.md) (Claude Code reads it through [`CLAUDE.md`](CLAUDE.md)); the setup needs nothing else installed first. It prepares the repository for ordinary contribution. It does not install the five development roles described in [How work is done here](#how-work-is-done-here): installing them from a fresh clone is planned and **not yet verified**.
 
 [`docs/development.md`](docs/development.md) is the technical reference: prerequisites, verified platforms, every developer command and its direct equivalent, and how to change integrity-tracked files.
 

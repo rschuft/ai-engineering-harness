@@ -80,9 +80,9 @@ Never bypass it with `--no-verify`.
 - [`AGENTS.md`](AGENTS.md): the instructions every coding agent follows here.
 - [`README.md`](README.md): what the project is and its current status. Its
   section [How work is done here](README.md#how-work-is-done-here) explains how
-  the Owner's current implementation arrangement (the Overseer, Architect and
-  Builder agents) differs from ordinary contribution. You do not need those
-  agents.
+  the Owner's current implementation arrangement (five role agents: a product
+  manager, a program manager, an architect, an engineering manager and an
+  engineer) differs from ordinary contribution. You do not need those agents.
 
 Repository-authored code and documentation are licensed under the
 [MIT License](LICENSE). The licence does not cover third-party components. They keep
