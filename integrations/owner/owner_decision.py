@@ -7,7 +7,14 @@ One record is written for each Owner decision a deterministic, non-model recorde
   the Owner's acceptance of an Objective item of an intent-driven OpenSpec change (decision 0008);
 - ``authorize-operation``: the Owner authorization recorder (plan leaf P-04.2,
   ``authorization_recorder.py``), the Owner's authorization of one exact operation manifest on a
-  pull request into a protected authorization branch (decision 0012).
+  pull request into a protected authorization branch (decision 0012);
+- ``accept-design`` and ``promote-manifest``: the dispatch-input commands of the authorization
+  recorder (plan leaf P-04.3, ``input_recorder.py``), the Owner's acceptance of an OpenSpec change's
+  design at an exact revision (decision 0008 point 5) and the Owner's promotion of an approved-input
+  manifest (``ai-engineering-harness/dispatch/approved-inputs/v1``). The same two kinds decided under
+  decision 0018 point 3.2 or 3.3 are never Owner decisions: they are ``delegated-decision/v1``
+  records (``delegated_decision.py``), whose subject is the subject defined here
+  (``subject_problems``).
 
 Fields, in this order (``FIELDS``):
 
@@ -46,8 +53,16 @@ SUBJECT_FIELDS = {
     # its kind, its target and its expiry.
     'authorize-operation': ('repository', 'pull', 'base', 'head', 'manifest', 'digest', 'operation',
                             'operationKind', 'target', 'expiresAt'),
+    # The design of OpenSpec change <change> of the manifest repository <repository> at the exact revision
+    # <commit>, with the digest of the change's folder there (<content>) and the decisionId of the
+    # acceptance of that change it supersedes (null for the first).
+    'accept-design': ('repository', 'change', 'commit', 'content', 'supersedes'),
+    # The approved-input manifest <schema> at position <version> of the promotion series, the sha256 of its
+    # bytes (<digest>), the promotion it replaces ({version, digest}, null for the first) and, for each of
+    # its designs entries in manifest order, the design acceptance it rests on.
+    'promote-manifest': ('schema', 'version', 'digest', 'previous', 'designs'),
 }
-KINDS = ('accept-objective', 'authorize-operation')
+KINDS = ('accept-objective', 'authorize-operation', 'accept-design', 'promote-manifest')
 
 UUID4 = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
 OUTCOME = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')  # lineage UUID
@@ -68,6 +83,17 @@ BRANCH = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$')
 OPERATION = re.compile(r'^[a-z0-9][a-z0-9-]{0,127}$')
 DIGEST = re.compile(r'^sha256:[0-9a-f]{64}$')
 OPERATION_KIND = re.compile(r'^[a-z][a-z0-9.-]{0,63}$')
+# accept-design and promote-manifest: the approved-input manifest's grammars (dispatch_inputs.ID_RE and
+# MAX_ID; the planning adapter's CHANGE_ID and COMMIT; integration_store.MAX_CHANGE_ID), repeated here
+# because this module imports nothing (a test asserts that they are equal).
+MANIFEST_SCHEMA = 'ai-engineering-harness/dispatch/approved-inputs/v1'
+MANIFEST_ID = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+MANIFEST_ID_MAX = 64
+DESIGN_CHANGE = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+DESIGN_CHANGE_MAX = 128
+FULL_COMMIT = re.compile(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$')
+DESIGN_BINDING_FIELDS = ('repository', 'change', 'commit', 'acceptance', 'sequence')
+PREVIOUS_FIELDS = ('version', 'digest')
 # Reference schemes whose records an agent writes: an engineering conversation of the OpenHands
 # Agent Server (the lineage `attempt` kind) is a model's own transcript, never an Owner statement.
 MODEL_SCHEMES = ('openhands',)
@@ -166,6 +192,14 @@ def check_record(record):
     return problems
 
 
+def subject_problems(kind, subject):
+    """The problems of SUBJECT as the subject of KIND (one of ``KINDS``): its fields, in order, and their
+    values. ``delegated_decision.py`` validates a delegated decision's subject with it."""
+    if kind not in KINDS:
+        return [f'kind must be one of {", ".join(KINDS)}']
+    return _subject_problems(kind, subject)
+
+
 def _subject_problems(kind, subject):
     fields = SUBJECT_FIELDS[kind]
     if not isinstance(subject, dict) or list(subject) != list(fields):
@@ -185,6 +219,84 @@ def _subject_problems(kind, subject):
             problems.append('subject.proposal must be a sha256')
     if kind == 'authorize-operation':
         problems.extend(operation_subject_problems(subject))
+    if kind == 'accept-design':
+        problems.extend(design_subject_problems(subject))
+    if kind == 'promote-manifest':
+        problems.extend(promotion_subject_problems(subject))
+    return problems
+
+
+def _manifest_id(value):
+    return isinstance(value, str) and len(value) <= MANIFEST_ID_MAX and MANIFEST_ID.match(value) is not None
+
+
+def _design_change(value):
+    return isinstance(value, str) and len(value) <= DESIGN_CHANGE_MAX and DESIGN_CHANGE.match(value) is not None
+
+
+def _full_commit(value):
+    return isinstance(value, str) and FULL_COMMIT.match(value) is not None
+
+
+def _position(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def design_subject_problems(subject):
+    """The problems of an ``accept-design`` subject's values (its fields are checked by the caller)."""
+    problems = []
+    if not _manifest_id(subject['repository']):
+        problems.append(f'subject.repository must be a manifest repository id (at most {MANIFEST_ID_MAX})')
+    if not _design_change(subject['change']):
+        problems.append(f'subject.change must be an OpenSpec change id (at most {DESIGN_CHANGE_MAX})')
+    if not _full_commit(subject['commit']):
+        problems.append('subject.commit must be a full commit id (40 or 64 lower-case hex digits)')
+    if not isinstance(subject['content'], str) or not DIGEST.match(subject['content']):
+        problems.append('subject.content must be sha256:<64 hex digits>')
+    supersedes = subject['supersedes']
+    if supersedes is not None and (not isinstance(supersedes, str) or not UUID4.match(supersedes)):
+        problems.append('subject.supersedes must be null or a decisionId (a lower-case version 4 UUID)')
+    return problems
+
+
+def promotion_subject_problems(subject):
+    """The problems of a ``promote-manifest`` subject's values (its fields are checked by the caller)."""
+    problems = []
+    if subject['schema'] != MANIFEST_SCHEMA:
+        problems.append(f'subject.schema must be {MANIFEST_SCHEMA}')
+    version = subject['version']
+    if not _position(version):
+        problems.append('subject.version must be an integer of at least 1')
+    if not isinstance(subject['digest'], str) or not DIGEST.match(subject['digest']):
+        problems.append('subject.digest must be sha256:<64 hex digits>')
+    previous = subject['previous']
+    if previous is not None:
+        if not isinstance(previous, dict) or list(previous) != list(PREVIOUS_FIELDS) \
+                or not _position(previous['version']) \
+                or not isinstance(previous['digest'], str) or not DIGEST.match(previous['digest']):
+            problems.append('subject.previous must be null or {version, digest} of an earlier promotion')
+        elif _position(version) and previous['version'] >= version:
+            problems.append('subject.previous.version must be lower than subject.version')
+    designs = subject['designs']
+    if not isinstance(designs, list):
+        return problems + ['subject.designs must be a list']
+    seen = set()
+    for index, binding in enumerate(designs):
+        where = f'subject.designs[{index}]'
+        if not isinstance(binding, dict) or list(binding) != list(DESIGN_BINDING_FIELDS):
+            problems.append(f'{where} must have exactly {", ".join(DESIGN_BINDING_FIELDS)}')
+            continue
+        if not _manifest_id(binding['repository']) or not _design_change(binding['change']) \
+                or not _full_commit(binding['commit']):
+            problems.append(f'{where} must name a manifest repository id, an OpenSpec change id and a full commit')
+        if not isinstance(binding['acceptance'], str) or not UUID4.match(binding['acceptance']):
+            problems.append(f'{where}.acceptance must be a decisionId (a lower-case version 4 UUID)')
+        if not _position(binding['sequence']):
+            problems.append(f'{where}.sequence must be an integer of at least 1')
+        key = (binding['repository'], binding['change'])
+        if key in seen:
+            problems.append(f'{where} binds {binding["repository"]}/{binding["change"]} twice')
+        seen.add(key)
     return problems
 
 
