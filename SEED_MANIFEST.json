@@ -14,18 +14,18 @@
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.html",
-      "sha256": "8d3ef610330c025625110603b87bd1e8dd7c140e7c1ebf655cfca417e8990a09",
-      "size_bytes": 3117643
+      "sha256": "0dae15e269e8b2e3f4cef4126d94fd1b054fb3148b6af8e0df450d5dd1f8d9bf",
+      "size_bytes": 3119526
     },
     {
       "path": "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json",
-      "sha256": "404ecf83348414642c21a41c1b15361a52080e6947f2742cda8d4b343cab2a48",
-      "size_bytes": 1633593
+      "sha256": "b3d38cc7a1450c0d4b6aecd63cee2f760f6e5c093a9e5abdf5e85079ba4798f1",
+      "size_bytes": 1634704
     },
     {
       "path": "AI_Engineering_Implementation_Work_Packages_Small_Steps_2026-10-31.csv",
-      "sha256": "c236f168ec40d0c787864f3316a46fdbf02b161bcfa732fd671019d3f19cb06d",
-      "size_bytes": 284574
+      "sha256": "d549094ea4dc0f47dcf207d0e23fb615e8cdb6a2bb1d56e2feb269f0f6085b25",
+      "size_bytes": 284828
     },
     {
       "path": "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html",
@@ -49,7 +49,7 @@
     },
     {
       "path": "task_manifest.json",
-      "sha256": "f9609ccd02655791414e067ffee0f22c4adc2e3b81c40dd727cf1a3a924e472d",
+      "sha256": "b018b091c54e25236517f800be8964aa3356e4625e758c124bd52b41a35cd913",
       "size_bytes": 53668
     },
     {
@@ -224,8 +224,8 @@
     },
     {
       "path": "task_prompts/E-05.6.md",
-      "sha256": "7548f139758684a8020ade2ae281ab0042748bc7b22133b5f276c799b0109b58",
-      "size_bytes": 6223
+      "sha256": "4d19ae93e8c2523fe2cc2fcd55219a0d839e7b22e3e6a10ffec8dcfd8806fdf4",
+      "size_bytes": 6477
     },
     {
       "path": "task_prompts/E-05.7.md",
