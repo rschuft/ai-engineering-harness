@@ -86,7 +86,7 @@ class Recorder:
         store = S.STORE.open_store(self.db)
         try:
             ctx = AR.Context(self.state_dir, store, fg.FixtureProvider(su.owner_entry()), 3000, http=self.gitea,
-                             now=lambda: su.NOW, verifier=self.verifier)
+                             now=lambda: su.NOW, policies=AR.exercise_policies(), verifier=self.verifier)
             challenge = AR.prepare(ctx, fg.REPOSITORY, number)
             self.gitea.on_merge = on_merge
             try:

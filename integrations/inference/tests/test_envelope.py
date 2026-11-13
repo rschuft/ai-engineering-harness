@@ -477,7 +477,8 @@ class Started(V.EnvelopeCase):
         number = self.recorder.gitea.propose({manifest['path']: blob}, branch='work/envelope')
         store = self.open_store()
         actx = AR.Context(self.tmp / 'authz-state', store, V.fg.FixtureProvider(V.su.owner_entry()), 3000,
-                          http=self.recorder.gitea, now=lambda: V.su.NOW, verifier=V.su.FakeVerifier())
+                          http=self.recorder.gitea, now=lambda: V.su.NOW, policies=AR.exercise_policies(),
+                          verifier=V.su.FakeVerifier())
         challenge = AR.prepare(actx, V.fg.REPOSITORY, number)
         self.assertIn(GOLDEN_MANIFEST.rstrip('\n'), challenge['shown']['summary'])
         self.assertEqual(challenge['subject']['digest'], GOLDEN_MANIFEST_DIGEST)

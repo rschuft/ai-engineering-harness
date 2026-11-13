@@ -49,7 +49,7 @@ def decision(**subject):
 
 class InMemory(su.Fixture):
     def gitea_for_test(self):
-        gitea = fg.FakeGitea()
+        gitea = fg.FakeGitea(self.repository)
         return gitea, 3000, gitea
 
 
@@ -99,7 +99,7 @@ class Message(unittest.TestCase):
 
 class PolicyComparison(unittest.TestCase):
     def test_the_fixture_policy_and_its_drift(self):
-        policy = AR.admitted_policies()[fg.REPOSITORY]
+        policy = AR.exercise_policies()[fg.REPOSITORY]
         self.assertEqual(policy.base, 'main')
         repo = {**policy.repository, 'permissions': {'admin': False, 'push': True, 'pull': True, 'extra': 1}}
         self.assertEqual(AR.policy_drift(policy, repo, dict(policy.branch)), [])
@@ -112,7 +112,7 @@ class PolicyComparison(unittest.TestCase):
 
     def test_the_expected_policy_is_the_fixture_s_declared_protection(self):
         rule = next(r for r in AR.roles.protection_rules() if r['rule_name'] == 'main')
-        policy = AR.admitted_policies()[f'{AR.roles.FIXTURE_ORG}/{AR.roles.FIXTURE_REPO}']
+        policy = AR.exercise_policies()[f'{AR.roles.FIXTURE_ORG}/{AR.roles.FIXTURE_REPO}']
         self.assertEqual(policy.branch['required_approvals'], rule['required_approvals'])
         self.assertEqual(rule['merge_whitelist_usernames'], [AR.OWNER])
         self.assertIs(rule['enable_push'], False)
@@ -509,6 +509,86 @@ class ManagedRootNeverReached(InMemory):
         ensure.assert_called_with('state', res, 'owner-authorization')
         self.assertEqual(record.call_count, 1)
         self.assertEqual(guard.held, 1)
+
+
+class AdmittedSets(InMemory):
+    """Plan leaf E-05.7 (decision 0022 point 2): the managed recorder context admits exactly the authorization
+    repository and refuses the S-01.2.2 fixture and any other name; an exercise context still admits the fixture;
+    every context carries its admitted set explicitly."""
+
+    OTHERS = ('someone/else', AR.AUTHORIZATION_REPOSITORY.upper(),
+              f'{AR.roles.AUTHORIZATION_ORG}/{AR.roles.FIXTURE_REPO}',
+              f'{AR.roles.FIXTURE_ORG}/{AR.roles.ESCAPE_PROBE_REPO}', None)
+
+    @contextlib.contextmanager
+    def managed(self):
+        """managed_context with the managed root, its host record, its store and the platform provider stood in
+        for (as test_the_managed_context_is_built_only_from_the_managed_root does)."""
+        @contextlib.contextmanager
+        def receipts(given):
+            yield self.store
+
+        with mock.patch.object(AR.host.paths, 'resolve', return_value=mock.Mock(name='resolution')), \
+                mock.patch.object(AR.host, 'layout', return_value='layout'), \
+                mock.patch.object(AR.host, 'read_host_record', return_value={'port': 3456}), \
+                mock.patch.object(AR.host.paths, 'ensure', return_value=self.dir / 'managed-state'), \
+                mock.patch.object(AR.host, 'credential_provider', return_value=self.provider), \
+                mock.patch.object(AR.host, 'credential_receipts', side_effect=receipts), \
+                AR.managed_context() as ctx:
+            yield ctx._replace(http=self.http, now=lambda: self.now)
+
+    def test_the_managed_context_admits_exactly_the_authorization_repository(self):
+        number = self.propose()
+        exercise = AR.prepare(self.context(state_dir=self.dir / 'managed-state'), fg.REPOSITORY, number)
+        with self.managed() as ctx:
+            self.assertEqual(list(ctx.policies), [AR.AUTHORIZATION_REPOSITORY])
+            self.assertEqual(ctx.policies, AR.managed_policies())
+            for repository in (fg.REPOSITORY, *self.OTHERS):
+                with self.subTest(repository=repository):
+                    error = self.assertRefused('REPOSITORY_NOT_ADMITTED', AR.prepare, ctx, repository, number)
+                    self.assertIn(AR.AUTHORIZATION_REPOSITORY, error.detail)
+            # a challenge on the fixture is refused at record too, before any credential is read or anything sent
+            requests, reads = len(self.gitea.requests), len(self.provider.reads)
+            self.assertRefused('REPOSITORY_NOT_ADMITTED', AR.record, ctx, exercise['shown']['nonce'], su.statement(),
+                               recorded_by=su.RECORDED_BY)
+        self.assertEqual((len(self.gitea.requests), len(self.provider.reads)), (requests, reads))
+        self.assertEqual(self.gitea.merge_count(), 0)
+        self.assertEqual(AR._receipts(self.store), {})
+
+    def test_an_exercise_context_still_admits_the_fixture_alone(self):
+        self.assertEqual(list(self.ctx.policies), [fg.REPOSITORY])
+        self.assertEqual(self.ctx.policies, AR.exercise_policies())
+        for repository in (AR.AUTHORIZATION_REPOSITORY, *self.OTHERS):
+            with self.subTest(repository=repository):
+                self.assertRefused('REPOSITORY_NOT_ADMITTED', AR.prepare, self.ctx, repository, 1)
+        number = self.propose()
+        challenge = self.prepare(number)
+        self.assertEqual(self.record(challenge['shown']['nonce'])['receipt']['state'], 'confirmed')
+
+    def test_a_context_carries_its_admitted_set_explicitly(self):
+        for policies in (None, {}, {fg.REPOSITORY: 'not a policy'}, [fg.REPOSITORY],
+                         {1: AR.policy_of(fg.REPOSITORY)}):
+            for call, args in ((AR.prepare, (fg.REPOSITORY, 1)), (AR.record, ('ab' * 16, su.statement())),
+                               (AR.resolve, ('ab' * 16,))):
+                with self.subTest(policies=policies, call=call.__name__), self.assertRaises(ValueError) as caught:
+                    kw = {'recorded_by': su.RECORDED_BY} if call is AR.record else {}
+                    call(self.context(policies=policies), *args, **kw)
+                self.assertIn('admits', str(caught.exception))
+        self.assertEqual(self.gitea.requests, [])
+        # no global admits a repository: each call builds a fresh set, and widening one widens nothing else
+        widened = AR.managed_policies()
+        widened[fg.REPOSITORY] = AR.policy_of(fg.REPOSITORY)
+        self.assertEqual(list(AR.managed_policies()), [AR.AUTHORIZATION_REPOSITORY])
+        self.assertFalse(hasattr(AR, 'admitted_policies'))
+        self.assertEqual(AR.Context._field_defaults['policies'], None)  # and None is refused (above)
+
+    def test_one_non_fixture_repository_is_admitted(self):
+        """Decision 0022 point 2: the provider-envelope read side (envelope_decisions.candidates) has no repository
+        predicate, which becomes mandatory only once a second non-fixture repository is admitted: there is one."""
+        admitted = set(AR.managed_policies()) | set(AR.exercise_policies())
+        self.assertEqual(admitted - {fg.REPOSITORY}, {AR.AUTHORIZATION_REPOSITORY})
+        self.assertEqual(AR.policy_of(AR.AUTHORIZATION_REPOSITORY), AR.policy_of(fg.REPOSITORY))  # same declaration
+        self.assertEqual(AR.FIXTURE_REPOSITORY, fg.REPOSITORY)
 
 
 class CommandLine(InMemory):

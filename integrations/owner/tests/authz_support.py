@@ -106,7 +106,11 @@ def stop():
 class Fixture(unittest.TestCase):
     """A directory per class in the module's temporary directory (start); a copy of the module's migrated
     integration store, a state directory and a fixture provider per test. Subclasses give the fake Gitea
-    (gitea_for_test)."""
+    (gitea_for_test). REPOSITORY is the repository the suite runs on: the S-01.2.2 fixture in an exercise context
+    (exercise_policies), or, in a subclass, the authorization repository in a context that admits what the managed
+    one does (managed_policies; plan leaf E-05.7)."""
+
+    repository = fg.REPOSITORY
 
     @classmethod
     def setUpClass(cls):
@@ -135,15 +139,19 @@ class Fixture(unittest.TestCase):
     def context(self, **changes):
         """The test's context; its protection verifier is the fake (``verified`` unless the test scripts it)."""
         fields = dict(state_dir=self.dir / 'state', store=self.store, provider=self.provider, port=self.port,
-                      http=self.http, now=lambda: self.now, verifier=self.verifier)
+                      http=self.http, now=lambda: self.now, policies=self.admitted(), verifier=self.verifier)
         fields.update(changes)
         return AR.Context(**fields)
+
+    def admitted(self):
+        """The context's admitted set: the managed one for the authorization repository, else an exercise's."""
+        return AR.managed_policies() if self.repository == AR.AUTHORIZATION_REPOSITORY else AR.exercise_policies()
 
     def propose(self, operation=OPERATION, files=None, **kw):
         return self.gitea.propose(files or {f'operations/{operation}.json': manifest(operation)}, **kw)
 
     def prepare(self, number, **kw):
-        return AR.prepare(self.ctx, fg.REPOSITORY, number, **kw)
+        return AR.prepare(self.ctx, self.repository, number, **kw)
 
     def record(self, nonce, said=None, **kw):
         return AR.record(self.ctx, nonce, statement() if said is None else said,

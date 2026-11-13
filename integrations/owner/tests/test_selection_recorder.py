@@ -72,7 +72,7 @@ class Selections(fi.Fixture):
         number = self.gitea.propose({f'operations/{operation}.json': envelope_manifest(operation, **kw)},
                                     branch=f'work/{operation}')
         actx = AR.Context(self.dir / 'authz', self.store, fg.FixtureProvider(su.owner_entry()), 3000, http=self.gitea,
-                          now=lambda: su.NOW, verifier=su.FakeVerifier())
+                          now=lambda: su.NOW, policies=AR.exercise_policies(), verifier=su.FakeVerifier())
         nonce = AR.prepare(actx, fg.REPOSITORY, number)['shown']['nonce']
         self.gitea.on_merge = on_merge
         try:

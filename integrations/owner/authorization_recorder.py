@@ -81,14 +81,21 @@ nothing on it, since it sends nothing. The command line's context (``managed_con
 mechanism the Owner approved on 2026-11-11 (OA-16): the protection check of the Gitea integration
 (integrations/gitea/protection_check.py, ``protection_verifier``), which reads, in process, as the protection
 auditor aieh-bot-protection-audit, a restricted Gitea Bot with repository-administrator collaboration on the
-admitted repository only and a token of scope exactly ``read:repository``, every rule (34 fields each), the
+repositories it audits only and a token of scope exactly ``read:repository``, every rule (34 fields each), the
 exact rule set and its precedence, the merge settings, the collaborators, the teams and the deploy keys, and
-compares them with the harness's total declaration. Its token is a second entry of which the recorder is
-custodian (``AIEH Gitea bot protection-audit``); only the check reads it, never the code path that reads
-aieh-owner's password. Until that auditor is provisioned (an Owner act), the check answers ``unverified``
+compares them with the harness's total declaration of that repository. Its token is a second entry of which the
+recorder is custodian (``AIEH Gitea bot protection-audit``); only the check reads it, never the code path that
+reads aieh-owner's password. Until that auditor is provisioned (an Owner act), the check answers ``unverified``
 (its credential is missing), so the command line still refuses every merge. Gitea itself evaluates the rule
 again at the merge, and nothing spans the check and the merge (time of check to time of use): the bracket
 discloses a change it sees after the merge. The observable checks above stay, as an additional layer.
+
+**The admitted repositories** (decision 0022 point 2). Every context carries its own admitted set
+(``Context.policies``). The command line's (``managed_context``) admits exactly the authorization repository
+(``AUTHORIZATION_REPOSITORY``, ``managed_policies``), so every ``owner-authorization/v1/`` receipt of the managed
+store is a merge on that one ledger; the S-01.2.2 fixture is admitted only by exercise contexts
+(``exercise_policies``), which carry their own state and store. The proposal that ``prepare`` reads is opened by
+the proposal act (``authorization_proposal.py``, bot tokens only).
 
 Usage (from the repository root, under the tools interpreter):
 
@@ -180,7 +187,8 @@ REMEDIES = {
     'STATEMENT_OPERATION_MISSING': 'the Owner\'s statement must name the operation id the challenge shows',
     'CHANNEL_NOT_ADMITTED': 'record a statement given through an admitted channel (main-session during bootstrap)',
     'RECORDED_BY_INVALID': 'name who runs the recorder as owner, agent:<id> or person:<id>',
-    'REPOSITORY_NOT_ADMITTED': 'name a repository whose protected-branch policy the recorder knows (Policy)',
+    'REPOSITORY_NOT_ADMITTED': 'name a repository the context admits: the command line admits the authorization '
+                               'repository alone (decision 0022), and the S-01.2.2 fixture only an exercise context',
     'CREDENTIAL_MISSING': 'the Owner account\'s credential is not in the credential provider: run task '
                           'gitea:finalize-credentials as an Owner-approved act',
     'CREDENTIAL_REFUSED': 'the recorder takes only aieh-owner\'s password from its own entry, never a token or '
@@ -283,18 +291,39 @@ UNOBSERVABLE = ('merge_whitelist_usernames (who else may merge)', 'push_whitelis
                 'block_on_codeowner_reviews', 'the effective rule\'s name')
 
 
-def admitted_policies():
-    """{repository: Policy}: the S-01.2.2 authorization fixture, whose protection gitea_roles declares (the
-    authorization repository and its G-03.1 settings are not built yet)."""
-    rule = next(r for r in roles.protection_rules() if r['rule_name'] == roles.DEFAULT_BRANCH)
-    return {f'{roles.FIXTURE_ORG}/{roles.FIXTURE_REPO}': Policy(
-        base=roles.DEFAULT_BRANCH,
-        repository={'private': True, 'archived': False, 'default_branch': roles.DEFAULT_BRANCH,
-                    'allow_merge_commits': True, 'permissions': {'admin': False, 'push': True, 'pull': True}},
+AUTHORIZATION_REPOSITORY = roles.AUTHORIZATION_REPOSITORY  # decision 0022: the one ledger
+FIXTURE_REPOSITORY = roles.FIXTURE_REPOSITORY  # the S-01.2.2 fixture, for exercises only
+
+
+def policy_of(repository):
+    """The Policy of a repository that gitea_roles declares (DECLARATIONS), derived from its declaration's
+    settings and the rule of its protected branch."""
+    declared = roles.DECLARATIONS[repository]()
+    base, settings = declared['base'], declared['settings']
+    rule = next(r for r in declared['rules'] if r['rule_name'] == base)
+    return Policy(
+        base=base,
+        repository={'private': settings['private'], 'archived': settings['archived'], 'default_branch': base,
+                    'allow_merge_commits': settings['allow_merge_commits'],
+                    'permissions': {'admin': False, 'push': True, 'pull': True}},
         branch={'protected': True, 'user_can_push': rule['enable_push'], 'user_can_merge': True,
                 'required_approvals': rule['required_approvals'], 'enable_status_check': False,
                 'status_check_contexts': []},
-        unobservable=UNOBSERVABLE)}
+        unobservable=UNOBSERVABLE)
+
+
+def managed_policies():
+    """{repository: Policy} the managed recorder context admits: exactly the authorization repository (decision
+    0022 point 2), so that every owner-authorization/v1/ receipt of the managed store is a merge on the ledger. A
+    fresh mapping on each call: no global admits a repository."""
+    return {AUTHORIZATION_REPOSITORY: policy_of(AUTHORIZATION_REPOSITORY)}
+
+
+def exercise_policies():
+    """{repository: Policy} an exercise context admits (P-04.2's suites, the live exercise and other tests, each
+    with its own state and store): the S-01.2.2 fixture. No real effect is ever authorized on a fixture (decision
+    0022 point 5)."""
+    return {FIXTURE_REPOSITORY: policy_of(FIXTURE_REPOSITORY)}
 
 
 def policy_drift(policy, repository_view, branch_view):
@@ -380,9 +409,12 @@ class Context(NamedTuple):
     credential provider, and the Gitea it talks to (host loopback, PORT). A test passes its own state
     directory, an integration store of its own and a fixture provider; only main() builds the managed
     context (managed_context). HTTP None is one keep-alive connection to 127.0.0.1:PORT per command; a
-    callable with gitea_host.http_get's signature stands in for it in tests. VERIFIER is the protection
-    verifier (see "The protection verifier" above); the managed context's is the protection check
-    (protection_verifier). None makes record refuse every merge with PROTECTION_UNVERIFIED."""
+    callable with gitea_host.http_get's signature stands in for it in tests. POLICIES is the context's own
+    admitted set, {repository: Policy}, which every context carries explicitly: the managed context's is
+    managed_policies() (the authorization repository alone), an exercise context's exercise_policies() (the
+    fixture); a repository outside it is REPOSITORY_NOT_ADMITTED, and a context without one is refused. VERIFIER
+    is the protection verifier (see "The protection verifier" above); the managed context's is the protection
+    check (protection_verifier). None makes record refuse every merge with PROTECTION_UNVERIFIED."""
     state_dir: Path
     store: object
     provider: object
@@ -398,6 +430,10 @@ def _check_context(ctx):
         raise ValueError('a context needs its own state directory, its own integration store and a provider')
     if not isinstance(ctx.port, int) or isinstance(ctx.port, bool) or not 0 < ctx.port < 65536:
         raise ValueError('a context needs the Gitea port')
+    if not isinstance(ctx.policies, dict) or not ctx.policies \
+            or not all(isinstance(k, str) and isinstance(v, Policy) for k, v in ctx.policies.items()):
+        raise ValueError('a context names the repositories it admits (policies: managed_policies() or '
+                         'exercise_policies())')
     if ctx.verifier is not None and not callable(ctx.verifier):
         raise ValueError('a context\'s protection verifier is a callable or None')
 
@@ -406,10 +442,11 @@ def _check_context(ctx):
 def managed_context(port=None, guard=None):
     """The command line's context: the recorder's state under <state>/owner-authorization of the managed
     data root, the integration store at its managed location (decision 0009), the platform's credential
-    provider (held by GUARD for the I7 scan) and the managed Gitea's port from its host record. Its
-    protection verifier is the protection check of Owner decision OA-16 (protection_verifier), over the same
-    provider and port: until the protection auditor is provisioned it answers unverified, so record refuses
-    with PROTECTION_UNVERIFIED and merges nothing."""
+    provider (held by GUARD for the I7 scan) and the managed Gitea's port from its host record. It admits exactly
+    the authorization repository (managed_policies; decision 0022 point 2): the fixture and any other repository
+    are REPOSITORY_NOT_ADMITTED here. Its protection verifier is the protection check of Owner decision OA-16
+    (protection_verifier), over the same provider and port: until the protection auditor is provisioned it
+    answers unverified, so record refuses with PROTECTION_UNVERIFIED and merges nothing."""
     res = host.paths.resolve()
     if port is None:
         port = host.read_host_record(host.layout(res))['port']
@@ -418,7 +455,8 @@ def managed_context(port=None, guard=None):
     if guard is not None:
         provider = contract.WatchedProvider(provider, guard)
     with host.credential_receipts(res) as store:
-        yield Context(state, store, provider, port, verifier=protection_verifier(provider, port))
+        yield Context(state, store, provider, port, policies=managed_policies(),
+                      verifier=protection_verifier(provider, port))
 
 
 # ---------------------------------------------------------------------------- Gitea, as aieh-owner
@@ -567,10 +605,10 @@ def open_session(ctx, *, may_merge=False):
 
 
 def _policy_for(ctx, repository):
-    policies = admitted_policies() if ctx.policies is None else ctx.policies
-    if not isinstance(repository, str) or repository not in policies:
-        raise RecorderError('REPOSITORY_NOT_ADMITTED', f'{repository!r} is not one of {sorted(policies)}')
-    return policies[repository]
+    """The Policy of REPOSITORY in the context's own admitted set, or REPOSITORY_NOT_ADMITTED."""
+    if not isinstance(repository, str) or repository not in ctx.policies:
+        raise RecorderError('REPOSITORY_NOT_ADMITTED', f'{repository!r} is not one of {sorted(ctx.policies)}')
+    return ctx.policies[repository]
 
 
 def check_policy(session, repository, policy):
@@ -1094,7 +1132,7 @@ def main(argv=None, out=None, err=None, context=None):
                                      '0 done, 2 refused, 1 failed or unknown.')
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('prepare', help='write the challenge to show the Owner to the recorder\'s state')
-    p.add_argument('repository', help='OWNER/NAME of the authorization repository')
+    p.add_argument('repository', help=f'OWNER/NAME of the authorization repository ({AUTHORIZATION_REPOSITORY})')
     p.add_argument('pull', type=int, help='the pull request number')
     p.add_argument('--expires-in-minutes', type=int, default=DEFAULT_EXPIRY_MINUTES)
     r = sub.add_parser('record', help='record the Owner\'s statement on a challenge and merge')

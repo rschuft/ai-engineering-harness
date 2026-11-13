@@ -45,7 +45,7 @@ def tearDownModule():
 
 class OverHttp(su.Fixture):
     def gitea_for_test(self):
-        return None, SERVER.port, SERVER.reset()  # the recorder's own keep-alive connection
+        return None, SERVER.port, SERVER.reset(self.repository)  # the recorder's own keep-alive connection
 
     def assertNoMerge(self):
         self.assertEqual(self.gitea.merge_count(), 0)
@@ -103,7 +103,7 @@ class Authorized(OverHttp):
                          {('basic', AR.OWNER, False)})
         # no token minted: the only POST is the merge; tokens are only listed
         self.assertEqual([r['path'] for r in self.gitea.requests_by('POST')],
-                         [f'/api/v1/repos/{fg.REPOSITORY}/pulls/{number}/merge'])
+                         [f'/api/v1/repos/{self.repository}/pulls/{number}/merge'])
         self.assertEqual({r['method'] for r in self.gitea.requests if r['path'].endswith('/tokens')}, {'GET'})
         self.assertEqual(self.gitea.users[AR.OWNER]['tokens'], [])
         # the Owner decision record (the shared shape) and the write-ahead receipt
@@ -267,7 +267,7 @@ class PolicyDrift(OverHttp):
     def test_each_drift_is_refused(self):
         for name, drift in self.DRIFTS.items():
             with self.subTest(drift=name):
-                self.gitea = SERVER.reset()
+                self.gitea = SERVER.reset(self.repository)
                 self.base = self.gitea.branches['main']
                 number, challenge = self.ready(branch=f'work/{len(self.gitea.requests)}')
                 drift(self.gitea)
@@ -334,12 +334,13 @@ class ProtectionVerifier(OverHttp):
         self.verifier.calls.clear()
         self.verifier.on_call = lambda phase: seen.append((phase, len(self.gitea.requests), self.receipts()))
         result = self.record(nonce)
-        self.assertEqual(self.verifier.calls, [(fg.REPOSITORY, 'main', 'before-merge'),
-                                               (fg.REPOSITORY, 'main', 'after-merge')])
+        self.assertEqual(self.verifier.calls, [(self.repository, 'main', 'before-merge'),
+                                               (self.repository, 'main', 'after-merge')])
         (_, count, receipts), (_, after_count, after_receipts) = seen
         self.assertEqual(receipts, {})
         sent = self.gitea.requests[count]  # the request right after the check is the merge
-        self.assertEqual((sent['method'], sent['path']), ('POST', f'/api/v1/repos/{fg.REPOSITORY}/pulls/{number}/merge'))
+        self.assertEqual((sent['method'], sent['path']),
+                         ('POST', f'/api/v1/repos/{self.repository}/pulls/{number}/merge'))
         self.assertEqual(after_count, len(self.gitea.requests))  # asked again after the read-back
         self.assertEqual(after_receipts, {nonce: ('dispatched', ['reserved', 'dispatched'])})
         answer = {'verdict': 'verified', 'detail': su.VERIFIED.detail, 'digest': su.VERIFIED.digest}
@@ -355,7 +356,7 @@ class ProtectionVerifier(OverHttp):
                   'drift': su.DRIFT, 'exception': OSError('the rules are gone'), 'malformed': None}
         for name, after in afters.items():
             with self.subTest(after=name):
-                self.gitea = SERVER.reset()
+                self.gitea = SERVER.reset(self.repository)
                 self.base = self.gitea.branches['main']
                 operation = f'op-after-{name}'
                 number, challenge = self.ready(operation, branch=f'work/after-{name}')
@@ -542,7 +543,7 @@ class BotTokens(OverHttp):
                 self.assertRefused('IDENTITY_NOT_OWNER', self.record, nonce)
             with self.subTest(bot=bot, entry='the bot token on the merge itself'):
                 status, _h, raw = AR.host.http_get(
-                    SERVER.port, f'/api/v1/repos/{fg.REPOSITORY}/pulls/{number}/merge', method='POST',
+                    SERVER.port, f'/api/v1/repos/{self.repository}/pulls/{number}/merge', method='POST',
                     body=json.dumps({'Do': 'merge', 'head_commit_id': self.gitea.head(number)}).encode(),
                     headers={'Authorization': f'token {token}', 'Content-Type': 'application/json'})
                 # the protection auditor's read:repository token is refused by its scope (403) before the merge
@@ -592,7 +593,7 @@ class ReadBack(OverHttp):
     def test_each_read_back_fault(self):
         for fault, resolved in self.FAULTS.items():
             with self.subTest(fault=fault):
-                self.gitea = SERVER.reset()
+                self.gitea = SERVER.reset(self.repository)
                 operation = f'op-{fault}'
                 number, challenge = self.ready(operation, branch=f'work/{fault}')
                 nonce = challenge['shown']['nonce']
@@ -613,7 +614,7 @@ class LostAnswer(OverHttp):
     def test_merged_but_the_answer_was_lost(self):
         for mode in ('drop', 'error-after'):
             with self.subTest(mode=mode):
-                self.gitea = SERVER.reset()
+                self.gitea = SERVER.reset(self.repository)
                 operation = f'op-{mode}'
                 number, challenge = self.ready(operation, branch=f'work/{mode}')
                 nonce = challenge['shown']['nonce']
@@ -666,6 +667,85 @@ class LostAnswer(OverHttp):
         detail = json.loads(self.store.events(AR.RECEIPT_PREFIX + nonce)[-1].detail_json)
         self.assertEqual(detail['code'], 'MERGED_OTHERWISE')
         self.assertEqual(len(self.gitea.requests_by('POST')), 1)
+
+
+# ---------------------------------------------------------------------------- on the authorization repository
+# Plan leaf E-05.7 (decision 0022): every class above, unchanged, on the authorization repository in a context that
+# admits what the managed recorder context admits (managed_policies), with its own state and store, against the fake
+# Gitea serving that repository and the protection auditor's view of it (its own declaration entry).
+
+
+class LedgerAuthorized(Authorized):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerStaleHead(StaleHead):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerAlteredDigest(AlteredDigest):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerReplayedOrExpired(ReplayedOrExpired):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerStatement(Statement):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerChallenge(Challenge):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerPolicyDrift(PolicyDrift):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerProtectionVerifier(ProtectionVerifier):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerOwnerIdentity(OwnerIdentity):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerProtectionCheck(ProtectionCheck):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerBotTokens(BotTokens):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerBinding(Binding):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerReadBack(ReadBack):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerLostAnswer(LostAnswer):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class OnTheLedger(unittest.TestCase):
+    """The classes above run on both repositories: every test case of P-04.2's suite has its ledger twin."""
+    category = 'contract'
+
+    def test_every_class_runs_on_the_authorization_repository(self):
+        cases = {name: value for name, value in globals().items()
+                 if isinstance(value, type) and issubclass(value, OverHttp) and value is not OverHttp}
+        fixture = {name for name, case in cases.items() if case.repository == fg.REPOSITORY}
+        ledger = {name for name, case in cases.items() if case.repository == AR.AUTHORIZATION_REPOSITORY}
+        self.assertEqual(ledger, {f'Ledger{name}' for name in fixture})
+        for name in fixture:
+            twin = cases[f'Ledger{name}']
+            self.assertTrue(issubclass(twin, cases[name]))
+            self.assertIn('repository', vars(twin))  # the twin changes the repository and nothing it tests
+            self.assertEqual([n for n, v in vars(twin).items() if callable(v) and not n.startswith('__')], [])
 
 
 if __name__ == '__main__':

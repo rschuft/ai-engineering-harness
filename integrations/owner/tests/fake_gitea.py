@@ -66,12 +66,13 @@ def sha(*parts) -> str:
 
 
 class FakeGitea:
-    def __init__(self):
+    def __init__(self, repository=REPOSITORY):
+        self.repository = repository  # the fixture by default; the authorization repository for its suites
         self.users = {OWNER: {'password': PASSWORD, 'is_admin': False, 'tokens': []}}
         for bot in BOTS:
             self.users[bot] = {'password': None, 'is_admin': False, 'tokens': []}
         self.basic_as = {}            # {(user, password): login}: a credential that signs in as someone else
-        self.repo = {'full_name': REPOSITORY, 'private': True, 'archived': False, 'default_branch': 'main',
+        self.repo = {'full_name': repository, 'private': True, 'archived': False, 'default_branch': 'main',
                      'allow_merge_commits': True, 'allow_rebase': True, 'allow_squash_merge': True}
         self.permissions = {OWNER: {'admin': False, 'push': True, 'pull': True}}
         self.protection = {'main': {'required_approvals': 1, 'enable_status_check': False,
@@ -85,7 +86,7 @@ class FakeGitea:
         self.on_merge = None
         self.after_merge = None       # a callable run after a merge, before its answer
         self.fail_routes = {}         # {substring of the path: HTTP status} answered instead
-        self.audit = protection_fake.ProtectionGitea(_roles)  # the protection auditor's reads
+        self.audit = protection_fake.ProtectionGitea(_roles, repository)  # the protection auditor's reads
         # GET /token of each bot but the auditor (whose token the audit fake answers): a view, or a status
         self.token_views = {spec['user']: {'id': n + 1, 'name': f'aieh-{role}-x', 'scopes': list(spec['scopes']),
                                            'login': spec['user']}
@@ -110,7 +111,7 @@ class FakeGitea:
         number = len(self.pulls) + 1
         self.pulls[number] = {'state': state, 'title': title, 'user': author, 'base': 'main', 'head_ref': branch,
                               'base_at_open': base, 'merged': False, 'merged_by': None, 'merge_commit_sha': None,
-                              'mergeable': mergeable, 'head_repo': REPOSITORY}
+                              'mergeable': mergeable, 'head_repo': self.repository}
         return number
 
     def head(self, number) -> str:
@@ -175,7 +176,7 @@ class FakeGitea:
         parsed = urllib.parse.urlsplit(path)
         query = dict(urllib.parse.parse_qsl(parsed.query))
         route = parsed.path.removeprefix('/api/v1')
-        repo = f'/repos/{REPOSITORY}'
+        repo = f'/repos/{self.repository}'
         if method == 'GET' and route == '/token' and kind == 'token':
             view = self.token_views.get(doer)
             if not isinstance(view, dict):
@@ -278,7 +279,7 @@ class FakeGitea:
         self.pulls[number] = {'state': 'open', 'title': form.get('title') or '', 'user': doer, 'base': base,
                               'head_ref': head, 'base_at_open': self.branches[base], 'merged': False,
                               'merged_by': None, 'merge_commit_sha': None, 'mergeable': True,
-                              'head_repo': REPOSITORY}
+                              'head_repo': self.repository}
         return self.reply(201, self.pull_view(number))
 
     def pull_view(self, number):
@@ -287,7 +288,7 @@ class FakeGitea:
                 'merged': pr['merged'], 'mergeable': pr['mergeable'],
                 'merged_by': {'login': pr['merged_by']} if pr['merged_by'] else None,
                 'merge_commit_sha': pr['merge_commit_sha'],
-                'base': {'ref': pr['base'], 'sha': self.branches[pr['base']], 'repo': {'full_name': REPOSITORY}},
+                'base': {'ref': pr['base'], 'sha': self.branches[pr['base']], 'repo': {'full_name': self.repository}},
                 'head': {'ref': pr['head_ref'], 'sha': self.head(number), 'repo': {'full_name': pr['head_repo']}}}
 
     def files(self, number):
@@ -397,8 +398,8 @@ class Server:
     def gitea(self):
         return self.httpd.gitea
 
-    def reset(self) -> FakeGitea:
-        self.httpd.gitea = FakeGitea()
+    def reset(self, repository=REPOSITORY) -> FakeGitea:
+        self.httpd.gitea = FakeGitea(repository)
         return self.httpd.gitea
 
     def close(self):

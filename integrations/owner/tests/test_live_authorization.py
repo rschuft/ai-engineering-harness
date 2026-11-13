@@ -295,7 +295,7 @@ def _open_store(live):
 
 def _context(live, store):
     return AR.Context(Path(live.run_dir) / RECORDER_DIR / 'state', store, live.provider, live.port, http=live.http,
-                      now=live.now, verifier=live.verifier)
+                      now=live.now, policies=AR.exercise_policies(), verifier=live.verifier)
 
 
 def _inspect(live, observed):
