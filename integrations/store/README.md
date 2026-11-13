@@ -8,7 +8,10 @@ and **rebuildable projections**. It is Python standard library only (`sqlite3`).
 
 It is not a record of authority. OpenSpec, Backlog.md, OpenHands, Gitea and the
 Owner keep their own data. The privileged executor's effect receipts belong in a
-separate store (F-05.2), never here.
+separate store (F-05.2), never here. The store also carries the Owner recorders' decision
+receipts (the authorization recorder's, and its dispatch-input commands' design acceptances and
+manifest promotions, P-04.3), which `load_manifest` reads as evidence that a decision was recorded;
+the authority stays with the decider.
 
 ## Files
 

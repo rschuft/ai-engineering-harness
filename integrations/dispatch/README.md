@@ -532,11 +532,12 @@ level. `check_manifest` reports:
 A catalog pin's `repository` names the catalog's repository; it need not be one whose Work
 is dispatched.
 
-**Accepted design revisions.** The blueprint records acceptance in OpenSpec ("Record
-acceptance ... Accepted design revision") but no mechanism yet marks a change accepted. The
-manifest's `designs` entries are therefore the approval source for "accepted OpenSpec
-revision": one accepted commit per change and repository, replaced when a changed design is
-accepted again.
+**Accepted design revisions.** The manifest's `designs` entries are the approval source for
+"accepted OpenSpec revision": one accepted commit per change and repository, replaced when a
+changed design is accepted again. Since P-04.3 each entry rests on a recorded design acceptance
+of that change at that commit (`accept-design`, by the Owner or delegated by decision 0018 point
+3.2), which the promotion decision binds; nothing is added to the change folder. A later
+acceptance takes effect when a manifest naming it is promoted.
 
 ### Custody (decision 0009, points 1, 2, 7 and 11; decision 0010)
 
@@ -544,16 +545,32 @@ accepted again.
   the managed data root, `<state>/dispatch/approved-inputs.json`. `manifest_path()` computes
   it through `aieh_paths` and creates nothing.
 - `load_manifest` refuses a relative path or one with `.` or `..` parts, and a path inside or
-  containing the checkout (before reading it, and again after resolving links). The request
-  never names a manifest.
-- The repository holds only this schema, its checker, the synthetic example and the test
-  fixtures. Writing the live manifest is not this leaf's: catalog pins come from A-01.1's
-  protected promotion; repository, design, profile and binding entries from governance.
+  containing the checkout (before reading it, and again after resolving links). These path
+  refusals stay its first (the dispatch-input commands rely on them). The request never names a
+  manifest.
+- **Promotion through a recorded decision (plan leaf P-04.3).** The live manifest has one
+  writer, the dispatch-input commands of the authorization recorder
+  ([`integrations/owner/input_recorder.py`](../owner/README.md#the-dispatch-input-commands-plan-leaf-p-043)):
+  a promotion decided by the Owner, or by the product manager under decision 0018 point 3.3, is a
+  write-ahead receipt in the integration store at the manifest's `version`, bound to the sha256 of
+  its bytes and to the design acceptance of each `designs` entry. `load_manifest(path,
+  decisions=...)` asks a decision verifier (`input_decisions.verifier(store)` over the managed
+  store, `<state>/integration/integration.sqlite`) after the path, read and schema checks, and
+  refuses (`MANIFEST_NOT_PROMOTED` without one; the verifier's codes below otherwise) unless the
+  store holds a confirmed promotion at this version with this digest, no later promotion is
+  confirmed, and each design entry has the confirmed acceptance the promotion bound. The loaded
+  manifest carries the approval view (`approval`); `approving_record(section, key)` names, for
+  each entry, the record that approved it: a design entry its design acceptance, every other
+  entry the promotion. `parse_manifest` stays for checking only: `resolve` and `admit` refuse its
+  result (`MANIFEST_NOT_PROMOTED`) before anything is read or reserved. A live driver loads the
+  manifest for each dispatch and never caches an `ApprovedInputs` across dispatches. Catalog pins
+  still come from A-01.1's protected promotion, through such a decision.
 - Placement is not a security boundary (decision 0010). Agents are kept from the managed
   root by the execution guest, the mount policy, bundle exchange and the role-token matrix
   (decision 0009 point 11). During bootstrap, host-side processes of the Owner's account can
-  read and change it (`fd-bootstrap-shared-identity`); the record's sha256 in every
-  reservation makes a change visible afterwards, not impossible.
+  read and change both the file and the store (`fd-bootstrap-shared-identity`; decision 0010
+  point 1): a manifest changed without a recorded decision is **detected and refused at load**,
+  not prevented from being written. No decision file beside the manifest is read.
 
 ## Refusal codes
 
@@ -567,6 +584,10 @@ accepted again.
 | `REQUEST_OVERRIDE_FORBIDDEN` | a field that tries to supply a path, mount, digest, resource, runtime, revision or ordinal |
 | `REQUEST_FIELD_INVALID` | a value outside its identifier grammar |
 | `MANIFEST_PATH_INVALID`, `MANIFEST_INSIDE_CHECKOUT`, `MANIFEST_MISSING`, `MANIFEST_UNREADABLE`, `MANIFEST_INVALID` | the manifest cannot be used |
+| `MANIFEST_NOT_PROMOTED` | no decision source was given, the store holds no promotion receipt at this version, or (`resolve`, `admit`, `approving_record`) the manifest was not approved by `load_manifest` |
+| `DECISION_RECORD_INVALID` | the receipt's decision is not a well-formed record of its format and kind or does not bind what the receipt says; or the verifier raised or answered anything but a well-formed view of this manifest |
+| `MANIFEST_PROMOTION_UNCONFIRMED`, `MANIFEST_DIGEST_MISMATCH` | the promotion receipt exists but is not confirmed (`manifest resolve`); the file's sha256 is not the decided one |
+| `DECISION_REPLAYED`, `DESIGN_ACCEPTANCE_MISSING` | a later promotion is confirmed; a design entry has no binding, or no confirmed design-acceptance receipt equal to it |
 | `REPOSITORY_NOT_APPROVED` | the repository is not approved |
 | `STAGE_UNKNOWN`, `STAGE_NOT_BOUND` | the stage is unknown, or not approved for the repository |
 | `PROFILE_NOT_APPROVED`, `PROFILE_NOT_BOUND` | the profile is not approved, or not bound to the repository and stage |
@@ -628,8 +649,12 @@ it creates and reads nothing there (exit 2 on a managed-root refusal).
 | `SuccessTests` | the record's fields; it feeds `reserve_attempt`, which reserves (and is idempotent); the next resolution asks for ordinal 2 with its own workspace, which the store refuses as a live claim until the first attempt fails; the review binding; case-insensitive Work ids; the checked-in profiles are refused as not operational |
 | `DeterminismTests` | the same inputs give an identical record and intent digest; the policy inputs (v2, with the admission policy) and a pinned golden policy digest; each policy input changes the digest; a manifest revision changes provenance and the intent digest but not the policy digest, so a retry under it conflicts; the record is immutable |
 | `ManifestCheckerTests` | the example is valid; schema, version, identifiers, duplicates (also duplicate JSON keys), unknown references, non-full commits, digest format, unreadable bytes; type fuzzing never crashes |
-| `ManifestCustodyTests` | the checkout (inside or containing) is refused before reading; path shapes; a manifest outside the checkout loads; `manifest_path` is `<state>/dispatch/approved-inputs.json` and creates nothing |
+| `ManifestCustodyTests` | the checkout (inside or containing) is refused before reading; path shapes; a manifest outside the checkout is refused without a decision source and loads with one; `manifest_path` is `<state>/dispatch/approved-inputs.json` and creates nothing |
 | `CliTests` | `check-manifest` exit codes and report; `manifest-path` with `AIEH_DATA_ROOT` in a throwaway directory creates nothing |
+
+The resolution and admission tests load their fixture manifests through `load_manifest` with a
+**test-only** decision verifier (`fixture_verifier`, which approves any manifest with synthetic
+records); nothing of P-04.3's proof rests on it.
 
 The design repository is built by the planning fixture (`two_task_fixture.build_repo`, a
 reproducible commit), and Backlog.md is its own recorded readiness output
@@ -640,6 +665,24 @@ against real Backlog.md JSON and real git objects.
 same fixture: one `PlanningWorkSource.read` is one adapter operation, so Backlog.md's `task
 list` is run once (the read and the readiness evaluation both ask for it), every pointer is
 resolved through one git batch reader, and the reader ends with the read, also when it raises.
+
+[`tests/test_manifest_promotion.py`](tests/test_manifest_promotion.py) (P-04.3): **the proof**
+that a manifest loads only through a recorded decision. Every row goes through `load_manifest`
+with the real decision verifier over a throwaway integration store, the manifests promoted by the
+real dispatch-input commands (the Owner's challenge and a synthetic statement, or the product
+manager's delegation on a fixture harness repository holding a decision 0018 and a log; fixtures
+from `integrations/owner/tests/input_fixture.py`):
+
+| Class | What it shows |
+|---|---|
+| `EntryWithoutARecordedDecision` | a manifest written by hand with an empty store, an entry added and the version raised by hand, and no decision source: `MANIFEST_NOT_PROMOTED` |
+| `DigestOtherThanTheDecidedOne` | one byte of whitespace, a profile's `sha256`, a pin's `manifest_sha256`: `MANIFEST_DIGEST_MISMATCH` |
+| `DesignEntryWithoutAnAcceptance` | the recorder refuses a candidate whose design has no acceptance (no receipt, no live file); a promotion receipt written by hand for such a design: `DESIGN_ACCEPTANCE_MISSING` |
+| `ReplayedDecision` | version 1 put back after version 2: `DECISION_REPLAYED`; `record` twice on one challenge: `CHALLENGE_CONSUMED`, one receipt; a candidate naming a superseded design revision: the recorder's `DECISION_REPLAYED` |
+| `PromotedManifestLoads` | Owner and delegated promotions load with their version and sha256; every entry's `approving_record` resolves to a confirmed receipt that covers it (a design its acceptance, every other entry the promotion), with its authority |
+| `NeverAnOwnerDecision` | an agent-attributed statement of either kind is `STATEMENT_MODEL_AUTHORED`; a delegated record fails the Owner record's check |
+| `EnforcementCannotBeSkipped` | `resolve`, `admit` and `dispatch` given `parse_manifest`'s output (or a view of another digest) refuse `MANIFEST_NOT_PROMOTED` with nothing read and nothing reserved |
+| `LoadOrder` | the path refusals come first and ask no verifier; a verifier that raises or answers anything but a view of this manifest approves nothing (`DECISION_RECORD_INVALID`); the verifier's own refusals pass through |
 
 [`tests/test_dispatch_admission.py`](tests/test_dispatch_admission.py) (E-01.2.2), on the same
 fixture, with every create through a counting fake transport: each refusal asserts it was

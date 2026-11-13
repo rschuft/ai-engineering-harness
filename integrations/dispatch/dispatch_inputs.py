@@ -25,7 +25,13 @@ the returned conversation id recorded in the store; a refused attempt is marked 
   in live use lives under the managed data root's ``state`` category
   (``<state>/dispatch/approved-inputs.json``, decision 0009 points 1 and 2), never in the
   checkout and never in the request. ``load_manifest`` refuses a manifest inside or
-  around the checkout.
+  around the checkout, and (plan leaf P-04.3) any manifest a recorded decision did not
+  promote: it asks an injected decision verifier (``decisions``; the dispatch-input
+  commands' ``integrations/owner/input_decisions.verifier`` over the integration store)
+  whether this manifest, at its version and digest, is the head of the promotion series and
+  each design entry has its acceptance, and refuses without one. The loaded manifest carries
+  the approval view: each entry names its approving record (``approving_record``).
+  ``resolve`` and ``admit`` refuse a manifest ``load_manifest`` did not approve.
 * **Output:** a ``ResolvedInputs`` record: the design revision, the profile digest, the
   agent manifest digest, the policy digest and the planned workspace, with the manifest
   version and digest that approved them. ``attempt_identity()`` and ``intent()`` feed
@@ -138,6 +144,16 @@ REFUSALS = {
     'MANIFEST_MISSING': 'no approved-input manifest exists at the path',
     'MANIFEST_UNREADABLE': 'the manifest cannot be read as one UTF-8 file of at most 1 MiB',
     'MANIFEST_INVALID': 'the manifest fails its schema check',
+    # P-04.3: a manifest is approved only by a recorded decision (load_manifest's decision verifier)
+    'MANIFEST_NOT_PROMOTED': 'no decision source was given, the store holds no promotion receipt at this version, '
+                             'or the manifest was not loaded by load_manifest',
+    'DECISION_RECORD_INVALID': 'a receipt\'s decision is not a well-formed record of its format and kind, or does not '
+                               'bind what the receipt says; also a verifier answer that is not well formed',
+    'MANIFEST_PROMOTION_UNCONFIRMED': 'the promotion receipt exists but is not confirmed (run manifest resolve)',
+    'MANIFEST_DIGEST_MISMATCH': 'the file\'s sha256 is not the decided digest',
+    'DECISION_REPLAYED': 'a later promotion is confirmed',
+    'DESIGN_ACCEPTANCE_MISSING': 'a design entry has no binding, or no confirmed design-acceptance receipt whose '
+                                 'subject equals it',
     'REPOSITORY_NOT_APPROVED': 'the repository is not in the manifest',
     'STAGE_UNKNOWN': 'the stage is not in the integration store\'s stage set',
     'STAGE_NOT_BOUND': 'no binding approves this stage for this repository',
@@ -379,16 +395,53 @@ def _no_constant(name):
     raise ValueError(f'non-standard JSON constant {name}')
 
 
+MANIFEST_SECTIONS = ('repositories', 'designs', 'profiles', 'catalog_pins', 'bindings')
+# P-04.3: the approval view load_manifest attaches (integrations/owner/input_decisions.APPROVAL_FORMAT).
+APPROVAL_FORMAT = 'ai-engineering-harness/dispatch/manifest-approval/v1'
+# The decision verifier's refusals, in the order it checks them (input_decisions.REFUSALS).
+DECISION_REFUSALS = ('MANIFEST_NOT_PROMOTED', 'DECISION_RECORD_INVALID', 'MANIFEST_PROMOTION_UNCONFIRMED',
+                     'MANIFEST_DIGEST_MISMATCH', 'DECISION_REPLAYED', 'DESIGN_ACCEPTANCE_MISSING')
+NAMED_RECORD_KEYS = ('decisionId', 'format', 'kind', 'receipt', 'authority')
+
+
 @dataclass(frozen=True)
 class ApprovedInputs:
-    """A schema-checked approved-input manifest: its version, the sha256 of its bytes, its entries."""
+    """A schema-checked approved-input manifest: its version, the sha256 of its bytes, its entries, and,
+    when ``load_manifest`` approved it through a recorded decision, the approval view (``approval``):
+    the promotion decision and each design entry's acceptance decision. ``parse_manifest``'s result has
+    none, and ``resolve`` and ``admit`` refuse it."""
     version: int
     sha256: str
     data_json: str  # canonical JSON of the parsed manifest; the object is never mutated
+    approval_json: str | None = None  # canonical JSON of the approval view, set only by load_manifest
 
     @property
     def data(self) -> dict:
         return json.loads(self.data_json)
+
+    @property
+    def approval(self) -> dict | None:
+        """The approval view (``ai-engineering-harness/dispatch/manifest-approval/v1``), or None."""
+        return None if self.approval_json is None else json.loads(self.approval_json)
+
+    def approving_record(self, section: str, key) -> dict:
+        """The record that approved entry KEY of SECTION (the key ``_index`` gives it: an id, or a
+        (repository, change) or (repository, stage) pair): a design entry names its design-acceptance
+        decision, every other entry the promotion decision; each with its decision id, format, kind,
+        receipt key and authority. MANIFEST_NOT_PROMOTED when the manifest carries no approval; KeyError
+        for an entry it does not have."""
+        approval = self.approval
+        if approval is None:
+            raise DispatchRefused('MANIFEST_NOT_PROMOTED', 'the manifest was not loaded by load_manifest with a '
+                                  'decision verifier: it names no approving record')
+        if section not in MANIFEST_SECTIONS:
+            raise KeyError(f'{section!r} is not a manifest section')
+        entry = self._index()[section][key]  # KeyError for an entry the manifest does not have
+        if section != 'designs':
+            return dict(approval['promotion'])
+        return next(dict(named) for named in approval['designs']
+                    if (named['repository'], named['change'], named['commit'])
+                    == (entry['repository'], entry['change'], entry['commit']))
 
     def _index(self) -> dict:
         data = self.data
@@ -430,8 +483,50 @@ def _overlaps(a: PurePath, b: PurePath) -> bool:
     return a == b or a.is_relative_to(b) or b.is_relative_to(a)
 
 
-def load_manifest(path, *, repo_root=REPO) -> ApprovedInputs:
-    """Read the live manifest from an absolute path outside the checkout and schema-check it."""
+def _approval(manifest: ApprovedInputs, answer) -> str:
+    """The canonical approval view of a decision verifier's ANSWER for MANIFEST, or DispatchRefused: the
+    verifier's own refusal, or DECISION_RECORD_INVALID for an answer that is not well formed."""
+    def malformed(detail):
+        return DispatchRefused('DECISION_RECORD_INVALID', f'the decision verifier\'s answer {detail}')
+
+    try:
+        code, detail, approval = answer
+    except (TypeError, ValueError):
+        raise malformed('is not (code, detail, approval)') from None
+    if code is not None:
+        if code not in DECISION_REFUSALS or not isinstance(detail, str):
+            raise malformed(f'names {code!r}, not one of its refusals')
+        raise DispatchRefused(code, detail)
+    designs = [(e['repository'], e['change'], e['commit']) for e in manifest.data['designs']]
+
+    def named(record):
+        return isinstance(record, dict) and all(k in record for k in NAMED_RECORD_KEYS) \
+            and isinstance(record['decisionId'], str) and isinstance(record['receipt'], str) \
+            and isinstance(record['authority'], dict) and record['authority'].get('authority') in ('owner', 'delegated')
+
+    if not isinstance(approval, dict) or approval.get('format') != APPROVAL_FORMAT \
+            or approval.get('version') != manifest.version or approval.get('digest') != f'sha256:{manifest.sha256}' \
+            or not named(approval.get('promotion')) or not isinstance(approval.get('designs'), list) \
+            or not all(named(d) for d in approval['designs']) \
+            or [(d.get('repository'), d.get('change'), d.get('commit')) for d in approval['designs']] != designs:
+        raise malformed(f'is not a {APPROVAL_FORMAT} view of this manifest (version {manifest.version}, '
+                        f'sha256:{manifest.sha256}, its designs entries in order)')
+    return _canonical(approval)
+
+
+def load_manifest(path, *, decisions=None, repo_root=REPO) -> ApprovedInputs:
+    """Read the live manifest from an absolute path outside the checkout, schema-check it, and approve it
+    through DECISIONS, the decision verifier (plan leaf P-04.3).
+
+    DECISIONS is a callable ``(version, sha256, designs) -> (code, detail, approval)``: the manifest's
+    version, the sha256 of its bytes and its ``designs`` entries ``[{repository, change, commit}]``; it
+    answers a refusal code of ``DECISION_REFUSALS`` with its detail, or None and the approval view (the
+    dispatch-input commands' ``input_decisions.verifier(store)``). In this order: the path rules
+    (``MANIFEST_PATH_INVALID``, ``MANIFEST_INSIDE_CHECKOUT``, before anything is read), the read
+    (``MANIFEST_MISSING``, ``MANIFEST_UNREADABLE``), the schema (``MANIFEST_INVALID``), then no DECISIONS
+    is ``MANIFEST_NOT_PROMOTED``, and the verifier's answer: its refusal, or ``DECISION_RECORD_INVALID``
+    when it raises or answers anything but a well-formed view of this manifest. The result carries the
+    approval view."""
     text = os.fspath(path) if isinstance(path, (str, os.PathLike)) else None
     candidate = Path(text) if text else None
     if candidate is None or not candidate.is_absolute() or any(part in ('.', '..') for part in candidate.parts):
@@ -446,7 +541,28 @@ def load_manifest(path, *, repo_root=REPO) -> ApprovedInputs:
         raise DispatchRefused('MANIFEST_MISSING', f'no manifest at {candidate}') from None
     except OSError as exc:
         raise DispatchRefused('MANIFEST_UNREADABLE', f'{candidate}: {type(exc).__name__}') from None
-    return parse_manifest(raw)
+    manifest = parse_manifest(raw)
+    if decisions is None:
+        raise DispatchRefused('MANIFEST_NOT_PROMOTED', 'no decision source was given: a manifest loads only when a '
+                              'recorded decision promoted it (P-04.3)')
+    designs = [{k: e[k] for k in ('repository', 'change', 'commit')} for e in manifest.data['designs']]
+    failure = None
+    try:
+        answer = decisions(manifest.version, manifest.sha256, designs)
+    except Exception as exc:  # noqa: BLE001 - whatever the verifier raises is an answer that is not well formed
+        failure = exc
+    if failure is not None:
+        raise DispatchRefused('DECISION_RECORD_INVALID', f'the decision verifier raised {type(failure).__name__}')
+    return dataclasses.replace(manifest, approval_json=_approval(manifest, answer))
+
+
+def _require_promoted(manifest: ApprovedInputs) -> None:
+    """MANIFEST_NOT_PROMOTED unless MANIFEST carries load_manifest's approval of this version and digest."""
+    approval = manifest.approval
+    if approval is None or approval.get('version') != manifest.version \
+            or approval.get('digest') != f'sha256:{manifest.sha256}':
+        raise DispatchRefused('MANIFEST_NOT_PROMOTED', 'the manifest was not approved by load_manifest through a '
+                              'recorded decision (parse_manifest\'s result is for checking only)')
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +842,7 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
     """
     if not isinstance(manifest, ApprovedInputs):
         raise TypeError('manifest must be ApprovedInputs (load_manifest or parse_manifest)')
+    _require_promoted(manifest)  # P-04.3: before anything is read or reserved
     work_id, repository, stage, profile, pin = parse_request(request)
     index = manifest._index()
 
@@ -1248,6 +1365,7 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
         raise TypeError('resolved must be ResolvedInputs (resolve)')
     if not isinstance(manifest, ApprovedInputs):
         raise TypeError('manifest must be ApprovedInputs (load_manifest or parse_manifest)')
+    _require_promoted(manifest)  # P-04.3: before anything is read
     entry = manifest._index()['profiles'].get(resolved.profile)
     if (resolved.manifest_sha256, resolved.manifest_version) != (manifest.sha256, manifest.version) \
             or entry is None or entry['sha256'] != resolved.profile_digest:

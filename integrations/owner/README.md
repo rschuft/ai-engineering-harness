@@ -396,10 +396,14 @@ digest back and confirm. A write that did not land leaves the receipt failed and
 (`PROMOTION_FAILED`); an outcome that does not read back as decided leaves it unknown (`OUTCOME_UNKNOWN`).
 `manifest resolve --version N` settles a receipt **by reading** the live file, never by writing it:
 confirmed when its digest is the decided one, failed otherwise (a receipt left reserved, nothing written,
-becomes failed).
+becomes failed). No promotion is prepared, recorded or delegated while an earlier promotion receipt is
+reserved, dispatched or unknown (`PROMOTION_UNRESOLVED`): once a later promotion replaced the live file,
+resolving the earlier one by reading would record a decision that landed as failed. A design acceptance
+writes no file, so an unsettled design receipt has no such hazard; it is a spent position the verifier
+ignores, and blocks nothing.
 
 **The verifier** (`input_decisions.verify_manifest`, or `verifier(store)` as the callable
-`load_manifest(path, decisions=...)` will take in slice 2) reads the store's receipts only, by direct
+`load_manifest(path, decisions=...)` takes; integrations/dispatch) reads the store's receipts only, by direct
 lookups: the promotion at the manifest's version must exist (`MANIFEST_NOT_PROMOTED`), be a well-formed
 record of its format binding the receipt's version and digest (`DECISION_RECORD_INVALID`), be confirmed
 (`MANIFEST_PROMOTION_UNCONFIRMED`), have the file's digest (`MANIFEST_DIGEST_MISMATCH`), be the last confirmed
@@ -415,7 +419,7 @@ system's level (decision 0010 point 1; `fd-bootstrap-shared-identity`): a file b
 effect, because no decision file is read; a manifest is approved only by a confirmed receipt of this store
 at its version with its digest, and producing one means running the recorder, which leaves an
 append-only receipt naming the authority it claimed. Unapproved content is detected and refused at load
-(slice 2), not prevented from being written.
+(`load_manifest`), not prevented from being written.
 
 ### Refusals
 
@@ -435,6 +439,7 @@ unknown promotion (its receipt says which).
 | `VERSION_NOT_NEXT` | the candidate's version is not the next position of the promotion series (or, for a delegated decision, another decision took the position meanwhile) |
 | `DESIGN_ACCEPTANCE_MISSING`, `DECISION_REPLAYED` | a design entry has no confirmed acceptance at its commit; it names a revision whose acceptance a later one superseded |
 | `PROMOTION_FAILED`, `OUTCOME_UNKNOWN` | the write did not land (receipt failed, the live file as it was); it did not read back as decided (receipt unknown: run `manifest resolve`) |
+| `PROMOTION_UNRESOLVED` | an earlier promotion receipt is reserved, dispatched or unknown: run `manifest resolve --version N` first |
 | `RECEIPT_MISSING` | `manifest resolve` for a version without a receipt |
 | `DELEGATION_KIND_UNKNOWN`, `DECIDER_NOT_DELEGATED` | no row of the delegation table for the kind; the decider is not the row's |
 | `DELEGATION_BASIS_INVALID`, `DELEGATION_BASIS_NOT_RECORDED` | the basis is not `{type, link, quote}` of the row's type (or its file is not JSON); the quote is not in the log at the harness repository's `HEAD` |
@@ -576,8 +581,8 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
 - Task itself (the targets' commands were run directly), Linux and macOS.
 - The dispatch-input commands against the managed data root, its integration store or a real Owner
   decision: they have run on throwaway repositories, a throwaway store and state root, and synthetic
-  statements and bases only. `load_manifest`'s enforcement (P-04.3 slice 2) is not built: until it is, a
-  manifest loads without a recorded decision.
+  statements and bases only. `load_manifest`'s enforcement has likewise run only over a throwaway store
+  (integrations/dispatch, `tests/test_manifest_promotion.py`); no live driver calls it yet (E-01.3.2).
 - The authorization recorder against a real Gitea: its live exercise (`test_live_authorization.py`)
   ran once on the S-01.2.2 fixture on 2026-11-12, on the Owner's own authorization (OA-14;
   [record](../../evidence/P-04.2-authorization-recorder.md), section 17). Observed on Gitea 28.3.0:

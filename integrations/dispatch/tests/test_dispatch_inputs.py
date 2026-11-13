@@ -137,6 +137,22 @@ def write_agent_server(profile_dir, template=TEMPLATE_BYTES, routes=ROUTES_BYTES
     (profile_dir / 'agent-server' / 'routes.json').write_bytes(routes)
 
 
+def fixture_verifier(version, sha256, designs):
+    """A TEST-ONLY decision verifier (P-04.3): it approves any manifest, naming synthetic records that no
+    store holds, so that the resolution and admission tests load their fixture manifests through
+    ``load_manifest`` as the dispatcher does. No proof of P-04.3 rests on it: the proof
+    (``test_manifest_promotion.py``) uses the real recorder, a throwaway store and the real verifier."""
+    def record(kind, receipt):
+        return {'decisionId': '00000000-0000-4000-8000-000000000000', 'format': 'synthetic-test-only', 'kind': kind,
+                'receipt': receipt, 'authority': {'authority': 'owner', 'channel': 'test-only',
+                                                  'reference': 'test:fixture-verifier', 'recordedBy': 'agent:test'}}
+    return (None, '', {
+        'format': di.APPROVAL_FORMAT, 'version': version, 'digest': f'sha256:{sha256}',
+        'promotion': record('promote-manifest', f'test-only/promotion/{version}'),
+        'designs': [{**d, 'sequence': 1, **record('accept-design', f'test-only/design/{d["change"]}/1')}
+                    for d in designs]})
+
+
 class SnapshotBacklog:
     """Backlog.md's recorded readiness output, replayed in process (task list and task view).
 
@@ -250,7 +266,7 @@ class Fixture(unittest.TestCase):
     def write_manifest(self, data, name='approved-inputs.json'):
         path = self.case / name
         path.write_bytes(json.dumps(data, indent=2).encode('utf-8'))
-        return di.load_manifest(path)
+        return di.load_manifest(path, decisions=fixture_verifier)
 
     def request(self, **changes):
         request = {'format': di.REQUEST_FORMAT, 'work_id': 'TASK-2', 'repository': 'demo-app',
@@ -845,7 +861,9 @@ class ManifestCustodyTests(unittest.TestCase):
     def test_loads_outside_the_checkout(self):
         path = self.tmp / 'approved-inputs.json'
         shutil.copyfile(EXAMPLE, path)
-        manifest = di.load_manifest(path)
+        # P-04.3: the bare call is refused; with a decision verifier (here the test-only one) it loads
+        self.assertEqual(self.refused(path), 'MANIFEST_NOT_PROMOTED')
+        manifest = di.load_manifest(path, decisions=fixture_verifier)
         self.assertEqual((manifest.version, manifest.sha256), (1, hashlib.sha256(path.read_bytes()).hexdigest()))
         path.write_bytes(path.read_bytes().replace(b'"version": 1', b'"version": 0'))
         self.assertEqual(self.refused(path), 'MANIFEST_INVALID')
