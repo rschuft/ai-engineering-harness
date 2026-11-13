@@ -3826,6 +3826,49 @@ push never implies parent acceptance.
   - **Recorded baseline** of the authorization repository `aieh-authorization/authorizations`: `sha256:041510d5330eb44a5a063afa9abfe9a6f0e340b6d357a9c46bfcd3e81341837f`.
   - **What it unblocks.** S-03.3 step 6b's recording carrier now exists: the managed recorder admits this repository alone, and the proposal act (`task owner:propose`) opens its pull requests. The provider-envelope authorization itself remains OA-12's.
   - **Records:** OA-30 moved to Resolved in the queue; `security/inventory.json`, `security/README.md`, `policy/role-tokens.json` and its generated tables in `policy/README.md` updated (`repo-gitea-authorization` and `op-protection-verify` `observed`; `op-gitea-administration` gains the act; the auditor's reach and `fd-owner-authorization-record`); the Gitea and owner READMEs and `docs/development.md` state the act as performed.
+- <a id="owner-direction-provider-access-2026-11-13"></a>**2026-11-13: Owner direction: provider access for D1 without harness spending enforcement.** Given in the main (engineering manager) session while the engineering manager prepared the OA-12 with OA-22 (a), (b), (c) and (e) package; transcribed verbatim by the engineering manager (decision 0018 point 7; the paste wrapper is removed). It is direction, not an authorization: no act of OA-12 or OA-22 is granted by it. Its reconciliation with S-03.5, decision 0021 and the leaves that rely on them is the product manager's, as the Owner directs. Verbatim:
+
+  > Owner clarification for OA-12 and D1:
+  >
+  > Do not implement or require harness-enforced spending
+  > limits, cumulative usage accounting, or budget-based
+  > model-call rejection.
+  >
+  > I accept that provider limits, exhausted credits,
+  > rate limits, and authentication failures may interrupt
+  > execution. Continuous availability is not a requirement.
+  >
+  > The desired behavior is to preserve durable Work state
+  > and resume safely when provider access becomes available.
+  >
+  > Claude Code already provides session resumption.
+  > Reuse that capability wherever applicable, and verify
+  > the equivalent recovery contract for contained
+  > OpenHands execution.
+  >
+  > Keep the broker responsible for:
+  > - Provider credential custody.
+  > - Approved provider destinations.
+  > - Isolation and network restrictions.
+  > - Attempt identity and authorization.
+  > - Security-relevant audit evidence.
+  >
+  > Do not remove those security boundaries.
+  >
+  > The existing S-03.5 spending machinery should not
+  > be expanded. Have the Product Manager reconcile its
+  > requirements and acceptance criteria with this Owner
+  > direction, including any necessary change to previously
+  > accepted decisions.
+  >
+  > For OA-12, recommend the smallest provider-access
+  > authorization needed for D1. Pricing research may
+  > inform model selection, but do not ask me to choose
+  > a budget, expiry date, or spending-enforcement mechanism.
+  >
+  > Do not interrupt or restart completed engineering work.
+  > Continue preparing the D1 authorization proposal under
+  > these revised requirements.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
