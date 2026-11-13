@@ -561,16 +561,26 @@ acceptance takes effect when a manifest naming it is promoted.
   confirmed, and each design entry has the confirmed acceptance the promotion bound. The loaded
   manifest carries the approval view (`approval`); `approving_record(section, key)` names, for
   each entry, the record that approved it: a design entry its design acceptance, every other
-  entry the promotion. `parse_manifest` stays for checking only: `resolve` and `admit` refuse its
-  result (`MANIFEST_NOT_PROMOTED`) before anything is read or reserved. A live driver loads the
-  manifest for each dispatch and never caches an `ApprovedInputs` across dispatches. Catalog pins
-  still come from A-01.1's protected promotion, through such a decision.
+  entry the promotion. `parse_manifest` stays for checking only: `resolve`, `admit` and
+  `dispatch` accept only an `ApprovedInputs` object that `load_manifest` returned in this process
+  (held by identity: a `dataclasses.replace`, a copy or a hand-built one is refused) and check
+  its approval view again, refusing anything else (`MANIFEST_NOT_PROMOTED`) before anything is
+  read or reserved. That guard is against convenience and accident (a driver that parses the
+  file itself); code of the same account in the same process can forge anything, and is outside
+  the threat model (decision 0010 point 1). Nor does `load_manifest` know which verifier it was
+  given: **the live driver (E-01.3.2) must pass `input_decisions.verifier(<the managed integration
+  store>)`** (`<state>/integration/integration.sqlite`), load the manifest for each dispatch, and
+  never cache an `ApprovedInputs` across dispatches. Catalog pins still come from A-01.1's
+  protected promotion, through such a decision.
 - Placement is not a security boundary (decision 0010). Agents are kept from the managed
   root by the execution guest, the mount policy, bundle exchange and the role-token matrix
   (decision 0009 point 11). During bootstrap, host-side processes of the Owner's account can
   read and change both the file and the store (`fd-bootstrap-shared-identity`; decision 0010
   point 1): a manifest changed without a recorded decision is **detected and refused at load**,
-  not prevented from being written. No decision file beside the manifest is read.
+  not prevented from being written, unless the store itself is also written by hand to imitate
+  the recorder, which decision 0010 point 1 places outside the threat model (the verifier's
+  series checks catch only a careless imitation, and a gap above the manifest's version is not
+  seen without listing the store). No decision file beside the manifest is read.
 
 ## Refusal codes
 
@@ -681,7 +691,7 @@ from `integrations/owner/tests/input_fixture.py`):
 | `ReplayedDecision` | version 1 put back after version 2: `DECISION_REPLAYED`; `record` twice on one challenge: `CHALLENGE_CONSUMED`, one receipt; a candidate naming a superseded design revision: the recorder's `DECISION_REPLAYED` |
 | `PromotedManifestLoads` | Owner and delegated promotions load with their version and sha256; every entry's `approving_record` resolves to a confirmed receipt that covers it (a design its acceptance, every other entry the promotion), with its authority |
 | `NeverAnOwnerDecision` | an agent-attributed statement of either kind is `STATEMENT_MODEL_AUTHORED`; a delegated record fails the Owner record's check |
-| `EnforcementCannotBeSkipped` | `resolve`, `admit` and `dispatch` given `parse_manifest`'s output (or a view of another digest) refuse `MANIFEST_NOT_PROMOTED` with nothing read and nothing reserved |
+| `EnforcementCannotBeSkipped` | `resolve`, `admit` and `dispatch` given `parse_manifest`'s output, a view of another digest, a well-formed view on a parsed manifest, or a replace, copy or hand-built equal of a loaded one, refuse `MANIFEST_NOT_PROMOTED` with nothing read and nothing reserved |
 | `LoadOrder` | the path refusals come first and ask no verifier; a verifier that raises or answers anything but a view of this manifest approves nothing (`DECISION_RECORD_INVALID`); the verifier's own refusals pass through |
 
 [`tests/test_dispatch_admission.py`](tests/test_dispatch_admission.py) (E-01.2.2), on the same

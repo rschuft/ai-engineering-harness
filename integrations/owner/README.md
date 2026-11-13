@@ -13,7 +13,7 @@ recorders:
   [`authorization_recorder.py`](authorization_recorder.py); decision 0012): it records
   the Owner's authorization of one exact operation manifest and merges it into the protected branch
   as `aieh-owner` (below);
-- the authorization recorder's **dispatch-input commands** (plan leaf P-04.3, slice 1,
+- the authorization recorder's **dispatch-input commands** (plan leaf P-04.3,
   [`input_recorder.py`](input_recorder.py)): they record design acceptances and manifest promotions,
   decided by the Owner or delegated by
   [decision 0018](../../decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md)
@@ -326,7 +326,8 @@ Each is decided by one of two authorities, recorded in one of two formats:
 
 ### The subjects
 
-`accept-design`: `repository` (the manifest's repository id), `change` (the OpenSpec change id),
+`accept-design`: `repository` (the manifest's repository id: a label, which nothing ties to a project
+repository; `commit` and `content` bind what was accepted), `change` (the OpenSpec change id),
 `commit` (the exact revision, 40 or 64 hex digits), `content` (`sha256:` over the change's folder at that
 commit: for each blob under `openspec/changes/<change>/`, in ascending path order, the line
 `<sha256 of the blob>  <path relative to the folder>\n`; the digest of those lines) and `supersedes` (the
@@ -346,9 +347,25 @@ validated by the same function), `delegation` (`record`: `decision:0018`; `point
 `digest`: `sha256:` of the record file's blob there; `basis`), `decidedBy` (the role the delegation names),
 `recordedBy` (equal to `decidedBy`: a delegated decision is recorded by the lead that made it; none is
 relayed) and `recordedAt`. The basis is `{type, link, quote}`, the shape of the network matrix's
-`owner_approval`: `type` `commitment` (point 3.2: the log's "Commitment: <milestone>" entry; the quote
-contains `Commitment: `) or `envelope` (point 3.3: the Owner's standing authorization, verbatim), `link`
-`evidence/bootstrap-log.md`, and the quote, at least 12 characters.
+`owner_approval`, anchored: `type` `commitment` (point 3.2) or `envelope` (point 3.3), `link`
+`evidence/bootstrap-log.md#<anchor>` (the anchor of the log's Decisions entry it rests on), and the quote,
+verbatim, at least 12 characters (a commitment's contains `Commitment: `).
+
+**How a basis is an authority** (fail closed). The anchor must open a Decisions entry of the log at the
+harness repository's `HEAD` (`- <a id="<anchor>"></a>**<date>: <title>** ...`; the entry runs to the next
+top-level list item or heading). A `commitment`'s entry is titled `<date>: Commitment: ...` and contains the
+quote. An `envelope`'s entry is titled `<date>: Owner standing authorization: ...`, and the quote lies inside
+its verbatim block (its `>` lines, the prefixes stripped, compared with runs of whitespace collapsed on both
+sides). An entry with another title (`Owner direction:`, `Owner authorization:`, ...), a quote outside the
+entry or its block, or a row of the Owner-actions queue prepared and not granted is
+`DELEGATION_BASIS_NOT_AUTHORITY`; an absent anchor or quote is `DELEGATION_BASIS_NOT_RECORDED`.
+
+**The convention this needs** (decision 0018 points 5 and 7): the session in which the Owner grants a
+standing authorization records it in the log's Decisions as an entry titled `<date>: Owner standing
+authorization: <what it covers>`, with an anchor, and the Owner's words verbatim as a `>` block. No agent
+writes, paraphrases or relays one. The recorder checks the entry's presence and shape, never its
+authorship. Until such an entry exists (none does at the time of writing), every delegated promotion is
+refused and a promotion is the Owner's.
 
 **The delegation table** (`delegated_decision.DELEGATIONS`) is data: one row per kind, naming the
 delegating record and its point, the decider and the basis type. A kind without a row is never delegated
@@ -358,9 +375,13 @@ check and, where it needs one, a basis type of its own (`BASIS_TYPES`), and reco
 
 **What `delegate` checks**: the row, the decider and the basis's shape; the delegating record
 (`decisions/0018-*.md`), read from the harness repository's `HEAD` commit through the repository-access
-module (the committed blob, never the work tree), has a `Status:` line beginning `Accepted (Owner)`; the
-quote is present verbatim in `evidence/bootstrap-log.md` at that commit; then everything the Owner path
-checks about the subject. **Not checked, disclosed** (decision 0018 point 7; decision 0010 point 1): who
+module (the committed blob, never the work tree), has its first `Status:` line beginning exactly `Status:
+Accepted (Owner) -` (a qualified variant such as `Accepted (Owner), superseded ...` is not accepted); the
+basis is an authority of its type at that commit (above); then everything the Owner path checks about the
+subject; and a delegated acceptance never supersedes an Owner acceptance of the same change
+(`OWNER_ACCEPTANCE_HEAD`: weakening an Owner-accepted decision is reserved, decision 0018 point 4.8; the
+next acceptance of that change is the Owner's). Promotions are not gated so: a new manifest version does
+not weaken an earlier one. **Not checked, disclosed** (decision 0018 point 7; decision 0010 point 1): who
 actually ran the command (any process of the account can declare the product manager); that the change
 lies inside the commitment's scope, that the Owner gave its intent and that it is not a change to the
 harness's own governance; that every entry lies inside the envelope and that the envelope has not expired
@@ -382,7 +403,11 @@ position is spent and never reused. The store's unique key makes a position sing
 on a consumed challenge is `CHALLENGE_CONSUMED`; a challenge whose position another decision took is
 `CHALLENGE_STALE`. A candidate naming a design revision whose acceptance a later acceptance of that change
 superseded is `DECISION_REPLAYED`. A design acceptance writes no manifest; its receipt is confirmed when it
-is recorded.
+is recorded. An act that stops after its reservation (a decision copy that cannot be written) marks its
+receipt failed when the store lets it (`IO_FAILED` for a design, `PROMOTION_FAILED` for a promotion; exit
+1): the position is spent and the challenge used (`CHALLENGE_CONSUMED`, whose detail gives the receipt's
+state). `status` shows, for each series, its head, its next position, its failed positions and its
+unsettled ones.
 
 The Owner's challenges and decision copies are kept in the recorder's own state,
 `<state>/owner-authorization/dispatch-inputs/{challenges,decisions}/`; delegated decision copies in
@@ -408,7 +433,12 @@ lookups: the promotion at the manifest's version must exist (`MANIFEST_NOT_PROMO
 record of its format binding the receipt's version and digest (`DECISION_RECORD_INVALID`), be confirmed
 (`MANIFEST_PROMOTION_UNCONFIRMED`), have the file's digest (`MANIFEST_DIGEST_MISMATCH`), be the last confirmed
 promotion (`DECISION_REPLAYED`), and each design entry must have the confirmed acceptance the promotion
-bound for it (`DESIGN_ACCEPTANCE_MISSING`). Otherwise it answers the approval view
+bound for it, reserved by the recorder (`DESIGN_ACCEPTANCE_MISSING`, `DECISION_RECORD_INVALID`). It also
+walks the promotion series from position 1 to the manifest's version by direct lookups
+(`DECISION_RECORD_INVALID`, the detail naming the position): every position present, each reserved by the
+recorder's actor (`dispatch-input-recorder/1`), no `decisionId` or Owner challenge repeated, and each
+confirmed promotion's `previous` the confirmed promotion before it. A gap **above** the manifest's version
+cannot be seen without listing the store, which the verifier does not do. Otherwise it answers the approval view
 (`ai-engineering-harness/dispatch/manifest-approval/v1`): the promotion decision and each design entry's
 acceptance decision, each with its receipt and its authority (the Owner, or the delegating record, its
 point, the revision, the decider and the basis). Design acceptances are not re-checked for currency at
@@ -419,7 +449,9 @@ system's level (decision 0010 point 1; `fd-bootstrap-shared-identity`): a file b
 effect, because no decision file is read; a manifest is approved only by a confirmed receipt of this store
 at its version with its digest, and producing one means running the recorder, which leaves an
 append-only receipt naming the authority it claimed. Unapproved content is detected and refused at load
-(`load_manifest`), not prevented from being written.
+(`load_manifest`), not prevented from being written, unless the store itself is also written by hand: a
+same-account write of the store that imitates the recorder (its actor, fresh ids, the right `previous`) is
+outside the threat model (decision 0010 point 1), and the series checks above catch only a careless one.
 
 ### Refusals
 
@@ -429,7 +461,7 @@ unknown promotion (its receipt says which).
 | Code | Refused when |
 |---|---|
 | `CHALLENGE_MISSING`, `CHALLENGE_INVALID`, `CHALLENGE_UNKNOWN` | no challenge; not a nonce, a malformed state file, or a challenge of the other kind; a nonce this recorder did not issue |
-| `CHALLENGE_EXPIRED`, `CHALLENGE_CONSUMED`, `CHALLENGE_STALE` | the challenge's expiry has passed; this challenge's decision is already recorded; another decision holds its position, or the series or a design acceptance changed after the summary was shown |
+| `CHALLENGE_EXPIRED`, `CHALLENGE_CONSUMED`, `CHALLENGE_STALE` | the challenge's expiry has passed; this challenge was already used (its position holds its receipt, confirmed or not: the detail says which); another decision holds its position, or the series or a design acceptance changed after the summary was shown |
 | `STATEMENT_MISSING`, `STATEMENT_MODEL_AUTHORED`, `STATEMENT_NOT_OWNER`, `STATEMENT_INVALID` | the statement verdicts of the shared record (or a statement file that is not JSON) |
 | `STATEMENT_SUBJECT_MISSING`, `CHANNEL_NOT_ADMITTED`, `RECORDED_BY_INVALID` | the statement does not name the change or `approved-inputs-v<version>`; its channel is not admitted; `--recorded-by` is not an attribution |
 | `PROJECT_UNAVAILABLE`, `GIT_FAILED` | `--project` is not a work tree root (or Dulwich is missing); the repository could not be read |
@@ -442,8 +474,11 @@ unknown promotion (its receipt says which).
 | `PROMOTION_UNRESOLVED` | an earlier promotion receipt is reserved, dispatched or unknown: run `manifest resolve --version N` first |
 | `RECEIPT_MISSING` | `manifest resolve` for a version without a receipt |
 | `DELEGATION_KIND_UNKNOWN`, `DECIDER_NOT_DELEGATED` | no row of the delegation table for the kind; the decider is not the row's |
-| `DELEGATION_BASIS_INVALID`, `DELEGATION_BASIS_NOT_RECORDED` | the basis is not `{type, link, quote}` of the row's type (or its file is not JSON); the quote is not in the log at the harness repository's `HEAD` |
-| `DELEGATION_NOT_ACCEPTED`, `AUTHORITY_UNAVAILABLE` | the delegating record is not `Accepted (Owner)` at `HEAD` (or is not there once); the harness repository cannot be read |
+| `DELEGATION_BASIS_INVALID`, `DELEGATION_BASIS_NOT_RECORDED` | the basis is not `{type, link, quote}` of the row's type with an anchored link (or its file is not JSON); the quote or the anchored entry is not in the log at the harness repository's `HEAD` |
+| `DELEGATION_BASIS_NOT_AUTHORITY` | the anchored entry is not an authority of the basis type, or the quote lies outside it (a commitment) or its verbatim block (a standing authorization) |
+| `DELEGATION_NOT_ACCEPTED`, `AUTHORITY_UNAVAILABLE` | the delegating record's status is not `Accepted (Owner) -` at `HEAD` (or it is not there once); the harness repository cannot be read |
+| `OWNER_ACCEPTANCE_HEAD` | a delegated acceptance of a change whose current acceptance is the Owner's |
+| `IO_FAILED` | a file could not be written or read: a challenge (nothing recorded, exit 2), or a decision copy after the reservation (the receipt failed, exit 1); on the command line also any other file error, as a code, never a traceback |
 
 A repository id outside the manifest's grammar, or an expiry outside 1 to 1440 minutes, is a usage error
 (exit 2, no code).
@@ -496,7 +531,7 @@ role the delegation names, in its own session):
 
 `task owner:design -- prepare ...` (and `record`, `delegate`) and `task owner:promote -- prepare ...` (and
 `record`, `delegate`, `resolve`) run the first seven. `basis.json` is `{"type": "commitment" or "envelope",
-"link": "evidence/bootstrap-log.md", "quote": ...}`.
+"link": "evidence/bootstrap-log.md#<anchor>", "quote": ...}`.
 
 The live exercise on the S-01.2.2 fixture runs in two phases, each an Owner-approved act and never
 run by default (`test_live_authorization.py` lists what each reads, writes and leaves). It never
