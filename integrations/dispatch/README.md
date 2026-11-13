@@ -188,8 +188,8 @@ A profile without a complete admission declaration is refused at resolution
 **Defence in depth.** `send_create` takes the `ResolvedInputs` the attempt was reserved under
 (its policy digest is the reserved one), re-derives the admission policy from it, re-checks
 that policy's rules, and runs every admission check on the `AdmittedCreate` again: identity,
-workspace (with the on-disk walk), the template's and the route allowlist's sha256, route, body
-and mounts. Only then, through the route-checked client and after decision 0001's
+workspace (with the on-disk walk), the template's and the route allowlist's sha256, the
+approved profile's bytes against the profile digest (since E-05.2), route, body and mounts. Only then, through the route-checked client and after decision 0001's
 `/server_info` preconditions (E-01.3.1, [below](#the-native-conversation-create-e-0131)), does it
 send the body it validated, exactly once. An admission refusal calls the transport zero times. A
 transport failure is raised, never retried and never re-routed to another runtime.
@@ -218,16 +218,31 @@ stage, and every profile without the declaration, keeps the admission above unch
 |---|---|---|
 | the declaration names a known stage and pins a file under `profiles/<id>/` by sha256 | resolution (any stage) | `PROFILE_ADMISSION_INVALID` |
 | it does not pin the profile's F-04.2 fixture (same path or same sha256) | resolution | `STAGE_TEMPLATE_DISPOSABLE` |
-| the pinned template is not tagged disposable (a tag value ending `-disposable`: the F-04.2 fixture's and the S-03.3 qualification create's) | admission | `STAGE_TEMPLATE_DISPOSABLE` |
-| the pinned template carries an ACP agent block (`agent_settings` with `agent_kind` `acp`) | admission | `AGENT_BLOCK_NOT_ACP` |
+| the pinned template is not tagged disposable (a tag value ending `-disposable`: the F-04.2 fixture's and the S-03.3 qualification create's) | admission and `send_create` | `STAGE_TEMPLATE_DISPOSABLE` |
+| the pinned template carries an ACP agent block (`agent_settings` with `agent_kind` `acp`) | admission and `send_create` | `AGENT_BLOCK_NOT_ACP` |
+| the reserved policy's create template is the stage's pin | admission and `send_create` | `ADMISSION_MISMATCH` |
 | the body's agent block is exactly the template's (canonical JSON), as every allowlisted field | admission and `send_create` | `BODY_NOT_TEMPLATE` (field `agent_settings`) |
 | the template's bytes have the pinned sha256 | admission and `send_create` | `PROFILE_ARTIFACT_DRIFTED` |
+| the approved profile the admitted create carries (`AdmittedCreate.profile_bytes`) has the reserved profile digest | `send_create` (and admission's own re-check) | `PROFILE_DRIFTED`, `PROFILE_MISSING` |
 
-The S-03.3 qualification create cannot be pinned (its path is outside `profiles/<id>/`), is
-tagged disposable when its body is copied under a profile, and carries `secrets`
-(`BODY_FIELD_UNKNOWN`) when filled. The template's content (tag, agent kind) is checked at
-admission, where the profile is read; `send_create` re-checks the template bytes' sha256, so the
-content it sends is the content admission checked.
+`send_create` takes no profile reader, so the admitted create carries the approved profile's
+bytes beside the template and the route allowlist; the send re-checks them against the reserved
+profile digest and, when they declare this attempt's stage as the D1 stage, re-runs the content
+checks. An admitted create built without admission's content check is therefore refused at the
+send, and nothing is sent (the independent review's R1; `ADMITTED_FORMAT` is unchanged).
+
+**What is recognized as a disposable fixture, and what is not.** The F-04.2 fixture is
+recognized by its path or its sha256 (the profile's `fixture` pin) and by its tag; the S-03.3
+qualification create by its path (outside `profiles/<id>/`, so it cannot be pinned) and by its
+tag, and, when filled, by its `secrets` (`BODY_FIELD_UNKNOWN`). A copy of either with the tag
+removed, and without `secrets`, is simply another template: nothing here can tell it apart, and
+whether it may be admitted is decided by the profile's approval by sha256 in a promoted manifest
+(decision 0020), like any other template.
+
+**Scope.** E-05.2 applies to the D1 stage only. Every other real stage keeps E-01.2.2's
+admission, the F-04.2 fixture included, until A-01.2 (whose proof refuses that fixture for every
+real stage). The checked-in `strong-windows-qemu-whpx` profile does not pin the candidate below:
+it gains the pin only when S-03.3 qualifies the real template.
 
 **The candidate.** [`profiles/strong-windows-qemu-whpx/agent-server/d1-create.json`](../../profiles/strong-windows-qemu-whpx/agent-server/d1-create.json)
 is a CANDIDATE, pinned by no checked-in profile: E-01.2.2's body allowlist (no `secrets`), with
@@ -759,6 +774,7 @@ clause by clause, every refusal with the counting transport called zero times:
 | `RefusesAnyOtherBlock` | eighteen other agent blocks in the body (the F-04.2 bare agent, another kind or server, the `npx` form, an `npx` or wrapper command, arguments, another model or session mode, a shared data dir, an MCP server, tools, an agent profile or context, a missing key, wrong types) are `BODY_NOT_TEMPLATE` at the send and in `check_create_body`; another agent source beside it is `BODY_FIELD_UNKNOWN`; an approved template without an ACP block is `AGENT_BLOCK_NOT_ACP` |
 | `RefusesTheF042Fixture` | the fixture pinned by path, by digest or both is `STAGE_TEMPLATE_DISPOSABLE` at resolution, nothing reserved; a re-serialized copy or its tag is refused at admission; a create built from it is `PROFILE_ARTIFACT_DRIFTED` (its bytes) or `BODY_NOT_TEMPLATE` (its block) |
 | `RefusesTheQualificationFixture` | its file cannot be pinned (`PROFILE_ADMISSION_INVALID`; the reader refuses its path); its body pinned is `STAGE_TEMPLATE_DISPOSABLE`, untagged `BODY_FIELD_UNKNOWN` (`secrets`); its filled create is `BODY_FIELD_UNKNOWN`, and without `secrets` `BODY_NOT_TEMPLATE` (`tags`) |
+| `SendCreateRechecks` | the review's R1: an admitted create built with admission's content check skipped (a non-ACP or a disposable template) is refused by `send_create` with the content check's code, and admission itself refuses it; the carried profile must be the approved one (`PROFILE_DRIFTED`: another profile, one byte more, empty; `PROFILE_MISSING`: none) |
 | `DeclarationRefusals` | eleven malformed declarations are `PROFILE_ADMISSION_INVALID` for either stage; a missing pinned file is `PROFILE_ARTIFACT_MISSING` |
 
 [`tests/test_conversation_create.py`](tests/test_conversation_create.py) (E-01.3.1), on the same

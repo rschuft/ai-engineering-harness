@@ -23,6 +23,7 @@ import importlib.util
 import json
 import sys
 import unittest
+import unittest.mock
 
 CATEGORY = 'integration'
 
@@ -337,6 +338,46 @@ class RefusesTheQualificationFixture(D1Fixture):
         bare = {k: v for k, v in body.items() if k not in ('secrets', 'secrets_encrypted')}
         refusal = self.assertDenied('BODY_NOT_TEMPLATE', self.send, self.tampered(admitted, bare), resolved)
         self.assertEqual(refusal.context['field'], 'tags')
+
+
+class SendCreateRechecks(D1Fixture):
+    """The independent review's R1 (fixed forward): send_create re-runs the D1 stage's content checks, from the
+    approved profile the admitted create carries, so an admitted create built without admit's check is refused
+    and nothing is sent."""
+
+    def admitted_without_the_content_check(self, template):
+        manifest = self.approve_d1(template)
+        resolved = self.resolve_d1(manifest)
+        self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor='d1-test')
+        with unittest.mock.patch.object(di, 'check_stage_template', lambda template, stage: None):
+            admitted = self.admit(resolved, manifest)
+        self.assertEqual(self.transport.calls, [])
+        return manifest, resolved, admitted
+
+    def test_an_admitted_create_that_skipped_the_content_check_is_refused_at_send(self):
+        cases = {
+            'AGENT_BLOCK_NOT_ACP': candidate_with(lambda body: body['agent_settings'].update(agent_kind='openhands')),
+            'STAGE_TEMPLATE_DISPOSABLE': json.dumps(FIXTURE, indent=1).encode('utf-8'),
+        }
+        for code, template in cases.items():
+            with self.subTest(code):
+                self.transport = adm.CountingTransport()
+                manifest, resolved, admitted = self.admitted_without_the_content_check(template)
+                self.assertDenied(code, self.admit, resolved, manifest)  # admit itself refuses it
+                self.assertDenied(code, self.send, admitted, resolved)
+                self.fail_live()
+
+    def test_the_carried_profile_must_be_the_approved_one(self):
+        _, resolved, admitted = self.reserved_d1()
+        other = (self.profiles / 'strong-test-profile' / 'profile.json').read_bytes()
+        for name, raw in {'another profile': other, 'one byte more': admitted.profile_bytes + b' ',
+                          'empty': b''}.items():
+            with self.subTest(name):
+                self.assertDenied('PROFILE_DRIFTED', self.send, dataclasses.replace(admitted, profile_bytes=raw),
+                                  resolved)
+        self.assertDenied('PROFILE_MISSING', self.send, dataclasses.replace(admitted, profile_bytes=None), resolved)
+        self.send(admitted, resolved)
+        self.assertEqual(len(self.transport.calls), 1)
 
 
 class DeclarationRefusals(D1Fixture):

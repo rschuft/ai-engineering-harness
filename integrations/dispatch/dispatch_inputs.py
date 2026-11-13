@@ -781,6 +781,13 @@ def parse_request(request) -> tuple[str, str, str, str, str]:
 
 
 def _check_profile(profile_id: str, approved_sha256: str, read_profile: Callable[[str], bytes]) -> tuple[str, dict]:
+    _, digest, declared = _read_checked_profile(profile_id, approved_sha256, read_profile)
+    return digest, declared
+
+
+def _read_checked_profile(profile_id: str, approved_sha256: str,
+                          read_profile: Callable[[str], bytes]) -> tuple[bytes, str, dict]:
+    """The approved profile's bytes, their sha256 and its checked declaration, or a refusal."""
     try:
         raw = read_profile(profile_id)
     except (OSError, ValueError) as exc:
@@ -804,7 +811,7 @@ def _check_profile(profile_id: str, approved_sha256: str, read_profile: Callable
         raise DispatchRefused('PROFILE_NOT_OPERATIONAL', f'{profile_id} declares status.operational '
                               f'{status.get("operational") if isinstance(status, dict) else None!r}',
                               profile=profile_id)
-    return digest, declared
+    return raw, digest, declared
 
 
 def _design_revision(work_id: str, entry: dict) -> tuple[str, str, str]:
@@ -1366,6 +1373,7 @@ class AdmittedCreate:
     policy_digest: str
     template_bytes: bytes     # the pinned create template, re-checked against its sha256 on send
     routes_bytes: bytes       # the pinned route allowlist every Agent Server call is checked against (E-01.3.1)
+    profile_bytes: bytes      # the approved profile.json, re-checked against the profile digest on send (E-05.2)
 
     @property
     def body(self) -> dict:
@@ -1402,6 +1410,19 @@ def _resolved_admission(resolved: ResolvedInputs) -> dict:
     return admission
 
 
+def _check_stage_content(declared: dict, resolved: ResolvedInputs, admission: dict, template: dict) -> None:
+    """For the D1 stage (the stage the approved profile's stage_create_template names, E-05.2): the reserved
+    policy's create template is that pin (``ADMISSION_MISMATCH`` otherwise), and the template's content passes
+    ``check_stage_template``. Nothing for any other stage."""
+    staged = stage_create_template(declared, resolved.profile)
+    if staged is None or staged['stage'] != resolved.stage:
+        return
+    if not _same({'path': staged['path'], 'sha256': staged['sha256']}, admission['create_template']):
+        raise DispatchRefused('ADMISSION_MISMATCH', f'the reserved create template is not the {resolved.stage} '
+                              'stage\'s pinned template')
+    check_stage_template(template, resolved.stage)
+
+
 def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admission: dict, workspaces) -> dict:
     """Every admission check on a built request; returns the validated body (the one to send)."""
     key = _operation_key(resolved)
@@ -1417,6 +1438,11 @@ def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admis
     if hashlib.sha256(template_raw).hexdigest() != admission['create_template']['sha256']:
         raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted create template is not the pinned one')
     template = _artifact_object(template_raw, 'create template')
+    # E-05.2: the approved profile the admitted create carries (its bytes must have the reserved profile digest)
+    # says whether this is the D1 stage; if so the template's content is checked again here.
+    profile_raw = admitted.profile_bytes
+    _, _, declared = _read_checked_profile(resolved.profile, resolved.profile_digest, lambda _name: profile_raw)
+    _check_stage_content(declared, resolved, admission, template)
     routes_raw = admitted.routes_bytes if isinstance(admitted.routes_bytes, bytes) else b''
     if hashlib.sha256(routes_raw).hexdigest() != admission['routes']['sha256']:
         raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted route allowlist is not the pinned one')
@@ -1458,7 +1484,7 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
     if (resolved.manifest_sha256, resolved.manifest_version) != (manifest.sha256, manifest.version) \
             or entry is None or entry['sha256'] != resolved.profile_digest:
         raise DispatchRefused('ADMISSION_MISMATCH', 'the resolved inputs were not approved by this manifest')
-    _, declared = _check_profile(resolved.profile, resolved.profile_digest, read_profile)
+    profile_raw, _, declared = _read_checked_profile(resolved.profile, resolved.profile_digest, read_profile)
     admission = _resolved_admission(resolved)
     if not _same(admission, admission_policy(declared, resolved.profile, resolved.stage)):
         raise DispatchRefused('ADMISSION_MISMATCH', 'the policy inputs do not carry the approved profile\'s '
@@ -1467,9 +1493,7 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
     host = workspace_host_path(resolved, workspaces, key)
     template_raw = _read_pinned(read_artifact, admission['create_template'], 'create template')
     template = _artifact_object(template_raw, 'create template')
-    staged = stage_create_template(declared, resolved.profile)
-    if staged is not None and staged['stage'] == resolved.stage:  # the D1 stage (E-05.2)
-        check_stage_template(template, resolved.stage)
+    _check_stage_content(declared, resolved, admission, template)  # the D1 stage (E-05.2)
     routes_raw = _read_pinned(read_artifact, admission['routes'], 'route allowlist')
     _check_route_allowlist(routes_raw, admission['route'])
     conversation_id = store.conversation_id_for(key)
@@ -1480,7 +1504,8 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
         path=admission['route']['path'], body_json=_canonical(body),
         mounts_json=_canonical(_binds_for(admission['mounts']['binds'], conversation_id.replace('-', ''))),
         planned_workspace=resolved.planned_workspace, host_workspace=str(host),
-        policy_digest=resolved.policy_digest, template_bytes=template_raw, routes_bytes=routes_raw)
+        policy_digest=resolved.policy_digest, template_bytes=template_raw, routes_bytes=routes_raw,
+        profile_bytes=profile_raw)
     _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces)
     return admitted
 
