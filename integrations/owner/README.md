@@ -713,10 +713,10 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
   decision: they have run on throwaway repositories, a throwaway store and state root, and synthetic
   statements and bases only. `load_manifest`'s enforcement has likewise run only over a throwaway store
   (integrations/dispatch, `tests/test_manifest_promotion.py`); no live driver calls it yet (E-01.3.2).
-- The authorization repository (plan leaf E-05.7): its admission, the proposal act and Owner act OA-30's
-  module (`integrations/gitea/gitea_roles.py authorization-repository`) are built and tested on the fake Gitea and
-  throwaway stores only. The repository does not exist until OA-30 is performed; no proposal, challenge or merge
-  has been made on it.
+- The authorization repository (plan leaf E-05.7): it exists since Owner act OA-30 (2026-11-13), performed once
+  and verified ([record](../../evidence/E-05.7-authorization-repository-offline.md#live-half-owner-act-oa-30)). Its
+  admission and the proposal act are tested on the fake Gitea and throwaway stores only: no proposal, challenge or
+  merge has been made on it.
 - The authorization recorder against a real Gitea: its live exercise (`test_live_authorization.py`)
   ran once on the S-01.2.2 fixture on 2026-11-12, on the Owner's own authorization (OA-14;
   [record](../../evidence/P-04.2-authorization-recorder.md), section 17). Observed on Gitea 28.3.0:

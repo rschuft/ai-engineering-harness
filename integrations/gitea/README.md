@@ -318,8 +318,12 @@ collaborators and Owners team), so that G-03.1 can change it without the fixture
 OA-30 (b): the four bots with the fixture's permissions, the protection auditor repository administrator (the
 auditor's reach, `AUDITED_REPOSITORIES`, becomes the fixture and this repository), and `aieh-owner` write.
 
-`authorization-repository --owner-act OA-30` is OA-30's administration act, built and tested on fakes and **not
-run**. It refuses (`OWNER_ACT_REQUIRED`, nothing read or sent) unless `--owner-act OA-30` names the act. Then:
+`authorization-repository --owner-act OA-30` is OA-30's administration act. It was **performed once, on
+2026-11-13**, on the Owner's authorization, and exited 0: twelve writes, each 2xx, no token minted; the read-back
+equal to the declaration; main holding its initial commit alone and no pull request; the protection check `verified`
+as the auditor with the recorded baseline `sha256:041510d5330eb44a5a063afa9abfe9a6f0e340b6d357a9c46bfcd3e81341837f`; the fixture `verified` with its own recorded baseline before and
+after ([record](../../evidence/E-05.7-authorization-repository-offline.md#live-half-owner-act-oa-30)). It is not to be
+run again except as a new Owner act. It refuses (`OWNER_ACT_REQUIRED`, nothing read or sent) unless `--owner-act OA-30` names the act. Then:
 
 1. read-only, before any write, every check that does not depend on the new repository, each a refusal with
    nothing written (exit 2): the managed integration store holds no `owner-authorization/v1/` receipt
@@ -433,9 +437,9 @@ authorization repository (E-05.7), whose entry G-03.1 completes.
 - A real cross-version `upgrade` (one version is pinned), and the rehearsal of upgrade, recovery and
   uninstall on a disposable instance with a reboot or sign-out (F-06.6).
 - `retire` against the running Gitea (fakes only).
-- The protection check on any repository but the S-01.2.2 fixture: the authorization repository's declaration
-  and OA-30's module (`authorization-repository`) have run against the fakes only; the repository does not exist
-  until OA-30 is performed. Gitea's views in states the live runs did not produce (the check's
+- The protection check on repositories other than the S-01.2.2 fixture and the authorization repository (the
+  latter verified live once, at OA-30 on 2026-11-13). OA-30's stop paths have run against the fakes only. Gitea's
+  views in states the live runs did not produce (the check's
   `unverified` paths on the real Gitea are exercised against the fake only).
 - The receipts of credential acts against the running Gitea and the managed root's integration store
   (fakes and a fixture store only, F-06.3).
