@@ -1253,6 +1253,16 @@
       "findings": ["fd-bootstrap-shared-identity"]
     },
     {
+      "id": "store-approved-inputs",
+      "name": "The live approved-input manifest (approved-inputs.json)",
+      "kind": "store",
+      "custodian": "owner-os-account",
+      "location": "<state>/dispatch/approved-inputs.json of the managed data root (decision 0009); written only by the dispatch-input commands of the authorization recorder (op-manifest-promotion; integrations/owner/input_recorder.py), and loaded by load_manifest (integrations/dispatch/dispatch_inputs.py) only when the integration store holds a confirmed promotion of its version and digest. Owner-session custody during bootstrap.",
+      "status": "planned",
+      "sources": ["decisions/0009-managed-data-root-and-configuration-contract.md", "decisions/0020-dispatch-input-decisions-design-acceptance-manifest-promotion-and-load-enforcement.md", "integrations/dispatch/README.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
       "id": "repo-owner-local",
       "name": "The Owner's local repositories",
       "kind": "repository",
@@ -1729,6 +1739,34 @@
       "status": "planned",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2"],
       "findings": ["fd-owner-authorization-record"]
+    },
+    {
+      "id": "op-design-acceptance",
+      "name": "Accept a design for dispatch",
+      "mechanism": "Record the acceptance of an OpenSpec change's design at an exact revision (accept-design), bound to the digest of the change's folder there, as a write-ahead receipt in the integration store",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": [],
+      "assets": ["store-integration"],
+      "planned_performer": "authorization-recorder",
+      "performed_via": "Delegated: the dispatch-input commands of the authorization recorder (P-04.3; integrations/owner/input_recorder.py; decision 0020, Proposed) record it on the Owner's statement through a single-use challenge, as an owner-decision/v1 record. Delegated by decision 0018 (accepted 2026-11-12) point 3.2: the product manager accepts the design of an OpenSpec change whose intent the Owner gave and which lies inside a recorded commitment's scope, recorded as a delegated-decision/v1 record naming decision 0018, the commitment (an anchored, dated 'Commitment:' entry of the log, read at HEAD) and the exact revision; never recorded as an Owner decision; a delegated acceptance never supersedes an Owner acceptance (point 4.8); a change to the harness's own governance stays outside committed scope. Not performed live: throwaway repositories and stores only.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.3", "decisions/0008-outcome-identity-assignment-form-and-record.md", "decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md", "decisions/0020-dispatch-input-decisions-design-acceptance-manifest-promotion-and-load-enforcement.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "op-manifest-promotion",
+      "name": "Promote an approved-input manifest",
+      "mechanism": "Record the promotion of an approved-input manifest at its version, bound to its digest and to the design acceptance of each design entry, as a write-ahead receipt in the integration store, then write the live manifest (the only writer: atomic replace, read back); load_manifest loads only a manifest so promoted",
+      "principal": "owner",
+      "owner_only": true,
+      "credentials": [],
+      "assets": ["store-approved-inputs", "store-integration"],
+      "planned_performer": "authorization-recorder",
+      "performed_via": "Delegated: the dispatch-input commands of the authorization recorder (P-04.3; integrations/owner/input_recorder.py; decision 0020, Proposed) record it on the Owner's statement through a single-use challenge, as an owner-decision/v1 record. Delegated by decision 0018 (accepted 2026-11-12) point 3.3: the product manager promotes a manifest when every entry lies inside an envelope the Owner granted as a standing authorization (point 5), recorded as a delegated-decision/v1 record bound to the manifest digest and naming the envelope (an anchored, dated 'Owner standing authorization:' entry of the log whose verbatim block holds the grant, read at HEAD); the engineering manager, which dispatches with the manifest, never promotes one; an entry outside the envelope is an Owner decision per act. No such entry exists yet, so every delegated promotion fails closed. Not performed live: throwaway stores only.",
+      "status": "planned",
+      "sources": ["AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.3", "decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md", "decisions/0020-dispatch-input-decisions-design-acceptance-manifest-promotion-and-load-enforcement.md"],
+      "findings": ["fd-bootstrap-shared-identity"]
     },
     {
       "id": "op-gitea-administration",

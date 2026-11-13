@@ -54,6 +54,7 @@
     "store-moby-data-root": "management",
     "store-effects": "management",
     "store-integration": "management",
+    "store-approved-inputs": "management",
     "repo-owner-local": "repository",
     "repo-github-public": "credential",
     "app-owner-host": "service",

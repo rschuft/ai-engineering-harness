@@ -161,6 +161,8 @@
           "op-git-push-public",
           "op-policy-change",
           "op-protected-merge",
+          "op-design-acceptance",
+          "op-manifest-promotion",
           "op-effect-store-custody"
         ],
         "capabilities": [
@@ -419,6 +421,8 @@
       },
       "denied": [
         "op-protected-merge",
+        "op-design-acceptance",
+        "op-manifest-promotion",
         "cap-code-merge-integration",
         "cap-protected-ref-push"
       ],
@@ -501,6 +505,8 @@
       },
       "denied": [
         "op-protected-merge",
+        "op-design-acceptance",
+        "op-manifest-promotion",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -655,6 +661,8 @@
       },
       "denied": [
         "op-protected-merge",
+        "op-design-acceptance",
+        "op-manifest-promotion",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -817,6 +825,8 @@
       },
       "denied": [
         "op-protected-merge",
+        "op-design-acceptance",
+        "op-manifest-promotion",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -945,6 +955,8 @@
       },
       "denied": [
         "op-protected-merge",
+        "op-design-acceptance",
+        "op-manifest-promotion",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-gitea-administration",
@@ -1157,6 +1169,8 @@
       },
       "denied": [
         "op-protected-merge",
+        "op-design-acceptance",
+        "op-manifest-promotion",
         "cap-code-merge-integration",
         "cap-protected-ref-push",
         "op-ci-administration",
@@ -1379,6 +1393,8 @@
         "cap-push-proposal-branch",
         "cap-open-pr",
         "op-protected-merge",
+        "op-design-acceptance",
+        "op-manifest-promotion",
         "op-effect-apply"
       ],
       "realization": [

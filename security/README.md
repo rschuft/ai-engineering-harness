@@ -66,11 +66,11 @@ custody only, and locations are described generically.
   account, administered during bootstrap through Gitea's CLI by the Owner's account),
   and in the guest root, the service user `openhands` and the operator login `agent`.
   One, the release job environment, is unknown. The other ten are planned.
-- **Credentials (27), assets (41), findings (21:** 6 unknown, 2 open risks, 13 limits).
-- **Privileged operations (37), each with exactly one principal.** 6 Owner-only,
-  all assigned to `owner`. 14 observed, 22 planned, 1 unknown. By principal:
+- **Credentials (27), assets (42), findings (21:** 6 unknown, 2 open risks, 13 limits).
+- **Privileged operations (39), each with exactly one principal.** 8 Owner-only,
+  all assigned to `owner`. 14 observed, 24 planned, 1 unknown. By principal:
   `management-dispatcher` 9 (the Agent Server management API and the CI dispatch; planned, no
-  dispatcher yet); `owner` 6; `owner-os-account` 5 (guest lifecycle, exec, exchange,
+  dispatcher yet); `owner` 8; `owner-os-account` 5 (guest lifecycle, exec, exchange,
   session-key export, provisioning fetch); `guest-root` 3; `privileged-executor` 2;
   `gitea-site-admin` 2 (Gitea administration and the CI lane's administration);
   `guest-service-openhands` 1 (the guest's Docker API); and one each for
@@ -163,6 +163,8 @@ in the evidence.
 | `op-git-push-public` Push to the public repository | git push to the public GitHub origin, after the publication-safety gate | `owner` | yes | `cred-owner-github` | `owner-os-account` | observed |
 | `op-policy-change` Change governance | The blueprint, accepted decisions, the plan, integrity-tracked files, the publication-safety gate and repository policy | `owner` | yes | - | `owner-os-account` | observed |
 | `op-protected-merge` Authorize an operation by protected merge | Owner-only merge of an exact operation manifest into the protected authorization branch; delegated performer (planned): `authorization-recorder`, which merges as aieh-owner on a recorded Owner decision (P-04.2, decision 0012) | `owner` | yes | `cred-gitea-owner-account` | - | planned |
+| `op-design-acceptance` Accept a design for dispatch | Record the acceptance of an OpenSpec change's design at an exact revision (accept-design) as a write-ahead receipt in the integration store; delegated performer (planned): `authorization-recorder`, its dispatch-input commands (P-04.3, decision 0020); delegated by decision 0018 point 3.2 to the product manager inside a recorded commitment, never as an Owner decision | `owner` | yes | - | - | planned |
+| `op-manifest-promotion` Promote an approved-input manifest | Record the promotion of an approved-input manifest bound to its digest and its design acceptances, then the only write of the live manifest; delegated performer (planned): `authorization-recorder`, its dispatch-input commands (P-04.3, decision 0020); delegated by decision 0018 point 3.3 to the product manager inside an Owner standing authorization; the engineering manager never promotes | `owner` | yes | - | - | planned |
 | `op-gitea-administration` Administer Gitea | Branch protection, merge allowlists, bot accounts, token maxima, audit settings, impersonation | `gitea-site-admin` | no | `cred-gitea-admin` | `owner-os-account` | observed |
 | `op-open-proposal-pr` Push a proposal branch and open a PR | Gitea API or git push with the builder's bot token | `engineering-agent` | no | `cred-gitea-bot-builder` | - | planned |
 | `op-submit-review` Submit an independent review | Gitea review with the reviewer's bot token | `reviewer-agent` | no | `cred-gitea-bot-reviewer` | - | planned |
@@ -258,6 +260,7 @@ Hosts, guests, processes, sockets, listeners, APIs, durable stores and repositor
 | `store-moby-data-root` Moby data root | store | `guest-root` | /srv/scratch/docker, root-only; never a conversation mount source. | observed |
 | `store-effects` Privileged effect store (effects.sqlite) | store | `privileged-executor` | An explicit, Owner-designated root on a local fixed volume outside the repository, every profile, the guest-state root and the integration tree. Interim custody: owner Administrators, DACL SYSTEM and Administrators only; the executor added as one Modify entry at A4. | planned |
 | `store-integration` Integration store (integration.sqlite) | store | `owner-os-account` | Default per-user location under the local application-data folder; Owner-session custody during bootstrap; custody moves to the Integration Service identity later. | planned |
+| `store-approved-inputs` The live approved-input manifest (approved-inputs.json) | store | `owner-os-account` | `<state>/dispatch/approved-inputs.json` of the managed data root; written only by `op-manifest-promotion`; loaded by `load_manifest` only when the integration store holds a confirmed promotion of its version and digest. | planned |
 | `repo-owner-local` The Owner's local repositories | repository | `owner-os-account` | This checkout and the Owner's other durable repositories on the host; never mounted into a guest, never written by exchange pull, never deleted automatically. | observed |
 | `repo-github-public` Public GitHub repository | repository | `owner` | The public origin of this repository; protected by the publication-safety gate before commit and push. | observed |
 | `app-owner-host` Owner host (the Owner UI shell) | service | `owner-os-account` | apps/owner-host (U-01.1): the React shell with assistant-ui and Agent Canvas, built to static files; its Vite dev and preview servers bind 127.0.0.1 only with strictPort (5173 and 4173). It holds no credential and connects to no backend yet; it is the Owner UI of decision 0013, in td-owner. | observed |
