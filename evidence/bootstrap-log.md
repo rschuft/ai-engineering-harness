@@ -3753,6 +3753,63 @@ push never implies parent acceptance.
     - The two declarations share the rule functions until G-03.1 changes the ledger's.
     - In D1 one session drives both the proposing and the reviewing bot (decision 0022).
   - **Next act:** OA-30 is now prepared; see its row in the Owner-actions queue. The verdict follows the act and its read-only check.
+- <a id="owner-authorization-oa-30-2026-11-13"></a>**2026-11-13: Owner authorization: OA-30**, given in the main (engineering manager) session after the D1 execution report presented OA-30 as prepared; transcribed verbatim by the engineering manager (decision 0018 point 7). It authorizes OA-30 parts (a), (b) and (c) as worded below; part (d), Gitea's `[audit]` setting, is not named and stays unauthorized. Verbatim:
+
+  > Owner decision: OA-30 APPROVED.
+  >
+  > I authorize the narrowly scoped creation and
+  > configuration of the dedicated authorization repository:
+  >
+  > aieh-authorization/authorizations
+  >
+  > The authorization covers:
+  >
+  > 1. Creating this repository in the existing local Gitea
+  >    instance.
+  >
+  > 2. Granting the protection auditor the administrative
+  >    permissions specified by decision 0022.
+  >
+  > 3. Granting the four existing bot identities only their
+  >    declared permissions for this repository.
+  >
+  > 4. Granting aieh-owner the protected-branch merge
+  >    authority required by the authorization recorder.
+  >
+  > 5. Applying the existing branch-protection requirements.
+  >
+  > 6. Performing the read-only verification and recording
+  >    the observed protection baseline.
+  >
+  > This authorization does not permit:
+  > - Creating additional repositories.
+  > - Widening permissions beyond the approved declaration.
+  > - Changing existing repositories' permissions.
+  > - Making model calls or incurring provider spending.
+  > - Creating or modifying provider credentials.
+  > - Expanding network access.
+  > - Merging an authorization proposal without a separate
+  >   valid Owner decision.
+  >
+  > Execute OA-30 using the implemented E-05.7 procedure.
+  >
+  > Use the established recorder and evidence requirements.
+  > Verify the actual Gitea state rather than relying on
+  > the administrative command's success response.
+  >
+  > If the observed configuration differs from the approved
+  > declaration, stop and report the discrepancy rather
+  > than broadening permissions.
+  >
+  > Complete E-05.7's remaining live acceptance criteria,
+  > record the verdict, and publish the verified checkpoint
+  > through the established publication gate.
+  >
+  > Do not initiate OA-12, OA-22, or any other reserved
+  > Owner operation.
+  >
+  > Report the outcome and the next D1 authorization
+  > boundary.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
