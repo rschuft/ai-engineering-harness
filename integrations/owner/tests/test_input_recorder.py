@@ -547,6 +547,37 @@ class WriteOutcomes(Base):
         three = IR.manifest_resolve(self.ctx, 3)['receipt']
         self.assertEqual(three['events'], ['reserved', 'dispatched', 'unknown', 'failed'])
 
+    def test_promotion_unresolved(self):
+        """Ruling R7 (slice 2, fix-forward of dca60ac): no promotion is prepared, recorded or delegated while an
+        earlier promotion receipt is reserved, dispatched or unknown; resolving it first lets the next one through.
+        Otherwise resolving it by reading, after a later promotion replaced the live file, would record a decision
+        that landed as failed."""
+        def land_then_raise(source, target):
+            os.replace(source, target)
+            raise OSError('the answer was lost')
+        self.replace = land_then_raise
+        self.assertRefused('OUTCOME_UNKNOWN', self.delegate_promotion, self.v2, refusal=False)
+        self.replace = None
+        v3 = self.candidate(name='v3.json', version=3)
+        refused = self.assertUnchanged('PROMOTION_UNRESOLVED', self.delegate_promotion, v3)
+        self.assertIn('version 2 (unknown)', refused.detail)
+        self.assertUnchanged('PROMOTION_UNRESOLVED', IR.manifest_prepare, self.ctx, v3)
+        decision = json.loads(self.store.get('dispatch-inputs/v1/promotion/1').intent_json)
+        for version, state in ((3, 'reserved'), (4, 'dispatched')):
+            key = I.promotion_key(version)
+            self.store.reserve(key, {**decision, 'version': version}, actor='test')
+            if state == 'dispatched':
+                self.store.transition(key, 'dispatched', actor='test')
+        refused = self.assertUnchanged('PROMOTION_UNRESOLVED', self.delegate_promotion,
+                                       self.candidate(name='v5.json', version=5))
+        self.assertIn('version 3 (reserved), version 4 (dispatched)', refused.detail)
+        for version in (2, 3, 4):
+            IR.manifest_resolve(self.ctx, version)
+        # version 2 landed and the live file still holds it: resolved by reading, confirmed
+        self.assertEqual(self.receipts()['dispatch-inputs/v1/promotion/2'][0], 'confirmed')
+        self.promote(self.candidate(name='v5.json', version=5))
+        self.assertIsNone(self.verify().code)
+
     def test_receipt_missing(self):
         self.assertUnchanged('RECEIPT_MISSING', IR.manifest_resolve, self.ctx, 7)
         with self.assertRaises(ValueError):

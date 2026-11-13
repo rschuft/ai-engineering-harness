@@ -151,6 +151,8 @@ REMEDIES = {
                          'currently accepted revision, or accept this one again',
     'PROMOTION_FAILED': 'the live manifest was not written and is as it was; the receipt is failed and its version '
                         'spent: repair the cause, then promote the candidate again at the next version',
+    'PROMOTION_UNRESOLVED': 'an earlier promotion is not settled: run manifest resolve --version N first (for each '
+                            'version the detail names), then prepare, record or delegate again',
     'DELEGATION_NOT_ACCEPTED': 'the delegating record is not Accepted (Owner) at the harness repository\'s HEAD: the '
                                'decision is the Owner\'s (prepare and record)',
     'AUTHORITY_UNAVAILABLE': 'the harness repository could not be read at HEAD: run from a full clone under the '
@@ -588,6 +590,12 @@ def _promotion_head(ctx):
 def _promotion_subject(ctx, approved):
     """The promote-manifest subject of APPROVED at the next position, and the head it replaces."""
     series, head = _promotion_head(ctx)
+    # Resolving a receipt reads the live file; once a later promotion replaced it, a promotion that landed would
+    # be recorded failed. So no promotion is decided while an earlier one is unsettled.
+    unsettled = [r for r in series if r.state not in ('confirmed', 'failed')]
+    if unsettled:
+        raise RecorderError('PROMOTION_UNRESOLVED', 'the promotion series has unsettled receipts: '
+                            + ', '.join(f'version {r.position} ({r.state})' for r in unsettled))
     position = I.next_position(series)
     if approved.version != position:
         raise RecorderError('VERSION_NOT_NEXT', f'the candidate is version {approved.version}; the next position of '

@@ -260,15 +260,16 @@ class Codes(unittest.TestCase):
 
     SOURCE = (fi.OWNER / 'input_recorder.py').read_text(encoding='utf-8')
     DELEGATED = (fi.OWNER / 'delegated_decision.py').read_text(encoding='utf-8')
-    # answer.md section Q7: the codes shared with the existing recorders, then the new ones.
+    # answer.md section Q7: the codes shared with the existing recorders, then the new ones (with the engineering
+    # manager's ruling R7 of slice 2: PROMOTION_UNRESOLVED).
     SHARED = {'CHALLENGE_MISSING', 'CHALLENGE_INVALID', 'CHALLENGE_UNKNOWN', 'CHALLENGE_EXPIRED',
               'CHALLENGE_CONSUMED', 'CHALLENGE_STALE', 'STATEMENT_MISSING', 'STATEMENT_MODEL_AUTHORED',
               'STATEMENT_NOT_OWNER', 'STATEMENT_INVALID', 'CHANNEL_NOT_ADMITTED', 'RECORDED_BY_INVALID',
               'PROJECT_UNAVAILABLE', 'GIT_FAILED', 'CHANGE_MISSING', 'OUTCOME_UNKNOWN', 'RECEIPT_MISSING'}
     NEW = {'STATEMENT_SUBJECT_MISSING', 'REVISION_INVALID', 'CANDIDATE_UNREADABLE', 'CANDIDATE_INVALID',
            'CANDIDATE_INSIDE_CHECKOUT', 'MANIFEST_LOCATION_INVALID', 'VERSION_NOT_NEXT', 'DESIGN_ACCEPTANCE_MISSING',
-           'DECISION_REPLAYED', 'PROMOTION_FAILED', 'DELEGATION_NOT_ACCEPTED', 'AUTHORITY_UNAVAILABLE',
-           'DELEGATION_KIND_UNKNOWN', 'DECIDER_NOT_DELEGATED', 'DELEGATION_BASIS_INVALID',
+           'DECISION_REPLAYED', 'PROMOTION_FAILED', 'PROMOTION_UNRESOLVED', 'DELEGATION_NOT_ACCEPTED',
+           'AUTHORITY_UNAVAILABLE', 'DELEGATION_KIND_UNKNOWN', 'DECIDER_NOT_DELEGATED', 'DELEGATION_BASIS_INVALID',
            'DELEGATION_BASIS_NOT_RECORDED'}
 
     def test_the_codes_are_the_recorder_table(self):
