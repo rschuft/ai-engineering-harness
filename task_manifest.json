@@ -1,5 +1,5 @@
 {
-  "task_count": 174,
+  "task_count": 177,
   "tasks": [
     {
       "id": "F-01.1",
@@ -528,7 +528,7 @@
         "F-09.2"
       ],
       "path": "task_prompts/F-10.1.md",
-      "sha256": "84cb2298f2745691c11c444f28c69357a9a324fc16b4a046f378cb4bb248fd3e"
+      "sha256": "dbc7b2e4b20795e2cca56148028fa1d95c98ef58f202117de87babeff11678be"
     },
     {
       "id": "F-10.2",
@@ -540,7 +540,7 @@
         "F-09.4"
       ],
       "path": "task_prompts/F-10.2.md",
-      "sha256": "6311d6c76f49d600e06e4b6d84598b90e0f1bdabfe1b0dd55645c4ebf1cc8704"
+      "sha256": "3f6545c336e325797fe7652d028f4dcdceb9df2b2cc01432351750ad325c55d2"
     },
     {
       "id": "F-10.3",
@@ -550,7 +550,7 @@
         "F-10.2"
       ],
       "path": "task_prompts/F-10.3.md",
-      "sha256": "23f0860402e7520c0ccf95b8d7c9669f774d00efbfbd2b46e30ed4118ae6cff7"
+      "sha256": "6bc6cda7cc3e5f97fb19a2915536650c02b2c24a8356b8bb46d68e1f047fe3c8"
     },
     {
       "id": "F-10.4",
@@ -560,7 +560,7 @@
         "F-10.2"
       ],
       "path": "task_prompts/F-10.4.md",
-      "sha256": "610d37780e12e95d031fbbe98ca4e3b74b8722747a043b34c442db26c61f872b"
+      "sha256": "c4dd71fe2555c04aac8a5a737a980c8b32bb1ab74c3de36f61a9c205a6897f9f"
     },
     {
       "id": "F-10.6",
@@ -572,7 +572,7 @@
         "S-01.2.2"
       ],
       "path": "task_prompts/F-10.6.md",
-      "sha256": "9c4e603d43fbc21a3946663e158dfb194605da13c9d8c32929d490436155a952"
+      "sha256": "319c2bee97f06cb0a9ad16bfae3cf1634029eee33a9b98705b186c33b77410f7"
     },
     {
       "id": "F-10.5",
@@ -585,7 +585,7 @@
         "F-03.4"
       ],
       "path": "task_prompts/F-10.5.md",
-      "sha256": "d458b3ff07798e1c4641e9918239f91d800bc34e18910366ae94921846f5fd50"
+      "sha256": "458c4f9fe23e5d5353082b0c0588c9f509b21f35e8442affd64c4a51fd9c4717"
     },
     {
       "id": "P-04.1",
@@ -609,6 +609,17 @@
       ],
       "path": "task_prompts/P-04.2.md",
       "sha256": "bb593e56ebecee31290e4c8bdac03dda4cf8e9d628bb07584e537f57b6f6064a"
+    },
+    {
+      "id": "E-05.7",
+      "title": "Provision the authorization repository and admit it, alone, in the managed recorder (carved from G-03.1 for D1)",
+      "phase": 0,
+      "deps": [
+        "P-04.2",
+        "S-01.2.2"
+      ],
+      "path": "task_prompts/E-05.7.md",
+      "sha256": "eb011a6750a80edfe90bcfad9d3fcaf3bc20d048de20de813ab48e42c09ea34e"
     },
     {
       "id": "E-01.1.1",
@@ -662,7 +673,7 @@
         "E-01.2.1"
       ],
       "path": "task_prompts/P-04.3.md",
-      "sha256": "3dc61b10b009cd5ffc0fa4f3252e9a5d4045aca05447af1a59d24fe505392da4"
+      "sha256": "bae401eaf5c6158b158c2d5cca8d5401504c1321bcaadf976a8da89e83c6cd95"
     },
     {
       "id": "S-03.5",
@@ -683,10 +694,22 @@
       "deps": [
         "S-03.2",
         "F-04.2",
-        "S-03.5"
+        "S-03.5",
+        "E-05.7"
       ],
       "path": "task_prompts/S-03.3.md",
-      "sha256": "d2ec5638949b4a213bd39433f78c6ecfdd76527daf603fa4ab869b5073566623"
+      "sha256": "074887b98c1cb4da3f1110ca9ff4415bad8a35805bbe7f1083af4162d4bce28e"
+    },
+    {
+      "id": "F-09.5",
+      "title": "Retire the remaining timing assertion and the timing-only runs of the test check",
+      "phase": 1,
+      "deps": [
+        "F-09.1",
+        "F-10.3"
+      ],
+      "path": "task_prompts/F-09.5.md",
+      "sha256": "4c421991e19f7c6104ee0ce748da51862d22c747eca2df062600a21da48dad3c"
     },
     {
       "id": "E-01.3.1",
@@ -764,7 +787,7 @@
         "E-01.3.2"
       ],
       "path": "task_prompts/E-01.4.1.md",
-      "sha256": "68708b5f235d1055e26d61dc25a86bbbdc65d350684668665f282160c6e9f481"
+      "sha256": "e654fe5bcf7f95eecb66371f374b9f275162bfd775364e230d94adf93882d231"
     },
     {
       "id": "E-01.4.2",
@@ -839,7 +862,7 @@
         "P-04.3"
       ],
       "path": "task_prompts/E-05.1.md",
-      "sha256": "62d4a25c9796b36edb000258bf16217b4a329118e8c8202210a5da4b1c015851"
+      "sha256": "667883666443d9040bccc006221e04197079826ba82d0b488bcaed2e21a21175"
     },
     {
       "id": "E-05.2",
@@ -850,7 +873,7 @@
         "S-03.3"
       ],
       "path": "task_prompts/E-05.2.md",
-      "sha256": "75b5c223f5af22b49a9480b16b9c4902d38eb5afec5b1f2b28eb38085ed64618"
+      "sha256": "80e0ac7ed42716602edb13c9f03a16b28b73771e5ebe2f93229b62c24ccd0b78"
     },
     {
       "id": "E-05.3",
@@ -861,7 +884,7 @@
         "E-05.2"
       ],
       "path": "task_prompts/E-05.3.md",
-      "sha256": "266ee19777fbab82d1d2d5cc7569466784e408125a8d10700b82e0d0c24ba0f6"
+      "sha256": "1907d14ba4fb2fbe787c9aba87eb27b5c6a646345c8990af7c6ff7b7f4d3ebf9"
     },
     {
       "id": "E-05.4",
@@ -872,7 +895,18 @@
         "F-10.6"
       ],
       "path": "task_prompts/E-05.4.md",
-      "sha256": "aefc15c9181f881299c00cc1349507ac4dbae1e5ceef157b4663e75a200598d9"
+      "sha256": "878fabb05ee1863f7e188a3a3e51faeb1bc3ba8179fc07e3e7c2366e0b2cef65"
+    },
+    {
+      "id": "E-05.6",
+      "title": "Admit the D1 stage's create secrets: the attempt's inference token and endpoint",
+      "phase": 1,
+      "deps": [
+        "E-01.2.2",
+        "E-01.3.1"
+      ],
+      "path": "task_prompts/E-05.6.md",
+      "sha256": "7548f139758684a8020ade2ae281ab0042748bc7b22133b5f276c799b0109b58"
     },
     {
       "id": "E-05.5",
@@ -884,10 +918,11 @@
         "E-05.1",
         "E-05.2",
         "E-05.3",
-        "E-05.4"
+        "E-05.4",
+        "E-05.6"
       ],
       "path": "task_prompts/E-05.5.md",
-      "sha256": "370347daed5fe4dd06db32d975036b47a58b64f4ced6bf3976100358d208a6bc"
+      "sha256": "6ddea84d4efed116ef28c9d92079a9cb3d70d3b6c134318e45fd3a5489725d14"
     },
     {
       "id": "P-05.1",
@@ -1220,10 +1255,11 @@
       "phase": 3,
       "deps": [
         "D-01.2",
-        "G-01.2"
+        "G-01.2",
+        "E-05.7"
       ],
       "path": "task_prompts/G-03.1.md",
-      "sha256": "28af869260fa392779de133c85cd64a8cffe47efa01c87fcbbbc29ccb61da290"
+      "sha256": "948cff83777adedeb01b98bfed84ad67d09027ecd0e3d50e51418baf7ec13088"
     },
     {
       "id": "G-03.2",
