@@ -2990,6 +2990,84 @@ push never implies parent acceptance.
   2. **Handoff readiness ignores Owner-act gates (observed; raised by the engineering manager's read of the D1 handoff).** `tools/plan_commitment.py` derives "ready" from recorded dependencies and status only, not from the Owner-actions queue. Of the four ready D1 leaves at `550b4fa`, only P-04.3 needs no Owner act.
   3. **Development-agent boundaries and repository integrity checks are enforced by instruction only (observed).** (a) The path boundary and protected paths rely on the agent complying. The coding assistant's deny rules or a pre-tool hook in the Owner's own settings could enforce them. (b) Bypassing git hooks (`--no-verify`, or a changed hooks path) is prevented only by instruction. (c) Nothing runs `tools/verify_seed.py` automatically: no hook and no CI. (d) Related, also instruction-only: one writer per checkout; execution touching only committed leaves; Owner quotes in this log are checked for presence, not for who wrote them. Only the authorization recorder's challenge is bound to the Owner.
 
+- <a id="owner-direction-first-planning-review"></a>**2026-11-12: Owner direction: the product manager's first planning review.** Given in the main session that opened the first product-manager planning session, verbatim (the paste wrapper is removed):
+
+  > You are taking over strategic planning for the
+  > AI Engineering Harness.
+  >
+  > The five-role migration is complete for its initial
+  > scope. The agent catalog is published at ce6ffa2,
+  > and the harness repository is published through
+  > 1021c77.
+  >
+  > Establish your planning context from the repository's
+  > authoritative plans, decisions, evidence, and progress
+  > records. Do not rely on this prompt as a substitute
+  > for those records.
+  >
+  > Our immediate product objective is D1: demonstrate
+  > a contained AI-assisted coding task that modifies
+  > a demo repository, runs tests, and returns a result
+  > branch, draft pull request, and verification evidence.
+  >
+  > Before directing further execution:
+  >
+  > 1. Review proposed decision 0018 and evaluate whether
+  >    its delegation model reflects my intent:
+  >
+  >    I provide vision, constraints, feedback, and
+  >    authorization for genuinely consequential effects.
+  >
+  >    AI owns product refinement, planning, architecture,
+  >    implementation, integration, verification, and
+  >    delivery within those boundaries.
+  >
+  >    Identify any provisions that unnecessarily make
+  >    me the operational decision-maker.
+  >
+  > 2. Review OA-21 and determine whether its remaining
+  >    decision is actually consequential or can be
+  >    resolved through an accepted existing constraint.
+  >    Do not inspect personal credentials.
+  >
+  > 3. Ask the Program Manager to classify the three
+  >    outstanding findings:
+  >
+  >    - Catalog test failures and environmental issues.
+  >    - Handoff readiness ignoring pending Owner actions.
+  >    - Development-agent safeguards relying on
+  >      instructions rather than deterministic enforcement.
+  >
+  >    Distinguish genuine D1 blockers from deferred
+  >    hardening. In particular, establish whether the
+  >    readiness defect could allow unauthorized execution.
+  >
+  > 4. Reconcile the current D1 critical path with actual
+  >    implementation readiness and authorization gates.
+  >
+  > 5. Identify the smallest next execution commitment
+  >    that can proceed under existing permissions.
+  >
+  > Do not modify accepted decisions, expand delegated
+  > authority, initiate live operations, or resume
+  > implementation during this review.
+  >
+  > Return a concise planning assessment containing:
+  >
+  > - Decision 0018: accept as written or recommended amendments.
+  > - OA-21: recommended disposition.
+  > - Findings: classification and D1 impact.
+  > - D1: current critical path and immediate next commitment.
+  > - Human decisions genuinely necessary now.
+  >
+  > Use the shared Architect selectively if an architectural
+  > question requires its expertise.
+  >
+  > Do not introduce additional planning artifacts or
+  > approval processes.
+  >
+  > Stop for my review before commissioning execution.
+
 ## Owner-directed maintenance items (no plan leaf covers these)
 
 | Item | Scope | Sequencing |
