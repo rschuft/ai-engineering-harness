@@ -173,3 +173,22 @@ Recorded by the engineering manager at S-03.5's completion ([decision 0021](0021
    does not enforce the limit (`enforced_by: broker`), the broker enforces a cumulative cap in usage tokens and closes
    the envelope when it is reached or when usage is unknown.
 4. Nothing here authorizes a key, an envelope, a cap, egress or a model call: those stay the Owner's (OA-12).
+
+## Current facts (2026-11-13, E-05.6)
+
+Recorded by the engineering manager at E-05.6's completion ([evidence](../evidence/E-05.6-d1-stage-create-secrets.md)). The text above is unchanged.
+
+1. The control listener revokes a grant by its token's fingerprint (section 3.3) or by its conversation and attempt
+   (`conversation_id` and `attempt_id` in place of `token_fingerprint`; one grant per attempt), for a dispatcher that
+   lost the issue's answer. A revocation by attempt that finds no grant writes a tombstone under the attempt's grant
+   receipt key (`inference/attempt/<attempt id>/grant`, format `aieh-inference-attempt-tombstone/1`), after which that
+   attempt's issue is refused (`GRANT_ATTEMPT_REVOKED`); per attempt, an issue's receipt and registration and such a
+   revocation run one at a time, so no grant is live after a revocation by attempt. Same listener, same revoker,
+   receipts in the integration store as before.
+2. Section 3.2's issuance and section 3.3's revocation by the dispatcher are, for the D1 stage, E-05.6's
+   (`integrations/dispatch/dispatch_inputs.py`): the token travels in the create's `secrets` (amendment 1 item 2), is
+   requested only after the reservation and every other input are admitted, is revoked on any failure after the issue
+   and at the attempt's end (`end_attempt`), and every record carries its fingerprint only. Every other stage's create
+   secrets stay A-01.2's and E-03.1's.
+3. Offline only: nothing here was run against a live broker, guest, Agent Server or provider, and nothing authorizes a
+   key, an envelope, egress or a model call (OA-12).

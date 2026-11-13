@@ -909,13 +909,14 @@
       "holder": "engineering-agent",
       "manager": "management-dispatcher",
       "readable_by": ["reviewer-agent", "guest-service-openhands", "guest-root", "bootstrap-host-agents"],
-      "storage": "Issued by the broker's control listener to the dispatcher for one attempt and returned once; the broker keeps only its sha256 digest and its fingerprint and journals the grant by fingerprint in the integration store. The dispatcher places it in the attempt's create request (an ACP agent: the create's secrets under the pinned registry entry's api_key_env_var; a native agent: the LLM settings' api_key; decision 0015 section 3.2 and amendment 1 point 2), so it is readable inside that conversation's container and persists in that conversation's record in the guest until revocation. Never in the harness's records, logs or reports (fingerprints only); never a provider key and never a role token. During bootstrap tools/guest.py, the dispatcher's stand-in, handles it in memory under the Owner's account (fd-bootstrap-shared-identity).",
+      "storage": "Issued by the broker's control listener to the dispatcher for one attempt and returned once; the broker keeps only its sha256 digest and its fingerprint and journals the grant by fingerprint in the integration store. The dispatcher places it in the attempt's create request (an ACP agent: the create's secrets under the pinned registry entry's api_key_env_var; a native agent: the LLM settings' api_key; decision 0015 section 3.2 and amendment 1 point 2), so it is readable inside that conversation's container and persists in that conversation's record in the guest until revocation. Never in the harness's records, logs or reports (fingerprints only); never a provider key and never a role token. For the D1 stage the dispatcher's own code holds it (integrations/dispatch/dispatch_inputs.py, E-05.6, offline only): requested only after the attempt's reservation and every other input are admitted, the issue journaled first by fingerprint (dispatch/attempt/<attempt id>/inference-grant), held in memory only until the create's transport call, which carries it sealed on standard input; for S-03.3's qualification tools/guest.py, the dispatcher's stand-in, handles it in memory; both under the Owner's account during bootstrap (fd-bootstrap-shared-identity).",
       "scope": "Inference for one attempt, on the broker's inference listener only (through the guest inference endpoint): bound to the attempt's reserved conversation, one API family, a model list, a budget of requests and usage tokens and an expiry (decision 0015 section 3.1, amendment 1 point 1).",
-      "lifetime": "One attempt: revoked at once (the next request answers 401) by the dispatcher at attempt end and on suspected exposure, definition revocation, policy revision and Owner direction, and by the broker at expiry (decision 0007 point 5), each with a revocation receipt (fingerprint, attempt, trigger, revoker) in the integration store, never the effects store; live grants end with the broker process.",
+      "lifetime": "One attempt: revoked at once (the next request answers 401) by the dispatcher at attempt end and on suspected exposure, definition revocation, policy revision and Owner direction, and by the broker at expiry (decision 0007 point 5), each with a revocation receipt (fingerprint, attempt, trigger, revoker) in the integration store, never the effects store; live grants end with the broker process. The dispatcher revokes on any failure after the issue and at attempt end, by fingerprint or, when the issue's answer was lost, by conversation and attempt; a revocation by attempt that finds no grant tombstones the attempt, so that none is registered after it (E-05.6, offline only).",
       "rotation_revocation_owner": "management-dispatcher",
       "status": "planned",
       "sources": [
         "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
+        "integrations/dispatch/README.md",
         "integrations/inference/README.md",
         "profiles/README.md"
       ],
@@ -1382,7 +1383,7 @@
       "kind": "api",
       "custodian": "inference-broker",
       "credentials": ["cred-inference-attempt-token"],
-      "location": "Host 127.0.0.1 at components.inference_broker.control_port (config.yml): issue, revoke and status of per-attempt tokens for the dispatcher; never forwarded into a guest. Same-account processes can call it, disclosed under decision 0013 point 6 (decision 0015 section 4.3).",
+      "location": "Host 127.0.0.1 at components.inference_broker.control_port (config.yml): issue, revoke (by token fingerprint or, since E-05.6, by conversation and attempt, tombstoning an attempt that has no grant) and status of per-attempt tokens for the dispatcher; never forwarded into a guest. Same-account processes can call it, disclosed under decision 0013 point 6 (decision 0015 section 4.3).",
       "status": "planned",
       "sources": [
         "decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md",
