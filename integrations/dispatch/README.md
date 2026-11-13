@@ -547,12 +547,13 @@ acceptance takes effect when a manifest naming it is promoted.
 - `load_manifest` refuses a relative path or one with `.` or `..` parts, and a path inside or
   containing the checkout (before reading it, and again after resolving links). These path
   refusals stay its first (the dispatch-input commands rely on them). The request never names a
-  manifest. "Inside or containing" is one comparison, `inside_or_around` (shared with the S-03.3
-  proposal's `--out`): on Windows it removes a leading `\\?\` or `\\.\` (and makes `\\?\UNC\`
-  `\\`), the trailing spaces and dots Windows ignores in each component, then normalizes the
-  separators and the case before `os.path.commonpath`, so no other form of the checkout's path
-  passes (`MANIFEST_INSIDE_CHECKOUT`; the input recorder's `CANDIDATE_INSIDE_CHECKOUT` runs the
-  same rules).
+  manifest. "Inside or containing" is one comparison, `aieh_paths.inside_or_around` (shared with
+  the managed root's guard and the S-03.3 proposal's `--out`), made twice: on the path as given
+  and on its realpath (`MANIFEST_INSIDE_CHECKOUT`; the input recorder's `CANDIDATE_INSIDE_CHECKOUT`
+  runs the same rules). The lexical comparison covers these Windows forms: a leading `\\?\` or
+  `\\.\` (and `\\?\UNC\` as `\\`), an alternate data stream suffix (`:stream`), the trailing
+  spaces and dots Windows ignores in a component, `/` and case. A link or junction, a volume-GUID
+  path and a GLOBALROOT path are caught by the realpath comparison, not by the lexical one.
 - **Promotion through a recorded decision (plan leaf P-04.3).** The live manifest has one
   writer, the dispatch-input commands of the authorization recorder
   ([`integrations/owner/input_recorder.py`](../owner/README.md#the-dispatch-input-commands-plan-leaf-p-043)):

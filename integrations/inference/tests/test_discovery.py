@@ -390,6 +390,37 @@ class Command(unittest.TestCase):
         self.assertNotIn('Traceback', ctx.err.getvalue())
         self.assertFalse((self.tmp / 'w.json').exists())
 
+    @unittest.skipUnless(os.name == 'nt', 'alternate data streams are a Windows form')
+    def test_an_alternate_data_stream_of_the_checkout_is_refused(self):
+        """N-A: --out <checkout>:ads.json (a stream of the checkout directory) is refused PROPOSAL_OUT_REFUSED."""
+        repo = os.path.realpath(S.REPO)
+        for value in (repo + ':ads.json', repo + ' :ads.json', repo + '\\x-na.json:ads'):
+            with self.subTest(value=value):
+                status, ctx = self.main('--audit', str(self.tmp / 'absent.jsonl'), '--out', value)
+                self.assertEqual(status, 2)
+                self.assertIn('PROPOSAL_OUT_REFUSED', ctx.err.getvalue())
+
+    @unittest.skipUnless(os.name == 'nt', 'a directory junction')
+    def test_a_junction_is_seen_through_by_both_halves(self):
+        """N-B: with a throwaway checkout, --out through a junction outside it pointing in is refused by the resolved
+        half, and --out through a junction inside it pointing out by the given-path half (the review's N4, N5)."""
+        import _winapi
+        checkout, outside = self.tmp / 'checkout', self.tmp / 'outside'
+        checkout.mkdir()
+        outside.mkdir()
+        into, out = self.tmp / 'into-checkout', checkout / 'out-of-checkout'
+        for link, target in ((into, checkout), (out, outside)):
+            _winapi.CreateJunction(str(target), str(link))
+            self.addCleanup(os.rmdir, link)              # the junction only, never its target (runs first)
+        with mock.patch.object(IQ.broker, 'REPO', checkout):
+            self.assertEqual(IQ.proposal_target(str(outside / 'p.json')), (outside / 'p.json').resolve())
+            for value in (into / 'p.json', out / 'p.json'):
+                with self.subTest(value=value):
+                    with self.assertRaises(IQ.QualificationError) as caught:
+                        IQ.proposal_target(str(value))
+                    self.assertEqual(caught.exception.code, 'PROPOSAL_OUT_REFUSED')
+        self.assertEqual(sorted(p.name for p in outside.iterdir()), [])
+
     @unittest.skipUnless(os.name == 'nt', 'the Windows forms of a path')
     def test_every_windows_form_of_the_checkout_is_refused(self):
         """F1: --out in the checkout under another form Windows resolves to it (\\\\?\\, trailing spaces or dots,

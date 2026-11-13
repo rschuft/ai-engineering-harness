@@ -867,6 +867,37 @@ class ManifestCustodyTests(unittest.TestCase):
                 self.assertEqual(self.refused(value), 'MANIFEST_INSIDE_CHECKOUT')
         self.assertEqual(self.refused(self.tmp / 'no-such-f5.json'), 'MANIFEST_MISSING')
 
+    @unittest.skipUnless(os.name == 'nt', 'alternate data streams are a Windows form')
+    def test_an_alternate_data_stream_of_the_checkout_is_inside(self):
+        """N-A: <checkout>:ads.json is a stream of the checkout directory: MANIFEST_INSIDE_CHECKOUT, never read."""
+        repo = os.path.realpath(REPO)
+        for value in (repo + ':ads.json', repo + '\\no-such-na.json:ads', repo + ' :ads.json'):
+            with self.subTest(value=value), mock.patch.object(di, 'open', side_effect=AssertionError('read'),
+                                                              create=True):
+                self.assertEqual(self.refused(value), 'MANIFEST_INSIDE_CHECKOUT')
+
+    @unittest.skipUnless(os.name == 'nt', 'a directory junction')
+    def test_a_junction_is_seen_through_by_both_halves(self):
+        """N-B: a junction outside the checkout pointing into it is refused by the realpath half; a junction inside
+        it pointing out is refused by the given-path half. Both must hold (the review's N10, N11)."""
+        import _winapi
+        checkout, outside = self.tmp / 'checkout', self.tmp / 'outside'
+        checkout.mkdir()
+        outside.mkdir()
+        into, out = self.tmp / 'into-checkout', checkout / 'out-of-checkout'
+        for link, target in ((into, checkout), (out, outside)):
+            _winapi.CreateJunction(str(target), str(link))
+            self.addCleanup(os.rmdir, link)              # the junction only, never its target (runs first)
+        self.assertEqual(os.path.realpath(into / 'm.json'), os.path.realpath(checkout / 'm.json'))
+        for candidate in (into / 'm.json', out / 'm.json'):
+            with self.subTest(candidate=candidate):
+                with self.assertRaises(di.DispatchRefused) as caught:
+                    di.load_manifest(candidate, repo_root=checkout)
+                self.assertEqual(caught.exception.code, 'MANIFEST_INSIDE_CHECKOUT')
+        with self.assertRaises(di.DispatchRefused) as caught:     # the control: beside the checkout, read
+            di.load_manifest(outside / 'm.json', repo_root=checkout)
+        self.assertEqual(caught.exception.code, 'MANIFEST_MISSING')
+
     def test_the_inside_or_around_comparison(self):
         """F1/F5's one comparison: the checkout itself, inside it, around it; nothing beside it."""
         root = self.tmp / 'checkout'
