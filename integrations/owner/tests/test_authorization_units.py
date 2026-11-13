@@ -255,7 +255,7 @@ class Faults(InMemory):
     ROUTES = {
         '/api/v1/user': ('/api/v1/user', 'GITEA_UNAVAILABLE'),
         'tokens': ('/tokens', 'GITEA_UNAVAILABLE'),
-        'repository': (f'/api/v1/repos/{fg.REPOSITORY}', 'GITEA_UNAVAILABLE'),
+        'repository': (None, 'GITEA_UNAVAILABLE'),  # the class's repository (routes())
         'branch missing': ('/branches/main', 'POLICY_DRIFT'),
         'branch unreadable': ('/branches/main', 'GITEA_UNAVAILABLE'),
         'pull': ('/pulls/1', 'GITEA_UNAVAILABLE'),
@@ -263,11 +263,14 @@ class Faults(InMemory):
         'manifest at head': ('/raw/operations/op-0001.json?ref=', 'MANIFEST_INVALID'),
     }
 
+    def routes(self):
+        return {**self.ROUTES, 'repository': (f'/api/v1/repos/{self.repository}', 'GITEA_UNAVAILABLE')}
+
     def test_each_failing_read(self):
         number = self.propose()
-        for name, (fragment, code) in self.ROUTES.items():
+        for name, (fragment, code) in self.routes().items():
             with self.subTest(read=name):
-                exact = fragment in ('/api/v1/user', f'/api/v1/repos/{fg.REPOSITORY}')
+                exact = fragment in ('/api/v1/user', f'/api/v1/repos/{self.repository}')
                 self.gitea.fail_routes = {} if exact else {fragment: 500 if code != 'POLICY_DRIFT' else 404}
                 if exact:
                     original = self.gitea._handle
@@ -290,7 +293,7 @@ class Faults(InMemory):
         def unreachable(*args, **kw):
             raise ConnectionRefusedError('nothing listens')
 
-        self.assertRefused('GITEA_UNAVAILABLE', AR.prepare, self.context(http=unreachable), fg.REPOSITORY, number)
+        self.assertRefused('GITEA_UNAVAILABLE', AR.prepare, self.context(http=unreachable), self.repository, number)
         self.gitea.pulls[number]['head_ref'] = 'work/op'
         original = self.gitea.pull_view
         self.gitea.pull_view = lambda n: {**original(n), 'head': {**original(n)['head'], 'sha': 'not a commit'}}
@@ -675,6 +678,55 @@ class CommandLine(InMemory):
         self.assertEqual((code, out), (1, ''))
         self.assertIn('EXPOSURE_FOUND', err)
         self.assertNotIn(fg.PASSWORD, err)
+
+
+# ---------------------------------------------------------------------------- on the authorization repository
+# Plan leaf E-05.7: the in-memory classes that exercise prepare, record and resolve, unchanged, on the authorization
+# repository in a context admitting what the managed one does (authz_support.Fixture.admitted).
+
+
+class LedgerFaults(Faults):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerChallengeState(ChallengeState):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerStore(Store):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class LedgerResolve(Resolve):
+    repository = AR.AUTHORIZATION_REPOSITORY
+
+
+class OnTheLedger(unittest.TestCase):
+    """Every in-memory class that drives prepare, record or resolve has a ledger twin that changes only the
+    repository, or is named here with why it stays on one repository."""
+    category = 'contract'
+
+    ONE_REPOSITORY = {
+        'ProtectionSeam': 'the verifier seam alone (no Gitea read depends on the repository)',
+        'ManagedRootNeverReached': 'the managed root and the context fields, not a repository',
+        'AdmittedSets': 'compares both repositories itself',
+        'CommandLine': 'the command line\'s arguments and exits (the ledger\'s admission is AdmittedSets\')',
+    }
+
+    def test_every_driving_class_has_its_ledger_twin(self):
+        import inspect
+        cases = {name: value for name, value in globals().items()
+                 if isinstance(value, type) and issubclass(value, InMemory) and value is not InMemory}
+        driving = {name for name, case in cases.items() if case.repository == fg.REPOSITORY
+                   and any(call in inspect.getsource(case) for call in ('self.prepare(', 'AR.prepare(', 'self.record(',
+                                                                         'AR.record(', 'AR.resolve('))}
+        twins = {name for name, case in cases.items() if case.repository == AR.AUTHORIZATION_REPOSITORY}
+        self.assertEqual(driving - set(self.ONE_REPOSITORY), {name[len('Ledger'):] for name in twins})
+        self.assertLessEqual({'Faults', 'ChallengeState', 'Store', 'Resolve'}, driving)
+        for name in twins:
+            twin = cases[name]
+            self.assertTrue(issubclass(twin, cases[name[len('Ledger'):]]))
+            self.assertEqual([n for n, v in vars(twin).items() if callable(v) and not n.startswith('__')], [])
 
 
 if __name__ == '__main__':
