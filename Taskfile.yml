@@ -403,6 +403,24 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/owner/authorization_recorder.py {{.CLI_ARGS}}'
 
+  owner:design:
+    desc: "The dispatch-input commands' design acceptance (<tools python> -I -B integrations/owner/input_recorder.py design <step>; plan leaf P-04.3): pass -- prepare --project DIR --repository ID --change NAME --commit FULL [--expires-in-minutes N] to write the challenge to show the Owner to the recorder's state, -- record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION to record the Owner's acceptance (only in the main session on an Owner decision), or -- delegate --project DIR --repository ID --change NAME --commit FULL --decided-by agent:product-manager --basis FILE to record an acceptance delegated by decision 0018 point 3.2; a receipt in the integration store, never an Owner record for a delegated decision; exit 2 on a refusal"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/owner/input_recorder.py design {{.CLI_ARGS}}'
+
+  owner:promote:
+    desc: "The dispatch-input commands' manifest promotion (<tools python> -I -B integrations/owner/input_recorder.py manifest <step>; plan leaf P-04.3), the only writer of the live approved-input manifest: pass -- prepare --candidate FILE [--expires-in-minutes N] to write the challenge to show the Owner, -- record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION to record the Owner's promotion and write the manifest (only in the main session on an Owner decision), -- delegate --candidate FILE --decided-by agent:product-manager --basis FILE to record a promotion delegated by decision 0018 point 3.3 and write it, or -- resolve --version N to settle an unconfirmed promotion by reading the live manifest (never writing it); exit 2 on a refusal, 1 on a failed or unknown promotion"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/owner/input_recorder.py manifest {{.CLI_ARGS}}'
+
   # Managed data root (plan leaf F-07.1, decision 0009): the shared path resolver, its
   # configuration and the Python tools venv (integrations/paths/README.md).
   paths:test:

@@ -12,7 +12,14 @@ recorders:
 - the **Owner authorization recorder** (plan leaf P-04.2,
   [`authorization_recorder.py`](authorization_recorder.py); decision 0012): it records
   the Owner's authorization of one exact operation manifest and merges it into the protected branch
-  as `aieh-owner` (below).
+  as `aieh-owner` (below);
+- the authorization recorder's **dispatch-input commands** (plan leaf P-04.3, slice 1,
+  [`input_recorder.py`](input_recorder.py)): they record design acceptances and manifest promotions,
+  decided by the Owner or delegated by
+  [decision 0018](../../decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md)
+  point 3.2 or 3.3, and are the only writer of the live approved-input manifest (below), with the
+  **delegated decision record** (`delegated-decision/v1`, [`delegated_decision.py`](delegated_decision.py))
+  and the series readers and verifier ([`input_decisions.py`](input_decisions.py)).
 
 Standard library only, plus the shared repository-access module (Dulwich, from the Python tools set;
 [decision 0014](../../decisions/0014-dulwich-adoption-scope-and-repository-access-contracts.md)) and
@@ -20,13 +27,18 @@ the lineage objective resolver. The acceptance recorder launches no process, use
 no credential and does not touch the managed data root. The authorization recorder launches no
 process either; it talks to the managed Gitea on host loopback, reads the two credentials it is
 custodian of (`aieh-owner`'s password, and its protection check's read-only token), and keeps its state
-and receipts under the managed data root (below).
+and receipts under the managed data root (below). The dispatch-input commands launch no process, use no
+network, read no credential and import no Gitea or credential module; they keep their state and receipts
+under the managed data root and write the live manifest there.
 
 ## Files
 
 | Path | What |
 |---|---|
-| `owner_decision.py` | The shared record: its fields, the kinds, the `accept-objective` and `authorize-operation` subjects, `statement_verdict` and `check_record` |
+| `owner_decision.py` | The shared record: its fields, the kinds, the `accept-objective`, `authorize-operation`, `accept-design` and `promote-manifest` subjects (`subject_problems`), `statement_verdict` and `check_record` |
+| `delegated_decision.py` | The delegated decision record (`delegated-decision/v1`): its fields, the delegation table (`DELEGATIONS`) and the basis types (`BASIS_TYPES`), the act's checks (`check_delegation`, and `read_authority`, which reads the delegating record and the log at the harness repository's `HEAD`), the generic `decide` and `check_record` |
+| `input_decisions.py` | The dispatch-input series (their store keys, positions and heads), the design binding of a manifest entry, and the verifier (`verify_manifest`, `verifier`) with its refusal codes; importable without the write side |
+| `input_recorder.py` | The dispatch-input commands: `design prepare`, `record` and `delegate`; `manifest prepare`, `record`, `delegate` and `resolve`; `status`; the codes and remedies, the context and the command line |
 | `acceptance_recorder.py` | `prepare` and `record`, the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
 | `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy, the protection verifier's seam and the command line's verifier (`protection_verifier`: the Gitea integration's protection check), the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
@@ -40,6 +52,9 @@ and receipts under the managed data root (below).
 | `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the protection verifier's seam (only a well-formed verdict counts), the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the command line (unit) |
 | `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; fail closed on every protection answer but `verified` (no verifier included), the verifier the last read before the receipt and the merge, the bracket after it; the command line's protection check against the fake auditor (verified, drift, every unverifiable state, a rule changed across the merge, no credential read for a refused statement); every bot token refused; no token minted; a lost answer resolved by reading (integration) |
 | `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture in two phases with the Owner's own decision between them (and `rechallenge`, regenerating expired challenges for the operations already presented), each skipped unless `AIEH_AUTHZ_RECORDER_LIVE` names it (`prepare`, then `record`; e2e) |
+| `tests/input_fixture.py` | The dispatch-input commands' fixtures: a throwaway project repository (an OpenSpec change at two commits), fixture harness repositories (a decision 0018 `Accepted (Owner)`, the same `Proposed`, and one whose log quotes are only in the work tree), a per-test context over a throwaway store and state root, synthetic statements, bases and candidate manifests |
+| `tests/test_input_decisions.py` | The two new kinds and the unchanged shape of `owner-decision/v1`; `delegated-decision/v1`, its table (the engineering manager never decides either kind) and a later kind added as a row; the status parser; the codes, the admitted channels and the repeated grammars against their sources (unit) |
+| `tests/test_input_recorder.py` | Both authorities end to end with the verifier's answer; every code of the recorder table with what it leaves (a refusal reserves nothing and leaves the live manifest as it was; `PROMOTION_FAILED` and `OUTCOME_UNKNOWN` leave a receipt `manifest resolve` settles); each delegated refusal on the fixture harness repositories; the real decision 0018 at `HEAD`; the verifier's refusals; a fixture context never reaching the managed root; importing the commands loads no Gitea or credential module; the command line (integration) |
 | `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: phase rechallenge (fresh challenges for the same operations with reads only, the record phase on them, every refusal leaving the run directory unchanged); prepare's precondition (the baseline variable, the protection check's digest, every role's identity and scopes, open pull requests and existing branches, each refused with zero writes), the auditor's control on a nonexistent pull request, the stopping rule after every control attempt, the presentation, the statement-file refusals, the expected outcome without a verifier and with one that does not verify, the stale-head control and each refusal it can observe (finding F14), the SECURITY FAILURE stops, the protection check end to end (unit) |
 
 ## The Owner decision record (`owner-decision/v1`)
@@ -50,7 +65,7 @@ One JSON object per decision, with exactly these fields in this order:
 |---|---|
 | `format` | `owner-decision/v1` |
 | `decisionId` | a random UUID, version 4, canonical lower-case text |
-| `kind` | `accept-objective` (P-04.1) or `authorize-operation` (P-04.2) |
+| `kind` | `accept-objective` (P-04.1), `authorize-operation` (P-04.2), or `accept-design` or `promote-manifest` (P-04.3; their subjects are under "The dispatch-input commands" below) |
 | `subject` | what was decided on; for `accept-objective`: `change`, `item` (`O<n>`), `outcome` (the outcome id), `revision` (the commit the summary was shown at) and `proposal` (the sha256 of the change's `proposal.md` there); for `authorize-operation`: `repository` (`owner/name`), `pull`, `base` (the protected branch), `head` (the exact head), `manifest` (`operations/<operation>.json`), `digest` (`sha256:` of its blob), `operation`, and what the manifest declares: `operationKind`, `target` and `expiresAt` |
 | `shown` | what the recorder presented before the decision: `summary` (the text shown), `nonce` (32 lower-case hex digits) and `expiresAt` (the challenge's expiry) |
 | `statement` | the decision as stated: `text` (verbatim), `attributedTo` (`owner`), `channel` (a lower-case token, such as `main-session`) and `reference` (where the statement is kept) |
@@ -285,6 +300,149 @@ required setting cannot be verified. The recorder calls it through a mechanism-n
 One code is a disclosure, not a refusal: `PROTECTION_CHANGED_AFTER_MERGE` in a confirmed receipt's
 detail, when the verifier's answer after the merge differs from its answer before it.
 
+## The dispatch-input commands (plan leaf P-04.3)
+
+Two decisions approve dispatch inputs:
+
+- a **design acceptance** (`accept-design`): the design of one OpenSpec change of one manifest
+  repository at an exact revision (decision 0008 point 5);
+- a **manifest promotion** (`promote-manifest`): one approved-input manifest
+  (`ai-engineering-harness/dispatch/approved-inputs/v1`, unchanged; integrations/dispatch).
+
+Each is decided by one of two authorities, recorded in one of two formats:
+
+- **the Owner**: an `owner-decision/v1` record, through a challenge, as the other recorders take one:
+  `prepare` writes the challenge (the subject, the summary to show the Owner, a nonce and an expiry, 30
+  minutes by default, at most a day) to the recorder's own state, and `record` takes the Owner's
+  statement, refusing it unless it is the Owner's, came through an admitted channel (`main-session`), and
+  names the change (a design) or the token `approved-inputs-v<version>` (a manifest). Run only in the
+  main session, on the Owner's decision, with the statement transcribed verbatim (decision 0012 point 9);
+- **a delegation**: a `delegated-decision/v1` record, in one step (`delegate`): there is no challenge,
+  because there is no Owner to show it to. Decision 0018 point 3.2 delegates a design acceptance inside a
+  recorded commitment's scope, and point 3.3 a manifest promotion inside an envelope the Owner granted, to
+  the **product manager** (`agent:product-manager`) only; the engineering manager never decides either
+  (`DECIDER_NOT_DELEGATED`). A delegated decision is never an `owner-decision/v1` record, is never kept
+  among the Owner's records, and is never shown as the Owner's.
+
+### The subjects
+
+`accept-design`: `repository` (the manifest's repository id), `change` (the OpenSpec change id),
+`commit` (the exact revision, 40 or 64 hex digits), `content` (`sha256:` over the change's folder at that
+commit: for each blob under `openspec/changes/<change>/`, in ascending path order, the line
+`<sha256 of the blob>  <path relative to the folder>\n`; the digest of those lines) and `supersedes` (the
+`decisionId` of the acceptance of that change it replaces, or `null` for the first).
+
+`promote-manifest`: `schema` (`ai-engineering-harness/dispatch/approved-inputs/v1`), `version` (the
+manifest's `version`: its position in the promotion series), `digest` (`sha256:` of the manifest file's
+bytes), `previous` (`{version, digest}` of the promotion it replaces, or `null`) and `designs` (for each
+`designs` entry, in manifest order, `{repository, change, commit, acceptance, sequence}`: the decision id
+of its design acceptance and its position in that series).
+
+### The delegated decision record (`delegated-decision/v1`)
+
+Fields, in this order: `format`, `decisionId`, `kind`, `subject` (the subject of the same kind above,
+validated by the same function), `delegation` (`record`: `decision:0018`; `point`: `3.2` or `3.3`;
+`revision`: the full commit of the harness repository at which the record and the basis were read;
+`digest`: `sha256:` of the record file's blob there; `basis`), `decidedBy` (the role the delegation names),
+`recordedBy` (equal to `decidedBy`: a delegated decision is recorded by the lead that made it; none is
+relayed) and `recordedAt`. The basis is `{type, link, quote}`, the shape of the network matrix's
+`owner_approval`: `type` `commitment` (point 3.2: the log's "Commitment: <milestone>" entry; the quote
+contains `Commitment: `) or `envelope` (point 3.3: the Owner's standing authorization, verbatim), `link`
+`evidence/bootstrap-log.md`, and the quote, at least 12 characters.
+
+**The delegation table** (`delegated_decision.DELEGATIONS`) is data: one row per kind, naming the
+delegating record and its point, the decider and the basis type. A kind without a row is never delegated
+(`DELEGATION_KIND_UNKNOWN`). A later leaf (S-03.5's model selection) adds its kind as a row, with its subject
+check and, where it needs one, a basis type of its own (`BASIS_TYPES`), and records through the same
+`read_authority` and `decide`; the record's fields do not change.
+
+**What `delegate` checks**: the row, the decider and the basis's shape; the delegating record
+(`decisions/0018-*.md`), read from the harness repository's `HEAD` commit through the repository-access
+module (the committed blob, never the work tree), has a `Status:` line beginning `Accepted (Owner)`; the
+quote is present verbatim in `evidence/bootstrap-log.md` at that commit; then everything the Owner path
+checks about the subject. **Not checked, disclosed** (decision 0018 point 7; decision 0010 point 1): who
+actually ran the command (any process of the account can declare the product manager); that the change
+lies inside the commitment's scope, that the Owner gave its intent and that it is not a change to the
+harness's own governance; that every entry lies inside the envelope and that the envelope has not expired
+or stopped; and who wrote a log quote ("a log quote is checked for presence, not authorship").
+
+### The series, the receipts and the live manifest
+
+Every decision is a write-ahead receipt in the integration store (intent format
+`aieh-dispatch-input-decision/1`, actor `dispatch-input-recorder/1`) at its position of its series:
+
+| Series | Store key | The receipt holds |
+|---|---|---|
+| promotions | `dispatch-inputs/v1/promotion/<version>` | the decision record, the manifest's schema, version, digest, `previous` and its exact text |
+| acceptances of one change | `dispatch-inputs/v1/design/<repository>/<change>/<sequence>` | the decision record, the repository, the change and the sequence |
+
+Positions start at 1 and are contiguous. A decision's link (`supersedes`, `previous`) names the last
+**confirmed** decision of its series, and it takes the next free position: a failed or unconfirmed
+position is spent and never reused. The store's unique key makes a position single-use: a second `record`
+on a consumed challenge is `CHALLENGE_CONSUMED`; a challenge whose position another decision took is
+`CHALLENGE_STALE`. A candidate naming a design revision whose acceptance a later acceptance of that change
+superseded is `DECISION_REPLAYED`. A design acceptance writes no manifest; its receipt is confirmed when it
+is recorded.
+
+The Owner's challenges and decision copies are kept in the recorder's own state,
+`<state>/owner-authorization/dispatch-inputs/{challenges,decisions}/`; delegated decision copies in
+`<state>/delegated-decisions/dispatch-inputs/`, never under `owner-authorization/`. The copies are for
+people and backups: nothing reads them to decide. No receipt holds a filesystem path.
+
+**The live manifest** (`<state>/dispatch/approved-inputs.json`, decision 0009) has one writer: `manifest
+record` and `manifest delegate` reserve the receipt, mark it dispatched, write the candidate's exact bytes
+to a temporary file in the live file's own directory, replace the live file with it atomically, read its
+digest back and confirm. A write that did not land leaves the receipt failed and the live file as it was
+(`PROMOTION_FAILED`); an outcome that does not read back as decided leaves it unknown (`OUTCOME_UNKNOWN`).
+`manifest resolve --version N` settles a receipt **by reading** the live file, never by writing it:
+confirmed when its digest is the decided one, failed otherwise (a receipt left reserved, nothing written,
+becomes failed).
+
+**The verifier** (`input_decisions.verify_manifest`, or `verifier(store)` as the callable
+`load_manifest(path, decisions=...)` will take in slice 2) reads the store's receipts only, by direct
+lookups: the promotion at the manifest's version must exist (`MANIFEST_NOT_PROMOTED`), be a well-formed
+record of its format binding the receipt's version and digest (`DECISION_RECORD_INVALID`), be confirmed
+(`MANIFEST_PROMOTION_UNCONFIRMED`), have the file's digest (`MANIFEST_DIGEST_MISMATCH`), be the last confirmed
+promotion (`DECISION_REPLAYED`), and each design entry must have the confirmed acceptance the promotion
+bound for it (`DESIGN_ACCEPTANCE_MISSING`). Otherwise it answers the approval view
+(`ai-engineering-harness/dispatch/manifest-approval/v1`): the promotion decision and each design entry's
+acceptance decision, each with its receipt and its authority (the Owner, or the delegating record, its
+point, the revision, the decider and the basis). Design acceptances are not re-checked for currency at
+load: a later acceptance takes effect when it is promoted.
+
+**What stops a same-account process writing a "decision" beside the manifest?** Nothing at the operating
+system's level (decision 0010 point 1; `fd-bootstrap-shared-identity`): a file beside the manifest has no
+effect, because no decision file is read; a manifest is approved only by a confirmed receipt of this store
+at its version with its digest, and producing one means running the recorder, which leaves an
+append-only receipt naming the authority it claimed. Unapproved content is detected and refused at load
+(slice 2), not prevented from being written.
+
+### Refusals
+
+`input-recorder: CODE: detail. Remedy: ...`; exit 2 when nothing was recorded or written, 1 for a failed or
+unknown promotion (its receipt says which).
+
+| Code | Refused when |
+|---|---|
+| `CHALLENGE_MISSING`, `CHALLENGE_INVALID`, `CHALLENGE_UNKNOWN` | no challenge; not a nonce, a malformed state file, or a challenge of the other kind; a nonce this recorder did not issue |
+| `CHALLENGE_EXPIRED`, `CHALLENGE_CONSUMED`, `CHALLENGE_STALE` | the challenge's expiry has passed; this challenge's decision is already recorded; another decision holds its position, or the series or a design acceptance changed after the summary was shown |
+| `STATEMENT_MISSING`, `STATEMENT_MODEL_AUTHORED`, `STATEMENT_NOT_OWNER`, `STATEMENT_INVALID` | the statement verdicts of the shared record (or a statement file that is not JSON) |
+| `STATEMENT_SUBJECT_MISSING`, `CHANNEL_NOT_ADMITTED`, `RECORDED_BY_INVALID` | the statement does not name the change or `approved-inputs-v<version>`; its channel is not admitted; `--recorded-by` is not an attribution |
+| `PROJECT_UNAVAILABLE`, `GIT_FAILED` | `--project` is not a work tree root (or Dulwich is missing); the repository could not be read |
+| `CHANGE_MISSING`, `REVISION_INVALID` | no file under `openspec/changes/<change>/` at the commit, or not a change id; not a full commit id of the repository |
+| `CANDIDATE_UNREADABLE`, `CANDIDATE_INVALID`, `CANDIDATE_INSIDE_CHECKOUT` | the candidate cannot be read (or is above 1 MiB); it is not UTF-8 strict JSON of the v1 schema; it lies inside or around the checkout |
+| `MANIFEST_LOCATION_INVALID` | the live manifest's path is refused by `load_manifest`'s own path rules |
+| `VERSION_NOT_NEXT` | the candidate's version is not the next position of the promotion series (or, for a delegated decision, another decision took the position meanwhile) |
+| `DESIGN_ACCEPTANCE_MISSING`, `DECISION_REPLAYED` | a design entry has no confirmed acceptance at its commit; it names a revision whose acceptance a later one superseded |
+| `PROMOTION_FAILED`, `OUTCOME_UNKNOWN` | the write did not land (receipt failed, the live file as it was); it did not read back as decided (receipt unknown: run `manifest resolve`) |
+| `RECEIPT_MISSING` | `manifest resolve` for a version without a receipt |
+| `DELEGATION_KIND_UNKNOWN`, `DECIDER_NOT_DELEGATED` | no row of the delegation table for the kind; the decider is not the row's |
+| `DELEGATION_BASIS_INVALID`, `DELEGATION_BASIS_NOT_RECORDED` | the basis is not `{type, link, quote}` of the row's type (or its file is not JSON); the quote is not in the log at the harness repository's `HEAD` |
+| `DELEGATION_NOT_ACCEPTED`, `AUTHORITY_UNAVAILABLE` | the delegating record is not `Accepted (Owner)` at `HEAD` (or is not there once); the harness repository cannot be read |
+
+A repository id outside the manifest's grammar, or an expiry outside 1 to 1440 minutes, is a usage error
+(exit 2, no code).
+
 ## Commands
 
 From the repository root, under the tools interpreter (`<tools python>` is what
@@ -311,6 +469,29 @@ The authorization recorder, only in the main session on an Owner decision:
 
 `task owner:authorize -- prepare ...` (and `record`, `resolve`) run them. `--port` names the Gitea
 port; by default the managed Gitea's host record gives it.
+
+The dispatch-input commands (`record` only in the main session on an Owner decision; `delegate` only by the
+role the delegation names, in its own session):
+
+```
+<tools python> -I -B integrations/owner/input_recorder.py design prepare --project DIR --repository ID --change NAME \
+    --commit FULL [--expires-in-minutes N]
+<tools python> -I -B integrations/owner/input_recorder.py design record --challenge NONCE --statement statement.json \
+    --recorded-by agent:<id>
+<tools python> -I -B integrations/owner/input_recorder.py design delegate --project DIR --repository ID --change NAME \
+    --commit FULL --decided-by agent:product-manager --basis basis.json
+<tools python> -I -B integrations/owner/input_recorder.py manifest prepare --candidate FILE [--expires-in-minutes N]
+<tools python> -I -B integrations/owner/input_recorder.py manifest record --challenge NONCE --statement statement.json \
+    --recorded-by agent:<id>
+<tools python> -I -B integrations/owner/input_recorder.py manifest delegate --candidate FILE \
+    --decided-by agent:product-manager --basis basis.json
+<tools python> -I -B integrations/owner/input_recorder.py manifest resolve --version N
+<tools python> -I -B integrations/owner/input_recorder.py status
+```
+
+`task owner:design -- prepare ...` (and `record`, `delegate`) and `task owner:promote -- prepare ...` (and
+`record`, `delegate`, `resolve`) run the first seven. `basis.json` is `{"type": "commitment" or "envelope",
+"link": "evidence/bootstrap-log.md", "quote": ...}`.
 
 The live exercise on the S-01.2.2 fixture runs in two phases, each an Owner-approved act and never
 run by default (`test_live_authorization.py` lists what each reads, writes and leaves). It never
@@ -393,6 +574,10 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
   would write CRLF; git's and the module's `status` report them clean (tested on a fixture).
   Filter drivers and `working-tree-encoding` on these paths: not tested.
 - Task itself (the targets' commands were run directly), Linux and macOS.
+- The dispatch-input commands against the managed data root, its integration store or a real Owner
+  decision: they have run on throwaway repositories, a throwaway store and state root, and synthetic
+  statements and bases only. `load_manifest`'s enforcement (P-04.3 slice 2) is not built: until it is, a
+  manifest loads without a recorded decision.
 - The authorization recorder against a real Gitea: its live exercise (`test_live_authorization.py`)
   ran once on the S-01.2.2 fixture on 2026-11-12, on the Owner's own authorization (OA-14;
   [record](../../evidence/P-04.2-authorization-recorder.md), section 17). Observed on Gitea 28.3.0:
