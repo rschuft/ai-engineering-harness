@@ -233,7 +233,8 @@ class FakeGitea:
                 form = json.loads(body) if body else {}
                 self.pulls[number].setdefault('reviews', []).append((doer, form.get('event'), self.head(number)))
                 return self.reply(200, {'state': form.get('event'), 'user': {'login': doer},
-                                        'commit_id': self.head(number)})
+                                        'commit_id': self.head(number), 'official': True, 'stale': False,
+                                        'dismissed': False})
             if method == 'GET' and rest[1:] == ['files']:
                 files = self.files(number)
                 if 'page' in query:  # Gitea's paging: limit a page, pages from 1

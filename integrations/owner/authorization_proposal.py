@@ -322,7 +322,10 @@ def propose(ctx, repository, blob):
         status, body = proposer.call('POST', f'/repos/{repository}/contents/{manifest}', {
             'content': base64.b64encode(blob).decode('ascii'), 'message': f'Propose operation {operation}',
             'branch': base, 'new_branch': branch})
-        if status != 201:  # Gitea refused the first write: nothing was written by this run
+        if not 400 <= status < 500 and status != 201:  # an error answer may follow a write: it may have landed
+            raise ProposalError('ANSWER_LOST', f'adding {manifest} on {branch} answered {status} ({_message(body)}); '
+                                'it may have been written', refusal=False)
+        if status != 201:  # Gitea refused the first write (4xx): nothing was written by this run
             appeared, _ = proposer.call('GET', f'/repos/{repository}/branches/{urllib.parse.quote(branch, safe="")}')
             if appeared == 200:
                 raise ProposalError('OPERATION_NOT_NEW', f'adding {manifest} on {branch} answered {status} '
@@ -348,8 +351,12 @@ def propose(ctx, repository, blob):
         written.append(f'a review of #{number}')
         review = review if isinstance(review, dict) else {}
         seen = {'state': review.get('state'), 'reviewer': (review.get('user') or {}).get('login')
-                if isinstance(review.get('user'), dict) else None, 'commit': review.get('commit_id')}
-        wanted = {'state': 'APPROVED', 'reviewer': reviewer.user, 'commit': head}
+                if isinstance(review.get('user'), dict) else None, 'commit': review.get('commit_id'),
+                'official': review.get('official'), 'stale': review.get('stale'), 'dismissed': review.get('dismissed')}
+        # an official approval (by an account on the approvals allowlist), current and not dismissed: the one that
+        # counts toward the protected branch's required approval
+        wanted = {'state': 'APPROVED', 'reviewer': reviewer.user, 'commit': head, 'official': True, 'stale': False,
+                  'dismissed': False}
         if seen != wanted:
             raise ProposalError('APPROVAL_UNCONFIRMED', f'the review of #{number} reads back as '
                                 + '; '.join(f'{k} {seen[k]!r}, not {v!r}' for k, v in wanted.items() if seen[k] != v),
@@ -360,6 +367,7 @@ def propose(ctx, repository, blob):
             exc.detail += f'; sent, in order: {", ".join(sent)}'
         if written:
             exc.detail += f'; written before it, not undone: {", ".join(written)}'
+            exc.refusal = False  # a stop after a write is never a refusal (exit 1), whatever stopped it
         exc.args = (f'{exc.code}: {exc.detail}. Remedy: {exc.remedy}.',)
         raise
     finally:

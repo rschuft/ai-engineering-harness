@@ -196,7 +196,10 @@ class Proposal(su.Fixture):
         approvedBy is ever reported."""
         for name, change in (('state', {'state': 'COMMENT'}), ('reviewer', {'user': {'login': 'aieh-bot-planner'}}),
                              ('no reviewer', {'user': None}), ('commit', {'commit_id': 'e' * 40}),
-                             ('no commit', {'commit_id': None})):
+                             ('no commit', {'commit_id': None}),
+                             # F4 (the reviewer's case D): an official, current, undismissed approval only
+                             ('not official', {'official': False}), ('stale', {'stale': True}),
+                             ('dismissed', {'dismissed': True}), ('no official field', {'official': None})):
             with self.subTest(changed=name):
                 self.gitea = fg.FakeGitea(self.repository)
 
@@ -209,6 +212,35 @@ class Proposal(su.Fixture):
                 self.assertIn('written before it, not undone', error.detail)
                 self.assertIn('a review of #1', error.detail)
                 self.assertEqual(self.gitea.merge_count(), 0)
+
+    def test_a_stop_after_a_write_is_never_a_refusal(self):
+        """F1: a lost read once the branch, or the branch and the pull request, landed exits 1 naming what was
+        written (the reviewer's cases A and B)."""
+        for name, fragment in (('A: the pull request', lambda p, g: p.rstrip('0123456789').endswith('/pulls/')
+                                and g.pulls),
+                               ('B: the manifest at the head', lambda p, g: '/raw/' in p and g.pulls)):
+            with self.subTest(case=name):
+                self.gitea = fg.FakeGitea(self.repository)
+
+                def lost(fake, port, path, method, body, headers, timeout, fragment=fragment):
+                    if fragment(path, fake):
+                        raise TimeoutError('lost')
+                    return fake(port, path, method=method, body=body, headers=headers, timeout=timeout)
+
+                error = self.refused('GITEA_UNAVAILABLE', refusal=False, http=self.intercept('GET', '', lost))
+                self.assertIn('written before it, not undone: the branch work/', error.detail)
+                self.assertIn('pull request #1', error.detail)
+
+    def test_a_5xx_answer_to_the_first_write_may_have_been_written(self):
+        """F2 (the reviewer's case C): only a 4xx answer means nothing was written by this run."""
+        def landed(fake, port, path, method, body, headers, timeout):
+            fake(port, path, method=method, body=body, headers=headers, timeout=timeout)
+            return fake.reply(500, {'message': 'error after the commit'})
+
+        error = self.refused('ANSWER_LOST', refusal=False, http=self.intercept('POST', f'/contents/{MANIFEST}', landed))
+        self.assertIn('answered 500 (error after the commit); it may have been written', error.detail)
+        self.assertIn(f'sent, in order: POST {MANIFEST} on the new branch', error.detail)
+        self.assertEqual(self.gitea.pulls, {})
 
     def test_a_lost_answer_to_a_write_may_have_been_written(self):
         """R3: the request is named as one that may have been written, with what was sent in order."""

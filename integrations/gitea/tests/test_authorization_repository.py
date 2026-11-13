@@ -498,6 +498,37 @@ class Stops(Act):
         self.assertEqual((error.report['fixture_before']['equal'], error.report['fixture']['equal']), (True, False))
         self.assertEqual(error.report['protection']['status'], 'verified')
 
+    def test_an_unexpected_error_after_the_writes_is_a_stop_with_its_report(self):
+        """F3: after the first write any exception becomes a stop (UNEXPECTED_ERROR, exit 1) carrying the report and
+        the writes; before any write it propagates as it is, nothing written."""
+        real = PC.verify
+
+        def check(provider, port, repository, base, *, http=None):
+            if repository == LEDGER:
+                raise RuntimeError('the check broke')
+            return real(provider, port, repository, base, http=http)
+
+        error = self.stopped('UNEXPECTED_ERROR', check=check)
+        self.assertIn('RuntimeError: the check broke', error.detail)
+        self.assertEqual(error.report['state'], 'created')
+        with self.assertRaises(RuntimeError):
+            self.setUp()
+            self.run_act(check=lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('before any write')))
+        self.assertEqual(self.gitea.writes(), [])
+
+    def test_a_malformed_token_list_afterwards_is_a_held_token(self):
+        """The reviewer's probe case 8: a token list Gitea answers with entries of another kind fails closed."""
+        original = self.gitea.admin
+
+        def bad_tokens(method, route, data):
+            if (method, route) == ('GET', f'/users/{G.SITE_ADMIN}/tokens') and self.gitea.ledger is not None:
+                return self.gitea.reply(200, ['not-a-dict'])
+            return original(method, route, data)
+
+        self.gitea.admin = bad_tokens
+        error = self.stopped('ADMIN_HOLDS_TOKEN')
+        self.assertIn("'not-a-dict'", error.detail)
+
     def test_an_existing_organization_or_repository_is_never_adopted(self):
         def org_alone(g):
             g.orgs[R.AUTHORIZATION_ORG] = dict(R.AUTHORIZATION_ORG_SETTINGS)

@@ -822,7 +822,9 @@ def _short(digest) -> str:
 
 def _admin_tokens(api) -> list | str:
     status, tokens = api.call('GET', f'/users/{host.SITE_ADMIN}/tokens')
-    return [t.get('name') for t in tokens] if status == 200 and isinstance(tokens, list) else f'HTTP {status}'
+    if status != 200 or not isinstance(tokens, list):
+        return f'HTTP {status}'
+    return [t.get('name') if isinstance(t, dict) else repr(t)[:60] for t in tokens]  # anything listed is a token
 
 
 def _fixture_check(check, provider, port, http, baseline) -> dict:
@@ -864,9 +866,14 @@ def authorization_repository(owner_act=None, provider=None, run: Callable = subp
     writes = report['actions']
     try:
         _authorization_act(report, writes, provider, port, http, cli, receipts, check)
-    except (GiteaError, *_LOST) as exc:
-        if not isinstance(exc, GiteaError):  # a lost answer outside the administrator's Api (its sign-in read)
-            exc = GiteaError('ANSWER_LOST', f'the answer was lost ({type(exc).__name__}) before any write')
+    except Exception as exc:  # noqa: BLE001 - after a write, whatever stops the act is reported with its writes
+        if isinstance(exc, _LOST):  # a lost answer outside the administrator's Api (its sign-in read)
+            exc = GiteaError('ANSWER_LOST', f'the answer was lost ({type(exc).__name__}) '
+                             + ('after the writes' if writes else 'before any write'), refusal=not writes)
+        elif not isinstance(exc, GiteaError):
+            if not writes:
+                raise  # before any write, an unexpected error propagates as it is: nothing was written
+            exc = GiteaError('UNEXPECTED_ERROR', f'{type(exc).__name__}: {str(exc)[:200]}', refusal=False)
         detail = exc.detail
         if writes:
             detail += '; the writes sent, in order: ' + json.dumps(writes)
