@@ -150,6 +150,37 @@ def _overlaps(a: PurePath, b: PurePath) -> bool:
     return a.is_relative_to(b) or b.is_relative_to(a)
 
 
+def _comparable(path, platform: str | None = None) -> str:
+    """PATH as the file system resolves it, for comparison only. On Windows (PLATFORM win32; default this host): a
+    leading \\\\?\\ or \\\\.\\ removed and \\\\?\\UNC\\ made \\\\, '/' made '\\', the trailing spaces and dots Windows
+    ignores removed from every component, then normpath and normcase. Elsewhere: normpath."""
+    text = os.fspath(path) if not isinstance(path, PurePath) else str(path)
+    if (platform or sys.platform) != 'win32':
+        return posixpath.normpath(text)
+    text = text.replace('/', BS)
+    if text[:8].upper() == BS * 2 + '?' + BS + 'UNC' + BS:
+        text = BS * 2 + text[8:]
+    elif text[:4] in (BS * 2 + '?' + BS, BS * 2 + '.' + BS):
+        text = text[4:]
+    drive, rest = ntpath.splitdrive(text)
+    rest = BS.join(part if part in ('.', '..') else part.rstrip(' .') for part in rest.split(BS))
+    return ntpath.normcase(ntpath.normpath(drive + rest))
+
+
+def inside_or_around(candidate, root, platform: str | None = None) -> bool:
+    """Whether CANDIDATE is ROOT, lies inside it or contains it, in any form the file system resolves to the same
+    path (_comparable). The one "inside or around the checkout" comparison of the harness: the managed root and its
+    categories against the checkout here (decision 0009), the dispatch manifest's path (dispatch_inputs.load_manifest)
+    and the S-03.3 proposal's --out (inference_qualification.proposal_target). Paths on different drives, or one
+    relative and one absolute, do not overlap."""
+    a, b = _comparable(candidate, platform), _comparable(root, platform)
+    try:
+        common = (ntpath if (platform or sys.platform) == 'win32' else posixpath).commonpath([a, b])
+    except ValueError:
+        return False
+    return common in (a, b)
+
+
 def _join(platform: str, base: PurePath, raw: str, code: str, what: str) -> PurePath:
     """raw as given when absolute, else below base; drive-relative and rooted forms are refused."""
     given = _pure(platform)(raw)
@@ -254,16 +285,16 @@ def _check_root(root: PurePath, repo: PurePath, environ: Mapping[str, str], plat
         value = environ.get(var, '')
         if value and _pure(platform)(value).is_absolute() and root == _norm(platform, value):
             raise PathsError('ROOT_IS_PROFILE_ROOT', f'the root {root} is {var} itself')
-    if _overlaps(root, repo):
+    if inside_or_around(root, repo, platform):
         raise PathsError('ROOT_INSIDE_CHECKOUT', f'the root {root} is inside or contains the checkout {repo}')
 
 
-def _check_path(name: str, path: PurePath, repo: PurePath) -> None:
+def _check_path(name: str, path: PurePath, repo: PurePath, platform: str | None = None) -> None:
     if name in STORE_CATEGORIES and _is_unc(path):
         raise PathsError('PATH_NETWORK_FOR_STORE', f'paths.{name} {path} is a network (UNC) path')
     if path.parent == path:
         raise PathsError('PATH_IS_DRIVE_ROOT', f'paths.{name} {path} is a volume root')
-    if _overlaps(path, repo):
+    if inside_or_around(path, repo, platform):
         raise PathsError('PATH_INSIDE_CHECKOUT', f'paths.{name} {path} is inside or contains the checkout {repo}')
 
 
@@ -283,7 +314,7 @@ def _filesystem_checks(res: Resolution) -> None:
     real_repo = _norm(res.platform, os.path.realpath(str(res.repo_root)))
     for name, path in [('root', res.root)] + list(res.paths.items()):
         real = _norm(res.platform, os.path.realpath(str(path)))
-        if _overlaps(real, real_repo):
+        if inside_or_around(real, real_repo, res.platform):
             raise PathsError('ROOT_INSIDE_CHECKOUT' if name == 'root' else 'PATH_INSIDE_CHECKOUT',
                              f'{name} {path} resolves to {real}, inside or containing the checkout {real_repo}')
         if res.platform == 'win32' and (name == 'root' or name in STORE_CATEGORIES):
@@ -318,7 +349,7 @@ def resolve(environ: Mapping[str, str] | None = None, *, platform: str | None = 
         else:
             paths[name] = _norm(plat, root / category.default)
         sources[name] = 'config' if name in overrides else 'root'
-        _check_path(name, paths[name], repo)
+        _check_path(name, paths[name], repo, plat)
         if not paths[name].is_relative_to(root):
             warnings.append(f'paths.{name} lies outside the managed root: {paths[name]}')
     names = list(paths)

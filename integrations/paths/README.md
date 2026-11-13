@@ -138,6 +138,16 @@ checks run before any filesystem access; then, read-only, the link-resolved root
 are checked against the checkout and, on Windows, the volume type through storecore's
 `GetDriveTypeW` check.
 
+"Inside or containing the checkout" (`ROOT_INSIDE_CHECKOUT`, `PATH_INSIDE_CHECKOUT`, lexically
+and after resolving links) is one public comparison, `inside_or_around(candidate, root,
+platform)`, which the dispatch manifest's guard (`dispatch_inputs.load_manifest`) and the S-03.3
+proposal's `--out` also use. On Windows it compares the path as the file system resolves it: a
+leading `\\?\` or `\\.\` removed (and `\\?\UNC\` made `\\`), the trailing spaces and dots of each
+component removed, `/` made `\`, then normalized and case-folded, with `commonpath`; elsewhere
+the normalized path. The order of the refusals is unchanged: a root or a store category given
+in the `\\?\` form is still refused first as a network path (`ROOT_UNC_OR_NETWORK`,
+`PATH_NETWORK_FOR_STORE`).
+
 | Group | Codes |
 |---|---|
 | Root | `DEFAULT_ROOT_UNAVAILABLE`, `ROOT_NOT_ABSOLUTE_AFTER_ANCHOR`, `ROOT_IS_DRIVE_ROOT`, `ROOT_IS_PROFILE_ROOT`, `ROOT_INSIDE_CHECKOUT` (also a root containing the checkout), `ROOT_UNC_OR_NETWORK` (also a non-fixed volume) |

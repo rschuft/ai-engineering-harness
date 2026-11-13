@@ -749,5 +749,56 @@ class ToolsInstall(Base):
         self.assertEqual(list((self.root / 'assets').rglob('aieh-asset.json')), [], 'no record without the download')
 
 
+class CheckoutForms(Base):
+    """F-07.1's guard (decision 0009: no managed location inside or containing the checkout) under every form a
+    Windows path resolves to (exposed by the S-03.3 review): inside_or_around, the harness's one checkout
+    comparison. Each refusal keeps its code and order: a \\\\?\\ root is still ROOT_UNC_OR_NETWORK first."""
+    category = 'unit'
+
+    def test_the_managed_root_in_another_form_of_the_checkout(self):
+        env, repo = self.case('win32')
+        text = str(P._norm('win32', repo))
+
+        def resolve(root=None, paths=None):
+            environ = dict(env) if root is None else dict(env, AIEH_DATA_ROOT=root)
+            return P.resolve(environ, platform='win32', repo_root=repo,
+                             config={'version': 1, 'paths': paths} if paths else {})
+        for root in (text + ' ' + BS + 'data', text + '.' + BS + 'data', text + ' . ', text.upper() + ' ' + BS + 'd',
+                     text.replace(BS, '/') + ' /data'):
+            with self.subTest(root=root):
+                self.assertRefused('ROOT_INSIDE_CHECKOUT', resolve, root)
+        for root in (BS * 2 + '?' + BS + text + BS + 'data', BS * 2 + '?' + BS + text + ' ' + BS + 'data',
+                     BS * 2 + '?' + BS + text):
+            with self.subTest(root=root):
+                self.assertRefused('ROOT_UNC_OR_NETWORK', resolve, root)
+        for name, value, code in (('cache', text + ' ' + BS + 'cache', 'PATH_INSIDE_CHECKOUT'),
+                                  ('cache', BS * 2 + '?' + BS + text + BS + 'cache', 'PATH_INSIDE_CHECKOUT'),
+                                  ('tmp', BS * 2 + '?' + BS + text + ' ', 'PATH_INSIDE_CHECKOUT'),
+                                  ('state', BS * 2 + '?' + BS + text + BS + 'state', 'PATH_NETWORK_FOR_STORE'),
+                                  ('state', text + '. ' + BS + 'state', 'PATH_INSIDE_CHECKOUT')):
+            with self.subTest(name=name, value=value):
+                self.assertRefused(code, resolve, None, {name: value})
+
+    def test_the_comparison(self):
+        for candidate, root, platform, expected in (
+                ('C:/src/aieh', 'C:/src/aieh', 'win32', True),
+                ('C:/src/aieh /x', 'c:\\SRC\\aieh', 'win32', True),
+                ('\\\\?\\C:\\src\\aieh.\\x', 'C:/src/aieh', 'win32', True),
+                ('\\\\.\\C:\\src', 'C:/src/aieh', 'win32', True),
+                ('\\\\?\\UNC\\server\\share\\d\\x', '\\\\server\\share\\d', 'win32', True),
+                ('C:/src/aieh-sibling', 'C:/src/aieh', 'win32', False),
+                ('D:/src/aieh', 'C:/src/aieh', 'win32', False),
+                ('relative', 'C:/src/aieh', 'win32', False),
+                ('/srv/src/aieh/x', '/srv/src/aieh', 'linux', True),
+                ('/srv/src', '/srv/src/aieh', 'linux', True),
+                ('/srv/src/aieh /x', '/srv/src/aieh', 'linux', False),
+                ('/srv/src/AIEH/x', '/srv/src/aieh', 'darwin', False)):
+            with self.subTest(candidate=candidate, platform=platform):
+                self.assertIs(P.inside_or_around(candidate, root, platform), expected)
+        self.assertEqual(P._comparable('\\\\?\\UNC\\Server\\Share\\Dir. \\f', 'win32'), '\\\\server\\share\\dir\\f')
+        self.assertEqual(P._comparable(PureWindowsPath('C:/A /b'), 'win32'), 'c:\\a\\b')
+        self.assertEqual(P._comparable('/a/./b/', 'linux'), '/a/b')
+
+
 if __name__ == '__main__':
     unittest.main()
