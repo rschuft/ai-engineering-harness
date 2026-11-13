@@ -547,7 +547,12 @@ acceptance takes effect when a manifest naming it is promoted.
 - `load_manifest` refuses a relative path or one with `.` or `..` parts, and a path inside or
   containing the checkout (before reading it, and again after resolving links). These path
   refusals stay its first (the dispatch-input commands rely on them). The request never names a
-  manifest.
+  manifest. "Inside or containing" is one comparison, `inside_or_around` (shared with the S-03.3
+  proposal's `--out`): on Windows it removes a leading `\\?\` or `\\.\` (and makes `\\?\UNC\`
+  `\\`), the trailing spaces and dots Windows ignores in each component, then normalizes the
+  separators and the case before `os.path.commonpath`, so no other form of the checkout's path
+  passes (`MANIFEST_INSIDE_CHECKOUT`; the input recorder's `CANDIDATE_INSIDE_CHECKOUT` runs the
+  same rules).
 - **Promotion through a recorded decision (plan leaf P-04.3).** The live manifest has one
   writer, the dispatch-input commands of the authorization recorder
   ([`integrations/owner/input_recorder.py`](../owner/README.md#the-dispatch-input-commands-plan-leaf-p-043)):
@@ -659,7 +664,7 @@ it creates and reads nothing there (exit 2 on a managed-root refusal).
 | `SuccessTests` | the record's fields; it feeds `reserve_attempt`, which reserves (and is idempotent); the next resolution asks for ordinal 2 with its own workspace, which the store refuses as a live claim until the first attempt fails; the review binding; case-insensitive Work ids; the checked-in profiles are refused as not operational |
 | `DeterminismTests` | the same inputs give an identical record and intent digest; the policy inputs (v2, with the admission policy) and a pinned golden policy digest; each policy input changes the digest; a manifest revision changes provenance and the intent digest but not the policy digest, so a retry under it conflicts; the record is immutable |
 | `ManifestCheckerTests` | the example is valid; schema, version, identifiers, duplicates (also duplicate JSON keys), unknown references, non-full commits, digest format, unreadable bytes; type fuzzing never crashes |
-| `ManifestCustodyTests` | the checkout (inside or containing) is refused before reading; path shapes; a manifest outside the checkout is refused without a decision source and loads with one; `manifest_path` is `<state>/dispatch/approved-inputs.json` and creates nothing |
+| `ManifestCustodyTests` | the checkout (inside or containing) is refused before reading, in every Windows form of its path (`\\?\`, `\\.\`, trailing spaces and dots, case, `/`), and `inside_or_around` itself; path shapes; a manifest outside the checkout is refused without a decision source and loads with one; `manifest_path` is `<state>/dispatch/approved-inputs.json` and creates nothing |
 | `CliTests` | `check-manifest` exit codes and report; `manifest-path` with `AIEH_DATA_ROOT` in a throwaway directory creates nothing |
 
 The resolution and admission tests load their fixture manifests through `load_manifest` with a

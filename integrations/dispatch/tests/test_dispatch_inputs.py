@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CATEGORY = 'integration'
 
@@ -850,6 +851,38 @@ class ManifestCustodyTests(unittest.TestCase):
         self.assertEqual(self.refused(EXAMPLE), 'MANIFEST_INSIDE_CHECKOUT')
         self.assertEqual(self.refused(REPO), 'MANIFEST_INSIDE_CHECKOUT')
         self.assertEqual(self.refused(REPO.parent), 'MANIFEST_INSIDE_CHECKOUT')
+
+    @unittest.skipUnless(os.name == 'nt', 'the Windows forms of a path')
+    def test_every_windows_form_of_the_checkout_is_inside(self):
+        """F5 (P-04.3, E-01.2.1): a manifest path inside the checkout under another form Windows resolves to it is
+        refused MANIFEST_INSIDE_CHECKOUT, before anything is read; the input recorder's candidate check runs these
+        rules (CANDIDATE_INSIDE_CHECKOUT)."""
+        repo = os.path.realpath(REPO)
+        for value in ('\\\\?\\' + repo + '\\no-such-f5.json', repo + ' \\no-such-f5.json', repo + '.\\no-such-f5.json',
+                      repo + ' . \\no-such-f5.json', '\\\\?\\' + repo.upper() + '\\no-such-f5.json',
+                      '\\\\?\\' + repo + ' \\no-such-f5.json', '\\\\.\\' + repo + '\\no-such-f5.json',
+                      repo.replace('\\', '/') + '/no-such-f5.json'):
+            with self.subTest(value=value), mock.patch.object(di, 'open', side_effect=AssertionError('read'),
+                                                              create=True):
+                self.assertEqual(self.refused(value), 'MANIFEST_INSIDE_CHECKOUT')
+        self.assertEqual(self.refused(self.tmp / 'no-such-f5.json'), 'MANIFEST_MISSING')
+
+    def test_the_inside_or_around_comparison(self):
+        """F1/F5's one comparison: the checkout itself, inside it, around it; nothing beside it."""
+        root = self.tmp / 'checkout'
+        for candidate, expected in ((root, True), (root / 'a' / 'b.json', True), (self.tmp, True),
+                                    (self.tmp / 'checkout-sibling' / 'x.json', False), (self.tmp / 'other', False),
+                                    ('relative/x.json', False)):
+            with self.subTest(candidate=candidate):
+                self.assertIs(di.inside_or_around(candidate, root), expected)
+        if os.name == 'nt':
+            for text, comparable in (('\\\\?\\UNC\\Server\\Share\\Dir. \\f', '\\\\server\\share\\dir\\f'),
+                                     ('\\\\?\\C:\\A \\B..\\c', 'c:\\a\\b\\c'), ('\\\\.\\C:\\A\\b', 'c:\\a\\b'),
+                                     ('C:/A/./b', 'c:\\a\\b')):
+                with self.subTest(text=text):
+                    self.assertEqual(di._comparable(text), comparable)
+            self.assertTrue(di.inside_or_around('\\\\?\\UNC\\server\\share\\d\\x', '\\\\server\\share\\d'))
+            self.assertFalse(di.inside_or_around('D:\\x', 'C:\\x'))
 
     def test_path_shape(self):
         self.assertEqual(self.refused('approved-inputs.json'), 'MANIFEST_PATH_INVALID')
