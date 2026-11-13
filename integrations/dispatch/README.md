@@ -321,9 +321,13 @@ call, then confirmed with the grant's record (by fingerprint), or failed (`issue
 broker refused the issue. When the answer is lost (a timeout, an unreachable listener after the
 request was sent) or is not a valid grant of this attempt, the outcome is unknown: the grant is
 revoked by the attempt's conversation and attempt (the broker's selector beside the fingerprint, one
-grant per attempt), and by the fingerprint an invalid answer named; the journal is then settled
-(confirmed when a grant was found, failed when the broker holds none, unsettled while the
-revocation itself fails).
+grant per attempt). An invalid answer's fingerprint is revoked too, and journaled, only when that
+answer named this conversation and attempt: another attempt's grant is never revoked on a wrong
+answer, and the attempt's selector decides the outcome. When the broker holds no grant of the
+attempt it tombstones the attempt, so that a late issue (one still in flight when the client gave
+up) is refused, never registered: the outcome is recorded as `no grant; attempt tombstoned`, and
+`end_attempt` need not call again. The journal is then settled (confirmed when a grant was found,
+failed when none was, unsettled while the revocation itself fails).
 
 **Revocation, always.** Once issued (or once its outcome is unknown), the grant is revoked (trigger
 `attempt end`: a refused attempt ends) on any refusal or failure, whatever is raised:
@@ -340,7 +344,9 @@ outcome from being recorded.
 **The attempt's end.** A confirmed attempt keeps its grant until its end. `end_attempt(store,
 operation_key, inference=, actor=)` revokes the attempt's issued, not yet revoked grant, whatever the
 attempt's state (confirmed, failed, unknown, or reserved or dispatched as an interrupted dispatcher
-left it): **ending an attempt still in flight revokes its grant** (fail closed). It revokes by the
+left it): **ending an attempt still in flight revokes its grant** (fail closed), and that dispatch then
+sends no create: `send_create`, given the store, refuses `GRANT_REVOKED` before each transport call
+when the attempt has a revocation receipt (the revocation stands). It revokes by the
 fingerprint the journal holds, else by the attempt; it resumes and settles any unsettled
 revocation receipt of the attempt whatever its revoker, and settles an unsettled journal. A failed
 revocation is `INFERENCE_REVOCATION_FAILED` with the record; a later call tries again under the

@@ -269,8 +269,9 @@ class PositiveControlTests(AdmissionFixture):
     def test_no_parameter_takes_a_caller_choice(self):
         self.assertEqual(list(inspect.signature(di.admit).parameters),
                          ['resolved', 'manifest', 'workspaces', 'read_profile', 'read_artifact'])
+        # integration_store (E-05.6): where the send reads whether the attempt's grant was revoked; not a choice
         self.assertEqual(list(inspect.signature(di.send_create).parameters),
-                         ['admitted', 'resolved', 'workspaces', 'transport'])
+                         ['admitted', 'resolved', 'workspaces', 'transport', 'integration_store'])
 
     def test_a_failed_create_is_never_retried_or_rerouted(self):
         self.transport = CountingTransport(fail=RuntimeError('422 from the server'))

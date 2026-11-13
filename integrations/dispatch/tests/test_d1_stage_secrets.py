@@ -44,6 +44,7 @@ import os
 import pickle
 import sqlite3
 import sys
+import threading
 import unittest
 from unittest import mock
 import uuid
@@ -945,7 +946,8 @@ class GrantJournal(SecretsFixture):
                 raise ic.ControlError('CONTROL_UNREACHABLE', '127.0.0.1: synthetic, before sending')
             answer = real(*args)
             if invalid:
-                raise ic.ControlError('CONTROL_ANSWER_INVALID', 'synthetic', fingerprint=answer['token_fingerprint'])
+                raise ic.ControlError('CONTROL_ANSWER_INVALID', 'synthetic', fingerprint=answer['token_fingerprint'],
+                                      conversation_id=answer['conversation_id'], attempt_id=answer['attempt_id'])
             raise ic.ControlError('CONTROL_UNREACHABLE', '127.0.0.1: TimeoutError (synthetic, after sending)')
         spy.issue = issue
         return spy
@@ -978,7 +980,7 @@ class GrantJournal(SecretsFixture):
             self.run_dispatch(cc.FakeAgentServer(), spy)
         revocation = caught.exception.context['inference_revocation']
         self.assertEqual((revocation['revoked'], revocation['outcome'], revocation['code']),
-                         (True, 'no grant', 'GRANT_UNKNOWN'))
+                         (True, di.NO_GRANT_TOMBSTONED, None))
         key = self.only(['failed']).operation_key
         state, detail = self.journal(store_mod.attempt_id_for(key))
         self.assertEqual((state, detail['issued']), ('failed', False))
@@ -1031,16 +1033,21 @@ class GrantJournal(SecretsFixture):
         self.assertRevoked(ic.token_fingerprint(spy.issued[0]))
 
     def test_the_broker_revokes_by_conversation_and_attempt(self):
-        """The control listener's new selector (E-05.6): the attempt's one grant; GRANT_UNKNOWN for none, for
-        another conversation, and GRANT_ALREADY_REVOKED once revoked; a mixed body stays CONTROL_BODY_INVALID."""
+        """The control listener's selector (E-05.6) over the wire: the attempt's one grant; a tombstone when it holds
+        none, after which the attempt's issue is GRANT_ATTEMPT_REVOKED; GRANT_UNKNOWN for another conversation's
+        grant; GRANT_ALREADY_REVOKED once revoked; a mixed body stays CONTROL_BODY_INVALID."""
         control = self.control()
         conversation, attempt = str(uuid.uuid4()), str(uuid.uuid4())
         answer = control.issue(conversation, attempt, 'anthropic-messages', [d1.TEST_MODEL], 1, 1, 60)
-        for args, code in (((str(uuid.uuid4()), attempt), 'GRANT_UNKNOWN'), ((conversation, str(uuid.uuid4())),
-                                                                            'GRANT_UNKNOWN')):
-            with self.assertRaises(ic.ControlError) as caught:
-                control.revoke_attempt(*args, 'attempt end', REVOKER)
-            self.assertEqual(caught.exception.code, code)
+        with self.assertRaises(ic.ControlError) as caught:
+            control.revoke_attempt(str(uuid.uuid4()), attempt, 'attempt end', REVOKER)
+        self.assertEqual(caught.exception.code, 'GRANT_UNKNOWN')
+        other = str(uuid.uuid4())
+        tombstone = control.revoke_attempt(conversation, other, 'attempt end', REVOKER)
+        self.assertEqual((tombstone['state'], tombstone['attempt_id']), ('tombstoned', other))
+        with self.assertRaises(ic.ControlError) as caught:
+            control.issue(conversation, other, 'anthropic-messages', [d1.TEST_MODEL], 1, 1, 60)
+        self.assertEqual(caught.exception.code, 'GRANT_ATTEMPT_REVOKED')
         revoked = control.revoke_attempt(conversation, attempt, 'attempt end', REVOKER)
         self.assertEqual((revoked['state'], revoked['token_fingerprint']), ('revoked', answer['token_fingerprint']))
         with self.assertRaises(ic.ControlError) as caught:
@@ -1055,6 +1062,140 @@ class GrantJournal(SecretsFixture):
         with self.assertRaises(ic.ControlError) as caught:
             control.revoke_attempt('not-a-uuid', attempt, 'attempt end', REVOKER)
         self.assertEqual(caught.exception.code, 'CONVERSATION_ID_INVALID')
+
+    def test_an_issue_held_in_the_broker_past_the_client_s_timeout_never_leaves_a_live_grant(self):
+        """Review A (probe P6): the issue request reaches the broker, which is held writing its receipt (a hook in
+        the in-process broker) while the client gives up (CONTROL_UNREACHABLE). The dispatcher's revocation by
+        attempt then contends for the broker's attempt lock; released, the issue registers its grant, and the
+        revocation finds and revokes it. And the other order: a revocation by attempt that finds nothing
+        tombstones the attempt, and the late issue is refused (GRANT_ATTEMPT_REVOKED). No live grant either way."""
+        for order in ('issue registers first', 'revocation first'):
+            with self.subTest(order):
+                broker = self.rig().broker
+                entered, release = threading.Event(), threading.Event()
+                real_record = broker.journal.record
+                late = []
+
+                def held_record(key, intent, detail, *, conflict):
+                    if intent.get('format') == S.IB.GRANT_FORMAT and order == 'issue registers first':
+                        entered.set()
+                        release.wait(30)   # held until the revocation contends for the attempt lock
+                    return real_record(key, intent, detail, conflict=conflict)
+                spy = self.spy()
+
+                def timed_out(*args):
+                    spy.events.append('issue')
+                    if order == 'issue registers first':
+                        worker = threading.Thread(target=lambda: late.append(self.control().issue(*args)))
+                        worker.start()
+                        self.assertTrue(entered.wait(30))
+                        late.append(worker)
+                    else:
+                        late.append(list(args))   # the request is still on its way; the broker sees it later
+                    raise ic.ControlError('CONTROL_UNREACHABLE', '127.0.0.1: TimeoutError (synthetic)')
+                spy.issue = timed_out
+                lock = broker._attempt_lock
+                with mock.patch.object(broker.journal, 'record', held_record), \
+                        mock.patch.object(broker, '_attempt_lock', _Contended(lock, release.set)):
+                    with self.assertRaises(di.DispatchRefused) as caught:
+                        self.run_dispatch(cc.FakeAgentServer(), spy)
+                    if order == 'issue registers first':
+                        late[0].join(30)
+                        answer = late[1]
+                    else:
+                        with self.assertRaises(ic.ControlError) as refused:
+                            self.control().issue(*late[0])   # the late issue arrives after the tombstone
+                        self.assertEqual(refused.exception.code, 'GRANT_ATTEMPT_REVOKED')
+                revocation = caught.exception.context['inference_revocation']
+                key = max(self.typed(['failed']),
+                          key=lambda r: self.store.attempt_identity(r.operation_key).identity.ordinal).operation_key
+                state, detail = self.journal(store_mod.attempt_id_for(key))
+                if order == 'issue registers first':
+                    self.assertEqual((revocation['outcome'], revocation['tokenFingerprint']),
+                                     ('revoked', answer['token_fingerprint']))
+                    self.assertRevoked(answer['token_fingerprint'])
+                    self.assertEqual((state, detail['issued']), ('confirmed', True))
+                else:
+                    self.assertEqual((revocation['outcome'], revocation['revoked']), (di.NO_GRANT_TOMBSTONED, True))
+                    self.assertEqual((state, detail['issued'], detail['settledBy']),
+                                     ('failed', False, di.NO_GRANT_TOMBSTONED))
+                    # end_attempt need not call again: the recorded outcome stands
+                    calls = self.spy()
+                    self.assertEqual(di.end_attempt(self.store, key, inference=self.access_for(calls),
+                                                    actor='e-05.6-test'), revocation)
+                    self.assertEqual(calls.revoked, [])
+                self.assertEqual(self.control().status()['grants']['live'], 0)
+
+    def test_a_wrong_answer_s_fingerprint_of_another_attempt_is_never_revoked(self):
+        """Review B (probe P7): an invalid answer names another attempt's grant; it is not revoked or journaled, and
+        when the attempt's selector fails the outcome is failed (the attempt's selector decides)."""
+        spy = self.spy()
+        real = spy.issue
+        other = {}
+
+        def invalid(*args):
+            real(*args)   # ours is issued
+            answer = self.control().issue(str(uuid.uuid4()), str(uuid.uuid4()), 'anthropic-messages',
+                                          [d1.TEST_MODEL], 1, 1, 600)
+            other.update(answer)
+            raise ic.ControlError('CONTROL_ANSWER_INVALID', 'synthetic', fingerprint=answer['token_fingerprint'],
+                                  conversation_id=answer['conversation_id'], attempt_id=answer['attempt_id'])
+
+        def unreachable(*args):
+            spy.revoked.append(args)
+            raise ic.ControlError('CONTROL_UNREACHABLE', 'synthetic')
+        spy.issue, spy.revoke_attempt = invalid, unreachable
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_dispatch(cc.FakeAgentServer(), spy)
+        revocation = caught.exception.context['inference_revocation']
+        self.assertEqual((revocation['revoked'], revocation['outcome'], revocation['selectors']),
+                         (False, 'failed', ['attempt']))
+        self.assertEqual(self.grant_state(other['token_fingerprint'])['state'], 'live')   # never another's
+        self.assertNotIn(other['token_fingerprint'], self.store.canonical_dump().decode('utf-8'))
+        ours = ic.token_fingerprint(spy.issued[0])
+        self.assertEqual(self.grant_state(ours)['state'], 'live')
+        key = self.only(['failed']).operation_key
+        record = di.end_attempt(self.store, key, inference=self.access_for(self.spy()), actor='e-05.6-test')
+        self.assertEqual((record['revoked'], record['tokenFingerprint']), (True, ours))
+        self.assertRevoked(ours)
+        self.assertEqual(self.grant_state(other['token_fingerprint'])['state'], 'live')
+
+    def test_an_attempt_ended_in_flight_sends_no_create(self):
+        """Review C (probe P8): end_attempt runs while the dispatch is in flight (before the workspace): the send
+        refuses GRANT_REVOKED before any transport call, and the revocation stands."""
+        spy = self.spy()
+        real = di.create_workspace
+        seen = {}
+
+        def ending_first(admitted, **kwargs):
+            seen['end'] = di.end_attempt(self.store, admitted.operation_key, inference=self.access_for(self.spy()),
+                                         actor='e-05.6-test')
+            return real(admitted, **kwargs)
+        server = cc.FakeAgentServer()
+        with mock.patch.object(di, 'create_workspace', ending_first), self.assertRaises(di.DispatchRefused) as caught:
+            self.run_dispatch(server, spy)
+        self.assertEqual((caught.exception.code, server.calls), ('GRANT_REVOKED', []))
+        fingerprint = ic.token_fingerprint(spy.issued[0])
+        self.assertTrue(seen['end']['revoked'])
+        self.assertRevoked(fingerprint)
+        self.assertEqual(self.only(['failed']).state, 'failed')
+        self.assertTrue(caught.exception.context['inference_revocation']['revoked'])
+
+
+class _Contended:
+    """The broker's attempt lock, observed: ON_CONTENDED runs when an acquirer finds it held (then it waits)."""
+
+    def __init__(self, lock, on_contended):
+        self.lock, self.on_contended = lock, on_contended
+
+    def __enter__(self):
+        if not self.lock.acquire(blocking=False):
+            self.on_contended()
+            self.lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.lock.release()
 
 
 class Custody(SecretsFixture):

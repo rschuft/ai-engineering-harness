@@ -262,6 +262,8 @@ REFUSALS = {
                                  'characters)',
     'SECRET_NOT_FROM_GRANT': 'the admitted create\'s token secret is not the slot the held grant\'s token fills at '
                              'the send: a token value in the admitted body is never sent',
+    'GRANT_REVOKED': 'the attempt\'s inference grant is revoked, or its revocation began, while the dispatch was '
+                     'in flight (end_attempt ran): the create is not sent',
     'INFERENCE_REVOCATION_FAILED': 'the attempt\'s inference grant was not revoked (the broker refused or did not '
                                    'answer): it stays live until revoked or expired; end_attempt tries again',
 }
@@ -1045,6 +1047,8 @@ REVOCATION_TRIGGER = 'attempt end'     # decision 0007 point 5 (the broker's TRI
 REVOCATION_KEY = 'dispatch/attempt/{attempt_id}/inference-revocation/{n}'
 GRANT_JOURNAL_FORMAT = 'ai-engineering-harness/dispatch/inference-grant-journal/v1'
 GRANT_JOURNAL_KEY = 'dispatch/attempt/{attempt_id}/inference-grant'
+# A revocation by attempt that found no grant: the broker tombstoned the attempt, so none is registered after it.
+NO_GRANT_TOMBSTONED = 'no grant; attempt tombstoned'
 CODE_RE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 ARTIFACT_PATH_RE = re.compile(r'profiles/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+')
 GUEST_PATH_RE = re.compile(r'(?:/[A-Za-z0-9._-]+)+')
@@ -1866,8 +1870,19 @@ def admit_secrets(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspa
     return with_secrets
 
 
+def _check_grant_unrevoked(integration_store, admitted: AdmittedCreate) -> None:
+    """GRANT_REVOKED when INTEGRATION_STORE holds a revocation receipt of the admitted create's attempt (E-05.6:
+    end_attempt ran, or began, while the dispatch was in flight): the create is not sent with that grant."""
+    if integration_store is None or admitted.inference is None:
+        return
+    attempt_id = store.attempt_id_for(admitted.operation_key)
+    if _revocation_receipts(integration_store, attempt_id):
+        raise DispatchRefused('GRANT_REVOKED', f'the inference grant of attempt {attempt_id} is revoked, or its '
+                              'revocation began, while the dispatch was in flight')
+
+
 def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspaces,
-                transport: Callable[[str, str, dict | None], object]):
+                transport: Callable[[str, str, dict | None], object], integration_store=None):
     """Validate the admitted create again, against the policy the attempt was reserved under
     (``resolved``, the record ``reserve_attempt`` stored), immediately before the transport; then,
     through an ``AgentServerClient`` on the pinned route allowlist, read ``GET /server_info`` and
@@ -1879,7 +1894,8 @@ def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspace
     For the D1 stage (E-05.6) the body checked and sent is the admitted one with the grant's token in the
     token secret's place, built in memory here: the secrets block is checked again by the shared check, the
     token bound to the admitted grant and the grant to this reserved conversation and attempt. A D1 create
-    without its secrets block or its grant is refused."""
+    without its secrets block or its grant is refused. Given the INTEGRATION_STORE (``dispatch`` gives it), a
+    create whose attempt's grant has a revocation receipt is GRANT_REVOKED, checked before each transport call."""
     if not isinstance(admitted, AdmittedCreate):
         raise TypeError('admitted must be AdmittedCreate (admit)')
     if not isinstance(resolved, ResolvedInputs):
@@ -1887,6 +1903,7 @@ def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspace
     admission = _resolved_admission(resolved)
     body = _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces)
     client = AgentServerClient(admitted.routes_bytes, transport, routes_sha256=admission['routes']['sha256'])
+    _check_grant_unrevoked(integration_store, admitted)
     try:
         info = client.call(SERVER_INFO_ROUTE['method'], SERVER_INFO_ROUTE['path'])
     except DispatchRefused:
@@ -1895,6 +1912,7 @@ def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspace
         raise DispatchRefused('SERVER_PRECONDITION_FAILED', f'GET /server_info was not answered: '
                               f'{type(exc).__name__}', failed=list(PRECONDITIONS), observed=None) from None
     server_preconditions(info, client.version)
+    _check_grant_unrevoked(integration_store, admitted)
     return client.call(admitted.method, admitted.path, body=body)
 
 
@@ -2245,6 +2263,8 @@ def _revoke(inference: InferenceAccess, selectors: list, conversation_id: str, a
     attempt's selector, nothing was issued or the grant ended with the broker). The last selector, when it is the
     attempt's, settles the outcome. Never raises: a failure is ``revoked`` false and its code, for the caller to
     record and surface."""
+    # (the docstring's GRANT_UNKNOWN for the attempt's selector: a grant ended with an earlier run of the broker; a
+    # broker that found none now answers with a tombstone, NO_GRANT_TOMBSTONED, after which it registers none)
     record = {'format': REVOCATION_FORMAT, 'tokenFingerprint': None, 'attemptId': attempt_id,
               'conversationId': conversation_id, 'selectors': [fp if kind == 'fingerprint' else 'attempt'
                                                                for kind, fp in selectors],
@@ -2266,15 +2286,22 @@ def _revoke(inference: InferenceAccess, selectors: list, conversation_id: str, a
                 record['tokenFingerprint'] = fingerprint
             continue
         named = answer.get('token_fingerprint') if isinstance(answer, Mapping) else None
-        revoked = isinstance(answer, Mapping) and answer.get('state') == 'revoked' \
-            and (kind == 'attempt' or named == fingerprint)
+        state = answer.get('state') if isinstance(answer, Mapping) else None
+        if kind == 'attempt' and state == 'tombstoned' and answer.get('attempt_id') == attempt_id \
+                and answer.get('conversation_id') == conversation_id:
+            outcomes.append((NO_GRANT_TOMBSTONED, None))   # none was registered, and none ever will be
+            continue
+        revoked = state == 'revoked' and (kind == 'attempt' or named == fingerprint)
         outcomes.append(('revoked', None) if revoked else ('failed', 'REVOCATION_UNCONFIRMED'))
-        if isinstance(named, str):
+        if revoked and isinstance(named, str):
             record['tokenFingerprint'] = named
-    if any(outcome == 'revoked' for outcome, _ in outcomes):
-        outcome, code = 'revoked', None
-    elif selectors and selectors[-1][0] == 'attempt':
+    if selectors and selectors[-1][0] == 'attempt':
+        # the attempt's selector decides (the broker holds at most one grant per attempt)
         outcome, code = outcomes[-1]
+        if outcome == 'already revoked' and any(o == 'revoked' for o, _ in outcomes[:-1]):
+            outcome, code = 'revoked', None
+    elif any(outcome == 'revoked' for outcome, _ in outcomes):
+        outcome, code = 'revoked', None
     else:
         outcome, code = next(((o, c) for o, c in outcomes if o == 'failed'), outcomes[-1])
     return {**record, 'outcome': outcome, 'revoked': outcome != 'failed', 'code': code}
@@ -2369,7 +2396,12 @@ class _GrantCustody:
         except Exception as exc:  # fail closed: whatever the control call raises, nothing is admitted
             code = _code_of(exc)
             named = getattr(exc, 'fingerprint', None)
-            if isinstance(named, str) and secrets_check.broker().FINGERPRINT_SHAPE.fullmatch(named):
+            # a fingerprint an invalid answer named is revoked (and journaled) only when that answer named this
+            # conversation and attempt: never another attempt's grant on a wrong answer (the attempt's selector
+            # covers this attempt's grant in any case)
+            if isinstance(named, str) and secrets_check.broker().FINGERPRINT_SHAPE.fullmatch(named) \
+                    and getattr(exc, 'attempt_id', None) == self.attempt_id \
+                    and getattr(exc, 'conversation_id', None) == store.conversation_id_for(self.key):
                 self.named.append(named)
             if getattr(exc, 'broker_code', False) is True and code != 'ATTEMPT_HAS_GRANT':
                 self.uncertain = False   # the broker refused the issue: nothing was issued
@@ -2425,7 +2457,7 @@ def _settle_journal(integration_store, journal_key: str, revocation: dict, actor
         held = integration_store.get(journal_key)
         if held is None or held.state not in ('reserved', 'dispatched') or not revocation['revoked']:
             return
-        issued = revocation['outcome'] != 'no grant'
+        issued = revocation['outcome'] not in ('no grant', NO_GRANT_TOMBSTONED)
         _settle(integration_store, journal_key, held.state, issued, actor, 'settled by revocation',
                 {'format': GRANT_JOURNAL_FORMAT, 'issued': issued, 'tokenFingerprint': revocation['tokenFingerprint'],
                  'settledBy': revocation['outcome']})
@@ -2494,7 +2526,8 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
             dispatched['inferenceGrant'] = grant.record()
         _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create', dispatched)
         try:
-            answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport)
+            answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport,
+                                 integration_store=integration_store)
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
                   _refusal_detail(custody.ended(refusal), create_sent=False))
