@@ -11,7 +11,11 @@ the model provider's key. It serves two listeners, both bound to 127.0.0.1 only:
   in the integration store (operation key inference/attempt/<attempt id>/grant, format aieh-inference-grant/1).
   Revocation is immediate (the next request answers 401) and leaves a receipt with the per-attempt summary
   (inference/attempt/<attempt id>/revocation, format aieh-inference-revocation/1): fingerprint, attempt,
-  trigger, revoker, requests, usage, refusals. Never the effects store.
+  trigger, revoker, requests, usage, refusals. Never the effects store. A grant is revoked by its fingerprint,
+  or (E-05.6) by its conversation and attempt; one that finds no grant leaves a tombstone under the same key
+  inference/attempt/<attempt id>/grant (format aieh-inference-attempt-tombstone/1), after which that attempt's
+  issue is refused (GRANT_ATTEMPT_REVOKED); per attempt, an issue's receipt and registration and such a
+  revocation's lookup and tombstone run one at a time.
 - the inference listener (the only forward target): a request is admitted only with a valid, unrevoked,
   unexpired token in its family's auth header, a method and path in that family's declared route set, a
   `model` in both the token's list and the family's allowlist, and budget left. It is then passed through
@@ -1212,6 +1216,43 @@ def _uuid(value, code: str, what: str) -> str:
     raise InferenceError(code, f'{what} is not a canonical lower-case UUID')
 
 
+class _AttemptLock:
+    """One attempt id's lock out of the broker's registry: the entry is made on first use (by the broker's
+    _attempt_lock_factory) and removed when its last user leaves. The registry's guard is held only to find or
+    drop the entry, never while the attempt's lock is acquired."""
+
+    def __init__(self, broker: 'Broker', attempt: str):
+        self.broker, self.attempt, self.entry = broker, attempt, None
+
+    def __enter__(self):
+        broker = self.broker
+        with broker._attempt_locks_guard:
+            entry = broker._attempt_locks.get(self.attempt)
+            if entry is None:
+                entry = broker._attempt_locks[self.attempt] = [broker._attempt_lock_factory(), 0]
+            entry[1] += 1
+        try:
+            entry[0].__enter__()
+        except BaseException:
+            self._leave(entry)
+            raise
+        self.entry = entry
+        return self
+
+    def __exit__(self, *exc):
+        entry, self.entry = self.entry, None
+        try:
+            entry[0].__exit__(*exc)
+        finally:
+            self._leave(entry)
+
+    def _leave(self, entry) -> None:
+        with self.broker._attempt_locks_guard:
+            entry[1] -= 1
+            if entry[1] == 0 and self.broker._attempt_locks.get(self.attempt) is entry:
+                del self.broker._attempt_locks[self.attempt]
+
+
 class Broker:
     """The broker's state and decisions (socket-free: issue, revoke, admit, status) and its two listeners
     (start, stop). provider_key is the loaded key (None: no entry). connect stands in for connect_upstream in
@@ -1230,9 +1271,14 @@ class Broker:
         if provider_key is not None:
             guard.hold(provider_key.key)
         self._lock = threading.RLock()
-        # E-05.6: an issue's grant receipt and registration, and a revocation by attempt's lookup and tombstone,
-        # happen one at a time (never under _lock across a store write, so inference is not held up)
-        self._attempt_lock = threading.Lock()
+        # E-05.6: per attempt, an issue's grant receipt and registration, and a revocation by attempt's lookup and
+        # tombstone, happen one at a time (_attempt_lock). One lock per attempt id, in a registry held only briefly
+        # and emptied as each attempt's last user leaves, so no attempt waits behind another's store write. Lock
+        # order: an attempt's lock before _lock, never the reverse; the registry's guard is never held while
+        # acquiring another lock. _attempt_lock_factory makes each attempt's lock (a test may observe it).
+        self._attempt_locks: dict[str, list] = {}   # attempt id -> [lock, users]
+        self._attempt_locks_guard = threading.Lock()
+        self._attempt_lock_factory = threading.Lock
         self._grants: dict[str, Grant] = {}     # sha256 digest of the token -> grant
         self._by_fingerprint: dict[str, Grant] = {}
         self._servers: list = []
@@ -1300,7 +1346,7 @@ class Broker:
         # grant receipt after a tombstone (E-05.6). The receipt and the registration happen under the attempt lock,
         # which a revocation by attempt takes too: whichever comes first, no grant is live after that revocation.
         key = f'inference/attempt/{attempt}/grant'
-        with self._attempt_lock:
+        with self._attempt_lock(attempt):
             try:
                 receipt = self.journal.record(key, intent, {'state': 'live'}, conflict='ATTEMPT_HAS_GRANT')
             except InferenceError as exc:
@@ -1331,7 +1377,7 @@ class Broker:
         if by_attempt:
             conversation = _uuid(body['conversation_id'], 'CONVERSATION_ID_INVALID', 'conversation_id')
             attempt = _uuid(body['attempt_id'], 'ATTEMPT_ID_INVALID', 'attempt_id')
-            with self._attempt_lock:   # an issue of this attempt is either registered already or refused after
+            with self._attempt_lock(attempt):   # an issue of this attempt: registered already, or refused after
                 with self._lock:
                     grant = next((g for g in self._grants.values()
                                   if g.attempt_id == attempt and g.conversation_id == conversation), None)
@@ -1348,6 +1394,10 @@ class Broker:
                 self._revoke_held(grant, trigger, revoker)
         self._write_revocation(grant)
         return {'format': REVOCATION_FORMAT, **grant.describe()}
+
+    def _attempt_lock(self, attempt: str) -> '_AttemptLock':
+        """The lock of one attempt id (a context manager; see __init__)."""
+        return _AttemptLock(self, attempt)
 
     def _revoke_held(self, grant: Grant, trigger: str, revoker: str) -> None:
         """Under the lock: GRANT_ALREADY_REVOKED, or the grant marked revoked."""

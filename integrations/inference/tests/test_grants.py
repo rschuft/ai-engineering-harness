@@ -683,7 +683,7 @@ class TestRevocationByAttempt(unittest.TestCase):
             contended.set()
             release.set()   # the revocation is waiting on the lock: let the issue finish
         broker.journal.record = held_record
-        broker._attempt_lock = GateLock(on_contended)
+        broker._attempt_lock_factory = lambda: GateLock(on_contended)
         issued = []
         worker = threading.Thread(target=lambda: issued.append(broker.issue(self.body(conversation, attempt))))
         worker.start()
@@ -709,7 +709,7 @@ class TestRevocationByAttempt(unittest.TestCase):
                 self.assertTrue(release.wait(30), 'the issue never contended for the attempt lock')
             return real_record(key, intent, detail, conflict=conflict)
         broker.journal.record = held_record
-        broker._attempt_lock = GateLock(release.set)
+        broker._attempt_lock_factory = lambda: GateLock(release.set)
         answers = []
         worker = threading.Thread(target=lambda: answers.append(broker.revoke(
             {'conversation_id': conversation, 'attempt_id': attempt, **self.REVOKE})))
@@ -719,6 +719,36 @@ class TestRevocationByAttempt(unittest.TestCase):
         worker.join(30)
         self.assertEqual(answers[0]['state'], 'tombstoned')
         self.assertEqual(broker.status()['grants']['live'], 0)
+
+    def test_the_lock_is_per_attempt(self):
+        """N1: while attempt X's issue holds X's lock (its receipt write held), a revocation by attempt of Y
+        completes; X then registers. The registry keeps no lock once its attempt's last user has left."""
+        broker = self.rig.broker
+        x, y = (S.new_id(), S.new_id()), (S.new_id(), S.new_id())
+        entered, release = threading.Event(), threading.Event()
+        real_record = broker.journal.record
+
+        def held_record(key, intent, detail, *, conflict):
+            if intent.get('format') == IB.GRANT_FORMAT and intent.get('attempt_id') == x[1]:
+                entered.set()
+                release.wait(30)
+            return real_record(key, intent, detail, conflict=conflict)
+        broker.journal.record = held_record
+        issued = []
+        worker = threading.Thread(target=lambda: issued.append(broker.issue(self.body(*x))))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(30))
+            self.assertEqual(list(broker._attempt_locks), [x[1]])
+            answer = broker.revoke({'conversation_id': y[0], 'attempt_id': y[1], **self.REVOKE})
+            self.assertEqual(answer['state'], 'tombstoned')      # Y did not wait behind X's held write
+            self.assertFalse(release.is_set())
+            self.assertEqual(issued, [])                          # X is still held
+        finally:
+            release.set()
+            worker.join(30)
+        self.assertEqual(broker.grant_status(issued[0]['token_fingerprint'])['state'], 'live')
+        self.assertEqual(broker._attempt_locks, {})
 
     def test_a_grant_of_another_conversation_or_an_earlier_run_is_grant_unknown(self):
         conversation, attempt = S.new_id(), S.new_id()

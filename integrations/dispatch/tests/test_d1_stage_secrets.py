@@ -1094,9 +1094,9 @@ class GrantJournal(SecretsFixture):
                         late.append(list(args))   # the request is still on its way; the broker sees it later
                     raise ic.ControlError('CONTROL_UNREACHABLE', '127.0.0.1: TimeoutError (synthetic)')
                 spy.issue = timed_out
-                lock = broker._attempt_lock
                 with mock.patch.object(broker.journal, 'record', held_record), \
-                        mock.patch.object(broker, '_attempt_lock', _Contended(lock, release.set)):
+                        mock.patch.object(broker, '_attempt_lock_factory',
+                                          lambda: _Contended(threading.Lock(), release.set)):
                     with self.assertRaises(di.DispatchRefused) as caught:
                         self.run_dispatch(cc.FakeAgentServer(), spy)
                     if order == 'issue registers first':
