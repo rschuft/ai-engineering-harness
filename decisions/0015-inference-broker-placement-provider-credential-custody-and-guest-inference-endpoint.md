@@ -156,3 +156,20 @@ needed, is presented before adoption; no runtime `npx` fallback).
 - The field names of the 1.60.1 create request's LLM settings and whether the Agent Server persists the LLM `api_key` encrypted or in clear in the conversation record (`openapi.json` and the SDK source are not in the checkout); the exact request paths and headers litellm 1.105.1 uses per provider family; whether the pinned create request admits a container environment.
 - OpenSSH `PermitListen`/`GatewayPorts clientspecified` and the Windows client's `-R` behaviour (documented; not exercised); a remote-forward listener bound to docker0's address across a dockerd restart; Moby's `bip` and `dns` daemon options in this guest (documented; not exercised).
 - The 1.105.7 wheel's source lines (not installed in the checkout; the managed root was out of this invocation's scope).
+
+## Current facts (2026-11-13)
+
+Recorded by the engineering manager at S-03.5's completion ([decision 0021](0021-provider-envelope-model-selection-and-broker-enforced-cap.md), Accepted). The text above is unchanged.
+
+1. The broker's real-provider start is bound to the Owner's authorization: `serve` refuses, before it reads the provider
+   key or opens a listener, any family whose upstream is not a loopback IP literal unless the integration store holds
+   the governing, confirmed, unexpired authorization recorder receipt of operation kind `provider-envelope` whose target
+   is the canonical digest of the live envelope (the provider, the one origin, the spending limit and its enforcement,
+   the expiry, the model selection). The one upstream origin of section 5.1 is thereby bound at start, not only
+   configured.
+2. Models: only the identifiers of the envelope, or of a delegated selection (decision 0018 point 3, decided by the
+   engineering manager, naming the governing receipt), are admitted at start, at issuance and per request.
+3. Section 6.3 stands: the broker enforces counts and token budgets, not prices. Where the envelope says the provider
+   does not enforce the limit (`enforced_by: broker`), the broker enforces a cumulative cap in usage tokens and closes
+   the envelope when it is reached or when usage is unknown.
+4. Nothing here authorizes a key, an envelope, a cap, egress or a model call: those stay the Owner's (OA-12).

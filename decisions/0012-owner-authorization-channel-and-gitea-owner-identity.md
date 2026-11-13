@@ -171,3 +171,7 @@ Recorded by the engineering manager at P-04.3's completion ([decision 0020](0020
 1. The shared Owner decision record (`owner-decision/v1`) has four kinds: `accept-objective`, `authorize-operation`, and, from P-04.3, `accept-design` and `promote-manifest`.
 2. The recorder's state also holds the challenges and Owner decision copies of the two new kinds (`<state>/owner-authorization/dispatch-inputs/`), and the integration store their receipts (`dispatch-inputs/v1/...`). Their commands (`integrations/owner/input_recorder.py`) are a module of their own: they import no Gitea or credential code, so the merge path is exactly as qualified.
 3. Point 9 ("run only in the main session on an Owner decision") governs every Owner-kind record of these commands. A decision delegated by decision 0018 point 3 is a `delegated-decision/v1` record, never an Owner decision; it is kept apart (`<state>/delegated-decisions/`) and is never shown as the Owner's.
+
+4. (S-03.5) The inference broker is the first consumer of `authorize-operation` receipts outside the recorder: at its
+   start it reads the governing receipt of operation kind `provider-envelope` from the integration store ([decision 0021](0021-provider-envelope-model-selection-and-broker-enforced-cap.md),
+   Accepted). The recorder, its merge path and its receipt format are unchanged.

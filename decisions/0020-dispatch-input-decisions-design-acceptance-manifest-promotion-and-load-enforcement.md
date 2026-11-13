@@ -229,3 +229,13 @@ checks and what is not verified. The code: `integrations/owner/owner_decision.py
 
 Anything live: the managed data root and its integration store, a real Owner decision, a real standing
 authorization, the live driver (E-01.3.2) and Task. Linux and macOS.
+
+## Current facts (2026-11-13)
+
+Recorded by the engineering manager at S-03.5's completion ([decision 0021](0021-provider-envelope-model-selection-and-broker-enforced-cap.md), Accepted). The numbered points are unchanged.
+
+1. The delegation table has a third row: `select-models`, decision 0018 point 3, decided by `agent:engineering-manager`
+   only, with the basis type `envelope-receipt` (the governing provider-envelope receipt of the authorization recorder).
+   `delegated-decision/v1`'s fields did not change, as point 2 foresaw.
+2. `read_authority` takes the integration store (`store=`) for a basis type that needs it; without a store such a type
+   refuses (`AUTHORITY_UNAVAILABLE`), never passes.
