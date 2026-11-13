@@ -221,6 +221,9 @@ CODES = {
                                               '(selection_recorder.py delegate)'),
     'MODEL_NOT_SELECTED': (403, 'use only a model the held selection selects; configure no other model for a '
                                 'family whose upstream is not loopback'),
+    'BROKER_STOPPING': (503, 'the broker is stopping and its run of the envelope is closed: start the broker again '
+                             '(a request admitted before the stop leaves the envelope closed until a new '
+                             'authorization)'),
     'ENVELOPE_CAP_REACHED': (429, 'the cumulative usage under the envelope\'s cap has reached it: the envelope is '
                                   'closed for good; have the Owner authorize a new envelope'),
     'ENVELOPE_USAGE_UNKNOWN': (429, 'the cumulative usage under the envelope\'s cap cannot be established (an answer '
@@ -840,6 +843,7 @@ class Meter:
     unknown: int = 0
     in_flight: int = 0
     opened: dict | None = None   # the run receipt, once written
+    stopping: bool = False       # set by the broker's stop, under its lock, before the close counts are read
 
     def describe(self) -> dict:
         return {'cap': self.cap, 'carried': self.carried, 'run': self.run, 'usage': self.usage,
@@ -1406,6 +1410,9 @@ class Broker:
                                grant)
         meter = self.meter
         if meter is not None:
+            if meter.stopping:
+                raise self._refuse('BROKER_STOPPING', 'the broker is stopping: its run of the envelope is closed',
+                                   grant)
             if meter.unknown:
                 raise self._refuse('ENVELOPE_USAGE_UNKNOWN', f'{meter.unknown} answer(s) of this run have unknown '
                                                              'usage: the envelope is closed', grant)
@@ -1772,7 +1779,13 @@ class Broker:
         if self._stopped:
             return
         self._stopped = True
-        stoppers = [threading.Thread(target=server.shutdown) for server in self._servers]
+        if self.meter is not None:
+            with self._lock:
+                # From here no request of a metered family is admitted (BROKER_STOPPING), before anything of it is
+                # written upstream: the close receipt's counts are then the run's whole usage, and a request
+                # admitted before is counted in flight (the next start refuses ENVELOPE_USAGE_UNKNOWN).
+                self.meter.stopping = True
+        stoppers =[threading.Thread(target=server.shutdown) for server in self._servers]
         for stopper in stoppers:
             stopper.start()
         for stopper in stoppers:

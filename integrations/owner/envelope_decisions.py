@@ -329,8 +329,21 @@ def stored_selection(decision):
     delegation = record.get('delegation')
     if isinstance(delegation, dict):
         record['delegation'] = delegation = _ordered(delegation, G.DELEGATION_FIELDS)
-        delegation['basis'] = _ordered(delegation.get('basis'), G.RECEIPT_FIELDS)
+        basis = delegation.get('basis')
+        delegation['basis'] = _ordered(basis, G.RECEIPT_FIELDS if isinstance(basis, dict) and 'receipt' in basis
+                                       else G.QUOTE_FIELDS)
     subject = record.get('subject')
+    kind = record.get('kind')
+    if kind != SELECTION_KIND:
+        # another kind (a record the head may hold by mistake or by hand): its own field order, so that the
+        # kind, not the order, is what refuses it
+        if isinstance(subject, dict) and kind in D.SUBJECT_FIELDS:
+            record['subject'] = subject = _ordered(subject, D.SUBJECT_FIELDS[kind])
+            if isinstance(subject.get('previous'), dict):
+                subject['previous'] = _ordered(subject['previous'], D.PREVIOUS_FIELDS)
+            if isinstance(subject.get('designs'), list):
+                subject['designs'] = [_ordered(b, D.DESIGN_BINDING_FIELDS) for b in subject['designs']]
+        return record
     if isinstance(subject, dict):
         record['subject'] = subject = _ordered(subject, G.SELECTION_FIELDS)
         subject['verified'] = _ordered(subject.get('verified'), G.VERIFIED_FIELDS)
@@ -372,7 +385,8 @@ def verify_selection(store, receipt):
         else [f'the decision is not a {G.FORMAT} record']
     if not problems and decision['kind'] != SELECTION_KIND:
         problems = [f'kind must be {SELECTION_KIND}']
-    if not problems and decision['delegation']['basis']['receipt'] != intent['receipt']:
+    basis = decision.get('delegation', {}).get('basis') if isinstance(decision, dict) else None
+    if not problems and (not isinstance(basis, dict) or basis.get('receipt') != intent['receipt']):
         problems = ['the decision\'s basis is not the receipt its receipt names']
     if problems:
         return _refused('MODEL_SELECTION_NOT_AUTHORIZED', f'{head.key}: {problems[0]}')

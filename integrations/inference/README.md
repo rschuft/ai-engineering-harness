@@ -178,7 +178,13 @@ on another envelope receipt (a selection does not carry to a new envelope) is `M
 Under either authority a configured model of a bound family that the selection does not select is
 `MODEL_NOT_SELECTED` (the configuration may not widen it), and none left is `MODEL_SELECTION_MISSING`. The held
 selection is the configured models; `issue` and admission refuse any other model of a bound family
-(`MODEL_NOT_SELECTED`, 403), after the existing checks. With `enforced_by: broker`, the cap's ledger (below)
+(`MODEL_NOT_SELECTED`, 403), after the existing checks. The per-request check reads the model where the
+admission reads it: the request body's top-level `model`, which is where the three declared families name it;
+a family that names its model elsewhere (a path segment, a header, a nested field) needs a check of its own
+before it is declared. A delegated selection is read from the series' **last confirmed** position only: an
+unsettled selection receipt (reserved or dispatched, a write that stopped) is never in force and has no file
+effect to resolve (the act writes only the store and a copy of the record), so it is harmless and is not
+waited for. With `enforced_by: broker`, the cap's ledger (below)
 is read last. A refused start exits 2, writes no receipt and no audit line (it may create an empty
 integration store where none exists).
 
@@ -206,9 +212,17 @@ request of a bound family adds:
 | the run receipt cannot be written or read back | the start fails; nothing is served |
 
 "Was anything written" is recorded when the request has been handed over, before its answer is read, and on a
-failure before the connection is closed (http.client clears its socket on close); a connection that was made is
-counted as written (a TLS handshake that fails after the TCP connection counts as unknown: conservative, never an
-undercount). **Fail closed, and stay closed:** the cap reached (carried plus this run at or above it) is
+failure before the connection is closed (http.client clears its socket on close, and when `getresponse`
+fails); a connection that was made is counted as written. Observed on CPython 3.12 on Windows: a TLS handshake
+that fails after the TCP connection leaves the socket set, so it counts as unknown (conservative, never an
+undercount), while a refused TCP connect leaves none and counts zero. So **one transient TLS or certificate
+failure closes a broker-enforced envelope until a new authorization.** **The stop:** the broker's own stop sets
+a stopping state under its lock before it reads the close receipt's counts; from then on a request of a metered
+family is refused `BROKER_STOPPING` (503) at admission, before anything of it is written upstream, and one
+admitted before is counted in flight, so the next start refuses `ENVELOPE_USAGE_UNKNOWN`. The close's counts are
+therefore the run's whole usage, and no window remains in which usage escapes the ledger. (After the stop the
+audit is closed, so such a refusal is not answered: the connection is closed instead.) **Fail closed, and stay
+closed:** the cap reached (carried plus this run at or above it) is
 `ENVELOPE_CAP_REACHED`, and an unknown answer is `ENVELOPE_USAGE_UNKNOWN`, for every further request of a bound
 family in that run (429, checked where the attempt budget is) and at every later start (exit 2). The only remedy is
 a new provider-envelope authorization, whose receipt starts a new ledger at zero (decision 0018 point 4.2: raising
@@ -492,7 +506,8 @@ The provider envelope (S-03.5; at start `serve` exits 2): `ENVELOPE_NOT_CONFIGUR
 `MODEL_SELECTION_NOT_AUTHORIZED`, `MODEL_SELECTION_RECEIPT_MISMATCH`; at start, in `issue` and at admission:
 `MODEL_NOT_SELECTED` (403);
 at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403),
-`ENVELOPE_CAP_REACHED`, `ENVELOPE_USAGE_UNKNOWN` (429).
+`ENVELOPE_CAP_REACHED`, `ENVELOPE_USAGE_UNKNOWN` (429); at admission after the broker's stop: `BROKER_STOPPING`
+(503).
 Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL_CONTENT_TYPE` (415),
 `CONTROL_BODY_INVALID` (400), `CONVERSATION_ID_INVALID`, `ATTEMPT_ID_INVALID`, `FAMILY_UNKNOWN`, `MODELS_INVALID`,
 `BUDGET_INVALID`, `TTL_INVALID`, `TRIGGER_UNKNOWN`, `REVOKER_INVALID` (400), `MODEL_NOT_ALLOWLISTED` (403),
@@ -534,4 +549,5 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
   a non-loopback origin (S-03.3's live step). The authorization recorder admits only the S-01.2.2 fixture
   repository today. A real model selection recorded on the managed store. The cumulative cap against a real
   provider: whether it bills an answer outside 2xx (the assumption above), whether it enforces a limit on a
-  dedicated key, and http.client's socket state after a partial send or a failed TLS handshake.
+  dedicated key, and http.client's socket state after a partial send (the failed TLS handshake is observed, above;
+  Linux and macOS are not).

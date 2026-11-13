@@ -265,6 +265,38 @@ class TheAct(Selections):
         self.assertEqual(list(ED.SELECTION_REFUSALS), ['MODEL_SELECTION_MISSING', 'MODEL_SELECTION_NOT_AUTHORIZED',
                                                        'MODEL_SELECTION_RECEIPT_MISMATCH'])
 
+    def test_g3_the_basis_type_refuses_a_receipt_another_actor_reserved(self):
+        """F3 of the review: the envelope-receipt basis type alone refuses a forged receipt (the act's governing
+        check would refuse it too, so the basis type is asked directly)."""
+        receipt = self.envelope()
+        intent = json.loads(self.store.get(receipt).intent_json)
+        forged = AR.RECEIPT_PREFIX + 'cd' * 16
+        self.hand_receipt(forged, intent, actor='someone-else')
+        with self.assertRaises(G.DelegationRefused) as caught:
+            G.read_authority(self.repos.harness['accepted'], 'select-models', EM, self.basis(forged),
+                             store=self.store)
+        self.assertEqual(caught.exception.code, 'DELEGATION_BASIS_NOT_AUTHORITY')
+        self.assertIn('not a receipt the authorization recorder reserved', caught.exception.detail)
+        self.assertIsNotNone(G.read_authority(self.repos.harness['accepted'], 'select-models', EM,
+                                              self.basis(receipt), store=self.store))
+
+    def test_e11_a_well_formed_delegated_record_of_another_kind_at_the_head(self):
+        """F3 of the review: a head whose decision is a well-formed delegated-decision/v1 of another kind
+        (accept-design) answers MODEL_SELECTION_NOT_AUTHORIZED for its kind, and never raises."""
+        receipt = self.envelope()
+        self.delegate(receipt)
+        intent = json.loads(self.store.get('model-selection/v1/1').intent_json)
+        design = {'repository': fi.REPOSITORY, 'change': fi.CHANGE, 'commit': 'a' * 40,
+                  'content': 'sha256:' + 'c' * 64, 'supersedes': None}
+        other = G.decide(G.Authority(G.DELEGATIONS['accept-design'], 'b' * 40, 'sha256:' + 'f' * 64, fi.commitment()),
+                         design, recorded_at='2026-11-13T12:00:00Z')
+        self.assertEqual(G.check_record(other), [])
+        self.hand_receipt('model-selection/v1/2', {**intent, 'sequence': 2, 'decision': other},
+                          actor=ED.SELECTION_RECORDER)
+        verdict = ED.verify_selection(self.store, receipt)
+        self.assertEqual(verdict.code, 'MODEL_SELECTION_NOT_AUTHORIZED')
+        self.assertIn('kind must be select-models', verdict.detail)
+
     def test_the_real_decision_0018_at_head_delegates_the_selection(self):
         """Read-only at this checkout's HEAD: decision 0018 is Accepted (Owner), so the row is in force."""
         receipt = self.envelope()

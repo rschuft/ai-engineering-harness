@@ -351,7 +351,11 @@ the Owner before the first paid operation (S-03.3). The broker's start reads the
 `envelope_decisions.verify_selection` (the decision source's `selection(receipt)`): the last confirmed position
 governs; `MODEL_SELECTION_MISSING`, `MODEL_SELECTION_NOT_AUTHORIZED` (not the selection recorder's, or not a
 well-formed `select-models` record binding its position and basis) or `MODEL_SELECTION_RECEIPT_MISMATCH`
-(another envelope receipt); otherwise the identifiers per family, never the record's revision.
+(another envelope receipt); otherwise the identifiers per family, never the record's revision. Only the last
+confirmed position is read: an unsettled position (a write that stopped after its reservation) is never in
+force and has no file effect to resolve (the act writes only the store and a copy of the record), so it is
+harmless; `status` lists it. A head of another kind, even a well-formed record, is
+`MODEL_SELECTION_NOT_AUTHORIZED` for its kind.
 
 ## The dispatch-input commands (plan leaf P-04.3)
 

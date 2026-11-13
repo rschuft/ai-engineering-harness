@@ -15,9 +15,11 @@ test_envelope.py (TheBlock: 'broker without a cap', 'provider with a cap'). Ever
 """
 from __future__ import annotations
 
+import dataclasses
 import http.client
 import io
 import json
+import socket
 import threading
 import unittest
 
@@ -84,6 +86,7 @@ class Connection:
         if self.gate is not None:
             self.gate.wait(30)                                 # a bound against a hang, released by the test
         if self.raise_getresponse is not None:
+            self.sock = None                                   # as http.client: a failed answer closes the socket
             raise self.raise_getresponse
         return self.response
 
@@ -347,6 +350,149 @@ def _quietly(call, *args):
         call(*args)
     except Exception:  # noqa: BLE001 - the stopped broker's audit is closed under the request still in flight
         pass
+
+
+class OverASocket(CapCase):
+    """F2 of the review: "a request written and never answered" over a real loopback socket (http.client's own
+    connection, whose socket is gone once getresponse fails): the request is counted unknown, never zero."""
+
+    def test_a_request_written_and_never_answered_over_a_real_socket(self):
+        raw = capped(10 ** 6)
+        receipt = self.governing(raw)
+        rig, token = self.started(raw)
+        listener = socket.socket()
+        self.addCleanup(listener.close)
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(1)
+        port, received = listener.getsockname()[1], []
+
+        def take_and_drop():
+            peer, _ = listener.accept()
+            received.append(peer.recv(65536))                  # the request arrives; no answer is ever sent
+            peer.close()
+        taker = threading.Thread(target=take_and_drop, daemon=True)
+        taker.start()
+        made = []
+
+        def connect(origin, timeout):
+            made.append(http.client.HTTPConnection('127.0.0.1', port, timeout=10))
+            return made[-1]
+        rig.broker._connect = connect
+        handler = Handler(rig.broker, token)
+        rig.broker.serve_inference(handler)
+        taker.join(30)
+        self.assertTrue(received and received[0].startswith(b'POST /v1/messages'))
+        self.assertIsNone(made[0].sock)                        # what the broker cannot read after the failure
+        self.assertRefusedWith(handler, 502, 'UPSTREAM_UNREACHABLE')
+        self.assertEqual(rig.broker.status()['authorization']['meter']['unknown'], 1)
+        rig.close()
+        self.assertEqual(self.closed(receipt)['unknown'], 1)
+
+
+class Stopping(CapCase):
+    """F1 of the review: from the broker's own stop, no request of a metered family is admitted (BROKER_STOPPING)
+    before anything of it is written upstream; the close receipt's counts are the run's whole usage."""
+
+    def test_r1_a_request_after_the_stop_is_refused_before_anything_is_sent(self):
+        raw = capped(10 ** 6)
+        receipt = self.governing(raw)
+        rig, token = self.started(raw)
+        self.assertEqual(self.send(rig, token, Connection(Response())).status(), 200)        # 18 tokens
+        rig.broker.stop()
+        closed = self.closed(receipt)
+        self.assertEqual(closed, {'usage': USAGE, 'requests': 1, 'unknown': 0, 'in_flight': 0})
+        after = Connection(Response())
+        handler = Handler(rig.broker, token)
+        rig.broker._connect = lambda origin, timeout: after
+        _quietly(rig.broker.serve_inference, handler)         # its audit is closed: the refusal is not answered
+        self.assertEqual(after.sent, [])                                  # nothing written upstream
+        meter = rig.broker.meter.describe()
+        self.assertEqual((meter['usage'], meter['requests'], meter['in_flight']), (USAGE, 1, 0))
+        self.assertEqual(V.minted(raw, self.db).carried, USAGE)          # the next start carries the true usage
+
+    def test_r1_the_refusal_code(self):
+        raw = capped(10 ** 6)
+        self.governing(raw)
+        rig, token = self.started(raw)
+        rig.broker.meter.stopping = True                       # the state stop() sets first, under the lock
+        self.assertRefusedWith(self.send(rig, token, Connection(Response())), 503, 'BROKER_STOPPING')
+
+    def test_r1b_a_keep_alive_request_after_the_stop_on_a_real_listener(self):
+        raw = capped(10 ** 6)
+        receipt = self.governing(raw)
+        rig, token = self.started(raw)
+        upstream = []
+
+        def connect(origin, timeout):
+            upstream.append(Connection(Response()))
+            return upstream[-1]
+        rig.broker._connect = connect
+        client = http.client.HTTPConnection('127.0.0.1', rig.inference, timeout=30)
+        self.addCleanup(client.close)
+        body = json.dumps({'model': S.MODEL_A})
+
+        def post():
+            client.request('POST', '/v1/messages', body=body, headers={'x-api-key': token})
+            answer = client.getresponse()
+            answer.read()
+            return answer.status
+        self.assertEqual(post(), 200)
+        rig.broker.stop()
+        try:
+            second = post()                                    # the same connection, its handler thread still alive
+        except (OSError, http.client.HTTPException) as exc:
+            second = type(exc).__name__
+        self.assertNotEqual(second, 200)
+        self.assertEqual(len(upstream), 1)                                # the second request was never forwarded
+        self.assertEqual(self.closed(receipt), {'usage': USAGE, 'requests': 1, 'unknown': 0, 'in_flight': 0})
+        meter = rig.broker.meter.describe()
+        self.assertEqual((meter['usage'], meter['requests']), (USAGE, 1))
+        self.assertEqual(V.minted(raw, self.db).carried, USAGE)
+
+    def test_the_provider_enforced_and_loopback_brokers_have_no_stopping_state(self):
+        raw = V.component()
+        self.governing(raw)
+        rig = V.BoundRig(raw, V.minted(raw, self.db), connect=V.refuse, db=self.db)
+        self.addCleanup(rig.close)
+        self.assertIsNone(rig.broker.meter)
+
+
+class Forged(CapCase):
+    """F3 of the review: hand-written records the checks refuse on their own."""
+
+    def test_b14_a_confirmed_run_receipt_another_actor_reserved(self):
+        """A run receipt reserved by another actor beside a close the broker wrote: refused for the run's actor
+        alone (the close alone would pass)."""
+        raw = capped(10 ** 6)
+        receipt = self.governing(raw)
+        run_key, close_key = IB.ledger_keys(receipt, 1)
+        store = S.STORE.open_store(self.db)
+        try:
+            store.reserve(run_key, {'format': IB.ENVELOPE_RUN_FORMAT, 'run': 1}, actor='someone-else')
+            store.transition(run_key, 'dispatched', actor='someone-else', expected_from='reserved')
+            store.transition(run_key, 'confirmed', actor='someone-else', expected_from='dispatched')
+        finally:
+            store.close()
+        journal = IB.Journal(lambda: S.STORE.open_store(self.db), IB.BrokerGuard())
+        try:
+            journal.record(close_key, {'format': IB.ENVELOPE_CLOSE_FORMAT, 'service': IB.SERVICE, 'receipt': receipt,
+                                       'run': 1, 'usage': 0, 'requests': 0, 'unknown': 0, 'in_flight': 0},
+                           {'state': 'closed'}, conflict='JOURNAL_FAILED')
+        finally:
+            journal.close()
+        detail = self.assertStartRefused(raw, 'ENVELOPE_USAGE_UNKNOWN').err.getvalue()
+        self.assertIn('was not reserved by the broker', detail)
+
+    def test_b3_a_hand_built_authorization_swapped_into_a_started_broker(self):
+        """A copy of the held authorization (not one authorize() minted), here with an expiry already past: refused
+        ENVELOPE_NOT_AUTHORIZED at admission, before its expiry is read."""
+        raw = capped(10 ** 6)
+        self.governing(raw)
+        rig, token = self.started(raw)
+        rig.broker.authorization = dataclasses.replace(rig.broker.authorization, expires=0.0)
+        connection = Connection(Response())
+        self.assertRefusedWith(self.send(rig, token, connection), 503, 'ENVELOPE_NOT_AUTHORIZED')
+        self.assertEqual(connection.sent, [])
 
 
 class LostWrites(CapCase):
