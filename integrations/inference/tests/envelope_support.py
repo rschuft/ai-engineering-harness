@@ -179,8 +179,8 @@ def minted(raw: dict, db: Path, clock: float = DURING):
 class BoundRig(S.Rig):
     """broker_support.Rig with the authorization the broker holds, and its clock at DURING."""
 
-    def __init__(self, raw: dict, authorization, *, connect):
-        super().__init__(raw, connect=connect)
+    def __init__(self, raw: dict, authorization, *, connect, db: Path | None = None, store_factory=None):
+        super().__init__(raw, connect=connect, db=db, store_factory=store_factory)
         self.clock.now = DURING
         self.broker = IB.Broker(self.config, provider_key=self.broker.provider_key, journal=self.journal,
                                 audit=self.audit, guard=self.guard, clock=self.clock, connect=connect,

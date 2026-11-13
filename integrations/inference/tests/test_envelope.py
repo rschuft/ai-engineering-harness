@@ -408,11 +408,21 @@ class StartRefusals(V.EnvelopeCase):
         self.assertStartRefused(raw, 'MODEL_SELECTION_MISSING')
 
     def test_a_cap_the_broker_enforces_fails_closed_while_its_usage_is_unknown(self):
-        """Slice 1 has no usage ledger, so a broker-enforced cap cannot be enforced: refused at start
-        (ENVELOPE_USAGE_UNKNOWN). Slice 3 replaces this with the ledger; it is never relaxed."""
+        """Slice 3 (the ledger): a prior run of the broker under this authorization with a run receipt and no close
+        receipt (a crash, a kill, a lost close write) leaves its usage unknown: refused at start
+        (ENVELOPE_USAGE_UNKNOWN), before the key or a listener. The run receipt is written by the broker's own
+        journal, as a start writes it."""
         raw = V.component(envelope=V.block(limit=V.limit(enforced_by='broker', cap=1000)))
-        self.confirmed(raw)
-        self.assertStartRefused(raw, 'ENVELOPE_USAGE_UNKNOWN')
+        receipt = self.confirmed(raw)['receipt']['operation_key']
+        run_key, close_key = IB.ledger_keys(receipt, 1)
+        journal = IB.Journal(lambda: S.STORE.open_store(self.db), IB.BrokerGuard())
+        try:
+            journal.record(run_key, {'format': IB.ENVELOPE_RUN_FORMAT, 'service': IB.SERVICE, 'receipt': receipt,
+                                     'run': 1}, {'state': 'open'}, conflict='JOURNAL_FAILED')
+        finally:
+            journal.close()
+        detail = self.assertStartRefused(raw, 'ENVELOPE_USAGE_UNKNOWN').err.getvalue()
+        self.assertIn('no close receipt', detail)
 
 
 # ---------------------------------------------------------------- serve: started (integration)

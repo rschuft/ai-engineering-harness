@@ -51,6 +51,10 @@ envelope. The read side is integrations/owner/envelope_decisions.py, handed to s
 The broker holds the authorization it was given (authorize: an object minted in this process) and refuses, at
 admission, a request of a bound family whose provider or upstream is not the held one or whose envelope has
 expired. A configuration whose upstreams are all loopback starts as before, and reads no authorization.
+With a broker-enforced cap (limit.enforced_by broker), the usage of the bound families is metered in usage
+tokens for the life of the governing receipt: a run receipt inference/envelope/<nonce>/run/<k> before serving and
+its close receipt at the broker's own stop; ENVELOPE_CAP_REACHED and ENVELOPE_USAGE_UNKNOWN close the envelope
+for good (read_ledger, envelope_usage, Meter).
 
   <tools python> -I -B integrations/inference/inference_broker.py config
   <tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]
@@ -121,6 +125,8 @@ STATUS_FORMAT = 'aieh-inference-broker-status/1'
 CONFIG_FORMAT = 'aieh-inference-config/1'
 CREDENTIAL_SET_FORMAT = 'aieh-inference-credential-set/1'
 ENVELOPE_REPORT_FORMAT = 'aieh-provider-envelope-report/1'
+ENVELOPE_RUN_FORMAT = 'aieh-inference-envelope-run/1'
+ENVELOPE_CLOSE_FORMAT = 'aieh-inference-envelope-close/1'
 LOOPBACK = '127.0.0.1'
 TOKEN_PREFIX = 'aieh-inf-'
 TOKEN_SHAPE = re.compile(r'aieh-inf-[A-Za-z0-9_-]{43}')
@@ -215,8 +221,11 @@ CODES = {
                                               '(selection_recorder.py delegate)'),
     'MODEL_NOT_SELECTED': (403, 'use only a model the held selection selects; configure no other model for a '
                                 'family whose upstream is not loopback'),
-    'ENVELOPE_USAGE_UNKNOWN': (429, 'the cumulative usage under the envelope\'s cap cannot be established (a cap '
-                                    'enforced by the broker is not yet supported): fail closed; have the Owner '
+    'ENVELOPE_CAP_REACHED': (429, 'the cumulative usage under the envelope\'s cap has reached it: the envelope is '
+                                  'closed for good; have the Owner authorize a new envelope'),
+    'ENVELOPE_USAGE_UNKNOWN': (429, 'the cumulative usage under the envelope\'s cap cannot be established (an answer '
+                                    'without readable usage, a cut stream, a request without an answer, a broker '
+                                    'error, or a run without its close): fail closed for good; have the Owner '
                                     'authorize a new envelope'),
     # the control listener
     'CONTROL_ROUTE_UNKNOWN': (404, 'use POST /v1/grants, POST /v1/grants/revoke, GET /v1/grants/<fingerprint> or '
@@ -605,6 +614,8 @@ class Authorization:
     enforced_by: str
     cap: int | None
     selection_record: dict | None = None    # a delegated selection: {record, point, receipt, decision}
+    carried: int | None = None              # enforced_by broker: the closed runs' usage under this receipt
+    run: int | None = None                  # enforced_by broker: this run's position in the receipt's ledger
 
     def describe(self) -> dict:
         """The start receipt's and the status answer's authorization member."""
@@ -613,7 +624,8 @@ class Authorization:
             selection.update(self.selection_record)
         return {'receipt': self.receipt, 'operation': self.operation, 'decision': self.decision,
                 'digest': self.digest, 'expires_at': self.expires_at, 'selection': selection,
-                'limit': {'enforced_by': self.enforced_by, 'cap': self.cap}}
+                'limit': {'enforced_by': self.enforced_by, 'cap': self.cap,
+                          **({} if self.run is None else {'carried': self.carried, 'run': self.run})}}
 
     def selects(self, family: str, model: str) -> bool:
         """Whether the held selection selects MODEL for FAMILY."""
@@ -729,18 +741,110 @@ def _authorize(config: BrokerConfig, decisions: Callable, store, document: dict,
         raise InferenceError('MODEL_SELECTION_MISSING', f'the {by} selection leaves no family whose upstream is not '
                                                         'loopback with a selected model')
     limit = document['limit']
-    if limit['enforced_by'] != 'provider':
-        raise InferenceError('ENVELOPE_USAGE_UNKNOWN', 'the envelope\'s cap is enforced by the broker, whose usage '
-                                                       'ledger is not yet built: fail closed')
+    carried = run = None
+    if limit['enforced_by'] == 'broker':
+        carried, run = read_ledger(store, view['receipt'], limit['cap'])
     (provider,), (origin,) = {f.provider for f in bound}, {f.upstream for f in bound}
     record = None if chosen is None else {'record': chosen['record'], 'point': chosen['point'],
                                           'receipt': chosen['receipt'], 'decision': chosen['decisionId']}
     held = Authorization(view['receipt'], view['operation'], view['decisionId'], digest, view['digest'],
                          document['expires_at'], expires.timestamp(), provider, origin, by,
                          tuple((f.id, tuple(sorted(f.models))) for f in sorted(bound, key=lambda f: f.id)),
-                         limit['enforced_by'], limit['cap'], record)
+                         limit['enforced_by'], limit['cap'], record, carried, run)
     _MINTED[id(held)] = held
     return held
+
+
+def ledger_keys(receipt: str, run: int) -> tuple[str, str]:
+    """(the run receipt's key, its close receipt's key) of run RUN under the authorization receipt RECEIPT
+    (``owner-authorization/v1/<nonce>``): the ledger is the receipt's own, so a new authorization starts at zero."""
+    base = f'inference/envelope/{receipt.rsplit("/", 1)[-1]}/run/{run}'
+    return base, f'{base}/close'
+
+
+def _usage_unknown(detail: str) -> InferenceError:
+    return InferenceError('ENVELOPE_USAGE_UNKNOWN', detail)
+
+
+def read_ledger(store, receipt: str, cap: int) -> tuple[int, int]:
+    """(the usage the closed runs under RECEIPT carry, the next run's position), walked from run 1 by direct
+    lookups. A run receipt that is not confirmed never served (it is the last step before the listeners serve)
+    and counts zero. A confirmed run must be the broker's, with a confirmed close receipt of the broker's that
+    records no unknown usage and nothing in flight; otherwise ENVELOPE_USAGE_UNKNOWN (a crash, a kill, a lost close
+    write, a broker still serving, an unknown answer). Carried usage at the cap is ENVELOPE_CAP_REACHED."""
+    def actor(key):
+        events = store.events(key)
+        return events[0].actor if events else None
+    carried, run = 0, 1
+    while (held := store.get(ledger_keys(receipt, run)[0])) is not None:
+        key, close_key = ledger_keys(receipt, run)
+        if held.state == 'confirmed':
+            if actor(key) != SERVICE:
+                raise _usage_unknown(f'{key} was not reserved by the broker ({SERVICE})')
+            closed = store.get(close_key)
+            if closed is None:
+                raise _usage_unknown(f'run {run} under {receipt} has no close receipt: a crash, a kill, a lost close '
+                                     'write or a broker still serving; its usage is unknown')
+            try:
+                intent = json.loads(closed.intent_json)
+            except (TypeError, ValueError):
+                intent = None
+            counts = [intent.get(name) if isinstance(intent, dict) else None
+                      for name in ('usage', 'unknown', 'in_flight')]
+            if closed.state != 'confirmed' or actor(close_key) != SERVICE or not isinstance(intent, dict) \
+                    or intent.get('format') != ENVELOPE_CLOSE_FORMAT or intent.get('run') != run \
+                    or not all(type(n) is int and n >= 0 for n in counts):
+                raise _usage_unknown(f'{close_key} is not a confirmed close receipt of the broker')
+            usage, unknown, in_flight = counts
+            if unknown or in_flight:
+                raise _usage_unknown(f'run {run} under {receipt} closed with {unknown} answer(s) of unknown usage and '
+                                     f'{in_flight} request(s) in flight')
+            carried += usage
+        run += 1
+    if carried >= cap:
+        raise InferenceError('ENVELOPE_CAP_REACHED', f'the runs under {receipt} carry {carried} usage tokens; the cap '
+                                                     f'is {cap}')
+    return carried, run
+
+
+UNKNOWN_USAGE = None
+
+
+def envelope_usage(usage, upstream_status, code, written: bool):
+    """What one admitted request adds to the envelope's cumulative usage: the usage report's total; zero when
+    nothing of it was written upstream, or for a complete answer outside 2xx (an assumption about the provider's
+    billing, disclosed: S-03.2's rule, to verify at OA-12's presentation); UNKNOWN_USAGE (None) for a 2xx answer
+    without readable usage, any answer cut off by either side, a request written and never answered, and a broker
+    error after admission."""
+    if isinstance(usage, dict):
+        return usage['total']
+    if code == 'BROKER_ERROR':
+        return UNKNOWN_USAGE
+    if upstream_status is None:
+        return UNKNOWN_USAGE if written else 0
+    if 200 <= upstream_status < 300 or code is not None:
+        return UNKNOWN_USAGE
+    return 0
+
+
+@dataclasses.dataclass
+class Meter:
+    """A broker-enforced cap's cumulative usage for one run: the cap, what the closed runs carry, this run's
+    position and its counts. Usage tokens, never money (decision 0015 section 6.3)."""
+    cap: int
+    carried: int
+    run: int
+    receipt: str
+    usage: int = 0
+    requests: int = 0
+    unknown: int = 0
+    in_flight: int = 0
+    opened: dict | None = None   # the run receipt, once written
+
+    def describe(self) -> dict:
+        return {'cap': self.cap, 'carried': self.carried, 'run': self.run, 'usage': self.usage,
+                'requests': self.requests, 'unknown': self.unknown, 'in_flight': self.in_flight,
+                'total': self.carried + self.usage, 'run_receipt': self.opened}
 
 
 def envelope_report(config: BrokerConfig, operation: str | None) -> dict:
@@ -1073,6 +1177,7 @@ class Admission:
     model: str
     body: bytes
     headers: list
+    written: bool = False    # the request was written upstream (recorded before the answer is read)
 
 
 def _uuid(value, code: str, what: str) -> str:
@@ -1096,6 +1201,9 @@ class Broker:
             audit, guard
         self.clock, self._connect = clock, connect or connect_upstream
         self.authorization = authorization   # authorize()'s, for the families whose upstream is not loopback
+        self.meter = None if authorization is None or authorization.enforced_by != 'broker' \
+            or authorization.run is None else Meter(authorization.cap, authorization.carried, authorization.run,
+                                                    authorization.receipt)
         if provider_key is not None:
             guard.hold(provider_key.key)
         self._lock = threading.RLock()
@@ -1229,6 +1337,9 @@ class Broker:
         with self._lock:
             grants = list(self._grants.values())
         bound = {} if self.authorization is None else {'authorization': self.authorization.describe()}
+        if self.meter is not None:
+            with self._lock:
+                bound['authorization']['meter'] = self.meter.describe()
         return {'format': STATUS_FORMAT, **bound, 'listeners': dict(self.listeners),
                 'provider_key': None if self.provider_key is None else {
                     'provider': self.provider_key.provider, 'fingerprint': self.provider_key.fingerprint,
@@ -1293,6 +1404,20 @@ class Broker:
         if self.clock() >= held.expires:
             raise self._refuse('ENVELOPE_EXPIRED', f'the authorization {held.receipt} expired at {held.expires_at}',
                                grant)
+        meter = self.meter
+        if meter is not None:
+            if meter.unknown:
+                raise self._refuse('ENVELOPE_USAGE_UNKNOWN', f'{meter.unknown} answer(s) of this run have unknown '
+                                                             'usage: the envelope is closed', grant)
+            if meter.carried + meter.usage >= meter.cap:
+                raise self._refuse('ENVELOPE_CAP_REACHED', f'{meter.carried + meter.usage} of {meter.cap} usage '
+                                                           'tokens', grant)
+
+    def _metered(self, family: Family):
+        """The meter of a broker-enforced cap, for a family whose upstream is not loopback; else None."""
+        if self.meter is None or family.upstream is None or family.upstream.loopback:
+            return None
+        return self.meter
 
     def _selected(self, family: Family, model: str, grant: Grant | None) -> None:
         """A model of a family whose upstream is not loopback is issued and admitted only when the held selection
@@ -1389,6 +1514,9 @@ class Broker:
             self._budget(grant)
             grant.requests += 1
             grant.in_flight += 1
+            if (meter := self._metered(family)) is not None:
+                meter.requests += 1
+                meter.in_flight += 1
             grant.bytes_in += len(body)
         return Admission(grant, family, method, target, path, model, body, forward)
 
@@ -1483,6 +1611,13 @@ class Broker:
                     grant.total_tokens += usage['total']
                 elif upstream_status is not None and 200 <= upstream_status < 300:
                     grant.unknown_usage += 1
+                if (meter := self._metered(family)) is not None:
+                    meter.in_flight -= 1
+                    counted = envelope_usage(usage, upstream_status, code, admission.written)
+                    if counted is UNKNOWN_USAGE:
+                        meter.unknown += 1
+                    else:
+                        meter.usage += counted
             audit(status=status, upstream_status=upstream_status, response_bytes=sent, usage=usage, code=code)
         try:
             self._relay(handler, admission, settle)
@@ -1506,9 +1641,13 @@ class Broker:
             for name, value in headers:
                 connection.putheader(name, value)
             connection.endheaders(admission.body)
+            admission.written = True
             response = connection.getresponse()
         except (OSError, http.client.HTTPException, ValueError, InferenceError) as exc:
             if connection is not None:
+                # A connection that was made may have carried part of the request (counted as unknown, never as
+                # zero); http.client clears it on close, so it is read here.
+                admission.written = admission.written or getattr(connection, 'sock', None) is not None
                 connection.close()
             error = InferenceError('UPSTREAM_UNREACHABLE', type(exc).__name__, grant=admission.grant)
             settle('unknown', 0, error.status, None, error.code)
@@ -1587,6 +1726,8 @@ class Broker:
             self.start_receipt = self.journal.record(f'inference/broker-start/{stamp}-{secrets.token_hex(4)}',
                                                      intent, {'state': 'started'}, conflict='JOURNAL_FAILED')
             self.audit.write({'event': 'broker-start', 'receipt': self.start_receipt['operation_key']})
+            if self.meter is not None and bound:
+                self._open_run(stamp)
         except BaseException:
             self._close_servers()
             raise
@@ -1599,6 +1740,31 @@ class Broker:
         for server in self._servers:
             server.server_close()
         self._servers.clear()
+
+    def _open_run(self, stamp: str) -> None:
+        """The run receipt of a broker-enforced cap: written and read back as the last step before serving."""
+        meter = self.meter
+        key, _ = ledger_keys(meter.receipt, meter.run)
+        intent = {'format': ENVELOPE_RUN_FORMAT, 'service': SERVICE, 'receipt': meter.receipt,
+                  'digest': self.authorization.digest, 'run': meter.run, 'cap': meter.cap, 'carried': meter.carried,
+                  'started_at': stamp, 'pid': os.getpid(), 'start_receipt': self.start_receipt['operation_key']}
+        meter.opened = self.journal.record(key, intent, {'state': 'open'}, conflict='JOURNAL_FAILED')
+
+    def _close_run(self) -> None:
+        """The close receipt of this run, at the broker's own stop: its usage, requests, unknown answers and the
+        requests still in flight. A close that cannot be written leaves the run without one (the next start then
+        refuses ENVELOPE_USAGE_UNKNOWN)."""
+        meter = self.meter
+        _, key = ledger_keys(meter.receipt, meter.run)
+        with self._lock:
+            counts = {'usage': meter.usage, 'requests': meter.requests, 'unknown': meter.unknown,
+                      'in_flight': meter.in_flight}
+        intent = {'format': ENVELOPE_CLOSE_FORMAT, 'service': SERVICE, 'receipt': meter.receipt, 'run': meter.run,
+                  **counts, 'closed_at': now_iso(self.clock())}
+        try:
+            self.journal.record(key, intent, {'state': 'closed'}, conflict='JOURNAL_FAILED')
+        except InferenceError as exc:
+            self.audit.write({'event': 'envelope-close-failed', 'code': exc.code, 'run': meter.run})
 
     def stop(self) -> None:
         """Stop both listeners, write the pending receipts, and close the journal and the audit. Live grants
@@ -1613,6 +1779,8 @@ class Broker:
             stopper.join()
         self._close_servers()
         try:
+            if self.meter is not None and self.meter.opened is not None:
+                self._close_run()
             self.housekeeping()
             with self._lock:
                 live = [g.fingerprint for g in self._grants.values() if g.revocation is None]

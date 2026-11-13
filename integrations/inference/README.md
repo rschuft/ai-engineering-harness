@@ -40,6 +40,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_credential_set.py` | `credential-set` over an in-memory provider and a fixture store |
 | `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream`; the census of the modules `serve` loads beside the broker (the envelope and its read side): no network module, no connector |
 | `tests/envelope_support.py` | The provider envelope's fixtures (S-03.5): the real authorization recorder over the owner suite's fake Gitea (in memory) writing into a throwaway store, contexts whose provider, audit directory and wait raise if asked, a `Rig` holding a minted authorization, an injected connector |
+| `tests/test_cap.py` | S-03.5 slice 3's proof rows D1 and D3 to D8: no ledger when the provider enforces; the cap reached within a run and at the next start, a closed run's usage carried; each unknown outcome (a 2xx answer without usage, a cut stream, a client leaving mid-stream, a request written and never answered, a connection cut while sending, a broker error) closing the envelope for the run and at the next start; a refused connect and an answer outside 2xx adding nothing; a run without its close and a stop with a request in flight; a lost run or close write; a new authorization's ledger at zero (integration) |
 | `tests/test_selection.py` | S-03.5 slice 2's proof rows C2 to C7: a delegated selection recorded by the real act starts the broker (no commit id in its receipt); a head another actor reserved, the product manager decided or written as an Owner record; a selection under an earlier envelope; a configured model not selected; a decision source that reads no selection or answers badly; a request and an issuance outside the held selection refused, a selected model passed through (integration) |
 | `tests/test_envelope.py` | S-03.5 slice 1's proof rows: the block, the document, the golden digest and manifest, the `envelope` command; every start refusal of `serve` (no block, missing, unsettled, expired, replayed, another origin, limit, expiry or selection, another target, a non-canonical manifest, hand-written receipts, a decision source that raises or answers badly, unbound families, the interim selection and cap refusals); the start with its `authorization` member; the envelope kind recorded through the recorder; loopback upstreams as before; the held authorization at start and at admission, and the expiry while serving |
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
@@ -177,13 +178,56 @@ on another envelope receipt (a selection does not carry to a new envelope) is `M
 Under either authority a configured model of a bound family that the selection does not select is
 `MODEL_NOT_SELECTED` (the configuration may not widen it), and none left is `MODEL_SELECTION_MISSING`. The held
 selection is the configured models; `issue` and admission refuse any other model of a bound family
-(`MODEL_NOT_SELECTED`, 403), after the existing checks. **Interim, slice 1:** `enforced_by: broker` is refused
-at start (`ENVELOPE_USAGE_UNKNOWN`: the cap's usage ledger is slice 3); it fails closed and is replaced, never
-relaxed. A refused start exits 2, writes no receipt and no
-audit line (it may create an empty integration store where none exists).
+(`MODEL_NOT_SELECTED`, 403), after the existing checks. With `enforced_by: broker`, the cap's ledger (below)
+is read last. A refused start exits 2, writes no receipt and no audit line (it may create an empty
+integration store where none exists).
+
+**The cumulative cap** (slice 3; `limit.enforced_by: broker`, for a provider that does not enforce the
+Owner-authorized limit on the dedicated key). The unit is **usage tokens, never money** (decision 0015 section
+6.3): `limit.cap` is the cumulative usage the provider reports (input including cache, plus output: the
+extractors' `total`) over every bound family, for the life of the **governing receipt**. How the cap follows from
+the money limit and the models' prices is OA-12's presentation and the selection's cost text; the broker does no
+price arithmetic. The ledger is the receipt's own and lives in the integration store as **two confirmed receipts
+per run**: `inference/envelope/<nonce>/run/<k>` (`aieh-inference-envelope-run/1`), written and read back as the
+last fallible step before the listeners serve, and `inference/envelope/<nonce>/run/<k>/close`
+(`aieh-inference-envelope-close/1`), written at the broker's own stop with the run's `usage`, `requests`,
+`unknown` answers and requests still `in_flight`. At start the runs are walked from 1 by direct lookups (a run
+receipt that is not confirmed never served and counts zero) and the closed runs' usage is carried. One admitted
+request of a bound family adds:
+
+| Outcome | Counted |
+|---|---|
+| a complete answer with a readable usage report | its total |
+| nothing of the request was written upstream (the connection was never made) | zero |
+| a complete answer outside 2xx | zero: **an assumption about the provider's billing** (S-03.2's rule for the attempt budget), to verify from current provider information at OA-12's presentation |
+| a 2xx answer without readable usage; any answer cut off by the upstream or by the client leaving mid-stream | unknown |
+| a request written and never answered; a connection made and the request cut while sending; a broker error after admission | unknown |
+| a run without its close receipt (a crash, a kill, a lost close write, a broker still serving); a close with unknown answers or requests in flight | unknown, at the next start |
+| the run receipt cannot be written or read back | the start fails; nothing is served |
+
+"Was anything written" is recorded when the request has been handed over, before its answer is read, and on a
+failure before the connection is closed (http.client clears its socket on close); a connection that was made is
+counted as written (a TLS handshake that fails after the TCP connection counts as unknown: conservative, never an
+undercount). **Fail closed, and stay closed:** the cap reached (carried plus this run at or above it) is
+`ENVELOPE_CAP_REACHED`, and an unknown answer is `ENVELOPE_USAGE_UNKNOWN`, for every further request of a bound
+family in that run (429, checked where the attempt budget is) and at every later start (exit 2). The only remedy is
+a new provider-envelope authorization, whose receipt starts a new ledger at zero (decision 0018 point 4.2: raising
+a cap is the Owner's per act); there is no reconciliation command. Disclosed limits: requests admitted together
+can overshoot by their own usage; charges that are not tokens are not counted; a stop that is not the broker's own
+closes the envelope although nothing may have been in flight; a restore of the store to a backup taken before usage
+was recorded loses that usage (decision 0004). With `enforced_by: provider` nothing is metered and no ledger
+receipt is written; loopback families are never metered.
+
+**The alternative not taken** (R7): a write-ahead receipt per request (reserved and dispatched before the request
+is forwarded; confirmed with its usage, failed for zero, unknown otherwise) survives a hard stop while idle and is
+what the store's states were made for, at three transactions on every paid request and one receipt per request
+for ever. Reconsider it when a hard stop closing the envelope proves operationally costly: at the first live use
+of a broker-enforced cap, or when the broker becomes a supervised service whose stop is a kill (decision 0011
+point 2, Windows).
 
 **What the broker holds.** `authorize` returns one frozen `Authorization` (the receipt key, the operation id,
-the decision id, the digest, the expiry, the provider, the origin, the selected models, the limit's enforcement);
+the decision id, the digest, the expiry, the provider, the origin, the selected models, the limit's enforcement
+and, with a broker-enforced cap, the usage the closed runs carry and this run's position);
 `Broker.start()` refuses a bound family unless it holds an object `authorize` returned in this process
 (`ENVELOPE_NOT_AUTHORIZED`; a copy or a hand-built one is not) whose provider and origin the family has
 (`ENVELOPE_MISMATCH`). At admission, where the attempt budget is checked, a request of a bound family is refused
@@ -447,8 +491,8 @@ The provider envelope (S-03.5; at start `serve` exits 2): `ENVELOPE_NOT_CONFIGUR
 `ENVELOPE_RECORD_INVALID`, `ENVELOPE_AUTHORIZATION_UNRESOLVED`, `ENVELOPE_REPLAYED`, `MODEL_SELECTION_MISSING`,
 `MODEL_SELECTION_NOT_AUTHORIZED`, `MODEL_SELECTION_RECEIPT_MISMATCH`; at start, in `issue` and at admission:
 `MODEL_NOT_SELECTED` (403);
-at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403); at
-start in slice 1: `ENVELOPE_USAGE_UNKNOWN` (429 at admission from slice 3).
+at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403),
+`ENVELOPE_CAP_REACHED`, `ENVELOPE_USAGE_UNKNOWN` (429).
 Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL_CONTENT_TYPE` (415),
 `CONTROL_BODY_INVALID` (400), `CONVERSATION_ID_INVALID`, `ATTEMPT_ID_INVALID`, `FAMILY_UNKNOWN`, `MODELS_INVALID`,
 `BUDGET_INVALID`, `TTL_INVALID`, `TRIGGER_UNKNOWN`, `REVOKER_INVALID` (400), `MODEL_NOT_ALLOWLISTED` (403),
@@ -488,5 +532,6 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
 - The provider envelope (S-03.5 slice 1) outside a test process: a real envelope manifest, its authorization by
   the Owner through the recorder against a real Gitea, `serve` started on it, and any request through `serve` to
   a non-loopback origin (S-03.3's live step). The authorization recorder admits only the S-01.2.2 fixture
-  repository today. A real model selection recorded on the managed store. The cumulative cap (slice 3) is not
-  built.
+  repository today. A real model selection recorded on the managed store. The cumulative cap against a real
+  provider: whether it bills an answer outside 2xx (the assumption above), whether it enforces a limit on a
+  dedicated key, and http.client's socket state after a partial send or a failed TLS handshake.

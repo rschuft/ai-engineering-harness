@@ -18,6 +18,12 @@ families the broker will use (``inference_broker.live_envelope``); only what has
 An unquoted timestamp or decimal (which YAML reads as a datetime or a float) is refused, never normalized, so
 the canonical document holds strings, integers and null only.
 
+``limit.cap`` (with ``enforced_by: broker`` only) counts usage tokens, never money (decision 0015 section 6.3):
+the broker meters the usage the provider reports for the life of the governing authorization and fails closed
+when the cap is reached or a usage is unknown (inference_broker.read_ledger, envelope_usage). A complete answer
+outside 2xx counts zero: an assumption about the provider's billing, disclosed, to verify at OA-12's
+presentation; a cut 2xx answer is unknown.
+
 The canonical document (``FORMAT``), exactly these members, in this order: ``format``, ``provider``,
 ``origin`` (``https://<host>:<port>``), ``limit`` (``amount``, ``currency``, ``enforced_by``, ``cap``: an integer
 or null), ``expires_at`` and ``selection`` (``{"by": "envelope", "models": {<family>: [<ids, sorted>]}}`` or
