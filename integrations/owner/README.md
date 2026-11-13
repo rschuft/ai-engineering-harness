@@ -42,7 +42,8 @@ under the managed data root and write the live manifest there.
 | `selection_recorder.py` | The model-selection recorder (plan leaf S-03.5, slice 2): `delegate` (the engineering manager's `select-models` decision under decision 0018 point 3, resting on the governing provider-envelope receipt) and `status`; the codes and remedies, the context and the command line. It imports no Gitea or credential module |
 | `input_recorder.py` | The dispatch-input commands: `design prepare`, `record` and `delegate`; `manifest prepare`, `record`, `delegate` and `resolve`; `status`; the codes and remedies, the context and the command line |
 | `acceptance_recorder.py` | `prepare` and `record`, the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
-| `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy, the protection verifier's seam and the command line's verifier (`protection_verifier`: the Gitea integration's protection check), the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
+| `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy (`policy_of`) and the admitted sets (`managed_policies`: the authorization repository alone; `exercise_policies`: the S-01.2.2 fixture), the protection verifier's seam and the command line's verifier (`protection_verifier`: the Gitea integration's protection check), the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
+| `authorization_proposal.py` | The proposal act (plan leaf E-05.7; decision 0022 point 4): one pull request of one operation manifest from `work/<id>` into the protected branch, by the builder bot, read back (sha256 equal) and approved by the reviewer bot, with bot tokens only and its own route allowlist (`BOT_ROUTES`); never merges; its command line admits the authorization repository alone |
 | `tests/test_owner_decision.py` | The record's shape and every statement verdict (unit) |
 | `tests/test_recorder_edits.py` | The recorder's edits, byte for byte, line endings included; every code has a remedy (unit) |
 | `tests/test_acceptance_recorder.py` | `prepare` and `record` on throwaway fixture repositories: the resolver round trip, the id kept on re-recording, the shared shape, every refusal; the command line (integration) |
@@ -50,9 +51,10 @@ under the managed data root and write the live manifest there.
 | `tests/owner_fixture.py` | The fixture project repository (two changes from the P-01.2 recording) and the example record; `--record` rewrites it |
 | `tests/fixtures/accept-objective.decision.json` | The example decision record (synthetic statement, fixed clock, nonce and ids) |
 | `tests/fake_gitea.py` | A fake Gitea 28.3.0 (the slice the authorization recorder uses, as read in the pinned source, and a bot's proposal routes and the precondition's reads (`GET /token`, the open pull requests) for the live exercise's phase plumbing; the protection auditor's requests go to `integrations/gitea/tests/protection_fake.py`), callable in memory or served by an in-process HTTP server on 127.0.0.1 that can drop an answer; and a fixture credential provider |
-| `tests/authz_support.py` | The authorization recorder's per-test fixture: a fake Gitea, a fixture provider, the recorder's state and an integration store of its own, a fixed clock, and a fake protection verifier (`verified` unless a test scripts it) |
-| `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the protection verifier's seam (only a well-formed verdict counts), the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the command line (unit) |
-| `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; fail closed on every protection answer but `verified` (no verifier included), the verifier the last read before the receipt and the merge, the bracket after it; the command line's protection check against the fake auditor (verified, drift, every unverifiable state, a rule changed across the merge, no credential read for a refused statement); every bot token refused; no token minted; a lost answer resolved by reading (integration) |
+| `tests/authz_support.py` | The authorization recorder's per-test fixture: a fake Gitea, a fixture provider, the recorder's state and an integration store of its own, a fixed clock, and a fake protection verifier (`verified` unless a test scripts it); its `repository` is the fixture (an exercise context), or the authorization repository in a context admitting what the managed one does |
+| `tests/test_authorization_units.py` | The `authorize-operation` subject, the trailers and the merge message, the policy comparison, the protection verifier's seam (only a well-formed verdict counts), the session's fixed calls, the credential checks, the codes and remedies, a fixture context never reaching the managed root, the admitted sets (the managed context admits the authorization repository alone and refuses the fixture and any other name; an exercise context the fixture alone; a context without its set refused; one non-fixture repository admitted), the command line (unit) |
+| `tests/test_authorization_recorder.py` | The plan's proof over HTTP on loopback: one merge per recorded decision, bound to the head and the digest, with the receipt and the trailers; every refusal with its code and no merge; fail closed on every protection answer but `verified` (no verifier included), the verifier the last read before the receipt and the merge, the bracket after it; the command line's protection check against the fake auditor (verified, drift, every unverifiable state, a rule changed across the merge, no credential read for a refused statement); every bot token refused; no token minted; a lost answer resolved by reading. Every class runs twice: on the fixture, and (`Ledger...`, plan leaf E-05.7) on the authorization repository in a context admitting what the managed one does (integration) |
+| `tests/test_authorization_proposal.py` | The proposal act on the fixture and on the authorization repository: one pull request from `work/<id>` into main, opened by the builder bot and approved by the reviewer bot, whose only change is the added manifest with the given bytes (sha256 equal on read-back), bot tokens only, never a merge, and the recorder prepares exactly it; an existing operation id refused before anything is written; a differing read-back not approved; the credential refusals; the session's routes; the command line (unit) |
 | `tests/test_live_authorization.py` | The live exercise on the S-01.2.2 fixture in two phases with the Owner's own decision between them (and `rechallenge`, regenerating expired challenges for the operations already presented), each skipped unless `AIEH_AUTHZ_RECORDER_LIVE` names it (`prepare`, then `record`; e2e) |
 | `tests/input_fixture.py` | The dispatch-input commands' fixtures: a throwaway project repository (an OpenSpec change at two commits), fixture harness repositories (a decision 0018 `Accepted (Owner)`, the same `Proposed`, and one whose log quotes are only in the work tree), a per-test context over a throwaway store and state root, synthetic statements, bases and candidate manifests |
 | `tests/test_input_decisions.py` | The two new kinds and the unchanged shape of `owner-decision/v1`; `delegated-decision/v1`, its table (the engineering manager never decides either kind) and a later kind added as a row; the status parser; the codes, the admitted channels and the repeated grammars against their sources (unit) |
@@ -226,8 +228,8 @@ plan leaf G-04.1.1's.
 (`GET /repos/{owner}/{repo}/branch_protections`) to repository and site administrators only
 (`reqToken(), reqAdmin()` in `routers/api/v1/api.go`), and `aieh-owner` is neither. The recorder
 therefore compares what a write collaborator can read with the expected policy of the repository
-(`Policy`; the S-01.2.2 fixture `aieh-authz-fixture/authz` is the one admitted repository, its
-expectation derived from `gitea_roles.protection_rules()`): the repository is private, not archived,
+(`Policy`, `policy_of`: derived from the repository's declaration in `gitea_roles.DECLARATIONS`; see
+"The admitted repositories" below): the repository is private, not archived,
 with its default branch, allowing merge commits, and `aieh-owner` holds write but not admin; the
 protected branch is protected, `aieh-owner` cannot push to it but can merge, with the rule's required
 approvals and no status checks. It cannot see who else is on the merge or push allowlists, force
@@ -261,7 +263,7 @@ required setting cannot be verified. The recorder calls it through a mechanism-n
   2026-11-11 (OA-16): `protection_verifier(provider, port)`, the Gitea integration's protection check
   ([`integrations/gitea/protection_check.py`](../gitea/README.md#the-protection-check-oa-16)), asked in
   process. It reads, as the protection auditor `aieh-bot-protection-audit` (a restricted Bot with
-  repository-administrator collaboration on the admitted repository only and a token of scope exactly
+  repository-administrator collaboration on the repositories it audits only and a token of scope exactly
   `read:repository`), every rule's 34 fields, the exact rule set and Gitea's precedence for the
   protected branch, the repository's merge settings, the collaborators and their permissions, the
   teams and the deploy keys, and compares them with the harness's total declaration. Its answer's
@@ -278,6 +280,30 @@ required setting cannot be verified. The recorder calls it through a mechanism-n
   rule changed between them is disclosed by the answer after the merge, not prevented (time of check
   to time of use; the Gitea README describes what Gitea enforces at merge time).
 
+**The admitted repositories (plan leaf E-05.7; [decision 0022](../../decisions/0022-authorization-repository-the-one-ledger-provisioned-for-d1.md)
+point 2).** Every context carries its own admitted set, `Context.policies` (`{repository: Policy}`); a context
+without one is refused (`ValueError`), and no global admits a repository. The command line's context
+(`managed_context`) admits exactly the authorization repository `aieh-authorization/authorizations`
+(`managed_policies`; `gitea_roles.AUTHORIZATION_REPOSITORY`), so that every `owner-authorization/v1/` receipt of
+the managed store is a merge on that one ledger, and refuses the S-01.2.2 fixture and any other name with
+`REPOSITORY_NOT_ADMITTED` before any credential is read. Exercise contexts (P-04.2's suites, the live exercise,
+the envelope and selection suites), each with its own state and store, admit the fixture alone
+(`exercise_policies`): no real effect is ever authorized on a fixture. The provider-envelope read side
+(`envelope_decisions.candidates`) has no repository predicate; it becomes mandatory once a second non-fixture
+repository is admitted, and there is one.
+
+**The proposal act** (`authorization_proposal.py`; decision 0022 point 4). With role-bot tokens only, read from
+the bots' own entries (`gitea_roles.read_token`) and each checked with `GET /token`: the builder bot adds
+`operations/<id>.json` with the given bytes on the new branch `work/<id>` and opens one pull request into the
+protected branch; the act reads back the pull request (open, unmerged, from `work/<id>` into the protected
+branch, by the builder bot), its files (exactly the manifest, added) and the manifest at its head, whose sha256
+must equal the given bytes' (`DIGEST_CHANGED` otherwise: nothing is approved); then the reviewer bot approves
+exactly that head. An operation id on the protected branch, with its branch present or in an open pull request
+is refused (`OPERATION_NOT_NEW`) before anything is written. Its requests are those of its own allowlist
+(`BOT_ROUTES`: no merge, token or user route), separate from the recorder's; it never reads `aieh-owner`'s or the
+site administrator's entry. Exit 0 done, 2 refused (nothing written), 1 failed after a write (what was written
+is named; nothing is undone or retried).
+
 ### Refusals
 
 `authorization-recorder: CODE: detail. Remedy: ...`; exit 2 when nothing was sent to Gitea's merge,
@@ -289,7 +315,7 @@ required setting cannot be verified. The recorder calls it through a mechanism-n
 | `CHALLENGE_EXPIRED`, `CHALLENGE_CONSUMED` | the challenge's expiry has passed; a receipt already exists for the nonce (a replay) |
 | `STATEMENT_MISSING`, `STATEMENT_MODEL_AUTHORED`, `STATEMENT_NOT_OWNER`, `STATEMENT_INVALID` | the statement verdicts of the shared record |
 | `STATEMENT_OPERATION_MISSING`, `CHANNEL_NOT_ADMITTED` | the statement does not name the operation id; its channel is not admitted |
-| `RECORDED_BY_INVALID`, `REPOSITORY_NOT_ADMITTED` | `--recorded-by` is not an attribution; no expected policy for the repository |
+| `RECORDED_BY_INVALID`, `REPOSITORY_NOT_ADMITTED` | `--recorded-by` is not an attribution; the repository is not in the context's admitted set (the command line: anything but the authorization repository) |
 | `CREDENTIAL_MISSING`, `CREDENTIAL_REFUSED`, `CREDENTIAL_REJECTED` | no entry; an entry naming another account (a bot) or holding a token-shaped or empty secret, refused before anything is sent; Gitea refuses the password |
 | `IDENTITY_NOT_OWNER`, `OWNER_IS_ADMIN`, `OWNER_HAS_TOKEN` | the credential signs in as another account; `aieh-owner` is an administrator; it holds a token |
 | `POLICY_DRIFT` | the repository or the protected branch differs from the expected policy |
@@ -566,7 +592,14 @@ The authorization recorder, only in the main session on an Owner decision:
 ```
 
 `task owner:authorize -- prepare ...` (and `record`, `resolve`) run them. `--port` names the Gitea
-port; by default the managed Gitea's host record gives it.
+port; by default the managed Gitea's host record gives it. The command line admits the authorization
+repository `aieh-authorization/authorizations` alone.
+
+The proposal act (bot tokens only; never merges):
+
+```
+<tools python> -I -B integrations/owner/authorization_proposal.py propose MANIFEST [--port PORT]
+```
 
 The dispatch-input commands (`record` only in the main session on an Owner decision; `delegate` only by the
 role the delegation names, in its own session):
@@ -676,6 +709,10 @@ AIEH_AUTHZ_RECORDER_LIVE=rechallenge AIEH_AUTHZ_RECORDER_RUN_DIR=<the same direc
   decision: they have run on throwaway repositories, a throwaway store and state root, and synthetic
   statements and bases only. `load_manifest`'s enforcement has likewise run only over a throwaway store
   (integrations/dispatch, `tests/test_manifest_promotion.py`); no live driver calls it yet (E-01.3.2).
+- The authorization repository (plan leaf E-05.7): its admission, the proposal act and Owner act OA-30's
+  module (`integrations/gitea/gitea_roles.py authorization-repository`) are built and tested on the fake Gitea and
+  throwaway stores only. The repository does not exist until OA-30 is performed; no proposal, challenge or merge
+  has been made on it.
 - The authorization recorder against a real Gitea: its live exercise (`test_live_authorization.py`)
   ran once on the S-01.2.2 fixture on 2026-11-12, on the Owner's own authorization (OA-14;
   [record](../../evidence/P-04.2-authorization-recorder.md), section 17). Observed on Gitea 28.3.0:
