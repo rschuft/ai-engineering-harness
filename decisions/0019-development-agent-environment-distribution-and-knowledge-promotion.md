@@ -79,7 +79,7 @@ statement that the role agents "are not part of this repository" stands, and not
        records; evidence; local only. It records "already held by X", or makes the lesson discovered work (a
        leaf or a deferral).
     3. *Decide by home:* `AGENTS.md` rules on the Owner's ask; docs, conventions and guards inside a committed
-       leaf; decisions by the lead accountable for their scope (decision 0018 revision 2, once accepted); catalog
+       leaf; decisions by the lead accountable for their scope (decision 0018 point 3, accepted 2026-11-12, revision 4); catalog
        definitions and skills by the Owner, in the catalog's own repository.
     4. *Land and verify:* re-check the lesson against the current tree; prefer a deterministic check with a test
        shown to fail on the old code; commit through the publication gate.

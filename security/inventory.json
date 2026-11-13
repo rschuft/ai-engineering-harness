@@ -1690,9 +1690,10 @@
       "credentials": ["cred-owner-github"],
       "assets": ["repo-github-public"],
       "observed_performer": "owner-os-account",
-      "performed_via": "On the Owner's explicit authorization, by processes of the Owner's account.",
+      "performed_via": "On the Owner's explicit authorization, by processes of the Owner's account. Delegated by decision 0018 (accepted 2026-11-12) point 3: fast-forward checkpoint pushes of verified work to this repository's existing origin and branch, by the five roles, never a force push, a new remote, a tag or a release; every other push stays the Owner's per act.",
       "status": "observed",
-      "sources": ["AGENTS.md"],
+      "sources": ["AGENTS.md",
+        "decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md"],
       "evidence": ["evidence/bootstrap-log.md"],
       "findings": ["fd-bootstrap-shared-identity", "fd-owner-credential-custody"]
     },
@@ -1705,11 +1706,12 @@
       "credentials": [],
       "assets": ["repo-owner-local", "repo-gitea-policy"],
       "observed_performer": "owner-os-account",
-      "performed_via": "Owner decisions recorded by the Overseer in decisions/ and evidence/bootstrap-log.md; planned: a protected Gitea policy merge.",
+      "performed_via": "Owner decisions recorded by the Overseer in decisions/ and evidence/bootstrap-log.md; planned: a protected Gitea policy merge. Delegated by decision 0018 (accepted 2026-11-12) point 3: plan amendments that preserve every obligation, deferrals with reconsider conditions, and decisions by the lead accountable for their scope, through the integrity process with that record as the standing direction; contradicting or weakening an Owner constraint, an Owner-accepted decision or an acceptance criterion, widening what a policy permits, and changing the delegation stay the Owner's (point 4); each amendment with its reasoning recorded and the program manager's challenge; no mechanism is relaxed (the recorder's challenge, the network matrix's owner_act edges, the spending limits, Gitea protection and the publication-safety gate stay in force; point 8).",
       "status": "observed",
       "sources": [
         "AGENTS.md",
-        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture"
+        "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#governance-architecture",
+        "decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md"
       ],
       "evidence": ["evidence/bootstrap-log.md"],
       "findings": ["fd-owner-authorization-record", "fd-bootstrap-shared-identity"]

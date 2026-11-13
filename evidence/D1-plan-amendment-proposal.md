@@ -1,5 +1,7 @@
 # D1 plan amendment proposal (OA-28)
 
+> **Applied 2026-11-12.** Decision 0018 was accepted by the Owner (revision 4); items 1 to 4 were decided by the product manager under its point 3, and item 5 was approved by the Owner together with item 3 (`bootstrap-log.md`, Decisions, "Owner acceptance: decision 0018 revision 4, and OA-28 item 5 with item 3"). An independent review added three corrections, applied in the same amendment: S-03.5 is in S-03's child list; S-03.5 and S-03.3 follow P-04.3 in the work order; and S-03.4 and K-02.2, which reach S-03.1 but not S-03.3, carry the model-use gate in their own proofs (the log's entry "Decision 0018 accepted and applied"). The text below is the proposal as it was presented.
+
 > **Prepared by the product manager (2026-11-12). A proposal for the Owner's decision; nothing in the plan is
 > changed.** It comes from the Owner's direction of 2026-11-12, item 4 ("Prepare the proposed plan amendments",
 > verbatim in [the log](bootstrap-log.md#owner-direction-planning-review-decisions)), and from two

@@ -31,9 +31,9 @@ This is `rschuft/ai-engineering-harness`, the **adoption-first** AI Engineering 
 
 ## Planning and execution
 
-- **Who decides what.** [Decision 0018](decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md) sets out each role's decisions, the delegated decisions and standing authorizations. It is Proposed: until the Owner accepts it, it grants nothing and the existing per-act Owner authorization governs.
+- **Who decides what.** [Decision 0018](decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md) sets out each role's decisions, the delegated decisions and standing authorizations. The Owner accepted it on 2026-11-12 (revision 4); its point 3 lists what is delegated and its point 4 what stays the Owner's per act.
 - **Where planning state lives.** There is no other store. A commitment is a dated entry "Commitment: <milestone>" in the Decisions of [`evidence/bootstrap-log.md`](evidence/bootstrap-log.md), naming the milestone's terminal leaf. The committed set and its readiness come from `task plan:commitment -- <leaf>` (`python -I -B tools/plan_commitment.py <leaf>`). Leaf status and blockers go in the log's Leaves table, a new row at most three lines; deferrals in the plan's `deferred` list; reserved requests in the log's Owner-actions queue. From the D1 transition (leaf P-05.1), Backlog.md and OpenSpec hold this repository's Work.
 - **Sessions.** Planning and execution sessions alternate; the handoff either way is a commit.
-- **Owner statements.** An Owner statement that an act requires is given in the session that performs the act.
+- **Owner statements.** An Owner authorization is recorded, verbatim and dated, by the session in which the Owner gave it; no agent writes, paraphrases or impersonates one, and none is relayed: another session acts on it only by reading that record ([decision 0018](decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md), point 7).
 - **Blocked work.** Execution stops a blocked leaf, not the unit.
 - **Discovered work.** Discovered work becomes its own leaf or a deferral, never another leaf's proof clause.

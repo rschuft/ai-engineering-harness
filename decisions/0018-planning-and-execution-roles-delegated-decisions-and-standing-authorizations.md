@@ -1,14 +1,16 @@
 # 0018 - Planning and execution roles, delegated decisions and standing authorizations
 
-Status: Proposed, revision 4 - 2026-11-12. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
+Status: Accepted (Owner) - 2026-11-12, revision 4, in the Owner's words "I accept decision 0018 revision 4 as
+presented" (verbatim in `evidence/bootstrap-log.md`, Decisions, "Owner acceptance: decision 0018 revision 4, and
+OA-28 item 5 with item 3"). Its history: Proposed - 2026-11-12, revision 4. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
 in `evidence/bootstrap-log.md`, Decisions, "Owner direction: the five-role operating model"); revised by the product
 manager on the Owner's direction of the same day (Decisions, "Owner direction: decisions on the product manager's
 first planning assessment", item 1), and refined again on the Owner's direction "finalize decision 0018 revision 2"
 (Decisions, same date), and corrected on the Owner's direction "decision 0018 revision 3 accepted in principle,
-subject to the model-selection correction" (Decisions, same date). Every change is listed under "Revisions" below. **This record grants
-nothing until the Owner accepts it.** Until then every existing restriction stays in force: per-act Owner
+subject to the model-selection correction" (Decisions, same date). Every change is listed under "Revisions" below. **It grants what it states from
+its acceptance; the Owner's statement grants no reserved live effect.** Before its acceptance, every existing restriction stayed in force: per-act Owner
 authorization, the integrity process's "only when your user explicitly asks", decision 0012's channel, and every
-Owner-only operation in `security/inventory.json`.
+Owner-only operation in `security/inventory.json`. From its acceptance they stay in force except where point 3 delegates the decision; no mechanism is relaxed (point 8).
 
 ## Context
 
@@ -269,3 +271,11 @@ operation and the broker admitting only the recorded identifiers; it applies to 
 amended through the integrity process (OA-28 item 5). Consequences add that reconciliation and name the earlier Owner requirement it replaces (point 8's heading
 says so). The engineering manager is named as the one who selects (point 1's row). Nothing else changed beyond the
 Status line and the annotation of revision 3.
+
+## Current facts
+
+- 2026-11-12: Accepted by the Owner (revision 4). Consequences applied the same day: `security/inventory.json`
+  `op-policy-change` and `op-git-push-public` record the point-3 delegations; `CLAUDE.md`'s Owner-statements rule
+  points to point 7; the plan amendment of 2026-11-12 (OA-28 items 1 to 5) reconciles S-03.3 with point 3, adds
+  S-03.5 and makes E-05.1 depend on P-04.3. The Owner's acceptance authorizes no provider credential, spending,
+  external egress, first model call or other reserved live effect.

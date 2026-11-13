@@ -1,5 +1,5 @@
 {
-  "task_count": 173,
+  "task_count": 174,
   "tasks": [
     {
       "id": "F-01.1",
@@ -307,7 +307,7 @@
         "F-04.2"
       ],
       "path": "task_prompts/S-03.1.md",
-      "sha256": "ac3c597c0b8b151ab9baaf85e17f9efd94349a7234c9cdd37edced7aa56937b4"
+      "sha256": "bb439ea58552aee2fc0cdfa352d255b75f5b405ecad6a0cfb1ee8f3bd58f4774"
     },
     {
       "id": "S-03.2",
@@ -329,18 +329,7 @@
         "S-03.2"
       ],
       "path": "task_prompts/S-03.4.md",
-      "sha256": "230d23d75cce775c8d03eef9abe0f87034b888d5d4055506425d6bf85427f94c"
-    },
-    {
-      "id": "S-03.3",
-      "title": "Qualify the first ACP coding provider through the broker",
-      "phase": 0,
-      "deps": [
-        "S-03.2",
-        "F-04.2"
-      ],
-      "path": "task_prompts/S-03.3.md",
-      "sha256": "bdbb7b534b43223a2fbb3df10c97c53b737bc4fa28cfab83f8bb075776a2ecd9"
+      "sha256": "de021435412cf6f35725431d5723b1a21f312f78179943a4cec0c4b43cb3fb87"
     },
     {
       "id": "F-08.1",
@@ -676,6 +665,30 @@
       "sha256": "3dc61b10b009cd5ffc0fa4f3252e9a5d4045aca05447af1a59d24fe505392da4"
     },
     {
+      "id": "S-03.5",
+      "title": "Bind the broker's real-provider start to a recorded provider-envelope authorization",
+      "phase": 0,
+      "deps": [
+        "S-03.1",
+        "P-04.2",
+        "P-04.3"
+      ],
+      "path": "task_prompts/S-03.5.md",
+      "sha256": "690651cc4a1c9392251653eb16fdb1f9fce8a24eb65c5ab1b8bc2b04536203d0"
+    },
+    {
+      "id": "S-03.3",
+      "title": "Qualify the first ACP coding provider through the broker",
+      "phase": 0,
+      "deps": [
+        "S-03.2",
+        "F-04.2",
+        "S-03.5"
+      ],
+      "path": "task_prompts/S-03.3.md",
+      "sha256": "d2ec5638949b4a213bd39433f78c6ecfdd76527daf603fa4ab869b5073566623"
+    },
+    {
       "id": "E-01.3.1",
       "title": "Implement typed native conversation-create request",
       "phase": 1,
@@ -822,10 +835,11 @@
       "phase": 1,
       "deps": [
         "P-02.2",
-        "E-01.2.1"
+        "E-01.2.1",
+        "P-04.3"
       ],
       "path": "task_prompts/E-05.1.md",
-      "sha256": "11906894de45c5203aa6dd044bc7dcb14e430c9d9b3c321feec31d7d7bde0134"
+      "sha256": "62d4a25c9796b36edb000258bf16217b4a329118e8c8202210a5da4b1c015851"
     },
     {
       "id": "E-05.2",
@@ -1438,7 +1452,7 @@
         "S-03.2"
       ],
       "path": "task_prompts/K-02.2.md",
-      "sha256": "43e7bea639ce84934413651345ececb7501fab118d61df88a051fbc90b2e31bd"
+      "sha256": "920509a93da69aa42c0cd346b073f326c42b6e393e7895c81008248241f19c71"
     },
     {
       "id": "K-03.1",
