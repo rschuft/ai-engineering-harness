@@ -9,7 +9,8 @@ the broker, and this module is all of them:
   forward_target refuses the control listener's port and any port that is not the inference listener's;
 - a call of the control listener on 127.0.0.1 (ControlClient): the broker's status, one grant's state by its
   token fingerprint, and revocation (decision 0015 section 3.3: the dispatcher revokes at attempt end). The
-  dispatcher's own issuance belongs to the typed create's change (A-01.2, E-03.1);
+  dispatcher's own issuance and revocation for the D1 stage are E-05.6's (integrations/dispatch/dispatch_inputs.py:
+  dispatch and end_attempt, through ControlClient); every other stage's create secrets stay A-01.2's and E-03.1's;
 - the fingerprint of an attempt token (token_fingerprint), after checking its shape, so that a record carries
   the fingerprint and never the token.
 

@@ -1,5 +1,5 @@
 """Trusted dispatch input resolution, create admission and the native conversation create
-(plan leaves E-01.2.1, E-01.2.2, E-01.3.1 and E-05.2, blueprint #execution-qualification).
+(plan leaves E-01.2.1, E-01.2.2, E-01.3.1, E-05.2 and E-05.6, blueprint #execution-qualification).
 
 Dispatch step 01 resolves the authoritative Work and profile before anything is reserved
 or created: "Check Backlog readiness, accepted OpenSpec revision and executable
@@ -14,6 +14,14 @@ send_create, with the reserved record re-read from the store, the host workspace
 after admission, every Agent Server call checked against the profile's pinned route allowlist
 (``AgentServerClient``), decision 0001's ``/server_info`` preconditions before the create, and
 the returned conversation id recorded in the store; a refused attempt is marked failed.
+
+For the D1 stage (E-05.6) the create also carries the attempt's inference token and the guest
+inference endpoint as its ``secrets``: the token is requested from the inference broker's
+control listener only after ``admit`` has admitted every other input, ``admit_secrets`` adds
+the block, the check shared with S-03.3's qualification admission (``create_secrets``) refuses
+any other shape at admission and again before the transport, the grant is revoked on any
+refusal or failure and at the attempt's end (``end_attempt``), and records carry the token's
+fingerprint only (integrations/dispatch/README.md).
 
 * **Input:** a dispatch request (``ai-engineering-harness/dispatch/request/v1``) that names
   identifiers only: the Work (a Backlog.md task id), the repository, the stage, the
@@ -93,6 +101,10 @@ planning = readiness.adapter
 paths = _load('aieh_paths', REPO / 'integrations' / 'paths' / 'aieh_paths.py')
 # The reference grammar integrations/lineage reads a reservation's outcomeRef with (decision 0008).
 lineage = _load('lineage', REPO / 'integrations' / 'lineage' / 'lineage.py')
+# E-05.6: the create's secrets block check, the one shared with S-03.3's qualification admission (not a copy). It
+# loads the broker's token grammar on first use only; the D1 stage's other inference modules are loaded by
+# ``_inference_modules`` when that stage is admitted: importing this module loads no inference or credential module.
+secrets_check = _load('aieh_dispatch_create_secrets', HERE / 'create_secrets.py')
 
 REQUEST_FORMAT = 'ai-engineering-harness/dispatch/request/v1'
 MANIFEST_SCHEMA = 'ai-engineering-harness/dispatch/approved-inputs/v1'
@@ -237,6 +249,17 @@ REFUSALS = {
                                  'F-04.2 fixture\'s and the S-03.3 qualification create\'s tag)',
     'AGENT_BLOCK_NOT_ACP': 'the D1 stage\'s pinned create template does not carry an ACP agent block '
                            '(agent_settings with agent_kind acp)',
+    # E-05.6: the D1 stage's create secrets (the attempt's inference token and endpoint). The secrets block's codes
+    # and meanings are the check's shared with S-03.3's qualification admission (create_secrets.MEANINGS).
+    **secrets_check.MEANINGS,
+    'INFERENCE_INPUTS_INVALID': 'the D1 stage\'s inference inputs cannot be admitted: the pinned ACP registry '
+                                'extract drifted or is not its shape, the template\'s ACP server is not the '
+                                'registry entry\'s, its model is not one name of the broker\'s grammar, or the profile '
+                                'declares no single guest inference endpoint',
+    'INFERENCE_GRANT_UNAVAILABLE': 'the D1 stage\'s attempt token was not issued: no broker control listener was '
+                                   'given, or the broker refused or did not answer the issue',
+    'INFERENCE_REVOCATION_FAILED': 'the attempt\'s inference grant was not revoked at the attempt\'s end (the broker '
+                                   'refused or did not answer): it stays live until revoked or expired',
 }
 
 
@@ -971,6 +994,7 @@ def resolve(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], 
 # template's sha256), the F-04.2 fixture and any template tagged disposable are refused, the template must
 # carry an ACP agent block, and the body's agent block must be exactly the template's (BODY_NOT_TEMPLATE).
 # A profile without the declaration, and every other stage, keep E-01.2.2's behaviour.
+# E-05.6: the D1 stage's create carries the attempt's secrets, added by admit_secrets after the token is issued.
 
 CREATE_ROUTE = {'method': 'POST', 'path': '/api/conversations'}  # docker_runtime/routers.py start_conversation
 WORKSPACE_CATEGORY = 'workspaces'      # aieh_paths category (persistent/, class C, decision 0009)
@@ -1002,6 +1026,20 @@ STAGE_TEMPLATE_KEY = 'stage_create_template'
 ACP_AGENT_KIND = 'acp'
 # The tag both disposable create fixtures carry: f-04.2-disposable (F-04.2) and s-03.3-disposable (S-03.3).
 DISPOSABLE_TAG_SUFFIX = '-disposable'
+# E-05.6: the D1 stage's create secrets. Only the D1 stage's create carries the two secret fields; the pinned
+# template carries none (admit_secrets adds them). The token's value stands in the admitted body as TOKEN_SLOT, and
+# is put in its place, in memory only, by the check immediately before the transport. The grant's budgets and
+# lifetime are declared beside the stage template's pin (GRANT_KEY: requests, tokens, ttl_s), bound by the profile
+# digest; the family and the model come from the pinned template's ACP block.
+SECRET_FIELDS = secrets_check.SECRET_FIELDS
+TOKEN_SLOT = '{attempt_token}'
+GRANT_KEY = 'inference_grant'
+GRANT_FIELDS = ('requests', 'tokens', 'ttl_s')
+GRANT_FORMAT = 'ai-engineering-harness/dispatch/inference-grant/v1'
+REVOCATION_FORMAT = 'ai-engineering-harness/dispatch/inference-revocation/v1'
+REVOCATION_TRIGGER = 'attempt end'     # decision 0007 point 5 (the broker's TRIGGERS): a refused attempt ends too
+REVOCATION_KEY = 'dispatch/attempt/{attempt_id}/inference-revocation/{n}'
+CODE_RE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 ARTIFACT_PATH_RE = re.compile(r'profiles/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+')
 GUEST_PATH_RE = re.compile(r'(?:/[A-Za-z0-9._-]+)+')
 MEMORY_RE = re.compile(r'([1-9][0-9]{0,15})([bkmg]?)')
@@ -1122,9 +1160,11 @@ def check_admission_policy(policy, profile: str) -> None:
 
 
 def _check_stage_create_template(pin, fixture, profile: str) -> dict:
-    """The profile's D1 stage template declaration, normalized to ``{stage, path, sha256}`` (E-05.2); refused
-    when malformed (``PROFILE_ADMISSION_INVALID``) or when it pins the profile's F-04.2 fixture, by path or by
-    sha256 (``STAGE_TEMPLATE_DISPOSABLE``). Other keys of the declaration are descriptive and ignored."""
+    """The profile's D1 stage template declaration, normalized to ``{stage, path, sha256, inference_grant}``
+    (E-05.2, E-05.6); refused when malformed (``PROFILE_ADMISSION_INVALID``: the grant's ``requests``, ``tokens``
+    and ``ttl_s`` are required positive integers, the broker bounds them at issuance) or when it pins the profile's
+    F-04.2 fixture, by path or by sha256 (``STAGE_TEMPLATE_DISPOSABLE``). Other keys of the declaration are
+    descriptive and ignored."""
     if not isinstance(pin, dict) or pin.get('stage') not in STAGES or not isinstance(pin.get('path'), str) \
             or not ARTIFACT_PATH_RE.fullmatch(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
             or not isinstance(pin.get('sha256'), str) or not SHA256_RE.fullmatch(pin['sha256']):
@@ -1133,7 +1173,14 @@ def _check_stage_create_template(pin, fixture, profile: str) -> dict:
     if pin['path'] == fixture.get('path') or pin['sha256'] == fixture.get('sha256'):
         raise DispatchRefused('STAGE_TEMPLATE_DISPOSABLE', f'{profile}: the {pin["stage"]} stage\'s create template '
                               'is the profile\'s F-04.2 disposable fixture', profile=profile, stage=pin['stage'])
-    return {'stage': pin['stage'], 'path': pin['path'], 'sha256': pin['sha256']}
+    grant = pin.get(GRANT_KEY)
+    if not isinstance(grant, dict) or set(grant) != set(GRANT_FIELDS) \
+            or not all(_positive_int(grant[name]) for name in GRANT_FIELDS):
+        raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: agent_server.{STAGE_TEMPLATE_KEY}.{GRANT_KEY} '
+                              f'must declare exactly {list(GRANT_FIELDS)}, each a positive integer (E-05.6)',
+                              profile=profile)
+    return {'stage': pin['stage'], 'path': pin['path'], 'sha256': pin['sha256'],
+            GRANT_KEY: {name: grant[name] for name in GRANT_FIELDS}}
 
 
 def stage_create_template(declared: dict, profile: str) -> dict | None:
@@ -1257,16 +1304,26 @@ def _override_code(key) -> str:
     return 'BODY_FIELD_UNKNOWN'
 
 
-def check_create_body(body, *, admission: dict, template: dict, conversation_id: str) -> None:
+def check_create_body(body, *, admission: dict, template: dict, conversation_id: str,
+                      secrets: Mapping | None = None) -> None:
     """Refuse a create body that is not exactly the pinned template with the reserved conversation
     id: an allowlist of fields; the Docker runtime named explicitly (decision 0001 s2: every create
     sends it); the server-provisioned working directory; within ``container`` no cap but the
-    declared one; every other field equal to the template's."""
+    declared one; every other field equal to the template's.
+
+    ``secrets`` (the D1 stage's, E-05.6: ``names``, ``endpoint`` and ``binding``, ``StageInference.secrets``)
+    admits the two secret fields beside the template's, checked first by the check shared with S-03.3's
+    qualification admission (``create_secrets.check_secrets``); without it, as for every other stage, they are
+    fields outside the allowlist (BODY_FIELD_UNKNOWN)."""
     if not isinstance(body, dict):
         raise DispatchRefused('BODY_MALFORMED', 'the create body is not a JSON object')
+    allowed = BODY_FIELDS + (SECRET_FIELDS if secrets is not None else ())
     for key in body:
-        if key not in BODY_FIELDS:
+        if key not in allowed:
             raise DispatchRefused(_override_code(key), f'the create body may not carry {key!r}', field=key)
+    if secrets is not None:
+        secrets_check.check_secrets(body, names=secrets['names'], endpoint=secrets['endpoint'],
+                                    binding=secrets['binding'], refused=DispatchRefused)
     if body.get('conversation_id') != conversation_id:
         raise DispatchRefused('CONVERSATION_ID_MISMATCH', f'the create body must carry the reserved '
                               f'conversation id {conversation_id}')
@@ -1289,10 +1346,11 @@ def check_create_body(body, *, admission: dict, template: dict, conversation_id:
             elif key not in CONTAINER_FIELDS:
                 raise DispatchRefused(_override_code(key), f'the create body may not carry container.{key}',
                                       field=f'container.{key}')
-    if set(body) != set(template):
-        raise DispatchRefused('BODY_NOT_TEMPLATE', f'the body fields {sorted(body)} are not the template\'s '
+    fields = set(body) - set(SECRET_FIELDS) if secrets is not None else set(body)
+    if fields != set(template):
+        raise DispatchRefused('BODY_NOT_TEMPLATE', f'the body fields {sorted(fields)} are not the template\'s '
                               f'{sorted(template)}')
-    for key in body:
+    for key in (key for key in body if key in fields):
         mine, theirs = body[key], template[key]
         if key == 'conversation_id':
             continue
@@ -1359,9 +1417,159 @@ def workspace_host_path(resolved: ResolvedInputs, workspaces, operation_key: str
     return category.joinpath(*parts)
 
 
+# ---------------------------------------------------------------------------
+# E-05.6: the D1 stage's inference grant, held in memory, and the broker's control listener
+
+def _inference_modules():
+    """(acp_qualification, inference_control): the pinned ACP registry and the guest inference endpoint, and the
+    broker's control listener. Loaded on first use by the D1 stage only, so that importing this module loads no
+    inference or credential module (the owner recorders' import census)."""
+    return (_load('acp_qualification', HERE / 'acp_qualification.py'),
+            _load('aieh_inference_control', REPO / 'integrations' / 'inference' / 'inference_control.py'))
+
+
+class InferenceGrant:
+    """One attempt's inference grant, as the broker's control listener issued it (decision 0015 section 3). The
+    token is held in memory only, from the issue to the create's transport call, and is never shown: ``repr`` and
+    ``record()`` carry its fingerprint; ``token()`` is the only way to it until ``drop()``."""
+
+    __slots__ = ('fingerprint', 'conversation_id', 'attempt_id', 'family', 'models', 'budget', 'expires_at',
+                 '_token')
+
+    def __init__(self, *, token, fingerprint, conversation_id, attempt_id, family, models, budget, expires_at):
+        self.fingerprint, self.conversation_id, self.attempt_id = fingerprint, conversation_id, attempt_id
+        self.family, self.models, self.budget, self.expires_at = family, models, budget, expires_at
+        self._token = token
+
+    @classmethod
+    def from_answer(cls, answer) -> 'InferenceGrant':
+        """The grant of the control listener's issue answer (``ControlClient.issue`` checked the token's shape,
+        its fingerprint and the attempt); its other fields are kept as answered, for the binding check."""
+        token = answer.get('token') if isinstance(answer, Mapping) else None
+        if not isinstance(token, str) or not secrets_check.broker().TOKEN_SHAPE.fullmatch(token) \
+                or answer.get('token_fingerprint') != secrets_check.fingerprint(token):
+            raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', 'the issue answer does not carry one attempt token')
+
+        def text(name):
+            value = answer.get(name)
+            return value if isinstance(value, str) else None
+        budget = answer.get('budget')
+        return cls(token=token, fingerprint=answer['token_fingerprint'], conversation_id=text('conversation_id'),
+                   attempt_id=text('attempt_id'), family=text('family'),
+                   models=[m for m in answer.get('models') or [] if isinstance(m, str)],
+                   budget=_json_value(budget) if isinstance(budget, Mapping) else None,
+                   expires_at=text('expires_at'))
+
+    def __repr__(self):
+        return f'InferenceGrant(fingerprint={self.fingerprint!r}, attempt_id={self.attempt_id!r}, open={self.open})'
+
+    __str__ = __repr__
+
+    def __reduce__(self):
+        raise TypeError('an inference grant is not serializable')
+
+    @property
+    def open(self) -> bool:
+        return self._token is not None
+
+    def token(self) -> str:
+        if self._token is None:
+            raise ValueError('the inference grant\'s token is no longer held')
+        return self._token
+
+    def drop(self) -> None:
+        """Release the in-memory token (this is not revocation: the broker's grant is revoked by its fingerprint)."""
+        self._token = None
+
+    def binding(self) -> dict:
+        """What the shared check binds the token to: the grant's fingerprint, conversation and attempt."""
+        return {'token_fingerprint': self.fingerprint, 'conversation_id': self.conversation_id,
+                'attempt_id': self.attempt_id}
+
+    def record(self) -> dict:
+        """What a record may carry: the grant's identity by the token's fingerprint, never the token."""
+        return {'format': GRANT_FORMAT, 'tokenFingerprint': self.fingerprint, 'conversationId': self.conversation_id,
+                'attemptId': self.attempt_id, 'family': self.family, 'models': list(self.models),
+                'budget': self.budget, 'expiresAt': self.expires_at}
+
+
+@dataclass(frozen=True)
+class InferenceAccess:
+    """The dispatcher's way to the inference broker (E-05.6): its control listener (``inference_control.
+    ControlClient`` on 127.0.0.1, or a test's stand-in with ``issue`` and ``revoke``) and the revoker every
+    revocation names. Never the provider key: the dispatcher reads no provider credential."""
+    control: object
+    revoker: str
+
+    @classmethod
+    def from_component(cls, raw, *, revoker: str) -> 'InferenceAccess':
+        """The control listener of ``components.inference_broker`` (its port through
+        ``inference_control.dispatcher_ports``)."""
+        _, control = _inference_modules()
+        ports = control.dispatcher_ports(raw)
+        return cls(control=control.ControlClient(ports['control_port']), revoker=revoker)
+
+
+@dataclass(frozen=True)
+class StageInference:
+    """The D1 stage's inference inputs, from trusted, digest-bound sources only (E-05.6): the pinned ACP registry
+    entry's two secret names (the token's, the endpoint's), the profile's guest inference endpoint, the broker
+    family of the registry entry, the model of the pinned template's ACP block, and the grant's budgets and
+    lifetime declared beside the stage template's pin."""
+    names: tuple
+    endpoint: str
+    family: str
+    models: tuple
+    requests: int
+    tokens: int
+    ttl_s: int
+
+    def secrets(self, grant: InferenceGrant | None, operation_key: str) -> dict:
+        """``check_create_body``'s ``secrets``: the names, the endpoint and the binding to the reserved
+        conversation and attempt (a missing grant binds nothing: SECRET_TOKEN_NOT_BOUND)."""
+        return {'names': list(self.names), 'endpoint': self.endpoint,
+                'binding': {'grant': None if grant is None else grant.binding(),
+                            'conversation_id': store.conversation_id_for(operation_key),
+                            'attempt_id': store.attempt_id_for(operation_key)}}
+
+    def block(self) -> dict:
+        """The secrets block of an admitted body: the token's value as TOKEN_SLOT, the endpoint as itself."""
+        token_name, endpoint_name = self.names
+        return {token_name: {'kind': secrets_check.STATIC_SECRET, 'value': TOKEN_SLOT},
+                endpoint_name: {'kind': secrets_check.STATIC_SECRET, 'value': self.endpoint}}
+
+
+def _stage_inference(declared: dict, staged: dict, template: dict, stage: str) -> StageInference:
+    """The D1 stage's inference inputs (StageInference), or INFERENCE_INPUTS_INVALID."""
+    qualification, _ = _inference_modules()
+
+    def invalid(detail):
+        return DispatchRefused('INFERENCE_INPUTS_INVALID', f'the {stage} stage: {detail}', stage=stage)
+
+    try:
+        names = qualification.registry_secret_names()
+    except qualification.QualificationRefused as exc:
+        raise invalid(f'the pinned ACP registry extract ({exc.code})') from None
+    try:
+        endpoint = qualification.inference_endpoint(declared)
+    except qualification.QualificationRefused as exc:
+        raise invalid(f'the profile\'s guest inference endpoint ({exc.code})') from None
+    settings = template.get('agent_settings') if isinstance(template.get('agent_settings'), dict) else {}
+    if settings.get('acp_server') != qualification.ACP_SERVER:
+        raise invalid(f'the template\'s acp_server is not the pinned registry entry\'s {qualification.ACP_SERVER!r}')
+    model, broker = settings.get('acp_model'), secrets_check.broker()
+    if not isinstance(model, str) or not broker.MODEL_NAME.fullmatch(model) or broker.WILDCARD.search(model):
+        raise invalid('the template\'s acp_model is not one model name of the broker\'s grammar')
+    grant = staged[GRANT_KEY]
+    return StageInference(names=tuple(names), endpoint=endpoint, family=qualification.ACP_FAMILY, models=(model,),
+                          requests=grant['requests'], tokens=grant['tokens'], ttl_s=grant['ttl_s'])
+
+
 @dataclass(frozen=True)
 class AdmittedCreate:
-    """The one admitted OpenHands create of an attempt, built from trusted policy only."""
+    """The one admitted OpenHands create of an attempt, built from trusted policy only. For the D1 stage
+    (E-05.6) the body carries the secrets block with the token's value as TOKEN_SLOT, and ``inference`` the grant
+    whose token takes its place, in memory only, immediately before the transport."""
     operation_key: str
     conversation_id: str
     method: str
@@ -1374,6 +1582,7 @@ class AdmittedCreate:
     template_bytes: bytes     # the pinned create template, re-checked against its sha256 on send
     routes_bytes: bytes       # the pinned route allowlist every Agent Server call is checked against (E-01.3.1)
     profile_bytes: bytes      # the approved profile.json, re-checked against the profile digest on send (E-05.2)
+    inference: InferenceGrant | None = None   # the D1 stage's grant (E-05.6); its token is never in body_json
 
     @property
     def body(self) -> dict:
@@ -1384,13 +1593,16 @@ class AdmittedCreate:
         return json.loads(self.mounts_json)
 
     def to_json(self) -> dict:
-        return {'format': ADMITTED_FORMAT, 'operation_key': self.operation_key,
-                'conversation_id': self.conversation_id, 'route': {'method': self.method, 'path': self.path},
-                'body': self.body, 'mounts': self.mounts,
-                'workspace': {'planned': self.planned_workspace, 'host': self.host_workspace},
-                'policy_digest': self.policy_digest,
-                'create_template_sha256': hashlib.sha256(self.template_bytes).hexdigest(),
-                'routes_sha256': hashlib.sha256(self.routes_bytes).hexdigest()}
+        record = {'format': ADMITTED_FORMAT, 'operation_key': self.operation_key,
+                  'conversation_id': self.conversation_id, 'route': {'method': self.method, 'path': self.path},
+                  'body': self.body, 'mounts': self.mounts,
+                  'workspace': {'planned': self.planned_workspace, 'host': self.host_workspace},
+                  'policy_digest': self.policy_digest,
+                  'create_template_sha256': hashlib.sha256(self.template_bytes).hexdigest(),
+                  'routes_sha256': hashlib.sha256(self.routes_bytes).hexdigest()}
+        if self.inference is not None:   # the D1 stage: the grant by its token's fingerprint (E-05.6)
+            record['inference_grant'] = self.inference.record()
+        return record
 
 
 def _resolved_admission(resolved: ResolvedInputs) -> dict:
@@ -1410,21 +1622,65 @@ def _resolved_admission(resolved: ResolvedInputs) -> dict:
     return admission
 
 
-def _check_stage_content(declared: dict, resolved: ResolvedInputs, admission: dict, template: dict) -> None:
+def _check_stage_content(declared: dict, resolved: ResolvedInputs, admission: dict,
+                         template: dict) -> StageInference | None:
     """For the D1 stage (the stage the approved profile's stage_create_template names, E-05.2): the reserved
-    policy's create template is that pin (``ADMISSION_MISMATCH`` otherwise), and the template's content passes
-    ``check_stage_template``. Nothing for any other stage."""
+    policy's create template is that pin (``ADMISSION_MISMATCH`` otherwise), the template's content passes
+    ``check_stage_template``, and its inference inputs are admissible (E-05.6); returns them. None for any other
+    stage."""
     staged = stage_create_template(declared, resolved.profile)
     if staged is None or staged['stage'] != resolved.stage:
-        return
+        return None
     if not _same({'path': staged['path'], 'sha256': staged['sha256']}, admission['create_template']):
         raise DispatchRefused('ADMISSION_MISMATCH', f'the reserved create template is not the {resolved.stage} '
                               'stage\'s pinned template')
     check_stage_template(template, resolved.stage)
+    for name in SECRET_FIELDS:   # E-05.6: the secrets are the attempt's, added at admission, never pinned
+        if name in template:
+            raise DispatchRefused('BODY_FIELD_UNKNOWN', f'the {resolved.stage} stage\'s pinned create template may '
+                                  f'not carry {name!r}: admit_secrets adds the attempt\'s', field=name)
+    return _stage_inference(declared, staged, template, resolved.stage)
 
 
-def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admission: dict, workspaces) -> dict:
-    """Every admission check on a built request; returns the validated body (the one to send)."""
+def _scrubbed(refusal: DispatchRefused, token: str | None) -> DispatchRefused:
+    """REFUSAL with every attempt token, the held token's body and every word holding a provider key's shape
+    replaced in its detail and context: a refusal of a body that held the token reaches the store and the caller
+    without it."""
+    shapes = secrets_check.broker()
+    body = token[len(shapes.TOKEN_PREFIX):] if isinstance(token, str) else None
+
+    def word(match):
+        return '<provider key>' if secrets_check.PROVIDER_KEY_SHAPE.search(match.group()) else match.group()
+
+    def clean(value):
+        if isinstance(value, str):
+            if body:
+                value = value.replace(body, '<attempt token>')
+            value = shapes.TOKEN_SHAPE.sub('<attempt token>', value)
+            return re.sub(r'[A-Za-z0-9_-]+', word, value)
+        if isinstance(value, Mapping):
+            return {clean(str(k)): clean(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [clean(v) for v in value]
+        return value
+    return DispatchRefused(refusal.code, clean(refusal.detail), **clean(dict(refusal.context)))
+
+
+def _wire_body(body: dict, inference: StageInference, grant: InferenceGrant | None) -> dict:
+    """BODY with the grant's token in the token secret's place (TOKEN_SLOT), in memory only; any other body as is."""
+    secrets = body.get('secrets')
+    source = secrets.get(inference.names[0]) if isinstance(secrets, dict) else None
+    if grant is not None and grant.open and isinstance(source, dict) and source.get('value') == TOKEN_SLOT:
+        body = {**body, 'secrets': {**secrets, inference.names[0]: {**source, 'value': grant.token()}}}
+    return body
+
+
+def _admitted_checks(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admission: dict, workspaces,
+                     secrets: bool) -> tuple[dict, StageInference | None]:
+    """Every admission check on a built request; returns the validated body (the one to send) and, for the D1
+    stage, its inference inputs. With SECRETS false (``admit``: every input but the secrets) the D1 stage's body
+    carries no secrets block and no grant; with SECRETS true (``admit_secrets``, ``send_create``) it must carry the
+    block, checked with the grant's token in place and bound to this attempt (E-05.6)."""
     key = _operation_key(resolved)
     conversation_id = store.conversation_id_for(key)
     if (admitted.operation_key, admitted.conversation_id, admitted.policy_digest) != \
@@ -1442,7 +1698,10 @@ def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admis
     # says whether this is the D1 stage; if so the template's content is checked again here.
     profile_raw = admitted.profile_bytes
     _, _, declared = _read_checked_profile(resolved.profile, resolved.profile_digest, lambda _name: profile_raw)
-    _check_stage_content(declared, resolved, admission, template)
+    inference = _check_stage_content(declared, resolved, admission, template)
+    if admitted.inference is not None and (inference is None or not secrets):
+        raise DispatchRefused('ADMISSION_MISMATCH', 'the admitted create holds an inference grant where no secrets '
+                              'are admitted (another stage, or before admit_secrets)')
     routes_raw = admitted.routes_bytes if isinstance(admitted.routes_bytes, bytes) else b''
     if hashlib.sha256(routes_raw).hexdigest() != admission['routes']['sha256']:
         raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted route allowlist is not the pinned one')
@@ -1454,7 +1713,16 @@ def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admis
         body = _strict_loads(admitted.body_json)
     except (TypeError, ValueError):
         raise DispatchRefused('BODY_MALFORMED', 'the create body is not strict JSON') from None
-    check_create_body(body, admission=admission, template=template, conversation_id=conversation_id)
+    if inference is None or not secrets:
+        check_create_body(body, admission=admission, template=template, conversation_id=conversation_id)
+    else:
+        body = _wire_body(body, inference, admitted.inference)
+        try:
+            check_create_body(body, admission=admission, template=template, conversation_id=conversation_id,
+                              secrets=inference.secrets(admitted.inference, key))
+        except DispatchRefused as refusal:
+            held = admitted.inference.token() if admitted.inference is not None and admitted.inference.open else None
+            raise _scrubbed(refusal, held) from None
     expected = _binds_for(admission['mounts']['binds'], conversation_id.replace('-', ''))
     try:
         mounts = _strict_loads(admitted.mounts_json)
@@ -1463,7 +1731,27 @@ def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admis
     if not _same(mounts, expected):
         raise DispatchRefused('MOUNTS_NOT_DECLARED', 'the admitted mount set is not exactly the declared one',
                               declared=expected)
-    return body
+    return body, inference
+
+
+def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admission: dict, workspaces,
+                    secrets: bool = True) -> dict:
+    """Every admission check on a built request; returns the validated body (the one to send)."""
+    return _admitted_checks(admitted, resolved=resolved, admission=admission, workspaces=workspaces,
+                            secrets=secrets)[0]
+
+
+def stage_inference(admitted: AdmittedCreate, *, resolved: ResolvedInputs) -> StageInference | None:
+    """The D1 stage's inference inputs of an admitted create (E-05.6), re-derived from the approved profile and
+    the pinned template it carries; None for every other stage."""
+    admission = _resolved_admission(resolved)
+    template_raw = admitted.template_bytes if isinstance(admitted.template_bytes, bytes) else b''
+    if hashlib.sha256(template_raw).hexdigest() != admission['create_template']['sha256']:
+        raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted create template is not the pinned one')
+    template = _artifact_object(template_raw, 'create template')
+    _, _, declared = _read_checked_profile(resolved.profile, resolved.profile_digest,
+                                           lambda _name: admitted.profile_bytes)
+    return _check_stage_content(declared, resolved, admission, template)
 
 
 def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
@@ -1474,6 +1762,10 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
     ``workspaces`` is the host's ``aieh_paths`` resolution (``aieh_paths.resolve()`` in live use);
     ``read_profile`` and ``read_artifact`` read the approved profile and the artifacts it pins.
     The request is built from trusted policy only; nothing is written and nothing is sent.
+
+    For the D1 stage (E-05.6) this admits every input but the secrets: the body carries no secrets block yet,
+    and its inference inputs (``stage_inference``) are checked. The token is requested only after this, and
+    ``admit_secrets`` adds the block; ``send_create`` refuses a D1 create without it.
     """
     if not isinstance(resolved, ResolvedInputs):
         raise TypeError('resolved must be ResolvedInputs (resolve)')
@@ -1506,8 +1798,31 @@ def admit(resolved: ResolvedInputs, *, manifest: ApprovedInputs, workspaces,
         planned_workspace=resolved.planned_workspace, host_workspace=str(host),
         policy_digest=resolved.policy_digest, template_bytes=template_raw, routes_bytes=routes_raw,
         profile_bytes=profile_raw)
-    _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces)
+    _check_admitted(admitted, resolved=resolved, admission=admission, workspaces=workspaces, secrets=False)
     return admitted
+
+
+def admit_secrets(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspaces,
+                  grant: InferenceGrant) -> AdmittedCreate:
+    """The D1 stage's create with its secrets (E-05.6): ADMITTED (``admit``'s, checked again without secrets) with
+    the secrets block of exactly the pinned registry entry's two names, each a StaticSecret, ``secrets_encrypted``
+    false: the token's value TOKEN_SLOT (GRANT's token takes its place only in the checks and the send), the
+    endpoint the profile's guest inference endpoint. The result is checked as ``send_create`` will check it: the
+    shared secrets check, the token bound to GRANT and GRANT to this reserved conversation and attempt. Refuses a
+    stage that carries no secrets (ADMISSION_MISMATCH)."""
+    if not isinstance(admitted, AdmittedCreate):
+        raise TypeError('admitted must be AdmittedCreate (admit)')
+    if not isinstance(grant, InferenceGrant):
+        raise TypeError('grant must be an InferenceGrant (the broker\'s issue answer)')
+    admission = _resolved_admission(resolved)
+    body, inference = _admitted_checks(admitted, resolved=resolved, admission=admission, workspaces=workspaces,
+                                       secrets=False)
+    if inference is None:
+        raise DispatchRefused('ADMISSION_MISMATCH', f'the {resolved.stage} stage\'s create carries no secrets')
+    body = {**body, 'secrets': inference.block(), 'secrets_encrypted': False}
+    with_secrets = dataclasses.replace(admitted, body_json=_canonical(body), inference=grant)
+    _check_admitted(with_secrets, resolved=resolved, admission=admission, workspaces=workspaces)
+    return with_secrets
 
 
 def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspaces,
@@ -1518,7 +1833,12 @@ def send_create(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspace
     refuse unless decision 0001's preconditions P1 to P5 hold (``server_preconditions``); then send
     the create exactly once and return the transport's answer. A refusal never sends the create
     (an admission refusal calls the transport zero times). Nothing is retried and no other runtime
-    is ever tried."""
+    is ever tried.
+
+    For the D1 stage (E-05.6) the body checked and sent is the admitted one with the grant's token in the
+    token secret's place, built in memory here: the secrets block is checked again by the shared check, the
+    token bound to the admitted grant and the grant to this reserved conversation and attempt. A D1 create
+    without its secrets block or its grant is refused."""
     if not isinstance(admitted, AdmittedCreate):
         raise TypeError('admitted must be AdmittedCreate (admit)')
     if not isinstance(resolved, ResolvedInputs):
@@ -1825,11 +2145,15 @@ class DispatchResult:
     http_status: int
     created: bool
     host_workspace: str
+    inference_grant: dict | None = None   # the D1 stage's grant record, by fingerprint (E-05.6)
 
     def to_json(self) -> dict:
-        return {'format': RESULT_FORMAT, 'operation_key': self.operation_key, 'attempt_id': self.attempt_id,
-                'conversation_id': self.conversation_id, 'execution_ref': self.execution_ref,
-                'http_status': self.http_status, 'created': self.created, 'host_workspace': self.host_workspace}
+        record = {'format': RESULT_FORMAT, 'operation_key': self.operation_key, 'attempt_id': self.attempt_id,
+                  'conversation_id': self.conversation_id, 'execution_ref': self.execution_ref,
+                  'http_status': self.http_status, 'created': self.created, 'host_workspace': self.host_workspace}
+        if self.inference_grant is not None:
+            record['inference_grant'] = self.inference_grant
+        return record
 
 
 def create_receipt(answer, conversation_id: str) -> dict | None:
@@ -1855,10 +2179,61 @@ def _mark(integration_store, key: str, from_state: str, to_state: str, actor: st
     integration_store.transition(key, to_state, actor=actor, reason=reason, detail=detail, expected_from=from_state)
 
 
+def _code_of(exc) -> str:
+    """A stable code of a failed broker call (the control listener's own code), never its message."""
+    code = getattr(exc, 'code', None)
+    return code if isinstance(code, str) and CODE_RE.fullmatch(code) else type(exc).__name__
+
+
+def _issue(inference, resolved: ResolvedInputs, staged: StageInference) -> InferenceGrant:
+    """The D1 stage's attempt token from the broker's control listener (decision 0015 section 3.2, E-05.6), for
+    the reserved conversation and attempt, of the stage's family and model, with its budgets and lifetime;
+    INFERENCE_GRANT_UNAVAILABLE when there is no control listener or the broker does not issue it."""
+    if not isinstance(inference, InferenceAccess):
+        raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the {resolved.stage} stage carries the attempt\'s '
+                              'inference token, and no broker control listener was given')
+    key = _operation_key(resolved)
+    try:
+        answer = inference.control.issue(store.conversation_id_for(key), store.attempt_id_for(key), staged.family,
+                                         list(staged.models), staged.requests, staged.tokens, staged.ttl_s)
+    except Exception as exc:  # fail closed: whatever the control call raises, nothing is admitted
+        code = _code_of(exc)
+        raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the broker\'s control listener did not issue the '
+                              f'grant ({code})', broker_code=code) from None
+    return InferenceGrant.from_answer(answer)
+
+
+def _revoke(inference: InferenceAccess, grant: dict, trigger: str = REVOCATION_TRIGGER) -> dict:
+    """Revoke GRANT (a grant record, by its token's fingerprint) through the broker's control listener; the
+    outcome as a record (``inference-revocation/v1``). Never raises: a failure is the record's ``revoked`` false
+    and its code, for the caller to record and surface."""
+    record = {'format': REVOCATION_FORMAT, 'tokenFingerprint': grant['tokenFingerprint'],
+              'attemptId': grant['attemptId'], 'conversationId': grant['conversationId'], 'trigger': trigger,
+              'revoker': inference.revoker}
+    try:
+        answer = inference.control.revoke(grant['tokenFingerprint'], trigger, inference.revoker)
+    except Exception as exc:  # recorded, never swallowed: the caller records and raises it
+        code = _code_of(exc)
+        return {**record, 'revoked': code == 'GRANT_ALREADY_REVOKED', 'code': code}
+    state = answer.get('state') if isinstance(answer, Mapping) else None
+    revoked = state == 'revoked' and answer.get('token_fingerprint') == grant['tokenFingerprint']
+    return {**record, 'revoked': revoked, 'code': None if revoked else 'REVOCATION_UNCONFIRMED'}
+
+
+def _ended(refusal: DispatchRefused, inference, grant: InferenceGrant | None) -> DispatchRefused:
+    """A refusal after issuance: the grant revoked first (trigger ``attempt end``: the refused attempt ends), and
+    the grant and its revocation, by fingerprint, in the refusal's context (so in the attempt's failed record)."""
+    if grant is not None:
+        refusal.context['inference_grant'] = grant.record()
+        refusal.context['inference_revocation'] = _revoke(inference, grant.record())
+    return refusal
+
+
 def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], WorkSource | None],
              integration_store, workspaces, transport: Callable[[str, str, dict | None], object], actor: str,
              read_profile: Callable[[str], bytes] = read_profile_file,
-             read_artifact: Callable[[str], bytes] = read_profile_artifact) -> DispatchResult:
+             read_artifact: Callable[[str], bytes] = read_profile_artifact,
+             inference: InferenceAccess | None = None) -> DispatchResult:
     """One native Docker conversation create for a dispatch request, in the dispatcher's order:
 
     1. ``resolve`` (a refusal reserves nothing);
@@ -1872,6 +2247,15 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
        (``create_receipt``) as the transition's detail, and returned; a 4xx is ``failed`` and
        CREATE_REFUSED; no answer, a 5xx or any other answer is ``unknown`` and CreateOutcomeUnknown
        (a transport exception is re-raised). Nothing is retried and no event history is stored.
+
+    The D1 stage (E-05.6): after ``admit`` has admitted every other input, and only then, the attempt token is
+    requested from the broker's control listener (``inference``, an ``InferenceAccess``) for the reserved
+    conversation and attempt, and ``admit_secrets`` adds the secrets block; then the workspace, ``dispatched`` (its
+    detail carries the grant by fingerprint) and ``send_create``. Once issued, the grant is revoked (trigger
+    ``attempt end``) on any refusal or failure, before the attempt's outcome is recorded, and the revocation's
+    outcome is in that record and on the raised exception; a confirmed attempt keeps its grant until
+    ``end_attempt``. The token is held in memory only, until the transport call; every record carries its
+    fingerprint. Every other stage takes no token and never calls ``inference``.
     """
     resolved = resolve(request, manifest=manifest, work_sources=work_sources,
                        next_ordinal=store_next_ordinal(integration_store), read_profile=read_profile)
@@ -1882,42 +2266,143 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
         reserved = reserved_inputs(integration_store, key)
         admitted = admit(reserved, manifest=manifest, workspaces=workspaces, read_profile=read_profile,
                          read_artifact=read_artifact)
-        host = create_workspace(admitted, resolved=reserved, workspaces=workspaces)
+        staged = stage_inference(admitted, resolved=reserved)   # the D1 stage's inference inputs, or None
     except DispatchRefused as refusal:
         if refusal.code != 'ATTEMPT_NOT_RESERVED':
             _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code, _refusal_detail(refusal))
         raise
-    _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create',
-          {'format': DISPATCHED_FORMAT, 'conversationId': admitted.conversation_id,
-           'route': {'method': admitted.method, 'path': admitted.path}})
+    grant = None
     try:
-        answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport)
-    except DispatchRefused as refusal:
-        _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
-              _refusal_detail(refusal, create_sent=False))
-        raise
-    except Exception as exc:
-        _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-unanswered',
-              {'error': type(exc).__name__})
-        raise
+        try:
+            if staged is not None:
+                grant = _issue(inference, reserved, staged)   # only now: the reservation and every input admitted
+                admitted = admit_secrets(admitted, resolved=reserved, workspaces=workspaces, grant=grant)
+            host = create_workspace(admitted, resolved=reserved, workspaces=workspaces)
+        except DispatchRefused as refusal:
+            _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code,
+                  _refusal_detail(_ended(refusal, inference, grant)))
+            raise
+        except Exception as exc:   # an unexpected failure after the issue: revoked, and said so on the exception
+            if grant is not None:
+                exc.add_note('inference revocation: ' + _canonical(_revoke(inference, grant.record())))
+            raise
+        dispatched = {'format': DISPATCHED_FORMAT, 'conversationId': admitted.conversation_id,
+                      'route': {'method': admitted.method, 'path': admitted.path}}
+        if grant is not None:
+            dispatched['inferenceGrant'] = grant.record()
+        try:
+            _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create', dispatched)
+        except Exception as exc:
+            if grant is not None:
+                exc.add_note('inference revocation: ' + _canonical(_revoke(inference, grant.record())))
+            raise
+        try:
+            answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport)
+        except DispatchRefused as refusal:
+            _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
+                  _refusal_detail(_ended(refusal, inference, grant), create_sent=False))
+            raise
+        except Exception as exc:
+            detail = {'error': type(exc).__name__}
+            if grant is not None:
+                detail.update(inferenceGrant=grant.record(), inferenceRevocation=_revoke(inference, grant.record()))
+                exc.add_note('inference revocation: ' + _canonical(detail['inferenceRevocation']))
+            _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-unanswered', detail)
+            raise
+    finally:
+        if grant is not None:
+            grant.drop()   # held only until the transport call; the broker's grant is revoked by fingerprint
     receipt = create_receipt(answer, admitted.conversation_id)
     if receipt is not None:
         _mark(integration_store, key, 'dispatched', 'confirmed', actor,
               'created' if receipt['created'] else 'existing', receipt)
         return DispatchResult(operation_key=key, attempt_id=store.attempt_id_for(key),
                               conversation_id=receipt['conversationId'], execution_ref=receipt['executionRef'],
-                              http_status=receipt['httpStatus'], created=receipt['created'], host_workspace=str(host))
+                              http_status=receipt['httpStatus'], created=receipt['created'], host_workspace=str(host),
+                              inference_grant=None if grant is None else grant.record())
     status = answer.get('status') if isinstance(answer, Mapping) else None
     status = status if type(status) is int else None
     if status is not None and 400 <= status < 500:
-        refusal = DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the create with {status}',
-                                  status=status)
+        refusal = _ended(DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the create with {status}',
+                                         status=status), inference, grant)
         _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
               _refusal_detail(refusal, create_sent=True))
         raise refusal
     detail = {'httpStatus': status, 'reason': 'no 200 or 201 answer carrying the reserved conversation id'}
+    ended = {}
+    if grant is not None:
+        ended = {'inference_grant': grant.record(), 'inference_revocation': _revoke(inference, grant.record())}
+        detail.update(inferenceGrant=ended['inference_grant'], inferenceRevocation=ended['inference_revocation'])
     _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-outcome-uncertain', detail)
-    raise CreateOutcomeUnknown(key, detail['reason'], http_status=status)
+    raise CreateOutcomeUnknown(key, detail['reason'], http_status=status, **ended)
+
+
+def _stored_grant(integration_store, operation_key: str) -> dict | None:
+    """The D1 stage's grant record of a dispatched attempt, from its ``dispatched`` event (by fingerprint); None
+    when the attempt took no grant (every other stage). RESERVATION_INVALID when it is not this attempt's."""
+    for event in integration_store.events(operation_key):
+        if event.to_state != 'dispatched':
+            continue
+        try:
+            detail = _strict_loads(event.detail_json or 'null')
+        except ValueError:
+            detail = None
+        grant = detail.get('inferenceGrant') if isinstance(detail, dict) else None
+        if grant is None:
+            return None
+        expected = {'format': GRANT_FORMAT, 'attemptId': store.attempt_id_for(operation_key),
+                    'conversationId': store.conversation_id_for(operation_key)}
+        fingerprint = grant.get('tokenFingerprint') if isinstance(grant, dict) else None
+        if not isinstance(fingerprint, str) or not re.fullmatch(r'sha256:[0-9a-f]{16}', fingerprint) \
+                or any(grant.get(name) != value for name, value in expected.items()):
+            raise DispatchRefused('RESERVATION_INVALID', 'the dispatched record\'s inference grant is not this '
+                                  'attempt\'s')
+        return grant
+    return None
+
+
+def end_attempt(integration_store, operation_key: str, *, inference: InferenceAccess, actor: str) -> dict | None:
+    """The attempt's end (decision 0015 section 3.3, E-05.6): revoke the D1 stage's inference grant of a
+    confirmed attempt through the broker's control listener (trigger ``attempt end``, the access's revoker).
+
+    The attempt is re-read from the store and must be confirmed (``stored_inputs``); its grant is the one its
+    ``dispatched`` record names, by fingerprint. Every other stage's attempt holds none: None. The revocation
+    is recorded in the integration store before and after the call, as the receipt ``dispatch/attempt/<attempt
+    id>/inference-revocation/<n>`` (reserved, dispatched, then confirmed with the revocation's record, or failed
+    with its code), and returned. A failed revocation is INFERENCE_REVOCATION_FAILED, with the record; a later
+    call tries again under the next receipt. A confirmed receipt is returned again without a second call. The
+    broker writes its own revocation receipt; nothing here reads or holds the token."""
+    if not isinstance(inference, InferenceAccess):
+        raise TypeError('inference must be an InferenceAccess (the broker\'s control listener)')
+    stored_inputs(integration_store, operation_key, state='confirmed')
+    grant = _stored_grant(integration_store, operation_key)
+    if grant is None:
+        return None
+    attempt_id = store.attempt_id_for(operation_key)
+    intent = {'format': REVOCATION_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
+              'conversationId': grant['conversationId'], 'tokenFingerprint': grant['tokenFingerprint'],
+              'trigger': REVOCATION_TRIGGER, 'revoker': inference.revoker}
+    n = 1
+    while True:
+        receipt_key = REVOCATION_KEY.format(attempt_id=attempt_id, n=n)
+        held = integration_store.get(receipt_key)
+        if held is None:
+            break
+        if held.state == 'confirmed':
+            return _strict_loads(integration_store.events(receipt_key)[-1].detail_json)
+        if held.state in ('reserved', 'dispatched') and held.intent_json == store.canonical_intent(intent):
+            break   # an interrupted end, resumed under its own receipt
+        n += 1
+    held = integration_store.reserve(receipt_key, intent, actor=actor).reservation
+    if held.state == 'reserved':
+        _mark(integration_store, receipt_key, 'reserved', 'dispatched', actor, 'revoke', None)
+    revocation = _revoke(inference, grant)
+    if revocation['revoked']:
+        _mark(integration_store, receipt_key, 'dispatched', 'confirmed', actor, 'revoked', revocation)
+        return revocation
+    _mark(integration_store, receipt_key, 'dispatched', 'failed', actor, revocation['code'], revocation)
+    raise DispatchRefused('INFERENCE_REVOCATION_FAILED', f'the grant {grant["tokenFingerprint"]} of attempt '
+                          f'{attempt_id} was not revoked ({revocation["code"]})', inference_revocation=revocation)
 
 
 # ---------------------------------------------------------------------------

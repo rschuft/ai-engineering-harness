@@ -24,6 +24,10 @@ a provider-key-shaped value anywhere; an ``ANTHROPIC_API_KEY`` that is not one b
 token anywhere else; a model outside the family's configured allowlist; and any network destination but the
 profile's guest inference endpoint. ``build_create`` fills the fixture and checks the result.
 
+The secrets block's checks are ``create_secrets.check_secrets``, shared with the dispatcher's D1 stage (plan leaf
+E-05.6): one function of one module, not a copy. ``registry_secret_names`` and ``inference_endpoint`` are what that
+stage reads its two names and its endpoint from, and ``ACP_FAMILY`` the broker family its grant is of.
+
 Standard library only (plus the broker's token and model grammars, loaded by path). Nothing here sends, reads a
 credential or runs a process.
 """
@@ -55,6 +59,8 @@ def _load(name: str, path: Path):
 
 # The attempt token's shape and the model grammar are the broker's own (decision 0015 section 3.1).
 broker = _load('aieh_inference_broker', REPO / 'integrations' / 'inference' / 'inference_broker.py')
+# The secrets block's check, shared with the dispatcher's D1 stage (E-05.6): one module, one name, not a copy.
+secrets_check = _load('aieh_dispatch_create_secrets', HERE / 'create_secrets.py')
 
 FIXTURE_FORMAT = 'ai-engineering-harness/dispatch/acp-qualification-create/v1'
 REGISTRY_FORMAT = 'ai-engineering-harness/dispatch/acp-registry-extract/v1'
@@ -64,11 +70,15 @@ FIXTURE_SHA256 = '44685659f22b1c75fd15a8c5b6bd9ded851baebdeca629d15c5363f657114d
 REGISTRY_PATH = 'integrations/dispatch/qualification/acp-registry-claude-code-1.60.1.json'
 REGISTRY_SHA256 = 'aa402bbb418fed47a86a377207511be6a7a4f03dd4ea1d7a77b4514438345574'
 ACP_SERVER = 'claude-code'
+# The broker's API family whose credential and base URL the registry entry's two names (ANTHROPIC_API_KEY,
+# ANTHROPIC_BASE_URL) carry: integrations/inference/families.json, its consumer "Claude Code's ACP adapter"
+# (decision 0015 amendment 1 item 1). The D1 stage's grant is of this family (dispatch_inputs, E-05.6).
+ACP_FAMILY = 'anthropic-messages'
 PLACEHOLDERS = {'conversation_id': '{conversation_id}', 'acp_model': '{acp_model}',
                 'attempt_token': '{attempt_token}', 'inference_endpoint': '{inference_endpoint}'}
 UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
-# Provider keys as the guest's P5 needles name them (sk-ant-..., sk-proj-..., any long sk-...).
-PROVIDER_KEY_SHAPE = re.compile(r'sk-(?:ant|proj)-|sk-[A-Za-z0-9_-]{20,}')
+# Provider keys as the guest's P5 needles name them (sk-ant-..., sk-proj-..., any long sk-...): the shared check's.
+PROVIDER_KEY_SHAPE = secrets_check.PROVIDER_KEY_SHAPE
 # A field outside the fixture is always refused; its name only picks the code.
 FIELD_CLASSES = (
     (re.compile(r'profile', re.IGNORECASE), 'AGENT_PROFILE_FORBIDDEN'),
@@ -95,15 +105,11 @@ REFUSALS = {
     'ACP_SERVER_NOT_PINNED': 'agent_kind is not acp, or acp_server is not claude-code (custom is refused)',
     'ACP_COMMAND_NOT_PINNED': 'acp_command is not exactly ["claude-agent-acp"], or acp_args is not empty (an empty '
                               'command is the registry\'s npx form)',
-    'SECRET_NAMES': 'secrets are not exactly the registry\'s ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL',
-    'SECRET_KIND_FORBIDDEN': 'a secret is not a StaticSecret of exactly kind and value (a LookupSecret makes the '
-                             'outer server fetch a URL the body names)',
-    'SECRETS_ENCRYPTED': 'secrets_encrypted is not false',
-    'SECRET_PROVIDER_KEY_SHAPED': 'a value in the create is shaped like a provider key',
-    'SECRET_NOT_ATTEMPT_TOKEN': 'ANTHROPIC_API_KEY is not one broker-issued attempt token',
-    'TOKEN_OUTSIDE_SECRET': 'an attempt token appears in the create outside ANTHROPIC_API_KEY',
-    'DESTINATION_NOT_ENDPOINT': 'ANTHROPIC_BASE_URL is not the profile\'s guest inference endpoint, or the create '
-                                'names another network destination',
+    # The secrets block's codes and meanings are the shared check's (create_secrets.MEANINGS), the same in
+    # dispatch_inputs.REFUSALS.
+    **{code: secrets_check.MEANINGS[code] for code in (
+        'SECRET_NAMES', 'SECRET_KIND_FORBIDDEN', 'SECRETS_ENCRYPTED', 'SECRET_PROVIDER_KEY_SHAPED',
+        'SECRET_NOT_ATTEMPT_TOKEN', 'TOKEN_OUTSIDE_SECRET', 'DESTINATION_NOT_ENDPOINT')},
     'BODY_NOT_FIXTURE': 'the create differs from the pinned qualification fixture',
 }
 
@@ -148,17 +154,7 @@ def _pinned(read: Callable[[str], bytes], path: str, sha256: str) -> dict:
     return data
 
 
-def _strings(node, where=()):
-    """Every key and string value of a JSON tree, with its location."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            yield where + (key, '#key'), key
-            yield from _strings(value, where + (key,))
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            yield from _strings(value, where + (index,))
-    elif isinstance(node, str):
-        yield where, node
+_strings = secrets_check.strings   # every key and string value of a JSON tree, with its location
 
 
 def _same(a, b) -> bool:
@@ -204,6 +200,23 @@ def load_fixture(read: Callable[[str], bytes] = read_repository_file) -> dict:
     return body
 
 
+def registry_secret_names(read: Callable[[str], bytes] = read_repository_file) -> list:
+    """The pinned registry entry's two secret names, ``[api_key_env_var, base_url_env_var]``, read from the
+    registry extract after its pin is checked (as ``load_fixture`` reads it; FIXTURE_DRIFTED, FIXTURE_INVALID). The
+    dispatcher's D1 stage takes its names from here (E-05.6)."""
+    registry = _pinned(read, REGISTRY_PATH, REGISTRY_SHA256)
+    facts = registry.get('facts')
+    if registry.get('format') != REGISTRY_FORMAT or registry.get('acp_server') != ACP_SERVER \
+            or not isinstance(facts, dict):
+        raise QualificationRefused('FIXTURE_INVALID', f'the registry extract is not {REGISTRY_FORMAT} of {ACP_SERVER}')
+    names = [facts[name].get('value') if isinstance(facts.get(name), dict) else None
+             for name in ('api_key_env_var', 'base_url_env_var')]
+    if not all(isinstance(name, str) and re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', name) for name in names) \
+            or names[0] == names[1]:
+        raise QualificationRefused('FIXTURE_INVALID', 'the registry extract does not name two secret variables')
+    return names
+
+
 def inference_endpoint(profile) -> str:
     """The guest inference endpoint as a base URL, from the profile's one ``network.endpoints`` entry of class
     ``inference`` (decision 0015 section 4.1): ``http://<IPv4 literal>:<port>``."""
@@ -241,10 +254,6 @@ def _field_code(key) -> str:
     return 'BODY_FIELD_UNKNOWN'
 
 
-def _location(where) -> str:
-    return '.'.join(str(part) for part in where)
-
-
 def check_create(body, *, conversation_id: str, approved_models, profile,
                  read: Callable[[str], bytes] = read_repository_file) -> None:
     """Refuse a qualification create that is not exactly the pinned fixture with the reserved conversation id,
@@ -276,34 +285,10 @@ def check_create(body, *, conversation_id: str, approved_models, profile,
     if settings.get('mcp_config', {}) != {}:
         raise QualificationRefused('MCP_FORBIDDEN', 'mcp_config must be empty')
     model = approved_model(settings.get('acp_model'), approved_models)
-    secrets, names = body.get('secrets'), list(template['secrets'])
-    if not isinstance(secrets, dict) or sorted(secrets) != sorted(names):
-        raise QualificationRefused('SECRET_NAMES', f'secrets must be exactly {names}')
-    for name in names:
-        source = secrets[name]
-        if not isinstance(source, dict) or set(source) != {'kind', 'value'} or source['kind'] != 'StaticSecret' \
-                or not isinstance(source['value'], str):
-            raise QualificationRefused('SECRET_KIND_FORBIDDEN', f'{name} must be a StaticSecret of kind and value')
-    if body.get('secrets_encrypted') is not False:
-        raise QualificationRefused('SECRETS_ENCRYPTED', 'secrets_encrypted must be false')
-    token_name, endpoint_name = names
-    token_at, endpoint_at = ('secrets', token_name, 'value'), ('secrets', endpoint_name, 'value')
-    texts = list(_strings(body))
-    for where, text in texts:
-        if PROVIDER_KEY_SHAPE.search(text) and not broker.TOKEN_SHAPE.fullmatch(text):
-            raise QualificationRefused('SECRET_PROVIDER_KEY_SHAPED', f'at {_location(where)}')
-    token = secrets[token_name]['value']
-    if not broker.TOKEN_SHAPE.fullmatch(token):
-        raise QualificationRefused('SECRET_NOT_ATTEMPT_TOKEN', f'{token_name} is not an attempt token')
-    body_of_token = token[len(broker.TOKEN_PREFIX):]
-    for where, text in texts:
-        if where != token_at and (body_of_token in text or broker.TOKEN_SHAPE.search(text)):
-            raise QualificationRefused('TOKEN_OUTSIDE_SECRET', f'at {_location(where)}')
-    for where, text in texts:
-        if where != endpoint_at and ('://' in text or text.startswith('//')):
-            raise QualificationRefused('DESTINATION_NOT_ENDPOINT', f'a destination at {_location(where)}')
-    if secrets[endpoint_name]['value'] != endpoint:
-        raise QualificationRefused('DESTINATION_NOT_ENDPOINT', f'{endpoint_name} must be {endpoint}')
+    # The secrets block: the check shared with the dispatcher's D1 stage (create_secrets, E-05.6), with no binding
+    # (the qualification driver checks its grant's conversation through the broker).
+    token = secrets_check.check_secrets(body, names=list(template['secrets']), endpoint=endpoint,
+                                        refused=QualificationRefused)
     expected = _fill(template, {PLACEHOLDERS['conversation_id']: conversation_id, PLACEHOLDERS['acp_model']: model,
                                 PLACEHOLDERS['attempt_token']: token, PLACEHOLDERS['inference_endpoint']: endpoint})
     for key in expected:

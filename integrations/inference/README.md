@@ -375,8 +375,11 @@ broker only through this module. `dispatcher_ports` reads `control_port` and `in
 listener on `127.0.0.1` as it admits callers (status, `GET /v1/grants/<fingerprint>`, revocation) and
 passes the broker's refusal code on (`CONTROL_UNREACHABLE` and `CONTROL_ANSWER_INVALID` otherwise);
 `token_fingerprint` checks a token's shape (`TOKEN_SHAPE_INVALID`) and returns only its fingerprint. The
-dispatcher's own issuance, the token reaching an attempt through the typed create, is A-01.2's and E-03.1's;
-for the qualification only, `ControlClient.issue` and the `issue` command (next section) ask for one grant.
+dispatcher's own issuance and revocation for the D1 stage, the token reaching that stage's attempt through the
+create's `secrets`, are E-05.6's (`integrations/dispatch/dispatch_inputs.py`, `dispatch` and `end_attempt`, through
+`ControlClient`; see `integrations/dispatch/README.md`); the general case, every stage's create secrets from role
+profiles, stays A-01.2's and E-03.1's. For the qualification, `ControlClient.issue` and the `issue` command (next
+section) ask for one grant.
 `guest.py inference-forward` (the forward session) and `job-access-probe --attempt-token-stdin` (the
 token steps) use it; see `docs/development.md`, Execution guests.
 
@@ -668,8 +671,9 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
   actually sends, and `propose-pin` over a real audit file; the real-key search against a real credential entry
   (Windows Credential Manager) and real surfaces (only under the Owner's act A1).
 - The guest side: the SSH remote forward (built offline in slice 3, never run against a real ssh or guest),
-  the sshd and container-guard changes (slice 2, offline), the typed create's `secrets`/LLM fields (A-01.2,
-  E-03.1), the containment re-run; `inference_control.py` against the broker as a supervised host service.
+  the sshd and container-guard changes (slice 2, offline), the typed create's `secrets`/LLM fields (the D1
+  stage's built offline by E-05.6, never sent to a real server; every other stage's A-01.2's and E-03.1's), the
+  containment re-run; `inference_control.py` against the broker as a supervised host service.
 - The qualification tools (slice 4): the launcher, the `issue` command and the fake upstream have run only in a
   test process (in-process listeners, an `os.pipe()` for the token); their first runs are part of act A2. The
   `issue` command's pipe check with PowerShell's and Git Bash's pipes is not observed.

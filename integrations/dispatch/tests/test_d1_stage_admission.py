@@ -12,8 +12,12 @@ qualification create). The D1 stage is the stage an approved profile's
 
 The approved template is the CANDIDATE ``profiles/strong-windows-qemu-whpx/agent-server/d1-create.json``
 (S-03.3 slice 2's ACP block, its model a sentinel, tagged ``e-05.2-d1-candidate``), pinned by a
-synthetic profile in a throwaway directory: no checked-in profile pins it yet. Every create goes
-through the E-01.2.2 counting fake transport; each refusal asserts it was called zero times.
+synthetic profile in a throwaway directory: no checked-in profile pins it yet. Since E-05.6 the D1
+stage's create carries the attempt's inference token and endpoint, so a create that is sent takes a
+grant from a real inference broker in process (its control listener on 127.0.0.1, no upstream
+contacted), and the sent template is the candidate with a synthetic model of that broker's allowlist
+(TEST_TEMPLATE: the sentinel is never a model). Every create goes through the E-01.2.2 counting fake
+transport; each refusal asserts it was called zero times.
 """
 from pathlib import Path
 import copy
@@ -57,6 +61,14 @@ QUALIFICATION_PATH = 'integrations/dispatch/qualification/acp-claude-code-create
 QUALIFICATION_BYTES = base.REPO.joinpath(*QUALIFICATION_PATH.split('/')).read_bytes()
 QUALIFICATION = json.loads(QUALIFICATION_BYTES)
 DEFAULT = object()
+# E-05.6: the D1 stage's grant, from a real broker in process (integrations/inference/tests/broker_support.py).
+S = _load('broker_support', base.REPO / 'integrations' / 'inference' / 'tests' / 'broker_support.py')
+FAMILY = 'anthropic-messages'
+TEST_MODEL, OTHER_MODEL = S.MODEL_A, S.MODEL_B
+GRANT = {'requests': 10, 'tokens': 1000, 'ttl_s': 600}
+ENDPOINT = 'http://172.17.0.1:8090'
+INFERENCE_ENDPOINT = {'class': 'inference', 'guest_address': '172.17.0.1', 'guest_port': 8090}
+REVOKER = 'E-05.6 test dispatcher'
 
 
 def sha(raw):
@@ -73,6 +85,11 @@ def candidate_with(change):
     return as_bytes(body)
 
 
+# The candidate with a model of the test broker's allowlist: the template a sent D1 create is built from.
+TEST_TEMPLATE_BYTES = candidate_with(lambda body: body['agent_settings'].update(acp_model=TEST_MODEL))
+TEST_TEMPLATE = json.loads(TEST_TEMPLATE_BYTES)
+
+
 class D1Fixture(adm.AdmissionFixture):
     """The E-01.2.2 admission fixture with one more approved profile, strong-d1-profile: the synthetic
     strong declaration plus a stage_create_template, bound to demo-app/implement and other-app/review."""
@@ -80,10 +97,13 @@ class D1Fixture(adm.AdmissionFixture):
     def setUp(self):
         super().setUp()
         self.d1_sources = {'demo-app': self.sources['demo-app'], 'other-app': self.sources['demo-app']}
+        self.rigs = {}
 
-    def approve_d1(self, template=CANDIDATE_BYTES, pin=DEFAULT):
+    def approve_d1(self, template=TEST_TEMPLATE_BYTES, pin=DEFAULT, change=None):
         """Write strong-d1-profile (F-04.2 fixture, route allowlist, the stage template TEMPLATE at D1_PATH
-        and the declaration pinning it, or PIN) and return a manifest approving its exact bytes."""
+        and the declaration pinning it, or PIN, with the grant's budgets unless PIN names its own; the guest
+        inference endpoint; CHANGE applied to the declaration) and return a manifest approving its exact
+        bytes."""
         directory = self.profiles / D1
         base.write_agent_server(directory)
         if template is not None:
@@ -91,7 +111,12 @@ class D1Fixture(adm.AdmissionFixture):
         declared = json.loads(base.profile_bytes(D1))
         if pin is DEFAULT:
             pin = {'stage': 'implement', 'path': D1_PATH, 'sha256': sha(template), 'plan_leaf': 'E-05.2'}
+        if isinstance(pin, dict) and di.GRANT_KEY not in pin:
+            pin = {**pin, di.GRANT_KEY: dict(GRANT)}
         declared['provisioning']['agent_server'][di.STAGE_TEMPLATE_KEY] = pin
+        declared['network'] = {'endpoints': [dict(INFERENCE_ENDPOINT)]}
+        if change is not None:
+            change(declared)
         (directory / 'profile.json').write_bytes(as_bytes(declared))
         data = self.manifest_data()
         data['designs'].append({'repository': 'other-app', 'change': base.CHANGE, 'commit': self.commit})
@@ -106,16 +131,63 @@ class D1Fixture(adm.AdmissionFixture):
     def resolve_d1(self, manifest, **changes):
         return self.resolve(self.d1_request(**changes), manifest, self.d1_sources)
 
-    def reserved_d1(self, template=CANDIDATE_BYTES):
+    # -- E-05.6: the broker, its grants and the D1 stage's secrets
+
+    def rig(self, name='broker'):
+        """A real inference broker in process (control and inference listeners on 127.0.0.1, ephemeral ports),
+        its family anthropic-messages keyed with a synthetic provider key; no upstream is ever contacted."""
+        if name not in self.rigs:
+            rig = S.Rig(S.component({FAMILY: 'http://127.0.0.1:9'}))
+            self.addCleanup(rig.close)
+            self.rigs[name] = rig.start()
+        return self.rigs[name]
+
+    def control(self, name='broker'):
+        return di._inference_modules()[1].ControlClient(self.rig(name).control)
+
+    def access(self, name='broker'):
+        return di.InferenceAccess(control=self.control(name), revoker=REVOKER)
+
+    def issue_for(self, resolved, *, conversation_id=None, attempt_id=None, rig='broker', model=TEST_MODEL):
+        """A grant of the broker's control listener, for the reserved conversation and attempt unless named."""
+        key = resolved.attempt_identity().operation_key
+        answer = self.control(rig).issue(conversation_id or store_mod.conversation_id_for(key),
+                                         attempt_id or store_mod.attempt_id_for(key), FAMILY, [model],
+                                         GRANT['requests'], GRANT['tokens'], GRANT['ttl_s'])
+        return di.InferenceGrant.from_answer(answer)
+
+    def secreted(self, resolved, admitted, grant=None):
+        """ADMITTED (admit's) with its secrets: admit_secrets with a grant for this attempt."""
+        return di.admit_secrets(admitted, resolved=resolved, workspaces=self.workspaces,
+                                grant=grant or self.issue_for(resolved))
+
+    def reserved_d1(self, template=TEST_TEMPLATE_BYTES):
+        """A reserved D1 attempt and its create, admitted with its secrets."""
         manifest = self.approve_d1(template)
         resolved = self.resolve_d1(manifest)
         self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor='d1-test')
-        return manifest, resolved, self.admit(resolved, manifest)
+        return manifest, resolved, self.secreted(resolved, self.admit(resolved, manifest))
 
-    def body_for(self, resolved, template):
+    def staged(self, admitted, resolved):
+        return di.stage_inference(admitted, resolved=resolved)
+
+    def body_for(self, resolved, template, secrets=True):
+        """TEMPLATE as the reserved attempt's create body; with SECRETS (the D1 stage) its secrets block, the
+        token's value the slot that the grant's token takes at the send."""
         body = copy.deepcopy(template)
         body['conversation_id'] = store_mod.conversation_id_for(resolved.attempt_identity().operation_key)
+        if secrets:
+            body['secrets'] = {'ANTHROPIC_API_KEY': {'kind': 'StaticSecret', 'value': di.TOKEN_SLOT},
+                               'ANTHROPIC_BASE_URL': {'kind': 'StaticSecret', 'value': ENDPOINT}}
+            body['secrets_encrypted'] = False
         return body
+
+    def wire(self, body, admitted):
+        """BODY as sent: the grant's token in the token secret's place."""
+        sent = copy.deepcopy(body)
+        if 'secrets' in sent and admitted.inference is not None:
+            sent['secrets']['ANTHROPIC_API_KEY']['value'] = admitted.inference.token()
+        return sent
 
     def tampered(self, admitted, body):
         return dataclasses.replace(admitted, body_json=di._canonical(body))
@@ -149,35 +221,39 @@ class AcceptsTheApprovedBlock(D1Fixture):
     def test_the_d1_stage_admits_exactly_the_approved_template(self):
         manifest = self.approve_d1()
         resolved = self.resolve_d1(manifest)
-        pin = {'path': D1_PATH, 'sha256': sha(CANDIDATE_BYTES)}
+        pin = {'path': D1_PATH, 'sha256': sha(TEST_TEMPLATE_BYTES)}
         self.assertEqual(resolved.policy_inputs['admission']['create_template'], pin)
         self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor='d1-test')
-        admitted = self.admit(resolved, manifest)
+        admitted = self.secreted(resolved, self.admit(resolved, manifest))
         self.send(admitted, resolved)
-        expected = self.body_for(resolved, CANDIDATE)
+        expected = self.wire(self.body_for(resolved, TEST_TEMPLATE), admitted)
         self.assertEqual(self.transport.calls, [('POST', '/api/conversations', expected)])
-        self.assertEqual(self.transport.calls[0][2]['agent_settings'], CANDIDATE['agent_settings'])
+        self.assertEqual(self.transport.calls[0][2]['agent_settings'], TEST_TEMPLATE['agent_settings'])
         self.assertEqual(admitted.to_json()['create_template_sha256'], pin['sha256'])
+        # The admitted block is the candidate's but its model, which no sentinel may be (decision 4 of E-05.6).
+        self.assertEqual({k: v for k, v in TEST_TEMPLATE.items() if k != 'agent_settings'},
+                         {k: v for k, v in CANDIDATE.items() if k != 'agent_settings'})
 
     def test_the_digest_binds_the_block_into_the_attempt(self):
         """Another approved ACP block (re-pinned by its digest) is admitted as itself, under another policy
         digest; bytes changed after approval, without a new pin, are refused."""
-        other = candidate_with(lambda body: body['agent_settings'].update(acp_model='another-unselected'))
+        other = candidate_with(lambda body: body['agent_settings'].update(acp_model=OTHER_MODEL))
         first = self.resolve_d1(self.approve_d1())
         manifest = self.approve_d1(other)
         second = self.resolve_d1(manifest)
         self.assertNotEqual(first.policy_digest, second.policy_digest)
         self.assertEqual(second.policy_inputs['admission']['create_template']['sha256'], sha(other))
         self.store.reserve_attempt(second.attempt_identity(), second.intent(), actor='d1-test')
-        self.send(self.admit(second, manifest), second)
-        self.assertEqual(self.transport.calls[0][2]['agent_settings']['acp_model'], 'another-unselected')
+        self.send(self.secreted(second, self.admit(second, manifest), self.issue_for(second, model=OTHER_MODEL)),
+                  second)
+        self.assertEqual(self.transport.calls[0][2]['agent_settings']['acp_model'], OTHER_MODEL)
 
         self.transport = adm.CountingTransport()
         manifest = self.approve_d1()
         resolved = self.resolve_d1(manifest)
         (self.profiles / D1 / 'agent-server' / 'd1-create.json').write_bytes(other)  # drift, no new pin
         refusal = self.assertDenied('PROFILE_ARTIFACT_DRIFTED', self.admit, resolved, manifest)
-        self.assertEqual(refusal.context['pinned'], sha(CANDIDATE_BYTES))
+        self.assertEqual(refusal.context['pinned'], sha(TEST_TEMPLATE_BYTES))
 
     def test_a_stage_the_declaration_does_not_name_keeps_e_01_2_2(self):
         """The boundary: E-05.2 is the D1 stage only. The same profile's review stage, and the policy of a
@@ -188,7 +264,7 @@ class AcceptsTheApprovedBlock(D1Fixture):
                          {'path': FIXTURE_PATH, 'sha256': sha(FIXTURE_BYTES)})
         self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor='d1-test')
         self.send(self.admit(resolved, manifest), resolved)
-        self.assertEqual(self.transport.calls[0][2], self.body_for(resolved, FIXTURE))
+        self.assertEqual(self.transport.calls[0][2], self.body_for(resolved, FIXTURE, secrets=False))
         declared = json.loads(base.profile_bytes('strong-test-profile'))
         for stage in (None, 'implement', 'review'):
             with self.subTest(stage=stage):
@@ -198,7 +274,7 @@ class AcceptsTheApprovedBlock(D1Fixture):
 
 class RefusesAnyOtherBlock(D1Fixture):
     def other_blocks(self):
-        acp = CANDIDATE['agent_settings']
+        acp = TEST_TEMPLATE['agent_settings']
 
         def variant(**changes):
             return {**copy.deepcopy(acp), **changes}
@@ -228,21 +304,22 @@ class RefusesAnyOtherBlock(D1Fixture):
         _, resolved, admitted = self.reserved_d1()
         for name, block in self.other_blocks().items():
             with self.subTest(name):
-                body = self.body_for(resolved, CANDIDATE)
+                body = self.body_for(resolved, TEST_TEMPLATE)
                 body['agent_settings'] = block
                 refusal = self.assertDenied('BODY_NOT_TEMPLATE', self.send, self.tampered(admitted, body), resolved)
                 self.assertEqual(refusal.context['field'], 'agent_settings')
                 template = json.loads(admitted.template_bytes)
+                secrets = self.staged(admitted, resolved).secrets(admitted.inference, admitted.operation_key)
                 with self.assertRaises(di.DispatchRefused) as caught:
-                    di.check_create_body(body, admission=resolved.policy_inputs['admission'], template=template,
-                                         conversation_id=admitted.conversation_id)
+                    di.check_create_body(self.wire(body, admitted), admission=resolved.policy_inputs['admission'],
+                                         template=template, conversation_id=admitted.conversation_id, secrets=secrets)
                 self.assertEqual(caught.exception.code, 'BODY_NOT_TEMPLATE')
 
     def test_another_agent_source_beside_the_block_is_refused(self):
         _, resolved, admitted = self.reserved_d1()
         for field in ('agent', 'agent_profile_id', 'initial_message'):
             with self.subTest(field):
-                body = self.body_for(resolved, CANDIDATE)
+                body = self.body_for(resolved, TEST_TEMPLATE)
                 body[field] = {'kind': 'Agent'}
                 self.assertDenied('BODY_FIELD_UNKNOWN', self.send, self.tampered(admitted, body), resolved)
 
@@ -300,8 +377,8 @@ class RefusesTheF042Fixture(D1Fixture):
 
 
 class RefusesTheQualificationFixture(D1Fixture):
-    def filled_qualification(self, conversation_id):
-        values = {'{conversation_id}': conversation_id, '{acp_model}': CANDIDATE['agent_settings']['acp_model'],
+    def filled_qualification(self, conversation_id, model=CANDIDATE['agent_settings']['acp_model']):
+        values = {'{conversation_id}': conversation_id, '{acp_model}': model,
                   '{attempt_token}': 'synthetic-attempt-token', '{inference_endpoint}': 'http://172.17.0.1:8090'}
 
         def fill(node):
@@ -328,16 +405,26 @@ class RefusesTheQualificationFixture(D1Fixture):
         refusal = self.assertDenied('BODY_FIELD_UNKNOWN', self.admit, self.resolve_d1(manifest), manifest)
         self.assertEqual(refusal.context['field'], 'secrets')
 
-    def test_its_filled_create_is_refused_on_the_d1_stage(self):
-        _, resolved, admitted = self.reserved_d1()
-        body = self.filled_qualification(admitted.conversation_id)
-        # Its agent block, the model filled, is the candidate's: what remains is not a D1 create.
-        self.assertEqual(body['agent_settings'], CANDIDATE['agent_settings'])
-        refusal = self.assertDenied('BODY_FIELD_UNKNOWN', self.send, self.tampered(admitted, body), resolved)
-        self.assertEqual(refusal.context['field'], 'secrets')
-        bare = {k: v for k, v in body.items() if k not in ('secrets', 'secrets_encrypted')}
-        refusal = self.assertDenied('BODY_NOT_TEMPLATE', self.send, self.tampered(admitted, bare), resolved)
+    def test_its_filled_create_is_refused_on_a_real_stage(self):
+        """Since E-05.6 the D1 stage's create carries secrets: the filled qualification create is refused there by
+        the shared check (its placeholder token) and, even with the held grant's token and the profile's endpoint,
+        by what remains (its disposable tag); on any other stage by its secrets (BODY_FIELD_UNKNOWN)."""
+        manifest, resolved, admitted = self.reserved_d1()
+        body = self.filled_qualification(admitted.conversation_id, model=TEST_MODEL)
+        # Its agent block, the model filled, is the approved template's: what remains is not a D1 create.
+        self.assertEqual(body['agent_settings'], TEST_TEMPLATE['agent_settings'])
+        self.assertDenied('SECRET_NOT_ATTEMPT_TOKEN', self.send, self.tampered(admitted, body), resolved)
+        body['secrets']['ANTHROPIC_API_KEY']['value'] = di.TOKEN_SLOT   # the held grant's token at the send
+        refusal = self.assertDenied('BODY_NOT_TEMPLATE', self.send, self.tampered(admitted, body), resolved)
         self.assertEqual(refusal.context['field'], 'tags')
+        bare = {k: v for k, v in body.items() if k not in ('secrets', 'secrets_encrypted')}
+        self.assertDenied('SECRET_NAMES', self.send, self.tampered(admitted, bare), resolved)
+        other = self.resolve_d1(manifest, repository='other-app', stage='review', catalog_pin='reviewer-pin')
+        self.store.reserve_attempt(other.attempt_identity(), other.intent(), actor='d1-test')
+        review = self.admit(other, manifest)
+        refusal = self.assertDenied('BODY_FIELD_UNKNOWN', self.send, self.tampered(
+            review, self.filled_qualification(review.conversation_id, model=TEST_MODEL)), other)
+        self.assertEqual(refusal.context['field'], 'secrets')
 
 
 class SendCreateRechecks(D1Fixture):
@@ -349,7 +436,7 @@ class SendCreateRechecks(D1Fixture):
         manifest = self.approve_d1(template)
         resolved = self.resolve_d1(manifest)
         self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor='d1-test')
-        with unittest.mock.patch.object(di, 'check_stage_template', lambda template, stage: None):
+        with unittest.mock.patch.object(di, '_check_stage_content', lambda *args: None):
             admitted = self.admit(resolved, manifest)
         self.assertEqual(self.transport.calls, [])
         return manifest, resolved, admitted

@@ -159,7 +159,7 @@ trusted policy:
 | caps | the server configuration's `conversation_container_memory`, `_cpus`, `_pids_limit` and `max_concurrent_runs`; `max_concurrent_runs` times each cap must stay within the profile's `ceilings` (`memory_mib`, `vcpu`). The body may carry `container.memory` or `container.cpus` only as exactly the declared value (the server applies a request's caps with no upper bound: F-04.2 deviation `request-caps-override`); any other cap field is refused | `CAPS_ABOVE_CEILING`, `CAPS_OVERRIDE_FORBIDDEN` |
 | mounts | the profile's `conversations.mounts` with the conversation's hex id: the effective mount set the container must have is exactly that list (decision 0003). Every source lies strictly under `source_root` and clear of every forbidden source (the list must name the Docker and containerd sockets); destinations are distinct. A body field that would add a mount is refused | `MOUNT_POLICY_INVALID`, `MOUNTS_NOT_DECLARED` |
 | host workspace | `planned_workspace` under the `workspaces` category of the `integrations/paths` resolution passed in; below | `WORKSPACE_*` |
-| other fields | an allowlist (the template's fields: `conversation_id`, `conversation_runtime`, `workspace`, `agent_settings`, `autotitle`, `container`, `tags`; in `container`, `browser` and the two caps). Every other field is refused; its name only picks the code (a mount, cap, runtime or path name gets that class's code). Each allowlisted field must equal the template's | `BODY_FIELD_UNKNOWN`, `BODY_NOT_TEMPLATE`, `CONVERSATION_ID_MISMATCH`, `BODY_MALFORMED` |
+| other fields | an allowlist (the template's fields: `conversation_id`, `conversation_runtime`, `workspace`, `agent_settings`, `autotitle`, `container`, `tags`; in `container`, `browser` and the two caps; for the D1 stage only, `secrets` and `secrets_encrypted`, [E-05.6](#the-d1-stages-create-secrets-e-056)). Every other field is refused; its name only picks the code (a mount, cap, runtime or path name gets that class's code). Each allowlisted field must equal the template's | `BODY_FIELD_UNKNOWN`, `BODY_NOT_TEMPLATE`, `CONVERSATION_ID_MISMATCH`, `BODY_MALFORMED` |
 
 **The host workspace.** The planned workspace must be exactly `<repository>/<WORK-ID>/<attempt
 uuid>` in the fixed rule's grammar (a lower-case repository id, the canonical upper-case Work
@@ -234,7 +234,8 @@ send, and nothing is sent (the independent review's R1; `ADMITTED_FORMAT` is unc
 **What is recognized as a disposable fixture, and what is not.** The F-04.2 fixture is
 recognized by its path or its sha256 (the profile's `fixture` pin) and by its tag; the S-03.3
 qualification create by its path (outside `profiles/<id>/`, so it cannot be pinned) and by its
-tag, and, when filled, by its `secrets` (`BODY_FIELD_UNKNOWN`). A copy of either with the tag
+tag, and, when filled, by its `secrets` on every stage but the D1 stage (`BODY_FIELD_UNKNOWN`);
+on the D1 stage (since E-05.6, below) by the shared secrets check and its tag. A copy of either with the tag
 removed, and without `secrets`, is simply another template: nothing here can tell it apart, and
 whether it may be admitted is decided by the profile's approval by sha256 in a promoted manifest
 (decision 0020), like any other template.
@@ -250,8 +251,86 @@ S-03.3 slice 2's ACP block (`claude-code`, exactly `["claude-agent-acp"]`, no ar
 server, an isolated data directory), its `acp_model` the sentinel `candidate-unselected` (no
 model is selected before S-03.3; never a name from memory) and the tag `e-05.2-d1-candidate`.
 When S-03.3 qualifies the block, its bytes change (the model, the tag) and a profile pins its
-sha256. **Not yet verified:** any live create from it; the D1 create's inference credentials
-(the S-03.3 create's `secrets`), which E-01.2.2's allowlist refuses and E-05.2 does not add.
+sha256. **Not yet verified:** any live create from it. The D1 create's inference credentials
+(the S-03.3 create's `secrets`), which E-01.2.2's allowlist refuses and E-05.2 does not add, are
+E-05.6's (next section).
+
+### The D1 stage's create secrets (E-05.6)
+
+Plan leaf E-05.6 extends the admission and the create for the D1 stage only (carved from A-01.2,
+which still owns every other stage's secrets from role profiles): the D1 create carries a
+`secrets` block of exactly the pinned ACP registry entry's two names, each a `StaticSecret` of
+exactly `kind` and `value`, with `secrets_encrypted` false: under `ANTHROPIC_API_KEY` the
+attempt's inference token, bound to the reserved conversation and attempt, and under
+`ANTHROPIC_BASE_URL` the profile's guest inference endpoint (decision 0015 amendment 1 item 2).
+
+**One check, shared.** The secrets block is checked by `create_secrets.check_secrets`, the one
+function S-03.3's qualification admission (`acp_qualification.check_create`) also calls: one
+module, loaded under one name (`aieh_dispatch_create_secrets`), each caller passing its own
+refusal type. The codes and their meanings are the same on both sides (`create_secrets.MEANINGS`);
+the dispatcher adds a binding to the grant it holds:
+
+| Rule | Refused as |
+|---|---|
+| the names are exactly the registry entry's two (an `OH_` name, another provider's, a missing or renamed one is refused) | `SECRET_NAMES` |
+| each is a `StaticSecret` of exactly `kind` and `value` (a `LookupSecret` makes the outer server fetch a URL the body names) | `SECRET_KIND_FORBIDDEN` |
+| `secrets_encrypted` is `false` | `SECRETS_ENCRYPTED` |
+| no key or value anywhere in the body has a provider key's shape | `SECRET_PROVIDER_KEY_SHAPED` |
+| the token has the broker's attempt-token shape | `SECRET_NOT_ATTEMPT_TOKEN` |
+| the token is the grant's (by fingerprint), and the grant is of the reserved conversation and attempt; no grant held is refused too (dispatcher only) | `SECRET_TOKEN_NOT_BOUND` |
+| the token, its body after the prefix or any token-shaped text appears nowhere but in its own secret | `TOKEN_OUTSIDE_SECRET` |
+| the endpoint is the profile's guest inference endpoint, and no other destination appears | `DESTINATION_NOT_ENDPOINT` |
+
+**Where the values come from.** The names from the pinned registry extract
+(`acp_qualification.registry_secret_names`, its sha256 checked on every load); the endpoint from
+the approved profile's one `network.endpoints` entry of class `inference`
+(`acp_qualification.inference_endpoint`); the token only from the broker's issue answer. The
+grant's family is the registry entry's (`acp_qualification.ACP_FAMILY`, `anthropic-messages`),
+its one model the pinned template's `acp_model` (in the broker's model grammar), and its budgets
+and lifetime are declared beside the stage template's pin:
+`stage_create_template.inference_grant` `{requests, tokens, ttl_s}`, each a positive integer,
+bound by the profile digest and required at resolution (`PROFILE_ADMISSION_INVALID`); the broker
+bounds them at issuance. Anything else that cannot be admitted (the registry extract drifted, no
+single inference endpoint, another ACP server, a model outside the grammar) is
+`INFERENCE_INPUTS_INVALID` at admission, before any token exists.
+
+**The pinned template carries no secrets** (a template that does is `BODY_FIELD_UNKNOWN`):
+`admit` admits every input but the secrets, and `admit_secrets(admitted, resolved=, workspaces=,
+grant=)` adds the block, the token's value as the slot `{attempt_token}`. The grant
+(`InferenceGrant`) holds the token in memory; the checks before the transport, in `admit_secrets`
+and again in `send_create`, put it in the slot's place in a body built in memory, run the shared
+check with the binding on that exact body, and `send_create` sends it. A D1 create without its
+block or its grant is refused at the send. Every other stage still refuses `secrets` and
+`secrets_encrypted` (`BODY_FIELD_UNKNOWN`), and a grant on its create (`ADMISSION_MISMATCH`).
+
+**Order and revocation.** In `dispatch(..., inference=InferenceAccess)`: resolve, reserve,
+`admit` (every other input), then, and only then, the token is requested from the broker's
+control listener (`InferenceAccess.from_component(raw, revoker=)`: `inference_control.
+ControlClient` on the port of `dispatcher_ports`) for the reserved conversation and attempt;
+then `admit_secrets`, the workspace, `dispatched` (its detail carries the grant by fingerprint)
+and `send_create`. No control listener, or a broker that refuses the issue, is
+`INFERENCE_GRANT_UNAVAILABLE` (the broker's code in its context). Once issued, the grant is revoked
+(trigger `attempt end`: a refused attempt ends) on any refusal or failure (the secrets admission,
+the workspace, the `dispatched` transition, a `send_create` refusal, a transport failure, a 4xx, an
+uncertain outcome) before the attempt's outcome is recorded, and the revocation's outcome is in
+that record and on the raised exception (its context, or a note). A failed revocation is recorded
+and surfaced, never swallowed, and never stops the attempt's outcome from being recorded. A
+confirmed attempt keeps its grant until its end: `end_attempt(store, operation_key, inference=,
+actor=)` revokes it and records the revocation as the receipt
+`dispatch/attempt/<attempt id>/inference-revocation/<n>` (confirmed, or failed with the broker's
+code and `INFERENCE_REVOCATION_FAILED` raised; a later call tries again under the next receipt).
+The broker writes its own revocation receipt; the grant's state shows it.
+
+**Fingerprints, never the token.** `AdmittedCreate.to_json()` carries the slot and
+`inference_grant` (`inference-grant/v1`: the token's fingerprint, conversation, attempt, family,
+models, budget, expiry); the `dispatched`, `failed` and `unknown` details, `DispatchResult`, the
+revocation records and every refusal carry the fingerprint only (a refusal's detail and context are
+scrubbed of the token, its body and any provider-key-shaped word). The dispatcher holds no provider
+credential and reads none: importing it loads no inference or credential module, and the D1
+stage's own modules (`acp_qualification`, `inference_control`) are loaded on first use.
+
+**Not yet verified:** any live create with secrets, any live broker, guest or model call; the
+checked-in profile pins no stage template yet, so no grant budgets are declared there.
 
 ## The native conversation create (E-01.3.1)
 
