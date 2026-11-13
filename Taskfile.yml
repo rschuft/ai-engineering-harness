@@ -628,7 +628,7 @@ tasks:
   # narrowest tokens in Credential Manager ("AIEH Gitea bot <role>"), the authorization fixture and the
   # live denial tests (integrations/gitea/README.md).
   gitea:roles:
-    desc: "Role bots and the authorization fixture (python -I -B integrations/gitea/gitea_roles.py <command>): pass -- provision | fixture [--admin-merge-probe] | escape-probe | rotate ROLE | retire ROLE | status; fixture and escape-probe need gitea:finalize-credentials first"
+    desc: "Role bots and the authorization fixture (python -I -B integrations/gitea/gitea_roles.py <command>): pass -- provision | fixture [--admin-merge-probe] | escape-probe | authorization-repository --owner-act OA-30 | rotate ROLE | retire ROLE | status; fixture, escape-probe and authorization-repository need gitea:finalize-credentials first; authorization-repository is Owner act OA-30 (plan leaf E-05.7) and refuses without --owner-act OA-30"
     cmds:
       - '{{.PYTHON}} -I -B integrations/gitea/gitea_roles.py {{.CLI_ARGS}}'
 

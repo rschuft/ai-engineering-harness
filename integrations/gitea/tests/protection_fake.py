@@ -53,10 +53,12 @@ SUDO_TEXT = 'Only administrators allowed to sudo.'
 CREATED = '2026-11-07T10:00:0{n}Z'
 
 
-def repository_view(settings):
-    """Every top-level field of Gitea 28.3.0's Repository view (omitempty ones absent), SETTINGS over it."""
+def repository_view(settings, repository=REPOSITORY):
+    """Every top-level field of Gitea 28.3.0's Repository view (omitempty ones absent) of REPOSITORY, SETTINGS
+    over it."""
+    owner, name = repository.split('/')
     view = {
-        'id': 2, 'owner': {'id': 3, 'login': 'aieh-authz-fixture'}, 'name': 'authz', 'full_name': REPOSITORY,
+        'id': 2, 'owner': {'id': 3, 'login': owner}, 'name': name, 'full_name': repository,
         'description': '', 'empty': False, 'private': True, 'fork': False, 'template': False, 'mirror': False,
         'size': 25, 'language': '', 'languages_url': '', 'html_url': '', 'url': '', 'link': '', 'ssh_url': '',
         'clone_url': '', 'original_url': '', 'website': '', 'stars_count': 0, 'forks_count': 0,
@@ -113,13 +115,18 @@ def _fake_match(name, branch):
 
 
 class ProtectionGitea:
-    def __init__(self, roles):
+    """REPOSITORY (the fixture by default) as its declaration in ROLES (gitea_roles.DECLARATIONS) says."""
+
+    def __init__(self, roles, repository=REPOSITORY):
+        self.repository = repository
+        declared = roles.DECLARATIONS[repository]()
         self.tokens = {AUDIT_TOKEN: {'login': AUDITOR, 'scopes': ['read:repository'], 'name': 'aieh-protection-audit-x'},
                        VERIFIER_TOKEN: {'login': VERIFIER, 'scopes': ['read:repository'], 'name': 'aieh-verifier-x'}}
-        self.repo = repository_view(roles.repository_settings())
-        self.rules = [rule_view(rule, n + 2) for n, rule in enumerate(roles.protection_rules())]
-        self.collaborators = dict(roles.collaborators())
-        self.teams = [team_view('Owners', 'owner')]
+        self.repo = repository_view(declared['settings'], repository)
+        self.rules = [rule_view(rule, n + 2) for n, rule in enumerate(declared['rules'])]
+        self.collaborators = dict(declared['collaborators'])
+        self.teams = [team_view(name, permission, n + 1)
+                      for n, (name, permission) in enumerate(declared['teams'].items())]
         self.keys = []
         self.effective = None   # overrides the rule the branch enforces
         self.faults = {}
@@ -221,7 +228,7 @@ class ProtectionGitea:
             return self.fault('token') or self.reply(200, {
                 'id': 7, 'name': doer['name'], 'scopes': list(doer['scopes']), 'created_at': CREATED.format(n=5),
                 'last_used_at': CREATED.format(n=6), 'user': {'id': 9, 'login': login}})
-        repo = f'/repos/{REPOSITORY}'
+        repo = f'/repos/{self.repository}'
         if not (route == repo or route.startswith(repo + '/')):
             return self.reply(404, {'message': 'not found (a restricted account sees only its repositories)'})
         permission = self.collaborators.get(login)

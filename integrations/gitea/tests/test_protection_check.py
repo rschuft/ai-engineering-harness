@@ -59,11 +59,14 @@ def audit_provider(token=PF.AUDIT_TOKEN, user=PF.AUDITOR):
 
 
 class Check(unittest.TestCase):
+    repository = REPOSITORY  # the fixture; the ledger's classes at the end set the authorization repository
+
     def setUp(self):
-        self.gitea = PF.ProtectionGitea(R)
+        self.gitea = PF.ProtectionGitea(R, self.repository)
         self.provider = audit_provider()
 
-    def verify(self, repository=REPOSITORY, base=BASE):
+    def verify(self, repository=None, base=BASE):
+        repository = self.repository if repository is None else repository
         verdict = PC.verify(self.provider, PORT, repository, base, http=self.gitea)
         self.assertIn(verdict.status, PC.VERDICTS)
         text = json.dumps(verdict._asdict())
@@ -149,7 +152,7 @@ class Verified(Check):
 
     def test_only_the_fixed_reads_are_sent_with_the_token(self):
         self.verify()
-        repo = f'/repos/{REPOSITORY}'
+        repo = f'/repos/{self.repository}'
         self.assertEqual([r['path'] for r in self.gitea.requests], [
             '/token', repo, f'{repo}/branch_protections', f'{repo}/branches/main',
             f'{repo}/collaborators?page=1&limit=50',
@@ -677,6 +680,105 @@ class Loopback(unittest.TestCase):
             code = PC.main(['verify', REPOSITORY, '--port', str(self.port)], out=out, err=err)
         self.assertEqual((code, out.getvalue()), (2, ''))
         self.assertIn('NO_CREDENTIAL_PROVIDER', err.getvalue())
+
+
+# ---------------------------------------------------------------------------- one declaration per repository
+# Plan leaf E-05.7 (decision 0022 point 3): the authorization repository carries the qualified fixture's total
+# declaration as an entry of its own. The classes above run on it unchanged (verified as declared; drift for each
+# injected difference), and the fixture's own assertions above are unchanged.
+
+LEDGER = R.AUTHORIZATION_REPOSITORY
+
+
+class Declarations(unittest.TestCase):
+    category = 'contract'
+
+    def test_one_entry_per_repository(self):
+        self.assertEqual(list(R.DECLARATIONS), [R.FIXTURE_REPOSITORY, LEDGER])
+        self.assertIsNot(R.DECLARATIONS[LEDGER], R.DECLARATIONS[R.FIXTURE_REPOSITORY])
+        with self.assertRaises(TypeError):  # no caller adds a declaration
+            R.DECLARATIONS['other/repo'] = R.fixture_declaration
+        fixture, ledger = PC.declaration(R.FIXTURE_REPOSITORY, BASE), PC.declaration(LEDGER, BASE)
+        self.assertEqual(ledger['repository'], LEDGER)
+        self.assertEqual({k: v for k, v in ledger.items() if k != 'repository'},
+                         {k: v for k, v in fixture.items() if k != 'repository'})  # the same total declaration
+        ledger['rules'][0]['required_approvals'] = 9  # each entry is built afresh: one never changes the other
+        self.assertEqual(PC.declaration(R.FIXTURE_REPOSITORY, BASE), fixture)
+        self.assertEqual(PC.declaration(LEDGER, BASE)['rules'][0]['required_approvals'], 1)
+        # OA-30 (b): the four bots with the fixture's permissions, the auditor administrator, aieh-owner write
+        self.assertEqual(ledger['collaborators'], {
+            'aieh-bot-planner': 'write', 'aieh-bot-builder': 'write', 'aieh-bot-reviewer': 'read',
+            'aieh-bot-verifier': 'read', PC.AUDITOR: 'admin', G.OWNER: 'write'})
+        self.assertEqual(ledger['teams'], {'Owners': 'owner'})
+
+    def test_not_declared_for_any_other_repository_or_branch(self):
+        for repository, base in (('other/repo', BASE), (LEDGER.upper(), BASE), (LEDGER + 'x', BASE),
+                                 (f'{R.AUTHORIZATION_ORG}/{R.FIXTURE_REPO}', BASE),
+                                 (f'{R.FIXTURE_ORG}/{R.AUTHORIZATION_REPO}', BASE),
+                                 (f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}', BASE), (None, BASE), (LEDGER, 'work/x')):
+            with self.subTest(repository=repository, base=base), self.assertRaises(PC.Unverifiable) as caught:
+                PC.declaration(repository, base)
+            self.assertEqual(caught.exception.code, 'NOT_DECLARED')
+        gitea, provider = PF.ProtectionGitea(R, LEDGER), audit_provider()
+        verdict = PC.verify(provider, PORT, f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}', BASE, http=gitea)
+        self.assertEqual((verdict.status, verdict.code), ('unverified', 'NOT_DECLARED'))
+        self.assertEqual((gitea.requests, provider.reads), ([], []))
+
+    def test_the_fixture_still_verifies_with_its_recorded_baseline(self):
+        """The fixture's declaration is unchanged: as declared, the check's digest is the baseline recorded live in
+        OA-16 Act B. The ledger's differs (its name is in the observed state)."""
+        fixture = PC.verify(audit_provider(), PORT, R.FIXTURE_REPOSITORY, BASE, http=PF.ProtectionGitea(R))
+        self.assertEqual((fixture.status, fixture.digest), ('verified', PC.RECORDED_BASELINES[R.FIXTURE_REPOSITORY]))
+        ledger = PC.verify(audit_provider(), PORT, LEDGER, BASE, http=PF.ProtectionGitea(R, LEDGER))
+        self.assertEqual(ledger.status, 'verified', ledger.detail)
+        self.assertNotEqual(ledger.digest, fixture.digest)
+        self.assertEqual(list(PC.RECORDED_BASELINES), [R.FIXTURE_REPOSITORY])
+
+    def test_one_entry_changes_without_the_other(self):
+        """G-03.1 changes the ledger's entry alone: the fixture still verifies, the unchanged ledger drifts."""
+        def stricter():
+            declared = R.authorization_declaration()
+            declared['rules'][0]['dismiss_stale_approvals'] = True
+            return declared
+
+        fixture_gitea, ledger_gitea = PF.ProtectionGitea(R), PF.ProtectionGitea(R, LEDGER)  # as they stand
+        changed = R.types.MappingProxyType({R.FIXTURE_REPOSITORY: R.fixture_declaration, LEDGER: stricter})
+        with mock.patch.object(R, 'DECLARATIONS', changed):
+            fixture = PC.verify(audit_provider(), PORT, R.FIXTURE_REPOSITORY, BASE, http=fixture_gitea)
+            ledger = PC.verify(audit_provider(), PORT, LEDGER, BASE, http=ledger_gitea)
+        self.assertEqual(fixture.digest, PC.RECORDED_BASELINES[R.FIXTURE_REPOSITORY])
+        self.assertEqual(ledger.status, 'drift')
+        self.assertEqual(ledger.problems, ('main.dismiss_stale_approvals is False, declared True',))
+
+    def test_the_name_and_the_auditor_s_reach(self):
+        """Decision 0022 point 1: a permanent name in its own organization, with neither "fixture" nor "d1"; the
+        auditor's reach is the fixture and the authorization repository (OA-16; OA-30 (b))."""
+        self.assertEqual(LEDGER, f'{R.AUTHORIZATION_ORG}/{R.AUTHORIZATION_REPO}')
+        self.assertNotEqual(R.AUTHORIZATION_ORG, R.FIXTURE_ORG)
+        for part in (R.AUTHORIZATION_ORG, R.AUTHORIZATION_REPO):
+            self.assertNotIn('fixture', part.lower())
+            self.assertNotIn('d1', part.lower())
+            self.assertRegex(part, r'^[a-z][a-z0-9-]*$')
+        self.assertEqual(R.AUDITED_REPOSITORIES, (R.FIXTURE_REPOSITORY, LEDGER))
+        self.assertEqual(R.AUDITED_REPOSITORIES, tuple(R.DECLARATIONS))
+        for repository in R.AUDITED_REPOSITORIES:
+            self.assertEqual(PC.declaration(repository, BASE)['collaborators'][PC.AUDITOR], 'admin')
+
+
+class LedgerVerified(Verified):
+    repository = LEDGER
+
+
+class LedgerFieldDrift(FieldDrift):
+    repository = LEDGER
+
+
+class LedgerRuleSetAndPrecedence(RuleSetAndPrecedence):
+    repository = LEDGER
+
+
+class LedgerRepositoryDrift(RepositoryDrift):
+    repository = LEDGER
 
 
 if __name__ == '__main__':

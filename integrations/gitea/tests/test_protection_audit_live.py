@@ -26,7 +26,9 @@ entries). The auditor's token (read:repository, of a repository administrator of
   webhook, push (an API file write, and a git push over smart HTTP through the repository module:
   ``PUSH_REFUSED``), merge (an absent pull request), create a repository (its own, or in the fixture
   organization);
-- not escape its repository: ``GET /repos/search`` lists the fixture only; the organization, user and admin
+- not escape its repositories: ``GET /repos/search`` lists the fixture and nothing outside the auditor's reach
+  (``gitea_roles.AUDITED_REPOSITORIES``: the fixture, and the authorization repository once Owner act OA-30 has
+  made the auditor its repository administrator; plan leaf E-05.7); the organization, user and admin
   routes are refused (403 by scope); ``sudo`` is refused ("Only administrators allowed to sudo."); every
   repository the escape probe reads answers 404 or 403 on its rules: by default
   ``aieh-authz-fixture/escape-probe``, the private, empty repository with no collaborators that
@@ -631,10 +633,15 @@ class TestWrites(NegativeLive):
 
 
 class TestNoEscape(NegativeLive):
-    def test_it_sees_the_fixture_only(self):
-        status, found = self.call('GET /repos/search', 'the fixture only', 'GET', '/repos/search?limit=50')
+    def test_it_sees_only_the_repositories_it_audits(self):
+        """The auditor's reach (E-05.7): the fixture, and at most the authorization repository besides."""
+        status, found = self.call('GET /repos/search', 'the repositories it audits only', 'GET',
+                                  '/repos/search?limit=50')
         self.assertEqual(status, 200)
-        self.assertEqual([r['full_name'] for r in found['data']], [REPOSITORY])
+        seen = [r['full_name'] for r in found['data']]
+        self.assertIn(REPOSITORY, seen)
+        self.assertLessEqual(set(seen), set(R.AUDITED_REPOSITORIES))
+        self.assertEqual(len(seen), len(set(seen)))
 
     def test_user_organization_and_admin_routes_and_sudo(self):
         for action, path, headers in (('GET /user', '/user', None), ('GET /admin/users', '/admin/users', None),

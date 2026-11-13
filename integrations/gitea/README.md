@@ -25,7 +25,7 @@ supplies through the harness's fail-closed factory
 | Path | What |
 |---|---|
 | `gitea_host.py` | The lifecycle command line: `install`, `up`, `down`, `restart`, `status`, `inspect`, `verify [--readiness]`, `identities`, `finalize-credentials`, `upgrade --to VERSION`, `recover`, `uninstall` (and the internal `supervise`); composes the platform adapter and its credential provider |
-| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `escape-probe`, `rotate ROLE`, `retire ROLE`, `status`; the fixture's total declaration (`protection_rules()`, `repository_settings()`, `collaborators()`, `FIXTURE_TEAMS`) |
+| `gitea_roles.py` | Role credentials (S-01.2.2): `provision`, `fixture [--admin-merge-probe]`, `escape-probe`, `rotate ROLE`, `retire ROLE`, `status`; Owner act OA-30's module `authorization-repository --owner-act OA-30` (plan leaf E-05.7, [below](#the-authorization-repository-e-057-owner-act-oa-30)); one total declaration per repository (`DECLARATIONS`: `fixture_declaration()` and `authorization_declaration()`, from `protection_rules()`, `repository_settings()`, `collaborators()` and the teams) and the protection auditor's reach (`AUDITED_REPOSITORIES`) |
 | `protection_check.py` | The protection check before and after each protected merge (Owner decision OA-16; decision 0012 point 6): `verify OWNER/NAME`, and `verify()` for the authorization recorder ([below](#the-protection-check-oa-16)) |
 | `tests/test_lifecycle.py` | The composition over the contract (F-06.2): the moved names, the platform asset key and `PLATFORM_MISMATCH`, both run-record formats, readiness, `inspect`, the transitions over a real SQLite database and `app.ini` in a temporary root, and the I7 scan of `main` |
 | `tests/test_gitea_roles.py` | Bots, tokens, custody, fixture, revocation and rotation with a fake CLI and a fake API; the guest profile declares no path to a token store |
@@ -34,8 +34,9 @@ supplies through the harness's fail-closed factory
 | `tests/live_breaker.py` | The circuit breaker shared by those two suites (each holds its own) and the auditor's probe record |
 | `tests/test_live_matrix_safety.py` | Those two suites' write safety offline (OA-16 Act C), run through unittest against a fake Gitea API (scopes; past a broken scope check: accepting, or validating as 28.3.0's binding and handlers are modelled), a fake git, and a smart-HTTP server on loopback (the module's pushes, and real `git push --dry-run`): the breaker stops every later write of every role, each auditor write refused or rejected with nothing created, the unexercised ones reported, and the other roles' requests equal to those of 7995a75 (`tests/live_matrix_7995a75.json`) |
 | `tests/live_matrix_7995a75.json` | The other roles' requests of the two suites at commit 7995a75, recorded by `test_live_matrix_safety.record_golden` |
-| `tests/protection_fake.py` | A fake Gitea 28.3.0 of what the protection auditor reads: token and scope rules, `reqAdmin`, the 37-field rule view, the repository, branch, collaborator, permission, team and deploy-key views, faults; also used by the authorization recorder's fake |
-| `tests/test_protection_check.py` | The protection check against the fake: the closed list pinned to 28.3.0, verified, each field's drift, the rule set and precedence, the settings, roster, teams and deploy keys, every unverifiable state, the session's fixed reads, the keep-alive connection and the command line over loopback |
+| `tests/protection_fake.py` | A fake Gitea 28.3.0 of what the protection auditor reads of one declared repository (the fixture by default, or the authorization repository): token and scope rules, `reqAdmin`, the 37-field rule view, the repository, branch, collaborator, permission, team and deploy-key views, faults; also used by the authorization recorder's fake |
+| `tests/test_protection_check.py` | The protection check against the fake: the closed list pinned to 28.3.0, verified, each field's drift, the rule set and precedence, the settings, roster, teams and deploy keys, every unverifiable state, the session's fixed reads, the keep-alive connection and the command line over loopback; one declaration entry per repository (the authorization repository's its own, changed without the fixture's; `NOT_DECLARED` for any other repository or branch; the fixture still verifying with its recorded baseline), and the verified, field, rule-set, precedence and repository drift classes run again on the authorization repository (`Ledger...`) |
+| `tests/test_authorization_repository.py` | Owner act OA-30's module on fakes (never run live by the suite): every step in order as the site administrator by basic authentication with no token minted, the read-back field for field, the auditor's check and baseline, the fixture's recorded baseline, each stop condition with nothing sent after it, the idempotent second run, the refusal without `--owner-act OA-30`, the read-only receipt check on throwaway stores, the command line |
 | `tests/test_protection_audit_live.py` | Opt-in, two phases, each an Owner act (`AIEH_PROTECTION_AUDIT_LIVE=negative` or `=qualify`): the auditor's token is refused every write and reaches nothing outside its repository; the check detects injected drift and its restoration, one explicit sequence (OA-16 Act D) that stops at the first failed or uncertain check and sends no later injection (its baseline digest `AIEH_PROTECTION_AUDIT_BASELINE` when set, else the first verdict's). Each write probe is harmless (it repeats a value just read, or names an absent object) or made non-mutating (a body Gitea's validation rejects; git pushes the repository module refuses before sending an update: not a fast-forward, or deleting an absent branch); none is unexercised. The first security failure trips a circuit breaker: no later write is sent, in any class, and the run fails. Run once each on 2026-11-12 (OA-16 Acts C and D) |
 | `tests/test_protection_audit_live_safety.py` | The negative phase's write safety offline (OA-16 Act C): the circuit breaker, each probe against a fake Gitea that lets writes past a broken scope check (accepting, rejecting, or validating as 28.3.0's body binding and handlers are modelled), the wider snapshot, and the git push probes through the repository module against a smart-HTTP server on loopback |
 | `tests/test_protection_audit_qualify_safety.py` | The qualify phase's stop rules offline (OA-16 Act D): the live method against a fake Gitea with the site administrator's routes and the real check through a scripted verifier; a full pass sends exactly five injections and five restorations in order; a failing precondition sends no mutation; after a failed restoration, a read-back difference, an unexpected verdict or digest, a missing or unnamed drift, a non-2xx injection or an exception no later injection is sent, one restoration is attempted, nothing is retried |
@@ -53,6 +54,7 @@ python -I -B integrations/gitea/gitea_host.py identities
 python -I -B integrations/gitea/gitea_host.py finalize-credentials
 python -I -B integrations/gitea/gitea_host.py upgrade --to VERSION [--from-file EXE] | recover | uninstall
 python -I -B integrations/gitea/gitea_roles.py provision | fixture [--admin-merge-probe] | escape-probe | rotate ROLE | retire ROLE | status
+python -I -B integrations/gitea/gitea_roles.py authorization-repository --owner-act OA-30   # Owner act OA-30 only
 python -I -B integrations/gitea/protection_check.py verify OWNER/NAME [--base BRANCH] [--port N]   # task gitea:protection-check
 python -I -B -m unittest discover -s integrations/gitea/tests -v                    # task gitea:test
 AIEH_GITEA_AUTHZ=1 python -I -B -m unittest discover -s integrations/gitea/tests -p test_authorization_live.py -v   # task gitea:authz
@@ -296,6 +298,7 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   `escape-probe` that is private, empty, not archived and without collaborators is reported and left
   unchanged; one in any other state is refused (`ESCAPE_PROBE_STATE`) and left unchanged; a missing
   organization is refused (`FIXTURE_MISSING`: run `fixture` first).
+- **The authorization repository (E-05.7, Owner act OA-30).** See [below](#the-authorization-repository-e-057-owner-act-oa-30).
 - **Live tests.** `task gitea:authz` reads every role's token into memory (the protection auditor's
   too; without its entry the suite skips naming the missing entry) and probes what each
   may and may not do; the fixture-dependent classes skip while the fixture is absent, and the executor
@@ -303,6 +306,44 @@ matrix: [`policy/role-tokens.json`](../../policy/README.md).
   gitea:transport` are non-mutating if Gitea wrongly accepted them, or not sent (two, reported "not
   exercised"); the first unexpected acceptance by any role trips a circuit breaker after which no write is
   sent and the run fails (OA-16 Act C; see the suites' docstrings).
+
+## The authorization repository (E-05.7, Owner act OA-30)
+
+[Decision 0022](../../decisions/0022-authorization-repository-the-one-ledger-provisioned-for-d1.md): real Owner
+authorizations are recorded on one dedicated repository, `aieh-authorization/authorizations`
+(`AUTHORIZATION_ORG`, `AUTHORIZATION_REPO`: a private organization of its own; the name is permanent and nothing
+else spells it), never on the fixture. Its declaration is an entry of its own in `DECLARATIONS`
+(`authorization_declaration()`): today the qualified fixture's total declaration (the same rules, settings,
+collaborators and Owners team), so that G-03.1 can change it without the fixture's. Its collaborators are those of
+OA-30 (b): the four bots with the fixture's permissions, the protection auditor repository administrator (the
+auditor's reach, `AUDITED_REPOSITORIES`, becomes the fixture and this repository), and `aieh-owner` write.
+
+`authorization-repository --owner-act OA-30` is OA-30's administration act, built and tested on fakes and **not
+run**. It refuses (`OWNER_ACT_REQUIRED`, nothing read or sent) unless `--owner-act OA-30` names the act. Then:
+
+1. read-only, before any write: the managed integration store holds no `owner-authorization/v1/` receipt
+   (`recorder_receipts`: SQLite `mode=ro` and `query_only`, never migrated; `RECORDER_RECEIPTS_PRESENT`), and the
+   bots and `aieh-owner` exist (`BOTS_MISSING`, `OWNER_MISSING`);
+2. as `aieh-site-admin` by basic authentication with the harness-held password read into memory (no token
+   minted): the private organization, the repository (auto-initialized, default branch `main`), its settings
+   (`PATCH`), its collaborators, its three protection rules, in that order;
+3. the read-back as the administrator, compared field for field with the declaration: the organization's
+   visibility and team-access setting, the repository's settings, the collaborators and their permissions, every
+   rule's 34 fields, the teams, no deploy key, `main` holding its initial commit alone (its head has no parent)
+   and no pull request in any state (`READBACK_DIFFERENT`);
+4. the administrator holds no token afterwards (`ADMIN_HOLDS_TOKEN`);
+5. `protection_check.verify` of the repository as the protection auditor, read-only: `verified`, its baseline
+   digest reported (`PROTECTION_NOT_VERIFIED`);
+6. the fixture still `verified` with its recorded baseline, `protection_check.RECORDED_BASELINES`
+   (`FIXTURE_NOT_VERIFIED`).
+
+Any non-2xx answer stops it (`API_UNEXPECTED`, naming what was sent before it), as does each check above:
+nothing further is sent, nothing is undone or retried. An existing organization or repository is never adopted or
+modified: one that reads back as declared and verifies is reported (`already present; nothing written`), so a
+second run writes nothing; one in any other state is refused (`AUTHORIZATION_REPOSITORY_EXISTS`) with nothing
+written. It never merges, opens a pull request, injects drift, runs a negative control or records an Owner
+statement on the repository. Its report carries no commit id or token and is shown unredacted (its digests have
+64 hex digits); the I7 scan withholds it if anything token-shaped is in it.
 
 ## The protection check (OA-16)
 
@@ -317,7 +358,8 @@ before each merge and once more after the read-back, and merges only on `verifie
 **The auditor.** Gitea 28.3.0 serves the branch protection rules to repository and site administrators only
 (`routers/api/v1/api.go`: `branch_protections` behind `reqToken(), reqAdmin()`), and `aieh-owner` is
 neither. The check reads as `aieh-bot-protection-audit`: a restricted Bot without a password, collaborator
-with `admin` permission on the admitted repository only, one token of scope exactly `read:repository`
+with `admin` permission on the repositories it audits only (`AUDITED_REPOSITORIES`: the fixture, and the
+authorization repository once OA-30 is performed), one token of scope exactly `read:repository`
 (credential `cred-gitea-protection-audit`, entry `AIEH Gitea bot protection-audit`; its custodian is the
 recorder). Gitea decides a token's required scope by HTTP method (`tokenRequiresScopes`: GET read; POST,
 PUT, PATCH, DELETE write), also for a token used as a basic-authentication password, so the token can
@@ -340,7 +382,8 @@ administrator identity, no administrator credential of `aieh-owner` and no broad
 
 Any read that is not 200, not JSON, of the wrong kind or lost is `READ_FAILED`; a missing entry is
 `CREDENTIAL_MISSING`, an entry naming another account or not holding a token `CREDENTIAL_REFUSED` (both
-before anything is sent); a repository other than the admitted fixture is `NOT_DECLARED`. Each is
+before anything is sent); a repository without a declaration entry (`DECLARATIONS`: the fixture and the
+authorization repository) is `NOT_DECLARED`. Each is
 `unverified`, never `verified`. The verdict's digest is `sha256:` of the canonical observed values (never
 a token, a time or a commit).
 
@@ -371,8 +414,8 @@ only, so the log corroborates, never controls (security finding `fd-protection-c
 
 **Limits.** Team membership is not readable with `read:repository`: who belongs to the Owners team is not
 compared. The allowlist names Gitea shows are resolved among the repository's current readers. Webhooks are
-not read. The check reads the S-01.2.2 fixture, the one admitted repository; G-03.1's authorization
-repository will need its own declaration.
+not read. The check reads a repository with a declaration entry of its own: the S-01.2.2 fixture, and the
+authorization repository (E-05.7), whose entry G-03.1 completes.
 
 ## Not yet verified
 
@@ -380,8 +423,9 @@ repository will need its own declaration.
 - A real cross-version `upgrade` (one version is pinned), and the rehearsal of upgrade, recovery and
   uninstall on a disposable instance with a reboot or sign-out (F-06.6).
 - `retire` against the running Gitea (fakes only).
-- The protection check on any repository but the S-01.2.2 fixture (G-03.1's authorization repository
-  needs its own declaration), and Gitea's views in states the live runs did not produce (the check's
+- The protection check on any repository but the S-01.2.2 fixture: the authorization repository's declaration
+  and OA-30's module (`authorization-repository`) have run against the fakes only; the repository does not exist
+  until OA-30 is performed. Gitea's views in states the live runs did not produce (the check's
   `unverified` paths on the real Gitea are exercised against the fake only).
 - The receipts of credential acts against the running Gitea and the managed root's integration store
   (fakes and a fixture store only, F-06.3).

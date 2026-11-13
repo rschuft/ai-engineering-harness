@@ -469,6 +469,29 @@ class TokenProbe(Fresh):
                          [f'POST /users/{PF.AUDITOR}/tokens', 'DELETE /token'])
 
 
+class AuditorsReach(Fresh):
+    """The negative phase's no-escape listing against the auditor's reach (plan leaf E-05.7): the fixture, and at
+    most the authorization repository besides, once Owner act OA-30 has made the auditor its administrator."""
+
+    def test_the_listing_stays_within_the_repositories_it_audits(self):
+        method = 'test_it_sees_only_the_repositories_it_audits'
+        for visible, passes in (([PF.REPOSITORY], True), ([PF.REPOSITORY, R.AUTHORIZATION_REPOSITORY], True),
+                                ([R.AUTHORIZATION_REPOSITORY], False),
+                                ([PF.REPOSITORY, f'{R.FIXTURE_ORG}/{R.ESCAPE_PROBE_REPO}'], False),
+                                ([PF.REPOSITORY, 'someone/else'], False), ([PF.REPOSITORY, PF.REPOSITORY], False)):
+            with self.subTest(visible=visible):
+                fake = ProbeGitea()
+                fake.visible = visible
+                if passes:
+                    self.run_live('TestNoEscape', method, context(fake))
+                else:
+                    with self.assertRaises(AssertionError) as caught:
+                        self.run_live('TestNoEscape', method, context(fake))
+                    self.assertNotIn('a real HTTP request', str(caught.exception))
+                self.assertEqual([r['path'] for r in fake.requests], ['/repos/search?limit=50'])
+                self.assertEqual(fake.writes, [])
+
+
 class Skips(Fresh):
     def test_every_class_skips_without_the_opt_in(self):
         with mock.patch.object(L, 'PHASE', ''), mock.patch.object(L, '_LIVE', []), \

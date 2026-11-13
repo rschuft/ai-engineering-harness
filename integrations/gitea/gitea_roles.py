@@ -4,7 +4,8 @@
 One Gitea account per role of policy/role-tokens.json that holds a Gitea credential: the planner, the
 builder and the reviewer (cred-gitea-bot-*), the authorization verifier's read-only identity
 (cred-verifier-read), and the protection auditor (cred-gitea-protection-audit; Owner decision OA-16): a
-read:repository token of an account that is a repository administrator of the fixture only, which the
+read:repository token of an account that is a repository administrator of the repositories it audits only
+(AUDITED_REPOSITORIES: the fixture, and the authorization repository once Owner act OA-30 creates it), which the
 authorization recorder's protection check (protection_check.py) uses to read the branch protection rules
 that Gitea 28.3.0 serves to repository administrators only. Each is created with Gitea's own CLI as a restricted, non-administrator account of
 Gitea's Bot type (`admin user create --user-type Bot --restricted`, no password: it cannot sign in
@@ -26,11 +27,14 @@ basic authentication with the harness-held password that `task gitea:finalize-cr
 administration, and the report shows that the administrator holds none afterwards. `escape-probe` acts the
 same way, separately, to create the organization's second repository, escape-probe: private, empty and with
 no collaborators, whose rules the protection auditor's live negative test must be refused; it never addresses
-the fixture repository, and it refuses an existing escape-probe in any other state.
+the fixture repository, and it refuses an existing escape-probe in any other state. `authorization-repository` is
+Owner act OA-30 (decision 0022; plan leaf E-05.7), acting the same way: it creates and declares the authorization
+repository (DECLARATIONS) and checks it once, read-only, as the protection auditor (authorization_repository).
 
   python -I -B integrations/gitea/gitea_roles.py provision      # the bot accounts and missing tokens
   python -I -B integrations/gitea/gitea_roles.py fixture        # organization, repository, protection
   python -I -B integrations/gitea/gitea_roles.py escape-probe   # the auditor's escape-probe repository
+  python -I -B integrations/gitea/gitea_roles.py authorization-repository --owner-act OA-30   # Owner act OA-30
   python -I -B integrations/gitea/gitea_roles.py rotate ROLE    # revoke a token, prove it fails closed, re-issue
   python -I -B integrations/gitea/gitea_roles.py retire ROLE    # revoke a token, prove it fails closed, drop the entry
   python -I -B integrations/gitea/gitea_roles.py status         # entries, fingerprints, token checks
@@ -56,6 +60,7 @@ import os
 import re
 import subprocess
 import sys
+import types
 import urllib.parse
 from pathlib import Path
 from typing import Callable
@@ -88,7 +93,8 @@ ROLES = {
                  'credential': 'cred-gitea-bot-reviewer', 'permission': 'read'},
     'verifier': {'user': host.BOT_ACCOUNTS['verifier'], 'scopes': ('read:repository',),
                  'credential': 'cred-verifier-read', 'permission': 'read'},
-    # Owner decision OA-16: repository-administrator collaboration on the fixture only, so that Gitea serves
+    # Owner decision OA-16: repository-administrator collaboration on the repositories it audits only (the fixture;
+    # the authorization repository by OA-30 (b): AUDITED_REPOSITORIES), so that Gitea serves
     # it the branch protection rules (reqAdmin), and a token that can only read (read:repository: every
     # POST, PUT, PATCH and DELETE under /repos needs the write scope). Its custodian is the authorization
     # recorder, whose protection check alone reads the entry (decision 0012 point 6, Proposed).
@@ -97,6 +103,12 @@ ROLES = {
                          'custodian': 'the authorization recorder (its protection check)'},
 }
 FIXTURE_ORG, FIXTURE_REPO, DEFAULT_BRANCH = 'aieh-authz-fixture', 'authz', 'main'
+# The authorization repository (decision 0022; plan leaf E-05.7): the one ledger of real Owner authorizations,
+# G-03.1's own repository provisioned early for D1, in a private organization of its own. Its name is permanent and
+# contains neither "fixture" nor "d1"; nothing else in the harness spells it.
+AUTHORIZATION_ORG, AUTHORIZATION_REPO = 'aieh-authorization', 'authorizations'
+FIXTURE_REPOSITORY = f'{FIXTURE_ORG}/{FIXTURE_REPO}'
+AUTHORIZATION_REPOSITORY = f'{AUTHORIZATION_ORG}/{AUTHORIZATION_REPO}'
 # A second repository of the fixture organization that no account is a collaborator of: the live negative test
 # of the protection auditor (test_protection_audit_live.py) reads its rules and must be refused.
 ESCAPE_PROBE_REPO = 'escape-probe'
@@ -198,6 +210,36 @@ def repository_settings() -> dict:
 # only, which Gitea creates with the organization and gives every repository of it (includes all
 # repositories). Not applied by apply_fixture; compared by the protection check.
 FIXTURE_TEAMS = {'Owners': 'owner'}
+
+
+def fixture_declaration() -> dict:
+    """The S-01.2.2 fixture's total declaration: its protected branch, rules, settings, collaborators, teams and
+    deploy keys (none), as the protection check compares them (Owner decision OA-16; qualified live on 2026-11-12,
+    baseline protection_check.RECORDED_BASELINES)."""
+    return {'base': DEFAULT_BRANCH, 'rules': protection_rules(), 'settings': repository_settings(),
+            'collaborators': collaborators(), 'teams': dict(FIXTURE_TEAMS), 'deploy_keys': []}
+
+
+def authorization_declaration() -> dict:
+    """The authorization repository's total declaration, an entry of its own (decision 0022 point 3): today the
+    same total protection declaration as the qualified fixture, so that G-03.1 can change one without the other
+    (G-03.1 keeps stale-approval dismissal, required checks, the audit configuration and the typed proposal
+    convention). Its collaborators are those of OA-30 (b): the four bots with the fixture's permissions, the
+    protection auditor repository administrator, and aieh-owner write (Gitea admits only writers to a merge
+    allowlist, and only aieh-owner is on it); its one team is the organization's Owners team, which Gitea
+    creates with the organization."""
+    return {'base': DEFAULT_BRANCH, 'rules': protection_rules(), 'settings': repository_settings(),
+            'collaborators': collaborators(), 'teams': {'Owners': 'owner'}, 'deploy_keys': []}
+
+
+# One declaration per declared repository (the protection check answers NOT_DECLARED for any other). A builder
+# per entry returns a fresh, total declaration.
+DECLARATIONS = types.MappingProxyType({FIXTURE_REPOSITORY: fixture_declaration,
+                                       AUTHORIZATION_REPOSITORY: authorization_declaration})
+# The protection auditor's reach: the repositories of which it is a repository administrator. Owner decision
+# OA-16 approved the fixture; decision 0022 (Consequences) and Owner act OA-30 (b) add the authorization repository
+# (planned until OA-30 is performed).
+AUDITED_REPOSITORIES = (FIXTURE_REPOSITORY, AUTHORIZATION_REPOSITORY)
 
 
 # ---------------------------------------------------------------- the Gitea CLI
@@ -583,6 +625,260 @@ def escape_probe(provider=None, run: Callable = subprocess.run, http: Callable =
     return report
 
 
+# ---------------------------------------------------------------- the authorization repository (Owner act OA-30)
+
+OWNER_ACT = 'OA-30'
+# authorization_recorder.RECEIPT_PREFIX, repeated so that this module loads no recorder (a test asserts equality).
+RECORDER_RECEIPT_PREFIX = 'owner-authorization/v1/'
+AUTHORIZATION_ORG_SETTINGS = {'visibility': 'private', 'repo_admin_change_team_access': False}
+LIST_PAGE = 'page=1&limit=50'
+_SUCCESS = tuple(range(200, 300))
+
+
+def recorder_receipts(path) -> list[str]:
+    """Read-only: the operation keys under RECORDER_RECEIPT_PREFIX in the integration store at PATH, [] when the
+    file does not exist. The store is opened with SQLite's mode=ro and query_only and is not migrated (its kind and
+    migrations are checked as they are); nothing in it is written."""
+    store_module = host._load_integration_store()
+    resolved = store_module.check_location(Path(path))
+    if not resolved.is_file():
+        return []
+    conn = store_module.storecore.open_read_only(resolved)
+    try:
+        conn.execute('PRAGMA query_only = ON')
+        if conn.execute('PRAGMA query_only').fetchone()[0] != 1:
+            raise GiteaError('STORE_NOT_READ_ONLY', 'the integration store connection did not take query_only',
+                             refusal=False)
+        store_module.storecore.check_current(conn, store_module.KIND)
+        keys = [r.operation_key for r in store_module.IntegrationStore(conn, resolved).attempts()]
+    finally:
+        conn.close()
+    return sorted(k for k in keys if k.startswith(RECORDER_RECEIPT_PREFIX))
+
+
+def managed_recorder_receipts() -> list[str]:
+    """recorder_receipts of the managed integration store, <state>/integration/integration.sqlite (decision 0009),
+    resolved without creating anything."""
+    res = host.paths.resolve()
+    return recorder_receipts(Path(str(res.paths['state'])) / 'integration' / 'integration.sqlite')
+
+
+def _protection_check():
+    """protection_check.py, loaded when the act needs it (it loads this module in turn)."""
+    if (module := sys.modules.get('aieh_gitea_protection_check')) is None:
+        spec = importlib.util.spec_from_file_location('aieh_gitea_protection_check', HERE / 'protection_check.py')
+        module = sys.modules['aieh_gitea_protection_check'] = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules['aieh_gitea_protection_check']
+            raise
+    return module
+
+
+def create_authorization_repository(api: Api, declared: dict, actions: list) -> None:
+    """The writes of OA-30 (a), in order, each appended to ACTIONS before its status is judged: the private
+    organization, the auto-initialized repository with its default branch, its settings, its collaborators (before
+    the rules: Gitea admits only writers to a merge allowlist) and its protection rules. Any non-2xx answer stops
+    (API_UNEXPECTED, nothing further is sent)."""
+    repo = f'/repos/{AUTHORIZATION_REPOSITORY}'
+
+    def call(method, path, body):
+        status, payload = api.call(method, path, body)
+        actions.append({'method': method, 'path': path, 'status': status})
+        require(status, _SUCCESS, f'{method} {path}', payload)
+
+    call('POST', '/orgs', {'username': AUTHORIZATION_ORG, **AUTHORIZATION_ORG_SETTINGS,
+                           'description': 'The authorization repository (decision 0022; plan leaf E-05.7)'})
+    call('POST', f'/orgs/{AUTHORIZATION_ORG}/repos', {
+        'name': AUTHORIZATION_REPO, 'private': True, 'auto_init': True, 'default_branch': declared['base'],
+        'readme': 'Default', 'description': 'Operation manifests; Owner authorizations are merges into main'})
+    call('PATCH', repo, declared['settings'])
+    for user, permission in declared['collaborators'].items():
+        call('PUT', f'{repo}/collaborators/{user}', {'permission': permission})
+    for rule in declared['rules']:
+        call('POST', f'{repo}/branch_protections', rule)
+
+
+def _normal_rule(rule: dict) -> dict:
+    return {f: sorted(rule.get(f) or []) if f in _LIST_FIELDS else rule.get(f) for f in PROTECTION_FIELDS}
+
+
+def read_authorization_repository(api: Api, base: str) -> dict:
+    """The authorization repository as the site administrator reads it (GETs only): the organization's settings,
+    the repository's view, the collaborators with their permissions, every rule's 34 fields, the teams, the deploy
+    keys, the protected branch's head commit's parent count and the pull requests in any state. It carries no
+    commit id."""
+    def read(path, kind, what):
+        status, payload = api.call('GET', path)
+        require(status, 200, f'GET {path}', payload)
+        if not isinstance(payload, kind):
+            raise GiteaError('API_UNEXPECTED', f'{what}: a view of another kind', refusal=False)
+        return payload
+
+    repo = f'/repos/{AUTHORIZATION_REPOSITORY}'
+    org = read(f'/orgs/{AUTHORIZATION_ORG}', dict, 'the organization')
+    info = read(repo, dict, 'the repository')
+    roster = read(f'{repo}/collaborators?{LIST_PAGE}', list, 'the collaborators')
+    collaborators_seen = {}
+    for entry in roster:
+        login = str(entry.get('login') if isinstance(entry, dict) else entry)
+        permission = read(f'{repo}/collaborators/{login}/permission', dict, f'the permission of {login}')
+        collaborators_seen[login] = permission.get('permission')
+    rules = read(f'{repo}/branch_protections', list, 'the branch protection rules')
+    teams = read(f'{repo}/teams', list, 'the teams')
+    keys = read(f'{repo}/keys?{LIST_PAGE}', list, 'the deploy keys')
+    branch = read(f'{repo}/branches/{urllib.parse.quote(base, safe="")}', dict, f'the branch {base}')
+    head = (branch.get('commit') or {}).get('id')
+    if not isinstance(head, str) or not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise GiteaError('API_UNEXPECTED', f'the branch {base} names no commit', refusal=False)
+    commit = read(f'{repo}/git/commits/{head}?stat=false&verification=false&files=false', dict, 'its head commit')
+    pulls = read(f'{repo}/pulls?state=all&{LIST_PAGE}', list, 'the pull requests')
+    return {'organization': {k: org.get(k) for k in AUTHORIZATION_ORG_SETTINGS},
+            'repository': {'full_name': info.get('full_name'), 'empty': info.get('empty'),
+                           **{k: info.get(k) for k in repository_settings()}},
+            'collaborators': collaborators_seen,
+            'rules': {str(r.get('rule_name')) if isinstance(r, dict) else '?': _normal_rule(r)
+                      if isinstance(r, dict) else {'malformed': True} for r in rules},
+            'teams': {str(t.get('name')) if isinstance(t, dict) else '?': t.get('permission')
+                      if isinstance(t, dict) else None for t in teams},
+            'deploy_keys': len(keys),
+            'branch': {'name': base, 'protected': branch.get('protected'),
+                       'head_parents': len(commit.get('parents') or [])},
+            'pulls': len(pulls)}
+
+
+def authorization_differences(observed: dict, declared: dict) -> list[str]:
+    """Field for field, how OBSERVED (read_authorization_repository) differs from the declaration DECLARED, the
+    organization's settings, an initial commit alone on the protected branch and no pull request ([] when it
+    does not)."""
+    out = []
+
+    def differ(what, seen, want):
+        if seen != want:
+            out.append(f'{what} is {seen!r}, declared {want!r}')
+
+    for key, want in AUTHORIZATION_ORG_SETTINGS.items():
+        differ(f'the organization\'s {key}', observed['organization'].get(key), want)
+    differ('the repository\'s full_name', observed['repository'].get('full_name'), AUTHORIZATION_REPOSITORY)
+    differ('the repository\'s empty', observed['repository'].get('empty'), False)
+    for key, want in declared['settings'].items():
+        differ(f'the repository\'s {key}', observed['repository'].get(key), want)
+    seen, want = observed['collaborators'], declared['collaborators']
+    for user in sorted(set(seen) | set(want)):
+        differ(f'collaborator {user}', seen.get(user, 'absent'), want.get(user, 'absent'))
+    rules = {r['rule_name']: _normal_rule(r) for r in declared['rules']}
+    for name in sorted(set(observed['rules']) - set(rules)):
+        out.append(f'rule {name!r} is not declared')
+    for name in sorted(set(rules) - set(observed['rules'])):
+        out.append(f'the declared rule {name!r} is missing')
+    for name in sorted(set(rules) & set(observed['rules'])):
+        for field in PROTECTION_FIELDS:
+            differ(f'{name}.{field}', observed['rules'][name].get(field), rules[name][field])
+    differ('the teams', observed['teams'], declared['teams'])
+    differ('the deploy keys', observed['deploy_keys'], len(declared['deploy_keys']))
+    differ(f'the branch {declared["base"]}\'s protection', observed['branch']['protected'], True)
+    differ(f'the parents of {declared["base"]}\'s head (its initial commit alone)',
+           observed['branch']['head_parents'], 0)
+    differ('the pull requests (any state)', observed['pulls'], 0)
+    return out
+
+
+def _short(digest) -> str:
+    """A digest as reports and messages show it in this act: sha256 and its first 16 hex digits (a full digest
+    holds 40 hex digits in a row, which the token redaction would cut)."""
+    return digest[:23] if isinstance(digest, str) else repr(digest)
+
+
+def authorization_repository(owner_act=None, provider=None, run: Callable = subprocess.run, http: Callable = None,
+                             ctx=None, receipts: Callable | None = None, check: Callable | None = None) -> dict:
+    """Owner act OA-30 (decision 0022; plan leaf E-05.7): create and declare the authorization repository
+    AUTHORIZATION_REPOSITORY as the site administrator (HTTP basic authentication with its harness-held password read
+    into memory; no token minted), read it back and compare it field for field with its declaration, then check it
+    once, read-only, as the protection auditor (protection_check.verify, its baseline digest reported) and check that
+    the fixture still verifies with its recorded baseline. Refused unless OWNER_ACT is OA-30.
+
+    Before any write it checks, read-only, that the managed integration store holds no recorder receipt (RECEIPTS,
+    by default managed_recorder_receipts), and that the bots and aieh-owner exist. An existing organization or
+    repository is never adopted or modified: a fully provisioned, verified one is reported and nothing is written (a
+    second run); one in any other state is refused (AUTHORIZATION_REPOSITORY_EXISTS) and nothing is written. Stops,
+    sending nothing further, on any non-2xx answer (API_UNEXPECTED), a read-back difference (READBACK_DIFFERENT), a
+    verdict that is not verified (PROTECTION_NOT_VERIFIED), the administrator holding a token afterwards
+    (ADMIN_HOLDS_TOKEN) or the fixture no longer verifying with its baseline (FIXTURE_NOT_VERIFIED). No merge, pull
+    request, negative control, drift injection or Owner statement is ever made on the repository. CHECK stands in
+    for protection_check.verify in tests."""
+    if owner_act != OWNER_ACT:
+        raise GiteaError('OWNER_ACT_REQUIRED', f'this is Owner act {OWNER_ACT} (decision 0022): it runs only with '
+                         f'--owner-act {OWNER_ACT}, on the Owner\'s approval of that act; nothing was read or sent')
+    lay, pinned, port, provider, cli = ctx or context(provider, run)
+    found = (receipts or managed_recorder_receipts)()
+    if found:
+        raise GiteaError('RECORDER_RECEIPTS_PRESENT', f'the managed integration store holds {len(found)} recorder '
+                         f'receipt(s) under {RECORDER_RECEIPT_PREFIX} ({found[:3]}): decision 0022 point 2 assumes '
+                         'none before the authorization repository is admitted; nothing was sent')
+    users = cli.users()
+    missing = sorted({spec['user'] for spec in ROLES.values()} - set(users))
+    if missing:
+        raise GiteaError('BOTS_MISSING', f'run provision first: {missing}')
+    if host.OWNER not in users:
+        raise GiteaError('OWNER_MISSING', f'{host.OWNER} does not exist; run task gitea:identities')
+    pc = _protection_check()
+    check = check or pc.verify
+    declared = DECLARATIONS[AUTHORIZATION_REPOSITORY]()
+    api = admin_api(provider, port, http)
+    report = {'owner_act': OWNER_ACT, 'repository': AUTHORIZATION_REPOSITORY,
+              'admin_auth': {'user': host.SITE_ADMIN, 'method': 'HTTP basic authentication, password read from '
+                             f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} into memory; no token minted'},
+              'recorder_receipts': found, 'actions': []}
+    status, payload = api.call('GET', f'/orgs/{AUTHORIZATION_ORG}')
+    if status == 404:
+        try:
+            create_authorization_repository(api, declared, report['actions'])
+        except GiteaError as exc:
+            raise GiteaError(exc.code, f'{exc.detail}; sent before it: '
+                             + json.dumps(report['actions'][:-1]), refusal=False) from None
+        report['state'] = 'created'
+    else:
+        require(status, 200, f'GET /orgs/{AUTHORIZATION_ORG}', payload)
+        status, payload = api.call('GET', f'/repos/{AUTHORIZATION_REPOSITORY}')
+        if status == 404:
+            raise GiteaError('AUTHORIZATION_REPOSITORY_EXISTS', f'the organization {AUTHORIZATION_ORG} exists without '
+                             f'{AUTHORIZATION_REPO}: an existing organization is never adopted; nothing was written')
+        require(status, 200, f'GET /repos/{AUTHORIZATION_REPOSITORY}', payload)
+        report['state'] = 'already present; nothing written'
+    report['readback'] = read_authorization_repository(api, declared['base'])
+    differences = authorization_differences(report['readback'], declared)
+    if differences and report['actions']:
+        raise GiteaError('READBACK_DIFFERENT', f'{AUTHORIZATION_REPOSITORY} was created but reads back otherwise; '
+                         'nothing further was sent: ' + '; '.join(differences), refusal=False)
+    if differences:
+        raise GiteaError('AUTHORIZATION_REPOSITORY_EXISTS', f'{AUTHORIZATION_REPOSITORY} exists in another state; it '
+                         'is never adopted or modified, and nothing was written: ' + '; '.join(differences))
+    report['differences'] = differences
+    status, tokens = api.call('GET', f'/users/{host.SITE_ADMIN}/tokens')
+    report['admin_tokens_after'] = [t.get('name') for t in tokens] if status == 200 and isinstance(tokens, list) \
+        else f'HTTP {status}'
+    if report['admin_tokens_after'] != []:
+        raise GiteaError('ADMIN_HOLDS_TOKEN', f'{host.SITE_ADMIN}\'s tokens afterwards read '
+                         f'{report["admin_tokens_after"]!r}, not none: nothing further was sent', refusal=False)
+    verdict = check(provider, port, AUTHORIZATION_REPOSITORY, declared['base'], http=http)
+    report['protection'] = {'status': verdict.status, 'code': verdict.code, 'detail': verdict.detail,
+                            'baseline': verdict.digest}
+    if verdict.status != 'verified':
+        raise GiteaError('PROTECTION_NOT_VERIFIED', f'protection_check verify {AUTHORIZATION_REPOSITORY} answered '
+                         f'{verdict.status} ({verdict.code}: {verdict.detail[:300]})', refusal=False)
+    baseline = pc.RECORDED_BASELINES[FIXTURE_REPOSITORY]
+    fixture_verdict = check(provider, port, FIXTURE_REPOSITORY, DEFAULT_BRANCH, http=http)
+    report['fixture'] = {'repository': FIXTURE_REPOSITORY, 'status': fixture_verdict.status,
+                         'code': fixture_verdict.code, 'baseline': fixture_verdict.digest,
+                         'recorded_baseline': baseline, 'equal': fixture_verdict.digest == baseline}
+    if fixture_verdict.status != 'verified' or fixture_verdict.digest != baseline:
+        raise GiteaError('FIXTURE_NOT_VERIFIED', f'the fixture {FIXTURE_REPOSITORY} answered {fixture_verdict.status} '
+                         f'({fixture_verdict.code}) with {_short(fixture_verdict.digest)}, recorded baseline '
+                         f'{_short(baseline)}', refusal=False)
+    return report
+
+
 TRIGGER ='owner direction'  # decision 0007 point 5: a command-line act is the Owner's direction (bootstrap)
 
 
@@ -748,6 +1044,15 @@ def main(argv=None) -> int:
     sub.add_parser('escape-probe', help=f'create the private, empty repository {FIXTURE_ORG}/{ESCAPE_PROBE_REPO} '
                    'with no collaborators as the site administrator (the protection auditor\'s escape probe); '
                    'never touches the fixture repository')
+    auth = sub.add_parser(
+        'authorization-repository',
+        help=f'Owner act {OWNER_ACT} (decision 0022; plan leaf E-05.7): create the private authorization repository '
+             f'{AUTHORIZATION_REPOSITORY} as the site administrator (basic authentication, password in memory, no '
+             'token minted), apply its settings, collaborators and protection rules, read it back against its '
+             'declaration, then check it once, read-only, as the protection auditor and check that the fixture still '
+             'verifies; refused unless --owner-act names the act; a second run on a verified repository writes nothing',
+        description=f'This is Owner act {OWNER_ACT}. It runs only on the Owner\'s approval of that act.')
+    auth.add_argument('--owner-act', help=f'must be {OWNER_ACT}: the Owner act this run performs')
     rot =sub.add_parser('rotate', help='revoke a role token, prove it fails closed, re-issue it')
     rot.add_argument('role', choices=sorted(ROLES))
     ret = sub.add_parser('retire', help='revoke a role token, prove it fails closed, delete its entry')
@@ -771,6 +1076,8 @@ def main(argv=None) -> int:
             report = fixture(ctx=ctx, probe=probe)
         elif args.command == 'escape-probe':
             report = escape_probe()
+        elif args.command == 'authorization-repository':
+            report = authorization_repository(owner_act=args.owner_act)
         elif args.command == 'rotate':
             report = rotate(args.role)
         elif args.command == 'retire':
@@ -783,7 +1090,11 @@ def main(argv=None) -> int:
         message, code = f'gitea-roles: {redact(str(exc))}\n', 2 if exc.refusal else 1
     finally:
         host.ACT_GUARD = None
-    text = '' if report is None else redact(json.dumps(report, indent=2, default=str)) + '\n'
+    text = '' if report is None else json.dumps(report, indent=2, default=str) + '\n'
+    if args.command != 'authorization-repository':
+        text = redact(text)
+    # The authorization-repository report carries sha256 digests (64 hex digits, which redact would cut) and no
+    # commit id or token: it is shown as it is, and the scan below withholds it if anything token-shaped is in it.
     scan = host.exposure_scan(guard, text, message)
     guard.clear()
     if scan['found_in']:

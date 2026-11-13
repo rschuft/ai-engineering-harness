@@ -1,17 +1,19 @@
 """The protection check before each protected merge (decision 0012 point 6, Proposed; Owner decision OA-16).
 
 A bounded, read-only adapter of the Gitea integration, not a policy service: it reads what Gitea 28.3.0
-reports about one admitted repository as the protection auditor, compares it with the harness's one total
-declaration of that repository (gitea_roles: ``protection_rules()``, ``repository_settings()``,
-``collaborators()``, ``FIXTURE_TEAMS``; no deploy key) and answers ``Verdict(status, code, detail, digest,
-problems)``, ``status`` one of ``verified``, ``drift`` or ``unverified``. Anything it cannot establish is
-``unverified``, never ``verified``. The authorization recorder (integrations/owner) asks it as the last read
-before each merge and once more after it (its ``Context.verifier`` seam).
+reports about one declared repository as the protection auditor, compares it with the harness's total
+declaration of that repository (one entry per repository, ``gitea_roles.DECLARATIONS``: the S-01.2.2 fixture's
+and the authorization repository's, each its rules, settings, collaborators and teams and no deploy key) and
+answers ``Verdict(status, code, detail, digest, problems)``, ``status`` one of ``verified``, ``drift`` or
+``unverified``. Anything it cannot establish is ``unverified``, never ``verified``. The authorization recorder
+(integrations/owner) asks it as the last read before each merge and once more after it (its ``Context.verifier``
+seam).
 
 **The auditor.** Gitea 28.3.0 serves branch protection rules (``GET /repos/{owner}/{repo}/branch_protections``)
 to repository and site administrators only (routers/api/v1/api.go: ``reqToken(), reqAdmin()``). The check
 therefore reads as ``aieh-bot-protection-audit``: a restricted Gitea Bot account without a password, a
-collaborator with ``admin`` permission on the admitted repository only, holding one token of scope exactly
+collaborator with ``admin`` permission on the repositories it audits only (``gitea_roles.AUDITED_REPOSITORIES``),
+holding one token of scope exactly
 ``read:repository``. Gitea decides the required scope by HTTP method (``tokenRequiresScopes``): GET needs the
 read scope, every POST, PUT, PATCH and DELETE under ``/repos`` the write scope, and the scope binds a token
 presented as a basic-authentication password too (services/auth/basic.go), so the token reads and can write
@@ -79,6 +81,7 @@ import json
 import os
 import re
 import sys
+import types
 import urllib.parse
 from pathlib import Path
 from typing import Callable, NamedTuple
@@ -172,17 +175,28 @@ class Unverifiable(Exception):
 
 
 def declaration(repository, base):
-    """The total declaration of an admitted repository: the S-01.2.2 authorization fixture, the one admitted
-    repository (G-03.1's authorization repository is not built yet)."""
-    if repository != f'{roles.FIXTURE_ORG}/{roles.FIXTURE_REPO}':
-        raise Unverifiable('NOT_DECLARED', f'{repository!r} has no protection declaration (only '
-                           f'{roles.FIXTURE_ORG}/{roles.FIXTURE_REPO} is admitted)')
-    if base != roles.DEFAULT_BRANCH:
+    """The total declaration of a declared repository, one entry per repository (gitea_roles.DECLARATIONS): the
+    S-01.2.2 authorization fixture, and the authorization repository of decision 0022 (plan leaf E-05.7), whose
+    entry is its own so that G-03.1 can change one without the other. Any other repository, or another branch, is
+    NOT_DECLARED."""
+    builder = roles.DECLARATIONS.get(repository) if isinstance(repository, str) else None
+    if builder is None:
+        raise Unverifiable('NOT_DECLARED', f'{repository!r} has no protection declaration (declared: '
+                           f'{", ".join(roles.DECLARATIONS)})')
+    declared = builder()
+    if base != declared['base']:
         raise Unverifiable('NOT_DECLARED', f'{base!r} is not the protected branch of {repository} '
-                           f'({roles.DEFAULT_BRANCH})')
-    return {'repository': repository, 'base': base, 'rules': roles.protection_rules(),
-            'settings': roles.repository_settings(), 'collaborators': roles.collaborators(),
-            'teams': dict(roles.FIXTURE_TEAMS), 'deploy_keys': []}
+                           f'({declared["base"]})')
+    return {'repository': repository, 'base': base, 'rules': declared['rules'], 'settings': declared['settings'],
+            'collaborators': declared['collaborators'], 'teams': declared['teams'],
+            'deploy_keys': declared['deploy_keys']}
+
+
+# The baseline digest each repository's check was recorded with: the fixture's from Owner decision OA-16, Act B
+# (2026-11-12; decision 0012, Current facts 1), equal before and after P-04.2's recorded merge. The authorization
+# repository's is recorded by Owner act OA-30's read-only check, not here.
+RECORDED_BASELINES = types.MappingProxyType({
+    roles.FIXTURE_REPOSITORY: 'sha256:5dd7ace780ca0878146915ed74e8761b432e4489f20cdfe9a243804ad5aa6e42'})
 
 
 # ---------------------------------------------------------------------------- precedence at the pin
