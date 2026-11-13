@@ -257,3 +257,7 @@ Anything live: a real envelope manifest and its authorization by the Owner again
 managed root, a request through `serve` to a non-loopback origin (S-03.3's live step), a real model selection, a
 real provider's billing of answers outside 2xx and its enforcement of a limit on a dedicated key, http.client's
 socket state after a partial send, Task, Linux and macOS.
+
+## Current facts (2026-11-13)
+
+1. (Planning, 2026-11-13) Section 9 item 2 is settled by [decision 0022](0022-authorization-repository-the-one-ledger-provisioned-for-d1.md) (Accepted, product manager): the first real envelope manifest is carried by the dedicated authorization repository, provisioned for D1 by plan leaf E-05.7 under Owner act OA-30, and never by the S-01.2.2 fixture. The managed recorder admits it alone. Until a second non-fixture repository is admitted, `envelope_decisions` needs no repository predicate. Items 1 and 3 to 5 are carried into OA-12's presentation (`evidence/bootstrap-log.md`, anchor `planning-pass-2026-11-13`). The numbered points are unchanged.
