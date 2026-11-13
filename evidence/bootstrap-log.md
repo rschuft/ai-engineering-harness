@@ -3897,6 +3897,65 @@ push never implies parent acceptance.
     - (4) **Wording to change:** E-05.5's "authorized cap", S-03.3's and S-03.5's proofs, OA-22 (g) and its stop "the cap reached"; fold D1's model calls into the OA-12 approval.
     - (5) **Accepted texts to amend:** 0018 points 3 and 8 (Owner-accepted), 0015 (sections 2.2, 3.1, 3.3, 6.3, 8, amendment 1 item 1, Current facts item 3), 0021 (title and sections 1, 3, 4, 6, 7, 9.4).
   - **Not verified:** anything live; the provider-side feature list is from the provider's API reference of 2026-11-03, not re-read today; the interrupt measurement used SIGINT through the C runtime, not a console Ctrl-C.
+- <a id="owner-direction-provider-reconciliation-2026-11-13"></a>**2026-11-13: Owner direction: reconcile the D1 provider-access requirements before live execution.** Given in the product manager's main session; transcribed verbatim by the product manager (decision 0018 point 7; the paste wrapper is removed). It accepts the [OA-12 with OA-22 (a), (b), (c), (e) package](#oa-12-package-2026-11-13) as the intended technical approach and grants no live act: OA-12 and OA-22 stay unanswered. Verbatim:
+
+  > Owner direction: reconcile the D1 provider-access
+  > requirements before live execution.
+  >
+  > The Engineering Manager's OA-12/OA-22 provider-access
+  > package at b246f40 is accepted as the intended
+  > technical approach, but live authorization is not
+  > yet granted.
+  >
+  > Preserve:
+  > - Anthropic API access through the inference broker.
+  > - Provider credential custody.
+  > - Approved network destinations.
+  > - Guest isolation and containment.
+  > - Security-relevant authorization and evidence.
+  >
+  > Retire:
+  > - Harness-enforced spending limits.
+  > - Per-attempt inference budgets.
+  > - Budget exhaustion as an authorization failure.
+  > - Requirements for the Owner to choose spending caps
+  >   or enforcement mechanisms.
+  >
+  > Use provider limits and recoverable interruption
+  > semantics instead.
+  >
+  > Reconcile decisions 0015, 0018 and 0021, the
+  > provider-envelope format, and affected D1 acceptance
+  > criteria through the established integrity process.
+  >
+  > For recovery, prefer existing Claude Code and OpenHands
+  > session capabilities. Determine what is actually
+  > supported by the pinned versions.
+  >
+  > Do not design or implement a new general-purpose
+  > resumption framework for D1.
+  >
+  > If native resumption cannot be qualified now, preserve
+  > durable Work and attempt state and permit a new attempt
+  > after provider access returns, with appropriate
+  > idempotency and reconciliation safeguards.
+  >
+  > Have the Program Manager determine whether any
+  > essential D1 acceptance criterion requires more.
+  >
+  > Keep the Engineering Manager's identified security
+  > fixes within the existing engineering scope.
+  >
+  > Minimize Owner interaction. Preserve necessary
+  > credential custody and reserved-effect authorization,
+  > but avoid redundant confirmations of decisions already
+  > covered by accepted intent.
+  >
+  > Return the reconciled requirements and the smallest
+  > remaining engineering commitment needed before OA-12
+  > can be executed.
+  >
+  > Do not perform live model calls or reserved operations.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
