@@ -54,7 +54,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
 | `tests/test_key_search.py` | `inference_key_search.py`: its forms (the standard encodings at every alignment, the body, the fragments), a copy across a read boundary, every positive control for keys of 16 to 128 body characters and each control failing when the view it controls is broken, the gzip, SQLite, HTTP, tar, tree and environment views with their incomplete cases, the command line (a pipe only, every refusal without the key, a planted copy found, nothing printed, logged or written) |
-| `tests/test_discovery.py` | S-03.3 slice 3 part two: the reader over audit records (exact routes and models with their answers and query parameter names; the flags; nothing outside the audit's grammars carried; grants, attempts and families), `propose-pin` (a new file outside the checkout only, `families.json` unchanged, its refusals), and `discover` end to end against its own fake upstream (the proposal of the run; refusals before the key is read; the port freed) |
+| `tests/test_discovery.py` | S-03.3 slice 3 part two: the reader over audit records (exact routes and models with their answers and query parameter names; the flags; nothing outside the audit's grammars carried; grants, attempts and families), the key paths of an admitted body (names only, arrays collapsed, bounded) and their flags, `propose-pin` (a new file outside the checkout only, `families.json` unchanged, its refusals), and `discover` end to end against its own fake upstream (the proposal of the run; refusals before the key is read; the port freed; a secondary model planted in a nested field flagged by its path, never its value; the `fake-upstream` command's records unchanged) |
 | `tests/test_real_key_search.py` | S-03.3 slice 4: the real-key search over a fake credential provider (a synthetic key, and a key of a provider key's shape made at run time): the entry read only after every argument is checked and under a named act, never standard input; not found, and planted copies found, on trees, files and an SQLite file; the provider's and the entry's refusals; a withheld report; no copy of the key printed or written |
 | `tests/test_key_search_boundary.py` | The search end to end at the broker's exposure boundary: the broker under the qualification launcher with the fake upstreams, every byte that crossed its listeners, its outputs, store and audit directory searched (not found; found on the bytes it sends upstream); a planted leak (a reflecting upstream, a copy in the audit directory and in a database) found where it was planted |
 
@@ -498,7 +498,12 @@ process: the discovery run is the slice plan's step 6a, under the Owner's acts A
   nothing else. When the broker stops (the Owner's interrupt), it reads that run's audit file (named in the
   broker's status) and writes the proposal (below) to `--out`, with a `discovery` member: the provider id, the
   keyed families, the provider key's fingerprint and what each fake upstream received (requests per route and
-  answer, and whether every credential it saw was the synthetic key's fingerprint). Standard output carries
+  answer, whether every credential it saw was the synthetic key's fingerprint, and per route the JSON **key paths**
+  of the admitted request bodies). Key paths are names only, never a value: object keys joined by `.`, each array
+  collapsed to `[]` (`messages[].content`); a key outside `[A-Za-z0-9_$@-][A-Za-z0-9_$@:-]{0,63}` (or holding the
+  token prefix) is recorded as `<unrecorded>` and counted. At most 256 paths per request and per route, 32 levels,
+  and a body of at most 32 MiB; beyond that the set is marked truncated. Only `discover` records them: the
+  `fake-upstream` command's records are unchanged, and so are the broker and its audit. Standard output carries
   `serve`'s own report, standard error the proposal's summary. A key refused after the fake upstream was bound
   leaves no audit and no proposal, and the port is freed.
 - **`propose-pin`** (`inference_qualification.py propose-pin --audit FILE --out FILE [--attempt-id UUID]`): the
@@ -524,13 +529,17 @@ process: the discovery run is the slice plan's step 6a, under the Owner's acts A
   its own check), `MODEL_UNRECORDED`, `PATH_UNRECORDED`, `QUERY_NAMES_UNRECORDED`, `QUERY_OBSERVED` (a query string
   where the family's rule is `refuse`: the declarations hold `refuse` or `pass` only, so admitting it is a decision
   of its own), `ROUTE_NOT_DECLARABLE`, `UNATTRIBUTED_REQUESTS`, `AUDIT_LINES_WITHHELD`, `AUDIT_LINES_UNREADABLE`,
-  `BROKER_UNRECORDED`, `READER_DROPPED` and `NO_GRANT_REQUESTS`. `complete` is false when any value went
-  unrecorded, unread or withheld, or no grant's request was seen.
+  `BROKER_UNRECORDED`, `READER_DROPPED` and `NO_GRANT_REQUESTS`; from a discovery run's key paths (S-03.5's F7,
+  the engineering manager's option (b)): `MODEL_KEY_ELSEWHERE` (a key path other than the top-level `model` whose
+  last segment contains `model`, any case; the flag lists the paths, never the values: a model named there is not
+  checked by the broker, so the family is not declared without its own check), `KEY_PATHS_TRUNCATED` and
+  `KEY_NAMES_UNRECORDED`. `complete` is false when any value went unrecorded, unread or withheld, the key paths
+  were truncated or held an unrecorded name, or no grant's request was seen.
 - **Not shown** (the proposal's `not_shown` list): a model named in a body field other than the top-level `model`
-  of a request that has one (the audit records the top-level model only, D-4 as accepted, so the absence of
-  `MODEL_NOT_TOP_LEVEL` does not show that no request names a second model elsewhere); query values, headers and
-  bodies; what a refused request would have done; requests the client never sent because an earlier one was
-  refused.
+  of a refused request in a discovery run (only admitted requests reach the fake upstream that reads the key
+  paths), and of any request when `propose-pin` reads an audit file alone (the audit records the top-level model
+  only, D-4 as accepted); query values, headers and bodies; what a refused request would have done; requests the
+  client never sent because an earlier one was refused.
 
 ## The real-key containment search (S-03.3, slice 4)
 

@@ -3124,12 +3124,15 @@ def p5_checks(record, obs):
     search = p5.get('provider_key_search')
     if inference_opted(record) or search is not None:
         # S-03.2's proof as amended: the fingerprint alone is not proof that the raw key is absent;
-        # without the search of the key itself (inspect --provider-key-stdin) this check is UNKNOWN,
+        # without the search of the key itself (inspect --provider-key-stdin with the synthetic key, or
+        # acp-qualification --key-search real with the real key) this check is UNKNOWN,
         # and so is an incomplete or invalid search
         verdict = (search or {}).get('verdict')
         checks.append(check(INFERENCE_KEY_SEARCH_CHECK, {'verdict': 'not-found', 'controls': 'valid'},
                             None if search is None else key_search_summary(search),
-                            'host: the synthetic key held in memory (inspect --provider-key-stdin), '
+                            'host: the provider key held in memory, the synthetic key (inspect '
+                            '--provider-key-stdin, S-03.2) or the real key read from the credential '
+                            'entry the broker reads (acp-qualification --key-search real, S-03.3), '
                             'raw and in its encodings, over the collection, seed.iso, launch.json '
                             'and serial.log, with positive controls (inference_key_search.py)',
                             None if verdict not in ('found', 'not-found') else verdict == 'not-found'))
@@ -6974,7 +6977,7 @@ INFERENCE_DROPIN_CHECK = 'sshd drop-in (inference composition, decision 0015)'
 INFERENCE_SSHD_CHECK = 'sshd -T forwarding directives (inference composition)'
 INFERENCE_LISTENER_CHECK = 'inference endpoint listener (decision 0015)'
 INFERENCE_KEY_CHECK = 'provider key fingerprint (decision 0015)'
-INFERENCE_KEY_SEARCH_CHECK = 'provider key itself, raw and encoded (synthetic key, S-03.2)'
+INFERENCE_KEY_SEARCH_CHECK = 'provider key itself, raw and encoded (synthetic key S-03.2, or real key S-03.3)'
 INFERENCE_SSHD_KEYS = ('allowtcpforwarding', 'gatewayports', 'permitlisten')
 _SEED_FILES = {}
 

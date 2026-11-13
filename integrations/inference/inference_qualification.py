@@ -35,8 +35,9 @@ any key or paid call, which routes and which model names (any secondary model in
   bind that family's fake upstream itself, before the key is read: the broker's upstream is then this process's
   fake and nothing else. When the broker stops (the Owner's interrupt), it reads that run's audit file and writes
   the proposed family pin (propose-pin below) to --out, a new file outside the checkout, with a summary of what
-  the fake upstreams received (route counts, and whether each credential they saw was the synthetic key's
-  fingerprint). It writes nowhere else.
+  the fake upstreams received (route counts, whether each credential they saw was the synthetic key's
+  fingerprint, and the JSON key paths of the admitted bodies, names only, never values: body_key_paths, from
+  which the proposal flags MODEL_KEY_ELSEWHERE, S-03.5's F7). It writes nowhere else.
 - propose-pin: the reader. It turns one broker run's audit file (persistent/logs/inference/audit-*.jsonl) into a
   PROPOSED family pin: per family, the exact method and path pairs and the exact model names the grants' requests
   carried (no wildcard: only strings inside the audit's own grammars are carried; anything else is counted), with
@@ -121,6 +122,11 @@ CODES = {
     'ATTEMPT_ID_INVALID': 'give --attempt-id as the grant\'s attempt id, a UUID',
     'PROPOSAL_EXPOSURE': 'nothing to do here: the proposal would have held the synthetic key and was not written',
 }
+KEY_NAME = re.compile(r'[A-Za-z0-9_$@-][A-Za-z0-9_$@:-]{0,63}')   # a recorded key name ('.' and '[]' separate)
+UNRECORDED_KEY = '<unrecorded>'
+KEY_PATH_LIMIT = 256               # distinct key paths per request and per route of a discovery run
+KEY_PATH_DEPTH = 32                # nesting levels walked
+KEY_PATH_BODY_LIMIT = 32 * broker.MIB   # bytes of a body kept for its key paths (the broker's default request cap)
 PROPOSAL_FORMAT = 'aieh-inference-family-pin-proposal/1'
 AUDIT_LIMIT = 256 * broker.MIB
 PASSED = '(passed)'                 # the codes column of a request answered without a refusal code
@@ -144,6 +150,10 @@ NOT_SHOWN = (
     'fake upstream',
     'requests the client never sent because an earlier one was refused',
 )
+DISCOVERY_NOT_SHOWN = (
+    'a model named in a body field other than the top-level "model" of a refused request: the key paths are read by '
+    'the fake upstream, which only admitted requests reach (MODEL_KEY_ELSEWHERE covers those); the audit records '
+    'the top-level model only (the slice plan\'s D-4 as accepted: no body)')
 
 
 class QualificationError(Exception):
@@ -254,6 +264,46 @@ def credential_fingerprints(headers, family) -> list:
     return found
 
 
+def body_key_paths(body: bytes) -> dict:
+    """The JSON key paths of a request BODY, names only, never a value: object keys joined by '.', each array
+    collapsed to '[]' (messages[].content). A key outside KEY_NAME (or holding the token prefix) is recorded as
+    UNRECORDED_KEY and counted; at most KEY_PATH_LIMIT paths, at most KEY_PATH_DEPTH levels, else truncated."""
+    try:
+        document = json.loads(body) if body else None
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        document = None
+    if not isinstance(document, (dict, list)):
+        return {'body': 'empty' if not body else 'not a JSON object or array', 'key_paths': [],
+                'key_paths_truncated': False, 'key_names_unrecorded': 0}
+    paths, truncated, unnamed = set(), False, 0
+    stack = [(document, '', 0)]
+    while stack:
+        node, prefix, depth = stack.pop()
+        if isinstance(node, dict):
+            children = []
+            for key in node:
+                name = key if KEY_NAME.fullmatch(key) and broker.TOKEN_PREFIX not in key else UNRECORDED_KEY
+                unnamed += name == UNRECORDED_KEY
+                children.append((node[key], f'{prefix}.{name}' if prefix else name))
+        elif isinstance(node, list):
+            children = [(item, prefix + '[]') for item in node]
+        else:
+            continue
+        for value, path in children:
+            if path not in paths and isinstance(node, dict):
+                if len(paths) >= KEY_PATH_LIMIT:
+                    truncated = True
+                    continue
+                paths.add(path)
+            if isinstance(value, (dict, list)):
+                if depth + 1 > KEY_PATH_DEPTH:
+                    truncated = True
+                    continue
+                stack.append((value, path, depth + 1))
+    return {'body': 'json', 'key_paths': sorted(paths), 'key_paths_truncated': truncated,
+            'key_names_unrecorded': unnamed}
+
+
 def fake_address(value) -> str:
     """VALUE when it is an IPv4 loopback literal, else FAKE_ADDRESS_REFUSED."""
     try:
@@ -306,12 +356,20 @@ class _FakeHandler(http.server.BaseHTTPRequestHandler):
             status, payload = 411, {'error': {'type': 'aieh_fake_upstream', 'message': 'send a Content-Length'}}
             self.close_connection = True
         else:
-            remaining = int(length)
+            remaining, kept = int(length), [] if fake.key_paths and route else None
+            if kept is not None and remaining > KEY_PATH_BODY_LIMIT:
+                kept = None
+                entry.update(body='over the limit', key_paths=[], key_paths_truncated=True, key_names_unrecorded=0)
             while remaining > 0:
                 data = self.rfile.read(min(remaining, 65536))
                 if not data:
                     break
                 remaining -= len(data)
+                if kept is not None:
+                    kept.append(data)
+            if kept is not None:
+                entry.update(body_key_paths(b''.join(kept)))
+                del kept
             status = 200 if route else 404
             payload = fake.answer if route else {'error': {'type': 'aieh_fake_upstream',
                                                            'message': f'not a declared route of {family.id}'}}
@@ -331,10 +389,12 @@ class _FakeHandler(http.server.BaseHTTPRequestHandler):
 
 class FakeUpstream:
     """One declared family's fake provider on ADDRESS:PORT (bound at construction, served from start()). Each
-    request's record is written to OUT as one JSON line before its answer."""
+    request's record is written to OUT as one JSON line before its answer. With KEY_PATHS (discover only; never
+    the fake-upstream command), a request on a declared route also records its body's JSON key paths, names only
+    (body_key_paths)."""
 
-    def __init__(self, family, address: str, port: int, out):
-        self.family, self.out = family, out
+    def __init__(self, family, address: str, port: int, out, *, key_paths: bool = False):
+        self.family, self.out, self.key_paths = family, out, key_paths
         self.answer = fake_answer(family)
         self.requests = 0
         self._lock = threading.Lock()
@@ -463,11 +523,13 @@ def _flag(code: str, detail: str, **where) -> dict:
     return {'code': code, **where, 'detail': detail}
 
 
-def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, source: dict | None = None) -> dict:
+def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, source: dict | None = None,
+                upstream: dict | None = None) -> dict:
     """The proposed family pin of RECORDS (an audit file's request records, read_audit): per declared family, the
     exact routes and models of the requests that presented one of its grants (of ATTEMPT_ID only, when given),
-    with their answers, query parameter names and flags; the requests without a grant counted apart. Nothing is
-    applied anywhere."""
+    with their answers, query parameter names and flags; the requests without a grant counted apart. UPSTREAM (a
+    discovery run's upstream_summary) adds the flags of the admitted bodies' key paths (MODEL_KEY_ELSEWHERE,
+    KEY_PATHS_TRUNCATED, KEY_NAMES_UNRECORDED). Nothing is applied anywhere."""
     families, unattributed, attempts = {}, {}, {}
     broker_unrecorded, reader_dropped = collections.Counter(), collections.Counter()
     for record in records:
@@ -577,6 +639,27 @@ def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, s
                          'observed_not_declared': [r for r in proposed_routes
                                                    if (r['method'], r['path']) not in declared.routes]},
             'observed': {'routes': routes, 'models': models}})
+    key_paths_incomplete = False
+    for family_id, summary in sorted((upstream or {}).items()):
+        for route, row in sorted((summary.get('key_paths') or {}).items()):
+            where = {'family': family_id, 'route': route}
+            elsewhere = sorted(path for path in row.get('paths') or () if path != 'model'
+                               and 'model' in path.rsplit('.', 1)[-1].lower())
+            if elsewhere:
+                flags.append(_flag('MODEL_KEY_ELSEWHERE', 'admitted request bodies name a key containing "model" '
+                                   'other than the top-level "model", the only field the broker\'s per-request check '
+                                   'reads (S-03.5, F7): a model named there is not checked, so the family is not '
+                                   'declared without its own check (key paths only, never values)', **where,
+                                   paths=elsewhere))
+            if row.get('truncated'):
+                key_paths_incomplete = True
+                flags.append(_flag('KEY_PATHS_TRUNCATED', f'more than {KEY_PATH_LIMIT} key paths, more than '
+                                   f'{KEY_PATH_DEPTH} levels, or a body over the limit: the key paths are not '
+                                   'complete', **where))
+            if row.get('names_unrecorded'):
+                key_paths_incomplete = True
+                flags.append(_flag('KEY_NAMES_UNRECORDED', f'{row["names_unrecorded"]} key name(s) outside the '
+                                   f'key grammar, recorded as {UNRECORDED_KEY}', **where))
     source = dict(source or {})
     if unattributed:
         flags.append(_flag('UNATTRIBUTED_REQUESTS', f'{sum(r["requests"] for r in unattributed.values())} '
@@ -596,14 +679,15 @@ def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, s
     if not families:
         flags.append(_flag('NO_GRANT_REQUESTS', 'no request presented a grant: nothing is proposed'))
     complete = bool(families) and not (+broker_unrecorded or +reader_dropped or source.get('withheld')
-                                       or source.get('unreadable'))
+                                       or source.get('unreadable') or key_paths_incomplete)
+    not_shown = list(NOT_SHOWN) if upstream is None else [DISCOVERY_NOT_SHOWN] + list(NOT_SHOWN[1:])
     return {'format': PROPOSAL_FORMAT, 'status': 'proposed', 'applied': False, 'statement': PROPOSAL_STATEMENT,
             'source': {**source, 'attempt_filter': attempt_id}, 'complete': complete,
             'attempts': [attempts[a] for a in sorted(attempts)], 'families': out_families,
             'unattributed': [{**{k: r[k] for k in ('method', 'path', 'requests')},
                               'query_names': sorted(r['query_names']), 'codes': dict(sorted(r['codes'].items()))}
                              for _, r in sorted(unattributed.items(), key=lambda i: (i[0][1] or '', i[0][0]))],
-            'flags': flags, 'not_shown': list(NOT_SHOWN)}
+            'flags': flags, 'not_shown': not_shown}
 
 
 def write_proposal(target: Path, proposal: dict) -> None:
@@ -644,12 +728,30 @@ def upstream_summary(fakes: dict, fingerprint) -> dict:
     for family_id, fake in sorted(fakes.items()):
         received = [json.loads(line) for line in fake.out.getvalue().splitlines()]
         requests = [r for r in received if r.get('event') == 'request']
+        key_paths = {}
+        for r in requests:
+            if r.get('path') is None or 'key_paths' not in r:
+                continue
+            row = key_paths.setdefault(f'{r.get("method")} {r["path"]}', {
+                'requests': 0, 'paths': set(), 'truncated': False, 'names_unrecorded': 0,
+                'bodies': collections.Counter()})
+            row['requests'] += 1
+            row['bodies'][str(r.get('body'))] += 1
+            row['truncated'] = row['truncated'] or r.get('key_paths_truncated') is not False
+            row['names_unrecorded'] += r.get('key_names_unrecorded') or 0
+            for path in r.get('key_paths') or ():
+                if path not in row['paths'] and len(row['paths']) >= KEY_PATH_LIMIT:
+                    row['truncated'] = True
+                    continue
+                row['paths'].add(path)
         out[family_id] = {
             'requests': len(requests),
             'routes': dict(sorted(collections.Counter(f'{r.get("method")} {r.get("path")} {r.get("status")}'
                                                       for r in requests).items())),
             'credential_is_the_synthetic_key': None if not requests else all(
-                r.get('credential_fingerprints') == [fingerprint] for r in requests)}
+                r.get('credential_fingerprints') == [fingerprint] for r in requests),
+            'key_paths': {route: {**row, 'paths': sorted(row['paths']), 'bodies': dict(sorted(row['bodies'].items()))}
+                          for route, row in sorted(key_paths.items())}}
     return out
 
 
@@ -669,7 +771,8 @@ def discover(provider_id: str, out_value, ctx) -> int:
             origin = config.families[family_id].upstream
             address = fake_address(origin.host)
             try:
-                fakes[family_id] = FakeUpstream(declarations[family_id], address, origin.port, io.StringIO())
+                fakes[family_id] = FakeUpstream(declarations[family_id], address, origin.port, io.StringIO(),
+                                                key_paths=True)
             except OSError as exc:
                 raise QualificationError('DISCOVERY_PORT_TAKEN', f'{family_id}: {origin.text()} '
                                                                  f'({type(exc).__name__})') from None
@@ -689,10 +792,10 @@ def discover(provider_id: str, out_value, ctx) -> int:
         return code                       # the broker never served: nothing was observed, nothing is proposed
     try:
         records, source = read_audit(Path(ctx.logs()) / seen['audit'])
-        proposal = propose_pin(records, declarations, source=source)
+        upstream = upstream_summary(fakes, seen['fingerprint'])
+        proposal = propose_pin(records, declarations, source=source, upstream=upstream)
         proposal['discovery'] = {'provider': provider_id, 'families': keyed,
-                                 'provider_key_fingerprint': seen['fingerprint'],
-                                 'upstream': upstream_summary(fakes, seen['fingerprint'])}
+                                 'provider_key_fingerprint': seen['fingerprint'], 'upstream': upstream}
         write_proposal(target, proposal)
     except QualificationError as exc:     # after the run: a failure, not a refusal
         ctx.err.write(f'inference-discovery: FAILED after the run: {exc}\n')

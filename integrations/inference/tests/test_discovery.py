@@ -190,6 +190,67 @@ class Reader(unittest.TestCase):
         self.assertEqual([a['attempt_id'] for a in only['attempts']], [OTHER_ATTEMPT])
 
 
+class KeyPaths(unittest.TestCase):
+    """F7, the engineering manager's option (b): the JSON key paths of an admitted body, names only, and the
+    reader's MODEL_KEY_ELSEWHERE, KEY_PATHS_TRUNCATED and KEY_NAMES_UNRECORDED."""
+
+    HIDDEN = 'syn-hidden-secondary-model'
+
+    def test_names_only_arrays_collapsed_bounded(self):
+        body = {'model': MAIN, 'max_tokens': 5, 'messages': [{'role': 'user', 'content': [{'type': 'text',
+                                                                                            'text': 'hello'}]},
+                                                              {'role': 'assistant', 'content': 'x'}],
+                'metadata': {'fallback_model': self.HIDDEN, 'a.b': 1, 'aieh-inf-k': 2, '': 3}, 'tools': []}
+        result = IQ.body_key_paths(json.dumps(body).encode())
+        self.assertEqual(result, {'body': 'json', 'key_paths_truncated': False, 'key_names_unrecorded': 3,
+                                  'key_paths': sorted(['model', 'max_tokens', 'messages', 'messages[].role',
+                                                       'messages[].content', 'messages[].content[].type',
+                                                       'messages[].content[].text', 'metadata',
+                                                       'metadata.fallback_model', 'metadata.<unrecorded>',
+                                                       'tools'])})
+        text = json.dumps(result)
+        for value in (MAIN, self.HIDDEN, 'hello', 'a.b', 'aieh-inf-k'):
+            self.assertNotIn(value, text)
+        self.assertEqual(IQ.body_key_paths(json.dumps([{'k': 1}]).encode())['key_paths'], ['[].k'])
+        for raw, kind in ((b'', 'empty'), (b'not json', 'not a JSON object or array'), (b'"s"', 'not a JSON object '
+                                                                                                  'or array')):
+            self.assertEqual(IQ.body_key_paths(raw), {'body': kind, 'key_paths': [], 'key_paths_truncated': False,
+                                                      'key_names_unrecorded': 0})
+        wide = IQ.body_key_paths(json.dumps({f'k{i}': i for i in range(IQ.KEY_PATH_LIMIT + 5)}).encode())
+        self.assertEqual((len(wide['key_paths']), wide['key_paths_truncated']), (IQ.KEY_PATH_LIMIT, True))
+        deep = {}
+        node = deep
+        for _ in range(IQ.KEY_PATH_DEPTH + 3):
+            node['d'] = {}
+            node = node['d']
+        self.assertTrue(IQ.body_key_paths(json.dumps(deep).encode())['key_paths_truncated'])
+        self.assertFalse(IQ.body_key_paths(json.dumps({'d': {'d': {}}}).encode())['key_paths_truncated'])
+
+    def upstream(self, paths, truncated=False, unnamed=0):
+        return {'anthropic-messages': {'requests': 1, 'routes': {}, 'credential_is_the_synthetic_key': True,
+                                       'key_paths': {'POST /v1/messages': {
+                                           'requests': 1, 'paths': paths, 'truncated': truncated,
+                                           'names_unrecorded': unnamed, 'bodies': {'json': 1}}}}}
+
+    def test_the_reader_flags_a_model_key_elsewhere_by_path_only(self):
+        declarations = IB.load_declarations()
+        only_top = IQ.propose_pin([line()], declarations, upstream=self.upstream(['messages', 'model']))
+        self.assertEqual((only_top['flags'], only_top['complete']), ([], True))
+        self.assertIn('only admitted requests reach', only_top['not_shown'][0])
+        planted = IQ.propose_pin([line()], declarations, upstream=self.upstream(
+            ['messages', 'messages[].Model_Hint', 'metadata', 'metadata.fallback_model', 'model', 'modelling.x']))
+        (flag,) = planted['flags']
+        self.assertEqual((flag['code'], flag['family'], flag['route'], flag['paths']),
+                         ('MODEL_KEY_ELSEWHERE', 'anthropic-messages', 'POST /v1/messages',
+                          ['messages[].Model_Hint', 'metadata.fallback_model']))
+        self.assertIn('F7', flag['detail'])
+        self.assertTrue(planted['complete'])
+        cut = IQ.propose_pin([line()], declarations, upstream=self.upstream(['model'], truncated=True, unnamed=2))
+        self.assertEqual(([f['code'] for f in cut['flags']], cut['complete']),
+                         (['KEY_PATHS_TRUNCATED', 'KEY_NAMES_UNRECORDED'], False))
+        self.assertIn('top-level model only', IQ.propose_pin([line()], declarations)['not_shown'][0])
+
+
 class Command(unittest.TestCase):
     """propose-pin: the audit file read, the proposal written to a new file outside the checkout, never
     families.json."""
@@ -345,8 +406,12 @@ class Discovery(unittest.TestCase):
         fingerprint = IB.contract.fingerprint(SYNTHETIC)
         self.assertEqual(proposal['discovery'], {
             'provider': PROVIDER_ID, 'families': ['anthropic-messages'], 'provider_key_fingerprint': fingerprint,
-            'upstream': {'anthropic-messages': {'requests': 1, 'routes': {'POST /v1/messages 200': 1},
-                                                'credential_is_the_synthetic_key': True}}})
+            'upstream': {'anthropic-messages': {
+                'requests': 1, 'routes': {'POST /v1/messages 200': 1}, 'credential_is_the_synthetic_key': True,
+                'key_paths': {'POST /v1/messages': {'requests': 1, 'paths': ['messages', 'model'],
+                                                    'truncated': False, 'names_unrecorded': 0,
+                                                    'bodies': {'json': 1}}}}}})
+        self.assertIn('only admitted requests reach', proposal['not_shown'][0])
         (audit,) = (self.tmp / 'logs').glob('audit-*.jsonl')
         self.assertEqual(proposal['source']['audit_file'], audit.name)
         self.assertEqual(proposal['source']['sha256'], hashlib.sha256(audit.read_bytes()).hexdigest())
@@ -359,6 +424,44 @@ class Discovery(unittest.TestCase):
         self.assertEqual(FAMILIES.read_bytes(), families)
         with socket.socket() as again:                              # the fake upstream's port is free again
             again.bind(('127.0.0.1', port))
+
+    def test_a_secondary_model_in_a_nested_field_is_flagged_by_its_path(self):
+        port, hidden = free_port(), 'syn-hidden-secondary-model'
+
+        def wait(broker):
+            grant = IC.ControlClient(broker.listeners['control']['port']).issue(
+                S.new_id(), S.new_id(), 'anthropic-messages', [MAIN], 10, 1000, 60)
+            body = {'model': MAIN, 'messages': [{'role': 'user', 'content': S.PROMPT_MARKER}],
+                    'metadata': {'fallback_model': hidden}}
+            self.assertEqual(S.request(broker.listeners['inference']['port'], 'POST', '/v1/messages', body,
+                                       [('x-api-key', grant['token'])])[0], 200)
+        ctx = self.context(f'http://127.0.0.1:{port}', Stdin(SYNTHETIC.encode()), wait)
+        out = self.tmp / 'proposal.json'
+        self.assertEqual(IQ.main(['discover', '--provider', PROVIDER_ID, '--out', str(out)], ctx), 0,
+                         ctx.err.getvalue())
+        text = out.read_text(encoding='utf-8')
+        proposal = json.loads(text)
+        self.assertEqual([(f['code'], f.get('paths')) for f in proposal['flags']],
+                         [('MODEL_KEY_ELSEWHERE', ['metadata.fallback_model'])])
+        self.assertEqual(proposal['families'][0]['proposed']['models'], [MAIN])
+        self.assertEqual(proposal['discovery']['upstream']['anthropic-messages']['key_paths']['POST /v1/messages']
+                         ['paths'], ['messages', 'messages[].content', 'messages[].role', 'metadata',
+                                     'metadata.fallback_model', 'model'])
+        for value in (hidden, S.PROMPT_MARKER, SYNTHETIC):
+            self.assertNotIn(value, text + ctx.out.getvalue() + ctx.err.getvalue())
+
+    def test_the_fake_upstream_command_records_no_key_paths(self):
+        family = IB.load_declarations()['anthropic-messages']
+        sink = io.StringIO()
+        fake = IQ.FakeUpstream(family, '127.0.0.1', 0, sink)
+        fake.start()
+        try:
+            S.request(fake.port, 'POST', '/v1/messages', {'model': MAIN, 'metadata': {'fallback_model': MAIN}})
+        finally:
+            fake.stop()
+        (record,) = [json.loads(r) for r in sink.getvalue().splitlines() if '"request"' in r]
+        self.assertEqual(sorted(record), ['credential_fingerprints', 'event', 'family', 'format', 'header_names',
+                                          'method', 'path', 'status'])
 
     def test_refusals_come_before_the_key_is_read(self):
         out = self.tmp / 'proposal.json'
