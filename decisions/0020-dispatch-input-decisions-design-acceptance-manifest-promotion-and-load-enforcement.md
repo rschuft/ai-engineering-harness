@@ -1,6 +1,6 @@
 # 0020 - Dispatch-input decisions: design acceptance, manifest promotion, the delegated-decision record and load_manifest's enforcement
 
-Status: Proposed - 2026-11-13, for plan leaf P-04.3 (architect, gates B and G; engineering manager's rulings)
+Status: Accepted (engineering manager) - 2026-11-13, at the completion of plan leaf P-04.3, under decision 0018 points 1 and 3.1 (an architectural decision inside committed scope that changes no acceptance criterion, no other leaf's contract and no Owner-approved policy). It authorizes no reserved act. Previously: Proposed - 2026-11-13, for plan leaf P-04.3 (architect, gates B and G; engineering manager's rulings)
 
 **Authority:** plan leaf P-04.3, "Promote approved dispatch inputs through recorded decisions" (its action,
 artifact and proof unchanged); decision 0008 points 2 and 5 (acceptance "delegated by an accepted decision
