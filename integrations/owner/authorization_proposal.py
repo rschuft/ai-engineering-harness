@@ -37,6 +37,7 @@ import argparse
 import base64
 import contextlib
 import hashlib
+import http.client
 import importlib.util
 import json
 import os
@@ -70,6 +71,7 @@ BRANCH_PREFIX = 'work/'                     # gitea_roles.PROPOSAL_PATTERN: the 
 OPERATION_ID = re.compile(r'[a-z0-9][a-z0-9-]{0,127}')  # the recorder's operations/<id>.json
 TIMEOUT_S = 30.0
 PAGE = 'page=1&limit=50'
+FILES_PAGE, MAX_FILE_PAGES = 50, 100  # an open pull request's files are read page by page, at most this many
 _SEGMENT = AR._SEGMENT
 _REPO = rf'/repos/{_SEGMENT}/{_SEGMENT}'
 _MANIFEST = rf'{AR.MANIFEST_DIR}/[a-z0-9][a-z0-9-]{{0,127}}\.json'
@@ -82,6 +84,7 @@ BOT_ROUTES = tuple((method, re.compile(pattern)) for method, pattern in (
     ('GET', rf'^{_REPO}/pulls\?state=open&{re.escape(PAGE)}$'),
     ('GET', rf'^{_REPO}/pulls/[0-9]+$'),
     ('GET', rf'^{_REPO}/pulls/[0-9]+/files$'),
+    ('GET', rf'^{_REPO}/pulls/[0-9]+/files\?page=[1-9][0-9]*&limit={FILES_PAGE}$'),
     ('POST', rf'^{_REPO}/contents/{_MANIFEST}$'),
     ('POST', rf'^{_REPO}/pulls$'),
     ('POST', rf'^{_REPO}/pulls/[0-9]+/reviews$'),
@@ -101,6 +104,10 @@ REMEDIES = {
     'PROPOSALS_NOT_READ': 'the open pull requests could not be read whole (50 or more): close the stale ones as an '
                           'operator act, then propose again',
     'GITEA_UNAVAILABLE': 'start Gitea (task gitea:up) and check its answers, then rerun',
+    'ANSWER_LOST': 'the answer to a write was lost, so it may have been written: inspect the repository as an '
+                   'operator (the detail names what was sent); nothing is retried',
+    'APPROVAL_UNCONFIRMED': 'the approval does not read back as the reviewer bot\'s APPROVED review of the head: '
+                            'inspect the pull request as an operator; it is not to be authorized',
     'PROPOSAL_FAILED': 'Gitea refused a write of the proposal: read its message; what was written is in the detail '
                        'and is not undone',
     'PROPOSAL_READBACK': 'the pull request does not read back as proposed: inspect it as an operator; it is not '
@@ -152,9 +159,11 @@ class BotSession:
         try:
             status, _headers, payload = send(self._ctx.port, '/api/v1' + path, method=method, body=data,
                                              headers=headers, timeout=TIMEOUT_S)
-        except OSError as exc:
-            raise ProposalError('GITEA_UNAVAILABLE', f'{method} {path}: {type(exc).__name__}',
-                                refusal=method == 'GET') from None
+        except (OSError, http.client.HTTPException) as exc:
+            if method == 'GET':
+                raise ProposalError('GITEA_UNAVAILABLE', f'GET {path}: {type(exc).__name__}') from None
+            raise ProposalError('ANSWER_LOST', f'{method} {path}: the answer was lost ({type(exc).__name__}); it may '
+                                'have been written', refusal=False) from None
         if raw:
             return status, payload
         try:
@@ -238,11 +247,25 @@ def check_new(session, repository, base, operation, manifest, branch):
         number = pull.get('number') if isinstance(pull, dict) else None
         if not isinstance(number, int) or isinstance(number, bool):
             raise ProposalError('GITEA_UNAVAILABLE', 'an open pull request has no number')
-        status, files = session.call('GET', f'/repos/{repository}/pulls/{number}/files')
-        _require(status, 200, f'GET the files of pull request {number}', files, refusal=True)
-        if any(isinstance(f, dict) and f.get('filename') == manifest for f in files or []):
+        if manifest in pull_files(session, repository, number):
             raise ProposalError('OPERATION_NOT_NEW', f'the open pull request #{number} changes {manifest}')
     return base_head
+
+
+def pull_files(session, repository, number):
+    """Every file name an open pull request changes, read page by page (FILES_PAGE a page) until a page is short;
+    PROPOSALS_NOT_READ beyond MAX_FILE_PAGES pages."""
+    names = []
+    for page in range(1, MAX_FILE_PAGES + 1):
+        status, files = session.call('GET', f'/repos/{repository}/pulls/{number}/files?page={page}&limit={FILES_PAGE}')
+        _require(status, 200, f'GET the files of pull request {number} (page {page})', files, refusal=True)
+        if not isinstance(files, list):
+            raise ProposalError('GITEA_UNAVAILABLE', f'the files of pull request {number} are not a list')
+        names.extend(f.get('filename') for f in files if isinstance(f, dict))
+        if len(files) < FILES_PAGE:
+            return names
+    raise ProposalError('PROPOSALS_NOT_READ', f'pull request #{number} changes more than '
+                        f'{MAX_FILE_PAGES * FILES_PAGE} files: its files were not read whole')
 
 
 def read_back(session, repository, base, branch, number, manifest, digest):
@@ -291,15 +314,24 @@ def propose(ctx, repository, blob):
     digest = 'sha256:' + hashlib.sha256(blob).hexdigest()
     proposer = bot_session(ctx, PROPOSER)
     reviewer = None
-    written = []
+    written, sent = [], []
     try:
         reviewer = bot_session(ctx, REVIEWER)
         base_head = check_new(proposer, repository, base, operation, manifest, branch)
+        sent.append(f'POST {manifest} on the new branch {branch}')
         status, body = proposer.call('POST', f'/repos/{repository}/contents/{manifest}', {
             'content': base64.b64encode(blob).decode('ascii'), 'message': f'Propose operation {operation}',
             'branch': base, 'new_branch': branch})
-        _require(status, 201, f'adding {manifest} on {branch}', body, refusal=False)
+        if status != 201:  # Gitea refused the first write: nothing was written by this run
+            appeared, _ = proposer.call('GET', f'/repos/{repository}/branches/{urllib.parse.quote(branch, safe="")}')
+            if appeared == 200:
+                raise ProposalError('OPERATION_NOT_NEW', f'adding {manifest} on {branch} answered {status} '
+                                    f'({_message(body)}): the branch {branch} appeared meanwhile; nothing was written '
+                                    'by this run')
+            raise ProposalError('PROPOSAL_FAILED', f'adding {manifest} on {branch} answered {status} '
+                                f'({_message(body)}); nothing was written by this run')
         written.append(f'the branch {branch} with {manifest}')
+        sent.append(f'POST the pull request from {branch}')
         status, pull = proposer.call('POST', f'/repos/{repository}/pulls', {
             'head': branch, 'base': base, 'title': f'Operation {operation}',
             'body': f'Proposes {manifest} ({digest}) for an Owner authorization.'})
@@ -309,18 +341,26 @@ def propose(ctx, repository, blob):
             raise ProposalError('PROPOSAL_READBACK', 'the opened pull request has no number', refusal=False)
         written.append(f'pull request #{number}')
         head = read_back(proposer, repository, base, branch, number, manifest, digest)
+        sent.append(f'POST the approval of #{number}')
         status, review = reviewer.call('POST', f'/repos/{repository}/pulls/{number}/reviews', {
             'event': 'APPROVED', 'body': f'Approves {manifest} ({digest}) as proposed.', 'commit_id': head})
         _require(status, 200, f'approving pull request #{number}', review, refusal=False)
-        reviewed = review.get('commit_id') if isinstance(review, dict) else None
-        if reviewed not in (None, head):
-            raise ProposalError('PROPOSAL_READBACK', f'the approval is of {reviewed}, not the head {head}',
+        written.append(f'a review of #{number}')
+        review = review if isinstance(review, dict) else {}
+        seen = {'state': review.get('state'), 'reviewer': (review.get('user') or {}).get('login')
+                if isinstance(review.get('user'), dict) else None, 'commit': review.get('commit_id')}
+        wanted = {'state': 'APPROVED', 'reviewer': reviewer.user, 'commit': head}
+        if seen != wanted:
+            raise ProposalError('APPROVAL_UNCONFIRMED', f'the review of #{number} reads back as '
+                                + '; '.join(f'{k} {seen[k]!r}, not {v!r}' for k, v in wanted.items() if seen[k] != v),
                                 refusal=False)
-        written.append(f'the approval of #{number}')
+        approved_by = seen['reviewer']
     except ProposalError as exc:
+        if exc.code == 'ANSWER_LOST':
+            exc.detail += f'; sent, in order: {", ".join(sent)}'
         if written:
             exc.detail += f'; written before it, not undone: {", ".join(written)}'
-            exc.args = (f'{exc.code}: {exc.detail}. Remedy: {exc.remedy}.',)
+        exc.args = (f'{exc.code}: {exc.detail}. Remedy: {exc.remedy}.',)
         raise
     finally:
         proposer.close()
@@ -328,7 +368,7 @@ def propose(ctx, repository, blob):
             reviewer.close()
     return {'repository': repository, 'operation': operation, 'kind': declared['kind'], 'manifest': manifest,
             'digest': digest, 'branch': branch, 'base': base, 'baseHead': base_head, 'pull': number, 'head': head,
-            'proposedBy': proposer.user, 'approvedBy': reviewer.user}
+            'proposedBy': proposer.user, 'approvedBy': approved_by}
 
 
 # ---------------------------------------------------------------------------- command line

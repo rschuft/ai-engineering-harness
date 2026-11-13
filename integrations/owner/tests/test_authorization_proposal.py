@@ -180,6 +180,84 @@ class Proposal(su.Fixture):
         self.assertIn(f'the branch work/{su.OPERATION} with {MANIFEST}', error.detail)
         self.assertEqual(fake.pulls, {})
 
+    def intercept(self, method, suffix, answer):
+        """An HTTP callable: the fake, except that a METHOD request ending in SUFFIX gets ANSWER(fake, ...)."""
+        fake, wanted = self.gitea, method
+
+        def call(port, path, *, method='GET', body=None, headers=None, timeout=5.0):
+            if method == wanted and path.split('?')[0].endswith(suffix):
+                return answer(fake, port, path, method, body, headers, timeout)
+            return fake(port, path, method=method, body=body, headers=headers, timeout=timeout)
+
+        return call
+
+    def test_the_approval_must_read_back_as_the_reviewer_s_approval_of_the_head(self):
+        """R2: state APPROVED, by the reviewer bot, of exactly the head; otherwise APPROVAL_UNCONFIRMED and no
+        approvedBy is ever reported."""
+        for name, change in (('state', {'state': 'COMMENT'}), ('reviewer', {'user': {'login': 'aieh-bot-planner'}}),
+                             ('no reviewer', {'user': None}), ('commit', {'commit_id': 'e' * 40}),
+                             ('no commit', {'commit_id': None})):
+            with self.subTest(changed=name):
+                self.gitea = fg.FakeGitea(self.repository)
+
+                def altered(fake, port, path, method, body, headers, timeout, change=change):
+                    status, h, data = fake(port, path, method=method, body=body, headers=headers, timeout=timeout)
+                    return status, h, json.dumps({**json.loads(data), **change}).encode()
+
+                error = self.refused('APPROVAL_UNCONFIRMED', refusal=False, http=self.intercept('POST', '/reviews',
+                                                                                                  altered))
+                self.assertIn('written before it, not undone', error.detail)
+                self.assertIn('a review of #1', error.detail)
+                self.assertEqual(self.gitea.merge_count(), 0)
+
+    def test_a_lost_answer_to_a_write_may_have_been_written(self):
+        """R3: the request is named as one that may have been written, with what was sent in order."""
+        for suffix, sent in ((f'/contents/{MANIFEST}', f'POST {MANIFEST} on the new branch work/{su.OPERATION}'),
+                             ('/pulls', 'POST the pull request from'), ('/reviews', 'POST the approval of #1')):
+            for applied in (False, True):
+                with self.subTest(write=suffix, applied=applied):
+                    self.gitea = fg.FakeGitea(self.repository)
+
+                    def lost(fake, port, path, method, body, headers, timeout, applied=applied):
+                        if applied:
+                            fake(port, path, method=method, body=body, headers=headers, timeout=timeout)
+                        raise ConnectionResetError('lost')
+
+                    error = self.refused('ANSWER_LOST', refusal=False, http=self.intercept('POST', suffix, lost))
+                    self.assertIn('the answer was lost (ConnectionResetError); it may have been written', error.detail)
+                    self.assertIn(f'sent, in order: POST {MANIFEST} on the new branch', error.detail)
+                    self.assertTrue(error.detail.split('; sent, in order: ')[1].split(';')[0].endswith(
+                        sent if not sent.endswith('from') else f'{sent} work/{su.OPERATION}'))
+                    self.assertEqual(self.gitea.merge_count(), 0)
+
+    def test_a_refused_first_write_wrote_nothing(self):
+        """R3: Gitea refusing the file's creation is a refusal with nothing written by this run: OPERATION_NOT_NEW
+        when work/<id> appeared meanwhile, PROPOSAL_FAILED otherwise."""
+        def appeared(fake, port, path, method, body, headers, timeout):
+            fake.branches[f'work/{su.OPERATION}'] = fake.branches['main']  # another writer, meanwhile
+            return fake.reply(422, {'message': 'branch already exists'})
+
+        error = self.refused('OPERATION_NOT_NEW', http=self.intercept('POST', f'/contents/{MANIFEST}', appeared))
+        self.assertIn('appeared meanwhile; nothing was written by this run', error.detail)
+        self.assertNotIn('written before it', error.detail)
+        self.gitea = fg.FakeGitea(self.repository)
+        error = self.refused('PROPOSAL_FAILED', http=self.intercept(
+            'POST', f'/contents/{MANIFEST}', lambda fake, *a: fake.reply(422, {'message': 'refused'})))
+        self.assertIn('answered 422 (refused); nothing was written by this run', error.detail)
+        self.assertEqual(self.gitea.pulls, {})
+
+    def test_an_open_pull_request_s_files_are_read_page_by_page(self):
+        """R6: the manifest on the second page of an open pull request's files is still found."""
+        files = {f'docs/file-{n:03}.txt': b'x\n' for n in range(PR.FILES_PAGE + 10)}
+        files[MANIFEST] = su.manifest()
+        self.gitea.propose(files, branch='work/many')
+        self.assertGreater(sorted(files).index(MANIFEST), PR.FILES_PAGE - 1)  # on page 2
+        self.refused('OPERATION_NOT_NEW')
+        pages = [r['path'] for r in self.gitea.requests if '/files' in r['path']]
+        self.assertEqual([p.split('?')[1] for p in pages], [f'page=1&limit={PR.FILES_PAGE}',
+                                                             f'page=2&limit={PR.FILES_PAGE}'])
+        self.assertNothingWritten()
+
     def test_bot_tokens_only(self):
         planner = R.ROLES['planner']['user']
         cases = {

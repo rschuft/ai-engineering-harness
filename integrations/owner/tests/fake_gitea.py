@@ -235,7 +235,11 @@ class FakeGitea:
                 return self.reply(200, {'state': form.get('event'), 'user': {'login': doer},
                                         'commit_id': self.head(number)})
             if method == 'GET' and rest[1:] == ['files']:
-                return self.reply(200, self.files(number))
+                files = self.files(number)
+                if 'page' in query:  # Gitea's paging: limit a page, pages from 1
+                    limit = int(query.get('limit', 30))
+                    files = files[(int(query['page']) - 1) * limit:int(query['page']) * limit]
+                return self.reply(200, files)
             if method == 'POST' and rest[1:] == ['merge']:
                 return self.merge(number, doer, json.loads(body) if body else {})
         if method == 'GET' and route.startswith(f'{repo}/raw/'):
