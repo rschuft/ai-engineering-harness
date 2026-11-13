@@ -62,3 +62,8 @@ components:
     #max_ttl_s: 86400             # the longest token lifetime, one day (at most 7 days)
     #upstream_timeout_s: 600      # seconds (1 to 3600)
     #families: {}                 # per declared family: provider, upstream (an origin) and models
+    #envelope:                    # absent; serve requires it for a family whose upstream is not loopback
+    # The provider envelope the Owner authorizes (S-03.5; integrations/inference/README.md): under
+    # envelope, expires_at: "YYYY-MM-DDTHH:MM:SSZ" (quoted); limit: amount (a quoted decimal),
+    # currency, enforced_by (provider or broker) and, with broker only, cap; selection: envelope
+    # or delegation. serve starts such a family only on the Owner's recorded authorization of it.

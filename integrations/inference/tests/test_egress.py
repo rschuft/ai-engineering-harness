@@ -70,6 +70,54 @@ class TestEgressCodePath(unittest.TestCase):
         self.assertNotIn('proxy_', SOURCE.lower().replace('proxy-', ''))
 
 
+NETWORK_MODULES = ('socket', 'ssl', 'http', 'urllib', 'urllib3', 'requests', 'httpx', 'aiohttp', 'litellm',
+                   'subprocess', 'asyncio', 'smtplib', 'ftplib')
+
+
+def loaded_sources(path) -> set:
+    """The sibling and owner modules PATH loads by file name (its string constants naming a .py file there)."""
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    names = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+             and node.value.endswith('.py')}
+    places = (S.HERE.parent, S.REPO / 'integrations' / 'owner')
+    return {place / name for name in names for place in places if (place / name).is_file()}
+
+
+class TestEnvelopeModulesOpenNothing(unittest.TestCase):
+    """The census covers every module serve loads from integrations/inference/ beside the broker (the provider
+    envelope, S-03.5) and the read side it is handed (integrations/owner/envelope_decisions.py and the record
+    format it loads): none imports a network or process module or calls a connector."""
+
+    def census(self) -> set:
+        broker = S.HERE.parent / 'inference_broker.py'   # its own census is the tests above
+        modules = loaded_sources(broker) - {broker}
+        for module in list(modules):
+            modules |= loaded_sources(module) - {broker}
+        return modules
+
+    def test_the_census_is_the_envelope_and_its_read_side(self):
+        self.assertEqual({path.name for path in self.census()},
+                         {'inference_envelope.py', 'envelope_decisions.py', 'owner_decision.py'})
+
+    def test_none_of_them_imports_a_network_module_or_calls_a_connector(self):
+        for path in sorted(self.census()):
+            with self.subTest(module=path.name):
+                tree = ast.parse(path.read_text(encoding='utf-8'))
+                imported = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        imported.update(alias.name.split('.')[0] for alias in node.names)
+                    elif isinstance(node, ast.ImportFrom):
+                        imported.add((node.module or '').split('.')[0])
+                self.assertEqual(imported & set(NETWORK_MODULES), set())
+                calls = {node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', None)
+                         for node in ast.walk(tree) if isinstance(node, ast.Call)}
+                self.assertEqual(calls & CONNECTORS, set())
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Attribute):
+                        self.assertNotIn(node.attr, ('environ', 'getenv', 'getproxies'))
+
+
 class TestConnectUpstream(unittest.TestCase):
     def test_https_verifies_and_http_is_loopback_only(self):
         tls = IB.connect_upstream(IB.parse_origin('https://api.example.test'), 5)

@@ -41,7 +41,19 @@ the provider id. Only the Owner-run credential-set command writes it, reading th
 (never argv, the environment, a file or config.yml), and it writes an aieh-credential-act/1 receipt with the
 fingerprint only.
 
+The provider envelope (plan leaf S-03.5, slice 1): before it reads the provider key or opens a listener, serve
+refuses any family whose upstream is not loopback (Origin.loopback: an IP literal only) unless the integration
+store holds the governing, confirmed, unexpired authorization recorder receipt (decision 0012) of operation kind
+provider-envelope whose target is the canonical digest of the live envelope (inference_envelope.py: the provider
+id, the one upstream origin, the spending limit, its enforcement, the expiry and the model selection, projected
+from this snapshot and components.inference_broker.envelope), and whose manifest is the canonical manifest of that
+envelope. The read side is integrations/owner/envelope_decisions.py, handed to serve as Context.authorization.
+The broker holds the authorization it was given (authorize: an object minted in this process) and refuses, at
+admission, a request of a bound family whose provider or upstream is not the held one or whose envelope has
+expired. A configuration whose upstreams are all loopback starts as before, and reads no authorization.
+
   <tools python> -I -B integrations/inference/inference_broker.py config
+  <tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]
   <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   (key on stdin)
   <tools python> -I -B integrations/inference/inference_broker.py serve
 
@@ -69,6 +81,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
@@ -92,6 +105,8 @@ def _load(name: str, path: Path):
 credentials = _load('aieh_credential_provider', REPO / 'integrations' / 'credentials' / 'credential_provider.py')
 contract = credentials.contract
 paths = _load('aieh_paths', REPO / 'integrations' / 'paths' / 'aieh_paths.py')
+inference_envelope = _load('aieh_inference_envelope', HERE / 'inference_envelope.py')
+ENVELOPE_DECISIONS = REPO / 'integrations' / 'owner' / 'envelope_decisions.py'   # the read side (managed_context)
 
 FAMILIES_PATH = HERE / 'families.json'
 DECLARATION_FORMAT = 'aieh-inference-families/1'
@@ -105,6 +120,7 @@ AUDIT_FORMAT = 'aieh-inference-audit/1'
 STATUS_FORMAT = 'aieh-inference-broker-status/1'
 CONFIG_FORMAT = 'aieh-inference-config/1'
 CREDENTIAL_SET_FORMAT = 'aieh-inference-credential-set/1'
+ENVELOPE_REPORT_FORMAT = 'aieh-provider-envelope-report/1'
 LOOPBACK = '127.0.0.1'
 TOKEN_PREFIX = 'aieh-inf-'
 TOKEN_SHAPE = re.compile(r'aieh-inf-[A-Za-z0-9_-]{43}')
@@ -164,6 +180,34 @@ CODES = {
                                    'loopback IP literal; no path, query, fragment or user information'),
     'CONFIG_MODEL_INVALID': (500, 'list exact, verified model identifiers: no wildcard, no duplicate'),
     'CONFIG_INCOMPLETE': (500, 'set control_port and inference_port in components.inference_broker of config.yml'),
+    'CONFIG_ENVELOPE_INVALID': (500, 'give components.inference_broker.envelope exactly as the inference broker '
+                                     'README shows it: expires_at and limit.amount quoted, limit.cap with '
+                                     'enforced_by broker only'),
+    # the provider envelope (S-03.5): a family whose upstream is not loopback
+    'ENVELOPE_NOT_CONFIGURED': (500, 'a family has an upstream that is not loopback: add the envelope block to '
+                                     'components.inference_broker and have the Owner authorize it'),
+    'ENVELOPE_FAMILIES_UNBOUND': (500, 'bind every family whose upstream is not loopback to one provider and one '
+                                       'origin, and name that provider in no loopback family'),
+    'ENVELOPE_NOT_AUTHORIZED': (503, 'record the Owner\'s authorization of the envelope (inference_broker.py '
+                                     'envelope --operation ID, then authorization_recorder.py prepare and record), '
+                                     'then start the broker again'),
+    'ENVELOPE_RECORD_INVALID': (500, 'the integration store holds an authorization receipt the broker cannot trust: '
+                                     'investigate the store before starting the broker'),
+    'ENVELOPE_AUTHORIZATION_UNRESOLVED': (500, 'resolve the later provider-envelope authorization '
+                                               '(authorization_recorder.py resolve --challenge <nonce>), then start '
+                                               'the broker again'),
+    'ENVELOPE_REPLAYED': (500, 'a later authorization supersedes this envelope: configure the envelope the Owner '
+                               'authorized last, or have the Owner authorize this one again'),
+    'ENVELOPE_MISMATCH': (503, 'the live envelope is not the one the Owner authorized: restore the authorized '
+                               'configuration (inference_broker.py envelope shows the live one), or have the Owner '
+                               'authorize it'),
+    'ENVELOPE_EXPIRED': (403, 'the Owner\'s authorization of the envelope has expired: have the Owner authorize a '
+                              'new envelope'),
+    'MODEL_SELECTION_MISSING': (500, 'name the models of the families whose upstream is not loopback in the '
+                                     'envelope (selection: envelope); a delegated selection is not yet supported'),
+    'ENVELOPE_USAGE_UNKNOWN': (429, 'the cumulative usage under the envelope\'s cap cannot be established (a cap '
+                                    'enforced by the broker is not yet supported): fail closed; have the Owner '
+                                    'authorize a new envelope'),
     # the control listener
     'CONTROL_ROUTE_UNKNOWN': (404, 'use POST /v1/grants, POST /v1/grants/revoke, GET /v1/grants/<fingerprint> or '
                                    'GET /v1/status'),
@@ -326,6 +370,7 @@ class BrokerConfig:
     max_ttl_s: int
     upstream_timeout_s: float
     families: dict
+    envelope: dict | None = None    # components.inference_broker.envelope, checked (inference_envelope.check_block)
 
     def describe(self) -> dict:
         return {'format': CONFIG_FORMAT, 'control_port': self.control_port, 'inference_port': self.inference_port,
@@ -441,7 +486,7 @@ def load_config(raw, declarations: dict | None = None, *, allow_ephemeral: bool 
     if not isinstance(raw, dict):
         raise InferenceError('CONFIG_NOT_A_MAPPING', f'components.{COMPONENT} is not a mapping')
     _refuse_secret_shaped(raw, f'components.{COMPONENT}.')
-    allowed = ('control_port', 'inference_port', 'families', *DEFAULTS)
+    allowed = ('control_port', 'inference_port', 'families', 'envelope', *DEFAULTS)
     unknown = sorted(str(k) for k in raw if k not in allowed)
     if unknown:
         raise InferenceError('CONFIG_UNKNOWN_KEY', f'components.{COMPONENT}: unknown {unknown}')
@@ -474,8 +519,178 @@ def load_config(raw, declarations: dict | None = None, *, allow_ephemeral: bool 
         models = model_list(entry.get('models', []), 'CONFIG_MODEL_INVALID', f'{where}.models')
         families[family_id] = dataclasses.replace(declarations[family_id], provider=provider, upstream=upstream,
                                                   models=models)
-    return BrokerConfig(control, inference, _limit(raw, 'max_request_bytes'), _limit(raw, 'max_ttl_s'),
-                        _limit(raw, 'upstream_timeout_s'), families)
+    limits = (_limit(raw, 'max_request_bytes'), _limit(raw, 'max_ttl_s'), _limit(raw, 'upstream_timeout_s'))
+    try:
+        block = inference_envelope.check_block(raw.get('envelope'))
+    except inference_envelope.EnvelopeError as exc:
+        raise InferenceError(exc.code, exc.detail) from None
+    # The block is only shape-checked here: whether a family needs it is serve's question (start), never the
+    # loader's, whose other callers (the qualification launcher, the dispatcher's side) keep their codes.
+    return BrokerConfig(control, inference, *limits, families, block)
+
+
+# ---------------------------------------------------------------- the provider envelope (S-03.5)
+
+# The codes the read side (integrations/owner/envelope_decisions.REFUSALS) answers; a test asserts them equal.
+AUTHORIZATION_REFUSALS = ('ENVELOPE_RECORD_INVALID', 'ENVELOPE_NOT_AUTHORIZED', 'ENVELOPE_AUTHORIZATION_UNRESOLVED',
+                          'ENVELOPE_REPLAYED', 'ENVELOPE_MISMATCH', 'ENVELOPE_EXPIRED')
+AUTHORIZATION_VIEW = ('receipt', 'operation', 'decisionId', 'target', 'digest', 'expiresAt')
+RECEIPT_KEY = re.compile(r'owner-authorization/v1/[0-9a-f]{32}')
+DECISION_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
+SHA256_DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
+
+
+def bound_families(config: BrokerConfig) -> list:
+    """The families the envelope binds: those whose upstream is configured and is not loopback."""
+    return [f for f in config.families.values() if f.upstream is not None and not f.upstream.loopback]
+
+
+def live_envelope(config: BrokerConfig) -> tuple[dict, str]:
+    """(the canonical envelope document, its digest), projected from CONFIG: the bound families' one provider and
+    one origin, their models, and the envelope block. ENVELOPE_NOT_CONFIGURED without a block;
+    ENVELOPE_FAMILIES_UNBOUND unless the bound families share exactly one provider and one origin and no loopback
+    family names that provider (under an envelope the provider key goes to the envelope's origin only)."""
+    if config.envelope is None:
+        raise InferenceError('ENVELOPE_NOT_CONFIGURED', f'components.{COMPONENT}.envelope is absent')
+    bound = bound_families(config)
+    if not bound:
+        raise InferenceError('ENVELOPE_FAMILIES_UNBOUND', 'no family has an upstream that is not loopback: there is '
+                                                          'nothing to bind')
+    providers, origins = {f.provider for f in bound}, {f.upstream for f in bound}
+    if len(providers) != 1 or len(origins) != 1:
+        raise InferenceError('ENVELOPE_FAMILIES_UNBOUND', f'the families whose upstream is not loopback name '
+                                                          f'{len(providers)} providers and {len(origins)} origins')
+    (provider,), (origin,) = providers, origins
+    beside = sorted(f.id for f in config.families.values()
+                    if f.upstream is not None and f.upstream.loopback and f.provider == provider)
+    if beside:
+        raise InferenceError('ENVELOPE_FAMILIES_UNBOUND', f'the loopback families {beside} name the envelope\'s '
+                                                          f'provider {provider!r}')
+    document = inference_envelope.document(config.envelope, provider, origin.text(),
+                                           {f.id: list(f.models) for f in bound})
+    return document, inference_envelope.digest(document)
+
+
+@dataclasses.dataclass(frozen=True)
+class Authorization:
+    """The provider-envelope authorization the broker holds: the governing receipt, the envelope's digest and
+    manifest digest, its expiry, the bound provider and origin, the selected models per bound family and the
+    limit's enforcement. Only authorize() makes one the broker accepts."""
+    receipt: str
+    operation: str
+    decision: str
+    digest: str
+    manifest_digest: str
+    expires_at: str
+    expires: float = dataclasses.field(repr=False)
+    provider: str
+    origin: Origin
+    selection: str
+    models: tuple       # ((family, (model, ...)), ...)
+    enforced_by: str
+    cap: int | None
+
+    def describe(self) -> dict:
+        """The start receipt's and the status answer's authorization member."""
+        return {'receipt': self.receipt, 'operation': self.operation, 'decision': self.decision,
+                'digest': self.digest, 'expires_at': self.expires_at,
+                'selection': {'by': self.selection, 'models': {family: list(ids) for family, ids in self.models}},
+                'limit': {'enforced_by': self.enforced_by, 'cap': self.cap}}
+
+
+# The Authorization objects authorize() returned in this process, by identity. A caller cannot add one:
+# dataclasses.replace, a copy or a hand-built Authorization is another object, which is not here. It is a guard
+# against convenience and accident (a caller that builds a Broker without the start check), not against code of
+# the same account in this process, which decision 0010 point 1 places outside the threat model.
+_MINTED: 'weakref.WeakValueDictionary[int, Authorization]' = weakref.WeakValueDictionary()
+
+
+def minted(authorization) -> bool:
+    return authorization is not None and _MINTED.get(id(authorization)) is authorization
+
+
+def _record_invalid(detail: str) -> InferenceError:
+    return InferenceError('ENVELOPE_RECORD_INVALID', detail)
+
+
+def authorize(config: BrokerConfig, decisions: Callable | None, store_factory: Callable,
+              clock: Callable = time.time) -> Authorization:
+    """The start precondition for CONFIG's bound families, before the provider key is read or a listener opened:
+    the live envelope and its digest; the governing provider-envelope receipt from DECISIONS (a callable
+    ``decisions(store) -> verify(target, manifest_digest, now)``: envelope_decisions.verifier) over the store
+    STORE_FACTORY opens (closed again; nothing is written); the model selection; the limit's enforcement. Returns
+    the Authorization the Broker holds, or raises the stable code."""
+    document, digest = live_envelope(config)
+    if decisions is None:
+        raise InferenceError('ENVELOPE_NOT_AUTHORIZED', 'no decision source was given: a family whose upstream is '
+                                                        'not loopback starts only on a recorded authorization')
+    now = datetime.datetime.fromtimestamp(clock(), datetime.timezone.utc)
+
+    def manifest_digest(operation: str) -> str:
+        return inference_envelope.manifest_digest(document, operation)
+    store = store_factory()
+    failure = None
+    try:
+        answer = decisions(store)(digest, manifest_digest, now)
+    except Exception as exc:  # noqa: BLE001 - whatever the decision source raises is an answer not to trust
+        failure = exc
+    finally:
+        store.close()
+    if failure is not None:
+        raise _record_invalid(f'the decision source raised {type(failure).__name__}')
+    if not isinstance(answer, tuple) or len(answer) != 3 or not isinstance(answer[1], str) \
+            or answer[0] not in (None, *AUTHORIZATION_REFUSALS):
+        raise _record_invalid(f'the decision source answered {type(answer).__name__}, not a well-formed verdict')
+    code, detail, view = answer
+    if code is not None:
+        raise InferenceError(code, detail[:500])
+    if not isinstance(view, dict) or tuple(view) != AUTHORIZATION_VIEW \
+            or not isinstance(view['receipt'], str) or not RECEIPT_KEY.fullmatch(view['receipt']) \
+            or not isinstance(view['decisionId'], str) or not DECISION_ID.fullmatch(view['decisionId']) \
+            or not isinstance(view['operation'], str) or not inference_envelope.OPERATION.fullmatch(view['operation']) \
+            or view['target'] != digest or view['expiresAt'] != document['expires_at'] \
+            or not isinstance(view['digest'], str) or not SHA256_DIGEST.fullmatch(view['digest']) \
+            or view['digest'] != manifest_digest(view['operation']):
+        raise _record_invalid('the decision source answered a view that does not bind the live envelope and its '
+                              'canonical manifest')
+    expires = inference_envelope.parse_expiry(document['expires_at'])
+    if now >= expires:
+        raise InferenceError('ENVELOPE_EXPIRED', f'the authorization {view["receipt"]} expired at '
+                                                 f'{document["expires_at"]}')
+    selection = document['selection']
+    bound = bound_families(config)
+    if selection['by'] != 'envelope':
+        raise InferenceError('MODEL_SELECTION_MISSING', 'the envelope delegates the model selection (decision 0018 '
+                                                        'point 3), and no delegated selection can be read yet: '
+                                                        'fail closed')
+    if not any(f.models for f in bound):
+        raise InferenceError('MODEL_SELECTION_MISSING', 'the envelope selects the models, and no family whose '
+                                                        'upstream is not loopback names one')
+    limit = document['limit']
+    if limit['enforced_by'] != 'provider':
+        raise InferenceError('ENVELOPE_USAGE_UNKNOWN', 'the envelope\'s cap is enforced by the broker, whose usage '
+                                                       'ledger is not yet built: fail closed')
+    (provider,), (origin,) = {f.provider for f in bound}, {f.upstream for f in bound}
+    held = Authorization(view['receipt'], view['operation'], view['decisionId'], digest, view['digest'],
+                         document['expires_at'], expires.timestamp(), provider, origin, selection['by'],
+                         tuple((f.id, tuple(sorted(f.models))) for f in sorted(bound, key=lambda f: f.id)),
+                         limit['enforced_by'], limit['cap'])
+    _MINTED[id(held)] = held
+    return held
+
+
+def envelope_report(config: BrokerConfig, operation: str | None) -> dict:
+    """The envelope command's report: the live envelope document and its digest and, with OPERATION, the canonical
+    manifest's path, text (a JSON string, so that no console changes its line endings) and sha256. It reads no
+    credential, store or listener, and proposes nothing."""
+    document, digest = live_envelope(config)
+    manifest = None
+    if operation is not None:
+        manifest = {'path': inference_envelope.manifest_path(operation),
+                    'text': inference_envelope.manifest_text(document, operation),
+                    'digest': inference_envelope.manifest_digest(document, operation)}
+    return {'format': ENVELOPE_REPORT_FORMAT, 'document': document, 'digest': digest, 'operation': operation,
+            'manifest': manifest}
 
 
 # ---------------------------------------------------------------- the exposure guard
@@ -811,10 +1026,12 @@ class Broker:
     tests; clock for time.time."""
 
     def __init__(self, config: BrokerConfig, *, provider_key: ProviderKey | None, journal: Journal,
-                 audit: AuditLog, guard: BrokerGuard, clock: Callable = time.time, connect: Callable | None = None):
+                 audit: AuditLog, guard: BrokerGuard, clock: Callable = time.time, connect: Callable | None = None,
+                 authorization: Authorization | None = None):
         self.config, self.provider_key, self.journal, self.audit, self.guard = config, provider_key, journal, \
             audit, guard
         self.clock, self._connect = clock, connect or connect_upstream
+        self.authorization = authorization   # authorize()'s, for the families whose upstream is not loopback
         if provider_key is not None:
             guard.hold(provider_key.key)
         self._lock = threading.RLock()
@@ -945,7 +1162,8 @@ class Broker:
         self.housekeeping()
         with self._lock:
             grants = list(self._grants.values())
-        return {'format': STATUS_FORMAT, 'listeners': dict(self.listeners),
+        bound = {} if self.authorization is None else {'authorization': self.authorization.describe()}
+        return {'format': STATUS_FORMAT, **bound, 'listeners': dict(self.listeners),
                 'provider_key': None if self.provider_key is None else {
                     'provider': self.provider_key.provider, 'fingerprint': self.provider_key.fingerprint,
                     'source': self.provider_key.source},
@@ -993,6 +1211,22 @@ class Broker:
             raise self._refuse('BUDGET_USAGE_UNKNOWN', f'{grant.unknown_usage} answer(s) reported no usage', grant)
         if grant.total_tokens >= grant.max_tokens:
             raise self._refuse('BUDGET_TOKENS_EXHAUSTED', f'{grant.total_tokens} of {grant.max_tokens}', grant)
+
+    def _envelope(self, family: Family, grant: Grant) -> None:
+        """A family whose upstream is not loopback is served only under the held authorization, for its provider
+        and origin, and until its expiry (checked where the budget is; an answer already streaming completes)."""
+        if family.upstream is None or family.upstream.loopback:
+            return
+        held = self.authorization
+        if not minted(held):
+            raise self._refuse('ENVELOPE_NOT_AUTHORIZED', f'{family.id}: no authorization of its envelope is held',
+                               grant)
+        if family.provider != held.provider or family.upstream != held.origin:
+            raise self._refuse('ENVELOPE_MISMATCH', f'{family.id}: its provider or upstream is not the authorized '
+                                                    'envelope\'s', grant)
+        if self.clock() >= held.expires:
+            raise self._refuse('ENVELOPE_EXPIRED', f'the authorization {held.receipt} expired at {held.expires_at}',
+                               grant)
 
     def _live(self, grant: Grant) -> None:
         if grant.revocation is not None:
@@ -1048,6 +1282,7 @@ class Broker:
         if has_query and family.query != 'pass':
             raise self._refuse('QUERY_NOT_ALLOWED', f'the {family.id} family admits no query', grant)
         with self._lock:
+            self._envelope(family, grant)
             self._budget(grant)
         body = self._read_body(headers, read, grant)
         try:
@@ -1070,6 +1305,7 @@ class Broker:
             raise self._refuse('PROVIDER_KEY_ABSENT', family.id, grant)
         with self._lock:
             self._live(grant)
+            self._envelope(family, grant)
             self._budget(grant)
             grant.requests += 1
             grant.in_flight += 1
@@ -1243,6 +1479,14 @@ class Broker:
         once), then serve. Returns the bound ports."""
         if self.config.control_port is None or self.config.inference_port is None:
             raise InferenceError('CONFIG_INCOMPLETE', 'a listener port is not configured')
+        bound = bound_families(self.config)
+        if bound and not minted(self.authorization):
+            raise InferenceError('ENVELOPE_NOT_AUTHORIZED', 'a family whose upstream is not loopback starts only under '
+                                                            'an authorization authorize() returned in this process')
+        for family in bound:
+            if family.provider != self.authorization.provider or family.upstream != self.authorization.origin:
+                raise InferenceError('ENVELOPE_MISMATCH', f'{family.id}: its provider or upstream is not the '
+                                                          'authorized envelope\'s')
         try:
             for name, port, handler in (('control', self.config.control_port, _ControlHandler),
                                         ('inference', self.config.inference_port, _InferenceHandler)):
@@ -1258,6 +1502,8 @@ class Broker:
                       'families': [{'id': f.id, 'status': f.status, 'upstream': None if f.upstream is None
                                     else f.upstream.text(), 'provider': f.provider, 'models': list(f.models)}
                                    for f in self.config.families.values()]}
+            if self.authorization is not None:
+                intent['authorization'] = self.authorization.describe()
             self.start_receipt = self.journal.record(f'inference/broker-start/{stamp}-{secrets.token_hex(4)}',
                                                      intent, {'state': 'started'}, conflict='JOURNAL_FAILED')
             self.audit.write({'event': 'broker-start', 'receipt': self.start_receipt['operation_key']})
@@ -1493,6 +1739,10 @@ class Context:
     err: object
     wait: Callable               # serve: blocks while the broker runs
     allow_ephemeral: bool = False
+    # serve, for a family whose upstream is not loopback: store -> verify(target, manifest_digest, now), the read
+    # side of the provider-envelope authorizations (envelope_decisions.verifier); None refuses such a start.
+    authorization: Callable | None = None
+    clock: Callable = time.time  # serve: the broker's clock (the envelope's expiry, at start and at admission)
 
 
 def _wait_for_interrupt(broker: Broker) -> None:
@@ -1505,17 +1755,23 @@ def _wait_for_interrupt(broker: Broker) -> None:
 def managed_context() -> Context:
     store_module = _load('integration_store', REPO / 'integrations' / 'store' / 'integration_store.py')
     res = paths.resolve()
+
+    def authorization(store):
+        return _load('envelope_decisions', ENVELOPE_DECISIONS).verifier(store)
     return Context(component=lambda: res.components.get(COMPONENT), provider=credentials.select_provider,
                    store=lambda: store_module.open_store(paths.ensure('state', res, 'integration')
                                                          / 'integration.sqlite'),
                    logs=lambda: paths.ensure('logs', res, 'inference'), stdin=sys.stdin, out=sys.stdout,
-                   err=sys.stderr, wait=_wait_for_interrupt)
+                   err=sys.stderr, wait=_wait_for_interrupt, authorization=authorization)
 
 
 def _serve(ctx: Context, guard: BrokerGuard) -> dict:
-    config = load_config(ctx.component(), allow_ephemeral=ctx.allow_ephemeral)
+    config = load_config(ctx.component(), allow_ephemeral=ctx.allow_ephemeral)   # read once: the snapshot served
     if config.control_port is None or config.inference_port is None:
         raise InferenceError('CONFIG_INCOMPLETE', 'a listener port is not configured')
+    # The start precondition (S-03.5), only when a family's upstream is not loopback: before the key is read and
+    # before any listener opens. A refusal exits 2 and writes nothing.
+    authorization = authorize(config, ctx.authorization, ctx.store, ctx.clock) if bound_families(config) else None
     provider = ctx.provider()
     entry = contract.WatchedProvider(provider, guard).get(ENTRY)
     provider_key = None if entry is None else ProviderKey(entry[0], entry[1],
@@ -1527,7 +1783,8 @@ def _serve(ctx: Context, guard: BrokerGuard) -> dict:
     except BaseException:
         journal.close()
         raise
-    broker = Broker(config, provider_key=provider_key, journal=journal, audit=audit, guard=guard)
+    broker = Broker(config, provider_key=provider_key, journal=journal, audit=audit, guard=guard, clock=ctx.clock,
+                    authorization=authorization)
     try:
         broker.start()
     except BaseException:
@@ -1544,12 +1801,23 @@ def _serve(ctx: Context, guard: BrokerGuard) -> dict:
         broker.stop()
 
 
+def _operation_id(value: str) -> str:
+    if not inference_envelope.OPERATION.fullmatch(value):
+        raise argparse.ArgumentTypeError('an operation id is lower-case letters, digits and hyphens (at most 128)')
+    return value
+
+
 def main(argv=None, context: Context | None = None) -> int:
     parser = argparse.ArgumentParser(prog='inference_broker.py', description='The inference broker (S-03.2; '
                                      'decision 0015 as amended). Exit 0 done, 1 failed, 2 refused.')
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('config', help='validate components.inference_broker and print the effective families; reads '
                                   'no credential, opens no listener')
+    env = sub.add_parser('envelope', help='print the live provider envelope and its digest and, with --operation, '
+                                          'the canonical manifest to propose for the Owner\'s authorization (as a '
+                                          'JSON string); reads no credential or store, opens no listener')
+    env.add_argument('--operation', type=_operation_id, help='the operation id of the manifest '
+                                                             '(operations/<id>.json)')
     cred = sub.add_parser('credential-set', help='store the provider key, read from standard input only, as the '
                                                  'entry "AIEH model provider"; prints its fingerprint')
     cred.add_argument('--provider', required=True, help='the provider id (the entry\'s user name)')
@@ -1562,6 +1830,9 @@ def main(argv=None, context: Context | None = None) -> int:
         out, err = ctx.out, ctx.err
         if args.command == 'config':
             report = load_config(ctx.component(), allow_ephemeral=ctx.allow_ephemeral).describe()
+        elif args.command == 'envelope':
+            report = envelope_report(load_config(ctx.component(), allow_ephemeral=ctx.allow_ephemeral),
+                                     args.operation)
         elif args.command == 'credential-set':
             if not PROVIDER_ID.fullmatch(args.provider):
                 raise InferenceError('PROVIDER_ID_INVALID', 'not a provider id')

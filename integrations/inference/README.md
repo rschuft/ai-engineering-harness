@@ -11,6 +11,10 @@ the qualification tools of slice 4: [`evidence/S-03.2-slice4-qualification-tools
 the provider-key containment search of slice 5:
 [`evidence/S-03.2-slice5-key-containment-search.md`](../../evidence/S-03.2-slice5-key-containment-search.md).
 
+Plan leaf S-03.5 ("Bind the broker's real-provider start to a recorded provider-envelope authorization"),
+**slice 1**, adds the provider envelope and the start precondition ([below](#the-provider-envelope-plan-leaf-s-035-slice-1)):
+built and tested offline only.
+
 The broker is the host-side process of the trusted management domain (inventory principal
 `inference-broker`) that alone holds the model provider's key and alone issues inference access. Standard
 library only, under the tools interpreter; it imports no litellm and no other HTTP client.
@@ -23,7 +27,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 
 | Path | What |
 |---|---|
-| `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line |
+| `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line; the provider envelope's start precondition (S-03.5: `live_envelope`, `authorize`, the held `Authorization`, the `envelope` command) |
+| `inference_envelope.py` | The provider envelope (S-03.5 slice 1): the `envelope` block's check, the canonical document, its digest and the canonical operation manifest. Standard library only; it opens nothing |
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
 | `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation, and for the qualification one grant (`issue`, slice 4); `127.0.0.1` only), an attempt token's fingerprint (`token_fingerprint`) and the `issue` command (slice 4) |
 | `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`) |
@@ -33,7 +38,9 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
 | `tests/test_grants.py` | Socket-free: issuance and its refusals, readiness, revocation and expiry with their receipts, journal failures, every admission refusal, budgets, refusal responses; a check that every stable code appears in a test |
 | `tests/test_credential_set.py` | `credential-set` over an in-memory provider and a fixture store |
-| `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream` |
+| `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream`; the census of the modules `serve` loads beside the broker (the envelope and its read side): no network module, no connector |
+| `tests/envelope_support.py` | The provider envelope's fixtures (S-03.5): the real authorization recorder over the owner suite's fake Gitea (in memory) writing into a throwaway store, contexts whose provider, audit directory and wait raise if asked, a `Rig` holding a minted authorization, an injected connector |
+| `tests/test_envelope.py` | S-03.5 slice 1's proof rows: the block, the document, the golden digest and manifest, the `envelope` command; every start refusal of `serve` (no block, missing, unsettled, expired, replayed, another origin, limit, expiry or selection, another target, a non-canonical manifest, hand-written receipts, a decision source that raises or answers badly, unbound families, the interim selection and cap refusals); the start with its `authorization` member; the envelope kind recorded through the recorder; loopback upstreams as before; the held authorization at start and at admission, and the expiry while serving |
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
@@ -98,7 +105,91 @@ The ports and values above are placeholders, not decided values. `upstream` is a
 fragment or user information. A non-loopback upstream needs a `provider`. Model names are exact identifiers
 (letters, digits, `.`, `_`, `:`, `@`, `/`, `-`): no wildcard, no duplicate. Unknown keys and undeclared
 families are refused. `python -I -B integrations/inference/inference_broker.py config` prints the effective
-configuration and touches no credential, store or listener.
+configuration and touches no credential, store or listener. The `envelope` block (next section) is checked here
+when present, never required here: `serve` requires it.
+
+## The provider envelope (plan leaf S-03.5, slice 1)
+
+`serve` refuses, before it reads the provider key or opens a listener, any family whose upstream is not loopback
+(`Origin.loopback`: an IP literal the interpreter calls loopback; a host name, `localhost` included, never is)
+unless the integration store holds the **governing, confirmed, unexpired** authorization recorder receipt
+(decision 0012) of operation kind `provider-envelope` whose target is the canonical digest of the **live
+envelope**, and whose merged manifest is the canonical manifest of that envelope. A configuration whose upstreams
+are all loopback starts exactly as before: no store read, no envelope needed (a present block is only checked).
+**Built and tested offline only**; no real authorization has been recorded.
+
+**The live envelope** is a projection of the one snapshot `serve` reads (once) and serves: the provider id, the
+one upstream origin and the selected models come from the families whose upstream is not loopback (the bound
+families); only what has no home there is a block of its own:
+
+```yaml
+components:
+  inference_broker:
+    envelope:
+      expires_at: "2026-12-31T00:00:00Z"   # quoted: YYYY-MM-DDTHH:MM:SSZ (UTC)
+      limit:
+        amount: "25.00"                    # quoted decimal: the Owner-authorized spending limit
+        currency: USD
+        enforced_by: provider              # provider | broker
+        #cap: 1000000                      # with broker only: a cumulative usage-token cap (integer)
+      selection: envelope                  # envelope | delegation
+```
+
+The values are placeholders, not decided values. An unquoted timestamp or decimal (YAML reads them as a time and
+a float) is refused (`CONFIG_ENVELOPE_INVALID`), never normalized. The bound families must share one provider and
+one origin, and no loopback family may name that provider (`ENVELOPE_FAMILIES_UNBOUND`): under an envelope the
+provider key goes to the envelope's origin only.
+
+**The canonical document** (`aieh-provider-envelope/1`): `format`, `provider`, `origin` (`https://host:port`),
+`limit` (`amount`, `currency`, `enforced_by`, `cap`: an integer or null), `expires_at`, and `selection`:
+`{"by": "envelope", "models": {<family>: [<ids, sorted>]}}`, or `{"by": "delegation", "record":
+"decision:0018", "point": "3"}`. Its **digest**, the authorization's target, is `sha256:` and the sha256 of the
+document as canonical JSON (the integration store's rule: sorted keys, no whitespace, UTF-8). **The canonical
+manifest** `operations/<operation>.json`: `operation`, `kind` (`provider-envelope`), `target`, `expiresAt` and
+`envelope` (the document, in clear, so the Owner reads it in the recorder's challenge summary), JSON with a
+two-space indent and one final LF. `serve` regenerates it from the live envelope and the receipt's operation id
+and requires its sha256 to be the receipt's manifest digest, so what the Owner was shown is exactly what is
+enforced. A change of either form is a new format (`/2`): receipts recorded under `/1` stop verifying.
+
+**Authorizing it** (an Owner act; not run here): `inference_broker.py envelope --operation ID` prints the live
+document, its digest and the canonical manifest's path, text and digest; the text travels inside the JSON report
+as a string, so no console changes its line endings (write it to `operations/<ID>.json` as UTF-8 with LF line
+endings, byte for byte). It is proposed and authorized as any operation, through `authorization_recorder.py
+prepare` and `record` (`integrations/owner/README.md`), which do not change and know nothing of the kind.
+
+**Which receipt governs** (the read side, `integrations/owner/envelope_decisions.py`, handed to `serve` as
+`Context.authorization`): the recorder's receipts of operation kind `provider-envelope`, in reservation order;
+the last confirmed one governs, so a later authorization ends an earlier one at the next start whatever its
+expiry. In this order: a receipt under the recorder's prefix that cannot be read or is not the recorder's
+(`ENVELOPE_RECORD_INVALID`); none confirmed and none unsettled (`ENVELOPE_NOT_AUTHORIZED`, also with no decision
+source); a later one `reserved`, `dispatched` or `unknown` (`ENVELOPE_AUTHORIZATION_UNRESOLVED`: resolve it with
+`authorization_recorder.py resolve`); the live digest an earlier, superseded authorization's
+(`ENVELOPE_REPLAYED`); another digest, or a merged manifest that is not the canonical one (`ENVELOPE_MISMATCH`:
+another origin, provider, limit, enforcement, cap, expiry or selection); the expiry reached
+(`ENVELOPE_EXPIRED`). Then the selection: with `selection: envelope`, the bound families' configured models are
+inside the digest, and no bound family naming one is `MODEL_SELECTION_MISSING`. **Interim, slice 1:**
+`selection: delegation` is refused at start (`MODEL_SELECTION_MISSING`: no delegated selection can be read yet;
+slice 2), and `enforced_by: broker` is refused at start (`ENVELOPE_USAGE_UNKNOWN`: the cap's usage ledger is
+slice 3). Both fail closed and are replaced, never relaxed. A refused start exits 2, writes no receipt and no
+audit line (it may create an empty integration store where none exists).
+
+**What the broker holds.** `authorize` returns one frozen `Authorization` (the receipt key, the operation id,
+the decision id, the digest, the expiry, the provider, the origin, the selected models, the limit's enforcement);
+`Broker.start()` refuses a bound family unless it holds an object `authorize` returned in this process
+(`ENVELOPE_NOT_AUTHORIZED`; a copy or a hand-built one is not) whose provider and origin the family has
+(`ENVELOPE_MISMATCH`). At admission, where the attempt budget is checked, a request of a bound family is refused
+when the held authorization is not one `authorize` minted (`ENVELOPE_NOT_AUTHORIZED`, 503), when the family's
+provider or upstream is not the held one (`ENVELOPE_MISMATCH`, 503), and from the expiry on
+(`ENVELOPE_EXPIRED`, 403); an answer already streaming completes, loopback families and the control listener
+keep working, and nothing is written at the moment of expiry. Supersession takes effect at the next start. The
+start receipt and the status answer carry an `authorization` member (receipt, operation, decision, digest,
+`expires_at`, the selection, the limit's enforcement) only when an envelope is bound.
+
+**What it is not.** A control against accident, convenience and a stale or edited `config.yml` at the moment of
+the act, not against a process of the Owner's account, which can write the store as the recorder does, read the
+credential entry or forward from loopback (decision 0010 point 1); it does not authenticate the Owner (decision
+0012 point 9). With only loopback upstreams `serve` still reads the real entry if one exists and sends it to the
+loopback upstream that names its provider, as before (disclosed).
 
 ## Tokens: issue, revoke, status (the control listener)
 
@@ -320,6 +411,7 @@ the reports, the broker's store, audit directory and captured output. The prepar
 ```
 <tools python> -I -B -m unittest discover -s integrations/inference/tests -v      # task inference:test
 <tools python> -I -B integrations/inference/inference_broker.py config            # validate and print the configuration
+<tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]   # the live envelope and its manifest
 <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   # key on stdin
 <tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until Ctrl+C
 <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
@@ -339,7 +431,12 @@ the fake upstream and `issue` are part of the Owner's act A2 and have not run ou
 
 Configuration: `DECLARATION_INVALID`, `CONFIG_NOT_A_MAPPING`, `CONFIG_UNKNOWN_KEY`, `CONFIG_SECRET_SHAPED_KEY`,
 `CONFIG_FAMILY_UNKNOWN`, `CONFIG_PORT_INVALID`, `CONFIG_LIMIT_INVALID`, `CONFIG_PROVIDER_INVALID`,
-`CONFIG_PROVIDER_REQUIRED`, `CONFIG_ORIGIN_INVALID`, `CONFIG_MODEL_INVALID`, `CONFIG_INCOMPLETE`.
+`CONFIG_PROVIDER_REQUIRED`, `CONFIG_ORIGIN_INVALID`, `CONFIG_MODEL_INVALID`, `CONFIG_INCOMPLETE`,
+`CONFIG_ENVELOPE_INVALID`.
+The provider envelope (S-03.5; at start `serve` exits 2): `ENVELOPE_NOT_CONFIGURED`, `ENVELOPE_FAMILIES_UNBOUND`,
+`ENVELOPE_RECORD_INVALID`, `ENVELOPE_AUTHORIZATION_UNRESOLVED`, `ENVELOPE_REPLAYED`, `MODEL_SELECTION_MISSING`;
+at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403); at
+start in slice 1: `ENVELOPE_USAGE_UNKNOWN` (429 at admission from slice 3).
 Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL_CONTENT_TYPE` (415),
 `CONTROL_BODY_INVALID` (400), `CONVERSATION_ID_INVALID`, `ATTEMPT_ID_INVALID`, `FAMILY_UNKNOWN`, `MODELS_INVALID`,
 `BUDGET_INVALID`, `TTL_INVALID`, `TRIGGER_UNKNOWN`, `REVOKER_INVALID` (400), `MODEL_NOT_ALLOWLISTED` (403),
@@ -376,3 +473,7 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
   `issue` command's pipe check with PowerShell's and Git Bash's pipes is not observed.
 - Linux and macOS (the listeners' exclusive binding is Windows-specific; elsewhere the default no-reuse
   binding applies).
+- The provider envelope (S-03.5 slice 1) outside a test process: a real envelope manifest, its authorization by
+  the Owner through the recorder against a real Gitea, `serve` started on it, and any request through `serve` to
+  a non-loopback origin (S-03.3's live step). The authorization recorder admits only the S-01.2.2 fixture
+  repository today. The delegated model selection (slice 2) and the cumulative cap (slice 3) are not built.

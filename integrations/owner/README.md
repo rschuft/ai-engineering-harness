@@ -38,6 +38,7 @@ under the managed data root and write the live manifest there.
 | `owner_decision.py` | The shared record: its fields, the kinds, the `accept-objective`, `authorize-operation`, `accept-design` and `promote-manifest` subjects (`subject_problems`), `statement_verdict` and `check_record` |
 | `delegated_decision.py` | The delegated decision record (`delegated-decision/v1`): its fields, the delegation table (`DELEGATIONS`) and the basis types (`BASIS_TYPES`), the act's checks (`check_delegation`, and `read_authority`, which reads the delegating record and the log at the harness repository's `HEAD`), the generic `decide` and `check_record` |
 | `input_decisions.py` | The dispatch-input series (their store keys, positions and heads), the design binding of a manifest entry, and the verifier (`verify_manifest`, `verifier`) with its refusal codes; importable without the write side |
+| `envelope_decisions.py` | The provider-envelope authorizations' read side (plan leaf S-03.5, slice 1): the authorization recorder's receipts of operation kind `provider-envelope`, the governing one (the last confirmed), and the verifier the inference broker's `serve` asks (`verify_envelope`, `verifier`) with its refusal codes; importable without the recorder (no Gitea, credential or store module) |
 | `input_recorder.py` | The dispatch-input commands: `design prepare`, `record` and `delegate`; `manifest prepare`, `record`, `delegate` and `resolve`; `status`; the codes and remedies, the context and the command line |
 | `acceptance_recorder.py` | `prepare` and `record`, the refusal codes and remedies, the edits of `proposal.md` and `.openspec.yaml`, and the command line |
 | `authorization_recorder.py` | The authorization recorder: `prepare`, `record` and `resolve`, the refusal codes and remedies, the expected policy, the protection verifier's seam and the command line's verifier (`protection_verifier`: the Gitea integration's protection check), the session as `aieh-owner`, the receipt, the merge and its read-back, and the command line |
@@ -56,6 +57,7 @@ under the managed data root and write the live manifest there.
 | `tests/test_input_decisions.py` | The two new kinds and the unchanged shape of `owner-decision/v1`; `delegated-decision/v1`, its table (the engineering manager never decides either kind) and a later kind added as a row; the status parser; the codes, the admitted channels and the repeated grammars against their sources (unit) |
 | `tests/test_input_recorder.py` | Both authorities end to end with the verifier's answer; every code of the recorder table with what it leaves (a refusal reserves nothing and leaves the live manifest as it was; `PROMOTION_FAILED` and `OUTCOME_UNKNOWN` leave a receipt `manifest resolve` settles); each delegated refusal on the fixture harness repositories; the real decision 0018 at `HEAD`; the verifier's refusals; a fixture context never reaching the managed root; importing the commands loads no Gitea or credential module; the command line (integration) |
 | `tests/test_live_phases.py` | The live exercise's phase plumbing against the fake Gitea: phase rechallenge (fresh challenges for the same operations with reads only, the record phase on them, every refusal leaving the run directory unchanged); prepare's precondition (the baseline variable, the protection check's digest, every role's identity and scopes, open pull requests and existing branches, each refused with zero writes), the auditor's control on a nonexistent pull request, the stopping rule after every control attempt, the presentation, the statement-file refusals, the expected outcome without a verifier and with one that does not verify, the stale-head control and each refusal it can observe (finding F14), the SECURITY FAILURE stops, the protection check end to end (unit) |
+| `tests/test_envelope_decisions.py` | The provider-envelope read side (S-03.5) over receipts the real recorder writes against the fake Gitea: the governing authorization and its view, the expiry at its second, supersession and replay, a non-canonical manifest, other kinds ignored, a failed, unknown or reserved receipt alone or after the confirmed one, every hand-written receipt it refuses, its constants equal to the recorder's and its imports (unit) |
 
 ## The Owner decision record (`owner-decision/v1`)
 
@@ -299,6 +301,26 @@ required setting cannot be verified. The recorder calls it through a mechanism-n
 
 One code is a disclosure, not a refusal: `PROTECTION_CHANGED_AFTER_MERGE` in a confirmed receipt's
 detail, when the verifier's answer after the merge differs from its answer before it.
+
+### Provider-envelope authorizations (plan leaf S-03.5, slice 1)
+
+The Owner authorizes the inference broker's provider envelope through this recorder as any operation: the
+manifest `operations/<id>.json` that `inference_broker.py envelope --operation <id>` prints, of kind
+`provider-envelope`, whose target is the envelope's canonical digest
+([`integrations/inference/README.md`](../inference/README.md), "The provider envelope"). The recorder does not
+change and learns nothing of the kind. Its read side is `envelope_decisions.py`, which the broker's `serve` is
+handed: it lists the recorder's receipts (they are keyed by a random nonce, so there is no direct lookup), keeps
+those of kind `provider-envelope` reserved by `authorization-recorder/1` with a well-formed `owner-decision/v1`
+that binds the receipt's key, operation and manifest digest, orders them by reservation, and lets the **last
+confirmed** one govern. Its answers, in order: `ENVELOPE_RECORD_INVALID` (a receipt under the prefix whose kind
+cannot be read, or a provider-envelope receipt that is not the recorder's: another actor or receipt format, a
+decision that fails `check_record`, a repeated `decisionId`), `ENVELOPE_NOT_AUTHORIZED` (none confirmed and none
+unsettled), `ENVELOPE_AUTHORIZATION_UNRESOLVED` (a later one `reserved`, `dispatched` or `unknown`: run
+`resolve`), `ENVELOPE_REPLAYED` (the live digest is a superseded authorization's), `ENVELOPE_MISMATCH` (another
+digest, or the merged manifest is not the canonical manifest of the live envelope), `ENVELOPE_EXPIRED` (the
+governing `expiresAt` reached); otherwise the governing receipt's view (`receipt`, `operation`, `decisionId`,
+`target`, `digest`, `expiresAt`). It reads the integration store only. A later provider-envelope authorization
+ends an earlier one at the broker's next start; no revocation record exists.
 
 ## The dispatch-input commands (plan leaf P-04.3)
 
