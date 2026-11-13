@@ -119,6 +119,9 @@ ENTRY = 'AIEH model provider'
 SERVICE = 'inference-broker'
 GRANT_FORMAT = 'aieh-inference-grant/1'
 REVOCATION_FORMAT = 'aieh-inference-revocation/1'
+# E-05.6: a revocation by conversation and attempt that finds no grant leaves this tombstone under the attempt's
+# grant receipt key, so that no grant of that attempt is ever registered after it (Broker.revoke).
+TOMBSTONE_FORMAT = 'aieh-inference-attempt-tombstone/1'
 START_FORMAT = 'aieh-inference-broker-start/1'
 AUDIT_FORMAT = 'aieh-inference-audit/1'
 STATUS_FORMAT = 'aieh-inference-broker-status/1'
@@ -255,6 +258,8 @@ CODES = {
     'BUDGET_INVALID': (400, 'give budget.requests and budget.tokens as positive integers within the limits'),
     'TTL_INVALID': (400, 'give ttl_s as a positive integer no larger than max_ttl_s'),
     'ATTEMPT_HAS_GRANT': (409, 'an attempt has one token for its whole life: start a new attempt'),
+    'GRANT_ATTEMPT_REVOKED': (409, 'the attempt was revoked by its conversation and attempt before a grant was '
+                                   'registered: start a new attempt'),
     'TRIGGER_UNKNOWN': (400, 'give one of the decision 0007 point 5 triggers'),
     'REVOKER_INVALID': (400, 'name the revoker in 1 to 200 printable characters'),
     'GRANT_UNKNOWN': (404, 'give the fingerprint the issue answer returned'),
@@ -1054,6 +1059,13 @@ class Journal:
                     'events': [event.to_state for event in events], 'read_back': True}
         return self._run(work)
 
+    def intent(self, key: str):
+        """The intent of the receipt under KEY, or None (read on the journal thread)."""
+        def work():
+            held = self._open().get(key)
+            return None if held is None else json.loads(held.intent_json)
+        return self._run(work)
+
     def close(self) -> None:
         """Close the store (best effort: a store that fails to close is dropped) and the journal thread."""
         def work():
@@ -1218,6 +1230,9 @@ class Broker:
         if provider_key is not None:
             guard.hold(provider_key.key)
         self._lock = threading.RLock()
+        # E-05.6: an issue's grant receipt and registration, and a revocation by attempt's lookup and tombstone,
+        # happen one at a time (never under _lock across a store write, so inference is not held up)
+        self._attempt_lock = threading.Lock()
         self._grants: dict[str, Grant] = {}     # sha256 digest of the token -> grant
         self._by_fingerprint: dict[str, Grant] = {}
         self._servers: list = []
@@ -1281,11 +1296,21 @@ class Broker:
                   'budget': {'requests': grant.max_requests, 'tokens': grant.max_tokens},
                   'issued_at': now_iso(issued), 'expires_at': now_iso(grant.expires_at),
                   'upstream': family.upstream.text()}
-        # One grant per attempt, durably: the journal refuses a second grant receipt under the attempt's key.
-        receipt = self.journal.record(f'inference/attempt/{attempt}/grant', intent, {'state': 'live'},
-                                      conflict='ATTEMPT_HAS_GRANT')
-        with self._lock:
-            self._grants[grant.digest] = self._by_fingerprint[grant.fingerprint] = grant
+        # One grant per attempt, durably: the journal refuses a second grant receipt under the attempt's key, and a
+        # grant receipt after a tombstone (E-05.6). The receipt and the registration happen under the attempt lock,
+        # which a revocation by attempt takes too: whichever comes first, no grant is live after that revocation.
+        key = f'inference/attempt/{attempt}/grant'
+        with self._attempt_lock:
+            try:
+                receipt = self.journal.record(key, intent, {'state': 'live'}, conflict='ATTEMPT_HAS_GRANT')
+            except InferenceError as exc:
+                if exc.code == 'ATTEMPT_HAS_GRANT' and (self.journal.intent(key) or {}).get('format') \
+                        == TOMBSTONE_FORMAT:
+                    raise InferenceError('GRANT_ATTEMPT_REVOKED', 'the attempt was revoked before its grant was '
+                                         'registered') from None
+                raise
+            with self._lock:
+                self._grants[grant.digest] = self._by_fingerprint[grant.fingerprint] = grant
         return {'format': GRANT_FORMAT, 'token': token, **grant.describe(), 'grant_receipt': receipt}
 
     def revoke(self, body) -> dict:
@@ -1306,22 +1331,49 @@ class Broker:
         if by_attempt:
             conversation = _uuid(body['conversation_id'], 'CONVERSATION_ID_INVALID', 'conversation_id')
             attempt = _uuid(body['attempt_id'], 'ATTEMPT_ID_INVALID', 'attempt_id')
-        with self._lock:
-            if by_attempt:
-                grant = next((g for g in self._grants.values()
-                              if g.attempt_id == attempt and g.conversation_id == conversation), None)
+            with self._attempt_lock:   # an issue of this attempt is either registered already or refused after
+                with self._lock:
+                    grant = next((g for g in self._grants.values()
+                                  if g.attempt_id == attempt and g.conversation_id == conversation), None)
+                    if grant is not None:
+                        self._revoke_held(grant, trigger, revoker)
                 if grant is None:
-                    raise InferenceError('GRANT_UNKNOWN', 'no grant has that conversation and attempt')
-            else:
+                    return self._tombstone(conversation, attempt, trigger, revoker)
+        else:
+            with self._lock:
                 fingerprint = body['token_fingerprint']
                 grant = self._by_fingerprint.get(fingerprint) if isinstance(fingerprint, str) else None
                 if grant is None:
                     raise InferenceError('GRANT_UNKNOWN', 'no grant has that fingerprint')
-            if grant.revocation is not None:
-                raise InferenceError('GRANT_ALREADY_REVOKED', f'revoked at {grant.revocation["revoked_at"]}')
-            self._mark_revoked(grant, trigger, revoker)
+                self._revoke_held(grant, trigger, revoker)
         self._write_revocation(grant)
         return {'format': REVOCATION_FORMAT, **grant.describe()}
+
+    def _revoke_held(self, grant: Grant, trigger: str, revoker: str) -> None:
+        """Under the lock: GRANT_ALREADY_REVOKED, or the grant marked revoked."""
+        if grant.revocation is not None:
+            raise InferenceError('GRANT_ALREADY_REVOKED', f'revoked at {grant.revocation["revoked_at"]}')
+        self._mark_revoked(grant, trigger, revoker)
+
+    def _tombstone(self, conversation: str, attempt: str, trigger: str, revoker: str) -> dict:
+        """Under the attempt lock, for a revocation by attempt that found no grant (E-05.6): the tombstone receipt
+        under the attempt's grant receipt key, so that a grant of this attempt is never registered after it (issue
+        answers GRANT_ATTEMPT_REVOKED, in this run and after a restart). When that key already holds a grant
+        receipt, the grant was issued in an earlier run of the broker and ended with it, or to another
+        conversation: GRANT_UNKNOWN (no second grant of the attempt can be issued: ATTEMPT_HAS_GRANT)."""
+        key = f'inference/attempt/{attempt}/grant'
+        intent = {'format': TOMBSTONE_FORMAT, 'issuer': SERVICE, 'attempt_id': attempt, 'conversation_id': conversation}
+        try:
+            receipt = self.journal.record(key, intent, {'state': 'tombstoned'}, conflict='GRANT_UNKNOWN')
+        except InferenceError as exc:
+            if exc.code == 'GRANT_UNKNOWN':
+                raise InferenceError('GRANT_UNKNOWN', 'no live grant has that conversation and attempt (a grant of '
+                                     'the attempt ended with an earlier run, or is of another conversation)') from None
+            raise
+        self.audit.write({'event': 'attempt-tombstoned', 'attempt_id': attempt, 'conversation_id': conversation,
+                          'trigger': trigger, 'revoker': revoker, 'receipt': receipt['operation_key']})
+        return {'format': TOMBSTONE_FORMAT, 'state': 'tombstoned', 'conversation_id': conversation,
+                'attempt_id': attempt, 'receipt': receipt}
 
     def _mark_revoked(self, grant: Grant, trigger: str, revoker: str) -> None:
         revoked_at = now_iso(self.clock())

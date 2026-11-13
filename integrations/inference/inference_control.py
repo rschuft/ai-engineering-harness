@@ -78,11 +78,12 @@ class ControlError(Exception):
     """A refusal with a stable code: one of CODES, or the broker's own refusal code (broker True)."""
 
     def __init__(self, code: str, detail: str, *, broker_code: bool = False, status: int | None = None,
-                 fingerprint: str | None = None):
+                 fingerprint: str | None = None, conversation_id: str | None = None, attempt_id: str | None = None):
         self.code, self.detail, self.broker_code, self.status = code, detail, broker_code, status
-        # an issue answer that was not a valid grant of this attempt but named a token fingerprint (E-05.6: the
-        # dispatcher then revokes by it as well as by the attempt)
-        self.fingerprint = fingerprint
+        # an issue answer that was not a valid grant of this attempt but named a token fingerprint, and the
+        # conversation and attempt it named (E-05.6: the dispatcher revokes by that fingerprint only when they are
+        # its own)
+        self.fingerprint, self.conversation_id, self.attempt_id = fingerprint, conversation_id, attempt_id
         remedy = broker.REMEDIES.get(code, '') if broker_code else CODES[code]
         super().__init__(f'{code}: {detail}. Remedy: {remedy}.')
 
@@ -191,9 +192,14 @@ class ControlClient:
                 or answer.get('token_fingerprint') != broker.contract.fingerprint(token) \
                 or answer.get('attempt_id') != attempt_id:
             named = answer.get('token_fingerprint')
+
+            def text(name):
+                value = answer.get(name)
+                return value if isinstance(value, str) and len(value) <= 64 else None
             raise ControlError('CONTROL_ANSWER_INVALID', 'the grant answer does not carry one token of this attempt',
                                fingerprint=named if isinstance(named, str)
-                               and broker.FINGERPRINT_SHAPE.fullmatch(named) else None)
+                               and broker.FINGERPRINT_SHAPE.fullmatch(named) else None,
+                               conversation_id=text('conversation_id'), attempt_id=text('attempt_id'))
         return answer
 
 

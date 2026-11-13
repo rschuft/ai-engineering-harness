@@ -9,6 +9,7 @@ import json
 import shutil
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -603,6 +604,132 @@ class TestSettledBeforeTheLastByte(Fixture):
                 self.assertEqual(connection.sent[0], ('POST', '/v1/chat/completions'))
                 self.assertIn(('authorization', f'Bearer {S.KEY}'), connection.sent)
         self.broker._connect = never
+
+
+class GateLock:
+    """The broker's attempt lock, observed: ON_CONTENDED runs when an acquirer finds it held (then it waits)."""
+
+    def __init__(self, on_contended):
+        self.lock, self.on_contended = threading.Lock(), on_contended
+
+    def __enter__(self):
+        if not self.lock.acquire(blocking=False):
+            self.on_contended()
+            self.lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.lock.release()
+
+
+class TestRevocationByAttempt(unittest.TestCase):
+    """E-05.6: a revocation by conversation and attempt that finds no grant tombstones the attempt, under the same
+    lock and the same store key as an issue's registration: whichever comes first, no grant of the attempt is
+    live after it."""
+    REVOKE = {'trigger': 'attempt end', 'revoker': 'dispatcher (test)'}
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix='aieh-inference-tombstone-'))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.db = self.dir / 'integration.sqlite'
+        self.rig = self.new_rig()
+
+    def new_rig(self):
+        rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'}), connect=never, db=self.db)
+        self.addCleanup(rig.close)
+        return rig
+
+    def body(self, conversation, attempt):
+        return {'conversation_id': conversation, 'attempt_id': attempt, 'family': 'openai-chat',
+                'models': [S.MODEL_A], 'budget': {'requests': 1, 'tokens': 1}, 'ttl_s': 60}
+
+    def code(self, call, *args) -> str:
+        with self.assertRaises(IB.InferenceError) as caught:
+            call(*args)
+        return caught.exception.code
+
+    def test_a_revocation_first_tombstones_the_attempt_and_refuses_its_issue(self):
+        conversation, attempt = S.new_id(), S.new_id()
+        answer = self.rig.broker.revoke({'conversation_id': conversation, 'attempt_id': attempt, **self.REVOKE})
+        self.assertEqual((answer['format'], answer['state'], answer['attempt_id']),
+                         (IB.TOMBSTONE_FORMAT, 'tombstoned', attempt))
+        again = self.rig.broker.revoke({'conversation_id': conversation, 'attempt_id': attempt, **self.REVOKE})
+        self.assertEqual(again['state'], 'tombstoned')   # idempotent: the same tombstone
+        self.assertEqual(self.code(self.rig.broker.issue, self.body(conversation, attempt)), 'GRANT_ATTEMPT_REVOKED')
+        self.assertEqual(self.rig.broker.status()['grants']['live'], 0)
+        # durable: a broker restarted on the same store refuses it too
+        restarted = self.new_rig()
+        self.assertEqual(self.code(restarted.broker.issue, self.body(conversation, attempt)), 'GRANT_ATTEMPT_REVOKED')
+        self.assertEqual(restarted.broker.status()['grants']['live'], 0)
+        # the attempt's receipt key holds the tombstone, never a token
+        held, _ = self.rig.store_records(f'inference/attempt/{attempt}/grant')
+        self.assertEqual(json.loads(held.intent_json)['format'], IB.TOMBSTONE_FORMAT)
+
+    def test_an_issue_in_flight_is_registered_and_then_revoked(self):
+        """The issue holds the attempt lock (its receipt is being written) when the revocation by attempt arrives:
+        the revocation waits, then finds the registered grant and revokes it."""
+        conversation, attempt = S.new_id(), S.new_id()
+        broker = self.rig.broker
+        entered, release, contended = threading.Event(), threading.Event(), threading.Event()
+        real_record = broker.journal.record
+
+        def held_record(key, intent, detail, *, conflict):
+            if intent.get('format') == IB.GRANT_FORMAT:
+                entered.set()
+                self.assertTrue(release.wait(30), 'the revocation never contended for the attempt lock')
+            return real_record(key, intent, detail, conflict=conflict)
+
+        def on_contended():
+            contended.set()
+            release.set()   # the revocation is waiting on the lock: let the issue finish
+        broker.journal.record = held_record
+        broker._attempt_lock = GateLock(on_contended)
+        issued = []
+        worker = threading.Thread(target=lambda: issued.append(broker.issue(self.body(conversation, attempt))))
+        worker.start()
+        self.assertTrue(entered.wait(30))
+        answer = broker.revoke({'conversation_id': conversation, 'attempt_id': attempt, **self.REVOKE})
+        worker.join(30)
+        self.assertTrue(contended.is_set())
+        self.assertEqual((answer['state'], answer['token_fingerprint']), ('revoked', issued[0]['token_fingerprint']))
+        self.assertEqual(broker.grant_status(issued[0]['token_fingerprint'])['state'], 'revoked')
+        self.assertEqual(broker.status()['grants']['live'], 0)
+
+    def test_a_revocation_while_an_issue_waits_tombstones_and_the_issue_is_refused(self):
+        """The revocation holds the attempt lock first (its tombstone is being written) when the issue arrives: the
+        issue waits, then is refused."""
+        conversation, attempt = S.new_id(), S.new_id()
+        broker = self.rig.broker
+        entered, release = threading.Event(), threading.Event()
+        real_record = broker.journal.record
+
+        def held_record(key, intent, detail, *, conflict):
+            if intent.get('format') == IB.TOMBSTONE_FORMAT:
+                entered.set()
+                self.assertTrue(release.wait(30), 'the issue never contended for the attempt lock')
+            return real_record(key, intent, detail, conflict=conflict)
+        broker.journal.record = held_record
+        broker._attempt_lock = GateLock(release.set)
+        answers = []
+        worker = threading.Thread(target=lambda: answers.append(broker.revoke(
+            {'conversation_id': conversation, 'attempt_id': attempt, **self.REVOKE})))
+        worker.start()
+        self.assertTrue(entered.wait(30))
+        self.assertEqual(self.code(broker.issue, self.body(conversation, attempt)), 'GRANT_ATTEMPT_REVOKED')
+        worker.join(30)
+        self.assertEqual(answers[0]['state'], 'tombstoned')
+        self.assertEqual(broker.status()['grants']['live'], 0)
+
+    def test_a_grant_of_another_conversation_or_an_earlier_run_is_grant_unknown(self):
+        conversation, attempt = S.new_id(), S.new_id()
+        grant = self.rig.broker.issue(self.body(conversation, attempt))
+        self.assertEqual(self.code(self.rig.broker.revoke, {'conversation_id': S.new_id(), 'attempt_id': attempt,
+                                                            **self.REVOKE}), 'GRANT_UNKNOWN')
+        self.assertEqual(self.rig.broker.grant_status(grant['token_fingerprint'])['state'], 'live')
+        restarted = self.new_rig()   # the grant ended with the earlier run; its receipt stays
+        self.assertEqual(self.code(restarted.broker.revoke, {'conversation_id': conversation, 'attempt_id': attempt,
+                                                             **self.REVOKE}), 'GRANT_UNKNOWN')
+        self.assertEqual(self.code(restarted.broker.issue, self.body(conversation, attempt)), 'ATTEMPT_HAS_GRANT')
 
 
 class TestEveryCodeIsExercised(unittest.TestCase):
