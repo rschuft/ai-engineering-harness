@@ -403,6 +403,15 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/owner/authorization_recorder.py {{.CLI_ARGS}}'
 
+  owner:propose:
+    desc: "The proposal act of the authorization repository (<tools python> -I -B integrations/owner/authorization_proposal.py propose MANIFEST [--port PORT]; plan leaf E-05.7, decision 0022): with bot tokens only, the builder bot opens one pull request from work/<id> into main whose only change is operations/<id>.json with the manifest's exact bytes, the act reads it back (sha256 equal) and the reviewer bot approves that head; it never merges and admits the authorization repository alone; exit 2 on a refusal (nothing written), 1 on a failure after a write"
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/owner/authorization_proposal.py {{.CLI_ARGS}}'
+
   owner:design:
     desc: "The dispatch-input commands' design acceptance (<tools python> -I -B integrations/owner/input_recorder.py design <step>; plan leaf P-04.3): pass -- prepare --project DIR --repository ID --change NAME --commit FULL [--expires-in-minutes N] to write the challenge to show the Owner to the recorder's state, -- record --challenge NONCE --statement FILE --recorded-by ATTRIBUTION to record the Owner's acceptance (only in the main session on an Owner decision), or -- delegate --project DIR --repository ID --change NAME --commit FULL --decided-by agent:product-manager --basis FILE to record an acceptance delegated by decision 0018 point 3.2; a receipt in the integration store, never an Owner record for a delegated decision; exit 2 on a refusal"
     vars:

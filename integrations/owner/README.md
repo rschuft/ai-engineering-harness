@@ -298,11 +298,15 @@ the bots' own entries (`gitea_roles.read_token`) and each checked with `GET /tok
 protected branch; the act reads back the pull request (open, unmerged, from `work/<id>` into the protected
 branch, by the builder bot), its files (exactly the manifest, added) and the manifest at its head, whose sha256
 must equal the given bytes' (`DIGEST_CHANGED` otherwise: nothing is approved); then the reviewer bot approves
-exactly that head. An operation id on the protected branch, with its branch present or in an open pull request
-is refused (`OPERATION_NOT_NEW`) before anything is written. Its requests are those of its own allowlist
+exactly that head, whose answer must read back as an `APPROVED` review by the reviewer bot of exactly that head
+(`APPROVAL_UNCONFIRMED` otherwise; the approver is reported only then). An operation id on the protected branch,
+with its branch present or in an open pull request (each one's files read page by page) is refused
+(`OPERATION_NOT_NEW`) before anything is written; a branch that appears meanwhile, refusing the first write, is the
+same refusal with nothing written by this run. A lost answer to a write is `ANSWER_LOST`: the write may have been
+made, and the detail names what was sent, in order. Its requests are those of its own allowlist
 (`BOT_ROUTES`: no merge, token or user route), separate from the recorder's; it never reads `aieh-owner`'s or the
-site administrator's entry. Exit 0 done, 2 refused (nothing written), 1 failed after a write (what was written
-is named; nothing is undone or retried).
+site administrator's entry. Exit 0 done, 2 refused (nothing written), 1 failed after a write (what was written, or
+may have been, is named; nothing is undone or retried). `task owner:propose -- propose MANIFEST` runs it.
 
 ### Refusals
 
