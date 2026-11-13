@@ -39,7 +39,7 @@ what it blocks, and its status.
 | Id | Origin | Act needed | Why Owner authority | Evidence and prepared material | Blocks | Status |
 |---|---|---|---|---|---|---|
 | OA-29 | The Owner's directions of 2026-11-12 on distribution and knowledge promotion | **DS1, each item separately answerable:** (a) accept, amend or decline Proposed [decision 0019](../decisions/0019-development-agent-environment-distribution-and-knowledge-promotion.md); (b) approve or decline the plan amendment adding group F-11 ([proposal](DS1-plan-amendment-proposal.md)); (c) the catalog's URL, visibility and a licence that permits fetching it at clone time; (d) the catalog publishes the projection and its manifest, and where (an act in the catalog's own repository); (e) the role set's closure at a named catalog commit; (f) memory scope `local` for distribution (recommended); (g) Codex: bootstrap only (recommended) or role parity; (h) whether the default instruction installs the roles or offers them; (i) the `AGENTS.md` Setup section, with two promoted rules, at F-11.3; (j) at F-11.2 and F-11.4: egress to fetch the catalog, a clean-profile harness login, and model calls for the verification. | Governance, another repository of the Owner's, a licence, a credential, egress and spend | The decision; the proposal; the architect's design and memory audit, and the program manager's placement (Decisions, the planning entry of 2026-11-12) | Nothing on D1's path. (a) and (b) unblock F-11.1, which is offline; (c) to (e) unblock F-11.2; (g) to (i) unblock F-11.3; (j) unblocks F-11.4. | Pending; nothing installed from a clone |
-| OA-27 | The Owner's direction of 2026-11-12, item 1 ("Prepare the exact revised decision record for review") | **Accept, amend or decline the revised decision 0018** (Proposed): delegated design acceptance within committed scope; delegated manifest promotion within an Owner-granted envelope; architectural decisions accepted by the accountable lead for their scope; routine use of harness-managed role credentials under existing custody; authorization recorded in the session where it was given. Protected merges and every other consequential effect outside the delegation stay per act. | Changing the delegation is reserved (0018 point 4.8). | [Decision 0018](../decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md), revision 2, its "Revision 2" section lists every change. | Nothing on the D1 path; it decides whether OA-23, OA-24 and OA-26 stay Owner acts. | Pending; nothing activated until accepted |
+| OA-27 | The Owner's direction of 2026-11-12, item 1 ("Prepare the exact revised decision record for review") | **Accept, amend or decline the revised decision 0018** (Proposed, revision 3): delegated design acceptance within committed scope; delegated manifest promotion within an Owner-granted envelope; architectural decisions accepted by the accountable lead for their scope; routine use of harness-managed role credentials under existing custody; authorization recorded in the session where it was given. Protected merges and every other consequential effect outside the delegation stay per act. | Changing the delegation is reserved (0018 point 4.8). | [Decision 0018](../decisions/0018-planning-and-execution-roles-delegated-decisions-and-standing-authorizations.md), revision 3; its "Revisions" section lists every change. | Nothing on the D1 path; it decides whether OA-23, OA-24 and OA-26 stay Owner acts. | Pending; nothing activated until accepted |
 | OA-28 | The Owner's direction of 2026-11-12, item 4 | **Approve or decline the D1 plan amendment** in [the proposal](D1-plan-amendment-proposal.md), each item separately: (1) E-05.1 gains the dependency P-04.3; (2) the Owner's authorization before the first model call moves from S-03.1 to S-03.3, the first-model-call boundary, unweakened; (3) a new leaf S-03.5 binds the broker's real-provider start to a recorded provider-envelope authorization, and S-03.3 depends on it; (4) four deferrals for findings 2 and 3, and a fifth for a mechanical projection-vs-plan agreement check. The proposal also records how to apply the amendment from tracked files alone. | A change to the integrity-tracked plan (Owner-reserved until decision 0018 is accepted). | The proposal: exact wording, reasons, effects on readiness. | (1) E-05.1's readiness reads true too early without it; (2) S-03.1, and through it S-03.2's guest qualification, stay held by a clause about model calls neither makes; (3) without it, spend, provider egress and the provider key rest on instruction alone at the first real-key run. | Pending |
 | OA-14 | P-04.2 (its live proof) | **Preparation approved, merge not authorized** (Owner, 2026-11-10). The exercise is reworked so it never manufactures Owner authority: (1) prepare the fixture proposals and manifest; (2) issue the recorder's actual one-time challenge; (3) present the exact operation, head, manifest digest, effects and challenge to the Owner; (4) the Owner's subsequent explicit authorization; (5) only then the protected merge. Negative controls (bot merges, a stale head) within the fixture scope; any unexpected successful bot merge is a security failure. Custody and teardown checks kept. Only the five named Credential Manager entries. | Credential access to the Owner account's entry; a merge as the Owner-authority identity; an effect that cannot be undone without the site administrator. | [P-04.2 evidence](P-04.2-authorization-recorder.md), section 8, "The live exercise" (the steps with outcomes stated in advance); [decision 0012](../decisions/0012-owner-authorization-channel-and-gitea-owner-identity.md). | P-04.2's live proof; P-04.3 (the promotion of dispatch inputs) after it. Unrelated work continues. | **Done 2026-11-12** on the Owner's explicit authorization of both operations (verbatim in Decisions, "Owner authorization: OA-14 operations A and B"): record phase run once; B `live-20261112t060110z-b` refused 409 `HEAD_STALE` (receipt failed, nothing merged, main unmoved); A `live-20261112t060110z-a` merged once as `75e89b28143464949c24bd46433a5d9f2197b0d0` (parents main `f18da179` and the approved head `111d20c3`), receipt confirmed, protection `verified` with the baseline before and after. The P-04.2 verdict and decision 0012 are judged separately by the Overseer. Earlier: regenerated challenges and Act E prepare 2026-11-12; held 2026-11-10 until OA-16 Acts A to D |
 | OA-19 | S-03.2 slice 3 finding 3(b); Architect consultation (gates A, G) | **Approve, amend or decline the plan amendment** in [the proposal](S-03.2-plan-amendment-proposal-child-clause.md) section 3: S-03.2's proof can no longer meet "A child conversation launched by an agent driven by the fake upstream ... No model call is made" (the 2026-11-10 re-scope removed the only create shape that lets an upstream drive an agent, and the template has no tools); the proposal shows the child's containment by a probe-created child through the same route and key, and moves the agent's own launch to S-03.3 (the ACP provider) and to the first leaf that runs an openhands-kind agent (made concrete in S-03.4); S-03.3 gains the real-key fingerprint search and a note on its create fixture | A change to the integrity-tracked plan and to acceptance criteria (Owner-reserved; never weakened silently) | The proposal (exact wording, reasoning, what was not determined); slice 3 evidence section 3.2 | S-03.2's guest qualification cannot pass as written; the offline slices continue | **Done 2026-11-11** (plan `2f973b0`, inventory `cebd3ab`, decision 0015 note with this entry): the corrected wording applied exactly; see Decisions, "OA-19 and M-5 applied" |
@@ -3345,6 +3345,67 @@ push never implies parent acceptance.
     - The promotion process is decision 0019 point 10. The first batch is F-11.5, OA-29 (i) and the Owner's catalog.
   - **One D1-path exposure, resolved.** Applying OA-28 needs the plan's exact serialization. The rules are derived from tracked files and history, and are recorded in the D1 proposal ("Applying it"), so no memory read is needed. A mechanical agreement check is a deferral (OA-28 item 4.5).
   - **Disclosed.** In the first consultation the architect wrote one lesson file to its own memory, a store outside this repository. It wrote nothing in the second. The user-level memory stores were not read, because no path was authorized.
+
+- <a id="owner-direction-finalize-0018"></a>**2026-11-12: Owner direction: finalize decision 0018 revision 2.** Given in the main session in answer to the planning report, verbatim (the paste wrapper is removed):
+
+  > I have reviewed your planning report.
+  >
+  > The strategic direction is accepted:
+  >
+  > - D1 remains the immediate integration objective.
+  > - DS1 is a separate distribution milestone.
+  > - P-04.3 is the next offline execution commitment.
+  > - S-03.5 addresses a genuine consequential-effect
+  >   enforcement gap and should remain on the path
+  >   before live provider access.
+  > - Reusable local-memory knowledge should be promoted
+  >   selectively, not copied wholesale.
+  > - No additional Owner decisions should be requested
+  >   merely for ordinary planning or engineering work.
+  >
+  > Before execution resumes, I want to finalize
+  > decision 0018 revision 2.
+  >
+  > Present its exact proposed delegation and reserved-
+  > boundary language, including the changes from revision 1.
+  >
+  > Evaluate it against my intended operating model:
+  >
+  > I provide intent, constraints, and feedback.
+  > The AI owns refinement, planning, architecture,
+  > implementation, verification, and delivery.
+  >
+  > Human authorization is reserved for genuinely
+  > consequential effects that exceed existing permissions.
+  >
+  > Avoid requiring my approval for:
+  > - Ordinary plan and acceptance-criteria refinement.
+  > - Architectural decisions within accepted constraints.
+  > - Milestone selection and prioritization.
+  > - Routine use of harness-managed credentials.
+  > - Design acceptance within committed scope.
+  > - Manifest promotion within an authorized envelope.
+  > - Routine publication within existing permissions.
+  >
+  > Preserve independently enforced boundaries for
+  > credentials, spending, external effects, protected
+  > merges, destructive operations, and privileged changes.
+  >
+  > Identify any remaining language in decision 0018
+  > that unnecessarily transfers operational decisions
+  > back to me.
+  >
+  > Also distinguish decisions that require my authorization
+  > under CURRENT accepted policy from decisions that can
+  > be delegated once 0018 is accepted.
+  >
+  > Do not implement or activate decision 0018 yet.
+  > Do not begin execution or initiate live operations.
+  >
+  > Return a concise recommendation and the exact decision
+  > wording needing my acceptance.
+  >
+  > Stop for review.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 

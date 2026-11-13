@@ -1,9 +1,10 @@
 # 0018 - Planning and execution roles, delegated decisions and standing authorizations
 
-Status: Proposed, revision 2 - 2026-11-12. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
+Status: Proposed, revision 3 - 2026-11-12. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
 in `evidence/bootstrap-log.md`, Decisions, "Owner direction: the five-role operating model"); revised by the product
 manager on the Owner's direction of the same day (Decisions, "Owner direction: decisions on the product manager's
-first planning assessment", item 1; every change is listed under "Revision 2" below). **This record grants
+first planning assessment", item 1), and refined again on the Owner's direction "finalize decision 0018 revision 2"
+(Decisions, same date). Every change is listed under "Revisions" below. **This record grants
 nothing until the Owner accepts it.** Until then every existing restriction stays in force: per-act Owner
 authorization, the integrity process's "only when your user explicitly asks", decision 0012's channel, and every
 Owner-only operation in `security/inventory.json`.
@@ -111,13 +112,18 @@ The Owner's direction for revision 2, item 1, verbatim:
    condition. It joins a committed leaf's proof only when that leaf's artifact cannot honestly pass without it.
    A clause is re-homed, never dropped or weakened, and the record says where it went.
 
-3. **Delegated, without a per-act approval, once this record is accepted.** Plan amendments that preserve every
-   obligation, through the integrity process, with this record as the standing direction the process requires;
-   deferrals with reconsider conditions; decisions inside committed scope; offline engineering; fast-forward
-   checkpoint pushes of verified work to this repository. Technical model selection within an Owner-authorized
+3. **Delegated, without a per-act approval, once this record is accepted.** Milestone selection, priorities and
+   commitments; decisions inside committed scope; offline engineering; deferrals with reconsider conditions. Plan
+   amendments that preserve every obligation, through the integrity process, with this record as the standing
+   direction the process requires: adding a leaf, a dependency or a criterion; refining, splitting or re-homing a
+   criterion without lowering what it proves; correcting one that cannot be met as written the same way; each
+   with the reasoning recorded and the program manager's challenge. Routine publication within existing
+   permissions: fast-forward checkpoint pushes of verified work to this repository's existing origin and branch,
+   never a force push, a new remote, a tag or a release. Technical model selection within an Owner-authorized
    provider and spending envelope: exact identifiers are verified against current provider information and
    presented, with intended uses and expected cost characteristics, before the first authorized paid operation;
-   ordinary selection details need no approval. And:
+   ordinary selection details need no approval, and that presentation satisfies a criterion that asks for the
+   Owner's approval of model identifiers inside the envelope (S-03.3). And:
    1. **Architectural decisions.** A decision record is accepted by the lead accountable for its scope under
       point 1, after the architect's consultation where a gate earned one. Accepting it authorizes none of the
       reserved acts (point 4) it names: each is presented separately, and the design does not wait for them. A
@@ -140,8 +146,8 @@ The Owner's direction for revision 2, item 1, verbatim:
       holds (a bot or service credential under decisions 0007, 0011 and 0013, such as the Gitea bot role tokens)
       for its decided purpose, through its decided custody path, inside committed scope and existing
       permissions: it reads the credential from its credential-provider entry for that use and verifies it
-      read-only against its issuer. Delegated use excludes issuing, rotating, revoking, widening, exporting or
-      displaying one; every Owner or provider credential (point 4.1); and any new principal, credential class or
+      read-only against its issuer. Revoking one the harness suspects exposed is also delegated, because it only
+      narrows access. Delegated use excludes issuing, rotating, widening, exporting or displaying one; every Owner or provider credential (point 4.1); and any new principal, credential class or
       token scope (point 4.7). For the five roles, this is the approval that `AGENTS.md`'s "ask before credential
       access" requires for these uses.
 
@@ -151,14 +157,16 @@ The Owner's direction for revision 2, item 1, verbatim:
    1. Entering, rotating or exposing an Owner or provider credential.
    2. Creating or raising a spending cap or budget.
    3. Each recorder decision outside point 3's delegation: every authorization of a consequential effect, the
-      protected merge (decision 0012) included; every acceptance the Owner reserves; every design acceptance and
-      manifest promotion that point 3 does not delegate. Its challenge is single-use.
+      protected merge (decision 0012) included; the acceptance of an objective as the Owner's intent (decision
+      0008), for which the Owner's own recorded statement suffices and no separate approval is asked; every design
+      acceptance and manifest promotion that point 3 does not delegate. Its challenge is single-use.
    4. A destructive or irreversible act on anything the harness did not create as disposable.
    5. Publication to a third party (decision 0017), a release, a tag or a package.
    6. Each elevation or other privileged host change (decision 0004).
-   7. Each change that widens an Owner-approved policy record: a new edge between trust domains, an egress
-      origin, a credential class or token scope, a principal with standing credentials, a relaxed guest profile
-      or protection baseline.
+   7. Each change that widens what an Owner-approved policy actually permits: a new allowed edge between trust
+      domains, an egress origin, a credential class or token scope, a principal with standing credentials, a
+      relaxed guest profile or protection baseline. Recording a planned edge, a narrowing or a correction is not
+      a widening.
    8. Contradicting or weakening an Owner constraint, an Owner-accepted decision or an acceptance criterion, and
       changing this delegation.
 
@@ -188,14 +196,20 @@ The Owner's direction for revision 2, item 1, verbatim:
    for presence, not authorship; that limit is disclosed, and an authorization that must be independently
    enforced goes through the recorder.
 
-8. **Nothing is superseded.** Decisions 0012 and 0016 and `AGENTS.md` are unchanged. Decision 0008 is applied,
-   not amended: its point 2 already admits an acceptance delegated by an accepted decision record. Every
-   consequential effect outside point 3 still needs the Owner's explicit authorization, per act or standing.
+8. **Nothing is superseded, and no enforcement is relaxed.** Decisions 0012 and 0016 are unchanged. Decision
+   0008 is applied, not amended: its point 2 already admits an acceptance delegated by an accepted decision
+   record. `AGENTS.md` is unchanged for every contributor; for the five roles, a delegation of point 3 is the
+   user's approval that `AGENTS.md` requires for that act (a push, a credential use, a change to an
+   integrity-tracked file), and nothing more. Delegation changes who decides, never a mechanism: the recorder's
+   challenge, the guest boundary, the network matrix's `owner_act` edges, the provider-side and broker spending
+   limits, Gitea's protection and the publication gate stay in force, and an act a mechanism refuses is not
+   authorized by this record. Every consequential effect outside point 3 still needs the Owner's explicit
+   authorization, per act or standing.
 
 ## Consequences
 
-- On acceptance, `security/inventory.json`'s `op-policy-change` records the delegation of point 3, as
-  `op-protected-merge` records its own.
+- On acceptance, `security/inventory.json`'s `op-policy-change` and `op-git-push-public` record the delegations
+  of point 3, as `op-protected-merge` records its own.
 - On acceptance, P-04.3's recorded decisions name their deciding authority: the Owner, through the recorder's
   challenge, or this record's point 3 delegation with the commitment or envelope it rests on. Until acceptance,
   only the first exists.
@@ -209,7 +223,9 @@ The provider, its egress origin, the spending cap and the key; the D1 standing a
 envelope it carries (presented separately, item by item); the recorder decisions D1 needs that point 3 does not
 delegate.
 
-## Revision 2
+## Revisions
+
+Revision 2:
 
 Product manager, 2026-11-12, on the Owner's direction quoted above. Changed: point 1 (the product manager's and the
 engineering manager's rows; architectural decisions follow the same rule); point 3 (sub-points 1 to 4: architectural
@@ -219,3 +235,13 @@ kept); point 5 (the session that records a standing authorization); point 7 (aut
 never relayed or impersonated); point 8 (decision 0008 applied; consequential effects outside point 3 stay
 authorized); Consequences (the "after D1" candidate decided here; P-04.3's deciding authority; `CLAUDE.md`).
 Unchanged: every other reserved act of point 4, the items that are never standing, and point 6.
+
+Revision 3 (product manager, 2026-11-12, on the Owner's direction to finalize revision 2, evaluated against the
+Owner's operating model): point 3 names milestone selection, priorities and commitments, ordinary criterion
+refinement, and routine publication explicitly, and states that J3's presentation satisfies S-03.3's model
+approval inside the envelope; point 3.4 delegates revoking a suspected-exposed harness credential; point 4.3
+replaces "every acceptance the Owner reserves" with the acceptance of an objective as the Owner's intent, which
+the Owner's own statement satisfies; point 4.7 reserves widening what a policy permits, not record-keeping;
+point 8 makes a point-3 delegation the approval `AGENTS.md` requires for the five roles and states that no
+enforcement mechanism is relaxed; Consequences add `op-git-push-public`. Unchanged: every other reserved act, the
+items that are never standing, and points 2, 5, 6 and 7.

@@ -74,8 +74,8 @@ therefore becomes its own leaf, and S-03.3 depends on it, so the first real-key 
 - **Proof:** "Offline, against fixtures: started with any family whose upstream is not loopback, `serve` refuses
   before it opens a listener or reads the provider key, unless the integration store holds a confirmed, unexpired
   authorization recorder receipt (decision 0012) whose operation is the provider envelope and whose target is the
-  canonical digest of the live envelope (the provider id, the one upstream origin, the exact models per family and
-  the expiry). A missing, expired, replayed or mismatched receipt (another origin, model or digest) is refused
+  canonical digest of the live envelope (the provider id, the one upstream origin, the model allowlist per family as recorded (approved by the
+  Owner, or, once decision 0018 is accepted, selected and presented under its point 3), and the expiry). A missing, expired, replayed or mismatched receipt (another origin, model or digest) is refused
   with a stable code. A request for a model outside the envelope is refused. If the Owner-authorized spending cap
   is not enforced by the provider on the dedicated key, as stated in OA-12's presentation, the envelope carries a
   cumulative cap that the broker enforces and that fails closed when reached or when usage is unknown. Loopback
