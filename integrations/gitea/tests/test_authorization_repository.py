@@ -19,6 +19,7 @@ import copy
 import importlib.util
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -64,6 +65,8 @@ class LedgerGitea:
         self.ledger = None                            # the authorization repository, once created
         self.pulls, self.admin_tokens, self.requests = [], [], []
         self.fail, self.ignore, self.extra_collaborators = {}, set(), {}
+        self.lose = {}       # {(method, route): 'before' or 'after'}: the answer is lost, before or after applying
+        self.after_create = None  # a callable run once the last rule is created
 
     # ------------------------------------------------------------------ helpers for the tests
 
@@ -107,7 +110,13 @@ class LedgerGitea:
             return self.reply(401, {'message': 'unauthorized'})
         if (method, route) in self.fail:
             return self.reply(self.fail[(method, route)], {'message': 'a fault of the fake'})
-        return self.admin(method, route, json.loads(body) if body else None)
+        lost = self.lose.get((method, route))
+        if lost == 'before':
+            raise ConnectionResetError('the fake dropped the request')
+        answer = self.admin(method, route, json.loads(body) if body else None)
+        if lost == 'after':
+            raise ConnectionResetError('the fake applied the request and dropped its answer')
+        return answer
 
     @staticmethod
     def reply(status, payload, extra=None):
@@ -159,6 +168,8 @@ class LedgerGitea:
                                     'user': {'login': user}})
         if rest == '/branch_protections' and method == 'POST':
             ledger.rules.append(PF.rule_view(data, len(ledger.rules) + 2))
+            if len(ledger.rules) == len(R.protection_rules()) and self.after_create is not None:
+                self.after_create(self)
             return self.reply(201, data)
         if rest == '/branch_protections' and method == 'GET':
             return self.reply(200, copy.deepcopy(ledger.rules))
@@ -202,12 +213,23 @@ class Act(unittest.TestCase):
                                           receipts=self.receipts, **kw)
 
     def stopped(self, code, refusal=False, **kw):
+        """The act stops with CODE (a refusal exactly when nothing was written), its report so far attached, naming
+        the writes sent in order with their outcomes."""
         with self.assertRaises(G.GiteaError) as caught:
             self.run_act(**kw)
-        self.assertEqual((caught.exception.code, caught.exception.refusal), (code, refusal), str(caught.exception))
-        self.assertNotIn(TR.ADMIN_PASSWORD, str(caught.exception))
-        self.assertNotIn(PF.AUDIT_TOKEN, str(caught.exception))
-        return caught.exception
+        error = caught.exception
+        self.assertEqual((error.code, error.refusal), (code, refusal), str(error))
+        for secret in (TR.ADMIN_PASSWORD, PF.AUDIT_TOKEN):
+            self.assertNotIn(secret, str(error))
+            self.assertNotIn(secret, json.dumps(error.report))
+        report = error.report
+        self.assertEqual((report['stopped']['code'], report['stopped']['after_writes']), (code, not refusal))
+        self.assertEqual([(a['method'], a['path']) for a in report['actions']], self.gitea.writes())
+        self.assertEqual(bool(report['actions']), not refusal)
+        if report['actions']:
+            self.assertIn('the writes sent, in order: ' + json.dumps(report['actions']), error.detail)
+        self.assertIsNone(re.search(r'(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])', json.dumps(report)))
+        return error
 
     def assertNoTokenMinted(self):
         self.assertEqual(self.cli.minted, [])
@@ -264,7 +286,15 @@ class TheAct(Act):
         self.assertEqual(report['recorder_receipts'], [])
         # never a merge, a pull request, a token or an Owner statement
         self.assertFalse(any('/pulls' in p and m != 'GET' or '/merge' in p for m, p in self.gitea.writes()))
-        self.assertIsNone(__import__('re').search(r'(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])', json.dumps(report)))
+        self.assertIsNone(re.search(r'(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])', json.dumps(report)))
+        # every check that does not depend on the new repository ran before the first write
+        self.assertEqual((report['admin_tokens_before'], report['fixture_before']['equal']), ([], True))
+        first_write = next(n for n, r in enumerate(self.gitea.requests) if r['method'] != 'GET')
+        before = self.gitea.requests[:first_write]
+        self.assertTrue(any(r['path'] == f'/users/{G.SITE_ADMIN}/tokens' for r in before))
+        self.assertTrue(any(r['auth'] == 'token' and r['path'].startswith(f'/repos/{FIXTURE}') for r in before))
+        self.assertFalse(any(r['path'].startswith(f'/repos/{LEDGER}') for r in before))
+        self.assertEqual(self.provider.reads[:2], [PC.ENTRY, G.FINAL_TARGETS[G.SITE_ADMIN]])  # presence, then admin
 
     def test_a_second_run_reports_and_writes_nothing(self):
         first = self.run_act()
@@ -301,13 +331,58 @@ class TheAct(Act):
         self.assertEqual(self.gitea.requests, [])
 
 
+class BeforeAnyWrite(Act):
+    """Every check that does not depend on the new repository runs before the first write: a refusal with nothing
+    written (exit 2), its report attached."""
+
+    def test_the_auditor_s_entry_must_be_present(self):
+        for name, entry in (('missing', None), ('another account', (G.OWNER, PF.AUDIT_TOKEN)),
+                            ('not a token', (PF.AUDITOR, 'a-password'))):
+            with self.subTest(entry=name):
+                self.setUp()
+                if entry is None:
+                    del self.provider.entries[PC.ENTRY]
+                else:
+                    self.provider.entries[PC.ENTRY] = entry
+                error = self.stopped('AUDITOR_ENTRY_MISSING', refusal=True)
+                self.assertIn('nothing was sent', error.detail)
+                self.assertEqual(self.gitea.requests, [])
+                self.assertNotIn(G.FINAL_TARGETS[G.SITE_ADMIN], self.provider.reads)
+
+    def test_the_administrator_must_hold_no_token(self):
+        self.gitea.admin_tokens.append('left-behind')
+        error = self.stopped('ADMIN_HOLDS_TOKEN', refusal=True)
+        self.assertIn('left-behind', error.detail)
+        self.assertEqual(self.gitea.by('token'), [])  # stopped before the fixture's check
+
+    def test_the_fixture_must_verify_with_its_recorded_baseline(self):
+        self.gitea.fixture.rule('main')['enable_push'] = True
+        error = self.stopped('FIXTURE_NOT_VERIFIED', refusal=True)
+        self.assertIn('drift', error.detail)
+        self.assertEqual(error.report['fixture_before']['status'], 'drift')
+        self.setUp()
+        with mock.patch.object(PC, 'RECORDED_BASELINES', {FIXTURE: 'sha256:' + '0' * 64}):
+            error = self.stopped('FIXTURE_NOT_VERIFIED', refusal=True)
+        self.assertIn('verified', error.detail)
+        self.assertIn('sha256:0000000000000000', error.detail)
+
+    def test_a_lost_read_before_any_write(self):
+        for route in ('/user', f'/users/{G.SITE_ADMIN}/tokens', f'/orgs/{R.AUTHORIZATION_ORG}'):
+            with self.subTest(route=route):
+                self.setUp()
+                self.gitea.lose[('GET', route)] = 'before'
+                error = self.stopped('ANSWER_LOST', refusal=True)
+                self.assertNotIn('may have been written', error.detail)
+
+
 class Stops(Act):
-    """Each stop condition: the act stops there and sends nothing further."""
+    """Each stop after the first write: nothing further is sent, and the stop (exit 1) carries the writes sent, in
+    order, with their outcomes."""
 
     def assertNothingAfter(self, method, path):
-        last = [(r['method'], r['path']) for r in self.gitea.requests if r['auth'] == 'basic'][-1]
-        self.assertEqual(last, (method, path))
-        self.assertEqual(self.gitea.by('token'), [])  # no check ran
+        last = len(self.gitea.requests) - 1 - [(r['method'], r['path']) for r in self.gitea.requests][::-1].index(
+            (method, path))
+        self.assertEqual(self.gitea.requests[last + 1:], [])
 
     def test_a_non_2xx_answer_at_each_write(self):
         repo = f'/repos/{LEDGER}'
@@ -320,9 +395,38 @@ class Stops(Act):
                     self.gitea.fail[(method, path)] = status
                     error = self.stopped('API_UNEXPECTED')
                     self.assertIn(f'{method} {path}: HTTP {status}', error.detail)
-                    self.assertIn('sent before it', error.detail)
+                    self.assertEqual(error.report['actions'][-1], {'method': method, 'path': path, 'status': status})
                     self.assertNothingAfter(method, path)
                     self.assertNoTokenMinted()
+
+    def test_a_lost_answer_at_each_write_may_have_been_written(self):
+        repo = f'/repos/{LEDGER}'
+        first_user = next(iter(R.collaborators()))
+        for method, path in (('POST', '/orgs'), ('POST', f'/orgs/{R.AUTHORIZATION_ORG}/repos'), ('PATCH', repo),
+                             ('PUT', f'{repo}/collaborators/{first_user}'), ('POST', f'{repo}/branch_protections')):
+            for when in ('before', 'after'):
+                with self.subTest(method=method, path=path, when=when):
+                    self.setUp()
+                    self.gitea.lose[(method, path)] = when
+                    error = self.stopped('ANSWER_LOST')
+                    self.assertIn(f'{method} {path}: the answer was lost (ConnectionResetError); it may have been '
+                                  'written', error.detail)
+                    self.assertEqual(error.report['actions'][-1],
+                                     {'method': method, 'path': path,
+                                      'status': 'answer lost (ConnectionResetError): may have been written'})
+                    self.assertNothingAfter(method, path)
+
+    def test_a_read_after_the_writes_fails_or_is_lost(self):
+        teams = f'/repos/{LEDGER}/teams'
+        self.gitea.fail[('GET', teams)] = 500
+        error = self.stopped('API_UNEXPECTED')
+        self.assertEqual(len(error.report['actions']), len(self.gitea.writes()))
+        self.assertEqual(error.report['state'], 'created')
+        self.setUp()
+        self.gitea.lose[('GET', teams)] = 'before'
+        error = self.stopped('ANSWER_LOST')
+        self.assertIn('a read writes nothing', error.detail)
+        self.assertNothingAfter('GET', teams)
 
     def test_a_read_back_difference(self):
         damages = {
@@ -335,9 +439,8 @@ class Stops(Act):
                 damage(self.gitea)
                 error = self.stopped('READBACK_DIFFERENT')
                 self.assertIn(named, error.detail)
-                self.assertEqual(self.gitea.by('token'), [])
-                self.assertEqual(self.gitea.writes()[-1][0], 'POST')  # the last rule; nothing sent after the reads
-                self.assertFalse(any(r['path'].endswith('/tokens') for r in self.gitea.requests))
+                self.assertNothingAfter('GET', f'/repos/{LEDGER}/pulls?state=all&{R.LIST_PAGE}')
+                self.assertEqual(error.report['readback']['branch']['head_parents'], 0)
 
     def test_a_rule_that_reads_back_otherwise(self):
         original = self.gitea.admin
@@ -351,13 +454,23 @@ class Stops(Act):
         error = self.stopped('READBACK_DIFFERENT')
         self.assertIn('work/*.push_whitelist_usernames is []', error.detail)
 
+    def test_the_read_back_takes_the_ledger_s_own_settings(self):
+        """R5: the authorization repository's declaration names its own settings (G-03.1 may add some); the read-back
+        reads exactly those."""
+        def stricter():
+            declared = R.authorization_declaration()
+            declared['settings']['has_wiki'] = False
+            return declared
+
+        changed = R.types.MappingProxyType({FIXTURE: R.fixture_declaration, LEDGER: stricter})
+        with mock.patch.object(R, 'DECLARATIONS', changed):
+            report = self.run_act()
+        self.assertIs(report['readback']['repository']['has_wiki'], False)
+        self.assertNotIn('has_wiki', R.repository_settings())
+        self.assertEqual(report['fixture']['equal'], True)
+
     def test_a_verdict_that_is_not_verified(self):
-        del self.provider.entries[PC.ENTRY]  # the auditor's entry missing
-        error = self.stopped('PROTECTION_NOT_VERIFIED')
-        self.assertIn('CREDENTIAL_MISSING', error.detail)
-        self.assertEqual(self.gitea.by('token'), [])
-        # the auditor's own view of the repository fails (a fault the administrator's reads do not see)
-        self.setUp()
+        """The auditor's own view of the repository fails (a fault the administrator's reads do not see)."""
         create = self.gitea.create_repository
 
         def faulty(private):
@@ -367,23 +480,23 @@ class Stops(Act):
         self.gitea.create_repository = faulty
         error = self.stopped('PROTECTION_NOT_VERIFIED')
         self.assertIn('READ_FAILED', error.detail)
-        self.assertFalse(any(r['path'].startswith(f'/repos/{FIXTURE}') for r in self.gitea.requests))
+        self.assertEqual(error.report['protection']['status'], 'unverified')
+        last = self.gitea.requests[-1]
+        self.assertEqual((last['auth'], last['path']), ('token', f'/repos/{LEDGER}/teams'))  # no fixture read after
 
     def test_the_administrator_holding_a_token_afterwards(self):
-        self.gitea.admin_tokens.append('left-behind')
+        self.gitea.after_create = lambda g: g.admin_tokens.append('made-meanwhile')
         error = self.stopped('ADMIN_HOLDS_TOKEN')
-        self.assertIn('left-behind', error.detail)
+        self.assertIn('made-meanwhile', error.detail)
+        self.assertEqual(error.report['admin_tokens_before'], [])
         self.assertNothingAfter('GET', f'/users/{G.SITE_ADMIN}/tokens')
 
-    def test_the_fixture_no_longer_verifying(self):
-        self.gitea.fixture.rule('main')['enable_push'] = True
+    def test_the_fixture_no_longer_verifying_afterwards(self):
+        self.gitea.after_create = lambda g: g.fixture.rule('main').update(enable_push=True)
         error = self.stopped('FIXTURE_NOT_VERIFIED')
         self.assertIn('drift', error.detail)
-        self.setUp()
-        with mock.patch.object(PC, 'RECORDED_BASELINES', {FIXTURE: 'sha256:' + '0' * 64}):
-            error = self.stopped('FIXTURE_NOT_VERIFIED')
-        self.assertIn('verified', error.detail)
-        self.assertIn('sha256:0000000000000000', error.detail)
+        self.assertEqual((error.report['fixture_before']['equal'], error.report['fixture']['equal']), (True, False))
+        self.assertEqual(error.report['protection']['status'], 'verified')
 
     def test_an_existing_organization_or_repository_is_never_adopted(self):
         def org_alone(g):
@@ -409,7 +522,7 @@ class Stops(Act):
                 error = self.stopped('AUTHORIZATION_REPOSITORY_EXISTS', refusal=True)
                 self.assertIn('nothing was written', error.detail)
                 self.assertEqual(self.gitea.writes(), [])
-                self.assertEqual(self.gitea.by('token'), [])
+                self.assertFalse(any(r['auth'] == 'token' and LEDGER in r['path'] for r in self.gitea.requests))
 
     def test_a_provisioned_repository_is_reported_without_a_write(self):
         self.gitea.provisioned()
@@ -489,6 +602,19 @@ class CommandLine(unittest.TestCase):
             code, out, err = self.main(['authorization-repository', '--owner-act', 'OA-30'])
         self.assertEqual((code, out), (1, ''))
         self.assertIn('EXPOSURE_FOUND', err)
+
+    def test_a_stop_prints_the_report_so_far(self):
+        for refusal, exit_code in ((False, 1), (True, 2)):
+            with self.subTest(refusal=refusal):
+                error = G.GiteaError('READBACK_DIFFERENT', 'reads back otherwise', refusal=refusal)
+                error.report = {'actions': [{'method': 'POST', 'path': '/orgs', 'status': 201}],
+                                'stopped': {'code': 'READBACK_DIFFERENT'}, 'baseline': 'sha256:' + 'ab' * 32}
+                with mock.patch.object(R, 'authorization_repository', side_effect=error):
+                    code, out, err = self.main(['authorization-repository', '--owner-act', 'OA-30'])
+                self.assertEqual(code, exit_code, err)
+                self.assertEqual(json.loads(out), error.report)  # whole: digests not cut
+                self.assertIn('READBACK_DIFFERENT', err)
+                self.assertIn('I7 no-exposure scan: clean', err)
 
     def test_the_help_names_the_owner_act(self):
         out = io.StringIO()

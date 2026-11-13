@@ -321,29 +321,39 @@ auditor's reach, `AUDITED_REPOSITORIES`, becomes the fixture and this repository
 `authorization-repository --owner-act OA-30` is OA-30's administration act, built and tested on fakes and **not
 run**. It refuses (`OWNER_ACT_REQUIRED`, nothing read or sent) unless `--owner-act OA-30` names the act. Then:
 
-1. read-only, before any write: the managed integration store holds no `owner-authorization/v1/` receipt
-   (`recorder_receipts`: SQLite `mode=ro` and `query_only`, never migrated; `RECORDER_RECEIPTS_PRESENT`), and the
-   bots and `aieh-owner` exist (`BOTS_MISSING`, `OWNER_MISSING`);
+1. read-only, before any write, every check that does not depend on the new repository, each a refusal with
+   nothing written (exit 2): the managed integration store holds no `owner-authorization/v1/` receipt
+   (`recorder_receipts`, `RECORDER_RECEIPTS_PRESENT`: the store is opened with SQLite's `mode=ro` and `query_only`
+   and never migrated; its content is never written, though SQLite may create or update its `-wal` and `-shm`
+   sidecar files, as for any reader of a WAL database); the bots and `aieh-owner` exist (`BOTS_MISSING`,
+   `OWNER_MISSING`); the protection auditor's entry is present (`AUDITOR_ENTRY_MISSING`); the site administrator
+   holds no token (`ADMIN_HOLDS_TOKEN`); the fixture is `verified` with its recorded baseline,
+   `protection_check.RECORDED_BASELINES` (`FIXTURE_NOT_VERIFIED`);
 2. as `aieh-site-admin` by basic authentication with the harness-held password read into memory (no token
    minted): the private organization, the repository (auto-initialized, default branch `main`), its settings
    (`PATCH`), its collaborators, its three protection rules, in that order;
 3. the read-back as the administrator, compared field for field with the declaration: the organization's
-   visibility and team-access setting, the repository's settings, the collaborators and their permissions, every
-   rule's 34 fields, the teams, no deploy key, `main` holding its initial commit alone (its head has no parent)
-   and no pull request in any state (`READBACK_DIFFERENT`);
+   visibility and team-access setting, the repository's own declared settings, the collaborators and their
+   permissions, every rule's 34 fields, the teams, no deploy key, `main` holding its initial commit alone (its head
+   has no parent) and no pull request in any state (`READBACK_DIFFERENT`);
 4. the administrator holds no token afterwards (`ADMIN_HOLDS_TOKEN`);
 5. `protection_check.verify` of the repository as the protection auditor, read-only: `verified`, its baseline
    digest reported (`PROTECTION_NOT_VERIFIED`);
-6. the fixture still `verified` with its recorded baseline, `protection_check.RECORDED_BASELINES`
-   (`FIXTURE_NOT_VERIFIED`).
+6. the fixture still `verified` with its recorded baseline (`FIXTURE_NOT_VERIFIED`).
 
-Any non-2xx answer stops it (`API_UNEXPECTED`, naming what was sent before it), as does each check above:
-nothing further is sent, nothing is undone or retried. An existing organization or repository is never adopted or
-modified: one that reads back as declared and verifies is reported (`already present; nothing written`), so a
-second run writes nothing; one in any other state is refused (`AUTHORIZATION_REPOSITORY_EXISTS`) with nothing
-written. It never merges, opens a pull request, injects drift, runs a negative control or records an Owner
-statement on the repository. Its report carries no commit id or token and is shown unredacted (its digests have
-64 hex digits); the I7 scan withholds it if anything token-shaped is in it.
+After the first write, any non-2xx answer stops it (`API_UNEXPECTED`), as does a lost answer (`ANSWER_LOST`: the
+request is named as one that may have been written) and each check above: nothing further is sent, nothing is
+undone or retried, and the stop is never a refusal (exit 1). **Every stop prints the act's report so far**, under
+the same rules as a finished run's: `actions` lists every write sent, in order, with its outcome (its HTTP status,
+or `answer lost (...): may have been written`), the stop's detail names the same list, and `stopped` gives the code.
+A rerun after a stop after the writes may report the repository `already present` (it reads back as declared and
+verifies) or refuse it (`AUTHORIZATION_REPOSITORY_EXISTS`): the first run's stop report is the record of what it
+created. An existing organization or repository is never adopted or modified: one that reads back as declared and
+verifies is reported (`already present; nothing written`), so a second run writes nothing; one in any other state
+is refused (`AUTHORIZATION_REPOSITORY_EXISTS`) with nothing written. It never merges, opens a pull request, injects
+drift, runs a negative control or records an Owner statement on the repository. Its report carries no commit id
+or token and is shown unredacted (its digests have 64 hex digits); the I7 scan withholds it if anything
+token-shaped is in it.
 
 ## The protection check (OA-16)
 

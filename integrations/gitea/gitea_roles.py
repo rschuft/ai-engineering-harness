@@ -54,6 +54,7 @@ import argparse
 import contextlib
 import datetime
 import hashlib
+import http.client
 import importlib.util
 import json
 import os
@@ -633,12 +634,14 @@ RECORDER_RECEIPT_PREFIX = 'owner-authorization/v1/'
 AUTHORIZATION_ORG_SETTINGS = {'visibility': 'private', 'repo_admin_change_team_access': False}
 LIST_PAGE = 'page=1&limit=50'
 _SUCCESS = tuple(range(200, 300))
+_LOST = (OSError, http.client.HTTPException)  # an answer lost on the way (a parameter named http shadows the module)
 
 
 def recorder_receipts(path) -> list[str]:
     """Read-only: the operation keys under RECORDER_RECEIPT_PREFIX in the integration store at PATH, [] when the
     file does not exist. The store is opened with SQLite's mode=ro and query_only and is not migrated (its kind and
-    migrations are checked as they are); nothing in it is written."""
+    migrations are checked as they are): its content is never written, though SQLite may create or update the -wal
+    and -shm sidecar files, as for any reader of a database in WAL mode."""
     store_module = host._load_integration_store()
     resolved = store_module.check_location(Path(path))
     if not resolved.is_file():
@@ -676,16 +679,42 @@ def _protection_check():
     return module
 
 
-def create_authorization_repository(api: Api, declared: dict, actions: list) -> None:
-    """The writes of OA-30 (a), in order, each appended to ACTIONS before its status is judged: the private
-    organization, the auto-initialized repository with its default branch, its settings, its collaborators (before
-    the rules: Gitea admits only writers to a merge allowlist) and its protection rules. Any non-2xx answer stops
-    (API_UNEXPECTED, nothing further is sent)."""
+class ActApi:
+    """The site administrator's Api for OA-30: every write it sends is appended to WRITES, in order, before it is
+    sent, with its outcome (the HTTP status, or a lost answer); a lost answer to any request is ANSWER_LOST, naming
+    the request (a write's as one that may have been written)."""
+
+    def __init__(self, api: Api, writes: list):
+        self._api, self.writes = api, writes
+
+    def call(self, method: str, path: str, body=None, headers=None):
+        entry = None
+        if method != 'GET':
+            entry = {'method': method, 'path': path, 'status': 'sent, no answer yet'}
+            self.writes.append(entry)
+        try:
+            status, payload = self._api.call(method, path, body, headers)
+        except _LOST as exc:
+            if entry is None:
+                raise GiteaError('ANSWER_LOST', f'GET {path}: the answer was lost ({type(exc).__name__}); a read '
+                                 'writes nothing') from None
+            entry['status'] = f'answer lost ({type(exc).__name__}): may have been written'
+            raise GiteaError('ANSWER_LOST', f'{method} {path}: the answer was lost ({type(exc).__name__}); it may have '
+                             'been written', refusal=False) from None
+        if entry is not None:
+            entry['status'] = status
+        return status, payload
+
+
+def create_authorization_repository(api: ActApi, declared: dict) -> None:
+    """The writes of OA-30 (a), in order (ActApi records each): the private organization, the auto-initialized
+    repository with its default branch, its settings, its collaborators (before the rules: Gitea admits only writers
+    to a merge allowlist) and its protection rules. Any non-2xx answer stops (API_UNEXPECTED, nothing further is
+    sent)."""
     repo = f'/repos/{AUTHORIZATION_REPOSITORY}'
 
     def call(method, path, body):
         status, payload = api.call(method, path, body)
-        actions.append({'method': method, 'path': path, 'status': status})
         require(status, _SUCCESS, f'{method} {path}', payload)
 
     call('POST', '/orgs', {'username': AUTHORIZATION_ORG, **AUTHORIZATION_ORG_SETTINGS,
@@ -704,11 +733,12 @@ def _normal_rule(rule: dict) -> dict:
     return {f: sorted(rule.get(f) or []) if f in _LIST_FIELDS else rule.get(f) for f in PROTECTION_FIELDS}
 
 
-def read_authorization_repository(api: Api, base: str) -> dict:
+def read_authorization_repository(api, declared: dict) -> dict:
     """The authorization repository as the site administrator reads it (GETs only): the organization's settings,
-    the repository's view, the collaborators with their permissions, every rule's 34 fields, the teams, the deploy
-    keys, the protected branch's head commit's parent count and the pull requests in any state. It carries no
-    commit id."""
+    the repository's view (the settings its own declaration DECLARED names), the collaborators with their
+    permissions, every rule's 34 fields, the teams, the deploy keys, the protected branch's head commit's parent count
+    and the pull requests in any state. It carries no commit id."""
+    base = declared['base']
     def read(path, kind, what):
         status, payload = api.call('GET', path)
         require(status, 200, f'GET {path}', payload)
@@ -736,7 +766,7 @@ def read_authorization_repository(api: Api, base: str) -> dict:
     pulls = read(f'{repo}/pulls?state=all&{LIST_PAGE}', list, 'the pull requests')
     return {'organization': {k: org.get(k) for k in AUTHORIZATION_ORG_SETTINGS},
             'repository': {'full_name': info.get('full_name'), 'empty': info.get('empty'),
-                           **{k: info.get(k) for k in repository_settings()}},
+                           **{k: info.get(k) for k in declared['settings']}},
             'collaborators': collaborators_seen,
             'rules': {str(r.get('rule_name')) if isinstance(r, dict) else '?': _normal_rule(r)
                       if isinstance(r, dict) else {'malformed': True} for r in rules},
@@ -790,6 +820,18 @@ def _short(digest) -> str:
     return digest[:23] if isinstance(digest, str) else repr(digest)
 
 
+def _admin_tokens(api) -> list | str:
+    status, tokens = api.call('GET', f'/users/{host.SITE_ADMIN}/tokens')
+    return [t.get('name') for t in tokens] if status == 200 and isinstance(tokens, list) else f'HTTP {status}'
+
+
+def _fixture_check(check, provider, port, http, baseline) -> dict:
+    verdict = check(provider, port, FIXTURE_REPOSITORY, DEFAULT_BRANCH, http=http)
+    return {'repository': FIXTURE_REPOSITORY, 'status': verdict.status, 'code': verdict.code,
+            'baseline': verdict.digest, 'recorded_baseline': baseline,
+            'equal': verdict.status == 'verified' and verdict.digest == baseline}
+
+
 def authorization_repository(owner_act=None, provider=None, run: Callable = subprocess.run, http: Callable = None,
                              ctx=None, receipts: Callable | None = None, check: Callable | None = None) -> dict:
     """Owner act OA-30 (decision 0022; plan leaf E-05.7): create and declare the authorization repository
@@ -798,20 +840,47 @@ def authorization_repository(owner_act=None, provider=None, run: Callable = subp
     once, read-only, as the protection auditor (protection_check.verify, its baseline digest reported) and check that
     the fixture still verifies with its recorded baseline. Refused unless OWNER_ACT is OA-30.
 
-    Before any write it checks, read-only, that the managed integration store holds no recorder receipt (RECEIPTS,
-    by default managed_recorder_receipts), and that the bots and aieh-owner exist. An existing organization or
-    repository is never adopted or modified: a fully provisioned, verified one is reported and nothing is written (a
-    second run); one in any other state is refused (AUTHORIZATION_REPOSITORY_EXISTS) and nothing is written. Stops,
-    sending nothing further, on any non-2xx answer (API_UNEXPECTED), a read-back difference (READBACK_DIFFERENT), a
-    verdict that is not verified (PROTECTION_NOT_VERIFIED), the administrator holding a token afterwards
-    (ADMIN_HOLDS_TOKEN) or the fixture no longer verifying with its baseline (FIXTURE_NOT_VERIFIED). No merge, pull
-    request, negative control, drift injection or Owner statement is ever made on the repository. CHECK stands in
-    for protection_check.verify in tests."""
+    Before any write, read-only, every check that does not depend on the new repository, each a refusal with nothing
+    written: the managed integration store holds no recorder receipt (RECEIPTS, by default managed_recorder_receipts;
+    RECORDER_RECEIPTS_PRESENT); the bots and aieh-owner exist (BOTS_MISSING, OWNER_MISSING); the protection auditor's
+    entry is present (protection_check.read_entry; AUDITOR_ENTRY_MISSING); the administrator holds no token
+    (ADMIN_HOLDS_TOKEN); the fixture verifies with its recorded baseline (FIXTURE_NOT_VERIFIED). An existing
+    organization or repository is never adopted or modified: a fully provisioned, verified one is reported and
+    nothing is written (a second run); one in any other state is refused (AUTHORIZATION_REPOSITORY_EXISTS).
+
+    After the first write it stops, sending nothing further, on any non-2xx answer (API_UNEXPECTED), a lost answer
+    (ANSWER_LOST: the request may have been written), a read-back difference (READBACK_DIFFERENT), the administrator
+    holding a token afterwards (ADMIN_HOLDS_TOKEN), a verdict that is not verified (PROTECTION_NOT_VERIFIED) or the
+    fixture no longer verifying (FIXTURE_NOT_VERIFIED). Every stop raises a GiteaError whose ``report`` is the act's
+    report so far, with ``actions``, the writes sent in order with their outcomes (also named in the detail), and
+    ``stopped``; a stop after a write is never a refusal. No merge, pull request, negative control, drift injection
+    or Owner statement is ever made on the repository. CHECK stands in for protection_check.verify in tests."""
     if owner_act != OWNER_ACT:
         raise GiteaError('OWNER_ACT_REQUIRED', f'this is Owner act {OWNER_ACT} (decision 0022): it runs only with '
                          f'--owner-act {OWNER_ACT}, on the Owner\'s approval of that act; nothing was read or sent')
     lay, pinned, port, provider, cli = ctx or context(provider, run)
+    report = {'owner_act': OWNER_ACT, 'repository': AUTHORIZATION_REPOSITORY, 'state': 'checking; nothing written',
+              'actions': []}
+    writes = report['actions']
+    try:
+        _authorization_act(report, writes, provider, port, http, cli, receipts, check)
+    except (GiteaError, *_LOST) as exc:
+        if not isinstance(exc, GiteaError):  # a lost answer outside the administrator's Api (its sign-in read)
+            exc = GiteaError('ANSWER_LOST', f'the answer was lost ({type(exc).__name__}) before any write')
+        detail = exc.detail
+        if writes:
+            detail += '; the writes sent, in order: ' + json.dumps(writes)
+        error = GiteaError(exc.code, detail, refusal=exc.refusal and not writes, remedy=exc.remedy)
+        report['stopped'] = {'code': exc.code, 'detail': detail, 'after_writes': bool(writes)}
+        error.report = report
+        raise error from None
+    return report
+
+
+def _authorization_act(report, writes, provider, port, http, cli, receipts, check):
+    """authorization_repository's steps, filling REPORT (see there)."""
     found = (receipts or managed_recorder_receipts)()
+    report['recorder_receipts'] = found
     if found:
         raise GiteaError('RECORDER_RECEIPTS_PRESENT', f'the managed integration store holds {len(found)} recorder '
                          f'receipt(s) under {RECORDER_RECEIPT_PREFIX} ({found[:3]}): decision 0022 point 2 assumes '
@@ -824,19 +893,29 @@ def authorization_repository(owner_act=None, provider=None, run: Callable = subp
         raise GiteaError('OWNER_MISSING', f'{host.OWNER} does not exist; run task gitea:identities')
     pc = _protection_check()
     check = check or pc.verify
+    try:
+        pc.read_entry(provider)  # presence only: the check reads it again for each answer
+    except pc.Unverifiable as exc:
+        raise GiteaError('AUDITOR_ENTRY_MISSING', f'{exc.code}: {exc.detail}; nothing was sent') from None
     declared = DECLARATIONS[AUTHORIZATION_REPOSITORY]()
-    api = admin_api(provider, port, http)
-    report = {'owner_act': OWNER_ACT, 'repository': AUTHORIZATION_REPOSITORY,
-              'admin_auth': {'user': host.SITE_ADMIN, 'method': 'HTTP basic authentication, password read from '
-                             f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} into memory; no token minted'},
-              'recorder_receipts': found, 'actions': []}
+    api = ActApi(admin_api(provider, port, http), writes)
+    report['admin_auth'] = {'user': host.SITE_ADMIN, 'method': 'HTTP basic authentication, password read from '
+                            f'{host.FINAL_TARGETS[host.SITE_ADMIN]!r} into memory; no token minted'}
+    report['admin_tokens_before'] = _admin_tokens(api)
+    if report['admin_tokens_before'] != []:
+        raise GiteaError('ADMIN_HOLDS_TOKEN', f'{host.SITE_ADMIN}\'s tokens read {report["admin_tokens_before"]!r}, '
+                         'not none, before the act: nothing was written')
+    baseline = pc.RECORDED_BASELINES[FIXTURE_REPOSITORY]
+    report['fixture_before'] = _fixture_check(check, provider, port, http, baseline)
+    if not report['fixture_before']['equal']:
+        raise GiteaError('FIXTURE_NOT_VERIFIED', f'before any write, the fixture {FIXTURE_REPOSITORY} answered '
+                         f'{report["fixture_before"]["status"]} ({report["fixture_before"]["code"]}) with '
+                         f'{_short(report["fixture_before"]["baseline"])}, recorded baseline {_short(baseline)}; '
+                         'nothing was written')
     status, payload = api.call('GET', f'/orgs/{AUTHORIZATION_ORG}')
     if status == 404:
-        try:
-            create_authorization_repository(api, declared, report['actions'])
-        except GiteaError as exc:
-            raise GiteaError(exc.code, f'{exc.detail}; sent before it: '
-                             + json.dumps(report['actions'][:-1]), refusal=False) from None
+        report['state'] = 'creating'
+        create_authorization_repository(api, declared)
         report['state'] = 'created'
     else:
         require(status, 200, f'GET /orgs/{AUTHORIZATION_ORG}', payload)
@@ -846,18 +925,16 @@ def authorization_repository(owner_act=None, provider=None, run: Callable = subp
                              f'{AUTHORIZATION_REPO}: an existing organization is never adopted; nothing was written')
         require(status, 200, f'GET /repos/{AUTHORIZATION_REPOSITORY}', payload)
         report['state'] = 'already present; nothing written'
-    report['readback'] = read_authorization_repository(api, declared['base'])
+    report['readback'] = read_authorization_repository(api, declared)
     differences = authorization_differences(report['readback'], declared)
-    if differences and report['actions']:
+    if differences and writes:
         raise GiteaError('READBACK_DIFFERENT', f'{AUTHORIZATION_REPOSITORY} was created but reads back otherwise; '
                          'nothing further was sent: ' + '; '.join(differences), refusal=False)
     if differences:
         raise GiteaError('AUTHORIZATION_REPOSITORY_EXISTS', f'{AUTHORIZATION_REPOSITORY} exists in another state; it '
                          'is never adopted or modified, and nothing was written: ' + '; '.join(differences))
     report['differences'] = differences
-    status, tokens = api.call('GET', f'/users/{host.SITE_ADMIN}/tokens')
-    report['admin_tokens_after'] = [t.get('name') for t in tokens] if status == 200 and isinstance(tokens, list) \
-        else f'HTTP {status}'
+    report['admin_tokens_after'] = _admin_tokens(api)
     if report['admin_tokens_after'] != []:
         raise GiteaError('ADMIN_HOLDS_TOKEN', f'{host.SITE_ADMIN}\'s tokens afterwards read '
                          f'{report["admin_tokens_after"]!r}, not none: nothing further was sent', refusal=False)
@@ -867,16 +944,12 @@ def authorization_repository(owner_act=None, provider=None, run: Callable = subp
     if verdict.status != 'verified':
         raise GiteaError('PROTECTION_NOT_VERIFIED', f'protection_check verify {AUTHORIZATION_REPOSITORY} answered '
                          f'{verdict.status} ({verdict.code}: {verdict.detail[:300]})', refusal=False)
-    baseline = pc.RECORDED_BASELINES[FIXTURE_REPOSITORY]
-    fixture_verdict = check(provider, port, FIXTURE_REPOSITORY, DEFAULT_BRANCH, http=http)
-    report['fixture'] = {'repository': FIXTURE_REPOSITORY, 'status': fixture_verdict.status,
-                         'code': fixture_verdict.code, 'baseline': fixture_verdict.digest,
-                         'recorded_baseline': baseline, 'equal': fixture_verdict.digest == baseline}
-    if fixture_verdict.status != 'verified' or fixture_verdict.digest != baseline:
-        raise GiteaError('FIXTURE_NOT_VERIFIED', f'the fixture {FIXTURE_REPOSITORY} answered {fixture_verdict.status} '
-                         f'({fixture_verdict.code}) with {_short(fixture_verdict.digest)}, recorded baseline '
-                         f'{_short(baseline)}', refusal=False)
-    return report
+    report['fixture'] = _fixture_check(check, provider, port, http, baseline)
+    if not report['fixture']['equal']:
+        raise GiteaError('FIXTURE_NOT_VERIFIED', f'the fixture {FIXTURE_REPOSITORY} answered '
+                         f'{report["fixture"]["status"]} ({report["fixture"]["code"]}) with '
+                         f'{_short(report["fixture"]["baseline"])}, recorded baseline {_short(baseline)}',
+                         refusal=False)
 
 
 TRIGGER ='owner direction'  # decision 0007 point 5: a command-line act is the Owner's direction (bootstrap)
@@ -1088,6 +1161,8 @@ def main(argv=None) -> int:
         message, code = f'gitea-roles: {exc}\n', 2
     except GiteaError as exc:
         message, code = f'gitea-roles: {redact(str(exc))}\n', 2 if exc.refusal else 1
+        if args.command == 'authorization-repository':
+            report = getattr(exc, 'report', None)  # OA-30's report so far: what it checked and wrote, in order
     finally:
         host.ACT_GUARD = None
     text = '' if report is None else json.dumps(report, indent=2, default=str) + '\n'
