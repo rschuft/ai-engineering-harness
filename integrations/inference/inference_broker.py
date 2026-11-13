@@ -134,6 +134,13 @@ FINGERPRINT_SHAPE = re.compile(r'sha256:[0-9a-f]{16}')
 TRIGGERS = ('attempt end', 'suspected exposure', 'definition revocation', 'policy revision', 'expiry',
             'owner direction')  # decision 0007 point 5
 EXPIRY_REVOKER = 'inference-broker (expiry)'
+REVOKER_LIMIT = 200
+
+
+def valid_revoker(value) -> bool:
+    """A revoker's name as a revocation takes it: 1 to REVOKER_LIMIT printable characters."""
+    return isinstance(value, str) and 1 <= len(value) <= REVOKER_LIMIT and value.isprintable()
+
 FAMILY_ID = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
 PROVIDER_ID = re.compile(r'[a-z0-9][a-z0-9._-]{0,63}')
 MODEL_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}')
@@ -1283,19 +1290,33 @@ class Broker:
 
     def revoke(self, body) -> dict:
         """Revoke a grant at once (its next request answers 401), then write its revocation receipt with the
-        per-attempt summary."""
+        per-attempt summary. The grant is named by its token's fingerprint, or (E-05.6) by its conversation and
+        attempt (``conversation_id`` and ``attempt_id`` in place of ``token_fingerprint``: one grant per attempt),
+        for a dispatcher that lost the issue's answer; neither names an unknown grant (GRANT_UNKNOWN)."""
         self.housekeeping()
-        _exact_keys(body, ('token_fingerprint', 'trigger', 'revoker'), (), 'CONTROL_BODY_INVALID',
-                    'the revoke request')
-        fingerprint, trigger, revoker = body['token_fingerprint'], body['trigger'], body['revoker']
+        by_attempt = isinstance(body, dict) and 'token_fingerprint' not in body \
+            and ('attempt_id' in body or 'conversation_id' in body)
+        selector = ('conversation_id', 'attempt_id') if by_attempt else ('token_fingerprint',)
+        _exact_keys(body, selector + ('trigger', 'revoker'), (), 'CONTROL_BODY_INVALID', 'the revoke request')
+        trigger, revoker = body['trigger'], body['revoker']
         if trigger not in TRIGGERS:
             raise InferenceError('TRIGGER_UNKNOWN', f'trigger must be one of {list(TRIGGERS)}')
-        if not isinstance(revoker, str) or not 1 <= len(revoker) <= 200 or not revoker.isprintable():
+        if not valid_revoker(revoker):
             raise InferenceError('REVOKER_INVALID', 'revoker must be 1 to 200 printable characters')
+        if by_attempt:
+            conversation = _uuid(body['conversation_id'], 'CONVERSATION_ID_INVALID', 'conversation_id')
+            attempt = _uuid(body['attempt_id'], 'ATTEMPT_ID_INVALID', 'attempt_id')
         with self._lock:
-            grant = self._by_fingerprint.get(fingerprint) if isinstance(fingerprint, str) else None
-            if grant is None:
-                raise InferenceError('GRANT_UNKNOWN', 'no grant has that fingerprint')
+            if by_attempt:
+                grant = next((g for g in self._grants.values()
+                              if g.attempt_id == attempt and g.conversation_id == conversation), None)
+                if grant is None:
+                    raise InferenceError('GRANT_UNKNOWN', 'no grant has that conversation and attempt')
+            else:
+                fingerprint = body['token_fingerprint']
+                grant = self._by_fingerprint.get(fingerprint) if isinstance(fingerprint, str) else None
+                if grant is None:
+                    raise InferenceError('GRANT_UNKNOWN', 'no grant has that fingerprint')
             if grant.revocation is not None:
                 raise InferenceError('GRANT_ALREADY_REVOKED', f'revoked at {grant.revocation["revoked_at"]}')
             self._mark_revoked(grant, trigger, revoker)

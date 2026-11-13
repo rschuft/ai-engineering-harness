@@ -276,7 +276,7 @@ Owner's account can call it (disclosed, decision 0013 point 6).
 | Call | Body | Answer |
 |---|---|---|
 | `POST /v1/grants` | `conversation_id`, `attempt_id` (canonical lower-case UUIDs), `family`, `models` (a non-empty subset of the family's allowlist), `budget` (`requests`, `tokens`: positive integers), `ttl_s` (1 to `max_ttl_s`) | 201: the token (returned once), its fingerprint, the grant and its receipt |
-| `POST /v1/grants/revoke` | `token_fingerprint`, `trigger` (a decision 0007 point 5 trigger: `attempt end`, `suspected exposure`, `definition revocation`, `policy revision`, `expiry`, `owner direction`), `revoker` | 200: the grant, revoked, with its revocation receipt |
+| `POST /v1/grants/revoke` | `token_fingerprint`, `trigger` (a decision 0007 point 5 trigger: `attempt end`, `suspected exposure`, `definition revocation`, `policy revision`, `expiry`, `owner direction`), `revoker` (1 to 200 printable characters, `valid_revoker`); or, in place of `token_fingerprint`, `conversation_id` and `attempt_id` (E-05.6: the attempt's one grant, for a dispatcher that lost the issue's answer) | 200: the grant, revoked, with its revocation receipt; `GRANT_UNKNOWN` when no grant has that fingerprint, or that conversation and attempt (nothing was issued, or the grant ended with the broker); `GRANT_ALREADY_REVOKED` |
 | `GET /v1/grants/<fingerprint>` | | the grant: state, budget, counts, usage, receipts |
 | `GET /v1/status` | | listeners, the provider key's fingerprint and source, each family and whether it is ready, grant counts, the audit file |
 
@@ -291,6 +291,14 @@ expired token is revoked with trigger `expiry` at its next use or at the next co
 cannot be written leaves the revocation in force and is retried at each control call (`receipts_pending` in
 the status). Receipts go to the integration store, never the effects store. Grants live in memory only: they
 end with the broker process (its stop writes an audit line naming the live fingerprints).
+
+Revocation by conversation and attempt (E-05.6) is the dispatcher's way to end a grant whose token it never
+received (decision 0015 section 3.3: the dispatcher revokes at attempt end): the issue's answer was lost (a
+timeout or an unreachable listener after the request was sent) or was not a valid grant of the attempt
+(`ControlClient.issue` then names the answer's fingerprint on its `CONTROL_ANSWER_INVALID`, and the dispatcher
+revokes by it as well). The broker keeps one grant per attempt, so the selector names at most one. `ControlClient.
+revoke_attempt` makes the call. The dispatcher journals each issue before it is sent and each revocation in the
+integration store (`integrations/dispatch/README.md`, "The D1 stage's create secrets").
 
 ## Inference: admission and pass-through
 

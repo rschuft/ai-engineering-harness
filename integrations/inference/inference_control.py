@@ -77,8 +77,12 @@ CODES = {
 class ControlError(Exception):
     """A refusal with a stable code: one of CODES, or the broker's own refusal code (broker True)."""
 
-    def __init__(self, code: str, detail: str, *, broker_code: bool = False, status: int | None = None):
+    def __init__(self, code: str, detail: str, *, broker_code: bool = False, status: int | None = None,
+                 fingerprint: str | None = None):
         self.code, self.detail, self.broker_code, self.status = code, detail, broker_code, status
+        # an issue answer that was not a valid grant of this attempt but named a token fingerprint (E-05.6: the
+        # dispatcher then revokes by it as well as by the attempt)
+        self.fingerprint = fingerprint
         remedy = broker.REMEDIES.get(code, '') if broker_code else CODES[code]
         super().__init__(f'{code}: {detail}. Remedy: {remedy}.')
 
@@ -169,6 +173,12 @@ class ControlClient:
         return self.call('POST', '/v1/grants/revoke', {'token_fingerprint': fingerprint, 'trigger': trigger,
                                                        'revoker': revoker})
 
+    def revoke_attempt(self, conversation_id: str, attempt_id: str, trigger: str, revoker: str) -> dict:
+        """Revoke the one grant of a conversation and attempt (E-05.6: when the issue's answer was lost or not
+        valid); the broker answers GRANT_UNKNOWN when it holds none."""
+        return self.call('POST', '/v1/grants/revoke', {'conversation_id': conversation_id, 'attempt_id': attempt_id,
+                                                       'trigger': trigger, 'revoker': revoker})
+
     def issue(self, conversation_id: str, attempt_id: str, family: str, models: list, requests: int, tokens: int,
               ttl_s: int) -> dict:
         """One grant (POST /v1/grants, the fields as the control API takes them): the broker's answer, its token
@@ -180,7 +190,10 @@ class ControlClient:
         if not isinstance(token, str) or not broker.TOKEN_SHAPE.fullmatch(token) \
                 or answer.get('token_fingerprint') != broker.contract.fingerprint(token) \
                 or answer.get('attempt_id') != attempt_id:
-            raise ControlError('CONTROL_ANSWER_INVALID', 'the grant answer does not carry one token of this attempt')
+            named = answer.get('token_fingerprint')
+            raise ControlError('CONTROL_ANSWER_INVALID', 'the grant answer does not carry one token of this attempt',
+                               fingerprint=named if isinstance(named, str)
+                               and broker.FINGERPRINT_SHAPE.fullmatch(named) else None)
         return answer
 
 
