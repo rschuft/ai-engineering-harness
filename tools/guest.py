@@ -15811,8 +15811,9 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
     caught = (Refused, OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError,
               gt.TransportError, cc.ContainmentError)
 
-    def sealed(requests, timeout=900):
-        # every answer is scanned in the guest for the token (sealed) and kept in memory for the key search
+    def sealed(requests, timeout=900, secret=None):
+        # every answer is scanned in the guest for the token (sealed) and kept in memory for the key search; every
+        # call here is sealed with the attempt token already, so a secret the transport names (E-05.6) is not used
         data = api(requests, timeout=timeout, secret=attempt_token)
         if isinstance(data, dict):
             count = data.get('sealed_occurrences')

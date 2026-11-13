@@ -100,6 +100,12 @@ class SpyControl:
             raise self.revoke_error
         return self.control.revoke(fingerprint, trigger, revoker)
 
+    def revoke_attempt(self, conversation_id, attempt_id, trigger, revoker):
+        self.revoked.append(((conversation_id, attempt_id), trigger, revoker))
+        if self.revoke_error is not None:
+            raise self.revoke_error
+        return self.control.revoke_attempt(conversation_id, attempt_id, trigger, revoker)
+
 
 class SecretsFixture(d1.D1Fixture):
     """The E-05.2 D1 fixture (strong-d1-profile's implement stage is the D1 stage), with full dispatches. The
@@ -129,10 +135,21 @@ class SecretsFixture(d1.D1Fixture):
                            actor='e-05.6-test', read_profile=self.read_profile, read_artifact=self.read_artifact,
                            inference=None if control is None else self.access_for(control), **kwargs)
 
+    def typed(self, states=None):
+        """The typed dispatch attempts (not the grant journal or revocation receipts beside them)."""
+        return [a for a in self.store.attempts(states) if a.operation_key.startswith('attempt/')]
+
     def only(self, states=None):
-        attempts = self.store.attempts(states)
-        self.assertEqual(len(attempts), 1, attempts)
+        attempts = self.typed(states)
+        self.assertEqual(len(attempts), 1, [a.operation_key for a in attempts])
         return attempts[0]
+
+    def journal(self, attempt_id):
+        """The attempt's grant journal: its state and last detail."""
+        key = f'dispatch/attempt/{attempt_id}/inference-grant'
+        held = self.store.get(key)
+        events = self.store.events(key)
+        return held.state, json.loads(events[-1].detail_json or 'null')
 
     def detail(self, key, to_state):
         events = [e for e in self.store.events(key) if e.to_state == to_state]
@@ -158,6 +175,24 @@ class SecretsFixture(d1.D1Fixture):
         self.store.reserve_attempt(resolved.attempt_identity(), resolved.intent(), actor='d1-test')
         return manifest, resolved, self.admit(resolved, manifest)
 
+    def crashed_after_the_issue(self):
+        """The dispatcher issued and then stopped: the journal is dispatched, the attempt reserved, the grant live,
+        and nothing of the dispatcher's handlers ran."""
+        spy = self.spy()
+        real = di._issue
+
+        def issue_then_crash(*args, **kwargs):
+            real(*args, **kwargs)
+            raise Crash()
+        with mock.patch.object(di, '_issue', issue_then_crash), \
+                mock.patch.object(di._GrantCustody, 'needs_end', lambda custody: False), self.assertRaises(Crash):
+            self.run_dispatch(cc.FakeAgentServer(), spy)
+        key = self.only(['reserved']).operation_key
+        self.assertEqual(self.journal(store_mod.attempt_id_for(key)), ('dispatched', None))
+        fingerprint = ic.token_fingerprint(spy.issued[0])
+        self.assertEqual(self.grant_state(fingerprint)['state'], 'live')
+        return key, fingerprint
+
     # -- the custody search -------------------------------------------------
 
     def dump(self, rig='broker'):
@@ -168,16 +203,24 @@ class SecretsFixture(d1.D1Fixture):
             held.close()
 
     def texts_of(self, *things):
+        """The texts of THINGS; an exception's with every exception of its __context__ and __cause__ chains."""
         out = []
         for thing in things:
             if thing is None:
                 continue
             if isinstance(thing, BaseException):
-                out += [str(thing), repr(thing), '\n'.join(getattr(thing, '__notes__', []))]
-                for name in ('to_json', 'context', 'detail'):
-                    value = getattr(thing, name, None)
-                    value = value() if callable(value) else value
-                    out.append(json.dumps(value, sort_keys=True, default=repr))
+                chain, seen = [thing], set()
+                while chain:
+                    exc = chain.pop()
+                    if exc is None or id(exc) in seen:
+                        continue
+                    seen.add(id(exc))
+                    out += [str(exc), repr(exc), '\n'.join(getattr(exc, '__notes__', []))]
+                    for name in ('to_json', 'context', 'detail'):
+                        value = getattr(exc, name, None)
+                        value = value() if callable(value) else value
+                        out.append(json.dumps(value, sort_keys=True, default=repr))
+                    chain += [exc.__context__, exc.__cause__]
             elif isinstance(thing, str):
                 out.append(thing)
             else:
@@ -627,14 +670,17 @@ class Issuance(SecretsFixture):
 
         def on_issue(answer):
             order.append('issue')
-            seen['states'] = [a.state for a in self.store.attempts()]
+            seen['states'] = [a.state for a in self.typed()]
             seen['workspace'] = os.path.lexists(self.category)
+            # the issue was journaled before the call (E-05.6, R2): the journal is dispatched, without the token
+            seen['journal'] = [(a.state, 'token' in a.intent_json) for a in self.store.attempts()
+                               if a.operation_key.endswith('/inference-grant')]
         spy = self.spy(on_issue=on_issue)
         with mock.patch.multiple(di, **{name: spying(name) for name in names}):
             self.run_dispatch(cc.FakeAgentServer(), spy)
         self.assertEqual(order, ['admit', 'stage_inference', 'issue', 'admit_secrets', 'create_workspace',
                                  'send_create'])
-        self.assertEqual(seen, {'states': ['reserved'], 'workspace': False})
+        self.assertEqual(seen, {'states': ['reserved'], 'workspace': False, 'journal': [('dispatched', False)]})
 
     def test_a_refusal_before_the_issue_issues_nothing(self):
         cases = {
@@ -731,7 +777,7 @@ class Revocation(SecretsFixture):
         transition = self.store.transition
 
         def failing(key, to_state, **kwargs):
-            if to_state == 'dispatched':
+            if to_state == 'dispatched' and key.startswith('attempt/'):   # the attempt's, not the journal's
                 raise store_mod.StoreError('synthetic store failure')
             return transition(key, to_state, **kwargs)
         spy = self.spy()
@@ -793,17 +839,21 @@ class Revocation(SecretsFixture):
         self.assertEqual(len(spy.revoked), 1)
         self.assertCustody(token, fingerprint, result.to_json(), record, out['text'])
 
-    def test_only_a_confirmed_attempt_is_ended(self):
+    def test_ending_a_failed_attempt_returns_its_recorded_revocation(self):
+        """A failed attempt's grant was revoked, and journaled, at its failure: end_attempt returns that record
+        without a second call (ATTEMPT_NOT_ENDABLE is gone: an attempt with nothing to end is a no-op, None)."""
         server = cc.FakeAgentServer(info={'status': 200, 'body': {}})
         spy = self.spy()
-        with self.assertRaises(di.DispatchRefused):
+        with self.assertRaises(di.DispatchRefused) as caught:
             self.run_dispatch(server, spy)
-        refusal = self.assertDenied('ATTEMPT_NOT_ENDABLE', di.end_attempt, self.store,
-                                    self.only(['failed']).operation_key, inference=self.access_for(spy),
-                                    actor='e-05.6-test')
-        self.assertEqual(refusal.context['state'], 'failed')
-        self.assertNotIn('role token', di.REFUSALS['ATTEMPT_NOT_ENDABLE'])   # its own meaning, not E-01.3.3's
+        record = di.end_attempt(self.store, self.only(['failed']).operation_key, inference=self.access_for(spy),
+                                actor='e-05.6-test')
+        self.assertEqual(record, caught.exception.context['inference_revocation'])
         self.assertEqual(len(spy.revoked), 1)   # the failure's revocation only
+        self.assertNotIn('ATTEMPT_NOT_ENDABLE', di.REFUSALS)
+        with self.assertRaises(di.DispatchRefused) as unknown:
+            di.end_attempt(self.store, 'attempt/v1/TASK-9/x', inference=self.access_for(spy), actor='e-05.6-test')
+        self.assertEqual(unknown.exception.code, 'RESERVATION_INVALID')
 
     def test_a_revocation_failure_is_recorded_and_surfaced(self):
         unreachable = ic.ControlError('CONTROL_UNREACHABLE', '127.0.0.1: synthetic')
@@ -819,6 +869,14 @@ class Revocation(SecretsFixture):
             self.assertEqual((revocation['revoked'], revocation['code']), (False, 'CONTROL_UNREACHABLE'))
         self.assertEqual(caught.exception.code, 'SERVER_PRECONDITION_FAILED')
         self.assertEqual(self.grant_state(fingerprint)['state'], 'live')   # honestly: not revoked
+        # Review P2: the failed revocation is journaled, and a later end_attempt revokes the failed attempt's grant.
+        key = self.only(['failed']).operation_key
+        aid = store_mod.attempt_id_for(key)
+        self.assertEqual(self.store.get(f'dispatch/attempt/{aid}/inference-revocation/1').state, 'failed')
+        record = di.end_attempt(self.store, key, inference=self.access_for(self.spy()), actor='e-05.6-test')
+        self.assertEqual((record['revoked'], record['tokenFingerprint']), (True, fingerprint))
+        self.assertEqual(self.store.get(f'dispatch/attempt/{aid}/inference-revocation/2').state, 'confirmed')
+        self.assertRevoked(fingerprint)
 
     def test_a_revocation_failure_at_the_attempt_s_end_is_recorded_and_retried(self):
         spy = self.spy()
@@ -838,6 +896,165 @@ class Revocation(SecretsFixture):
         self.assertEqual(self.store.get(f'dispatch/attempt/{result.attempt_id}/inference-revocation/2').state,
                          'confirmed')
         self.assertRevoked(fingerprint)
+
+
+class Crash(BaseException):
+    """The dispatcher process ending where it stands (no handler of it runs)."""
+
+
+class GrantJournal(SecretsFixture):
+    """Every issued grant can be found, revoked and retried (review R2 to R4): the issue is journaled before the
+    call; a lost or invalid answer, any BaseException after the issue and a crashed dispatcher all end with the
+    broker's grant revoked."""
+
+    def assertAllRevoked(self, rig='broker'):
+        grants = self.control(rig).status()['grants']
+        self.assertEqual((grants['live'], grants['receipts_pending']), (0, 0))
+        self.assertGreaterEqual(grants['revoked'], 1)
+
+    def test_any_base_exception_after_the_issue_revokes_the_grant(self):
+        """Review P1: KeyboardInterrupt and SystemExit after the issue: revoked, journaled, said so, re-raised."""
+        for raised in (KeyboardInterrupt, SystemExit):
+            with self.subTest(raised.__name__):
+                spy = self.spy()
+
+                def interrupted(*args, **kwargs):
+                    raise raised()
+                with mock.patch.object(di, 'create_workspace', interrupted), self.assertRaises(raised) as caught:
+                    self.run_dispatch(cc.FakeAgentServer(), spy)
+                fingerprint = ic.token_fingerprint(spy.issued[0])
+                self.assertRevoked(fingerprint)
+                attempt = max(self.typed(), key=lambda r: self.store.attempt_identity(r.operation_key).identity.ordinal)
+                aid = store_mod.attempt_id_for(attempt.operation_key)
+                self.assertEqual(attempt.state, 'reserved')   # the interrupt records no outcome; the revocation does
+                self.assertEqual(self.store.get(f'dispatch/attempt/{aid}/inference-revocation/1').state, 'confirmed')
+                self.assertIn(fingerprint, '\n'.join(caught.exception.__notes__))
+                self.assertCustody(spy.issued[0], fingerprint, caught.exception)
+                record = di.end_attempt(self.store, attempt.operation_key, inference=self.access_for(spy),
+                                        actor='e-05.6-test')   # the attempt in flight: its recorded revocation
+                self.assertTrue(record['revoked'])
+                self.assertEqual(len(spy.revoked), 1)
+                self.store.transition(attempt.operation_key, 'failed', actor='e-05.6-test', reason='test cleanup')
+
+    def lost(self, spy, *, issued=True, invalid=False):
+        """SPY's issue loses its answer: after the broker issued (ISSUED), or before the request reached it."""
+        real = spy.issue
+
+        def issue(*args):
+            if not issued:
+                raise ic.ControlError('CONTROL_UNREACHABLE', '127.0.0.1: synthetic, before sending')
+            answer = real(*args)
+            if invalid:
+                raise ic.ControlError('CONTROL_ANSWER_INVALID', 'synthetic', fingerprint=answer['token_fingerprint'])
+            raise ic.ControlError('CONTROL_UNREACHABLE', '127.0.0.1: TimeoutError (synthetic, after sending)')
+        spy.issue = issue
+        return spy
+
+    def test_a_lost_or_invalid_issue_answer_is_revoked_by_the_attempt(self):
+        """Review P3: the broker issued, the answer was lost (or not a valid grant of this attempt): the attempt's
+        grant is revoked by its conversation and attempt (and by the fingerprint an invalid answer named)."""
+        for name, invalid in (('lost', False), ('invalid', True)):
+            with self.subTest(name):
+                spy = self.lost(self.spy(), invalid=invalid)
+                with self.assertRaises(di.DispatchRefused) as caught:
+                    self.run_dispatch(cc.FakeAgentServer(), spy)
+                self.assertEqual(caught.exception.code, 'INFERENCE_GRANT_UNAVAILABLE')
+                fingerprint = ic.token_fingerprint(spy.issued[-1])
+                self.assertRevoked(fingerprint)
+                revocation = caught.exception.context['inference_revocation']
+                self.assertEqual((revocation['revoked'], revocation['outcome'], revocation['tokenFingerprint']),
+                                 (True, 'revoked', fingerprint))
+                self.assertEqual(revocation['selectors'], [fingerprint, 'attempt'] if invalid else ['attempt'])
+                attempt = max(self.typed(['failed']),
+                              key=lambda r: self.store.attempt_identity(r.operation_key).identity.ordinal)
+                state, detail = self.journal(store_mod.attempt_id_for(attempt.operation_key))
+                self.assertEqual((state, detail['issued'], detail['tokenFingerprint']), ('confirmed', True, fingerprint))
+                self.assertCustody(spy.issued[-1], fingerprint, caught.exception)
+        self.assertAllRevoked()
+
+    def test_an_answer_lost_before_the_broker_issued_settles_as_no_grant(self):
+        spy = self.lost(self.spy(), issued=False)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_dispatch(cc.FakeAgentServer(), spy)
+        revocation = caught.exception.context['inference_revocation']
+        self.assertEqual((revocation['revoked'], revocation['outcome'], revocation['code']),
+                         (True, 'no grant', 'GRANT_UNKNOWN'))
+        key = self.only(['failed']).operation_key
+        state, detail = self.journal(store_mod.attempt_id_for(key))
+        self.assertEqual((state, detail['issued']), ('failed', False))
+        self.assertNoGrant()
+        self.assertEqual(di.end_attempt(self.store, key, inference=self.access_for(self.spy()), actor='e-05.6-test'),
+                         revocation)
+
+    def test_a_lost_answer_whose_revocation_fails_is_ended_later(self):
+        """Review P3 with an unreachable listener: the journal stays unsettled; end_attempt revokes by the attempt
+        later and settles the journal and the revocation receipts."""
+        spy = self.lost(self.spy(revoke_error=ic.ControlError('CONTROL_UNREACHABLE', 'synthetic')))
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_dispatch(cc.FakeAgentServer(), spy)
+        fingerprint = ic.token_fingerprint(spy.issued[0])
+        self.assertEqual(caught.exception.context['inference_revocation']['revoked'], False)
+        key = self.only(['failed']).operation_key
+        aid = store_mod.attempt_id_for(key)
+        self.assertEqual(self.journal(aid)[0], 'dispatched')
+        self.assertEqual(self.grant_state(fingerprint)['state'], 'live')
+        record = di.end_attempt(self.store, key, inference=self.access_for(self.spy()), actor='e-05.6-test')
+        self.assertEqual((record['revoked'], record['selectors'], record['tokenFingerprint']),
+                         (True, ['attempt'], fingerprint))
+        self.assertRevoked(fingerprint)
+        self.assertEqual(self.journal(aid)[:1], ('confirmed',))
+        self.assertEqual([self.store.get(f'dispatch/attempt/{aid}/inference-revocation/{n}').state for n in (1, 2)],
+                         ['failed', 'confirmed'])
+
+    def test_a_crash_after_the_issue_is_ended_by_the_attempt(self):
+        key, fingerprint = self.crashed_after_the_issue()
+        record = di.end_attempt(self.store, key, inference=self.access_for(self.spy()), actor='e-05.6-test')
+        self.assertEqual((record['revoked'], record['selectors'], record['tokenFingerprint']),
+                         (True, ['attempt'], fingerprint))
+        self.assertRevoked(fingerprint)
+        self.assertEqual(self.journal(store_mod.attempt_id_for(key))[0], 'confirmed')
+
+    def test_an_unsettled_revocation_receipt_is_settled_whatever_its_revoker(self):
+        """Review #8: a receipt another revoker left dispatched (interrupted) is resumed and settled."""
+        spy = self.spy()
+        result = self.run_dispatch(cc.FakeAgentServer(), spy)
+        other = di.InferenceAccess(control=self.spy(revoke_error=KeyboardInterrupt()), revoker='another revoker')
+        with self.assertRaises(KeyboardInterrupt):
+            di.end_attempt(self.store, result.operation_key, inference=other, actor='e-05.6-test')
+        receipt = f'dispatch/attempt/{result.attempt_id}/inference-revocation/1'
+        self.assertEqual(self.store.get(receipt).state, 'dispatched')
+        record = di.end_attempt(self.store, result.operation_key, inference=self.access_for(spy), actor='e-05.6-test')
+        self.assertEqual((record['revoked'], record['revoker']), (True, REVOKER))
+        self.assertEqual((self.store.get(receipt).state, json.loads(self.store.get(receipt).intent_json)['revoker']),
+                         ('confirmed', 'another revoker'))
+        self.assertIsNone(self.store.get(f'dispatch/attempt/{result.attempt_id}/inference-revocation/2'))
+        self.assertRevoked(ic.token_fingerprint(spy.issued[0]))
+
+    def test_the_broker_revokes_by_conversation_and_attempt(self):
+        """The control listener's new selector (E-05.6): the attempt's one grant; GRANT_UNKNOWN for none, for
+        another conversation, and GRANT_ALREADY_REVOKED once revoked; a mixed body stays CONTROL_BODY_INVALID."""
+        control = self.control()
+        conversation, attempt = str(uuid.uuid4()), str(uuid.uuid4())
+        answer = control.issue(conversation, attempt, 'anthropic-messages', [d1.TEST_MODEL], 1, 1, 60)
+        for args, code in (((str(uuid.uuid4()), attempt), 'GRANT_UNKNOWN'), ((conversation, str(uuid.uuid4())),
+                                                                            'GRANT_UNKNOWN')):
+            with self.assertRaises(ic.ControlError) as caught:
+                control.revoke_attempt(*args, 'attempt end', REVOKER)
+            self.assertEqual(caught.exception.code, code)
+        revoked = control.revoke_attempt(conversation, attempt, 'attempt end', REVOKER)
+        self.assertEqual((revoked['state'], revoked['token_fingerprint']), ('revoked', answer['token_fingerprint']))
+        with self.assertRaises(ic.ControlError) as caught:
+            control.revoke_attempt(conversation, attempt, 'attempt end', REVOKER)
+        self.assertEqual(caught.exception.code, 'GRANT_ALREADY_REVOKED')
+        for body in ({'token_fingerprint': answer['token_fingerprint'], 'attempt_id': attempt, 'trigger': 'attempt end',
+                      'revoker': REVOKER},
+                     {'attempt_id': attempt, 'trigger': 'attempt end', 'revoker': REVOKER}):
+            with self.assertRaises(ic.ControlError) as caught:
+                control.call('POST', '/v1/grants/revoke', body)
+            self.assertEqual(caught.exception.code, 'CONTROL_BODY_INVALID')
+        with self.assertRaises(ic.ControlError) as caught:
+            control.revoke_attempt('not-a-uuid', attempt, 'attempt end', REVOKER)
+        self.assertEqual(caught.exception.code, 'CONVERSATION_ID_INVALID')
 
 
 class Custody(SecretsFixture):
@@ -884,6 +1101,74 @@ class Custody(SecretsFixture):
         self.run_dispatch(server, spy)
         token = spy.issued[0]
         self.assertEqual([token in json.dumps(body) for _, _, body in server.calls], [False, True])
+
+    def test_a_token_value_in_the_admitted_body_is_never_sent(self):
+        """Review R5 (probe P4): the admitted body's token secret must be the slot; a token there, even the held
+        grant's own, is SECRET_NOT_FROM_GRANT at the send, and no record of that create carries it."""
+        _, resolved, admitted = self.reserved_d1()
+        token = admitted.inference.token()
+        literal = self.wire(self.body_for(resolved, d1.TEST_TEMPLATE), admitted)
+        tampered = dataclasses.replace(admitted, body_json=di._canonical(literal))
+        refusal = self.assertDenied('SECRET_NOT_FROM_GRANT', self.send, tampered, resolved)
+        for text in self.texts_of(refusal, tampered.to_json()):
+            self.assertNotIn(token, text)
+            self.assertNotIn(token[9:], text)
+        self.send(admitted, resolved)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_a_split_token_is_withheld_whole(self):
+        """Review R6 (probe P5a): a refusal text that, without its characters outside the token's alphabet, holds a
+        part of the token of 8 or more characters is replaced whole, detail and context field alike."""
+        _, resolved, admitted = self.reserved_d1()
+        token = admitted.inference.token()
+        body_of = token[9:]
+        for separator in ('.', ' ', '/', '+'):
+            with self.subTest(separator=separator):
+                split = 'aieh-inf-' + separator.join(body_of[i:i + 7] for i in range(0, len(body_of), 7))
+                body = self.body_for(resolved, d1.TEST_TEMPLATE)
+                body[split] = 'x'
+                refusal = self.assertDenied('BODY_FIELD_UNKNOWN', self.send, self.tampered(admitted, body), resolved)
+                self.assertEqual((refusal.detail, refusal.context['field']), (di.SCRUBBED_DETAIL, di.SCRUBBED_DETAIL))
+                for text in self.texts_of(refusal):
+                    self.assertNotIn(body_of, _OUTSIDE.sub('', text))
+        # A text without a part of the token keeps its detail.
+        body = self.body_for(resolved, d1.TEST_TEMPLATE)
+        body['unknown_field'] = 'x'
+        refusal = self.assertDenied('BODY_FIELD_UNKNOWN', self.send, self.tampered(admitted, body), resolved)
+        self.assertIn('unknown_field', refusal.detail)
+
+    def test_a_scrubbed_refusal_holds_no_chain_to_the_original(self):
+        """Review R7 (probe P5b): the scrubbed refusal has no __context__ or __cause__; the custody search walks
+        both chains (texts_of)."""
+        _, resolved, admitted = self.reserved_d1()
+        token = admitted.inference.token()
+        body = self.body_for(resolved, d1.TEST_TEMPLATE)
+        body[token] = 'x'
+        refusal = self.assertDenied('BODY_FIELD_UNKNOWN', self.send, self.tampered(admitted, body), resolved)
+        self.assertIsNone(refusal.__context__)
+        self.assertIsNone(refusal.__cause__)
+        for text in self.texts_of(refusal):
+            self.assertNotIn(token, text)
+        # Negative control: the search walks a chain, and would see the token there.
+        try:
+            try:
+                raise di.DispatchRefused('BODY_FIELD_UNKNOWN', token)
+            except di.DispatchRefused:
+                raise di.DispatchRefused('BODY_FIELD_UNKNOWN', 'clean')
+        except di.DispatchRefused as chained:
+            self.assertTrue(any(token in text for text in self.texts_of(chained)))
+
+    def test_the_revoker_takes_the_broker_s_grammar(self):
+        """Review R8: InferenceAccess checks its revoker at construction (INFERENCE_REVOKER_INVALID)."""
+        for revoker in ('', 'x' * 201, 'a\nb', 5, None):
+            with self.subTest(revoker=revoker):
+                with self.assertRaises(di.DispatchRefused) as caught:
+                    di.InferenceAccess(control=self.control(), revoker=revoker)
+                self.assertEqual(caught.exception.code, 'INFERENCE_REVOKER_INVALID')
+        self.assertEqual(di.InferenceAccess(control=self.control(), revoker='x' * 200).revoker, 'x' * 200)
+
+
+_OUTSIDE = di._OUTSIDE_TOKEN_ALPHABET
 
 
 class NoProviderCredential(SecretsFixture):
@@ -1003,11 +1288,32 @@ class RevocationReceipts(SecretsFixture):
                          ([], 'confirmed', True, []))
         # A receipt left dispatched (its revocation's outcome unknown) is reconciled as itself: the oracle is asked
         # about that receipt, never the attempt, whose state is unchanged; once settled the epoch closes.
+        grant_journal = f'dispatch/attempt/{result.attempt_id}/inference-grant'
+        self.assertEqual(self.store.get(grant_journal).state, 'confirmed')
+        self.assertFalse({'workRef', 'outcomeRef', di.INTENT_KEY} & set(json.loads(
+            self.store.get(grant_journal).intent_json)))
         uncertain = self.reconciled(interrupted, key, identity)
         self.assertEqual(uncertain['asked'], [receipts[1]])
         self.assertEqual(uncertain['report'], {'confirmed': [], 'failed': [receipts[1]], 'still_unknown': []})
         self.assertEqual((uncertain['state'], uncertain['closed'], uncertain['claims']),
                          ('confirmed', True, without['claims']))
+
+    def test_grant_journals_change_no_attempt_s_reconciliation(self):
+        """The grant journal (review R2): a settled one is not seen by reconciliation; one left dispatched by a
+        crash after the issue is reconciled as itself (the oracle is asked about the journal, never the attempt,
+        which stays reserved: a reserved attempt may stay across an epoch), and end_attempt then still revokes the
+        grant by its attempt."""
+        key, fingerprint = self.crashed_after_the_issue()
+        identity = self.store.attempt_identity(key).identity
+        aid = store_mod.attempt_id_for(key)
+        crashed = self.reconciled(self.copy_store('crashed'), key, identity)
+        self.assertEqual(crashed['asked'], [f'dispatch/attempt/{aid}/inference-grant'])
+        self.assertEqual((crashed['state'], crashed['closed'], crashed['unsettled']), ('reserved', True, []))
+        di.end_attempt(self.store, key, inference=self.access_for(self.spy()), actor='e-05.6-test')
+        self.assertRevoked(fingerprint)
+        ended = self.reconciled(self.copy_store('ended'), key, identity)
+        self.assertEqual((ended['report'], ended['asked'], ended['state'], ended['claims']),
+                         ({'confirmed': [], 'failed': [], 'still_unknown': []}, [], 'reserved', crashed['claims']))
 
 
 if __name__ == '__main__':

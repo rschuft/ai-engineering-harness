@@ -23,6 +23,9 @@ The key:
   module never opens the host custody copy (``session_key.host_path``): that copy is the provision and inspect
   steps' fingerprint source, disclosed under decision 0013 point 6.
 
+A call whose body carries ``secrets`` (the D1 create's attempt token, E-05.6) uses ``GuestApi``'s sealed form: the
+request travels in the probe's text on ssh's standard input, never on a command line (``sealed_secret``).
+
 ``calls`` records each call's method, path, status, seconds and the sha256 of its canonical body (``body_sha256``),
 never a body, a key or an answer. Standard library only; it imports nothing of ``tools/guest.py`` unless
 ``for_instance`` is given that module.
@@ -31,9 +34,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import secrets
 import time
 
 CALL_TIMEOUT_S = 600  # the per-request ceiling inside the guest (a create can take minutes)
+# A secret GuestApi's sealed form takes (tools/guest.py SEALED_SECRET): one URL-safe word of 16 to 128 characters.
+SEALABLE = re.compile(r'[A-Za-z0-9_-]{16,128}')
 # The declared custody of the management key that this transport requires, with the login put in.
 CUSTODY_FIELDS = ('owner', 'group', 'mode', 'guest_dir_owner', 'guest_dir_group', 'guest_dir_mode')
 
@@ -53,6 +60,17 @@ def body_sha256(body) -> str | None:
         return None
     text = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def sealed_secret(body: dict) -> str:
+    """The secret a sealed call of BODY redacts from its answer: the one value of ``body['secrets']`` that is a
+    single URL-safe word of 16 to 128 characters (an attempt token; the endpoint is a URL), else a fresh nonce
+    (the call is sealed all the same)."""
+    secrets_block = body.get('secrets')
+    values = [source.get('value') for source in (secrets_block.values() if isinstance(secrets_block, dict) else ())
+              if isinstance(source, dict)]
+    words = [v for v in values if isinstance(v, str) and SEALABLE.fullmatch(v)]
+    return words[0] if len(words) == 1 else secrets.token_urlsafe(32)
 
 
 def declared_custody(profile) -> dict:
@@ -95,7 +113,14 @@ class GuestTransport:
         self.calls.append(entry)
         t0 = time.monotonic()
         try:
-            data = self.api([request])
+            if isinstance(body, dict) and 'secrets' in body:
+                # E-05.6: a body that carries secrets (the D1 create's attempt token) goes sealed: the request
+                # travels in the probe's text on ssh's standard input, never in an argument of ssh or of the
+                # guest's python3, where a refusal or a TimeoutExpired would show it. The sealed secret is the
+                # body's one URL-safe secret value (the token, then redacted from the answer), else a fresh nonce.
+                data = self.api([request], secret=sealed_secret(body))
+            else:
+                data = self.api([request])
         except BaseException as exc:
             entry.update(error=type(exc).__name__, seconds=round(time.monotonic() - t0, 2))
             raise

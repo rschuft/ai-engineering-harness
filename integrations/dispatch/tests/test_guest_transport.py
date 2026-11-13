@@ -392,6 +392,88 @@ class ProbePairTests(unittest.TestCase):
         self.assertEqual(broken.calls[0]['error'], 'Refused')
 
 
+TOKEN = 'aieh-inf-' + 'Kq7_' * 10 + 'Zz9'        # an attempt token's shape (synthetic)
+SECRET_BODY = {'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c',
+               'secrets': {'ANTHROPIC_API_KEY': {'kind': 'StaticSecret', 'value': TOKEN},
+                           'ANTHROPIC_BASE_URL': {'kind': 'StaticSecret', 'value': 'http://172.17.0.1:8090'}},
+               'secrets_encrypted': False}
+
+
+def needles(body):
+    """What must never be on a command line: the token, its body, the body's marker, and the request in the
+    form the unsealed probe takes it (base64 JSON of the request list)."""
+    request = [{'method': 'POST', 'path': '/api/conversations', 'timeout': gt.CALL_TIMEOUT_S, 'json': body}]
+    spec = guest.base64.b64encode(json.dumps(request).encode('utf-8')).decode('ascii')
+    return [TOKEN, TOKEN[9:], body['x'], spec, spec[:40]]
+
+
+class SealedSecretsTests(unittest.TestCase):
+    """E-05.6 (review R1): a call whose body carries secrets (the D1 create's attempt token) goes through
+    GuestApi's sealed form: the request is on ssh's standard input, never in its argv or the guest python's, so
+    neither a command line nor a TimeoutExpired raised by the real Ssh.run shows it."""
+    category = 'integration'
+
+    def ssh(self):
+        """The real guest.Ssh over a throwaway instance directory, its ssh -G check and the ssh.exe lookup faked;
+        its subprocess.run is faked by each test."""
+        tmp = Path(tempfile.mkdtemp(prefix='aieh-sealed-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / 'ssh').mkdir()
+        (tmp / 'ssh' / 'id_ed25519').write_text('synthetic', encoding='ascii')
+        (tmp / 'ssh' / 'known_hosts').write_text('synthetic', encoding='ascii')
+        with mock.patch.object(guest, 'openssh', return_value='ssh.exe'):
+            ssh = guest.Ssh(PROFILE, tmp, 40022)
+        ssh._checked = True
+        return ssh
+
+    def test_a_timeout_shows_no_part_of_a_body_with_secrets(self):
+        runs = []
+
+        def times_out(argv, input=None, timeout=None, **kwargs):
+            runs.append((list(argv), input))
+            raise subprocess.TimeoutExpired(argv, timeout, output=b'', stderr=b'')
+        live = gt.GuestTransport(guest.GuestApi(self.ssh(), PROFILE), PROFILE, api_login='agent')
+        with mock.patch.object(guest.subprocess, 'run', times_out):
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                live('POST', '/api/conversations', copy.deepcopy(SECRET_BODY))
+        argv, stdin = runs[0]
+        shown = json.dumps([argv, str(caught.exception), repr(caught.exception), caught.exception.cmd])
+        for needle in needles(SECRET_BODY):
+            self.assertNotIn(needle, shown)
+        self.assertIn(TOKEN.encode(), stdin)   # it travelled on standard input, in the sealed probe's text
+        # python3 - <key file> <address> <port>: no request argument
+        self.assertEqual((argv[-5:-3], argv[-3]), (['python3', '-'], KEY_FILE))
+        self.assertEqual(live.calls[0]['error'], 'TimeoutExpired')
+        # Negative control: a body without secrets goes unsealed, and the same search finds its request in argv.
+        runs.clear()
+        with mock.patch.object(guest.subprocess, 'run', times_out):
+            with self.assertRaises(subprocess.TimeoutExpired) as plain:
+                live('POST', '/api/conversations', {'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c'})
+        self.assertIn(needles({'conversation_id': cc.CONVERSATION, 'x': 'body-marker-7b1c'})[3], str(plain.exception))
+
+    def test_the_sealed_secret_is_the_token_or_a_nonce(self):
+        self.assertEqual(gt.sealed_secret(SECRET_BODY), TOKEN)
+        two = copy.deepcopy(SECRET_BODY)
+        two['secrets']['OTHER'] = {'kind': 'StaticSecret', 'value': 'another-url-safe-word-1234'}
+        for body in (two, {'secrets': {}}, {'secrets': None}):
+            with self.subTest(body=json.dumps(body)[:40]):
+                nonce = gt.sealed_secret(body)
+                self.assertRegex(nonce, r'^[A-Za-z0-9_-]{43}$')
+                self.assertNotIn(nonce, json.dumps(body))
+        api = FakeApi(answer(201, {'id': cc.CONVERSATION}), answer(200, {}))
+        t = transport(api)
+        calls = []
+        real = api.__call__
+
+        def recording(requests, timeout=900, secret=None):
+            calls.append(secret)
+            return real(requests, timeout, secret)
+        t.api = recording
+        t('POST', '/api/conversations', copy.deepcopy(SECRET_BODY))
+        t('GET', '/server_info', None)
+        self.assertEqual(calls, [TOKEN, None])
+
+
 class DispatchOverTheProbePairTests(adm.AdmissionFixture):
     """The dispatcher's order (dispatch) over GuestTransport, end to end through the fake ssh and the real probe:
     op-as-conversation-create on Work goes through the dispatch module over GuestApi."""

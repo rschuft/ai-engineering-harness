@@ -308,35 +308,69 @@ block or its grant is refused at the send. Every other stage still refuses `secr
 **Order and revocation.** In `dispatch(..., inference=InferenceAccess)`: resolve, reserve,
 `admit` (every other input), then, and only then, the token is requested from the broker's
 control listener (`InferenceAccess.from_component(raw, revoker=)`: `inference_control.
-ControlClient` on the port of `dispatcher_ports`) for the reserved conversation and attempt;
+ControlClient` on the port of `dispatcher_ports`; the revoker is checked with the broker's own
+grammar at construction, `INFERENCE_REVOKER_INVALID`) for the reserved conversation and attempt;
 then `admit_secrets`, the workspace, `dispatched` (its detail carries the grant by fingerprint)
 and `send_create`. No control listener, or a broker that refuses the issue, is
-`INFERENCE_GRANT_UNAVAILABLE` (the broker's code in its context). Once issued, the grant is revoked
-(trigger `attempt end`: a refused attempt ends) on any refusal or failure (the secrets admission,
-the workspace, the `dispatched` transition, a `send_create` refusal, a transport failure, a 4xx, an
-uncertain outcome) before the attempt's outcome is recorded, and the revocation's outcome is in
-that record and on the raised exception (its context, or a note). A failed revocation is recorded
-and surfaced, never swallowed, and never stops the attempt's outcome from being recorded. A
-confirmed attempt keeps its grant until its end: `end_attempt(store, operation_key, inference=,
-actor=)` revokes it and records the revocation as the receipt
-`dispatch/attempt/<attempt id>/inference-revocation/<n>` (confirmed, or failed with the broker's
-code and `INFERENCE_REVOCATION_FAILED` raised; a later call tries again under the next receipt).
-Only a confirmed attempt is ended (`ATTEMPT_NOT_ENDABLE` otherwise: a refused or failed attempt's
-grant was revoked at its failure). The broker writes its own revocation receipt; the grant's state
-shows it. The receipts change no attempt's outcome: restore-epoch reconciliation and its closure
-see the same attempts with or without them, and a receipt carries no `workRef` or `outcomeRef`. A
-receipt left `dispatched` by an interrupted revocation is reconciled as itself (the oracle is asked
-about the receipt, never the attempt) and holds the restore epoch open until then, as the broker's
-own receipts do: a revocation whose outcome is unknown must be settled.
+`INFERENCE_GRANT_UNAVAILABLE` (the broker's code in its context).
 
-**Fingerprints, never the token.** `AdmittedCreate.to_json()` carries the slot and
-`inference_grant` (`inference-grant/v1`: the token's fingerprint, conversation, attempt, family,
-models, budget, expiry); the `dispatched`, `failed` and `unknown` details, `DispatchResult`, the
-revocation records and every refusal carry the fingerprint only (a refusal's detail and context are
-redacted by `create_secrets.redact`: every word holding the token, a part of it of 8 or more
-characters, or a provider key's shape). The dispatcher holds no provider
-credential and reads none: importing it loads no inference or credential module, and the D1
-stage's own modules (`acp_qualification`, `inference_control`) are loaded on first use.
+**The grant journal.** The issue is journaled in the integration store before it is sent:
+`dispatch/attempt/<attempt id>/inference-grant` (`inference-grant-journal/v1`: the operation key,
+attempt, conversation, family and revoker, never the token) is reserved and dispatched before the
+call, then confirmed with the grant's record (by fingerprint), or failed (`issued` false) when the
+broker refused the issue. When the answer is lost (a timeout, an unreachable listener after the
+request was sent) or is not a valid grant of this attempt, the outcome is unknown: the grant is
+revoked by the attempt's conversation and attempt (the broker's selector beside the fingerprint, one
+grant per attempt), and by the fingerprint an invalid answer named; the journal is then settled
+(confirmed when a grant was found, failed when the broker holds none, unsettled while the
+revocation itself fails).
+
+**Revocation, always.** Once issued (or once its outcome is unknown), the grant is revoked (trigger
+`attempt end`: a refused attempt ends) on any refusal or failure, whatever is raised:
+`DispatchRefused` (the secrets admission, the workspace, a `send_create` refusal, a 4xx), a
+transport failure, an uncertain outcome, a failing `dispatched` transition, and any other
+`BaseException` (KeyboardInterrupt and SystemExit included: best effort, then re-raised). It is
+revoked before the attempt's outcome is recorded, and its outcome is in that record and on the raised
+exception (its context, or a note). Every revocation is journaled as the receipt
+`dispatch/attempt/<attempt id>/inference-revocation/<n>` (reserved and dispatched before the call,
+then confirmed or failed with the record); the call is made even when the store cannot be written.
+A failed revocation is recorded and surfaced, never swallowed, and never stops the attempt's
+outcome from being recorded.
+
+**The attempt's end.** A confirmed attempt keeps its grant until its end. `end_attempt(store,
+operation_key, inference=, actor=)` revokes the attempt's issued, not yet revoked grant, whatever the
+attempt's state (confirmed, failed, unknown, or reserved or dispatched as an interrupted dispatcher
+left it): **ending an attempt still in flight revokes its grant** (fail closed). It revokes by the
+fingerprint the journal holds, else by the attempt; it resumes and settles any unsettled
+revocation receipt of the attempt whatever its revoker, and settles an unsettled journal. A failed
+revocation is `INFERENCE_REVOCATION_FAILED` with the record; a later call tries again under the
+next receipt. When the grant is already revoked and journaled, its record is returned without a
+call; an attempt with no journal (every other stage, a D1 attempt refused before the issue) or
+whose issue the broker refused has nothing to end: None (`ATTEMPT_NOT_ENDABLE` is gone). The
+broker writes its own revocation receipt; the grant's state shows it.
+
+**The receipts change no attempt's outcome.** Restore-epoch reconciliation and its closure see the
+same attempts with or without the journal and the revocation receipts, and none carries a `workRef`
+or `outcomeRef`. A receipt or journal left `dispatched` by an interrupted dispatcher is reconciled as
+itself (the oracle is asked about it, never the attempt) and holds the restore epoch open until
+then, as the broker's own receipts do: a grant or a revocation whose outcome is unknown must be
+settled; `end_attempt` still revokes such a grant by its attempt.
+
+**Fingerprints, never the token.** The admitted body's token secret must be the slot: a token
+value there, even the held grant's own, is `SECRET_NOT_FROM_GRANT` at the send.
+`AdmittedCreate.to_json()` carries the slot and `inference_grant` (`inference-grant/v1`: the
+token's fingerprint, conversation, attempt, family, models, budget, expiry), and redacts anything
+token- or provider-key-shaped in the body besides; the `dispatched`, `failed` and `unknown`
+details, `DispatchResult`, the journal, the revocation records and every refusal carry the
+fingerprint only. While the token is held, a refusal's detail and context are rebuilt, with no
+`__context__` or `__cause__` to the original: a string that, without its characters outside the
+token's alphabet, still holds a part of the token of 8 or more characters is withheld whole; in any
+other, every word holding a token, such a part, or a provider key's shape is redacted
+(`create_secrets.redact`). The live transport sends a body that carries `secrets` sealed
+(`guest_transport.GuestTransport`: on ssh's standard input, never in an argument, so neither a
+command line nor a `TimeoutExpired` shows it). The dispatcher holds no provider credential and
+reads none: importing it loads no inference or credential module, and the D1 stage's own modules
+(`acp_qualification`, `inference_control`) are loaded on first use.
 
 **Not yet verified:** any live create with secrets, any live broker, guest or model call; the
 checked-in profile pins no stage template yet, so no grant budgets are declared there.

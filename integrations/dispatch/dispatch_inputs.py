@@ -258,10 +258,12 @@ REFUSALS = {
                                 'declares no single guest inference endpoint',
     'INFERENCE_GRANT_UNAVAILABLE': 'the D1 stage\'s attempt token was not issued: no broker control listener was '
                                    'given, or the broker refused or did not answer the issue',
-    'ATTEMPT_NOT_ENDABLE': 'the stored attempt is not confirmed: end_attempt ends a confirmed attempt\'s inference '
-                           'grant only (a refused or failed attempt\'s grant was revoked at its failure)',
-    'INFERENCE_REVOCATION_FAILED':'the attempt\'s inference grant was not revoked at the attempt\'s end (the broker '
-                                   'refused or did not answer): it stays live until revoked or expired',
+    'INFERENCE_REVOKER_INVALID': 'the dispatcher\'s revoker is not a revoker the broker takes (1 to 200 printable '
+                                 'characters)',
+    'SECRET_NOT_FROM_GRANT': 'the admitted create\'s token secret is not the slot the held grant\'s token fills at '
+                             'the send: a token value in the admitted body is never sent',
+    'INFERENCE_REVOCATION_FAILED': 'the attempt\'s inference grant was not revoked (the broker refused or did not '
+                                   'answer): it stays live until revoked or expired; end_attempt tries again',
 }
 
 
@@ -1041,6 +1043,8 @@ GRANT_FORMAT = 'ai-engineering-harness/dispatch/inference-grant/v1'
 REVOCATION_FORMAT = 'ai-engineering-harness/dispatch/inference-revocation/v1'
 REVOCATION_TRIGGER = 'attempt end'     # decision 0007 point 5 (the broker's TRIGGERS): a refused attempt ends too
 REVOCATION_KEY = 'dispatch/attempt/{attempt_id}/inference-revocation/{n}'
+GRANT_JOURNAL_FORMAT = 'ai-engineering-harness/dispatch/inference-grant-journal/v1'
+GRANT_JOURNAL_KEY = 'dispatch/attempt/{attempt_id}/inference-grant'
 CODE_RE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 ARTIFACT_PATH_RE = re.compile(r'profiles/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+')
 GUEST_PATH_RE = re.compile(r'(?:/[A-Za-z0-9._-]+)+')
@@ -1498,10 +1502,16 @@ class InferenceGrant:
 @dataclass(frozen=True)
 class InferenceAccess:
     """The dispatcher's way to the inference broker (E-05.6): its control listener (``inference_control.
-    ControlClient`` on 127.0.0.1, or a test's stand-in with ``issue`` and ``revoke``) and the revoker every
-    revocation names. Never the provider key: the dispatcher reads no provider credential."""
+    ControlClient`` on 127.0.0.1, or a test's stand-in with ``issue``, ``revoke`` and ``revoke_attempt``) and the
+    revoker every revocation names, checked at construction with the broker's own revoker grammar
+    (INFERENCE_REVOKER_INVALID). Never the provider key: the dispatcher reads no provider credential."""
     control: object
     revoker: str
+
+    def __post_init__(self):
+        if not secrets_check.broker().valid_revoker(self.revoker):
+            raise DispatchRefused('INFERENCE_REVOKER_INVALID', 'the revoker must be 1 to '
+                                  f'{secrets_check.broker().REVOKER_LIMIT} printable characters')
 
     @classmethod
     def from_component(cls, raw, *, revoker: str) -> 'InferenceAccess':
@@ -1595,9 +1605,20 @@ class AdmittedCreate:
         return json.loads(self.mounts_json)
 
     def to_json(self) -> dict:
+        """The admitted create as a record. Its body is the admitted one (the token's value is the slot) with,
+        besides, every word that holds an attempt token, a part of the held one or a provider key's shape
+        redacted: a record never carries a token, whatever the body holds (E-05.6)."""
+        held = self.inference.token() if self.inference is not None and self.inference.open else None
+
+        def clean(node):
+            if isinstance(node, dict):
+                return {clean(key): clean(value) for key, value in node.items()}
+            if isinstance(node, list):
+                return [clean(value) for value in node]
+            return secrets_check.redact(node, held) if isinstance(node, str) else node
         record = {'format': ADMITTED_FORMAT, 'operation_key': self.operation_key,
                   'conversation_id': self.conversation_id, 'route': {'method': self.method, 'path': self.path},
-                  'body': self.body, 'mounts': self.mounts,
+                  'body': clean(self.body), 'mounts': self.mounts,
                   'workspace': {'planned': self.planned_workspace, 'host': self.host_workspace},
                   'policy_digest': self.policy_digest,
                   'create_template_sha256': hashlib.sha256(self.template_bytes).hexdigest(),
@@ -1644,13 +1665,25 @@ def _check_stage_content(declared: dict, resolved: ResolvedInputs, admission: di
     return _stage_inference(declared, staged, template, resolved.stage)
 
 
+SCRUBBED_DETAIL = '<withheld: the text held a part of the attempt token>'
+_OUTSIDE_TOKEN_ALPHABET = re.compile(r'[^A-Za-z0-9_-]')
+
+
 def _scrubbed(refusal: DispatchRefused, token: str | None) -> DispatchRefused:
-    """REFUSAL with every word that holds an attempt token, a part of the held TOKEN of
-    ``create_secrets.FRAGMENT`` or more characters, or a provider key's shape redacted in its detail and context
-    (``create_secrets.redact``, as the shared check redacts its own): a refusal of a body that held the token
-    reaches the store and the caller without it, whichever check refused it."""
+    """A new refusal of REFUSAL's code, with no ``__context__`` or ``__cause__`` (the caller raises it outside the
+    ``except`` that caught REFUSAL), whose detail and context strings are cleaned: a string that, with every
+    character outside the token's alphabet removed, still holds a part of the held TOKEN of
+    ``create_secrets.FRAGMENT`` or more characters is replaced whole by SCRUBBED_DETAIL (a token split by dots or
+    spaces is caught); in any other, every word that holds an attempt token, a part of TOKEN or a provider key's
+    shape is redacted (``create_secrets.redact``, as the shared check redacts its own). A refusal of a body that
+    held the token reaches the store and the caller without it, whichever check refused it."""
+    parts = secrets_check.fragments(token)
+
     def clean(value):
         if isinstance(value, str):
+            joined = _OUTSIDE_TOKEN_ALPHABET.sub('', value)
+            if any(part in joined for part in parts):
+                return SCRUBBED_DETAIL
             return secrets_check.redact(value, token)
         if isinstance(value, Mapping):
             return {clean(str(k)): clean(v) for k, v in value.items()}
@@ -1658,6 +1691,13 @@ def _scrubbed(refusal: DispatchRefused, token: str | None) -> DispatchRefused:
             return [clean(v) for v in value]
         return value
     return DispatchRefused(refusal.code, clean(refusal.detail), **clean(dict(refusal.context)))
+
+
+def _token_value(body: dict, inference: StageInference):
+    """The token secret's value in BODY, or None."""
+    secrets = body.get('secrets')
+    source = secrets.get(inference.names[0]) if isinstance(secrets, dict) else None
+    return source.get('value') if isinstance(source, dict) else None
 
 
 def _wire_body(body: dict, inference: StageInference, grant: InferenceGrant | None) -> dict:
@@ -1710,13 +1750,20 @@ def _admitted_checks(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admi
     if inference is None or not secrets:
         check_create_body(body, admission=admission, template=template, conversation_id=conversation_id)
     else:
-        body = _wire_body(body, inference, admitted.inference)
+        slot = _token_value(body, inference) == TOKEN_SLOT
+        body, caught = _wire_body(body, inference, admitted.inference), None
         try:
             check_create_body(body, admission=admission, template=template, conversation_id=conversation_id,
                               secrets=inference.secrets(admitted.inference, key))
+            if not slot:   # the token passed the check, but it came from the admitted body, not the held grant
+                raise DispatchRefused('SECRET_NOT_FROM_GRANT', f'{inference.names[0]} in the admitted body is not '
+                                      f'the slot {TOKEN_SLOT}')
         except DispatchRefused as refusal:
+            caught = refusal
+        if caught is not None:   # raised outside the except: the scrubbed refusal holds no chain to the original
             held = admitted.inference.token() if admitted.inference is not None and admitted.inference.open else None
-            raise _scrubbed(refusal, held) from None
+            scrubbed, caught = _scrubbed(caught, held), None
+            raise scrubbed
     expected = _binds_for(admission['mounts']['binds'], conversation_id.replace('-', ''))
     try:
         mounts = _strict_loads(admitted.mounts_json)
@@ -2179,48 +2226,211 @@ def _code_of(exc) -> str:
     return code if isinstance(code, str) and CODE_RE.fullmatch(code) else type(exc).__name__
 
 
-def _issue(inference, resolved: ResolvedInputs, staged: StageInference) -> InferenceGrant:
+def _issue(inference: InferenceAccess, resolved: ResolvedInputs, staged: StageInference) -> InferenceGrant:
     """The D1 stage's attempt token from the broker's control listener (decision 0015 section 3.2, E-05.6), for
-    the reserved conversation and attempt, of the stage's family and model, with its budgets and lifetime;
-    INFERENCE_GRANT_UNAVAILABLE when there is no control listener or the broker does not issue it."""
-    if not isinstance(inference, InferenceAccess):
-        raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the {resolved.stage} stage carries the attempt\'s '
-                              'inference token, and no broker control listener was given')
+    the reserved conversation and attempt, of the stage's family and model, with its budgets and lifetime. Raises
+    what the control call raises; ``_GrantCustody.issue`` journals the call and decides what its failure means."""
     key = _operation_key(resolved)
-    try:
-        answer = inference.control.issue(store.conversation_id_for(key), store.attempt_id_for(key), staged.family,
-                                         list(staged.models), staged.requests, staged.tokens, staged.ttl_s)
-    except Exception as exc:  # fail closed: whatever the control call raises, nothing is admitted
-        code = _code_of(exc)
-        raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the broker\'s control listener did not issue the '
-                              f'grant ({code})', broker_code=code) from None
+    answer = inference.control.issue(store.conversation_id_for(key), store.attempt_id_for(key), staged.family,
+                                     list(staged.models), staged.requests, staged.tokens, staged.ttl_s)
     return InferenceGrant.from_answer(answer)
 
 
-def _revoke(inference: InferenceAccess, grant: dict, trigger: str = REVOCATION_TRIGGER) -> dict:
-    """Revoke GRANT (a grant record, by its token's fingerprint) through the broker's control listener; the
-    outcome as a record (``inference-revocation/v1``). Never raises: a failure is the record's ``revoked`` false
-    and its code, for the caller to record and surface."""
-    record = {'format': REVOCATION_FORMAT, 'tokenFingerprint': grant['tokenFingerprint'],
-              'attemptId': grant['attemptId'], 'conversationId': grant['conversationId'], 'trigger': trigger,
-              'revoker': inference.revoker}
+def _revoke(inference: InferenceAccess, selectors: list, conversation_id: str, attempt_id: str,
+            trigger: str = REVOCATION_TRIGGER) -> dict:
+    """Revoke through the broker's control listener by each of SELECTORS in turn (``('fingerprint', fp)``, or
+    ``('attempt', None)``: the attempt's one grant, by its conversation and attempt); the outcome as a record
+    (``inference-revocation/v1``). ``revoked`` is whether no live grant remains: a call revoked it, or the broker
+    answers that it is already revoked (GRANT_ALREADY_REVOKED) or holds no such grant (GRANT_UNKNOWN; for the
+    attempt's selector, nothing was issued or the grant ended with the broker). The last selector, when it is the
+    attempt's, settles the outcome. Never raises: a failure is ``revoked`` false and its code, for the caller to
+    record and surface."""
+    record = {'format': REVOCATION_FORMAT, 'tokenFingerprint': None, 'attemptId': attempt_id,
+              'conversationId': conversation_id, 'selectors': [fp if kind == 'fingerprint' else 'attempt'
+                                                               for kind, fp in selectors],
+              'trigger': trigger, 'revoker': inference.revoker if isinstance(inference, InferenceAccess) else None}
+    outcomes = []
+    for kind, fingerprint in selectors:
+        try:
+            if not isinstance(inference, InferenceAccess):
+                raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', 'no broker control listener was given')
+            if kind == 'fingerprint':
+                answer = inference.control.revoke(fingerprint, trigger, inference.revoker)
+            else:
+                answer = inference.control.revoke_attempt(conversation_id, attempt_id, trigger, inference.revoker)
+        except Exception as exc:  # recorded, never swallowed: the caller records and raises it
+            code = _code_of(exc)
+            outcome = {'GRANT_ALREADY_REVOKED': 'already revoked', 'GRANT_UNKNOWN': 'no grant'}.get(code, 'failed')
+            outcomes.append((outcome, code))
+            if kind == 'fingerprint' and record['tokenFingerprint'] is None and outcome != 'no grant':
+                record['tokenFingerprint'] = fingerprint
+            continue
+        named = answer.get('token_fingerprint') if isinstance(answer, Mapping) else None
+        revoked = isinstance(answer, Mapping) and answer.get('state') == 'revoked' \
+            and (kind == 'attempt' or named == fingerprint)
+        outcomes.append(('revoked', None) if revoked else ('failed', 'REVOCATION_UNCONFIRMED'))
+        if isinstance(named, str):
+            record['tokenFingerprint'] = named
+    if any(outcome == 'revoked' for outcome, _ in outcomes):
+        outcome, code = 'revoked', None
+    elif selectors and selectors[-1][0] == 'attempt':
+        outcome, code = outcomes[-1]
+    else:
+        outcome, code = next(((o, c) for o, c in outcomes if o == 'failed'), outcomes[-1])
+    return {**record, 'outcome': outcome, 'revoked': outcome != 'failed', 'code': code}
+
+
+def _last_detail(integration_store, key: str):
+    events = integration_store.events(key)
     try:
-        answer = inference.control.revoke(grant['tokenFingerprint'], trigger, inference.revoker)
-    except Exception as exc:  # recorded, never swallowed: the caller records and raises it
-        code = _code_of(exc)
-        return {**record, 'revoked': code == 'GRANT_ALREADY_REVOKED', 'code': code}
-    state = answer.get('state') if isinstance(answer, Mapping) else None
-    revoked = state == 'revoked' and answer.get('token_fingerprint') == grant['tokenFingerprint']
-    return {**record, 'revoked': revoked, 'code': None if revoked else 'REVOCATION_UNCONFIRMED'}
+        return _strict_loads(events[-1].detail_json or 'null') if events else None
+    except ValueError:
+        return None
 
 
-def _ended(refusal: DispatchRefused, inference, grant: InferenceGrant | None) -> DispatchRefused:
-    """A refusal after issuance: the grant revoked first (trigger ``attempt end``: the refused attempt ends), and
-    the grant and its revocation, by fingerprint, in the refusal's context (so in the attempt's failed record)."""
-    if grant is not None:
-        refusal.context['inference_grant'] = grant.record()
-        refusal.context['inference_revocation'] = _revoke(inference, grant.record())
-    return refusal
+def _settle(integration_store, key: str, held_state: str, ok: bool, actor: str, reason: str, detail) -> None:
+    """Move a receipt from HELD_STATE to confirmed (OK) or failed, through dispatched when it is reserved."""
+    if held_state == 'reserved' and ok:
+        _mark(integration_store, key, 'reserved', 'dispatched', actor, 'resumed', None)
+        held_state = 'dispatched'
+    _mark(integration_store, key, held_state, 'confirmed' if ok else 'failed', actor, reason, detail)
+
+
+def _revocation_receipts(integration_store, attempt_id: str) -> list:
+    """(key, reservation) of the attempt's revocation receipts, in order."""
+    out, n = [], 1
+    while (held := integration_store.get(REVOCATION_KEY.format(attempt_id=attempt_id, n=n))) is not None:
+        out.append((REVOCATION_KEY.format(attempt_id=attempt_id, n=n), held))
+        n += 1
+    return out
+
+
+def _journaled_revocation(integration_store, operation_key: str, inference, selectors: list, actor: str) -> dict:
+    """``_revoke`` with its receipt in the integration store (``dispatch/attempt/<attempt id>/inference-revocation/
+    <n>``): an unsettled receipt of the attempt is resumed, whatever its revoker, else the next one is reserved and
+    dispatched before the call; after it, the receipt and every other unsettled one of the attempt are confirmed
+    (no live grant remains) or failed, with the record. The call is made even when the store cannot be written;
+    the record then says so (``journal``)."""
+    attempt_id, conversation_id = store.attempt_id_for(operation_key), store.conversation_id_for(operation_key)
+    intent = {'format': REVOCATION_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
+              'conversationId': conversation_id, 'trigger': REVOCATION_TRIGGER,
+              'revoker': inference.revoker if isinstance(inference, InferenceAccess) else None}
+    opened, journal_error = [], None
+    try:
+        receipts = _revocation_receipts(integration_store, attempt_id)
+        opened = [(k, h.state) for k, h in receipts if h.state in ('reserved', 'dispatched')]
+        if not opened:
+            receipt_key = REVOCATION_KEY.format(attempt_id=attempt_id, n=len(receipts) + 1)
+            integration_store.reserve(receipt_key, intent, actor=actor)
+            _mark(integration_store, receipt_key, 'reserved', 'dispatched', actor, 'revoke', None)
+            opened = [(receipt_key, 'dispatched')]
+    except Exception as exc:  # the revocation is made all the same
+        journal_error = type(exc).__name__
+    record = _revoke(inference, selectors, conversation_id, attempt_id)
+    try:
+        for receipt_key, state in opened:
+            _settle(integration_store, receipt_key, state, record['revoked'], actor, record['code'] or 'revoked',
+                    record)
+    except Exception as exc:
+        journal_error = journal_error or type(exc).__name__
+    if journal_error is not None:
+        record = {**record, 'journal': f'not written ({journal_error})'}
+    return record
+
+
+class _GrantCustody:
+    """One attempt's inference grant in the dispatcher's custody (E-05.6). The issue is journaled in the integration
+    store before the call (``dispatch/attempt/<attempt id>/inference-grant``: reserved, dispatched; confirmed with
+    the grant's fingerprint, or failed when the broker refused to issue), so that a grant whose answer was lost, or
+    whose dispatcher stopped, can still be found and revoked by its attempt. Every revocation is journaled too
+    (``_journaled_revocation``)."""
+
+    def __init__(self, integration_store, operation_key: str, inference, actor: str):
+        self.store, self.key, self.inference, self.actor = integration_store, operation_key, inference, actor
+        self.attempt_id = store.attempt_id_for(operation_key)
+        self.journal_key = GRANT_JOURNAL_KEY.format(attempt_id=self.attempt_id)
+        self.grant = None          # the InferenceGrant, once its answer is admitted
+        self.uncertain = False     # an issue was sent and whether it issued a grant is not known
+        self.named = []            # fingerprints an answer that was not a valid grant named
+        self.revocation = None
+
+    def issue(self, resolved: ResolvedInputs, staged: StageInference) -> InferenceGrant:
+        if not isinstance(self.inference, InferenceAccess):
+            raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the {resolved.stage} stage carries the attempt\'s '
+                                  'inference token, and no broker control listener was given')
+        intent = {'format': GRANT_JOURNAL_FORMAT, 'operationKey': self.key, 'attemptId': self.attempt_id,
+                  'conversationId': store.conversation_id_for(self.key), 'family': staged.family,
+                  'revoker': self.inference.revoker}
+        self.store.reserve(self.journal_key, intent, actor=self.actor)
+        _mark(self.store, self.journal_key, 'reserved', 'dispatched', self.actor, 'issue', None)
+        self.uncertain = True   # from here a grant may exist
+        try:
+            grant = _issue(self.inference, resolved, staged)
+        except Exception as exc:  # fail closed: whatever the control call raises, nothing is admitted
+            code = _code_of(exc)
+            named = getattr(exc, 'fingerprint', None)
+            if isinstance(named, str) and secrets_check.broker().FINGERPRINT_SHAPE.fullmatch(named):
+                self.named.append(named)
+            if getattr(exc, 'broker_code', False) is True and code != 'ATTEMPT_HAS_GRANT':
+                self.uncertain = False   # the broker refused the issue: nothing was issued
+                _mark(self.store, self.journal_key, 'dispatched', 'failed', self.actor, code,
+                      {'format': GRANT_JOURNAL_FORMAT, 'issued': False, 'code': code})
+            raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the broker\'s control listener did not issue the '
+                                  f'grant ({code})', broker_code=code) from None
+        self.grant, self.uncertain = grant, False
+        _mark(self.store, self.journal_key, 'dispatched', 'confirmed', self.actor, 'issued', grant.record())
+        return grant
+
+    def needs_end(self) -> bool:
+        return self.revocation is None and (self.grant is not None or self.uncertain)
+
+    def selectors(self) -> list:
+        if self.grant is not None:
+            return [('fingerprint', self.grant.fingerprint)]
+        return [('fingerprint', fp) for fp in self.named] + [('attempt', None)]
+
+    def end(self) -> dict | None:
+        """Revoke the grant once (trigger ``attempt end``: a refused attempt ends too); never raises an
+        Exception. An uncertain issue is settled in its journal by the revocation's outcome."""
+        if not self.needs_end():
+            return self.revocation
+        uncertain = self.grant is None
+        self.revocation = _journaled_revocation(self.store, self.key, self.inference, self.selectors(), self.actor)
+        if uncertain:
+            _settle_journal(self.store, self.journal_key, self.revocation, self.actor)
+        return self.revocation
+
+    def ended(self, refusal: DispatchRefused) -> DispatchRefused:
+        """REFUSAL after the grant's revocation, with the grant and its revocation (by fingerprint) in its context."""
+        revocation = self.end()
+        if revocation is not None:
+            if self.grant is not None:
+                refusal.context['inference_grant'] = self.grant.record()
+            refusal.context['inference_revocation'] = revocation
+        return refusal
+
+    def detail(self) -> dict:
+        """The grant and its revocation for an unknown outcome's transition detail, after the revocation."""
+        revocation = self.end()
+        if revocation is None:
+            return {}
+        return {**({'inferenceGrant': self.grant.record()} if self.grant is not None else {}),
+                'inferenceRevocation': revocation}
+
+
+def _settle_journal(integration_store, journal_key: str, revocation: dict, actor: str) -> None:
+    """Settle an unsettled grant journal by a revocation by its attempt: confirmed when a grant was found (and is
+    no longer live), failed when the broker holds none; left as it is while the outcome is unknown."""
+    try:
+        held = integration_store.get(journal_key)
+        if held is None or held.state not in ('reserved', 'dispatched') or not revocation['revoked']:
+            return
+        issued = revocation['outcome'] != 'no grant'
+        _settle(integration_store, journal_key, held.state, issued, actor, 'settled by revocation',
+                {'format': GRANT_JOURNAL_FORMAT, 'issued': issued, 'tokenFingerprint': revocation['tokenFingerprint'],
+                 'settledBy': revocation['outcome']})
+    except Exception:  # the revocation stands; the journal is settled by a later end_attempt
+        pass
 
 
 def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], WorkSource | None],
@@ -2243,13 +2453,15 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
        (a transport exception is re-raised). Nothing is retried and no event history is stored.
 
     The D1 stage (E-05.6): after ``admit`` has admitted every other input, and only then, the attempt token is
-    requested from the broker's control listener (``inference``, an ``InferenceAccess``) for the reserved
-    conversation and attempt, and ``admit_secrets`` adds the secrets block; then the workspace, ``dispatched`` (its
-    detail carries the grant by fingerprint) and ``send_create``. Once issued, the grant is revoked (trigger
-    ``attempt end``) on any refusal or failure, before the attempt's outcome is recorded, and the revocation's
-    outcome is in that record and on the raised exception; a confirmed attempt keeps its grant until
-    ``end_attempt``. The token is held in memory only, until the transport call; every record carries its
-    fingerprint. Every other stage takes no token and never calls ``inference``.
+    requested from the broker's control listener (``inference``, an ``InferenceAccess``), the call journaled before
+    it is made (``_GrantCustody``), and ``admit_secrets`` adds the secrets block; then the workspace,
+    ``dispatched`` (its detail carries the grant by fingerprint) and ``send_create``. From the issue on, the grant
+    is revoked (trigger ``attempt end``) on any refusal or failure, whatever is raised (KeyboardInterrupt and
+    SystemExit included), before the attempt's outcome is recorded; a lost or invalid issue answer is revoked by the
+    attempt. The revocation is journaled and its outcome is in the attempt's record and on the raised exception;
+    a confirmed attempt keeps its grant until ``end_attempt``. The token is held in memory only, until the
+    transport call; every record carries its fingerprint. Every other stage takes no token and never calls
+    ``inference``.
     """
     resolved = resolve(request, manifest=manifest, work_sources=work_sources,
                        next_ordinal=store_next_ordinal(integration_store), read_profile=read_profile)
@@ -2265,142 +2477,112 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
         if refusal.code != 'ATTEMPT_NOT_RESERVED':
             _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code, _refusal_detail(refusal))
         raise
-    grant = None
+    custody, grant = _GrantCustody(integration_store, key, inference, actor), None
     try:
         try:
             if staged is not None:
-                grant = _issue(inference, reserved, staged)   # only now: the reservation and every input admitted
+                grant = custody.issue(reserved, staged)   # only now: the reservation and every input admitted
                 admitted = admit_secrets(admitted, resolved=reserved, workspaces=workspaces, grant=grant)
             host = create_workspace(admitted, resolved=reserved, workspaces=workspaces)
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code,
-                  _refusal_detail(_ended(refusal, inference, grant)))
-            raise
-        except Exception as exc:   # an unexpected failure after the issue: revoked, and said so on the exception
-            if grant is not None:
-                exc.add_note('inference revocation: ' + _canonical(_revoke(inference, grant.record())))
+                  _refusal_detail(custody.ended(refusal)))
             raise
         dispatched = {'format': DISPATCHED_FORMAT, 'conversationId': admitted.conversation_id,
                       'route': {'method': admitted.method, 'path': admitted.path}}
         if grant is not None:
             dispatched['inferenceGrant'] = grant.record()
-        try:
-            _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create', dispatched)
-        except Exception as exc:
-            if grant is not None:
-                exc.add_note('inference revocation: ' + _canonical(_revoke(inference, grant.record())))
-            raise
+        _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create', dispatched)
         try:
             answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport)
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
-                  _refusal_detail(_ended(refusal, inference, grant), create_sent=False))
+                  _refusal_detail(custody.ended(refusal), create_sent=False))
             raise
         except Exception as exc:
-            detail = {'error': type(exc).__name__}
-            if grant is not None:
-                detail.update(inferenceGrant=grant.record(), inferenceRevocation=_revoke(inference, grant.record()))
+            detail = {'error': type(exc).__name__, **custody.detail()}
+            if 'inferenceRevocation' in detail:
                 exc.add_note('inference revocation: ' + _canonical(detail['inferenceRevocation']))
             _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-unanswered', detail)
             raise
-    finally:
         if grant is not None:
             grant.drop()   # held only until the transport call; the broker's grant is revoked by fingerprint
-    receipt = create_receipt(answer, admitted.conversation_id)
-    if receipt is not None:
-        _mark(integration_store, key, 'dispatched', 'confirmed', actor,
-              'created' if receipt['created'] else 'existing', receipt)
-        return DispatchResult(operation_key=key, attempt_id=store.attempt_id_for(key),
-                              conversation_id=receipt['conversationId'], execution_ref=receipt['executionRef'],
-                              http_status=receipt['httpStatus'], created=receipt['created'], host_workspace=str(host),
-                              inference_grant=None if grant is None else grant.record())
-    status = answer.get('status') if isinstance(answer, Mapping) else None
-    status = status if type(status) is int else None
-    if status is not None and 400 <= status < 500:
-        refusal = _ended(DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the create with {status}',
-                                         status=status), inference, grant)
-        _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
-              _refusal_detail(refusal, create_sent=True))
-        raise refusal
-    detail = {'httpStatus': status, 'reason': 'no 200 or 201 answer carrying the reserved conversation id'}
-    ended = {}
-    if grant is not None:
-        ended = {'inference_grant': grant.record(), 'inference_revocation': _revoke(inference, grant.record())}
-        detail.update(inferenceGrant=ended['inference_grant'], inferenceRevocation=ended['inference_revocation'])
-    _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-outcome-uncertain', detail)
-    raise CreateOutcomeUnknown(key, detail['reason'], http_status=status, **ended)
-
-
-def _stored_grant(integration_store, operation_key: str) -> dict | None:
-    """The D1 stage's grant record of a dispatched attempt, from its ``dispatched`` event (by fingerprint); None
-    when the attempt took no grant (every other stage). RESERVATION_INVALID when it is not this attempt's."""
-    for event in integration_store.events(operation_key):
-        if event.to_state != 'dispatched':
-            continue
-        try:
-            detail = _strict_loads(event.detail_json or 'null')
-        except ValueError:
-            detail = None
-        grant = detail.get('inferenceGrant') if isinstance(detail, dict) else None
-        if grant is None:
-            return None
-        expected = {'format': GRANT_FORMAT, 'attemptId': store.attempt_id_for(operation_key),
-                    'conversationId': store.conversation_id_for(operation_key)}
-        fingerprint = grant.get('tokenFingerprint') if isinstance(grant, dict) else None
-        if not isinstance(fingerprint, str) or not re.fullmatch(r'sha256:[0-9a-f]{16}', fingerprint) \
-                or any(grant.get(name) != value for name, value in expected.items()):
-            raise DispatchRefused('RESERVATION_INVALID', 'the dispatched record\'s inference grant is not this '
-                                  'attempt\'s')
-        return grant
-    return None
+        receipt = create_receipt(answer, admitted.conversation_id)
+        if receipt is not None:
+            _mark(integration_store, key, 'dispatched', 'confirmed', actor,
+                  'created' if receipt['created'] else 'existing', receipt)
+            return DispatchResult(operation_key=key, attempt_id=store.attempt_id_for(key),
+                                  conversation_id=receipt['conversationId'], execution_ref=receipt['executionRef'],
+                                  http_status=receipt['httpStatus'], created=receipt['created'],
+                                  host_workspace=str(host), inference_grant=None if grant is None else grant.record())
+        status = answer.get('status') if isinstance(answer, Mapping) else None
+        status = status if type(status) is int else None
+        if status is not None and 400 <= status < 500:
+            refusal = custody.ended(DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the create with '
+                                                    f'{status}', status=status))
+            _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
+                  _refusal_detail(refusal, create_sent=True))
+            raise refusal
+        detail = {'httpStatus': status, 'reason': 'no 200 or 201 answer carrying the reserved conversation id',
+                  **custody.detail()}
+        _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-outcome-uncertain', detail)
+        ended = {} if custody.revocation is None else {
+            **({'inference_grant': grant.record()} if grant is not None else {}),
+            'inference_revocation': custody.revocation}
+        raise CreateOutcomeUnknown(key, detail['reason'], http_status=status, **ended)
+    except BaseException as exc:
+        if custody.needs_end():   # any other failure after the issue, KeyboardInterrupt and SystemExit included
+            exc.add_note('inference revocation: ' + _canonical(custody.end()))
+        raise
+    finally:
+        if grant is not None:
+            grant.drop()
 
 
 def end_attempt(integration_store, operation_key: str, *, inference: InferenceAccess, actor: str) -> dict | None:
-    """The attempt's end (decision 0015 section 3.3, E-05.6): revoke the D1 stage's inference grant of a
-    confirmed attempt through the broker's control listener (trigger ``attempt end``, the access's revoker).
+    """The attempt's end (decision 0015 section 3.3, E-05.6): revoke the attempt's issued, not yet revoked
+    inference grant through the broker's control listener (trigger ``attempt end``, the access's revoker), whatever
+    the attempt's state: confirmed, failed, unknown, or reserved or dispatched as an interrupted dispatcher left it.
+    Ending an attempt still in flight revokes its grant (fail closed).
 
-    The attempt is re-read from the store and must be confirmed (ATTEMPT_NOT_ENDABLE otherwise; then
-    ``stored_inputs``); its grant is the one its
-    ``dispatched`` record names, by fingerprint. Every other stage's attempt holds none: None. The revocation
-    is recorded in the integration store before and after the call, as the receipt ``dispatch/attempt/<attempt
-    id>/inference-revocation/<n>`` (reserved, dispatched, then confirmed with the revocation's record, or failed
-    with its code), and returned. A failed revocation is INFERENCE_REVOCATION_FAILED, with the record; a later
-    call tries again under the next receipt. A confirmed receipt is returned again without a second call. The
-    broker writes its own revocation receipt; nothing here reads or holds the token."""
+    The grant is the one the attempt's grant journal (``dispatch/attempt/<attempt id>/inference-grant``) records:
+    by its fingerprint when the journal has it, else by the attempt (a lost or interrupted issue). An attempt
+    with no journal (every other stage, or a D1 attempt refused before the issue) or whose issue the broker refused
+    has no grant: None. When a revocation receipt of the attempt is already confirmed and none is unsettled, its
+    record is returned without a call. Otherwise the revocation is journaled (``_journaled_revocation``: an
+    unsettled receipt of the attempt is resumed and settled whatever its revoker, else the next one is written) and
+    returned; an unsettled grant journal is settled by it. A failed revocation is INFERENCE_REVOCATION_FAILED, with
+    the record; a later call tries again. The broker writes its own revocation receipt; nothing here reads or holds
+    the token."""
     if not isinstance(inference, InferenceAccess):
         raise TypeError('inference must be an InferenceAccess (the broker\'s control listener)')
-    held = integration_store.get(operation_key)
-    if held is not None and held.state != 'confirmed':
-        raise DispatchRefused('ATTEMPT_NOT_ENDABLE', f'{operation_key!r} is {held.state}', state=held.state)
-    stored_inputs(integration_store, operation_key, state='confirmed')
-    grant = _stored_grant(integration_store, operation_key)
-    if grant is None:
-        return None
+    if integration_store.get(operation_key) is None or integration_store.attempt_identity(operation_key) is None:
+        raise DispatchRefused('RESERVATION_INVALID', f'no dispatch reservation under {operation_key!r}')
     attempt_id = store.attempt_id_for(operation_key)
-    intent = {'format': REVOCATION_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
-              'conversationId': grant['conversationId'], 'tokenFingerprint': grant['tokenFingerprint'],
-              'trigger': REVOCATION_TRIGGER, 'revoker': inference.revoker}
-    n = 1
-    while True:
-        receipt_key = REVOCATION_KEY.format(attempt_id=attempt_id, n=n)
-        held = integration_store.get(receipt_key)
-        if held is None:
-            break
-        if held.state == 'confirmed':
-            return _strict_loads(integration_store.events(receipt_key)[-1].detail_json)
-        if held.state in ('reserved', 'dispatched') and held.intent_json == store.canonical_intent(intent):
-            break   # an interrupted end, resumed under its own receipt
-        n += 1
-    held = integration_store.reserve(receipt_key, intent, actor=actor).reservation
-    if held.state == 'reserved':
-        _mark(integration_store, receipt_key, 'reserved', 'dispatched', actor, 'revoke', None)
-    revocation = _revoke(inference, grant)
-    if revocation['revoked']:
-        _mark(integration_store, receipt_key, 'dispatched', 'confirmed', actor, 'revoked', revocation)
-        return revocation
-    _mark(integration_store, receipt_key, 'dispatched', 'failed', actor, revocation['code'], revocation)
-    raise DispatchRefused('INFERENCE_REVOCATION_FAILED', f'the grant {grant["tokenFingerprint"]} of attempt '
-                          f'{attempt_id} was not revoked ({revocation["code"]})', inference_revocation=revocation)
+    journal_key = GRANT_JOURNAL_KEY.format(attempt_id=attempt_id)
+    journal = integration_store.get(journal_key)
+    if journal is None:
+        return None
+    detail = _last_detail(integration_store, journal_key)
+    receipts = _revocation_receipts(integration_store, attempt_id)
+    unsettled = [k for k, h in receipts if h.state in ('reserved', 'dispatched')]
+    confirmed = [k for k, h in receipts if h.state == 'confirmed']
+    if confirmed and not unsettled and journal.state not in ('reserved', 'dispatched'):
+        return _last_detail(integration_store, confirmed[-1])
+    if journal.state == 'failed' and isinstance(detail, dict) and detail.get('issued') is False and not unsettled:
+        return None
+    fingerprint = detail.get('tokenFingerprint') if isinstance(detail, dict) and journal.state == 'confirmed' else None
+    if isinstance(fingerprint, str) and secrets_check.broker().FINGERPRINT_SHAPE.fullmatch(fingerprint):
+        selectors = [('fingerprint', fingerprint)]
+    else:
+        selectors = [('attempt', None)]
+    record = _journaled_revocation(integration_store, operation_key, inference, selectors, actor)
+    if selectors[0][0] == 'attempt':
+        _settle_journal(integration_store, journal_key, record, actor)
+    if not record['revoked']:
+        raise DispatchRefused('INFERENCE_REVOCATION_FAILED', f'the inference grant of attempt {attempt_id} was not '
+                              f'revoked ({record["code"]})', inference_revocation=record)
+    return record
 
 
 # ---------------------------------------------------------------------------
