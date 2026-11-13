@@ -121,9 +121,15 @@ CODES = {
                         'of at most 256 MiB',
     'ATTEMPT_ID_INVALID': 'give --attempt-id as the grant\'s attempt id, a UUID',
     'PROPOSAL_EXPOSURE': 'nothing to do here: the proposal would have held the synthetic key and was not written',
+    'PROPOSAL_WRITE_FAILED': 'the proposal could not be written (the detail names the error type): free the path or '
+                             'its directory, then read the run\'s audit again with propose-pin',
 }
-KEY_NAME = re.compile(r'[A-Za-z0-9_$@-][A-Za-z0-9_$@:-]{0,63}')   # a recorded key name ('.' and '[]' separate)
+KEY_NAME = re.compile(r'[A-Za-z0-9_$@-][A-Za-z0-9_$@:-]{0,31}')   # a recorded key name ('.' and '[]' separate);
+#                     at most 32 characters, as the audit's observed word, so no credential shape in play fits
 UNRECORDED_KEY = '<unrecorded>'
+MAP_KEY = '<map>'                  # a key name under an open map, recorded only when it contains "model"
+OPEN_MAPS = frozenset({'metadata', 'properties', 'input_schema', 'parameters', 'definitions', '$defs'})
+#                     ... and every key ending in _metadata: maps whose key names are data (ids, emails, field names)
 KEY_PATH_LIMIT = 256               # distinct key paths per request and per route of a discovery run
 KEY_PATH_DEPTH = 32                # nesting levels walked
 KEY_PATH_BODY_LIMIT = 32 * broker.MIB   # bytes of a body kept for its key paths (the broker's default request cap)
@@ -149,6 +155,12 @@ NOT_SHOWN = (
     'what a request would have done had it been admitted: a refused request was answered by the broker, not by the '
     'fake upstream',
     'requests the client never sent because an earlier one was refused',
+    'a secondary model named under a key whose name does not contain "model" (for example "engine" or '
+    '"deployment_id"): MODEL_KEY_ELSEWHERE reads key names only, never values',
+    'key names that are data: a key name can itself carry data (an id, an e-mail address, a schema\'s field name). '
+    'Under the open maps metadata, properties, input_schema, parameters, definitions, $defs and any key ending in '
+    '_metadata, a key name is recorded only when it contains "model", else as <map>; elsewhere names of up to 32 '
+    'characters of the key grammar are recorded as they are',
 )
 DISCOVERY_NOT_SHOWN = (
     'a model named in a body field other than the top-level "model" of a refused request: the key paths are read by '
@@ -266,8 +278,10 @@ def credential_fingerprints(headers, family) -> list:
 
 def body_key_paths(body: bytes) -> dict:
     """The JSON key paths of a request BODY, names only, never a value: object keys joined by '.', each array
-    collapsed to '[]' (messages[].content). A key outside KEY_NAME (or holding the token prefix) is recorded as
-    UNRECORDED_KEY and counted; at most KEY_PATH_LIMIT paths, at most KEY_PATH_DEPTH levels, else truncated."""
+    collapsed to '[]' (messages[].content). Under an open map (OPEN_MAPS, or a key ending in _metadata), where key
+    names are data, a key name is recorded only when it contains "model" (any case), else as MAP_KEY. A key outside
+    KEY_NAME (or holding the token prefix) is recorded as UNRECORDED_KEY and counted; at most KEY_PATH_LIMIT paths,
+    at most KEY_PATH_DEPTH levels, else truncated."""
     try:
         document = json.loads(body) if body else None
     except (ValueError, UnicodeDecodeError, RecursionError):
@@ -276,20 +290,24 @@ def body_key_paths(body: bytes) -> dict:
         return {'body': 'empty' if not body else 'not a JSON object or array', 'key_paths': [],
                 'key_paths_truncated': False, 'key_names_unrecorded': 0}
     paths, truncated, unnamed = set(), False, 0
-    stack = [(document, '', 0)]
+    stack = [(document, '', 0, False)]
     while stack:
-        node, prefix, depth = stack.pop()
+        node, prefix, depth, in_map = stack.pop()
         if isinstance(node, dict):
             children = []
             for key in node:
-                name = key if KEY_NAME.fullmatch(key) and broker.TOKEN_PREFIX not in key else UNRECORDED_KEY
-                unnamed += name == UNRECORDED_KEY
-                children.append((node[key], f'{prefix}.{name}' if prefix else name))
+                if in_map and 'model' not in key.lower():
+                    name = MAP_KEY
+                else:
+                    name = key if KEY_NAME.fullmatch(key) and broker.TOKEN_PREFIX not in key else UNRECORDED_KEY
+                    unnamed += name == UNRECORDED_KEY
+                opens = in_map or key.lower() in OPEN_MAPS or key.lower().endswith('_metadata')
+                children.append((node[key], f'{prefix}.{name}' if prefix else name, opens))
         elif isinstance(node, list):
-            children = [(item, prefix + '[]') for item in node]
+            children = [(item, prefix + '[]', in_map) for item in node]
         else:
             continue
-        for value, path in children:
+        for value, path, opens in children:
             if path not in paths and isinstance(node, dict):
                 if len(paths) >= KEY_PATH_LIMIT:
                     truncated = True
@@ -299,7 +317,7 @@ def body_key_paths(body: bytes) -> dict:
                 if depth + 1 > KEY_PATH_DEPTH:
                     truncated = True
                     continue
-                stack.append((value, path, depth + 1))
+                stack.append((value, path, depth + 1, opens))
     return {'body': 'json', 'key_paths': sorted(paths), 'key_paths_truncated': truncated,
             'key_names_unrecorded': unnamed}
 
@@ -446,13 +464,20 @@ def fake_upstream(family_id: str, address: str, port: int, ctx) -> int:
 # ---------------------------------------------------------------- the proposed family pin (the reader)
 
 
+def _dispatch_inputs():
+    """integrations/dispatch/dispatch_inputs.py, for its one "inside or around the checkout" comparison
+    (inside_or_around), loaded when a proposal's --out is checked."""
+    return _load('dispatch_inputs', broker.REPO / 'integrations' / 'dispatch' / 'dispatch_inputs.py')
+
+
 def proposal_target(value) -> Path:
     """--out: a new file in an existing directory, outside the checkout (PROPOSAL_OUT_REFUSED)."""
     if not isinstance(value, str) or not value.strip():
         raise QualificationError('PROPOSAL_OUT_REFUSED', 'no path given')
     target = Path(value).resolve()
-    repo = Path(os.path.realpath(broker.REPO))
-    if os.path.lexists(target) or not target.parent.is_dir() or target == repo or target.is_relative_to(repo):
+    repo = os.path.realpath(broker.REPO)
+    inside = _dispatch_inputs().inside_or_around
+    if os.path.lexists(target) or not target.parent.is_dir() or inside(value, repo) or inside(target, repo):
         raise QualificationError('PROPOSAL_OUT_REFUSED', f'{str(value)[:200]!r} exists, has no directory or lies '
                                                          'inside the checkout')
     return target
@@ -678,8 +703,10 @@ def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, s
                            f'{dict(sorted((+reader_dropped).items()))}'))
     if not families:
         flags.append(_flag('NO_GRANT_REQUESTS', 'no request presented a grant: nothing is proposed'))
+    # complete: everything the run sent is accounted for. An unattributed request (no grant, so no model recorded)
+    # leaves it false; MODEL_KEY_ELSEWHERE is a suitability flag about the pin and does not.
     complete = bool(families) and not (+broker_unrecorded or +reader_dropped or source.get('withheld')
-                                       or source.get('unreadable') or key_paths_incomplete)
+                                       or source.get('unreadable') or key_paths_incomplete or unattributed)
     not_shown = list(NOT_SHOWN) if upstream is None else [DISCOVERY_NOT_SHOWN] + list(NOT_SHOWN[1:])
     return {'format': PROPOSAL_FORMAT, 'status': 'proposed', 'applied': False, 'statement': PROPOSAL_STATEMENT,
             'source': {**source, 'attempt_filter': attempt_id}, 'complete': complete,
@@ -695,8 +722,11 @@ def write_proposal(target: Path, proposal: dict) -> None:
     text = json.dumps(proposal, indent=2, sort_keys=True) + '\n'
     if SYNTHETIC_PREFIX in text:
         raise QualificationError('PROPOSAL_EXPOSURE', 'the proposal holds the synthetic key\'s prefix')
-    with open(target, 'x', encoding='utf-8', newline='\n') as handle:
-        handle.write(text)
+    try:
+        with open(target, 'x', encoding='utf-8', newline='\n') as handle:
+            handle.write(text)
+    except OSError as exc:
+        raise QualificationError('PROPOSAL_WRITE_FAILED', f'{target.name[:120]!r}: {type(exc).__name__}') from None
 
 
 def proposal_summary(target: Path, proposal: dict) -> dict:
@@ -842,7 +872,7 @@ def main(argv=None, context=None) -> int:
             out=sys.stdout, err=sys.stderr, wait=broker._wait_for_interrupt, allow_ephemeral=False))
     except QualificationError as exc:
         err.write(f'inference-qualification: {exc}\n')
-        return 1 if exc.code == 'PROPOSAL_EXPOSURE' else 2
+        return 1 if exc.code in ('PROPOSAL_EXPOSURE', 'PROPOSAL_WRITE_FAILED') else 2
     except (broker.InferenceError, contract.LifecycleError) as exc:
         err.write(f'inference-qualification: {exc}\n')
         return 2 if exc.refusal else 1

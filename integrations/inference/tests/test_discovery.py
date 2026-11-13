@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import socket
@@ -87,7 +88,8 @@ class Reader(unittest.TestCase):
                    unattributed()]
         proposal = self.propose(records, source={'audit_file': 'audit-x.jsonl', 'withheld': 0, 'unreadable': 0})
         self.assertEqual((proposal['format'], proposal['status'], proposal['applied'], proposal['complete']),
-                         ('aieh-inference-family-pin-proposal/1', 'proposed', False, True))
+                         ('aieh-inference-family-pin-proposal/1', 'proposed', False, False))   # F2: unattributed
+        self.assertTrue(self.propose(records[:-1])['complete'])
         self.assertIn('never applied', proposal['statement'])
         self.assertIn('decision 0018 point 3', proposal['statement'])
         self.assertIn("Owner's approval", proposal['statement'])
@@ -200,16 +202,17 @@ class KeyPaths(unittest.TestCase):
         body = {'model': MAIN, 'max_tokens': 5, 'messages': [{'role': 'user', 'content': [{'type': 'text',
                                                                                             'text': 'hello'}]},
                                                               {'role': 'assistant', 'content': 'x'}],
-                'metadata': {'fallback_model': self.HIDDEN, 'a.b': 1, 'aieh-inf-k': 2, '': 3}, 'tools': []}
+                'metadata': {'fallback_model': self.HIDDEN, 'user_id': 'u'},
+                'extra': {'a.b': 1, 'aieh-inf-k': 2, '': 3, 'k' * 33: 4}, 'tools': []}
         result = IQ.body_key_paths(json.dumps(body).encode())
-        self.assertEqual(result, {'body': 'json', 'key_paths_truncated': False, 'key_names_unrecorded': 3,
+        self.assertEqual(result, {'body': 'json', 'key_paths_truncated': False, 'key_names_unrecorded': 4,
                                   'key_paths': sorted(['model', 'max_tokens', 'messages', 'messages[].role',
                                                        'messages[].content', 'messages[].content[].type',
                                                        'messages[].content[].text', 'metadata',
-                                                       'metadata.fallback_model', 'metadata.<unrecorded>',
-                                                       'tools'])})
+                                                       'metadata.fallback_model', 'metadata.<map>', 'extra',
+                                                       'extra.<unrecorded>', 'tools'])})
         text = json.dumps(result)
-        for value in (MAIN, self.HIDDEN, 'hello', 'a.b', 'aieh-inf-k'):
+        for value in (MAIN, self.HIDDEN, 'hello', 'a.b', 'aieh-inf-k', 'user_id', 'k' * 33):
             self.assertNotIn(value, text)
         self.assertEqual(IQ.body_key_paths(json.dumps([{'k': 1}]).encode())['key_paths'], ['[].k'])
         for raw, kind in ((b'', 'empty'), (b'not json', 'not a JSON object or array'), (b'"s"', 'not a JSON object '
@@ -249,6 +252,59 @@ class KeyPaths(unittest.TestCase):
         self.assertEqual(([f['code'] for f in cut['flags']], cut['complete']),
                          (['KEY_PATHS_TRUNCATED', 'KEY_NAMES_UNRECORDED'], False))
         self.assertIn('top-level model only', IQ.propose_pin([line()], declarations)['not_shown'][0])
+        not_shown = ' '.join(only_top['not_shown'])
+        self.assertIn('does not contain "model"', not_shown)
+        self.assertIn('a key name can itself carry data', not_shown)
+        for name in sorted(IQ.OPEN_MAPS) + ['_metadata']:
+            self.assertIn(name, not_shown)
+
+    def test_the_reviews_p2_bodies_key_names_that_are_data(self):
+        """F3: under the open maps a key name is recorded only when it contains "model"; elsewhere a name longer
+        than 32 characters (a token body) is not recorded."""
+        email, user = 'jane.doe@example.com', 'user_8f3a2c91d4'
+        for body, expected, unnamed in (
+                ({'model': 'm', 'metadata': {user: 'x', email: 1, 'fallback_model': 'b'}},
+                 ['metadata', 'metadata.<map>', 'metadata.fallback_model', 'model'], 0),
+                ({'model': 'm', 'tools': [{'input_schema': {'properties': {'ssn_last4': {}, 'Model': {}}}}]},
+                 ['model', 'tools', 'tools[].input_schema', 'tools[].input_schema.<map>',
+                  'tools[].input_schema.<map>.<map>', 'tools[].input_schema.<map>.Model'], 0),
+                ({'model': 'm', 'x': {'A' * 43: 1}}, ['model', 'x', 'x.<unrecorded>'], 1),
+                ({'model': 'm', 'request_metadata': {'tenant-a': {'deep': 1}}, 'parameters': {'p': 1},
+                  'definitions': {'d': 1}, '$defs': {'e': 1}},
+                 ['$defs', '$defs.<map>', 'definitions', 'definitions.<map>', 'model', 'parameters',
+                  'parameters.<map>', 'request_metadata', 'request_metadata.<map>', 'request_metadata.<map>.<map>'],
+                 0)):
+            with self.subTest(body=sorted(body)):
+                result = IQ.body_key_paths(json.dumps(body).encode())
+                self.assertEqual((result['key_paths'], result['key_names_unrecorded']), (expected, unnamed))
+                for data in (email, user, 'ssn_last4', 'A' * 43, 'tenant-a', 'deep'):
+                    self.assertNotIn(data, json.dumps(result))
+        summary = {'anthropic-messages': {'key_paths': {'POST /v1/messages': {
+            'paths': IQ.body_key_paths(json.dumps({'model': 'm', 'metadata': {'fallback_model': 'b'}}).encode())
+            ['key_paths'], 'truncated': False, 'names_unrecorded': 0}}}}
+        (flag,) = IQ.propose_pin([line()], IB.load_declarations(), upstream=summary)['flags']
+        self.assertEqual((flag['code'], flag['paths']), ('MODEL_KEY_ELSEWHERE', ['metadata.fallback_model']))
+
+    def test_upstream_summary_credentials_and_requests(self):
+        """F4: the substitution is shown only when every request carried exactly the provider key's fingerprint."""
+        family = IB.load_declarations()['anthropic-messages']
+        right, wrong = 'sha256:' + 'a' * 16, 'sha256:' + 'b' * 16
+
+        class Fake:
+            def __init__(self, *fingerprints_per_request):
+                lines = [{'event': 'start'}] + [
+                    {'event': 'request', 'family': family.id, 'method': 'POST', 'path': '/v1/messages',
+                     'status': 200, 'credential_fingerprints': fps} for fps in fingerprints_per_request]
+                self.out = io.StringIO(''.join(json.dumps(r) + '\n' for r in lines))
+
+        for fake, expected in ((Fake([right]), True), (Fake([right], [right]), True), (Fake([wrong]), False),
+                               (Fake([right], [wrong]), False), (Fake([]), False), (Fake([right, right]), False),
+                               (Fake(), None)):
+            with self.subTest(expected=expected):
+                summary = IQ.upstream_summary({'anthropic-messages': fake}, right)['anthropic-messages']
+                self.assertIs(summary['credential_is_the_synthetic_key'], expected)
+        empty = IQ.upstream_summary({'anthropic-messages': Fake()}, right)['anthropic-messages']
+        self.assertEqual((empty['requests'], empty['routes'], empty['key_paths']), (0, {}, {}))
 
 
 class Command(unittest.TestCase):
@@ -324,6 +380,30 @@ class Command(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'PROPOSAL_EXPOSURE')
         self.assertFalse((self.tmp / 'e.json').exists())
 
+    def test_a_write_failure_is_a_coded_failure(self):
+        """F6: PROPOSAL_WRITE_FAILED, exit 1, no traceback."""
+        with mock.patch.object(IQ, 'open', side_effect=PermissionError('denied'), create=True):
+            status, ctx = self.main('--audit', str(self.audit), '--out', str(self.tmp / 'w.json'))
+        self.assertEqual((status, ctx.out.getvalue()), (1, ''))
+        self.assertIn('PROPOSAL_WRITE_FAILED', ctx.err.getvalue())
+        self.assertIn('PermissionError', ctx.err.getvalue())
+        self.assertNotIn('Traceback', ctx.err.getvalue())
+        self.assertFalse((self.tmp / 'w.json').exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'the Windows forms of a path')
+    def test_every_windows_form_of_the_checkout_is_refused(self):
+        """F1: --out in the checkout under another form Windows resolves to it (\\\\?\\, trailing spaces or dots,
+        case, '/')."""
+        repo = os.path.realpath(S.REPO)
+        for value in ('\\\\?\\' + repo + '\\x-proposal.json', repo + ' \\x-proposal.json',
+                      repo + '.\\x-proposal.json', repo + '. .\\x-proposal.json', '\\\\?\\' + repo.upper() + '\\x.json',
+                      repo.replace('\\', '/') + '/integrations/x.json', '\\\\?\\' + repo + ' \\x-proposal.json'):
+            with self.subTest(value=value):
+                status, ctx = self.main('--audit', str(self.tmp / 'absent.jsonl'), '--out', value)
+                self.assertEqual(status, 2)
+                self.assertIn('PROPOSAL_OUT_REFUSED', ctx.err.getvalue())
+        self.assertFalse((S.REPO / 'x-proposal.json').exists())
+
 
 # ---------------------------------------------------------------- discovery, end to end
 
@@ -342,9 +422,14 @@ class Stdin:
 
 
 def free_port() -> int:
+    """A port that was free a moment ago: used only where nothing binds it (a refusal comes first), or through
+    Discovery.discover, which retries when another socket took it in between (F7: no bind-close-rebind race)."""
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         return probe.getsockname()[1]
+
+
+PORT_TRIES = 5
 
 
 class Discovery(unittest.TestCase):
@@ -366,8 +451,19 @@ class Discovery(unittest.TestCase):
                           stdin=stdin, out=io.StringIO(), err=io.StringIO(), wait=wait or refuse,
                           allow_ephemeral=True)
 
+    def discover(self, make_context, out, provider=PROVIDER_ID):
+        """(exit code, context, port) of a discover run on a fresh port; a run refused DISCOVERY_PORT_TAKEN (before
+        the key is read) is retried on another port, at most PORT_TRIES times."""
+        for _ in range(PORT_TRIES):
+            port = free_port()
+            ctx = make_context(port)
+            code = IQ.main(['discover', '--provider', provider, '--out', str(out)], ctx)
+            if 'DISCOVERY_PORT_TAKEN' not in ctx.err.getvalue():
+                return code, ctx, port
+        self.fail(f'no free port in {PORT_TRIES} tries')
+
     def test_the_discovery_run_proposes_the_routes_and_models_it_saw(self):
-        port, seen = free_port(), {}
+        seen = {}
         families = FAMILIES.read_bytes()
 
         def wait(broker):
@@ -384,11 +480,10 @@ class Discovery(unittest.TestCase):
                     ('GET', '/v1/models', None)):
                 seen.setdefault('status', []).append(S.request(inference, method, target, body, key)[0])
             seen['status'].append(S.request(inference, 'GET', '/v1/models?limit=5')[0])
-        stdin = Stdin((SYNTHETIC + '\n').encode())
-        ctx = self.context(f'http://127.0.0.1:{port}', stdin, wait)
         out = self.tmp / 'proposal.json'
-        self.assertEqual(IQ.main(['discover', '--provider', PROVIDER_ID, '--out', str(out)], ctx), 0,
-                         ctx.err.getvalue())
+        code, ctx, port = self.discover(lambda p: self.context(f'http://127.0.0.1:{p}',
+                                                               Stdin((SYNTHETIC + '\n').encode()), wait), out)
+        self.assertEqual(code, 0, ctx.err.getvalue())
         self.assertEqual(seen['status'], [200, 400, 403, 404, 404, 401])
         proposal = json.loads(out.read_text(encoding='utf-8'))
         (family,) = proposal['families']
@@ -402,7 +497,7 @@ class Discovery(unittest.TestCase):
                           ('MODEL_NOT_TOP_LEVEL', 'GET /v1/models'), ('UNATTRIBUTED_REQUESTS', None)])
         self.assertEqual(proposal['unattributed'], [{'method': 'GET', 'path': '/v1/models', 'requests': 1,
                                                      'query_names': ['limit'], 'codes': {'TOKEN_MISSING': 1}}])
-        self.assertTrue(proposal['complete'])
+        self.assertFalse(proposal['complete'])          # F2: an unattributed request was seen
         fingerprint = IB.contract.fingerprint(SYNTHETIC)
         self.assertEqual(proposal['discovery'], {
             'provider': PROVIDER_ID, 'families': ['anthropic-messages'], 'provider_key_fingerprint': fingerprint,
@@ -426,7 +521,7 @@ class Discovery(unittest.TestCase):
             again.bind(('127.0.0.1', port))
 
     def test_a_secondary_model_in_a_nested_field_is_flagged_by_its_path(self):
-        port, hidden = free_port(), 'syn-hidden-secondary-model'
+        hidden = 'syn-hidden-secondary-model'
 
         def wait(broker):
             grant = IC.ControlClient(broker.listeners['control']['port']).issue(
@@ -435,20 +530,34 @@ class Discovery(unittest.TestCase):
                     'metadata': {'fallback_model': hidden}}
             self.assertEqual(S.request(broker.listeners['inference']['port'], 'POST', '/v1/messages', body,
                                        [('x-api-key', grant['token'])])[0], 200)
-        ctx = self.context(f'http://127.0.0.1:{port}', Stdin(SYNTHETIC.encode()), wait)
         out = self.tmp / 'proposal.json'
-        self.assertEqual(IQ.main(['discover', '--provider', PROVIDER_ID, '--out', str(out)], ctx), 0,
-                         ctx.err.getvalue())
+        code, ctx, _ = self.discover(lambda p: self.context(f'http://127.0.0.1:{p}', Stdin(SYNTHETIC.encode()), wait),
+                                     out)
+        self.assertEqual(code, 0, ctx.err.getvalue())
         text = out.read_text(encoding='utf-8')
         proposal = json.loads(text)
         self.assertEqual([(f['code'], f.get('paths')) for f in proposal['flags']],
                          [('MODEL_KEY_ELSEWHERE', ['metadata.fallback_model'])])
         self.assertEqual(proposal['families'][0]['proposed']['models'], [MAIN])
+        self.assertTrue(proposal['complete'])           # MODEL_KEY_ELSEWHERE is a suitability flag only
         self.assertEqual(proposal['discovery']['upstream']['anthropic-messages']['key_paths']['POST /v1/messages']
                          ['paths'], ['messages', 'messages[].content', 'messages[].role', 'metadata',
                                      'metadata.fallback_model', 'model'])
         for value in (hidden, S.PROMPT_MARKER, SYNTHETIC):
             self.assertNotIn(value, text + ctx.out.getvalue() + ctx.err.getvalue())
+
+    def test_a_write_failure_after_the_run_is_a_coded_failure(self):
+        """F6: the run happened; the proposal could not be written: exit 1, PROPOSAL_WRITE_FAILED, no traceback."""
+        def wait(broker):
+            pass
+        out = self.tmp / 'proposal.json'
+        with mock.patch.object(IQ, 'open', side_effect=OSError('disk full'), create=True):
+            code, ctx, _ = self.discover(lambda p: self.context(f'http://127.0.0.1:{p}', Stdin(SYNTHETIC.encode()),
+                                                                wait), out)
+        self.assertEqual(code, 1)
+        self.assertIn('FAILED after the run: PROPOSAL_WRITE_FAILED', ctx.err.getvalue())
+        self.assertNotIn('Traceback', ctx.err.getvalue())
+        self.assertFalse(out.exists())
 
     def test_the_fake_upstream_command_records_no_key_paths(self):
         family = IB.load_declarations()['anthropic-messages']
@@ -467,11 +576,11 @@ class Discovery(unittest.TestCase):
         out = self.tmp / 'proposal.json'
         existing = self.tmp / 'exists.json'
         existing.write_text('{}', encoding='utf-8')
-        port = free_port()
         holder = socket.socket()
         self.addCleanup(holder.close)
-        holder.bind(('127.0.0.1', port))
+        holder.bind(('127.0.0.1', 0))                   # held: its port is taken for the whole test
         holder.listen()
+        port = holder.getsockname()[1]
         for upstream, target, code in (
                 (f'http://127.0.0.1:{free_port()}', existing, 'PROPOSAL_OUT_REFUSED'),
                 (f'http://127.0.0.1:{port}', out, 'DISCOVERY_PORT_TAKEN'),
@@ -488,10 +597,9 @@ class Discovery(unittest.TestCase):
         self.assertEqual(IQ.main(['discover', '--provider', 'Not An Id', '--out', str(out)], ctx), 2)
         self.assertIn('PROVIDER_ID_INVALID', ctx.err.getvalue())
         # a key refused after the fake upstream was bound: nothing proposed, the port freed
-        free = free_port()
-        stdin = Stdin(b'not-a-synthetic-key-0123456789')
-        ctx = self.context(f'http://127.0.0.1:{free}', stdin)
-        self.assertEqual(IQ.main(['discover', '--provider', PROVIDER_ID, '--out', str(out)], ctx), 2)
+        code, ctx, free = self.discover(lambda p: self.context(f'http://127.0.0.1:{p}',
+                                                               Stdin(b'not-a-synthetic-key-0123456789')), out)
+        self.assertEqual(code, 2)
         self.assertIn('KEY_NOT_SYNTHETIC', ctx.err.getvalue())
         self.assertFalse(out.exists())
         self.assertEqual(list((self.tmp / 'logs').iterdir()), [])

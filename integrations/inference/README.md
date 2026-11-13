@@ -492,17 +492,25 @@ process: the discovery run is the slice plan's step 6a, under the Owner's acts A
 - **`discover`** (`inference_qualification.py discover --provider ID --out FILE`, the synthetic key on standard
   input): the qualification launcher in its discovery mode. It refuses exactly as `broker` does, through the same
   code path, and also: `--out` must be a new file in an existing directory outside the checkout
-  (`PROPOSAL_OUT_REFUSED`), and each keyed family's upstream must be an IPv4 loopback literal
+  (`PROPOSAL_OUT_REFUSED`; "outside" is the comparison `load_manifest` uses, `dispatch_inputs.inside_or_around`,
+  which sees through every form Windows resolves to the same path: a `\\?\` or `\\?\UNC\` prefix, trailing spaces
+  and dots of a component, case, `/`), and each keyed family's upstream must be an IPv4 loopback literal
   (`FAKE_ADDRESS_REFUSED`) on which the command binds that family's fake upstream itself (`DISCOVERY_PORT_TAKEN`
-  when it cannot), all before the key is read. The broker's upstream is then this process's fake upstream and
-  nothing else. When the broker stops (the Owner's interrupt), it reads that run's audit file (named in the
+  when it cannot), all before the key is read. The broker's upstream for a keyed family is then this process's fake
+  upstream and nothing else. A configured family keyed to another provider id, whose loopback upstream the
+  launcher admits, is **not** bound by `discover`: whatever listens there is not this command's fake upstream (its
+  requests are still in the audit). When the broker stops (the Owner's interrupt), it reads that run's audit file (named in the
   broker's status) and writes the proposal (below) to `--out`, with a `discovery` member: the provider id, the
   keyed families, the provider key's fingerprint and what each fake upstream received (requests per route and
   answer, whether every credential it saw was the synthetic key's fingerprint, and per route the JSON **key paths**
   of the admitted request bodies). Key paths are names only, never a value: object keys joined by `.`, each array
-  collapsed to `[]` (`messages[].content`); a key outside `[A-Za-z0-9_$@-][A-Za-z0-9_$@:-]{0,63}` (or holding the
-  token prefix) is recorded as `<unrecorded>` and counted. At most 256 paths per request and per route, 32 levels,
-  and a body of at most 32 MiB; beyond that the set is marked truncated. Only `discover` records them: the
+  collapsed to `[]` (`messages[].content`); a key outside `[A-Za-z0-9_$@-][A-Za-z0-9_$@:-]{0,31}` (at most 32
+  characters, the audit's own bound) or holding the token prefix is recorded as `<unrecorded>` and counted. **Key
+  names can carry data** (an id, an e-mail address, a schema's field name): under the open maps `metadata`,
+  `properties`, `input_schema`, `parameters`, `definitions`, `$defs` and any key ending in `_metadata`, and
+  everywhere below them, a key name is recorded only when it contains `model` (any case), else as `<map>`, so
+  `metadata.fallback_model` is still seen. At most 256 paths per request and per route, 32 levels, and a body of at
+  most 32 MiB; beyond that the set is marked truncated. Only `discover` records them: the
   `fake-upstream` command's records are unchanged, and so are the broker and its audit. Standard output carries
   `serve`'s own report, standard error the proposal's summary. A key refused after the fake upstream was bound
   leaves no audit and no proposal, and the port is freed.
@@ -533,13 +541,19 @@ process: the discovery run is the slice plan's step 6a, under the Owner's acts A
   the engineering manager's option (b)): `MODEL_KEY_ELSEWHERE` (a key path other than the top-level `model` whose
   last segment contains `model`, any case; the flag lists the paths, never the values: a model named there is not
   checked by the broker, so the family is not declared without its own check), `KEY_PATHS_TRUNCATED` and
-  `KEY_NAMES_UNRECORDED`. `complete` is false when any value went unrecorded, unread or withheld, the key paths
-  were truncated or held an unrecorded name, or no grant's request was seen.
+  `KEY_NAMES_UNRECORDED`. `complete` says whether everything the run sent is accounted for: it is false when any
+  value went unrecorded, unread or withheld, the key paths were truncated or held an unrecorded name, a request
+  presented no grant (`UNATTRIBUTED_REQUESTS`: its model is never recorded), or no grant's request was seen.
+  `MODEL_KEY_ELSEWHERE` is a suitability flag about the pin and does not affect `complete`.
 - **Not shown** (the proposal's `not_shown` list): a model named in a body field other than the top-level `model`
   of a refused request in a discovery run (only admitted requests reach the fake upstream that reads the key
   paths), and of any request when `propose-pin` reads an audit file alone (the audit records the top-level model
-  only, D-4 as accepted); query values, headers and bodies; what a refused request would have done; requests the
-  client never sent because an earlier one was refused.
+  only, D-4 as accepted); a secondary model under a key whose name does not contain `model` (`engine`,
+  `deployment_id`): the flag reads key names, never values; key names that are data, as above; query values,
+  headers and bodies; what a refused request would have done; requests the client never sent because an earlier one
+  was refused.
+- **A write that fails** after the run (or in `propose-pin`) is `PROPOSAL_WRITE_FAILED`, exit 1, with the error's
+  type and no traceback; `propose-pin` over the run's audit file writes it again.
 
 ## The real-key containment search (S-03.3, slice 4)
 
@@ -555,14 +569,17 @@ credential provider holding a synthetic key) and has never read a real entry.
     --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
 ```
 
-- Every argument is checked first: `--owner-act` names the Owner's act (`OWNER_ACT_REQUIRED` otherwise: a letter or
-  digit, then up to 63 letters, digits, spaces or `._:()/-`), `--expect-fingerprint` (the running broker's
+- Every argument is checked first: `--owner-act` is a **label** naming the Owner's act, recorded in the report; only
+  its grammar is checked (`OWNER_ACT_REQUIRED` otherwise: a letter or digit, then up to 63 letters, digits, spaces
+  or `._:()/-`), never a record: no recorded act is read or verified, and that the act exists is the operator's
+  statement; `--expect-fingerprint` (the running broker's
   provider-key fingerprint, from its start receipt or status) and the surfaces, as `inference_key_search.py`
   takes them. Only then is the credential provider asked.
 - The key is read once through the broker's own credential factory (`credentials.select_provider`, the provider
   the broker's managed context uses) from the entry `AIEH model provider`: never standard input, an argument or
   the environment. A provider that fails (`KEY_PROVIDER_FAILED`, its error type only), an absent or malformed
-  entry (`KEY_ENTRY_ABSENT`) and another key (`FINGERPRINT_MISMATCH`) are refused without repeating what was read.
+  entry (`KEY_ENTRY_ABSENT`) and another key (`FINGERPRINT_MISMATCH`, naming the key of the credential entry, never
+  a piped one) are refused without repeating what was read.
 - The search is `inference_key_search.run`: the same forms (for a key without the synthetic prefix, its body is
   the whole key), views, surfaces, positive controls (copies planted by the standard library's encoders) and
   verdicts. The report (`aieh-inference-real-key-search/1`, the search's own format as `search_format`) adds the
@@ -631,7 +648,7 @@ side's codes and the broker's refusals): `TOKEN_STDOUT_TERMINAL`, `TOKEN_STDOUT_
 `KEY_INVALID`, `KEY_NOT_SYNTHETIC`, `FINGERPRINT_INVALID`, `FINGERPRINT_MISMATCH`, `SURFACE_INVALID` (exit 2),
 `OUTPUT_WITHHELD` (exit 1).
 Discovery and the reader (`inference_qualification.py`, S-03.3): `DISCOVERY_PORT_TAKEN`, `PROPOSAL_OUT_REFUSED`,
-`AUDIT_UNREADABLE`, `ATTEMPT_ID_INVALID` (exit 2), `PROPOSAL_EXPOSURE` (exit 1); after a discovery run, a proposal
+`AUDIT_UNREADABLE`, `ATTEMPT_ID_INVALID` (exit 2), `PROPOSAL_EXPOSURE`, `PROPOSAL_WRITE_FAILED` (exit 1); after a discovery run, a proposal
 that cannot be read or written exits 1. The real-key search (`inference_real_key_search.py`): `OWNER_ACT_REQUIRED`,
 `KEY_PROVIDER_FAILED`, `KEY_ENTRY_ABSENT` and the key search's `FINGERPRINT_INVALID`, `FINGERPRINT_MISMATCH`,
 `SURFACE_INVALID` (exit 2), `OUTPUT_WITHHELD` (exit 1).

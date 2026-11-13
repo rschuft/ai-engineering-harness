@@ -178,6 +178,21 @@ class RealKeySearch(unittest.TestCase):
                 self.assert_no_copy(other, err)
         self.assertIn('OSError', self.run_search(key, factory=Factory(fail=OSError(key)))[2])
 
+    def test_a_mismatch_names_the_entrys_key_never_a_piped_one(self):
+        """F6: this caller's meaning: the key of the credential entry; the synthetic search keeps its own."""
+        key, other = provider_shaped(), provider_shaped()
+        status, _, err, _ = self.run_search(key, factory=Factory({IB.ENTRY: (S.PROVIDER, other)}))
+        self.assertEqual(status, 2)
+        self.assertIn('FINGERPRINT_MISMATCH: the key of the credential entry is not the key of that fingerprint', err)
+        self.assertIn(RK.MISMATCH_REMEDY, err)
+        self.assertNotIn('pipe', err)
+        with self.assertRaises(KS.SearchError) as caught:
+            KS.check_fingerprint(key, KS.fingerprint(other))
+        self.assertIn('piped key', str(caught.exception))
+        with self.assertRaises(KS.SearchError) as caught:
+            RK.read_entry_key('sha256:XYZ', Factory({IB.ENTRY: (S.PROVIDER, key)}))
+        self.assertEqual(caught.exception.code, 'FINGERPRINT_INVALID')
+
     def test_a_report_that_would_hold_the_key_is_withheld(self):
         key = provider_shaped()
         status, out, err, _ = self.run_search(key, surfaces=[f'{key[-30:]}=tree:{self.root}'])

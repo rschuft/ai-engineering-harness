@@ -15,6 +15,8 @@ same withheld-report rule. The report adds the entry, the provider's name and th
 
 Its live use is covered only by the Owner's act A1 (OA-12: the provider key in its Credential Manager entry): the
 command refuses to run without --owner-act naming that act, and reads nothing before every argument is checked.
+--owner-act is a label that names the act in the report: its grammar is checked, but it is not checked against any
+record (no recorded Owner act is read or verified here); that the act exists is the operator's statement.
 It reads no standard input and no environment variable, prints and writes no copy of the key, and keeps no log.
 
   <tools python> -I -B integrations/inference/inference_real_key_search.py search --owner-act ACT \\
@@ -53,6 +55,8 @@ broker = _load('aieh_inference_broker', HERE / 'inference_broker.py')
 ks = _load('aieh_inference_key_search', HERE / 'inference_key_search.py')
 
 FORMAT = 'aieh-inference-real-key-search/1'
+MISMATCH_REMEDY = ('give --expect-fingerprint as the running broker\'s provider-key fingerprint (its start receipt or '
+                   'status); the entry holds another key')
 OWNER_ACT = re.compile(r'[A-Za-z0-9][A-Za-z0-9 ._:()/-]{0,63}')
 CODES = {
     'OWNER_ACT_REQUIRED': 'name the Owner\'s act that covers reading the provider key (A1 of OA-12) with --owner-act: '
@@ -91,7 +95,15 @@ def read_entry_key(expected: str, provider_factory: Callable) -> tuple[str, str]
         raise RealKeyError('KEY_ENTRY_ABSENT', f'the entry {broker.ENTRY!r} holds no provider key')
     key = entry[1]
     del entry
-    ks.check_fingerprint(key, expected)
+    try:
+        ks.check_fingerprint(key, expected)
+    except ks.SearchError as exc:          # this caller's meaning: the entry's key, never a piped one
+        if exc.code != 'FINGERPRINT_MISMATCH':
+            raise
+        mismatch = ks.SearchError(exc.code, 'the key of the credential entry is not the key of that fingerprint')
+        mismatch.remedy = MISMATCH_REMEDY
+        mismatch.args = (f'{mismatch.code}: {mismatch.detail}. Remedy: {MISMATCH_REMEDY}.',)
+        raise mismatch from None
     return key, str(source)[:64]
 
 
@@ -120,7 +132,9 @@ def main(argv=None, out=None, err=None, provider_factory: Callable | None = None
                                      'incomplete, 2 refused.')
     sub = parser.add_subparsers(dest='command', required=True)
     search = sub.add_parser('search', help='read the key of the broker\'s credential entry and search the surfaces')
-    search.add_argument('--owner-act', required=True, help='the Owner\'s act that covers reading the key (A1)')
+    search.add_argument('--owner-act', required=True, help='a label naming the Owner\'s act that covers reading the '
+                                                           'key (A1); recorded in the report, not checked against '
+                                                           'any record')
     search.add_argument('--expect-fingerprint', required=True,
                         help="the running broker's provider-key fingerprint (start receipt or status), "
                              'sha256:<16 hex digits>')
