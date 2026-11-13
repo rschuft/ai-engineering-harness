@@ -1324,9 +1324,10 @@
       "name": "Gitea authorization repository",
       "kind": "repository",
       "custodian": "owner",
-      "location": "A dedicated repository with one protected authorization branch; operations/<operation-id>.json manifests; Owner-only merges; no direct or force pushes; merge commits only.",
+      "location": "A dedicated repository with one protected authorization branch; operations/<operation-id>.json manifests; Owner-only merges; no direct or force pushes; merge commits only. Decision 0022 places it early, for D1 (plan leaf E-05.7, carved from G-03.1): aieh-authorization/authorizations on the host-loopback Gitea, a private organization of its own, default and protected branch main, the one ledger of real Owner authorizations and never a fixture.",
       "status": "planned",
-      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification"]
+      "notes": "E-05.7 built it offline (2026-11-13), on the Gitea fakes and throwaway stores only: the managed recorder context admits exactly this repository (integrations/owner/authorization_recorder.py, managed_policies), the protection check carries its own declaration entry (integrations/gitea/gitea_roles.py DECLARATIONS), a proposal act opens its pull requests with bot tokens only (integrations/owner/authorization_proposal.py), and Owner act OA-30's module creates and declares it as the site administrator (gitea_roles.py authorization-repository --owner-act OA-30). It does not exist until OA-30 is performed; status stays planned until then.",
+      "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "decisions/0022-authorization-repository-the-one-ledger-provisioned-for-d1.md", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#E-05.7"]
     },
     {
       "id": "repo-gitea-policy",
@@ -1736,7 +1737,7 @@
       "credentials": ["cred-gitea-owner-account"],
       "assets": ["repo-gitea-authorization", "gitea-server"],
       "planned_performer": "authorization-recorder",
-      "performed_via": "Delegated: the authorization recorder (P-04.2; decision 0012) performs the merge as aieh-owner on a recorded Owner decision; the Owner never operates Gitea. Before the merge the recorder requires the protection check (op-protection-verify) to answer verified, and it asks again after the read-back. Performed once, on 2026-11-12, on the S-01.2.2 fixture (aieh-authz-fixture/authz), on the Owner's authorization of OA-14 (evidence/P-04.2-authorization-recorder.md, section 17); the authorization repository (G-03.1) does not exist yet.",
+      "performed_via": "Delegated: the authorization recorder (P-04.2; decision 0012) performs the merge as aieh-owner on a recorded Owner decision; the Owner never operates Gitea. Before the merge the recorder requires the protection check (op-protection-verify) to answer verified, and it asks again after the read-back. Performed once, on 2026-11-12, on the S-01.2.2 fixture (aieh-authz-fixture/authz), on the Owner's authorization of OA-14 (evidence/P-04.2-authorization-recorder.md, section 17); the authorization repository (G-03.1) does not exist yet: E-05.7 built its offline admission (the managed recorder context admits it alone), its declaration, its proposal act and Owner act OA-30's module on fakes (decision 0022), and it is created only by OA-30.",
       "status": "planned",
       "sources": ["AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authorization-qualification", "AI_Engineering_Open_Source_Blueprint_Architecture_Deep_Review_2026-10-31.html#authority", "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#P-04.2"],
       "findings": ["fd-owner-authorization-record"]
