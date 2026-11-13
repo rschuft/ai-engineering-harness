@@ -802,6 +802,45 @@ class BasisAuthority(Base):
         self.assertEqual(caught.exception.code, 'DELEGATION_BASIS_NOT_AUTHORITY')
 
 
+class TitlesAndDates(Base):
+    """Slice 3 (N-A and the title date): a commitment's entry title begins, after its date, with "Commitment:";
+    the quote lies inside that entry; and an undated entry is no authority of either type."""
+
+    def anchored(self, factory, anchor, quote):
+        return factory(link=f'{G.LOG}#{anchor}', quote=quote)
+
+    def test_a_title_that_merely_contains_commitment_is_no_commitment(self):
+        self.assertUnchanged('DELEGATION_BASIS_NOT_AUTHORITY', self.delegate_design,
+                             basis=self.anchored(fi.commitment, fi.FINDINGS_ANCHOR, fi.FINDINGS_QUOTE))
+
+    def test_a_commitment_quote_from_outside_its_anchored_entry(self):
+        refused = self.assertUnchanged('DELEGATION_BASIS_NOT_AUTHORITY', self.delegate_design,
+                                       basis=self.anchored(fi.commitment, fi.COMMITMENT_ANCHOR, fi.FINDINGS_QUOTE))
+        self.assertIn('not inside the entry', refused.detail)
+
+    def test_an_undated_entry_is_no_authority(self):
+        refused = self.assertUnchanged('DELEGATION_BASIS_NOT_AUTHORITY', self.delegate_design, basis=self.anchored(
+            fi.commitment, fi.UNDATED_COMMITMENT_ANCHOR, fi.UNDATED_COMMITMENT))
+        self.assertIn('no "<date>: " title', refused.detail)
+        self.accept()
+        refused = self.assertUnchanged('DELEGATION_BASIS_NOT_AUTHORITY', self.delegate_promotion, self.candidate(),
+                                       basis=self.anchored(fi.envelope, fi.UNDATED_ENVELOPE_ANCHOR,
+                                                           fi.UNDATED_ENVELOPE))
+        self.assertIn('no "<date>: " title', refused.detail)
+
+    def test_read_design_refuses_a_line_break_at_the_end(self):
+        """N-D: the shared grammars end in "$", which also matches before a final newline."""
+        with self.assertRaises(ValueError):
+            IR.read_design(self.repos.project, REPOSITORY + '\n', CHANGE, self.repos.first)
+        for change, commit, code in ((CHANGE + '\n', self.repos.first, 'CHANGE_MISSING'),
+                                     (CHANGE, self.repos.first + '\n', 'REVISION_INVALID')):
+            with self.subTest(change=change, commit=commit):
+                with self.assertRaises(IR.RecorderError) as caught:
+                    IR.read_design(self.repos.project, REPOSITORY, change, commit)
+                self.assertEqual(caught.exception.code, code)
+                self.assertIn(repr(change if code == 'CHANGE_MISSING' else commit), caught.exception.detail)
+
+
 class OwnerHead(Base):
     """F8: a delegated acceptance never supersedes an Owner acceptance (decision 0018 point 4.8)."""
 

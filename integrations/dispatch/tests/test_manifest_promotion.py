@@ -317,6 +317,31 @@ class EnforcementCannotBeSkipped(Proof):
         self.assertEqual(self.reads, ['read_profile'])
 
 
+class GuardRecheck(Proof):
+    """Slice 3, N-B: the guard re-checks the approval view of the very object load_manifest returned, so a view
+    changed in place on that object is refused."""
+
+    def test_a_view_changed_in_place_is_refused(self):
+        self.promoted_v1()
+        loaded = self.load()
+        reached = []
+
+        def forbidden(*args, **kw):
+            reached.append('read')
+            raise AssertionError('read')
+        for view in (json.dumps({'version': loaded.version, 'digest': f'sha256:{loaded.sha256}'}),
+                     loaded.approval_json.replace('"designs":[', '"designs":[{},', 1)):
+            with self.subTest(view=view[:60]):
+                object.__setattr__(loaded, 'approval_json', view)
+                with self.assertRaises(DI.DispatchRefused) as caught:
+                    DI.resolve({'format': DI.REQUEST_FORMAT, 'work_id': 'TASK-1', 'repository': REPOSITORY,
+                                'stage': 'implement', 'profile': 'fixture-profile', 'catalog_pin': 'fixture-pin'},
+                               manifest=loaded, work_sources=forbidden, next_ordinal=forbidden,
+                               read_profile=forbidden)
+                self.assertEqual(caught.exception.code, 'MANIFEST_NOT_PROMOTED')
+        self.assertEqual(reached, [])
+
+
 class LoadOrder(Proof):
     """Ruling R8: the path rules stay load_manifest's first refusals (the recorder relies on them), then the
     read and the schema; the verifier is asked last, and only a well-formed answer approves."""

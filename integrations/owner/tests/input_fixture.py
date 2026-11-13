@@ -71,6 +71,14 @@ DIRECTION_QUOTE = 'SYNTHETIC FIXTURE direction, not a standing authorization: pr
 AUTHORIZATION_QUOTE = 'SYNTHETIC FIXTURE per-act authorization, not standing: promote this one manifest.'
 ENVELOPE_PROSE = 'Given in the main session (SYNTHETIC FIXTURE), transcribed verbatim below'
 OA_ROW = 'Prepared, not granted (SYNTHETIC FIXTURE): (j) the manifest envelope of fixture-app'
+# An entry whose title contains "Commitment:" without beginning with it (slice 3, N-A), with a quote of its own that
+# names a commitment; and undated entries of both kinds (their titles have no "<date>: ").
+FINDINGS_ANCHOR = 'findings-on-a-commitment-fixture'
+FINDINGS_QUOTE = 'Commitment: FIXTURE-D is in scope (SYNTHETIC FIXTURE findings, not a commitment).'
+UNDATED_COMMITMENT_ANCHOR = 'commitment-undated-fixture'
+UNDATED_COMMITMENT = 'Commitment: FIXTURE-U (SYNTHETIC FIXTURE, undated).'
+UNDATED_ENVELOPE_ANCHOR = 'owner-standing-authorization-undated-fixture'
+UNDATED_ENVELOPE = 'SYNTHETIC FIXTURE, undated: a standing authorization to promote fixture-app manifests.'
 ACCEPTED_STATUS = ('Status: Accepted (Owner) - 2026-11-12, revision 4 (SYNTHETIC FIXTURE of decision 0018, not '
                    'the record)')
 PROPOSED_STATUS = 'Status: Proposed - 2026-11-12, revision 4 (SYNTHETIC FIXTURE of decision 0018, not the record)'
@@ -121,6 +129,11 @@ def log(entries=True):
                   '', *_block(DIRECTION_QUOTE), '',
                   f'- <a id="{AUTHORIZATION_ANCHOR}"></a>**2026-11-12: Owner authorization: one fixture manifest.** '
                   'Verbatim:', '', *_block(AUTHORIZATION_QUOTE), '',
+                  f'- <a id="{FINDINGS_ANCHOR}"></a>**2026-11-12: Findings on the Commitment: FIXTURE-D scope.** '
+                  f'{FINDINGS_QUOTE}',
+                  f'- <a id="{UNDATED_COMMITMENT_ANCHOR}"></a>**{UNDATED_COMMITMENT}** Terminal leaf FIXTURE-2.',
+                  f'- <a id="{UNDATED_ENVELOPE_ANCHOR}"></a>**Owner standing authorization: undated.** Verbatim:', '',
+                  *_block(UNDATED_ENVELOPE), '',
                   '- **2026-11-12: An entry without an anchor (SYNTHETIC FIXTURE).**', '', '## Later section']
     return ''.join(f'{line}\n' for line in lines).encode('utf-8')
 

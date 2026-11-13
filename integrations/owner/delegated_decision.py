@@ -36,7 +36,7 @@ repository's ``HEAD`` commit through the repository-access module (the committed
 tree; decision 0014), has a ``Status:`` line beginning ``Status: Accepted (Owner) -``; and the basis is
 recorded there as an authority of its type, structurally: its link names an anchored entry of the log's
 Decisions (``evidence/bootstrap-log.md#<anchor>``); a ``commitment``'s entry is titled ``<date>: Commitment:
-...`` and contains the quote; an ``envelope``'s entry is titled ``<date>: Owner standing authorization: ...``
+...`` (the title begins so) and contains the quote; an ``envelope``'s entry is titled ``<date>: Owner standing authorization: ...``
 and the quote lies inside its verbatim block (the ``>`` lines). An absent anchor or quote is
 ``DELEGATION_BASIS_NOT_RECORDED``; an entry of another kind, or a quote outside it or its block, is
 ``DELEGATION_BASIS_NOT_AUTHORITY`` (fail closed). Who ran the command, that the decision lies inside the
@@ -120,7 +120,7 @@ ANCHOR = re.compile(r'^[a-z0-9][a-z0-9-]{0,127}$')
 DECISIONS_HEADING = '## Decisions'
 # A Decisions entry of the log: a top-level list item opening with its anchor and its bold, dated title.
 ENTRY_START = re.compile(r'^- <a id="(?P<anchor>[a-z0-9][a-z0-9-]*)"></a>\*\*(?P<title>.+?)\*\*')
-DATED_TITLE = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}: (?P<rest>.*)$')
+DATED_TITLE = re.compile(r'^(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2}): (?P<rest>.*)$')
 STANDING_TITLE = 'Owner standing authorization:'
 COMMITMENT_TITLE = 'Commitment:'
 VERBATIM_LINE = re.compile(r'^\s*>\s?(?P<text>.*)$')
@@ -154,9 +154,11 @@ def _quote_problems(name, mark=None):
 
 
 class LogEntry(NamedTuple):
-    """One anchored Decisions entry of the log: its anchor, its title without the date, its whole text and its
-    verbatim block (its ``>`` lines with the prefixes stripped, joined by newlines)."""
+    """One anchored Decisions entry of the log: its anchor, its date (None when the title has no ``<date>:``
+    prefix), its title without the date, its whole text and its verbatim block (its ``>`` lines with the
+    prefixes stripped, joined by newlines)."""
     anchor: str
+    date: str | None
     title: str
     text: str
     verbatim: str
@@ -183,8 +185,8 @@ def decisions_entry(log_text, anchor):
         dated = DATED_TITLE.match(match.group('title'))
         body = lines[index:end]
         verbatim = [m.group('text') for m in (VERBATIM_LINE.match(text) for text in body[1:]) if m]
-        return LogEntry(anchor, dated.group('rest') if dated else match.group('title'), '\n'.join(body),
-                        '\n'.join(verbatim))
+        return LogEntry(anchor, dated.group('date') if dated else None,
+                        dated.group('rest') if dated else match.group('title'), '\n'.join(body), '\n'.join(verbatim))
     return None
 
 
@@ -205,12 +207,20 @@ def _anchored(basis, view):
     return entry, None
 
 
+def _undated(entry):
+    return ('DELEGATION_BASIS_NOT_AUTHORITY', f'the entry {entry.anchor!r} has no "<date>: " title: a Decisions '
+            'entry of the log is dated')
+
+
 def _commitment_unrecorded(basis, view):
-    """A commitment: the anchored entry's title contains ``Commitment:`` and the quote lies inside the entry."""
+    """A commitment: the anchored entry's title begins, after its date, with ``Commitment:`` and the quote lies
+    inside the entry."""
     entry, refusal = _anchored(basis, view)
     if refusal is not None:
         return refusal
-    if COMMITMENT_TITLE not in entry.title:
+    if entry.date is None:
+        return _undated(entry)
+    if not entry.title.startswith(COMMITMENT_TITLE):
         return ('DELEGATION_BASIS_NOT_AUTHORITY', f'the entry {entry.anchor!r} is {entry.title!r}, not a '
                 f'"{COMMITMENT_TITLE} <milestone>" entry')
     if basis['quote'] not in entry.text:
@@ -224,6 +234,8 @@ def _envelope_unrecorded(basis, view):
     entry, refusal = _anchored(basis, view)
     if refusal is not None:
         return refusal
+    if entry.date is None:
+        return _undated(entry)
     if not entry.title.startswith(STANDING_TITLE):
         return ('DELEGATION_BASIS_NOT_AUTHORITY', f'the entry {entry.anchor!r} is {entry.title!r}, not an '
                 f'"{STANDING_TITLE} ..." entry')

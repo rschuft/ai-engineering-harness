@@ -356,9 +356,10 @@ harness repository's `HEAD` (`- <a id="<anchor>"></a>**<date>: <title>** ...`; t
 top-level list item or heading). A `commitment`'s entry is titled `<date>: Commitment: ...` and contains the
 quote. An `envelope`'s entry is titled `<date>: Owner standing authorization: ...`, and the quote lies inside
 its verbatim block (its `>` lines, the prefixes stripped, compared with runs of whitespace collapsed on both
-sides). An entry with another title (`Owner direction:`, `Owner authorization:`, ...), a quote outside the
-entry or its block, or a row of the Owner-actions queue prepared and not granted is
-`DELEGATION_BASIS_NOT_AUTHORITY`; an absent anchor or quote is `DELEGATION_BASIS_NOT_RECORDED`.
+sides). Each title begins, after its `<date>: `, with its kind's words: a title that merely contains
+`Commitment:` is no commitment, and an undated title is no authority of either type. An entry with another
+title (`Owner direction:`, `Owner authorization:`, ...), a quote outside the entry or its block, or a row of
+the Owner-actions queue prepared and not granted is `DELEGATION_BASIS_NOT_AUTHORITY`; an absent anchor or quote is `DELEGATION_BASIS_NOT_RECORDED`.
 
 **The convention this needs** (decision 0018 points 5 and 7): the session in which the Owner grants a
 standing authorization records it in the log's Decisions as an entry titled `<date>: Owner standing
