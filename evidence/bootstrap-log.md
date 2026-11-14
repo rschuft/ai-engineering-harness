@@ -4093,6 +4093,30 @@ push never implies parent acceptance.
   >
   > Use focused verification and independent review.
   > Do not reinstate performance-budget gates.
+- <a id="owner-authorization-d1-provider-envelope-2026-11-14"></a>**2026-11-14: Owner authorization: operation `d1-provider-envelope` (OA-12 act 3).** Given in the main (engineering manager) session in reply to the authorization recorder's challenge (nonce `acbb790e42e0d53fb96cb60265ba6eed`, pull request #1 on `aieh-authorization/authorizations`, head `50ef38cb30d50d68f92c09fa0cc7ba6501488ffe`, manifest `sha256:eb4f612a…bcac2`, target `sha256:6ed08821…4d54`); transcribed verbatim by the engineering manager (decision 0018 point 7; the paste wrapper is removed) and recorded through the recorder with this entry as its reference. It also accepts the two corrections disclosed with the challenge: the real-key containment search reads the key in memory (D-5), and S-03.3 sends a second fixed prompt asking for one sub-agent step. Verbatim:
+
+  > I authorize operation d1-provider-envelope.
+  >
+  > I approve the exact manifest presented in the
+  > recorder's challenge:
+  >
+  > Repository: aieh-authorization/authorizations
+  > Pull request: #1
+  > Head: 50ef38cb30d50d68f92c09fa0cc7ba6501488ffe
+  > Target: sha256:6ed0882190c5c505aabb868d37eb2b5b6bf93b12618e63ebd7be7c0a2a5d4d54
+  >
+  > This authorization is limited to the previously
+  > approved OA-12 provider-access scope.
+  >
+  > I accept the two disclosed qualification corrections:
+  > the in-memory provider-key containment inspection
+  > and the additional fixed subagent prompt.
+  >
+  > Proceed through the authorization recorder using
+  > the existing challenge and established protections.
+  >
+  > I will separately complete the dedicated API-key
+  > creation and hidden credential-entry steps.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
