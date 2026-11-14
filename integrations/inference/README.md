@@ -56,6 +56,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, no budget (an answer without usage, a cut stream and an upstream error stop nothing), revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
 | `tests/test_stop.py` | The stop (S-03.2 fix-forward, before act A2): the stop event, the interrupt handler and the forced exit of a second interrupt, `POST /v1/stop` and `inference_control.py stop`, `BROKER_STOPPING` from the stop's start, the bounded drain (a request cut by the stop audited `BROKER_STOPPED`; an upstream that never answers does not hold the stop); on Windows, `serve` in a process of its own stopped by a real `CTRL_BREAK_EVENT`, by `inference_control.py stop`, and forced by a second one |
+| `tests/test_reach.py` | Provider-side reach refused (S-03.3 fix-forward, before the first paid call): each rule of the `anthropic-messages` checker (`mcp_servers`, `container`, a tool type other than `custom`, a `url` or `file` source and a `container_upload` block anywhere, tool results included) refused `PROVIDER_REACH_REFUSED` with its audit `reach` member and nothing sent upstream; plain model calls and custom tools admitted; a family with no checker refused at start on an upstream that is not loopback (`FAMILY_REACH_UNCHECKED`) |
 | `tests/serve_child.py` | The child process of `test_stop.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -268,7 +269,8 @@ family's auth header; the method and path are in that family's route set (and th
 broker's own stop has not begun (`BROKER_STOPPING`) and, for a bound family, the envelope holds; the body has one
 `Content-Length` (no chunked body) within
 `max_request_bytes`, is a JSON object and names a `model` that is in both the token's list and the family's
-allowlist; and the token appears nowhere in what would be forwarded (target, headers, body). The request is
+allowlist; the body asks the provider to reach or run nothing outside the request ([Provider-side
+reach](#provider-side-reach)); and the token appears nowhere in what would be forwarded (target, headers, body). The request is
 then counted, and passed through unchanged to the family's one upstream origin: the same method, target and
 body; the client's headers except hop-by-hop ones, `Host`, `Content-Length`, `Accept-Encoding` (the broker
 asks for `identity`, so that usage can be read) and every credential-bearing header (`Authorization`,
@@ -290,6 +292,23 @@ refused `BROKER_STOPPING` (503) at admission, before anything of it is written u
 after the listeners stop (a keep-alive connection) forwards nothing more. After the stop the audit is closed, so
 such a refusal is not answered: the connection is closed instead. How a stop is asked and how it ends:
 [The stop](#the-stop).
+
+**Provider-side reach.** The authorized D1 scope is plain model calls (OA-12 package, section 3 point 5): a
+request must not ask the provider to reach or run anything outside the request. A family's reach checker reads
+the parsed JSON body of every admitted request; `anthropic-messages` refuses, with `PROVIDER_REACH_REFUSED` (400):
+
+- a top-level `mcp_servers` or `container` key, present at all, whatever its value (rule `top-level-key`);
+- an entry of `tools` whose `type` is present and is not `custom` (rule `tool-type`): every server tool (web
+  search, web fetch, code execution) and every provider-defined tool type, known or not, fail closed; Claude
+  Code's own tools are custom tools;
+- anywhere in the body (every nested object and list, tool results included), an object whose `source` is an
+  object of `type` `url` or `file` (rule `source-type`), and a block whose `type` is `container_upload` (rule
+  `block-type`).
+
+The refused request's audit line carries `reach`: `{"rule", "name"}`, the name being the key or the type in the
+audit's bounded name grammar (`null` outside it), never a value. A family with no reach checker (the two OpenAI
+families today) is refused at start when its upstream is not loopback (`FAMILY_REACH_UNCHECKED`); on a loopback
+upstream it is unchanged. The walk is iterative, so a deeply nested body is checked whole.
 
 **Egress.** `connect_upstream` is the one place that opens a connection, to the configured upstream origin of
 the admitted token's family: `https` with the system's trust roots and hostname check, or `http` to a
@@ -333,9 +352,10 @@ One append-only JSON line per request (`aieh-inference-audit/1`) in a new file p
 `<managed root>/persistent/logs/inference/audit-<stamp>-<random>.jsonl`: `time`, `attempt_id`,
 `conversation_id`, `token_fingerprint`, `family`, `method`, `path`, `query_names`, `model`, `unrecorded`,
 `request_bytes`, `response_bytes`, `status`, `upstream_status`, `latency_ms`, `usage` and `code` (the refusal
-code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`, `BROKER_STOPPED`: cut by the broker's stop); plus
-`broker-start`, `broker-stop` (`stopped_by`, `requests_cut`, `live_grants_ended`) and `handler-error` lines. An admitted request's line has its declared route and admitted model. A refused
-request's line (the S-03.3 slice plan's D-4, for route and model discovery without a model call against the
+code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`, `BROKER_STOPPED`: cut by the broker's
+stop); plus `broker-start`, `broker-stop` (`stopped_by`, `requests_cut`, `live_grants_ended`) and
+`handler-error` lines. A request refused `PROVIDER_REACH_REFUSED` adds `reach` (`rule` and `name`). An admitted
+request's line has its declared route and admitted model. A refused request's line (the S-03.3 slice plan's D-4, for route and model discovery without a model call against the
 fake upstream) has its path, its query parameter **names** (sorted, at most 16) and, when it presented a
 grant's token, the `model` of its JSON body (read, if the refusal came first, from the body the refusal
 drains anyway); each only in a bounded grammar: a path segment or a name of at most 32 characters from
@@ -637,7 +657,7 @@ The provider envelope (S-03.5; at start `serve` exits 2): `ENVELOPE_NOT_CONFIGUR
 `MODEL_SELECTION_NOT_AUTHORIZED`, `MODEL_SELECTION_RECEIPT_MISMATCH`; at start, in `issue` and at admission:
 `MODEL_NOT_SELECTED` (403);
 at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403); at
-admission once the broker's stop has begun: `BROKER_STOPPING` (503).
+admission once the broker's stop has begun: `BROKER_STOPPING` (503). At start (S-03.3): `FAMILY_REACH_UNCHECKED`.
 Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL_CONTENT_TYPE` (415),
 `CONTROL_BODY_INVALID` (400), `CONVERSATION_ID_INVALID`, `ATTEMPT_ID_INVALID`, `FAMILY_UNKNOWN`, `MODELS_INVALID`,
 `BUDGET_RETIRED`, `TTL_INVALID`, `TRIGGER_UNKNOWN`, `REVOKER_INVALID` (400), `MODEL_NOT_ALLOWLISTED` (403),
@@ -645,7 +665,7 @@ Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL
 `EXPOSURE_FOUND` (500).
 Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`, `TOKEN_EXPIRED`,
 `TOKEN_WRONG_HEADER` (401), `ROUTE_NOT_ALLOWED` (404), `QUERY_NOT_ALLOWED`, `BODY_LENGTH_INVALID`,
-`BODY_NOT_JSON`, `MODEL_MISSING`, `TOKEN_IN_REQUEST` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
+`BODY_NOT_JSON`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`, `PROVIDER_REACH_REFUSED` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
 (411), `BODY_TOO_LARGE` (413), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
 Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.
 Qualification (`inference_qualification.py`, beside the broker's configuration and key codes):
@@ -702,6 +722,9 @@ every family.
 - Everything outside a test process: the broker as a supervised host service (the lifecycle contract), its
   real listeners, the real credential entry, `credential-set` against the Credential Manager, TLS to a real
   provider, any model call (each an Owner act).
+- Whether a pinned client (Claude Code) ever sends what the reach checker refuses, and the provider's own
+  request shapes beyond its public documentation: the rules are written from the documented shapes, not from
+  observed traffic.
 - The route sets, query rules and usage extractors of all three families: provisional, written from the
   families' public shapes, not from observed traffic; they are pinned at the leaf that first runs each family.
 - The provider-key search against a live broker, guest, job or instance directory (slice 5: offline only, in

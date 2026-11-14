@@ -61,6 +61,15 @@ The envelope carries no spending limit and the broker enforces no cumulative cap
 per-run ledger in the integration store and their refusals (decision 0021 amendment 1); spending is bounded by
 the provider account's own limits. Once the broker's own stop begins, a new request is refused BROKER_STOPPING.
 
+Provider-side reach (S-03.3, before the first paid call; the OA-12 package section 3 point 5): the authorized scope
+is plain model calls, so a request must not ask the provider to reach or run anything outside the request. A
+family's reach checker (REACH_CHECKERS) reads every admitted request's JSON body; anthropic-messages refuses a
+top-level mcp_servers or container, a tool whose type is present and not custom (every server tool and every
+provider-defined tool type: fail closed), and anywhere in the body a source of type url or file or a
+container_upload block (PROVIDER_REACH_REFUSED; the audit names the rule and the key or type name, never a value).
+A family with no checker (the OpenAI families today) is refused at start when its upstream is not loopback
+(FAMILY_REACH_UNCHECKED).
+
 The stop (S-03.2, before the Owner's act A2): serve waits on the broker's one stop event in slices of STOP_POLL_S,
 so that an interrupt is delivered on every platform (an indefinite wait ignores Ctrl-C on Windows). SIGINT,
 SIGBREAK (Windows) and SIGTERM, where the platform has them, and the control listener's POST /v1/stop (the stop
@@ -253,6 +262,9 @@ CODES = {
                                               '(selection_recorder.py delegate)'),
     'MODEL_NOT_SELECTED': (403, 'use only a model the held selection selects; configure no other model for a '
                                 'family whose upstream is not loopback'),
+    'FAMILY_REACH_UNCHECKED': (500, 'the broker has no check of provider-side reach for the family: give it a '
+                                    'loopback upstream only, or no upstream; only a family with a reach checker '
+                                    '(anthropic-messages) may name an upstream that is not loopback'),
     # the broker's own stop
     'BROKER_STOPPING': (503, 'the broker is stopping: no new request is admitted; send it again once the broker '
                              'has been started again'),
@@ -299,6 +311,10 @@ CODES = {
     'BODY_NOT_JSON': (400, 'send the body as one uncompressed JSON object'),
     'MODEL_MISSING': (400, 'send the model as a string field "model"'),
     'MODEL_NOT_ALLOWED': (403, "use a model of the token's list"),
+    'PROVIDER_REACH_REFUSED': (400, 'send a plain model call: no mcp_servers or container, no tool whose type is '
+                                    'not custom (no server tool or provider-defined tool), no content whose source '
+                                    'is a url or a file, no container_upload block; the provider is never asked to '
+                                    'reach or run anything outside the request'),
     'TOKEN_IN_REQUEST': (400, 'the attempt token is only ever the auth header: remove it from the path, other '
                               'headers and the body'),
     'PROVIDER_KEY_ABSENT': (503, "store the family's provider key (credential-set) and restart the broker"),
@@ -319,8 +335,9 @@ class InferenceError(Exception):
     """A refusal (exit 2) or a failure (exit 1) with a stable code, its HTTP status on a listener and its remedy.
     grant, when set, is the grant the refused request presented (for its counters and the audit line)."""
 
-    def __init__(self, code: str, detail: str, *, refusal: bool = True, grant=None):
+    def __init__(self, code: str, detail: str, *, refusal: bool = True, grant=None, audit: dict | None = None):
         self.code, self.detail, self.refusal, self.grant = code, detail, refusal, grant
+        self.audit = audit       # fields the refused request's audit line adds (bounded names only)
         self.status, self.remedy = CODES[code]
         super().__init__(f'{code}: {detail}. Remedy: {self.remedy}.')
 
@@ -785,6 +802,56 @@ def envelope_report(config: BrokerConfig, operation: str | None) -> dict:
                     'digest': inference_envelope.manifest_digest(document, operation)}
     return {'format': ENVELOPE_REPORT_FORMAT, 'document': document, 'digest': digest, 'operation': operation,
             'manifest': manifest}
+
+
+# ---------------------------------------------------------------- provider-side reach (S-03.3)
+
+REACH_KEYS = ('mcp_servers', 'container')       # top-level keys refused whatever their value
+REACH_SOURCE_TYPES = ('url', 'file')            # a source the provider would fetch or read from its own store
+REACH_BLOCK_TYPES = ('container_upload',)       # a content block that places a file in a provider container
+
+
+def anthropic_reach(document: dict):
+    """(rule, name) of the first thing in an anthropic-messages request body that asks the provider to reach or
+    run something outside the request, or None. NAME is the key or the type as the body gives it (the caller
+    records it only in the audit's bounded name grammar). The walk is iterative (no recursion limit) and covers
+    every nested object and list, tool results included."""
+    for key in REACH_KEYS:
+        if key in document:
+            return 'top-level-key', key
+    tools = document.get('tools')
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict) and 'type' in tool and tool['type'] != 'custom':
+                return 'tool-type', tool['type']
+    stack = [document]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            source = node.get('source')
+            if isinstance(source, dict) and isinstance(source.get('type'), str) \
+                    and source['type'] in REACH_SOURCE_TYPES:
+                return 'source-type', source['type']
+            if isinstance(node.get('type'), str) and node['type'] in REACH_BLOCK_TYPES:
+                return 'block-type', node['type']
+            stack.extend(reversed(list(node.values())))
+        elif isinstance(node, list):
+            stack.extend(reversed(node))
+    return None
+
+
+# The families whose request bodies the broker checks for provider-side reach, by family id. A family absent here
+# is refused at start when its upstream is not loopback (FAMILY_REACH_UNCHECKED): fail closed until it is qualified.
+REACH_CHECKERS = {'anthropic-messages': anthropic_reach}
+
+
+def check_reach(config: BrokerConfig) -> None:
+    """FAMILY_REACH_UNCHECKED when a family whose upstream is not loopback has no reach checker."""
+    unchecked = sorted(f.id for f in config.families.values()
+                       if f.upstream is not None and not f.upstream.loopback and f.id not in REACH_CHECKERS)
+    if unchecked:
+        raise InferenceError('FAMILY_REACH_UNCHECKED', f'{unchecked} name an upstream that is not loopback and have '
+                                                       'no check of provider-side reach')
 
 
 # ---------------------------------------------------------------- the exposure guard
@@ -1437,11 +1504,25 @@ class Broker:
         (token, carriers), = found.items()
         return token, carriers
 
-    def _refuse(self, code: str, detail: str, grant: Grant | None) -> InferenceError:
+    def _refuse(self, code: str, detail: str, grant: Grant | None, audit: dict | None = None) -> InferenceError:
         if grant is not None:
             with self._lock:
                 grant.refused += 1
-        return InferenceError(code, detail, grant=grant)
+        return InferenceError(code, detail, grant=grant, audit=audit)
+
+    def _reach(self, family: Family, document: dict, grant: Grant) -> None:
+        """PROVIDER_REACH_REFUSED when the family's reach checker finds something the provider would reach or run
+        outside the request. The audit line records the rule and the key or type name, only in OBSERVED_WORD's
+        grammar (None otherwise), never a value."""
+        checker = REACH_CHECKERS.get(family.id)
+        found = None if checker is None else checker(document)
+        if found is None:
+            return
+        rule, name = found
+        recorded = name if isinstance(name, str) and self._recordable('audit reach name', name, OBSERVED_WORD) \
+            else None
+        raise self._refuse('PROVIDER_REACH_REFUSED', f'{rule}: {recorded or "(a name outside the audit grammar)"}',
+                           grant, audit={'reach': {'rule': rule, 'name': recorded}})
 
     def request_stop(self, by: str, *, wake: bool = True) -> bool:
         """Begin the stop: from now on every new request is refused BROKER_STOPPING. WAKE sets the stop event, on
@@ -1565,6 +1646,7 @@ class Broker:
         if model not in grant.models or model not in family.models:
             raise self._refuse('MODEL_NOT_ALLOWED', "not in the token's model list", grant)
         self._selected(family, model, grant)
+        self._reach(family, document, grant)
         forward = self._forward_headers(headers, family)
         if token in target or any(token in value for _, value in forward) or token.encode('ascii') in body:
             raise self._refuse('TOKEN_IN_REQUEST', 'the token is in the path, a forwarded header or the body', grant)
@@ -1649,6 +1731,7 @@ class Broker:
                             token_fingerprint=exc.grant.fingerprint, family=exc.grant.family)
                 body = captured[0] if captured else _drain(handler)
             line.update(self.observed_request(handler.path, body))
+            line.update(exc.audit or {})
             line.update(status=exc.status, code=exc.code, latency_ms=round((time.monotonic() - started) * 1000, 1))
             self.audit.write(line)
             _send_refusal(handler, exc)
@@ -1785,6 +1868,7 @@ class Broker:
             if family.provider != self.authorization.provider or family.upstream != self.authorization.origin:
                 raise InferenceError('ENVELOPE_MISMATCH', f'{family.id}: its provider or upstream is not the '
                                                           'authorized envelope\'s')
+        check_reach(self.config)
         try:
             for name, port, handler in (('control', self.config.control_port, _ControlHandler),
                                         ('inference', self.config.inference_port, _InferenceHandler)):
@@ -2175,6 +2259,7 @@ def _serve(ctx: Context, guard: BrokerGuard) -> dict:
     # The start precondition (S-03.5), only when a family's upstream is not loopback: before the key is read and
     # before any listener opens. A refusal exits 2 and writes nothing.
     authorization = authorize(config, ctx.authorization, ctx.store, ctx.clock) if bound_families(config) else None
+    check_reach(config)     # S-03.3: a family with no reach checker serves a loopback upstream only
     provider = ctx.provider()
     entry = contract.WatchedProvider(provider, guard).get(ENTRY)
     provider_key = None if entry is None else ProviderKey(entry[0], entry[1],
