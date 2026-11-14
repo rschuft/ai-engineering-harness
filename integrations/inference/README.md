@@ -62,6 +62,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_account_scope.py` | Account-scope headers never forwarded (S-03.3 fix-forward): every header whose name starts with `anthropic-workspace` or `anthropic-organization` stripped, not refused, for each family, streamed and not, against the fake upstreams; the audit's `stripped_headers` (names only) |
 | `tests/test_query.py` | Exact query-string equality (S-03.3 fix-forward; `pass` retired): `anthropic-messages` declares exactly `beta=true`, admitted and forwarded unchanged; every other form (case, repetition, addition, percent-encoding, `&`, `#`, an empty query) refused `QUERY_NOT_ALLOWED` before anything is sent; the description output; the qualification's fake upstream answering the declared query |
 | `tests/test_census.py` | The live census: every verdict branch of its rule on synthetic tables, the four table layouts and a fake `iphlpapi`, the broker's pid in its status and start receipt, the `upstream-connect` line written at connect time, the command's record and exit codes; on Windows a real census of `serve` in a process of its own (PASS idle and with a request in flight, FAIL on an extra listener, connection or UDP socket in the broker's process) |
+| `tests/test_body.py` | Strict bodies (S-03.3, the security review's B1, N4, N6): a key repeated at any depth refused `BODY_DUPLICATE_KEY` on the inference listener with nothing forwarded (the `model` allowlist and the reach rule bypasses) and `CONTROL_BODY_INVALID` on the control listener; a case-folded `mcp_servers` or `container`; a `Content-Length` of non-ASCII digits |
 | `tests/serve_child.py` | The child process of `test_stop.py` and `test_census.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -234,7 +235,8 @@ loopback upstream that names its provider, as before (disclosed).
 ## Tokens: issue, revoke, status (the control listener)
 
 The control listener answers only a direct loopback call (`Host` exactly `127.0.0.1:<port>`, no `Origin`
-header, JSON bodies as `application/json`, at most 64 KiB); it is never forwarded. Every process of the
+header, JSON bodies as `application/json`, at most 64 KiB, with no key repeated in any object); it is never
+forwarded. Every process of the
 Owner's account can call it (disclosed, decision 0013 point 6).
 
 | Call | Body | Answer |
@@ -278,8 +280,9 @@ A request on the inference listener is admitted only when, in this order: exactl
 declared auth header shape; it is one this broker issued, unrevoked and unexpired; it arrives in its own
 family's auth header; the method and path are in that family's route set (and the query rule holds); the
 broker's own stop has not begun (`BROKER_STOPPING`) and, for a bound family, the envelope holds; the body has one
-`Content-Length` (no chunked body) within
-`max_request_bytes`, is a JSON object and names a `model` that is in both the token's list and the family's
+`Content-Length` of ASCII digits (no chunked body) within
+`max_request_bytes`, is a JSON object read strictly (a key repeated in any object, at any depth and after escapes
+are decoded, is refused `BODY_DUPLICATE_KEY`: the broker must check the document the provider reads) and names a `model` that is in both the token's list and the family's
 allowlist; the body asks the provider to reach or run nothing outside the request ([Provider-side
 reach](#provider-side-reach)); and the token appears nowhere in what would be forwarded (target, headers, body). The request is
 then counted, and passed through unchanged to the family's one upstream origin: the same method, target and
@@ -310,7 +313,8 @@ such a refusal is not answered: the connection is closed instead. How a stop is 
 request must not ask the provider to reach or run anything outside the request. A family's reach checker reads
 the parsed JSON body of every admitted request; `anthropic-messages` refuses, with `PROVIDER_REACH_REFUSED` (400):
 
-- a top-level `mcp_servers` or `container` key, present at all, whatever its value (rule `top-level-key`);
+- a top-level `mcp_servers` or `container` key, or one that case-folds to either, present at all, whatever its
+  value (rule `top-level-key`);
 - an entry of `tools` whose `type` is present and is not `custom` (rule `tool-type`): every server tool (web
   search, web fetch, code execution) and every provider-defined tool type, known or not, fail closed; Claude
   Code's own tools are custom tools;
@@ -745,7 +749,7 @@ Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL
 `EXPOSURE_FOUND` (500).
 Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`, `TOKEN_EXPIRED`,
 `TOKEN_WRONG_HEADER` (401), `ROUTE_NOT_ALLOWED` (404), `QUERY_NOT_ALLOWED`, `BODY_LENGTH_INVALID`,
-`BODY_NOT_JSON`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`, `PROVIDER_REACH_REFUSED` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
+`BODY_NOT_JSON`, `BODY_DUPLICATE_KEY`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`, `PROVIDER_REACH_REFUSED` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
 (411), `BODY_TOO_LARGE` (413), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
 Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.
 Credential enter: `PROVIDER_ID_INVALID`, `KEY_CONSOLE_REQUIRED`, `KEY_NOT_KEY_SHAPED`, `KEY_ENTRY_CANCELLED`

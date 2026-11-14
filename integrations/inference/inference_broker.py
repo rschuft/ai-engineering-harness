@@ -202,6 +202,7 @@ ROUTE_PATH = re.compile(r'/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+')
 # with the request target's raw query (no parsing, decoding, reordering or case folding).
 QUERY_STRING = re.compile(r'[A-Za-z0-9._~-]+=[A-Za-z0-9._~-]*(?:&[A-Za-z0-9._~-]+=[A-Za-z0-9._~-]*)*')
 QUERY_STRING_LIMIT = 256
+DECIMAL = re.compile(r'[0-9]{1,15}')     # a Content-Length: ASCII digits only (str.isdigit admits other scripts)
 METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'CONNECT', 'TRACE')
 USAGE_KINDS = ('anthropic-messages', 'openai-responses', 'openai-chat')
 MIB = 1024 * 1024
@@ -334,6 +335,8 @@ CODES = {
     'BODY_LENGTH_INVALID': (400, 'send one valid Content-Length'),
     'BODY_TOO_LARGE': (413, 'send a body no larger than max_request_bytes'),
     'BODY_NOT_JSON': (400, 'send the body as one uncompressed JSON object'),
+    'BODY_DUPLICATE_KEY': (400, 'send each key of a JSON object once, at every depth: a body whose objects repeat a '
+                                'key is read differently by different parsers'),
     'MODEL_MISSING': (400, 'send the model as a string field "model"'),
     'MODEL_NOT_ALLOWED': (403, "use a model of the token's list"),
     'PROVIDER_REACH_REFUSED': (400, 'send a plain model call: no mcp_servers or container, tools as a list of '
@@ -857,6 +860,29 @@ def envelope_report(config: BrokerConfig, operation: str | None) -> dict:
             'manifest': manifest}
 
 
+# ---------------------------------------------------------------- strict JSON (S-03.3)
+
+
+class DuplicateKey(ValueError):
+    """A JSON object repeats a key (strict_json). Its text names no key."""
+
+
+def _unique_pairs(pairs) -> dict:
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise DuplicateKey('a JSON object repeats a key')
+        seen[key] = value
+    return seen
+
+
+def strict_json(data):
+    """json.loads of DATA, with every object's keys distinct at any depth (after escapes are decoded): DuplicateKey
+    otherwise. Every body the broker checks is read this way, so that what it checks is what any parser upstream
+    reads (json.loads alone keeps the last of a repeated key; another parser may keep the first)."""
+    return json.loads(data, object_pairs_hook=_unique_pairs)
+
+
 # ---------------------------------------------------------------- provider-side reach (S-03.3)
 
 REACH_KEYS = ('mcp_servers', 'container')       # top-level keys refused whatever their value
@@ -870,8 +896,8 @@ def anthropic_reach(document: dict):
     records it only in the audit's bounded name grammar). The walk is iterative (no recursion limit) and covers
     every nested object and list, tool results included. A top-level tools that is not a list, or a tools entry
     that is not an object, is refused as tools-shape (fail closed: the rule cannot read it)."""
-    for key in REACH_KEYS:
-        if key in document:
+    for key in document:
+        if isinstance(key, str) and key.casefold() in REACH_KEYS:   # the exact key, or one that case-folds to it
             return 'top-level-key', key
     if 'tools' in document:
         tools = document['tools']
@@ -1681,7 +1707,7 @@ class Broker:
         lengths = headers.get_all('content-length') or []
         if not lengths:
             raise self._refuse('BODY_LENGTH_REQUIRED', 'no Content-Length', grant)
-        if len(lengths) != 1 or not lengths[0].strip().isdigit():
+        if len(lengths) != 1 or not DECIMAL.fullmatch(lengths[0].strip()):
             raise self._refuse('BODY_LENGTH_INVALID', 'not one decimal Content-Length', grant)
         length = int(lengths[0])
         if length > self.config.max_request_bytes:
@@ -1736,7 +1762,9 @@ class Broker:
             self._envelope(family, grant)
         body = self._read_body(headers, read, grant)
         try:
-            document = json.loads(body)
+            document = strict_json(body)
+        except DuplicateKey:
+            raise self._refuse('BODY_DUPLICATE_KEY', 'a JSON object of the body repeats a key', grant) from None
         except (ValueError, UnicodeDecodeError, RecursionError):   # RecursionError: nested too deeply to parse
             raise self._refuse('BODY_NOT_JSON', 'the body is not JSON', grant) from None
         if not isinstance(document, dict):
@@ -1792,8 +1820,8 @@ class Broker:
             unrecorded['query_names'] = dropped
         model = None
         try:
-            document = json.loads(body) if body else None
-        except (ValueError, UnicodeDecodeError, RecursionError):
+            document = strict_json(body) if body else None
+        except (ValueError, UnicodeDecodeError, RecursionError):     # DuplicateKey included: no model is read
             document = None
         if isinstance(document, dict) and 'model' in document:
             candidate = document['model']
@@ -2130,7 +2158,8 @@ def _drain(handler) -> bytes | None:
         return None
     handler.body_consumed = True
     length = handler.headers.get('content-length') or ''
-    if handler.headers.get('transfer-encoding') is None and length.isdigit() and int(length) <= DRAIN_LIMIT:
+    if handler.headers.get('transfer-encoding') is None and DECIMAL.fullmatch(length.strip()) \
+            and int(length) <= DRAIN_LIMIT:
         try:
             return handler.rfile.read(int(length))
         except OSError:
@@ -2205,12 +2234,14 @@ class _ControlHandler(_Handler):
         if (self.headers.get('content-type') or '').split(';')[0].strip().lower() != 'application/json':
             raise InferenceError('CONTROL_CONTENT_TYPE', 'not application/json')
         length = self.headers.get('content-length')
-        if self.headers.get('transfer-encoding') is not None or length is None or not length.isdigit() \
-                or int(length) > CONTROL_BODY_LIMIT:
+        if self.headers.get('transfer-encoding') is not None or length is None \
+                or not DECIMAL.fullmatch(length.strip()) or int(length) > CONTROL_BODY_LIMIT:
             raise InferenceError('CONTROL_BODY_INVALID', 'a Content-Length of at most 64 KiB is required')
         self.body_consumed = True
         try:
-            return json.loads(self.rfile.read(int(length)))
+            return strict_json(self.rfile.read(int(length)))
+        except DuplicateKey:
+            raise InferenceError('CONTROL_BODY_INVALID', 'a JSON object of the body repeats a key') from None
         except (ValueError, UnicodeDecodeError, RecursionError):   # RecursionError: nested too deeply to parse
             raise InferenceError('CONTROL_BODY_INVALID', 'the body is not JSON') from None
 
