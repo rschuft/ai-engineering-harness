@@ -176,7 +176,7 @@ push never implies parent acceptance.
 | E-05.6 Admit the D1 stage's create secrets: the attempt's inference token and endpoint | **PASS (2026-11-13)**, the engineering manager's [verdict](#e-05-6-verdict-2026-11-13); offline by construction; independently reviewed in three passes | build `aa32a87`; fix-forwards `c6b90c8`, `d5fcbd7`, `4966416`, `8d47cac`, `b977105`, `44a83ab` | [Evidence](E-05.6-d1-stage-create-secrets.md). Added by the plan amendment `bbbad04` (fix-forward `3a4af34`); carved from A-01.2 for the D1 stage. Off D1's path since the plan amendment of 2026-11-14 ([record](#d1-native-reconciliation-2026-11-14)): kept as built for the optional brokered profile (planning, 2026-11-14). | - |
 | E-05.5 Demonstrate D1: one contained AI-assisted coding task to a verified result and a draft pull request | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12). Amended 2026-11-14 ([record](#d1-native-reconciliation-2026-11-14)): D1 on the native profile; deps E-05.11 and E-05.9 replace S-03.3 and E-05.6; the broker clauses replaced, every other obligation kept (the leaf's notes name each). | - |
 | E-05.8 End a provider-interrupted D1 attempt cleanly and admit a new attempt for the same task | Not started | - | Added by the plan amendment of 2026-11-13 ([planning pass](#planning-pass-2026-11-13b)). Amended 2026-11-14 ([record](#d1-native-reconciliation-2026-11-14)): re-scoped to the native profile; deps E-01.3.1 replace S-03.6 and E-05.6; the broker's classification and revocation are the plan's deferral. | - |
-| E-05.9 Hold the native Claude Code token in host custody and admit the D1 stage's native create secrets | Not started | - | Added by the plan amendment of 2026-11-14 ([record](#d1-native-reconciliation-2026-11-14)); decision 0023 (Proposed); offline; carved from A-01.2 for the D1 stage on the native profile | - |
+| E-05.9 Hold the native Claude Code token in host custody and admit the D1 stage's native create secrets | **PASS (engineering manager, 2026-11-14), offline**, the [verdict](#e-05-9-verdict-2026-11-14); independently reviewed in two passes | build `d3f0e39`; fix-forwards `7a64046`, `3030a2d` | [Evidence](E-05.9-native-token-custody-and-create-secrets.md). Added by the plan amendment of 2026-11-14 ([record](#d1-native-reconciliation-2026-11-14)); carved from A-01.2 for the D1 stage on the native profile | - |
 | E-05.10 Qualify native provider access through a host CONNECT-only tunnel, with no credential | Not started | - | Added by the plan amendment of 2026-11-14 ([record](#d1-native-reconciliation-2026-11-14)); offline part first; its live step waits for OA-31 (a) | - |
 | E-05.11 Qualify native Claude Code in the execution container: the first authenticated turn, containment, and no persisted or leaked token | Not started | - | Added by the plan amendment of 2026-11-14 ([record](#d1-native-reconciliation-2026-11-14)); after E-05.9 and E-05.10; its live step waits for OA-31 (b) to (f) | - |
 | P-05.1 Move the repository's own Work into Backlog.md and OpenSpec | Not started | - | Added by the plan amendment `f3a6c92` (2026-11-12) | - |
@@ -4333,6 +4333,97 @@ push never implies parent acceptance.
   - **No live act in this pass.** No credential, login, model call, guest operation or reserved act was performed or requested.
   - **The Owner's interaction, the minimum:** OA-31, presented once by the engineering manager when E-05.9 and E-05.10's offline part have passed (its [presentation](#oa-31-prepared-2026-11-14)). It has one answer covering (a) the native path's egress, (b) the credential class, (c) the model calls and identifiers, (d) the terms reading and (f) the token's delivery, then one act, (e): run `claude setup-token` and paste the token at the hidden prompt. The items already on D1's path are unchanged: OA-22 (d), (f), (h), (i), (j) and OA-25, each at its leaf.
   - **Execution takes next:** the ready leaves, in the engineering manager's order. E-05.9 and E-05.10's offline work are on the critical path; no live step precedes OA-31's answer.
+
+- <a id="owner-direction-native-execution-2026-11-14"></a>**2026-11-14: Owner direction to the engineering manager: resume D1 native execution (verbatim).** Given in the main (engineering manager) session at the start of the execution session; recorded verbatim by the engineering manager, the session in which it was given (decision 0018 point 7):
+
+  > Resume D1 execution from the Product Manager's
+  > committed native Claude Code plan.
+  >
+  > The planning commits are 195df87 and 95ce000,
+  > currently local on main and two ahead of origin.
+  >
+  > First reconcile the repository state and publish
+  > these verified commits through the established
+  > checkpoint procedure.
+  >
+  > Then execute the ready D1 work, prioritizing
+  > E-05.9 and E-05.10.
+  >
+  > The objective is to run an isolated, unmodified
+  > Claude Code agent using supported native
+  > authentication, without requiring the inference
+  > broker.
+  >
+  > Preserve the Product Manager's revised D1 scope.
+  >
+  > Requirements:
+  >
+  > 1. Implement the native credential-entry and
+  >    attempt-delivery path.
+  >
+  > 2. Implement the narrow provider tunnel and
+  >    verify its functionality without credentials.
+  >
+  > 3. Preserve disposable guest isolation and
+  >    protection of unrelated host resources.
+  >
+  > 4. Keep credential persistence and leakage checks
+  >    proportional to the actual risks.
+  >
+  > 5. Do not add spending caps, performance-budget
+  >    gates, or exhaustive new qualification suites.
+  >
+  > 6. Use focused tests and independent review.
+  >    Do not repeat successful verification of
+  >    unchanged code.
+  >
+  > 7. Complete other ready offline leaves where
+  >    dependencies permit.
+  >
+  > 8. Confirm the provider-supported use of the
+  >    native Claude Code authentication method
+  >    before requesting live credentials.
+  >
+  > 9. Prepare one consolidated OA-31 Owner decision
+  >    after the necessary offline work passes.
+  >
+  > For OA-31, recommend standing authorization for
+  > D1 coding attempts and routine model selection
+  > within the approved native execution profile.
+  >
+  > Do not require per-attempt Owner approval or
+  > repeated approval of routine provider operations.
+  >
+  > Do not weaken Claude Code's native permission
+  > enforcement or bypass provider restrictions.
+  >
+  > Do not initiate live credentials, provider calls,
+  > or reserved operations before their required
+  > authorization.
+  >
+  > Continue autonomously within delegated authority.
+  > Publish verified checkpoints and return only when
+  > an actual Owner decision or action is unavoidable.
+  >
+  > The priority is completing D1: Owner intent
+  > becomes a tested code change delivered as a
+  > draft pull request.
+
+  The planning commits `195df87` and `95ce000` were verified (`verify_seed` PASS, 182 leaves; `--baseline seed` PASS, 136; `test_plan_commitment` 12 OK; the range scan clean) and pushed fast-forward, `origin/main` `a13a2a3..95ce000`.
+
+- <a id="e-05-9-verdict-2026-11-14"></a>**2026-11-14: E-05.9 PASS (engineering manager), offline.** The engineering manager's verdict, under decision 0018 point 1. Evidence: [E-05.9](E-05.9-native-token-custody-and-create-secrets.md); commits `d3f0e39`, `7a64046`, `3030a2d`, and this record.
+  - **Verdict basis.** Every proof clause is shown offline and traced to its tests in the evidence; this leaf runs nothing live and delivers the token to no attempt. The native credential class is *planned*: it is observed only after the Owner's act OA-31 (b), at E-05.11. Two independent review passes by a fresh engineer: the first found B1 (blocking: a fifth secret through `agent_context.secrets` and a seeded configuration directory through `acp_file_secrets`), S1, S2 and N1 to N5; all were fixed forward (`7a64046`, `3030a2d`) with the reviewer's failing inputs as regression tests; the delta review was clean.
+  - **Decisions made under delegated authority (decision 0018 point 3):**
+    1. The switch spelling `tRuE` for both switches: accepted by every reader of each at the pinned CLI, never `1` or `true`; the pinned SDK masks case-sensitively.
+    2. The token grammar kept general (`sk-ant-<label>-...`, the provider's other credential labels refused), not narrowed to `oat01`: no source states the setup-token shape, and a narrower rule could refuse the Owner's genuine token at OA-31 (e).
+    3. The entry name `AIEH Claude Code native token` and user `claude-code`.
+    4. The native D1 create is a closed world: `agent_settings` and the top-level fields allowlisted at the pinned run shape; `agent_context` absent or null; `acp_file_secrets` absent or `[]`.
+    5. Encoded copies of the token (S1) refused through the outbound search's own needles.
+    6. The inventory exemption confined to `engineering-agent`, readable only; `bootstrap-host-agents` dropped from the token's `readable_by`, in line with the Owner's other OS-store entries, its reach disclosed in `fd-bootstrap-shared-identity`.
+    7. The outbound search reading the entry is covered by OA-31 (b) and (f), named there when presented.
+  - **Carried to E-05.11:** its qualification admission must close the nested `container`, `workspace` and `tags` as `check_create_body` does for D1 (review NIT-a); the pinned adapter must not launch the CLI with `--bare` (the provider's authentication page, read 2026-11-14: "Bare mode does not read `CLAUDE_CODE_OAUTH_TOKEN`"); the hidden prompt is exercised for real only at OA-31 (e).
+  - **Accepted residuals:** reversed and per-byte percent-encoded copies are not detected (outside S-03.2's forms); the negative control sees the injected provider, environment reads and file opens only; a `tree` surface does not inflate loose objects.
+  - **Unrelated but detected:** the finding split in `security/README.md`'s summary was stale (21 = 5/2/14, not 6/2/13); corrected in `d3f0e39`.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
