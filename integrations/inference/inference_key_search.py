@@ -170,7 +170,7 @@ def needles(key: str, prefix: str = SYNTHETIC_PREFIX) -> dict:
         found[text.encode('utf-16-le')].add(f'{part}/utf-16-le')
         found[text.encode('utf-16-be')].add(f'{part}/utf-16-be')
     body = body_of(key, prefix).encode('utf-8')
-    starts =sorted(set(range(0, max(len(body) - FRAGMENT, 0) + 1, STRIDE)) | {max(len(body) - FRAGMENT, 0)})
+    starts = sorted(set(range(0, max(len(body) - FRAGMENT, 0) + 1, STRIDE)) | {max(len(body) - FRAGMENT, 0)})
     for start in starts:
         found[body[start:start + FRAGMENT]].add('fragment')
     return {needle: tuple(sorted(labels)) for needle, labels in found.items() if needle}
