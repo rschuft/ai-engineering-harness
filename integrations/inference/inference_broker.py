@@ -926,17 +926,55 @@ def strict_json(data):
 
 # ---------------------------------------------------------------- provider-side reach (S-03.3)
 
-REACH_KEYS = ('mcp_servers', 'container')       # top-level keys refused whatever their value
-REACH_SOURCE_TYPES = ('url', 'file')            # a source the provider would fetch or read from its own store
-REACH_BLOCK_TYPES = ('container_upload',)       # a content block that places a file in a provider container
+REACH_KEYS = ('mcp_servers', 'container')       # top-level keys refused whatever their value (and any case-folding)
+REACH_BLOCK_TYPES = ('container_upload',)       # a block that places a file in a provider container: refused anywhere
+# The security review's S2: allowlists, not deny lists. A content block (in messages[].content, in system when it is a
+# list, and in the content of a tool_result, a search_result and a source of type content) is admitted only with one
+# of these types; a source object, anywhere in the body, only with one of these types. Everything else (server tool
+# use and results, mcp_tool_use, container_upload, a url or file source, a type not yet known) is refused. S-03.3's
+# discovery run may show the pinned client needs another type: adding one is a reviewed change.
+CONTENT_BLOCK_TYPES = ('text', 'image', 'document', 'tool_use', 'tool_result', 'thinking', 'redacted_thinking',
+                       'search_result')
+SOURCE_TYPES = ('base64', 'text', 'content')
+
+
+def _blocks(document: dict):
+    """(rule, name) of the first content block outside CONTENT_BLOCK_TYPES, or of a content that is neither a
+    string nor a list of objects, in the block lists of an anthropic-messages body; or None."""
+    lists = []
+    if 'system' in document and not isinstance(document['system'], str):
+        lists.append(document['system'])
+    messages = document.get('messages')
+    for message in messages if isinstance(messages, list) else ():
+        if isinstance(message, dict) and 'content' in message and not isinstance(message['content'], str):
+            lists.append(message['content'])
+    while lists:
+        blocks = lists.pop()
+        if not isinstance(blocks, list):
+            return 'content-shape', 'content'
+        for block in blocks:
+            if not isinstance(block, dict):
+                return 'content-shape', 'content'
+            kind = block.get('type')
+            if not isinstance(kind, str) or kind not in CONTENT_BLOCK_TYPES:
+                return 'block-type', kind
+            if kind in ('tool_result', 'search_result') and 'content' in block \
+                    and not isinstance(block['content'], str):
+                lists.append(block['content'])
+            source = block.get('source')
+            if isinstance(source, dict) and source.get('type') == 'content' and 'content' in source \
+                    and not isinstance(source['content'], str):
+                lists.append(source['content'])
+    return None
 
 
 def anthropic_reach(document: dict):
     """(rule, name) of the first thing in an anthropic-messages request body that asks the provider to reach or
     run something outside the request, or None. NAME is the key or the type as the body gives it (the caller
-    records it only in the audit's bounded name grammar). The walk is iterative (no recursion limit) and covers
-    every nested object and list, tool results included. A top-level tools that is not a list, or a tools entry
-    that is not an object, is refused as tools-shape (fail closed: the rule cannot read it)."""
+    records it only in the audit's bounded name grammar). Fail closed: a top-level mcp_servers or container (any
+    case-folding); a tools value that is not a list of objects, or a tool whose type is present and not custom; a
+    content block outside CONTENT_BLOCK_TYPES; anywhere in the body, a source object whose type is outside
+    SOURCE_TYPES and a container_upload block. The walk is iterative (no recursion limit)."""
     for key in document:
         if isinstance(key, str) and key.casefold() in REACH_KEYS:   # the exact key, or one that case-folds to it
             return 'top-level-key', key
@@ -949,14 +987,17 @@ def anthropic_reach(document: dict):
                 return 'tools-shape', 'tools'
             if 'type' in tool and tool['type'] != 'custom':
                 return 'tool-type', tool['type']
+    found = _blocks(document)
+    if found is not None:
+        return found
     stack = [document]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
             source = node.get('source')
-            if isinstance(source, dict) and isinstance(source.get('type'), str) \
-                    and source['type'] in REACH_SOURCE_TYPES:
-                return 'source-type', source['type']
+            if isinstance(source, dict) and not (isinstance(source.get('type'), str)
+                                                 and source['type'] in SOURCE_TYPES):
+                return 'source-type', source.get('type')
             if isinstance(node.get('type'), str) and node['type'] in REACH_BLOCK_TYPES:
                 return 'block-type', node['type']
             stack.extend(reversed(list(node.values())))

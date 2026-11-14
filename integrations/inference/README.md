@@ -64,6 +64,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_census.py` | The live census: every verdict branch of its rule on synthetic tables, the four table layouts and a fake `iphlpapi`, the broker's pid in its status and start receipt, the `upstream-connect` line written at connect time, the command's record and exit codes; on Windows a real census of `serve` in a process of its own (PASS idle and with a request in flight, FAIL on an extra listener, connection or UDP socket in the broker's process) |
 | `tests/test_body.py` | Strict bodies (S-03.3, the security review's B1, N4, N6): a key repeated at any depth refused `BODY_DUPLICATE_KEY` on the inference listener with nothing forwarded (the `model` allowlist and the reach rule bypasses) and `CONTROL_BODY_INVALID` on the control listener; a case-folded `mcp_servers` or `container`; a `Content-Length` of non-ASCII digits |
 | `tests/test_headers.py` | The forwarded-header allowlist per family (S-03.3, the security review's S1): the shipped declarations and the refusal of one that names or covers a never-forwarded or account-scope header; only declared headers reach each fake upstream, every other one stripped and named; `HEADER_VALUE_INVALID` (a folded header), `CONTENT_ENCODING_REFUSED`, `CONTENT_TYPE_REFUSED`, nothing forwarded |
+| `tests/test_reach_allowlist.py` | Provider-side reach by allowlist (S-03.3, the security review's S2): content block types and source types outside the allowlists refused `PROVIDER_REACH_REFUSED` wherever they are read (a replayed `server_tool_use`, server tool results, `mcp_tool_use`, a `web_page` source, unknown types), nothing forwarded; the allowed shapes forwarded |
 | `tests/serve_child.py` | The child process of `test_stop.py` and `test_census.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -337,9 +338,20 @@ the parsed JSON body of every admitted request; `anthropic-messages` refuses, wi
   Code's own tools are custom tools;
 - a `tools` that is present and is not a list, or a `tools` entry that is not an object (rule `tools-shape`, name
   `tools`): a shape the rule cannot read is refused, never passed on;
-- anywhere in the body (every nested object and list, tool results included), an object whose `source` is an
-  object of `type` `url` or `file` (rule `source-type`), and a block whose `type` is `container_upload` (rule
-  `block-type`).
+- a content block whose `type` is not one of `text`, `image`, `document`, `tool_use`, `tool_result`, `thinking`,
+  `redacted_thinking`, `search_result` (rule `block-type`; an allowlist since the security review's S2): in
+  `messages[].content`, in `system` when it is a list, and in the content of a `tool_result`, a `search_result`
+  and a source of type `content`; so a replayed `server_tool_use`, any server tool's `*_tool_result`,
+  `mcp_tool_use`, `container_upload` and every type not yet known are refused. A content that is neither a
+  string nor a list of objects is refused too (rule `content-shape`);
+- anywhere in the body (every nested object and list, tool results and tool inputs included), an object whose
+  `source` is an object whose `type` is not `base64`, `text` or `content` (rule `source-type`: `url`, `file`,
+  `web_page`, a missing type, anything else), and a block whose `type` is `container_upload` (rule
+  `block-type`). Fail closed, disclosed: a tool input or a tool's schema holding a property named `source` whose
+  value is an object is refused unless that object's `type` is one of the three.
+
+The allowlists are written from the provider's public request shapes. S-03.3's discovery run may show that the
+pinned client (Claude Code) needs another block or source type; adding one is a reviewed change.
 
 The refused request's audit line carries `reach`: `{"rule", "name"}`, the name being the key or the type in the
 audit's bounded name grammar (`null` outside it), never a value. A family with no reach checker (the two OpenAI

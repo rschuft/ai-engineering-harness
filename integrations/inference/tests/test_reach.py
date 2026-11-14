@@ -133,11 +133,17 @@ class TheChecker(unittest.TestCase):
 
     def test_the_walk_has_no_recursion_limit(self):
         nested = {'type': 'text', 'text': 'x'}
-        for _ in range(5000):
-            nested = {'content': [nested]}
-        self.assertIsNone(IB.anthropic_reach({'model': S.MODEL_A, 'messages': [nested]}))
+        for _ in range(5000):          # tool results nested in tool results: every level an allowed block
+            nested = {'type': 'tool_result', 'tool_use_id': 't', 'content': [nested]}
+        body = {'model': S.MODEL_A, 'messages': [{'role': 'user', 'content': [nested]}]}
+        self.assertIsNone(IB.anthropic_reach(body))
         nested['content'].append({'type': 'image', 'source': {'type': 'url', 'url': 'https://x.test'}})
-        self.assertEqual(IB.anthropic_reach({'model': S.MODEL_A, 'messages': [nested]}), ('source-type', 'url'))
+        self.assertEqual(IB.anthropic_reach(body), ('source-type', 'url'))
+        innermost = nested
+        while innermost['content'][0].get('type') == 'tool_result':
+            innermost = innermost['content'][0]
+        innermost['content'].append({'type': 'server_tool_use', 'id': 's', 'name': 'web_fetch', 'input': {}})
+        self.assertEqual(IB.anthropic_reach(body), ('block-type', 'server_tool_use'))
 
     def test_only_anthropic_messages_has_a_checker(self):
         self.assertEqual(set(IB.REACH_CHECKERS), {'anthropic-messages'})
