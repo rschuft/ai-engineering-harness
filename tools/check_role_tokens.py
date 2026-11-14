@@ -16,7 +16,9 @@ It fails when:
 - an agent-controlled role is granted an Owner-only operation, an executor operation,
   ``op-gitea-administration``, an ``op-as-*`` operation, ``cap-code-merge-integration``
   or another capability of privileged authority, or a credential of Owner, admin,
-  executor or management authority; or a provider credential (never a role token);
+  executor or management authority; or a provider credential (never a role token), except the native execution
+  profile's token (``cred-native-claude-code-token``, decision 0023 among its inventory sources) to the D1 stage's
+  role, ``builder`` (plan leaf E-05.9), whose revocation never names attempt end;
 - a grant is made to a principal that is not independently isolated (the bootstrap
   agents are a non-role row with no grants);
 - a granted operation's inventory principal is not the role's principal;
@@ -68,6 +70,11 @@ REQUIRED_TRIGGERS = ('suspected-exposure', 'owner-direction')
 # dispatcher no replacement), rotated and revoked only on the other triggers, so attempt end is forbidden there.
 AGENT_REQUIRED_TRIGGERS = ('attempt-end',)
 STANDING_ISSUERS = ('gitea-site-admin',)
+# Decision 0023 (plan leaf E-05.9): the native execution profile's token is the one provider credential an agent
+# role may hold, and only the D1 stage's role: it is delivered to a D1 attempt's container and readable there by
+# design. It is the Owner's own, valid up to a year and not bound to an attempt, so it is standing: attempt end is
+# not among its triggers (the Owner revokes it at the provider). Every other provider credential stays refused.
+NATIVE_PROVIDER_ROLES = ('builder',)
 NEW_DISPATCH = 'immediate-refusal'
 RECEIPT_STORES = ('integration-store', 'effects-store')
 
@@ -326,9 +333,11 @@ class Checker(csi.Checker):
             if agent and cred.get('authority') in csi.PRIVILEGED_AUTHORITIES:
                 self.add('AGENT_PRIVILEGED_GRANT', where,
                          f'{cid}: a credential of {cred.get("authority")} authority')
-            if agent and cred.get('authority') == 'provider':
+            if agent and cred.get('authority') == 'provider' \
+                    and not (rid in NATIVE_PROVIDER_ROLES and csi.native_provider_credential(cid, cred)):
                 self.add('PROVIDER_ROLE_TOKEN', where,
-                         f'{cid}: a provider credential is never a role token')
+                         f'{cid}: a provider credential is never a role token (only the native profile\'s token, '
+                         f'{csi.NATIVE_PROVIDER_CREDENTIAL}, to {list(NATIVE_PROVIDER_ROLES)}: decision 0023)')
 
         for cid in self.id_list(f'{where}.custodian_of', role.get('custodian_of', [])):
             cred = self.credentials.get(cid)
@@ -451,11 +460,16 @@ class Checker(csi.Checker):
                 self.add('TRIGGER_INVALID', w, f'triggers must be a non-empty subset of {TRIGGERS}')
                 triggers = []
             cred = self.credentials.get(cid) or {}
+            native = csi.native_provider_credential(cid, cred)
             standing = cred.get('issuer') in STANDING_ISSUERS
-            required = REQUIRED_TRIGGERS + (AGENT_REQUIRED_TRIGGERS if agent and not standing else ())
+            required = REQUIRED_TRIGGERS + (AGENT_REQUIRED_TRIGGERS if agent and not (standing or native) else ())
             missing = [t for t in required if t not in triggers]
             if missing:
                 self.add('TRIGGER_INVALID', w, f'triggers must include {missing}')
+            if native and 'attempt-end' in triggers:
+                self.add('TRIGGER_INVALID', w, 'attempt-end is not a trigger of the native profile\'s token: it is '
+                         'the Owner\'s own, valid up to a year and not bound to an attempt; only the Owner revokes it '
+                         'at the provider (decision 0023 section 6)')
             if standing and 'attempt-end' in triggers:
                 self.add('TRIGGER_INVALID', w, 'attempt-end is not a trigger of a standing credential the Gitea '
                          'site administrator issues: releasing it at attempt end is not revocation (decision 0007 '

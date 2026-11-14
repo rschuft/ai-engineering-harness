@@ -33,6 +33,26 @@ provider key, for either caller: every word of a reported location that holds on
 
 Standard library only. The broker's token grammar and the fingerprint are the broker's own (decision 0015 section
 3.1), loaded on first use: importing this module loads no inference or credential module.
+
+**The native profile** (decision 0023 section 3; plan leaves E-05.9 and E-05.11): ``check_native_secrets`` is the
+one check of a native create's secrets and agent block, shared by the dispatcher's D1 stage on the native profile
+(``dispatch_inputs``) and E-05.11's qualification admission (which calls this function, as S-03.3's admission
+calls ``check_secrets``: not a copy). It admits exactly decision 0023's four names, each a ``StaticSecret`` of
+exactly kind and value, with ``secrets_encrypted`` false: ``CLAUDE_CODE_OAUTH_TOKEN``, a value of the native
+token's shape (``native_token.token_rule``); ``HTTPS_PROXY``, the profile's tunnel endpoint (``tunnel_endpoint``);
+and the two switches with their declared spellings (``NATIVE_SWITCHES``). It refuses with stable codes
+(``NATIVE_MEANINGS``) a mix of the native and brokered sets (NATIVE_SECRETS_MIXED); any other, additional or
+missing name (NATIVE_SECRET_NAMES); another kind or shape (SECRET_KIND_FORBIDDEN, as E-05.6); ``secrets_encrypted``
+not false (SECRETS_ENCRYPTED, as E-05.6); a token without the shape (NATIVE_TOKEN_NOT_SHAPED); the token, its body
+after the public prefix or any run of FRAGMENT of its body's characters anywhere else (NATIVE_TOKEN_OUTSIDE_SECRET);
+a second authentication method anywhere else in the body, an ``ANTHROPIC_API_KEY``, ``ANTHROPIC_BASE_URL`` or
+``ANTHROPIC_AUTH_TOKEN`` name or another provider credential's value (NATIVE_SECOND_AUTH_METHOD); another proxy
+endpoint, or another network destination anywhere (NATIVE_PROXY_NOT_TUNNEL); a switch value other than its declared
+spelling (NATIVE_SWITCH_NOT_DECLARED); an MCP configuration (NATIVE_MCP_FORBIDDEN); an ACP server, command or
+arguments other than the pinned ``claude-agent-acp`` (NATIVE_ACP_COMMAND_NOT_PINNED); and a setting that relocates
+the per-conversation configuration directory (NATIVE_CONFIG_DIR_RELOCATED). Given the held token's fingerprint
+(the D1 stage's), a token that is not the held one is NATIVE_TOKEN_NOT_HELD. The native token's grammar is
+``native_token``'s, loaded on first use.
 """
 from __future__ import annotations
 
@@ -92,6 +112,11 @@ def broker():
     return _load('aieh_inference_broker', REPO / 'integrations' / 'inference' / 'inference_broker.py')
 
 
+def native():
+    """The native token's module (its grammar and fingerprint, E-05.9), loaded on first use: standard library only."""
+    return _load('aieh_dispatch_native_token', HERE / 'native_token.py')
+
+
 def fingerprint(token: str) -> str:
     """The token's fingerprint, as the broker records it (sha256:<16 hex digits>)."""
     return broker().contract.fingerprint(token)
@@ -110,13 +135,22 @@ def strings(node, where=()):
         yield where, node
 
 
-def fragments(token) -> frozenset:
-    """Every run of FRAGMENT characters of an attempt token's body (empty for anything else)."""
-    shapes = broker()
-    if not isinstance(token, str) or not shapes.TOKEN_SHAPE.fullmatch(token):
-        return frozenset()
-    body = token[len(shapes.TOKEN_PREFIX):]
+def body_fragments(body: str) -> frozenset:
+    """Every run of FRAGMENT characters of BODY."""
     return frozenset(body[i:i + FRAGMENT] for i in range(len(body) - FRAGMENT + 1))
+
+
+def fragments(token) -> frozenset:
+    """Every run of FRAGMENT characters of an attempt token's body, or of a native token's body after its public
+    prefix (E-05.9); empty for anything else."""
+    if not isinstance(token, str):
+        return frozenset()
+    shapes = broker()
+    if shapes.TOKEN_SHAPE.fullmatch(token):
+        return body_fragments(token[len(shapes.TOKEN_PREFIX):])
+    if native().is_token(token):
+        return body_fragments(native().secret_body(token))
+    return frozenset()
 
 
 def _holds_secret(text: str, parts: frozenset) -> bool:
@@ -193,3 +227,145 @@ def check_secrets(body: dict, *, names, endpoint: str, refused: Callable[[str, s
     if secrets[endpoint_name]['value'] != endpoint:
         raise refused('DESTINATION_NOT_ENDPOINT', f'{endpoint_name} must be {endpoint}')
     return token
+
+
+# ---------------------------------------------------------------------------
+# The native profile (decision 0023 section 3; E-05.9, shared with E-05.11's qualification admission)
+
+NATIVE_TOKEN_NAME = 'CLAUDE_CODE_OAUTH_TOKEN'
+NATIVE_PROXY_NAME = 'HTTPS_PROXY'
+# The switches' declared spelling (decision 0023 section 3: collision-free, never 1 or true; the SDK masks every
+# secret value in the agent's output by substring). At the pinned CLI (claude 2.1.220) CLAUDE_CODE_PROXY_RESOLVES_HOSTS
+# is read through its environment parser's bool, true for "1", "true", "yes" or "on" after lower-casing and
+# trimming; CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is read as any non-empty value, and its declared accessor is the
+# same bool. "tRuE" is accepted by every reader of both, is neither "1" nor "true", and does not occur in the pinned
+# CLI's own code and text (E-05.9's report gives the source locations).
+SWITCH_SPELLING = 'tRuE'
+NATIVE_SWITCHES = {'CLAUDE_CODE_PROXY_RESOLVES_HOSTS': SWITCH_SPELLING,
+                   'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': SWITCH_SPELLING}
+NATIVE_NAMES = (NATIVE_TOKEN_NAME, NATIVE_PROXY_NAME, *NATIVE_SWITCHES)
+# The brokered profile's set: the pinned registry entry's two names (acp_qualification.registry_secret_names).
+BROKERED_NAMES = ('ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL')
+# A second authentication method (decision 0023 section 3): none of these is set on the native profile.
+SECOND_AUTH_NAMES = ('ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN')
+# The profile's tunnel endpoint (decision 0023 sections 3 and 4.4): one network.endpoints entry of this class, the
+# docker0 gateway address and the tunnel's port. E-05.10 declares it in the profile, P7 and properties.json.
+TUNNEL_CLASS = 'provider-tunnel'
+TUNNEL_ADDRESS = '172.17.0.1'
+# The pinned ACP block's run shape (decision 0023 section 3; the registry extract's claude-code entry).
+PINNED_ACP = {'agent_kind': 'acp', 'acp_server': 'claude-code', 'acp_command': ['claude-agent-acp']}
+# The per-conversation, empty configuration directory: the SDK's isolation on, and nothing that names the variable
+# it sets (the SDK's ACPAgent overwrites CLAUDE_CONFIG_DIR when acp_isolate_data_dir is true, decision 0023).
+ISOLATE_SETTING = 'acp_isolate_data_dir'
+CONFIG_DIR_NAME = 'CLAUDE_CONFIG_DIR'
+MCP_NAME = re.compile(r'mcp', re.IGNORECASE)
+NATIVE_MEANINGS = {
+    'NATIVE_SECRETS_MIXED': 'the create mixes the native secret set and the brokered one (ANTHROPIC_API_KEY, '
+                            'ANTHROPIC_BASE_URL)',
+    'NATIVE_SECRET_NAMES': 'secrets are not exactly CLAUDE_CODE_OAUTH_TOKEN, HTTPS_PROXY, '
+                           'CLAUDE_CODE_PROXY_RESOLVES_HOSTS and CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+    'SECRET_KIND_FORBIDDEN': MEANINGS['SECRET_KIND_FORBIDDEN'],
+    'SECRETS_ENCRYPTED': MEANINGS['SECRETS_ENCRYPTED'],
+    'NATIVE_TOKEN_NOT_SHAPED': 'the native token is not a value of its shape (in CLAUDE_CODE_OAUTH_TOKEN or in its '
+                               'entry)',
+    'NATIVE_TOKEN_NOT_HELD': 'CLAUDE_CODE_OAUTH_TOKEN is not the token the dispatcher read from the native entry',
+    'NATIVE_TOKEN_OUTSIDE_SECRET': 'the native token, or a part of it, appears in the create outside '
+                                   'CLAUDE_CODE_OAUTH_TOKEN',
+    'NATIVE_SECOND_AUTH_METHOD': 'the create carries a second authentication method (an ANTHROPIC_API_KEY, '
+                                 'ANTHROPIC_BASE_URL or ANTHROPIC_AUTH_TOKEN, or another provider credential)',
+    'NATIVE_PROXY_NOT_TUNNEL': 'HTTPS_PROXY is not the profile\'s tunnel endpoint, or the create names another '
+                               'network destination',
+    'NATIVE_SWITCH_NOT_DECLARED': 'a switch is not its declared spelling (never 1 or true)',
+    'NATIVE_MCP_FORBIDDEN': 'the create configures an MCP server',
+    'NATIVE_ACP_COMMAND_NOT_PINNED': 'the agent block is not the pinned ACP run shape: agent_kind acp, acp_server '
+                                     'claude-code, acp_command exactly ["claude-agent-acp"], no acp_args',
+    'NATIVE_CONFIG_DIR_RELOCATED': 'the create relocates the per-conversation configuration directory '
+                                   '(acp_isolate_data_dir not true, or a CLAUDE_CONFIG_DIR setting)',
+    'NATIVE_TUNNEL_UNDECLARED': 'the profile declares no single tunnel endpoint (class provider-tunnel) with the '
+                                'docker0 gateway address 172.17.0.1 and a port',
+}
+
+
+def tunnel_endpoint(profile, *, refused: Callable[[str, str], Exception]) -> str:
+    """The profile's tunnel endpoint, ``http://172.17.0.1:<port>``, from its one ``network.endpoints`` entry of class
+    TUNNEL_CLASS (decision 0023 section 3); NATIVE_TUNNEL_UNDECLARED otherwise."""
+    endpoints = (profile.get('network') or {}).get('endpoints') if isinstance(profile, dict) else None
+    entries = [e for e in endpoints or [] if isinstance(e, dict) and e.get('class') == TUNNEL_CLASS]
+    if len(entries) != 1:
+        raise refused('NATIVE_TUNNEL_UNDECLARED', f'{len(entries)} {TUNNEL_CLASS} endpoints declared')
+    address, port = entries[0].get('guest_address'), entries[0].get('guest_port')
+    if address != TUNNEL_ADDRESS or type(port) is not int or not 1 <= port <= 65535:
+        raise refused('NATIVE_TUNNEL_UNDECLARED', f'the tunnel endpoint needs guest_address {TUNNEL_ADDRESS} and a '
+                                                  'port')
+    return f'http://{address}:{port}'
+
+
+def check_native_secrets(body: dict, *, endpoint: str, refused: Callable[[str, str], Exception],
+                         held: str | None = None) -> str:
+    """Refuse a native create BODY (a JSON object) unless its secrets block is exactly NATIVE_NAMES, each a
+    StaticSecret, with secrets_encrypted false, the token of the native token's shape (the held one, when HELD, its
+    fingerprint, is given) and nowhere else, no second authentication method, HTTPS_PROXY ENDPOINT and no other
+    destination, each switch its declared spelling, and its agent block the pinned ACP run shape with no MCP
+    configuration and the per-conversation configuration directory kept; raise ``refused(code, detail)``
+    (NATIVE_MEANINGS). Returns the token."""
+    secrets = body.get('secrets')
+    names = set(secrets) if isinstance(secrets, dict) else set()
+    if names & set(NATIVE_NAMES) and names & set(BROKERED_NAMES):
+        raise refused('NATIVE_SECRETS_MIXED', 'the native and brokered secret sets are mixed')
+    if not isinstance(secrets, dict) or sorted(secrets) != sorted(NATIVE_NAMES):
+        raise refused('NATIVE_SECRET_NAMES', f'secrets must be exactly {list(NATIVE_NAMES)}')
+    for name in NATIVE_NAMES:
+        source = secrets[name]
+        if not isinstance(source, dict) or set(source) != {'kind', 'value'} or source['kind'] != STATIC_SECRET \
+                or not isinstance(source['value'], str):
+            raise refused('SECRET_KIND_FORBIDDEN', f'{name} must be a StaticSecret of kind and value')
+    if body.get('secrets_encrypted') is not False:
+        raise refused('SECRETS_ENCRYPTED', 'secrets_encrypted must be false')
+    grammar = native()
+    token = secrets[NATIVE_TOKEN_NAME]['value']
+    rule = grammar.token_rule(token)
+    if rule is not None:
+        raise refused('NATIVE_TOKEN_NOT_SHAPED', f'{NATIVE_TOKEN_NAME} is {grammar.rule_detail(rule)}')
+    if held is not None and grammar.fingerprint(token) != held:
+        raise refused('NATIVE_TOKEN_NOT_HELD', f'{NATIVE_TOKEN_NAME} is not the held token')
+    token_at, proxy_at = ('secrets', NATIVE_TOKEN_NAME, 'value'), ('secrets', NATIVE_PROXY_NAME, 'value')
+    secret, parts = grammar.secret_body(token), fragments(token)
+    texts = list(strings(body))
+    for where, text in texts:
+        if where != token_at and (token in text or secret in text or any(part in text for part in parts)):
+            raise refused('NATIVE_TOKEN_OUTSIDE_SECRET', f'at {location(where, token)}')
+    for where, text in texts:
+        if where != token_at and (PROVIDER_KEY_SHAPE.search(text) or 'sk-ant' in text
+                                  or any(name in text for name in SECOND_AUTH_NAMES)):
+            raise refused('NATIVE_SECOND_AUTH_METHOD', f'at {location(where, token)}')
+    for where, text in texts:
+        if where != proxy_at and ('://' in text or text.startswith('//')):
+            raise refused('NATIVE_PROXY_NOT_TUNNEL', f'a destination at {location(where, token)}')
+    if secrets[NATIVE_PROXY_NAME]['value'] != endpoint:
+        raise refused('NATIVE_PROXY_NOT_TUNNEL', f'{NATIVE_PROXY_NAME} must be {endpoint}')
+    for name, spelling in NATIVE_SWITCHES.items():
+        if secrets[name]['value'] != spelling:
+            raise refused('NATIVE_SWITCH_NOT_DECLARED', f'{name} must be its declared spelling')
+    check_native_agent(body, refused=refused, token=token)
+    return token
+
+
+def check_native_agent(body: dict, *, refused: Callable[[str, str], Exception], token=None) -> None:
+    """The agent block of a native create BODY (``check_native_secrets`` ends with it; the D1 stage also runs it on
+    its pinned template before the token is read): no MCP configuration anywhere (NATIVE_MCP_FORBIDDEN), the pinned
+    ACP run shape (NATIVE_ACP_COMMAND_NOT_PINNED) and the per-conversation configuration directory kept
+    (NATIVE_CONFIG_DIR_RELOCATED). TOKEN, when given, is redacted from a refusal's location."""
+    texts = list(strings(body))
+    for where, _ in texts:
+        if where and where[-1] == '#key' and MCP_NAME.search(str(where[-2])) \
+                and where[:-1] != ('agent_settings', 'mcp_config'):
+            raise refused('NATIVE_MCP_FORBIDDEN', f'at {location(where[:-1], token)}')
+    settings = body.get('agent_settings')
+    if isinstance(settings, dict) and settings.get('mcp_config', {}) != {}:
+        raise refused('NATIVE_MCP_FORBIDDEN', 'agent_settings.mcp_config must be empty')
+    if not isinstance(settings, dict) or any(settings.get(k) != v for k, v in PINNED_ACP.items()) \
+            or settings.get('acp_args', []) != []:
+        raise refused('NATIVE_ACP_COMMAND_NOT_PINNED', 'the agent block must be the pinned claude-agent-acp')
+    if settings.get(ISOLATE_SETTING) is not True or any(CONFIG_DIR_NAME in text for _, text in texts):
+        raise refused('NATIVE_CONFIG_DIR_RELOCATED', f'{ISOLATE_SETTING} must be true and nothing may set '
+                                                     f'{CONFIG_DIR_NAME}')

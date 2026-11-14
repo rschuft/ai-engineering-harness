@@ -150,6 +150,33 @@ class AgentAndOwnerAuthority(unittest.TestCase):
         found, _ = codes(inv)
         self.assertIn('AGENT_PRIVILEGED_CREDENTIAL', found)
 
+    def test_only_the_native_token_is_a_provider_credential_an_agent_may_read(self):
+        """Decision 0023 (E-05.9): the native profile's token is readable by the D1 attempt's agent by design;
+        every other provider credential held, managed or readable by an agent principal fails, and so does the
+        native one without decision 0023 among its sources."""
+        native = entry(INVENTORY, 'credentials', 'cred-native-claude-code-token')
+        self.assertEqual(native['authority'], 'provider')
+        self.assertIn('engineering-agent', native['readable_by'])
+        self.assertEqual(codes(fresh())[1], [])
+        for cid, key in (('cred-llm-provider-key', 'readable_by'), ('cred-owner-provider-login', 'readable_by'),
+                         ('cred-llm-provider-key', 'holder'), ('cred-owner-provider-login', 'manager')):
+            with self.subTest(credential=cid, key=key):
+                inv = fresh()
+                cred = entry(inv, 'credentials', cid)
+                if key == 'readable_by':
+                    cred[key].append('engineering-agent')
+                else:
+                    cred[key] = 'reviewer-agent'
+                found, problems = codes(inv)
+                self.assertIn('AGENT_PROVIDER_CREDENTIAL', found)
+                self.assertTrue(any(cid in p.where for p in problems))
+        inv = fresh()
+        entry(inv, 'credentials', 'cred-native-claude-code-token')['sources'] = ['profiles/README.md']
+        self.assertIn('AGENT_PROVIDER_CREDENTIAL', codes(inv)[0])
+        inv = fresh()
+        entry(inv, 'credentials', 'cred-native-claude-code-token')['authority'] = 'owner'
+        self.assertIn('AGENT_PRIVILEGED_CREDENTIAL', codes(inv)[0])
+
     def test_agent_readable_management_key_fails(self):
         inv = fresh()
         entry(inv, 'credentials', 'cred-agent-server-session-key')['readable_by'].append(

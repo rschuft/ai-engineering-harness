@@ -551,6 +551,18 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/inference/inference_broker.py credential-enter {{.CLI_ARGS}}'
 
+  # The Owner's native Claude Code token entry (E-05.9; decision 0023; OA-31 (e)): run by the Owner in his own
+  # console window only.
+  credentials:native-token-enter:
+    desc: "The Owner's native Claude Code token entry (<tools python> -I -B integrations/credentials/native_token_entry.py enter [--replace]; plan leaf E-05.9, decision 0023, OA-31 (e)), run by the Owner in his own console window after claude setup-token: refused unless standard input is an interactive console, and for an existing entry without --replace, before any prompt; the token pasted once at a hidden prompt (echo off; never argv, the environment, a file, config.yml or the host Claude configuration), refused naming the rule unless of the native shape (sk-ant-, a lower-case label, -, then [A-Za-z0-9_-], 40 to 512 characters; never an API key, admin key or session token); stored as the one credential entry \"AIEH Claude Code native token\" with a fingerprint-only receipt; prints nothing derived from the token, and a reminder to clear the clipboard; exit 2 on a refusal"
+    interactive: true
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/credentials/native_token_entry.py enter {{.CLI_ARGS}}'
+
   dispatch:check-manifest:
     desc: Schema-check an approved-input manifest file; admits nothing (python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest MANIFEST)
     requires:

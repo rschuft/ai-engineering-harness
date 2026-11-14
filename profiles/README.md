@@ -125,6 +125,22 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
   Server's session API key (amended 2026-11-07, F-04.1). Provider and LLM credentials
   never enter the guest. They are used only behind the brokered `inference` endpoint
   class (`profiles P7`).
+- **The native profile's token (planned; decision 0023, plan leaf E-05.9).** One
+  exception, on the native execution profile only: the Owner's own Claude Code token
+  (`claude setup-token`; `cred-native-claude-code-token` in the security inventory), its
+  own credential class, held on the host in one credential-provider entry (`AIEH Claude
+  Code native token`, written only by the Owner's entry command at a hidden prompt) and
+  delivered by the dispatcher to a D1 attempt's conversation container as
+  `CLAUDE_CODE_OAUTH_TOKEN` in the create's secrets, where that attempt reads it by
+  design. It is never in the seed, cloud-init, the guest's own environment, a home
+  directory, `/etc`, a record, a log or a report (records carry its fingerprint only), and
+  never the host Claude configuration or `cred-owner-provider-login`. Each delivery is the
+  Owner's act (OA-31 (f)). Residuals (decision 0023 section 6; `fd-native-token-residuals`):
+  every process of the attempt and guest root can read it; it is valid up to a year and
+  not bound to an attempt; same-account host processes can read its entry. An outbound
+  search (`integrations/dispatch/native_token_search.py`) looks for it, raw and encoded, on
+  what leaves the guest (result bundle, records, reports), with a positive control; its
+  runs are E-05.11's and E-05.5's. Nothing of it is observed yet.
 - **Custody of the Agent Server's two secrets (amended 2026-11-07, F-04.1).** The root
   step generates `OH_SECRET_KEY` and the session API key inside the guest. Both live only
   in a root-only environment file that systemd reads for the service; neither is in the

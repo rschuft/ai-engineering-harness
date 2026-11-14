@@ -316,7 +316,8 @@
         "credentials": [
           "cred-guest-ssh-key",
           "cred-owner-github",
-          "cred-owner-provider-login"
+          "cred-owner-provider-login",
+          "cred-native-claude-code-token"
         ]
       },
       "denied": [
@@ -341,6 +342,12 @@
           "issuer": "external:model-provider",
           "delivered_by": null,
           "delivery": "The Owner's own coding-assistant login; never a role token."
+        },
+        {
+          "credential": "cred-native-claude-code-token",
+          "issuer": "external:model-provider",
+          "delivered_by": null,
+          "delivery": "The Owner runs claude setup-token on the host through the provider's own flow and pastes the token once at the hidden prompt of the harness's entry command (integrations/credentials/native_token_entry.py, OA-31 (e)), which writes the one credential-provider entry `AIEH Claude Code native token` with a fingerprint-only receipt (decision 0023 section 2). A new, separate credential: never cred-owner-provider-login and never the host Claude configuration."
         }
       ],
       "revocation": [
@@ -380,6 +387,19 @@
           "rotation_owner": "owner",
           "findings": [
             "fd-owner-credential-custody"
+          ]
+        },
+        {
+          "credential": "cred-native-claude-code-token",
+          "triggers": [
+            "suspected-exposure",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "Revoked at the provider by the Owner and replaced by a new entry (the entry command with --replace, OA-31 (e)); valid up to a year and not bound to an attempt, so attempt end does not revoke it (decision 0023 section 6).",
+          "rotation_owner": "owner",
+          "findings": [
+            "fd-native-token-residuals"
           ]
         }
       ],
@@ -528,6 +548,7 @@
         "cred-uac-consent",
         "cred-owner-github",
         "cred-llm-provider-key",
+        "cred-native-claude-code-token",
         "cred-gitea-bot-builder",
         "cred-gitea-bot-reviewer"
       ],
@@ -659,7 +680,8 @@
         "credentials": [
           "cred-gitea-bot-builder",
           "cred-conversation-keys",
-          "cred-inference-attempt-token"
+          "cred-inference-attempt-token",
+          "cred-native-claude-code-token"
         ]
       },
       "denied": [
@@ -735,6 +757,12 @@
           "issuer": "inference-broker",
           "delivered_by": "management-dispatcher",
           "delivery": "Issued per attempt by the inference broker alone (decision 0007 point 4) on its control listener to the dispatcher, before the create: bound to the attempt's reserved conversation, one API family, a model list and an expiry (no request or token budget: decision 0015 amendment 2), returned once and kept by the broker as its digest only. The dispatcher places it in the create request (an ACP agent: the create's secrets under the pinned registry's api_key_env_var, with the endpoint under base_url_env_var; a native agent: the LLM settings' api_key), so the attempt's agent can read it by design (decision 0015 sections 3.2 and 3.3, amendment 1 point 2). It is issued by the broker and is not a role token: no role token is ever sent to the broker and no provider credential is ever a role token. Records carry its fingerprint only."
+        },
+        {
+          "credential": "cred-native-claude-code-token",
+          "issuer": "external:model-provider",
+          "delivered_by": "management-dispatcher",
+          "delivery": "The native execution profile only (decision 0023): the Owner's own token from its one credential-provider entry, read by the dispatcher only at a D1 create after the reservation and every other input are admitted, and placed in the create's secrets as CLAUDE_CODE_OAUTH_TOKEN (a StaticSecret) beside HTTPS_PROXY and the two switches, so the attempt's Claude Code reads it by design (\"Permit the isolated Claude Code process to access its own authentication credential.\"). Each delivery is the Owner's act (OA-31 (f)). It is the one provider credential an agent role may read: never a role token, never issued per attempt, never sent to the broker. Records carry its fingerprint only (E-05.9, offline only)."
         }
       ],
       "revocation": [
@@ -785,6 +813,20 @@
           "rotation_owner": "management-dispatcher",
           "findings": [
             "fd-acp-provider-auth"
+          ]
+        }
+     ,
+        {
+          "credential": "cred-native-claude-code-token",
+          "triggers": [
+            "suspected-exposure",
+            "owner-direction"
+          ],
+          "revoker": "owner",
+          "method": "Revoked at the provider by the Owner and replaced by a new entry (OA-31 (e)); valid up to a year and not bound to an attempt, so attempt end does not revoke it (decision 0023 section 6): the attempt's container and record are what end with the attempt.",
+          "rotation_owner": "owner",
+          "findings": [
+            "fd-native-token-residuals"
           ]
         }
       ],
@@ -850,6 +892,7 @@
         "cred-uac-consent",
         "cred-owner-github",
         "cred-llm-provider-key",
+        "cred-native-claude-code-token",
         "cap-push-proposal-branch",
         "cred-gitea-bot-planner",
         "cred-gitea-bot-builder"

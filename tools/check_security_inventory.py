@@ -12,6 +12,9 @@ This checker enforces the leaf's acceptance mechanically:
   Owner-only operation uses a credential that an agent principal holds, manages or may
   read; an Owner-only operation's principal holds Owner authority, and no agent
   principal is described as holding Owner authority;
+- no provider credential is held, managed or readable by an agent principal, except the native execution profile's
+  token (``cred-native-claude-code-token``, decision 0023 among its sources; plan leaf E-05.9), which a D1 attempt
+  reads by design;
 - a privileged credential that an agent principal can reach because it shares an OS
   identity with the holder carries a finding that names that agent principal
   (decision 0004, Owner clarification 5: such agents are not isolated principals);
@@ -52,6 +55,12 @@ OWNER_KINDS = ('owner', 'owner-host-account')
 AUTHORITIES = ('owner', 'admin', 'executor', 'management', 'scoped', 'guest-local',
                'provider')
 PRIVILEGED_AUTHORITIES = ('owner', 'admin', 'executor', 'management')
+# Decision 0023 (plan leaf E-05.9): the one provider credential an agent principal may read, the native execution
+# profile's token, delivered to a D1 attempt's container. It is recognized by its id and by decision 0023 among its
+# sources; every other provider credential held, managed or readable by an agent principal is refused.
+NATIVE_PROVIDER_CREDENTIAL = 'cred-native-claude-code-token'
+NATIVE_PROVIDER_SOURCE = ('decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-'
+                          'tunnel.md')
 ASSET_KINDS = ('host', 'guest', 'process', 'container', 'directory', 'secret-file',
                'socket', 'listener', 'api', 'store', 'repository', 'service',
                'credential-store', 'privileged-unit')
@@ -116,6 +125,14 @@ class RepoFiles:
             self._plan_ids['ids'] = _plan_ids(self.read_text(PLAN))
         ids = self._plan_ids['ids']
         return None if ids is None else set(ids)
+
+
+def native_provider_credential(cid, cred) -> bool:
+    """Whether CRED (of id CID) is the native profile's token: its id, provider authority and decision 0023 among
+    its sources (plan leaf E-05.9)."""
+    sources = cred.get('sources') if isinstance(cred, dict) else None
+    return cid == NATIVE_PROVIDER_CREDENTIAL and cred.get('authority') == 'provider' \
+        and isinstance(sources, list) and NATIVE_PROVIDER_SOURCE in sources
 
 
 def _plan_ids(text):
@@ -432,6 +449,11 @@ class Checker:
                 self.add('AGENT_PRIVILEGED_CREDENTIAL', where,
                          f'{authority} authority is held, managed or readable by agent '
                          f'principal(s) {sorted(set(agents))}')
+            if authority == 'provider' and agents and not native_provider_credential(cid, c):
+                self.add('AGENT_PROVIDER_CREDENTIAL', where,
+                         f'a provider credential is held, managed or readable by agent principal(s) '
+                         f'{sorted(set(agents))}; only the native profile\'s token ({NATIVE_PROVIDER_CREDENTIAL}, '
+                         f'decision 0023) may be')
             if authority == 'owner' and holder is not None and holder.get('owner_authority') is not True:
                 self.add('AGENT_OWNER_AUTHORITY', where,
                          f'an Owner-authority credential held by {c.get("holder")}, '

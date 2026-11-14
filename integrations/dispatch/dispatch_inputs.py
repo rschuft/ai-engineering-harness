@@ -1,5 +1,5 @@
 """Trusted dispatch input resolution, create admission and the native conversation create
-(plan leaves E-01.2.1, E-01.2.2, E-01.3.1, E-05.2 and E-05.6, blueprint #execution-qualification).
+(plan leaves E-01.2.1, E-01.2.2, E-01.3.1, E-05.2, E-05.6 and E-05.9, blueprint #execution-qualification).
 
 Dispatch step 01 resolves the authoritative Work and profile before anything is reserved
 or created: "Check Backlog readiness, accepted OpenSpec revision and executable
@@ -22,6 +22,13 @@ the block, the check shared with S-03.3's qualification admission (``create_secr
 any other shape at admission and again before the transport, the grant is revoked on any
 refusal or failure and at the attempt's end (``end_attempt``), and records carry the token's
 fingerprint only (integrations/dispatch/README.md).
+
+On the native profile (E-05.9, decision 0023: the stage template's pin declares ``execution_profile`` ``native``)
+no broker is involved: after ``admit`` has admitted every other input, and only then, the Owner's native Claude Code
+token is read from its one credential-provider entry (``native_token``), ``admit_secrets`` adds decision 0023's
+four secrets, the check shared with E-05.11's qualification admission (``create_secrets.check_native_secrets``)
+refuses any other shape at admission and again before the transport, and records carry the token's fingerprint
+only.
 
 * **Input:** a dispatch request (``ai-engineering-harness/dispatch/request/v1``) that names
   identifiers only: the Work (a Backlog.md task id), the repository, the stage, the
@@ -270,6 +277,15 @@ REFUSALS = {
                      'in flight (end_attempt ran): the create is not sent',
     'INFERENCE_REVOCATION_FAILED': 'the attempt\'s inference grant was not revoked (the broker refused or did not '
                                    'answer): it stays live until revoked or expired; end_attempt tries again',
+    # E-05.9: the D1 stage on the native profile (decision 0023). The secrets block's codes and meanings are the
+    # check's shared with E-05.11's qualification admission (create_secrets.NATIVE_MEANINGS).
+    **secrets_check.NATIVE_MEANINGS,
+    'NATIVE_TOKEN_MISSING': 'the native profile\'s token entry holds no token (the Owner enters it, OA-31 (e)): '
+                            'nothing was created',
+    'NATIVE_TOKEN_UNAVAILABLE': 'the native profile\'s token entry could not be read: no credential provider was '
+                                'given, or it failed',
+    'NATIVE_SECRET_NOT_FROM_ENTRY': 'the admitted create\'s CLAUDE_CODE_OAUTH_TOKEN is not the slot the held native '
+                                    'token fills at the send: a token value in the admitted body is never sent',
 }
 
 
@@ -1055,6 +1071,16 @@ GRANT_JOURNAL_FORMAT = 'ai-engineering-harness/dispatch/inference-grant-journal/
 GRANT_JOURNAL_KEY = 'dispatch/attempt/{attempt_id}/inference-grant'
 # A revocation by attempt that found no grant: the broker tombstoned the attempt, so none is registered after it.
 NO_GRANT_TOMBSTONED = 'no grant; attempt tombstoned'
+# E-05.9: the D1 stage's execution profile (decision 0023 section 1.3), declared beside the stage template's pin
+# (EXECUTION_PROFILE_KEY, bound by the profile digest): brokered when absent (E-05.6, as built), or native. The
+# native profile takes no inference grant (decision 0023 section 5): its create carries the Owner's native token,
+# read from its one credential-provider entry (native_token.read) only after every other input is admitted, and
+# held as NATIVE_SLOT in the admitted body; the token takes the slot's place, in memory only, at the checks and the
+# send, as the attempt token does.
+EXECUTION_PROFILE_KEY = 'execution_profile'
+BROKERED, NATIVE = 'brokered', 'native'
+EXECUTION_PROFILES = (BROKERED, NATIVE)
+NATIVE_SLOT = '{native_token}'
 CODE_RE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 ARTIFACT_PATH_RE = re.compile(r'profiles/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+')
 GUEST_PATH_RE = re.compile(r'(?:/[A-Za-z0-9._-]+)+')
@@ -1189,6 +1215,17 @@ def _check_stage_create_template(pin, fixture, profile: str) -> dict:
     if pin['path'] == fixture.get('path') or pin['sha256'] == fixture.get('sha256'):
         raise DispatchRefused('STAGE_TEMPLATE_DISPOSABLE', f'{profile}: the {pin["stage"]} stage\'s create template '
                               'is the profile\'s F-04.2 disposable fixture', profile=profile, stage=pin['stage'])
+    execution = pin.get(EXECUTION_PROFILE_KEY, BROKERED)
+    if execution not in EXECUTION_PROFILES:
+        raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: agent_server.{STAGE_TEMPLATE_KEY}.'
+                              f'{EXECUTION_PROFILE_KEY} must be one of {list(EXECUTION_PROFILES)} (decision 0023)',
+                              profile=profile)
+    if execution == NATIVE:   # E-05.9: no grant, no broker (decision 0023 section 5)
+        if GRANT_KEY in pin:
+            raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: agent_server.{STAGE_TEMPLATE_KEY} '
+                                  f'declares the native profile and an {GRANT_KEY}: the native profile takes no '
+                                  'inference grant (decision 0023 section 5)', profile=profile)
+        return {'stage': pin['stage'], 'path': pin['path'], 'sha256': pin['sha256'], EXECUTION_PROFILE_KEY: NATIVE}
     grant = pin.get(GRANT_KEY)
     retired = sorted(name for name in RETIRED_GRANT_FIELDS if isinstance(grant, dict) and name in grant)
     if retired:
@@ -1201,7 +1238,7 @@ def _check_stage_create_template(pin, fixture, profile: str) -> dict:
                               f'must declare exactly {list(GRANT_FIELDS)}, each a positive integer (E-05.6)',
                               profile=profile)
     return {'stage': pin['stage'], 'path': pin['path'], 'sha256': pin['sha256'],
-            GRANT_KEY: {name: grant[name] for name in GRANT_FIELDS}}
+            GRANT_KEY: {name: grant[name] for name in GRANT_FIELDS}, EXECUTION_PROFILE_KEY: BROKERED}
 
 
 def stage_create_template(declared: dict, profile: str) -> dict | None:
@@ -1334,15 +1371,20 @@ def check_create_body(body, *, admission: dict, template: dict, conversation_id:
 
     ``secrets`` (the D1 stage's, E-05.6: ``names``, ``endpoint`` and ``binding``, ``StageInference.secrets``)
     admits the two secret fields beside the template's, checked first by the check shared with S-03.3's
-    qualification admission (``create_secrets.check_secrets``); without it, as for every other stage, they are
-    fields outside the allowlist (BODY_FIELD_UNKNOWN)."""
+    qualification admission (``create_secrets.check_secrets``); on the native profile (E-05.9: ``endpoint`` and
+    ``held``, ``StageNative.secrets``) by the check shared with E-05.11's (``create_secrets.check_native_secrets``);
+    without it, as for every other stage, they are fields outside the allowlist (BODY_FIELD_UNKNOWN)."""
     if not isinstance(body, dict):
         raise DispatchRefused('BODY_MALFORMED', 'the create body is not a JSON object')
     allowed = BODY_FIELDS + (SECRET_FIELDS if secrets is not None else ())
     for key in body:
         if key not in allowed:
             raise DispatchRefused(_override_code(key), f'the create body may not carry {key!r}', field=key)
-    if secrets is not None:
+    if secrets is not None and secrets.get(EXECUTION_PROFILE_KEY) == NATIVE:
+        # E-05.9: the native profile's check, shared with E-05.11's qualification admission
+        secrets_check.check_native_secrets(body, endpoint=secrets['endpoint'], held=secrets['held'],
+                                           refused=DispatchRefused)
+    elif secrets is not None:
         secrets_check.check_secrets(body, names=secrets['names'], endpoint=secrets['endpoint'],
                                     binding=secrets['binding'], refused=DispatchRefused)
     if body.get('conversation_id') != conversation_id:
@@ -1561,6 +1603,71 @@ class StageInference:
         return {token_name: {'kind': secrets_check.STATIC_SECRET, 'value': TOKEN_SLOT},
                 endpoint_name: {'kind': secrets_check.STATIC_SECRET, 'value': self.endpoint}}
 
+    @property
+    def token_name(self) -> str:
+        return self.names[0]
+
+    slot = TOKEN_SLOT
+    holder = InferenceGrant
+    not_from_holder = 'SECRET_NOT_FROM_GRANT'
+
+
+def _native_module():
+    """native_token (E-05.9): the native token's grammar, its entry and the dispatcher's read. Standard library only,
+    loaded on first use by the native D1 stage."""
+    return _load('aieh_dispatch_native_token', HERE / 'native_token.py')
+
+
+@dataclass(frozen=True)
+class StageNative:
+    """The D1 stage's inputs on the native profile (E-05.9, decision 0023 section 3), from digest-bound sources only:
+    the profile's tunnel endpoint (``create_secrets.tunnel_endpoint``). The secrets block is exactly decision 0023's
+    four names: the native token as NATIVE_SLOT, HTTPS_PROXY the endpoint, the two switches their declared
+    spellings."""
+    endpoint: str
+    token_name = secrets_check.NATIVE_TOKEN_NAME
+    slot = NATIVE_SLOT
+    not_from_holder = 'NATIVE_SECRET_NOT_FROM_ENTRY'
+
+    @property
+    def holder(self):
+        return _native_module().NativeToken
+
+    def secrets(self, held, operation_key: str) -> dict:
+        """``check_create_body``'s ``secrets``: the native profile, the endpoint and the held token's fingerprint (a
+        missing token holds nothing: the slot is then not of the token's shape, NATIVE_TOKEN_NOT_SHAPED)."""
+        return {EXECUTION_PROFILE_KEY: NATIVE, 'endpoint': self.endpoint,
+                'held': None if held is None else held.fingerprint}
+
+    def block(self) -> dict:
+        """The secrets block of an admitted body: the token's value as NATIVE_SLOT, the others as themselves."""
+        static = secrets_check.STATIC_SECRET
+        return {secrets_check.NATIVE_TOKEN_NAME: {'kind': static, 'value': NATIVE_SLOT},
+                secrets_check.NATIVE_PROXY_NAME: {'kind': static, 'value': self.endpoint},
+                **{name: {'kind': static, 'value': spelling}
+                   for name, spelling in secrets_check.NATIVE_SWITCHES.items()}}
+
+
+def _stage_native(declared: dict, template: dict, stage: str) -> StageNative:
+    """The native D1 stage's inputs (StageNative): the profile's tunnel endpoint (NATIVE_TUNNEL_UNDECLARED) and the
+    pinned template's agent block passing the shared check's agent half (no MCP, the pinned command, the
+    per-conversation configuration directory), before any token is read."""
+    def refused(code, detail):
+        return DispatchRefused(code, f'the {stage} stage: {detail}', stage=stage)
+    endpoint = secrets_check.tunnel_endpoint(declared, refused=refused)
+    secrets_check.check_native_agent(template, refused=refused)
+    return StageNative(endpoint=endpoint)
+
+
+def _read_native(provider, stage: str):
+    """The native token from its one entry (``native_token.read``: exactly that entry, nothing else), as a
+    DispatchRefused of its code when it cannot be read."""
+    module = _native_module()
+    try:
+        return module.read(provider)
+    except module.NativeTokenError as exc:
+        raise DispatchRefused(exc.code, f'the {stage} stage: {exc.detail}', stage=stage) from None
+
 
 def _stage_inference(declared: dict, staged: dict, template: dict, stage: str) -> StageInference:
     """The D1 stage's inference inputs (StageInference), or INFERENCE_INPUTS_INVALID."""
@@ -1605,7 +1712,8 @@ class AdmittedCreate:
     template_bytes: bytes     # the pinned create template, re-checked against its sha256 on send
     routes_bytes: bytes       # the pinned route allowlist every Agent Server call is checked against (E-01.3.1)
     profile_bytes: bytes      # the approved profile.json, re-checked against the profile digest on send (E-05.2)
-    inference: InferenceGrant | None = None   # the D1 stage's grant (E-05.6); its token is never in body_json
+    # the D1 stage's grant (E-05.6), or on the native profile its NativeToken (E-05.9); the token is never in body_json
+    inference: object = None
 
     @property
     def body(self) -> dict:
@@ -1634,8 +1742,10 @@ class AdmittedCreate:
                   'policy_digest': self.policy_digest,
                   'create_template_sha256': hashlib.sha256(self.template_bytes).hexdigest(),
                   'routes_sha256': hashlib.sha256(self.routes_bytes).hexdigest()}
-        if self.inference is not None:   # the D1 stage: the grant by its token's fingerprint (E-05.6)
+        if isinstance(self.inference, InferenceGrant):   # the D1 stage: the grant by its token's fingerprint (E-05.6)
             record['inference_grant'] = self.inference.record()
+        elif self.inference is not None:   # the native D1 stage: the native token by its fingerprint (E-05.9)
+            record['native_token'] = self.inference.record()
         return record
 
 
@@ -1673,6 +1783,8 @@ def _check_stage_content(declared: dict, resolved: ResolvedInputs, admission: di
         if name in template:
             raise DispatchRefused('BODY_FIELD_UNKNOWN', f'the {resolved.stage} stage\'s pinned create template may '
                                   f'not carry {name!r}: admit_secrets adds the attempt\'s', field=name)
+    if staged[EXECUTION_PROFILE_KEY] == NATIVE:   # E-05.9
+        return _stage_native(declared, template, resolved.stage)
     return _stage_inference(declared, staged, template, resolved.stage)
 
 
@@ -1704,19 +1816,21 @@ def _scrubbed(refusal: DispatchRefused, token: str | None) -> DispatchRefused:
     return DispatchRefused(refusal.code, clean(refusal.detail), **clean(dict(refusal.context)))
 
 
-def _token_value(body: dict, inference: StageInference):
-    """The token secret's value in BODY, or None."""
+def _token_value(body: dict, inference):
+    """The token secret's value in BODY, or None (INFERENCE: StageInference or, E-05.9, StageNative)."""
     secrets = body.get('secrets')
-    source = secrets.get(inference.names[0]) if isinstance(secrets, dict) else None
+    source = secrets.get(inference.token_name) if isinstance(secrets, dict) else None
     return source.get('value') if isinstance(source, dict) else None
 
 
-def _wire_body(body: dict, inference: StageInference, grant: InferenceGrant | None) -> dict:
-    """BODY with the grant's token in the token secret's place (TOKEN_SLOT), in memory only; any other body as is."""
+def _wire_body(body: dict, inference, grant) -> dict:
+    """BODY with the held token (GRANT's: the attempt token, or E-05.9's native token) in the token secret's place
+    (the stage's slot), in memory only; any other body as is."""
     secrets = body.get('secrets')
-    source = secrets.get(inference.names[0]) if isinstance(secrets, dict) else None
-    if grant is not None and grant.open and isinstance(source, dict) and source.get('value') == TOKEN_SLOT:
-        body = {**body, 'secrets': {**secrets, inference.names[0]: {**source, 'value': grant.token()}}}
+    name = inference.token_name
+    source = secrets.get(name) if isinstance(secrets, dict) else None
+    if grant is not None and grant.open and isinstance(source, dict) and source.get('value') == inference.slot:
+        body = {**body, 'secrets': {**secrets, name: {**source, 'value': grant.token()}}}
     return body
 
 
@@ -1747,6 +1861,10 @@ def _admitted_checks(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admi
     if admitted.inference is not None and (inference is None or not secrets):
         raise DispatchRefused('ADMISSION_MISMATCH', 'the admitted create holds an inference grant where no secrets '
                               'are admitted (another stage, or before admit_secrets)')
+    if admitted.inference is not None and not isinstance(admitted.inference, inference.holder):
+        raise DispatchRefused('ADMISSION_MISMATCH', 'the admitted create holds a credential of the other execution '
+                              'profile (an inference grant on the native profile, or the native token on the '
+                              'brokered one)')
     routes_raw = admitted.routes_bytes if isinstance(admitted.routes_bytes, bytes) else b''
     if hashlib.sha256(routes_raw).hexdigest() != admission['routes']['sha256']:
         raise DispatchRefused('PROFILE_ARTIFACT_DRIFTED', 'the admitted route allowlist is not the pinned one')
@@ -1761,14 +1879,14 @@ def _admitted_checks(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admi
     if inference is None or not secrets:
         check_create_body(body, admission=admission, template=template, conversation_id=conversation_id)
     else:
-        slot = _token_value(body, inference) == TOKEN_SLOT
+        slot = _token_value(body, inference) == inference.slot
         body, caught = _wire_body(body, inference, admitted.inference), None
         try:
             check_create_body(body, admission=admission, template=template, conversation_id=conversation_id,
                               secrets=inference.secrets(admitted.inference, key))
             if not slot:   # the token passed the check, but it came from the admitted body, not the held grant
-                raise DispatchRefused('SECRET_NOT_FROM_GRANT', f'{inference.names[0]} in the admitted body is not '
-                                      f'the slot {TOKEN_SLOT}')
+                raise DispatchRefused(inference.not_from_holder, f'{inference.token_name} in the admitted body is '
+                                      f'not the slot {inference.slot}')
         except DispatchRefused as refusal:
             caught = refusal
         if caught is not None:   # raised outside the except: the scrubbed refusal holds no chain to the original
@@ -1794,8 +1912,9 @@ def _check_admitted(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admis
 
 
 def stage_inference(admitted: AdmittedCreate, *, resolved: ResolvedInputs) -> StageInference | None:
-    """The D1 stage's inference inputs of an admitted create (E-05.6), re-derived from the approved profile and
-    the pinned template it carries; None for every other stage."""
+    """The D1 stage's inference inputs of an admitted create (E-05.6: StageInference; on the native profile,
+    E-05.9: StageNative), re-derived from the approved profile and the pinned template it carries; None for every
+    other stage."""
     admission = _resolved_admission(resolved)
     template_raw = admitted.template_bytes if isinstance(admitted.template_bytes, bytes) else b''
     if hashlib.sha256(template_raw).hexdigest() != admission['create_template']['sha256']:
@@ -1861,16 +1980,25 @@ def admit_secrets(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspa
     false: the token's value TOKEN_SLOT (GRANT's token takes its place only in the checks and the send), the
     endpoint the profile's guest inference endpoint. The result is checked as ``send_create`` will check it: the
     shared secrets check, the token bound to GRANT and GRANT to this reserved conversation and attempt. Refuses a
-    stage that carries no secrets (ADMISSION_MISMATCH)."""
+    stage that carries no secrets (ADMISSION_MISMATCH).
+
+    On the native profile (E-05.9) GRANT is the NativeToken ``native_token.read`` returned, and the block is
+    decision 0023's four names (``StageNative.block``: the token's value NATIVE_SLOT), checked by
+    ``create_secrets.check_native_secrets`` with the token in place and bound to the held one by fingerprint. A
+    credential of the other profile is ADMISSION_MISMATCH."""
     if not isinstance(admitted, AdmittedCreate):
         raise TypeError('admitted must be AdmittedCreate (admit)')
-    if not isinstance(grant, InferenceGrant):
-        raise TypeError('grant must be an InferenceGrant (the broker\'s issue answer)')
+    if not isinstance(grant, (InferenceGrant, _native_module().NativeToken)):
+        raise TypeError('grant must be an InferenceGrant (the broker\'s issue answer) or, on the native profile, the '
+                        'NativeToken (native_token.read)')
     admission = _resolved_admission(resolved)
     body, inference = _admitted_checks(admitted, resolved=resolved, admission=admission, workspaces=workspaces,
                                        secrets=False)
     if inference is None:
         raise DispatchRefused('ADMISSION_MISMATCH', f'the {resolved.stage} stage\'s create carries no secrets')
+    if not isinstance(grant, inference.holder):   # E-05.9: the native and brokered credentials never cross
+        raise DispatchRefused('ADMISSION_MISMATCH', f'the {resolved.stage} stage\'s execution profile takes the other '
+                              'credential (the native token, or a broker grant)')
     body = {**body, 'secrets': inference.block(), 'secrets_encrypted': False}
     with_secrets = dataclasses.replace(admitted, body_json=_canonical(body), inference=grant)
     _check_admitted(with_secrets, resolved=resolved, admission=admission, workspaces=workspaces)
@@ -1880,8 +2008,8 @@ def admit_secrets(admitted: AdmittedCreate, *, resolved: ResolvedInputs, workspa
 def _check_grant_unrevoked(integration_store, admitted: AdmittedCreate) -> None:
     """GRANT_REVOKED when INTEGRATION_STORE holds a revocation receipt of the admitted create's attempt (E-05.6:
     end_attempt ran, or began, while the dispatch was in flight): the create is not sent with that grant."""
-    if integration_store is None or admitted.inference is None:
-        return
+    if integration_store is None or not isinstance(admitted.inference, InferenceGrant):
+        return   # no grant: every other stage, and the native profile (E-05.9), whose token no broker revokes
     attempt_id = store.attempt_id_for(admitted.operation_key)
     if _revocation_receipts(integration_store, attempt_id):
         raise DispatchRefused('GRANT_REVOKED', f'the inference grant of attempt {attempt_id} is revoked, or its '
@@ -2212,6 +2340,7 @@ class DispatchResult:
     created: bool
     host_workspace: str
     inference_grant: dict | None = None   # the D1 stage's grant record, by fingerprint (E-05.6)
+    native_token: dict | None = None      # the native D1 stage's token record, by fingerprint (E-05.9)
 
     def to_json(self) -> dict:
         record = {'format': RESULT_FORMAT, 'operation_key': self.operation_key, 'attempt_id': self.attempt_id,
@@ -2219,6 +2348,8 @@ class DispatchResult:
                   'http_status': self.http_status, 'created': self.created, 'host_workspace': self.host_workspace}
         if self.inference_grant is not None:
             record['inference_grant'] = self.inference_grant
+        if self.native_token is not None:
+            record['native_token'] = self.native_token
         return record
 
 
@@ -2516,11 +2647,25 @@ def _settle_journal(integration_store, journal_key: str, revocation: dict, actor
         pass
 
 
+def _native_detail(held) -> dict:
+    """An outcome's transition detail of the native D1 stage: its token by fingerprint (E-05.9); {} otherwise."""
+    if held is None or isinstance(held, InferenceGrant):
+        return {}
+    return {'nativeToken': held.record()}
+
+
+def _native_ended(refusal: DispatchRefused, held) -> DispatchRefused:
+    """REFUSAL with, on the native D1 stage, the token it held by fingerprint in its context (E-05.9)."""
+    if held is not None and not isinstance(held, InferenceGrant):
+        refusal.context['native_token'] = held.record()
+    return refusal
+
+
 def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str], WorkSource | None],
              integration_store, workspaces, transport: Callable[[str, str, dict | None], object], actor: str,
              read_profile: Callable[[str], bytes] = read_profile_file,
              read_artifact: Callable[[str], bytes] = read_profile_artifact,
-             inference: InferenceAccess | None = None) -> DispatchResult:
+             inference: InferenceAccess | None = None, native_credentials=None) -> DispatchResult:
     """One native Docker conversation create for a dispatch request, in the dispatcher's order:
 
     1. ``resolve`` (a refusal reserves nothing);
@@ -2545,6 +2690,14 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
     a confirmed attempt keeps its grant until ``end_attempt``. The token is held in memory only, until the
     transport call; every record carries its fingerprint. Every other stage takes no token and never calls
     ``inference``.
+
+    The D1 stage on the native profile (E-05.9, decision 0023): no broker is involved and ``inference`` is never
+    called. After ``admit`` has admitted every other input (the tunnel endpoint and the template's agent block
+    included), and only then, the native token is read from its one entry of ``native_credentials`` (a credential
+    provider: ``native_token.read``, exactly that entry and no other; no provider refuses
+    NATIVE_TOKEN_UNAVAILABLE), and ``admit_secrets`` adds decision 0023's four secrets; the token is held in memory
+    only until the transport call, and every record (the dispatched transition, a refusal's context, the result)
+    carries its fingerprint only. Every other stage, and the brokered profile, never reads it.
     """
     resolved = resolve(request, manifest=manifest, work_sources=work_sources,
                        next_ordinal=store_next_ordinal(integration_store), read_profile=read_profile)
@@ -2563,28 +2716,33 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
     custody, grant = _GrantCustody(integration_store, key, inference, actor), None
     try:
         try:
-            if staged is not None:
+            if isinstance(staged, StageNative):   # E-05.9: only now, the native token's one entry
+                grant = _read_native(native_credentials, reserved.stage)
+                admitted = admit_secrets(admitted, resolved=reserved, workspaces=workspaces, grant=grant)
+            elif staged is not None:
                 grant = custody.issue(reserved, staged)   # only now: the reservation and every input admitted
                 admitted = admit_secrets(admitted, resolved=reserved, workspaces=workspaces, grant=grant)
             host = create_workspace(admitted, resolved=reserved, workspaces=workspaces)
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'reserved', 'failed', actor, refusal.code,
-                  _refusal_detail(custody.ended(refusal)))
+                  _refusal_detail(_native_ended(custody.ended(refusal), grant)))
             raise
         dispatched = {'format': DISPATCHED_FORMAT, 'conversationId': admitted.conversation_id,
                       'route': {'method': admitted.method, 'path': admitted.path}}
-        if grant is not None:
+        if isinstance(grant, InferenceGrant):
             dispatched['inferenceGrant'] = grant.record()
+        elif grant is not None:
+            dispatched['nativeToken'] = grant.record()
         _mark(integration_store, key, 'reserved', 'dispatched', actor, 'create', dispatched)
         try:
             answer = send_create(admitted, resolved=reserved, workspaces=workspaces, transport=transport,
                                  integration_store=integration_store)
         except DispatchRefused as refusal:
             _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
-                  _refusal_detail(custody.ended(refusal), create_sent=False))
+                  _refusal_detail(_native_ended(custody.ended(refusal), grant), create_sent=False))
             raise
         except Exception as exc:
-            detail = {'error': type(exc).__name__, **custody.detail()}
+            detail = {'error': type(exc).__name__, **custody.detail(), **_native_detail(grant)}
             if 'inferenceRevocation' in detail:
                 exc.add_note('inference revocation: ' + _canonical(detail['inferenceRevocation']))
             _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-unanswered', detail)
@@ -2598,17 +2756,20 @@ def dispatch(request, *, manifest: ApprovedInputs, work_sources: Callable[[str],
             return DispatchResult(operation_key=key, attempt_id=store.attempt_id_for(key),
                                   conversation_id=receipt['conversationId'], execution_ref=receipt['executionRef'],
                                   http_status=receipt['httpStatus'], created=receipt['created'],
-                                  host_workspace=str(host), inference_grant=None if grant is None else grant.record())
+                                  host_workspace=str(host),
+                                  inference_grant=grant.record() if isinstance(grant, InferenceGrant) else None,
+                                  native_token=None if grant is None or isinstance(grant, InferenceGrant)
+                                  else grant.record())
         status = answer.get('status') if isinstance(answer, Mapping) else None
         status = status if type(status) is int else None
         if status is not None and 400 <= status < 500:
-            refusal = custody.ended(DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the create with '
-                                                    f'{status}', status=status))
+            refusal = _native_ended(custody.ended(DispatchRefused('CREATE_REFUSED', f'the Agent Server answered the '
+                                                                  f'create with {status}', status=status)), grant)
             _mark(integration_store, key, 'dispatched', 'failed', actor, refusal.code,
                   _refusal_detail(refusal, create_sent=True))
             raise refusal
         detail = {'httpStatus': status, 'reason': 'no 200 or 201 answer carrying the reserved conversation id',
-                  **custody.detail()}
+                  **custody.detail(), **_native_detail(grant)}
         _mark(integration_store, key, 'dispatched', 'unknown', actor, 'create-outcome-uncertain', detail)
         ended = {} if custody.revocation is None else {
             **({'inference_grant': grant.record()} if grant is not None else {}),

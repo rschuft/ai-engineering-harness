@@ -148,16 +148,17 @@ def _b64(value: bytes, encode) -> list:
     return out
 
 
-def body_of(key: str) -> str:
-    """The secret part: the key without the public synthetic prefix (the whole key when it has none)."""
-    return key[len(SYNTHETIC_PREFIX):] if key.startswith(SYNTHETIC_PREFIX) and len(key) > len(SYNTHETIC_PREFIX) \
-        else key
+def body_of(key: str, prefix: str = SYNTHETIC_PREFIX) -> str:
+    """The secret part: the key without its public PREFIX, the synthetic one unless another is given (E-05.9's
+    native token search gives the token's sk-ant-<label>- prefix); the whole key when it has none."""
+    return key[len(prefix):] if prefix and key.startswith(prefix) and len(key) > len(prefix) else key
 
 
-def needles(key: str) -> dict:
-    """{needle bytes: (labels...)}: every form of the whole key and of its body, and the body's raw fragments."""
+def needles(key: str, prefix: str = SYNTHETIC_PREFIX) -> dict:
+    """{needle bytes: (labels...)}: every form of the whole key and of its body (without its public PREFIX), and the
+    body's raw fragments."""
     found = collections.defaultdict(set)
-    for part, text in (('key', key), ('body', body_of(key))):
+    for part, text in (('key', key), ('body', body_of(key, prefix))):
         value = text.encode('utf-8')
         found[value].add(f'{part}/raw')
         found[binascii.hexlify(value)].add(f'{part}/hex')
@@ -168,8 +169,8 @@ def needles(key: str) -> dict:
             found[encoded].add(f'{part}/base64url@{shift}')
         found[text.encode('utf-16-le')].add(f'{part}/utf-16-le')
         found[text.encode('utf-16-be')].add(f'{part}/utf-16-be')
-    body = body_of(key).encode('utf-8')
-    starts = sorted(set(range(0, max(len(body) - FRAGMENT, 0) + 1, STRIDE)) | {max(len(body) - FRAGMENT, 0)})
+    body = body_of(key, prefix).encode('utf-8')
+    starts =sorted(set(range(0, max(len(body) - FRAGMENT, 0) + 1, STRIDE)) | {max(len(body) - FRAGMENT, 0)})
     for start in starts:
         found[body[start:start + FRAGMENT]].add('fragment')
     return {needle: tuple(sorted(labels)) for needle, labels in found.items() if needle}
@@ -400,12 +401,12 @@ class _Surface:
 class Search:
     """One key, held in memory only, and the surfaces searched for it. Its repr shows the fingerprint only."""
 
-    def __init__(self, key: str, *, chunk: int | None = None):
+    def __init__(self, key: str, *, chunk: int | None = None, prefix: str = SYNTHETIC_PREFIX):
         if not isinstance(key, str) or not 16 <= len(key) <= KEY_LIMIT or \
                 not all(33 <= ord(c) <= 126 for c in key):
             raise SearchError('KEY_INVALID', 'not one printable key of 16 to 1024 characters')
-        self._key = key
-        self._table = needles(key)
+        self._key, self.prefix = key, prefix
+        self._table = needles(key, prefix)
         self._longest = max(len(n) for n in self._table)
         self.fingerprint = fingerprint(key)
         self.chunk = max(int(chunk or CHUNK), self._longest)
@@ -605,11 +606,24 @@ class Search:
         surface.searched = True
         return surface.report()
 
+    def objects(self, label: str, kind: str, items, *, expect: str = 'absent', incomplete=()) -> dict:
+        """One surface of several named byte strings held in memory, each searched through every view that applies
+        to it (E-05.9: a git bundle's pack objects, inflated and with their deltas applied, by integrations/dispatch/
+        native_token_search.py). INCOMPLETE names what the caller could not read in full."""
+        surface = self._new(label, kind, expect)
+        for name, data in items:
+            surface.items += 1
+            self._blob(surface, io.BytesIO(bytes(data)).read, f'{label} {name}')
+        for reason in incomplete:
+            surface.incomplete[str(reason)] += 1
+        surface.searched = True
+        return surface.report()
+
     # ---- the positive control
 
     def carriers(self) -> list:
         """(case, bytes): a planted copy of the key in each form, made by the standard library's encoders."""
-        key, body = self._key, body_of(self._key)
+        key, body = self._key, body_of(self._key, self.prefix)
         k = key.encode('utf-8')
         out = [('raw', b'provider key: ' + k + b'\n'),
                ('json', json.dumps({'api_key': key}).encode('utf-8')),
@@ -646,7 +660,7 @@ class Search:
         key (the same needles and chunk size). Each case must be found in the view it plants for; the verdict is
         invalid unless every case is."""
         carriers = self.carriers()
-        probe = Search(self._key, chunk=self.chunk)
+        probe = Search(self._key, chunk=self.chunk, prefix=self.prefix)
         cases, failed = [], []
 
         def case(kind, name, report, view, where, raw_misses=False):

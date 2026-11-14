@@ -402,6 +402,91 @@ reads none: importing it loads no inference or credential module, and the D1 sta
 **Not yet verified:** any live create with secrets, any live broker, guest or model call; the
 checked-in profile pins no stage template yet, so no grant lifetime is declared there.
 
+### The native profile's token (E-05.9)
+
+Plan leaf E-05.9 adds the D1 stage on the **native execution profile** (decision 0023): the
+unmodified Claude Code authenticates with the Owner's own long-lived token (`claude setup-token`),
+and no broker is involved. E-05.6's brokered profile stays as built.
+
+**The declaration.** The stage template's pin declares `execution_profile`: `brokered` when absent
+(E-05.6, with its `inference_grant`), or `native`, which takes no `inference_grant` (declaring
+both, or another value, is `PROFILE_ADMISSION_INVALID` at resolution). The profile declares its
+tunnel endpoint as one `network.endpoints` entry of class `provider-tunnel` with `guest_address`
+`172.17.0.1` and a `guest_port` (`create_secrets.tunnel_endpoint`; otherwise
+`NATIVE_TUNNEL_UNDECLARED`). That is the field E-05.10 fills: no checked-in profile declares it
+yet (the class is E-05.10's to add to `profiles/properties.json` and P7), so the native stage is
+refused there until then.
+
+**The token's custody.** One credential-provider entry (F-06.3), `AIEH Claude Code native token`,
+user `claude-code` ([`native_token.py`](native_token.py)), written only by the Owner's entry
+command ([`../credentials/native_token_entry.py`](../credentials/native_token_entry.py), `task
+credentials:native-token-enter`, the Owner's act OA-31 (e)): an interactive console only, the token
+read once at a hidden prompt (never argv, the environment, a file, `config.yml` or the host Claude
+configuration), a value without the token's shape refused by rule name, the one entry written and
+read back, a fingerprint-only `aieh-credential-act/1` receipt. This package only reads a provider.
+The shape (`native_token.token_rule`): `sk-ant-`, a lower-case label, `-`, then only
+`[A-Za-z0-9_-]`, 40 to 512 characters; the labels of the provider's other credentials (an API key
+`api...`, `admin...`, a session key `sid...`, session tokens `cc` and `si`) are refused. Neither the
+provider's documentation nor the pinned CLI states the setup-token value's exact shape; this is the
+grammar both state for the provider's credentials (the sources are in `native_token.py`).
+
+**The read.** `dispatch(..., native_credentials=<provider>)`: after `admit` has admitted every other
+input (the tunnel endpoint and the template's agent block included), and only then,
+`native_token.read` asks the provider for that one entry, once (`NATIVE_TOKEN_MISSING`,
+`NATIVE_TOKEN_UNAVAILABLE`, `NATIVE_TOKEN_NOT_SHAPED`; no provider given is
+`NATIVE_TOKEN_UNAVAILABLE`); no other entry, no environment variable and no host Claude
+configuration is read. The token is held in memory (`NativeToken`: its `repr` and `record()` carry
+the fingerprint only, it does not pickle) until the transport call; the admitted body holds
+`{native_token}` in its place (a token value there is `NATIVE_SECRET_NOT_FROM_ENTRY` at the send).
+The dispatched transition, a refusal's context, an unknown outcome's detail, the admitted-create
+record and the result carry `tokenFingerprint` only.
+
+**One check, shared.** `create_secrets.check_native_secrets` is the one check of the native create,
+the dispatcher's at `admit_secrets` and again in `send_create` before the transport, and E-05.11's
+qualification admission's (which calls the same function with its own refusal type, as S-03.3's
+calls `check_secrets`). Its codes and meanings are `create_secrets.NATIVE_MEANINGS`:
+
+| Rule | Refused as |
+|---|---|
+| the names are not a mix of the native set and the brokered one (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`) | `NATIVE_SECRETS_MIXED` |
+| the names are exactly `CLAUDE_CODE_OAUTH_TOKEN`, `HTTPS_PROXY`, `CLAUDE_CODE_PROXY_RESOLVES_HOSTS` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (`ANTHROPIC_AUTH_TOKEN`, an `OH_` name, `CLAUDE_CONFIG_DIR` or a missing one is refused) | `NATIVE_SECRET_NAMES` |
+| each is a `StaticSecret` of exactly `kind` and `value` (a `LookupSecret` included) | `SECRET_KIND_FORBIDDEN` |
+| `secrets_encrypted` is `false` | `SECRETS_ENCRYPTED` |
+| the token has the native shape | `NATIVE_TOKEN_NOT_SHAPED` |
+| the token is the one read from the entry (by fingerprint; dispatcher only) | `NATIVE_TOKEN_NOT_HELD` |
+| the token, its body after `sk-ant-<label>-`, or any run of 8 or more of its body's characters appears nowhere else | `NATIVE_TOKEN_OUTSIDE_SECRET` |
+| no second authentication method anywhere else: an `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` name, or another provider credential's value | `NATIVE_SECOND_AUTH_METHOD` |
+| `HTTPS_PROXY` is the profile's tunnel endpoint, and no other destination appears | `NATIVE_PROXY_NOT_TUNNEL` |
+| each switch is its declared spelling, `tRuE` (never `1` or `true`) | `NATIVE_SWITCH_NOT_DECLARED` |
+| no MCP configuration (`mcp_config` empty, no other `mcp` key) | `NATIVE_MCP_FORBIDDEN` |
+| the agent block is `acp`, `claude-code`, exactly `["claude-agent-acp"]`, no `acp_args` | `NATIVE_ACP_COMMAND_NOT_PINNED` |
+| the per-conversation configuration directory is kept: `acp_isolate_data_dir` true, nothing naming `CLAUDE_CONFIG_DIR` | `NATIVE_CONFIG_DIR_RELOCATED` |
+
+The switches' spelling: at the pinned CLI (`claude` 2.1.220, read from the release package
+`@anthropic-ai/claude-code-linux-x64` 2.1.220), `CLAUDE_CODE_PROXY_RESOLVES_HOSTS` is read through
+the CLI's environment parser's bool (`1`, `true`, `yes` or `on`, lower-cased and trimmed) and
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` as any non-empty value (its declared accessor is the same
+bool); `tRuE` is accepted by every reader of both, is neither `1` nor `true` (the SDK masks every
+secret value in agent output by substring), and does not occur in the CLI's own code and text. The
+agent-block half (`check_native_agent`) also runs on the pinned template at `admit`, before any
+token is read. A native template that is the S-03.3 qualification fixture is still
+`STAGE_TEMPLATE_DISPOSABLE`; every other stage still refuses `secrets` (`BODY_FIELD_UNKNOWN`) and
+never reads the token; a broker grant on the native stage, or the native token on the brokered one,
+is `ADMISSION_MISMATCH`.
+
+**The outbound search** ([`native_token_search.py`](native_token_search.py)): S-03.2's key search
+(`inference_key_search.Search`, its forms, views, surfaces and positive controls; reused with the
+token's public prefix), plus the result bundle: a git bundle's pack objects inflated and their
+deltas applied (standard library), with its own positive control (the token planted whole, split
+across a delta's base and its inserted data, and behind a ref-delta, none in the raw bytes). It holds
+the token in memory, reports counts and the fingerprint (a report that would hold the token is
+withheld), and `not-found` covers the bytes searched only. Its command line reads the token from the
+one entry and names the Owner's act (`--owner-act`); its runs are E-05.11's and E-05.5's.
+
+**Not yet verified:** any real token, entry, console or Credential Manager; any create carrying the
+token, the CLI's reading of the switches, the SDK's masking and every other live behaviour
+(E-05.11); the tunnel and its endpoint (E-05.10).
+
 ## The native conversation create (E-01.3.1)
 
 Plan leaf E-01.3.1, blueprint `#execution-qualification` dispatch steps 02 and 03 and decision
@@ -984,3 +1069,28 @@ and a fake Gitea that answers `GET /api/v1/token` as Gitea 28.3.0 does (its logi
 | `StandingCredentialTests` | the three lifecycles: two sequential attempts of a stage use the standing credential; two concurrent ones hold it at once, the first released out of order leaves the second's credential usable and the guard holding it, a third joins meanwhile, and Gitea is only ever asked `GET /api/v1/token` (nothing revokes); a token Gitea refuses is `ROLE_TOKEN_REJECTED` on every try until `gitea_roles.rotate` (the administrative act, resuming over the refused token) replaces the entry, then delivery works with the new one; while a token is held, another attempt dispatched over the live transport sends neither it nor its fingerprint, and calls that would carry it are refused before `GuestApi` is called; an attempt takes no stage from its caller, reads only its own stage's entry and refuses another attempt's stored record |
 | `LiveCustodyDriverTests` | the prepared probe's step (5) composed offline: two attempts dispatched over the live transport on a fake `GuestApi`, each delivered its mapped bot through the read-only provider, both conversations deleted, no token in what was sent; the read-only wrapper refuses and counts writes; the optional administrative-lifecycle step's verdict |
 | `ReachableNamesTests` (contract) | the package's syntax trees: no mint, CLI, entry write, administrative act or revocation is reachable, no `generate-access-token`, and Gitea is asked `GET /token` only; a negative control finds a planted mint |
+
+[`tests/test_native_d1_stage.py`](tests/test_native_d1_stage.py) (E-05.9), on the E-05.2 fixture with
+the synthetic profile declaring the native profile and a tunnel endpoint, the fake Agent Server and an
+in-memory credential provider; **the proof**, clause by clause, every refusal with the counting
+transport called zero times:
+
+| Class | What it shows |
+|---|---|
+| `Accepts` | a full native dispatch sends exactly the four static secrets (the token, the tunnel endpoint, the two switches), `secrets_encrypted` false, the rest the template; no `ANTHROPIC_*` name; the result and the dispatched transition carry the fingerprint; the provider was asked for the one entry |
+| `Refusals` | every rule of `NATIVE_MEANINGS` on its own fact, at admission and again at `send_create`, no refusal text holding the token; a token not the held one; a token value in the admitted body; refusals of the profile (no, two or another tunnel endpoint) and the template (MCP, another command, a shared data dir) before any read; malformed declarations at resolution |
+| `Mixing` | a broker grant on the native stage and the native token on the brokered one are `ADMISSION_MISMATCH`; the brokered stage refuses the native name (`SECRET_NAMES`) |
+| `OtherStages` | the review stage refuses `secrets` (`BODY_FIELD_UNKNOWN`) and never reads the token; the S-03.3 qualification fixture is `STAGE_TEMPLATE_DISPOSABLE` on the native stage |
+| `SharedCheck` | the dispatcher calls `create_secrets.check_native_secrets` (patched, it refuses with it); a qualification caller gets the same function and codes; no other module of the package declares the set |
+| `ReadOrder` | the order `admit`, `stage_inference`, read, `admit_secrets`, workspace, `send_create`, the attempt reserved and no workspace at the read; a missing, malformed or unreadable entry, or no provider, is a refused attempt |
+| `NoOtherCredential` | negative control: sentinels in other entries, the credential environment names and a host Claude configuration (an audit hook on file opens); only the one entry is read; positive controls see each kind of read |
+| `Custody` | the store, the result, the admitted-create record and captured output and logs carry the fingerprint only, also on a refused, unknown and unanswered create |
+
+[`tests/test_native_token.py`](tests/test_native_token.py) (unit): the shape and each rule by name; the
+read of exactly one entry and its refusals; the held token's fingerprint-only views.
+[`tests/test_native_token_search.py`](tests/test_native_token_search.py) (unit, Dulwich): a committed
+copy in a real bundle found only in the inflated objects; the bundle's positive control (and its
+negative control without delta application); a clean bundle, store and report directory
+`not-found`; a planted copy found in each common encoding; a missed control is `invalid`; a report
+holding the token is withheld; the command line's one-entry read and refusals. The entry command's
+tests are [`../credentials/tests/test_native_token_entry.py`](../credentials/tests/test_native_token_entry.py).

@@ -47,6 +47,10 @@ REPOINTED = {
 }
 
 
+NATIVE = 'cred-native-claude-code-token'
+NATIVE_SOURCE = 'decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md'
+
+
 def fresh():
     return copy.deepcopy(POLICY)
 
@@ -111,6 +115,10 @@ class CommittedMatrix(unittest.TestCase):
                     self.assertNotEqual(principals[op['principal']]['kind'], 'executor', oid)
                     self.assertFalse(oid.startswith('op-as-') or oid == 'op-gitea-administration')
                 for cid in r['grants']['credentials']:
+                    if (r['id'], cid) == ('builder', NATIVE):   # decision 0023 (E-05.9): the one exception
+                        self.assertEqual(credentials[cid]['authority'], 'provider')
+                        self.assertIn(NATIVE_SOURCE, credentials[cid]['sources'])
+                        continue
                     self.assertNotIn(credentials[cid]['authority'], privileged | {'provider'}, cid)
                 for cid in r['grants']['capabilities']:
                     self.assertNotIn(capabilities[cid]['authority'], privileged, cid)
@@ -417,6 +425,44 @@ class AgentGrants(unittest.TestCase):
         pol = fresh()
         role(pol, 'builder')['grants']['credentials'].append('cred-llm-provider-key')
         self.assertIn('PROVIDER_ROLE_TOKEN', codes(pol)[0])
+
+    def test_only_the_native_token_and_only_to_the_d1_role(self):
+        """Decision 0023 (E-05.9): the native profile's token is the one provider credential an agent role holds,
+        only builder, and only while the inventory records it with decision 0023 as its source; every other Owner
+        or provider credential stays refused to every agent role."""
+        self.assertIn(NATIVE, role(POLICY, 'builder')['grants']['credentials'])
+        for rid in ('planner', 'reviewer', 'ci-job'):
+            with self.subTest(role=rid):
+                pol = fresh()
+                r = role(pol, rid)
+                if NATIVE in r['denied']:
+                    r['denied'].remove(NATIVE)
+                r['grants']['credentials'].append(NATIVE)
+                builder = row(role(pol, 'builder')['issuance'], NATIVE)
+                r['issuance'].append(copy.deepcopy(builder))
+                r['revocation'].append(copy.deepcopy(row(role(pol, 'builder')['revocation'], NATIVE)))
+                self.assertIn('PROVIDER_ROLE_TOKEN', codes(pol)[0])
+        inv = fresh_inventory()
+        inv_entry(inv, 'credentials', NATIVE)['sources'].remove(NATIVE_SOURCE)
+        self.assertIn('PROVIDER_ROLE_TOKEN', codes(fresh(), inv)[0])
+        for cid in ('cred-owner-provider-login', 'cred-llm-provider-key', 'cred-owner-github'):
+            with self.subTest(credential=cid):
+                pol = fresh()
+                builder = role(pol, 'builder')
+                if cid in builder['denied']:
+                    builder['denied'].remove(cid)
+                builder['grants']['credentials'].append(cid)
+                found = codes(pol)[0]
+                self.assertTrue({'PROVIDER_ROLE_TOKEN', 'AGENT_PRIVILEGED_GRANT'} & found, found)
+
+    def test_the_native_token_never_ends_with_the_attempt(self):
+        for rid in ('builder', 'owner-os-account'):
+            with self.subTest(role=rid):
+                pol = fresh()
+                triggers = row(role(pol, rid)['revocation'], NATIVE)['triggers']
+                self.assertNotIn('attempt-end', triggers)
+                triggers.append('attempt-end')
+                self.assertIn('TRIGGER_INVALID', codes(pol)[0])
 
 
 class Mapping(unittest.TestCase):

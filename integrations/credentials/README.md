@@ -19,6 +19,8 @@ name. The platform adapter supplies the provider through this module's factory, 
 |---|---|
 | `credential_provider.py` | `CredentialStore` and `WindowsCredentialProvider` (Credential Manager through standard-library ctypes, moved from `integrations/platform/platform_windows.py`), the Windows credential field limits (`CREDENTIAL_LIMITS`, `check_credential_fields`), `KeyringProvider` and `qualify_keyring`, the factory `select_provider`, `doctor` and its command line, and `ActReceipt`, the integration-store receipt of a credential act |
 | `tests/test_credential_provider.py` | The provider contract suite over a fake, the Windows provider (its real ctypes code over an in-memory advapi32; Windows) and `KeyringProvider` with an in-process keyring backend; the Windows field limits over the fake and the Windows provider; the factory and its refusals; keyring's own selection and configuration shown ignored; the module's reachable names read from its syntax tree; `doctor` |
+| `native_token_entry.py` | The Owner's entry of the native Claude Code token (plan leaf E-05.9, decision 0023, OA-31 (e)): an interactive console only, the token read once at a hidden prompt, refused by rule name unless of the native shape (`integrations/dispatch/native_token.py`), written as the one entry `AIEH Claude Code native token` and read back, with an `ActReceipt` carrying the fingerprint only ([dispatch README](../dispatch/README.md#the-native-profiles-token-e-059)) |
+| `tests/test_native_token_entry.py` | The entry command over an injected console, an in-memory provider and a fixture store: every refusal before any prompt, each rule of the shape, replace, cancel, a failed read back, the token from the prompt only, nothing derived from it in the output |
 | `tests/test_receipts.py` | `ActReceipt` on a fixture integration store; `gitea_roles.py rotate` and `retire` end to end over the fake Gitea, writing their receipts into the fixture store |
 | `tests/test_crossread.py`, `tests/crossread_support.py` | The throwaway-name cross-read: written in this process, read back by name in a separate process, deleted, checked absent in a separate process, then the I7 scan of what the processes printed. Default mode: a keyring backend of the test that keeps its entries in a temporary JSON file. Real-store mode: opt-in (below) |
 
@@ -101,6 +103,7 @@ own store, so a fixture act never reaches the managed one.
 ```
 <tools python> -I -B -m unittest discover -s integrations/credentials/tests -v   # task credentials:test
 <tools python> -I -B integrations/credentials/credential_provider.py doctor        # task credentials:doctor
+<tools python> -I -B integrations/credentials/native_token_entry.py enter [--replace]  # task credentials:native-token-enter (the Owner only, OA-31 (e))
 ```
 
 `doctor` reports the chosen provider, its mechanism and viability (for keyring, the backend and its
