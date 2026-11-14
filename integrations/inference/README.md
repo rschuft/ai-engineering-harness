@@ -887,7 +887,9 @@ completes a TLS handshake verified for `api.anthropic.com` and sends nothing aft
 an IP literal and plain HTTP are refused with the tunnel's status and code; a mismatched or absent server name is
 `closed-without-answer` only when, after the 200 and the job's one ClientHello, not one byte arrives before the
 end of the stream (a TLS alert from an origin the tunnel let through is a byte: `answered-after-hello`, a FAIL and a
-stop condition).
+stop condition). Around each tunnel row the runner records the host's own TCP rows to remote port 443, any owner and
+state, TIME_WAIT included (`host_443.before` and `.after`, read from the operating system's tables): evidence
+independent of the tunnel's log, judged by the live qualification.
 
 **Not yet verified.** Everything live (the Owner's act OA-31 (a)): the tunnel as a host process against the real
 network, the host's resolution of the origin, a TLS handshake with the provider through it, the forward to it from

@@ -10971,6 +10971,23 @@ def tunnel_mode(outcome):
     return 'handshake' if outcome == 'handshake-complete' else 'no-answer'
 
 
+TUNNEL_ORIGIN_PORT = 443
+
+
+def host_port_rows(port):
+    """Every TCP row of the host's tables whose remote port is PORT, whatever its owner and state (TIME_WAIT rows,
+    owned by no process, included): read-only, through inference_census.py's tables (GetExtendedTcpTable, IPv4 and
+    IPv6). {'unavailable': why} when the tables cannot be read (never an empty list then)."""
+    census = inference_census()
+    try:
+        endpoints = census.read_tables()
+    except census.TablesUnavailable as exc:
+        return {'unavailable': str(exc)[:300]}
+    return sorted((dict(e.describe(), pid=e.pid) for e in endpoints
+                   if e.protocol == 'tcp' and e.remote_port == port),
+                  key=lambda r: (r['local'], str(r['remote']), str(r['state'])))
+
+
 def forward_target(session):
     """The held forward's host target from its record: TUNNEL_TARGET for a native forward, else
     'broker' (a record without a tunnel port is the brokered profile's, as before E-05.10)."""
@@ -12067,8 +12084,14 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
             before = container_guard_rows(facts())
             for item in spec['items']:
                 arg = base64.b64encode(json.dumps(dict(spec, items=[item])).encode('utf-8')).decode('ascii')
+                observed = host_port_rows(TUNNEL_ORIGIN_PORT) if item[0] == 'tunnel' else None
                 data = _job_json(in_container(cid, container_python(JOB_INFERENCE_SWEEP, arg), 300))
                 rows = [dict(r, conversation=cid) for r in data.get('results') or []]
+                if observed is not None:
+                    # the host's own view around the row, independent of the tunnel's log (evidence; the
+                    # live plan judges it): every TCP row to remote port 443, any owner, TIME_WAIT included
+                    rows = [dict(r, host_443={'before': observed, 'after': host_port_rows(TUNNEL_ORIGIN_PORT)})
+                            for r in rows]
                 if item[0] != 'lookup':
                     after = container_guard_rows(facts())
                     rows = [dict(r, guard={'before': before, 'after': after}) for r in rows]

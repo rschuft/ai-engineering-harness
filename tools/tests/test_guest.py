@@ -5769,6 +5769,9 @@ class ContainmentProbe(TempState):
         patcher = mock.patch.object(guest, 'forward_state', lambda profile, idir: self.forward)
         patcher.start()
         self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(guest, 'host_port_rows', lambda port: [])   # never the host's own tables
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_probe(self, sensitivity=False, **faults):
         fake = FakeContainmentGuest(**faults)
@@ -6703,6 +6706,9 @@ class InferenceJobSweep(TempState):
         patcher = mock.patch.object(guest, 'forward_state', lambda profile, idir: self.forward)
         patcher.start()
         self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(guest, 'host_port_rows', lambda port: [])   # never the host's own tables
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_inference(self, **faults):
         fake = FakeInferenceJobGuest(**faults)
@@ -6756,11 +6762,25 @@ class InferenceJobSweep(TempState):
     def test_native_sweep_runs_the_tunnels_admission_from_every_job(self):
         """E-05.10: with the forward held to the provider tunnel, the sweep adds the tunnel's rows (an
         admitted CONNECT to a verified handshake; another host, another port, an IP literal and plain
-        HTTP refused with the tunnel's code; a mismatched or absent server name closed), and judges
-        the endpoint and the guest login by the tunnel's 405."""
+        HTTP refused with the tunnel's code; a mismatched or absent server name closed without an
+        answer), and judges the endpoint and the guest login by the tunnel's 405. Around each tunnel
+        row the host's own TCP rows to port 443 are recorded (review round 1, live-plan gap 2)."""
         self.record['inference'] = inference_record(self.record)['inference']
         self.forward = dict(self.forward, session={'ports': dict(NATIVE_PORTS)})
-        out, step, fake = self.run_inference(native=True)
+        snapshots = []
+
+        def host_rows(port):
+            snapshots.append(port)
+            return [{'local': '10.0.0.5:5%04d' % len(snapshots), 'remote': '160.79.104.10:443',
+                     'state': 'TIME_WAIT', 'pid': 0}]
+        with mock.patch.object(guest, 'host_port_rows', host_rows):
+            out, step, fake = self.run_inference(native=True)
+        self.assertEqual(snapshots, [443] * 2 * 2 * len(guest.TUNNEL_MATRIX))     # before and after, each job
+        for row in step['detail']['results']:
+            if row['what'] in guest.TUNNEL_EXPECTED:
+                self.assertEqual(sorted(row['host_443']), ['after', 'before'], row)
+            else:
+                self.assertNotIn('host_443', row)
         self.assertTrue(step['ok'], json.dumps(step, default=str)[:3000])
         self.assertEqual((out['result'], out['stop_conditions']), ('PASS', []))
         self.assertEqual(step['detail']['target'], guest.TUNNEL_TARGET)
@@ -7234,6 +7254,24 @@ class InferenceTokenStep(TempState):
         self.assertEqual(guest.redact_secret({'a': [TOKEN, 'b'], TOKEN: 1}, TOKEN, '<r>'),
                          {'a': ['<r>', 'b'], '<r>': 1, 'redactions': 2})
 
+
+
+class HostPortRows(unittest.TestCase):
+    """E-05.10 review round 1 (live-plan gap 2): the host-side observer around each tunnel row reads every TCP row
+    to the port, whatever its owner and state, and says so when the tables cannot be read."""
+
+    def test_every_owner_and_state(self):
+        census = guest.inference_census()
+        E = census.Endpoint
+        rows = [E('tcp', 4, 'ESTABLISHED', '10.0.0.5', 50001, '160.79.104.10', 443, 1234),
+                E('tcp', 4, 'TIME_WAIT', '10.0.0.5', 50002, '160.79.104.10', 443, 0),
+                E('tcp', 6, 'ESTABLISHED', '::1', 50003, '::1', 8443, 1234),
+                E('tcp', 4, 'LISTEN', '127.0.0.1', 443, '0.0.0.0', 0, 5)]
+        with mock.patch.object(census, 'read_tables', return_value=rows):
+            got = guest.host_port_rows(443)
+        self.assertEqual([(r['state'], r['pid']) for r in got], [('ESTABLISHED', 1234), ('TIME_WAIT', 0)])
+        with mock.patch.object(census, 'read_tables', side_effect=census.TablesUnavailable('no tables')):
+            self.assertEqual(guest.host_port_rows(443), {'unavailable': 'no tables'})
 
 if __name__ == '__main__':
     unittest.main()
