@@ -4159,6 +4159,69 @@ push never implies parent acceptance.
   - **So the broker cannot hold it.** The broker storing the Owner's subscription token (for example from `claude setup-token`) and attaching it to requests is the intermediation the rule forbids. The only supported subscription shape puts the credential in the client, i.e. Claude Code inside the disposable guest (its own `/login`, or `CLAUDE_CODE_OAUTH_TOKEN`, a one-year token), with the broker as a pass-through.
   - **That conflicts with accepted controls:** decision 0015 (the broker is the provider credential's only holder), OA-22's exclusion of any Owner credential in a guest, and S-03.3's proof (`cred-owner-provider-login` absent). The agent could read a one-year token for the Owner's whole subscription. Changing that is an acceptance-criteria and security decision, not an engineering one; the engineering manager does not recommend it.
   - **Recommendation:** keep the approved path. The minimum unavoidable setup is the paused acts 1 and 2, once: create the dedicated key, paste it at the hidden prompt. Act 3 is recorded; nothing else of the broker needs the Owner. For planning (not D1): a Console sign-in without a static key (`ant auth login`, an OAuth profile the provider refreshes) could later replace the pasted key; it needs a custody and egress design of its own.
+- <a id="owner-clarification-native-auth-2026-11-14"></a>**2026-11-14: Owner clarification: native Claude Code authentication inside the contained environment.** Given in the main (engineering manager) session in reply to the [evaluation](#subscription-auth-evaluation-2026-11-14); transcribed verbatim by the engineering manager (decision 0018 point 7; the paste wrapper is removed). It is direction: it reconsiders "no provider authentication in a coding container" and asks planning to reconcile only the conflicting requirements; it grants no live act and asks for no credential. Verbatim:
+
+  > Owner clarification: preserve execution isolation.
+  >
+  > I want autonomous coding agents to run in isolated
+  > containers, but I am willing to let the native
+  > Claude Code application access my Claude Code
+  > authentication inside that environment.
+  >
+  > My priority is protecting the host and its durable
+  > state, not preventing the coding agent from accessing
+  > the credentials it legitimately needs to operate.
+  >
+  > Reconsider the earlier requirement that no provider
+  > authentication may enter a coding container.
+  >
+  > Preferred architecture:
+  >
+  > - Keep the existing contained execution environment.
+  > - Run the unmodified Claude Code application.
+  > - Use supported native Claude Code authentication.
+  > - Do not extract or intermediate subscription tokens
+  >   through our inference broker.
+  > - Give the coding agent access only to its assigned
+  >   repository and required execution resources.
+  > - Never mount the entire host Claude configuration
+  >   or unrelated credentials into the container.
+  > - Prefer narrowly scoped, persistent authentication
+  >   storage separate from disposable workspaces.
+  > - Preserve host filesystem and management isolation.
+  > - Accept that a compromised coding container could
+  >   potentially misuse its accessible Claude credential.
+  >
+  > Determine the simplest provider-supported way to
+  > authenticate Claude Code inside this environment,
+  > including whether interactive login can establish
+  > credentials in an isolated persistent volume.
+  >
+  > If a supported method exists, use that instead of
+  > requiring a separate Anthropic API key and broker
+  > for D1.
+  >
+  > Keep the brokered execution profile available for
+  > other providers or stronger credential isolation.
+  >
+  > Have the Product Manager reconcile only the
+  > requirements that genuinely conflict with this
+  > direction.
+  >
+  > Do not broaden the work into a new security framework
+  > or repeat previously completed isolation qualification.
+  >
+  > Do not ask me for credentials yet.
+  >
+  > Return the smallest practical path to running one
+  > authenticated Claude Code coding agent inside our
+  > existing isolated environment.
+- <a id="native-auth-path-2026-11-14"></a>**2026-11-14: Native Claude Code authentication for D1: the smallest path, and what planning must reconcile (execution).** The engineering manager's answer to the [clarification](#owner-clarification-native-auth-2026-11-14); read-only: provider documentation (code.claude.com/docs `authentication`, `devcontainer`, `network-config`, `cli-reference`, `legal-and-compliance`, read 2026-11-14) and the pinned OpenHands facts already in [the ACP recommendation](S-03-acp-coding-provider-recommendation.md) section 1.1 and the [S-03.3 slice plan](S-03.3-slice-plan.md).
+  - **Interactive login into a persistent volume is provider-supported** (dev containers: a named volume at the config directory with `CLAUDE_CONFIG_DIR` set to it; sign-in by URL and pasted code). **At our pins it is not the smallest path:** the pinned `ACPAgent` relocates `CLAUDE_CONFIG_DIR` to a per-conversation directory (`_isolate_acp_data_dir`) and excludes the interactive `claude-login` method ("needs an interactive terminal"); it would need that isolation overridden, a volume writable by every attempt (settings and hooks persist across attempts), and refresh egress to `platform.claude.com`.
+  - **Recommended: the provider's long-lived token, delivered natively.** `claude setup-token` (Anthropic's own browser flow; one-year token; "for CI pipelines and scripts"; the provider documents storing it as a secret and exposing it as `CLAUDE_CODE_OAUTH_TOKEN` in a container). The pinned SDK already handles it: with `CLAUDE_CODE_OAUTH_TOKEN` present it strips `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` (`env_conflicts`), so the unmodified Claude Code talks to `api.anthropic.com` itself; the broker never sees it.
+  - **Smallest change (one execution-profile variant beside the brokered one, which stays):** (1) a second hidden-prompt credential entry for the token on the host (Credential Manager; never the host `~/.claude`); (2) the ACP create delivers exactly `CLAUDE_CODE_OAUTH_TOKEN`, `HTTPS_PROXY=http://172.17.0.1:8090` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` as the conversation's secrets, no attempt token or base URL; (3) a host CONNECT-only tunnel on the port the existing A3 forward targets, admitting only `api.anthropic.com:443` (further hosts only if observed), holding no credential and decrypting nothing; (4) the S-03.3 driver and census gain the variant. The guest, its composition and the forward are unchanged, so the completed containment qualification is reused; only the tunnel's allowlist is new evidence. To verify first, read-only at the pin: that `_preconfigured_credentials` accepts `CLAUDE_CODE_OAUTH_TOKEN`.
+  - **For planning to reconcile (each conflicts with the direction for this variant only):** S-03.3's proof (`cred-owner-provider-login` absent; the real-key search; the route and model allowlist pinned and admitted by the broker); OA-22's exclusion of any Owner credential in a guest; decision 0015 (the broker as the only credential holder) and decision 0021 (the envelope the broker checks) as they apply to D1; E-05.5's and E-05.6's per-attempt inference-token issuance and revocation; whether S-03.2's live qualification stays on D1's path (the variant reuses its forward edge, not its broker); and the network matrix's inference edges (a guest-originated TLS connection to the provider through the tunnel). The Owner's acts that would follow at their leaf: the tunnel's destination (policy widening) and running `setup-token` with its hidden-prompt entry.
+  - **Unchanged and kept:** the recorded act 3 (`d1-provider-envelope`), the brokered profile and its built controls, every completed qualification. S-03.2's live run is held for planning's answer; its offline case work continues.
 
 ## Owner-directed maintenance items (no plan leaf covers these)
 
