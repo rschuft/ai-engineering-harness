@@ -15,6 +15,10 @@ Plan leaf S-03.5 ("Bind the broker's real-provider start to a recorded provider-
 **slice 1**, adds the provider envelope and the start precondition ([below](#the-provider-envelope-plan-leaf-s-035-slice-1)):
 built and tested offline only.
 
+Plan leaf S-03.6 ("Retire the harness's spending enforcement from the broker, the provider envelope and the D1
+grant") removes the spending limit, the cumulative cap and the attempt budgets, and keeps every security control
+([Retired by S-03.6](#retired-by-s-036)): built and tested offline only.
+
 Plan leaf S-03.3 ("Qualify the first ACP coding provider through the broker") adds two qualification tools, built
 and tested offline only ([below](#route-and-model-discovery-s-033-slice-3-part-two) and
 [below](#the-real-key-containment-search-s-033-slice-4)): the discovery mode of the qualification launcher with the
@@ -33,7 +37,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | Path | What |
 |---|---|
 | `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line; the provider envelope's start precondition (S-03.5: `live_envelope`, `authorize`, the held `Authorization`, the `envelope` command) |
-| `inference_envelope.py` | The provider envelope (S-03.5 slice 1): the `envelope` block's check, the canonical document, its digest and the canonical operation manifest. Standard library only; it opens nothing |
+| `inference_envelope.py` | The provider envelope (S-03.5 slice 1; `aieh-provider-envelope/2` since S-03.6): the `envelope` block's check (the retired spending keys refused), the canonical document, its digest and the canonical operation manifest. Standard library only; it opens nothing |
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
 | `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation, and for the qualification one grant (`issue`, slice 4); `127.0.0.1` only), an attempt token's fingerprint (`token_fingerprint`) and the `issue` command (slice 4) |
 | `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`); S-03.3 slice 3 part two: the launcher's discovery mode (`discover`) and the reader of a run's audit (`propose-pin`, `propose_pin`), which writes a proposed family pin and applies nothing |
@@ -42,14 +46,14 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/broker_support.py` | Synthetic fixtures: an in-memory credential provider, a settable clock, a fake upstream per family (`FakeUpstream`, an in-process server on an ephemeral `127.0.0.1` port) and `Rig` (a broker over a fixture store and audit directory) |
 | `tests/test_config.py` | The shipped declarations; every refusal of the declaration file and of `components.inference_broker`; the decision 0009 loader's refusal of secret-shaped keys under the component; the `config` command |
 | `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
-| `tests/test_grants.py` | Socket-free: issuance and its refusals, readiness, revocation and expiry with their receipts, journal failures, every admission refusal, budgets, refusal responses; a check that every stable code appears in a test |
+| `tests/test_grants.py` | Socket-free: issuance and its refusals (a budget refused, `BUDGET_RETIRED`), readiness, revocation and expiry with their receipts, journal failures, every admission refusal, no refusal for a request count, a usage count or unknown usage, refusal responses; a check that every stable code appears in a test |
 | `tests/test_credential_set.py` | `credential-set` over an in-memory provider and a fixture store |
 | `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream`; the census of the modules `serve` loads beside the broker (the envelope and its read side): no network module, no connector |
-| `tests/envelope_support.py` | The provider envelope's fixtures (S-03.5): the real authorization recorder over the owner suite's fake Gitea (in memory) writing into a throwaway store, contexts whose provider, audit directory and wait raise if asked, a `Rig` holding a minted authorization, an injected connector |
-| `tests/test_cap.py` | S-03.5 slice 3's proof rows D1 and D3 to D8: no ledger when the provider enforces; the cap reached within a run and at the next start, a closed run's usage carried; each unknown outcome (a 2xx answer without usage, a cut stream, a client leaving mid-stream, a request written and never answered, a connection cut while sending, a broker error) closing the envelope for the run and at the next start; a refused connect and an answer outside 2xx adding nothing; a run without its close and a stop with a request in flight; a lost run or close write; a new authorization's ledger at zero (integration) |
+| `tests/envelope_support.py` | The provider envelope's fixtures (S-03.5): the real authorization recorder over the owner suite's fake Gitea (in memory) writing into a throwaway store, contexts whose provider, audit directory and wait raise if asked, a `Rig` holding a minted authorization, an injected connector; a correctly formed S-03.5 `/1` document and manifest of the same families (S-03.6) |
+| `tests/test_spending_retired.py` | S-03.6's proof (it replaces S-03.5's `test_cap.py`): the cap and its ledger gone from the broker; a bound broker writes and reads no `inference/envelope/` receipt, and S-03.5's ledger receipts in a store are neither read nor changed; after each outcome S-03.5 counted as unknown (a 2xx answer without usage, a cut stream, a client leaving mid-stream, a request written and never answered, a connection cut while sending, a refused connect, an answer outside 2xx, a broker error) the next request is admitted; a client gone mid-stream against a fake upstream; `BROKER_STOPPING` at the stop for a bound and a loopback family, in process and over a keep-alive connection; a hand-built authorization refused at admission (integration) |
 | `tests/test_selection.py` | S-03.5 slice 2's proof rows C2 to C7: a delegated selection recorded by the real act starts the broker (no commit id in its receipt); a head another actor reserved, the product manager decided or written as an Owner record; a selection under an earlier envelope; a configured model not selected; a decision source that reads no selection or answers badly; a request and an issuance outside the held selection refused, a selected model passed through (integration) |
-| `tests/test_envelope.py` | S-03.5 slice 1's proof rows: the block, the document, the golden digest and manifest, the `envelope` command; every start refusal of `serve` (no block, missing, unsettled, expired, replayed, another origin, limit, expiry or selection, another target, a non-canonical manifest, hand-written receipts, a decision source that raises or answers badly, unbound families, the interim selection and cap refusals); the start with its `authorization` member; the envelope kind recorded through the recorder; loopback upstreams as before; the held authorization at start and at admission, and the expiry while serving |
-| `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, budgets, revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
+| `tests/test_envelope.py` | S-03.5 slice 1's proof rows: the block, the document, the golden digest and manifest, the `envelope` command; every start refusal of `serve` (no block, missing, unsettled, expired, replayed, another origin, expiry or selection, another target, a non-canonical manifest, a receipt over a `/1` document, hand-written receipts, a decision source that raises or answers badly, unbound families, the interim selection refusals); the retired spending keys refused; the start with its `authorization` member; the envelope kind recorded through the recorder; loopback upstreams as before; the held authorization at start and at admission, and the expiry while serving |
+| `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, no budget (an answer without usage, a cut stream and an upstream error stop nothing), revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -136,22 +140,19 @@ families); only what has no home there is a block of its own:
 components:
   inference_broker:
     envelope:
-      expires_at: "2026-12-31T00:00:00Z"   # quoted: YYYY-MM-DDTHH:MM:SSZ (UTC)
-      limit:
-        amount: "25.00"                    # quoted decimal: the Owner-authorized spending limit
-        currency: USD
-        enforced_by: provider              # provider | broker
-        #cap: 1000000                      # with broker only: a cumulative usage-token cap (integer)
+      expires_at: "2026-12-31T00:00:00Z"   # quoted: YYYY-MM-DDTHH:MM:SSZ (UTC), a security validity window
       selection: envelope                  # envelope | delegation
 ```
 
-The values are placeholders, not decided values. An unquoted timestamp or decimal (YAML reads them as a time and
-a float) is refused (`CONFIG_ENVELOPE_INVALID`), never normalized. The bound families must share one provider and
+The values are placeholders, not decided values. An unquoted timestamp (YAML reads it as a time) is refused
+(`CONFIG_ENVELOPE_INVALID`), never normalized. The envelope carries **no spending limit**: a block that still
+names `limit` or any of `amount`, `currency`, `enforced_by` or `cap` is refused (`CONFIG_ENVELOPE_INVALID`, the
+keys named), never ignored ([Retired by S-03.6](#retired-by-s-036)). The bound families must share one provider and
 one origin, and no loopback family may name that provider (`ENVELOPE_FAMILIES_UNBOUND`): under an envelope the
 provider key goes to the envelope's origin only.
 
-**The canonical document** (`aieh-provider-envelope/1`): `format`, `provider`, `origin` (`https://host:port`),
-`limit` (`amount`, `currency`, `enforced_by`, `cap`: an integer or null), `expires_at`, and `selection`:
+**The canonical document** (`aieh-provider-envelope/2`): exactly `format`, `provider`, `origin`
+(`https://host:port`), `expires_at`, and `selection`:
 `{"by": "envelope", "models": {<family>: [<ids, sorted>]}}`, or `{"by": "delegation", "record":
 "decision:0018", "point": "3"}`. Its **digest**, the authorization's target, is `sha256:` and the sha256 of the
 document as canonical JSON (the integration store's rule: sorted keys, no whitespace, UTF-8). **The canonical
@@ -159,7 +160,9 @@ manifest** `operations/<operation>.json`: `operation`, `kind` (`provider-envelop
 `envelope` (the document, in clear, so the Owner reads it in the recorder's challenge summary), JSON with a
 two-space indent and one final LF. `serve` regenerates it from the live envelope and the receipt's operation id
 and requires its sha256 to be the receipt's manifest digest, so what the Owner was shown is exactly what is
-enforced. A change of either form is a new format (`/2`): receipts recorded under `/1` stop verifying.
+enforced. A change of either form is a new format: `/2` dropped `/1`'s `limit`, so a receipt recorded over a
+`/1` document names a digest no live envelope has and authorizes no start (`ENVELOPE_MISMATCH`, or
+`ENVELOPE_REPLAYED` when a later `/1` receipt supersedes a `/2` one); none was recorded for a real provider.
 
 **Authorizing it** (an Owner act; not run here): `inference_broker.py envelope --operation ID` prints the live
 document, its digest and the canonical manifest's path, text and digest; the text travels inside the JSON report
@@ -175,7 +178,7 @@ expiry. In this order: a receipt under the recorder's prefix that cannot be read
 source); a later one `reserved`, `dispatched` or `unknown` (`ENVELOPE_AUTHORIZATION_UNRESOLVED`: resolve it with
 `authorization_recorder.py resolve`); the live digest an earlier, superseded authorization's
 (`ENVELOPE_REPLAYED`); another digest, or a merged manifest that is not the canonical one (`ENVELOPE_MISMATCH`:
-another origin, provider, limit, enforcement, cap, expiry or selection); the expiry reached
+another origin, provider, expiry or selection, or a `/1` document); the expiry reached
 (`ENVELOPE_EXPIRED`). Then the selection: with `selection: envelope`, the bound families' configured models are
 inside the digest, and no bound family naming one is `MODEL_SELECTION_MISSING`. With `selection: delegation`
 (slice 2) the governing selection is the last confirmed position of the one series `model-selection/v1/<n>`,
@@ -192,74 +195,21 @@ a family that names its model elsewhere (a path segment, a header, a nested fiel
 before it is declared. A delegated selection is read from the series' **last confirmed** position only: an
 unsettled selection receipt (reserved or dispatched, a write that stopped) is never in force and has no file
 effect to resolve (the act writes only the store and a copy of the record), so it is harmless and is not
-waited for. With `enforced_by: broker`, the cap's ledger (below)
-is read last. A refused start exits 2, writes no receipt and no audit line (it may create an empty
+waited for. A refused start exits 2, writes no receipt and no audit line (it may create an empty
 integration store where none exists).
 
-**The cumulative cap** (slice 3; `limit.enforced_by: broker`, for a provider that does not enforce the
-Owner-authorized limit on the dedicated key). The unit is **usage tokens, never money** (decision 0015 section
-6.3): `limit.cap` is the cumulative usage the provider reports (input including cache, plus output: the
-extractors' `total`) over every bound family, for the life of the **governing receipt**. How the cap follows from
-the money limit and the models' prices is OA-12's presentation and the selection's cost text; the broker does no
-price arithmetic. The ledger is the receipt's own and lives in the integration store as **two confirmed receipts
-per run**: `inference/envelope/<nonce>/run/<k>` (`aieh-inference-envelope-run/1`), written and read back as the
-last fallible step before the listeners serve, and `inference/envelope/<nonce>/run/<k>/close`
-(`aieh-inference-envelope-close/1`), written at the broker's own stop with the run's `usage`, `requests`,
-`unknown` answers and requests still `in_flight`. At start the runs are walked from 1 by direct lookups (a run
-receipt that is not confirmed never served and counts zero) and the closed runs' usage is carried. One admitted
-request of a bound family adds:
-
-| Outcome | Counted |
-|---|---|
-| a complete answer with a readable usage report | its total |
-| nothing of the request was written upstream (the connection was never made) | zero |
-| a complete answer outside 2xx | zero: **an assumption about the provider's billing** (S-03.2's rule for the attempt budget), to verify from current provider information at OA-12's presentation |
-| a 2xx answer without readable usage; any answer cut off by the upstream or by the client leaving mid-stream | unknown |
-| a request written and never answered; a connection made and the request cut while sending; a broker error after admission | unknown |
-| a run without its close receipt (a crash, a kill, a lost close write, a broker still serving); a close with unknown answers or requests in flight | unknown, at the next start |
-| the run receipt cannot be written or read back | the start fails; nothing is served |
-
-"Was anything written" is recorded when the request has been handed over, before its answer is read, and on a
-failure before the connection is closed (http.client clears its socket on close, and when `getresponse`
-fails); a connection that was made is counted as written. Observed on CPython 3.12 on Windows: a TLS handshake
-that fails after the TCP connection leaves the socket set, so it counts as unknown (conservative, never an
-undercount), while a refused TCP connect leaves none and counts zero. So **one transient TLS or certificate
-failure closes a broker-enforced envelope until a new authorization.** **The stop:** the broker's own stop sets
-a stopping state under its lock before it reads the close receipt's counts; from then on a request of a metered
-family is refused `BROKER_STOPPING` (503) at admission, before anything of it is written upstream, and one
-admitted before is counted in flight, so the next start refuses `ENVELOPE_USAGE_UNKNOWN`. The close's counts are
-therefore the run's whole usage, and no window remains in which usage escapes the ledger. (After the stop the
-audit is closed, so such a refusal is not answered: the connection is closed instead.) **Fail closed, and stay
-closed:** the cap reached (carried plus this run at or above it) is
-`ENVELOPE_CAP_REACHED`, and an unknown answer is `ENVELOPE_USAGE_UNKNOWN`, for every further request of a bound
-family in that run (429, checked where the attempt budget is) and at every later start (exit 2). The only remedy is
-a new provider-envelope authorization, whose receipt starts a new ledger at zero (decision 0018 point 4.2: raising
-a cap is the Owner's per act); there is no reconciliation command. Disclosed limits: requests admitted together
-can overshoot by their own usage; charges that are not tokens are not counted; a stop that is not the broker's own
-closes the envelope although nothing may have been in flight; a restore of the store to a backup taken before usage
-was recorded loses that usage (decision 0004). With `enforced_by: provider` nothing is metered and no ledger
-receipt is written; loopback families are never metered.
-
-**The alternative not taken** (R7): a write-ahead receipt per request (reserved and dispatched before the request
-is forwarded; confirmed with its usage, failed for zero, unknown otherwise) survives a hard stop while idle and is
-what the store's states were made for, at three transactions on every paid request and one receipt per request
-for ever. Reconsider it when a hard stop closing the envelope proves operationally costly: at the first live use
-of a broker-enforced cap, or when the broker becomes a supervised service whose stop is a kill (decision 0011
-point 2, Windows).
-
 **What the broker holds.** `authorize` returns one frozen `Authorization` (the receipt key, the operation id,
-the decision id, the digest, the expiry, the provider, the origin, the selected models, the limit's enforcement
-and, with a broker-enforced cap, the usage the closed runs carry and this run's position);
+the decision id, the digest, the expiry, the provider, the origin and the selected models);
 `Broker.start()` refuses a bound family unless it holds an object `authorize` returned in this process
 (`ENVELOPE_NOT_AUTHORIZED`; a copy or a hand-built one is not) whose provider and origin the family has
-(`ENVELOPE_MISMATCH`). At admission, where the attempt budget is checked, a request of a bound family is refused
+(`ENVELOPE_MISMATCH`). At admission a request of a bound family is refused
 when the held authorization is not one `authorize` minted (`ENVELOPE_NOT_AUTHORIZED`, 503), when the family's
 provider or upstream is not the held one (`ENVELOPE_MISMATCH`, 503), and from the expiry on
 (`ENVELOPE_EXPIRED`, 403); an answer already streaming completes, loopback families and the control listener
 keep working, and nothing is written at the moment of expiry. Supersession takes effect at the next start. The
 start receipt and the status answer carry an `authorization` member (receipt, operation, decision, digest,
-`expires_at`, the selection: `by`, `models` and, when delegated, its `record`, `point`, `receipt` and `decision`;
-the limit's enforcement) only when an envelope is bound. It never carries the selection record's revision.
+`expires_at`, the selection: `by`, `models` and, when delegated, its `record`, `point`, `receipt` and
+`decision`) only when an envelope is bound. It never carries the selection record's revision.
 
 **What it is not.** A control against accident, convenience and a stale or edited `config.yml` at the moment of
 the act, not against a process of the Owner's account, which can write the store as the recorder does, read the
@@ -275,14 +225,15 @@ Owner's account can call it (disclosed, decision 0013 point 6).
 
 | Call | Body | Answer |
 |---|---|---|
-| `POST /v1/grants` | `conversation_id`, `attempt_id` (canonical lower-case UUIDs), `family`, `models` (a non-empty subset of the family's allowlist), `budget` (`requests`, `tokens`: positive integers), `ttl_s` (1 to `max_ttl_s`) | 201: the token (returned once), its fingerprint, the grant and its receipt |
+| `POST /v1/grants` | `conversation_id`, `attempt_id` (canonical lower-case UUIDs), `family`, `models` (a non-empty subset of the family's allowlist), `ttl_s` (1 to `max_ttl_s`); no `budget` (a body carrying one, of any value, is refused `BUDGET_RETIRED`) | 201: the token (returned once), its fingerprint, the grant and its receipt |
 | `POST /v1/grants/revoke` | `token_fingerprint`, `trigger` (a decision 0007 point 5 trigger: `attempt end`, `suspected exposure`, `definition revocation`, `policy revision`, `expiry`, `owner direction`), `revoker` (1 to 200 printable characters, `valid_revoker`); or, in place of `token_fingerprint`, `conversation_id` and `attempt_id` (E-05.6: the attempt's one grant, for a dispatcher that lost the issue's answer) | 200: the grant, revoked, with its revocation receipt; by conversation and attempt with no grant, 200 `tombstoned` (`aieh-inference-attempt-tombstone/1`: the attempt is tombstoned and its issue is refused from then on, `GRANT_ATTEMPT_REVOKED`); `GRANT_UNKNOWN` when no grant has that fingerprint, or when the attempt's grant ended with an earlier run or is of another conversation; `GRANT_ALREADY_REVOKED` |
-| `GET /v1/grants/<fingerprint>` | | the grant: state, budget, counts, usage, receipts |
+| `GET /v1/grants/<fingerprint>` | | the grant: state, lifetime, counts, usage, receipts |
 | `GET /v1/status` | | listeners, the provider key's fingerprint and source, each family and whether it is ready, grant counts, the audit file |
 
 A token is `aieh-inf-` and 43 random URL-safe characters. The broker keeps only its sha256 digest and its
 fingerprint (`sha256:` and 16 hex digits). One grant per attempt, durably: its receipt
-`inference/attempt/<attempt id>/grant` (`aieh-inference-grant/1`, fingerprint only) is written and read back
+`inference/attempt/<attempt id>/grant` (`aieh-inference-grant/2`, fingerprint only, no budget; `/1` carried the
+retired one) is written and read back
 before the token is returned, and a second grant for the same attempt is refused even after a restart.
 Revocation takes effect at once (the next request answers 401) and then writes
 `inference/attempt/<attempt id>/revocation` (`aieh-inference-revocation/1`: fingerprint, attempt,
@@ -311,7 +262,8 @@ integration store (`integrations/dispatch/README.md`, "The D1 stage's create sec
 A request on the inference listener is admitted only when, in this order: exactly one token is presented in a
 declared auth header shape; it is one this broker issued, unrevoked and unexpired; it arrives in its own
 family's auth header; the method and path are in that family's route set (and the query rule holds); the
-request and usage budgets are not spent; the body has one `Content-Length` (no chunked body) within
+broker's own stop has not begun (`BROKER_STOPPING`) and, for a bound family, the envelope holds; the body has one
+`Content-Length` (no chunked body) within
 `max_request_bytes`, is a JSON object and names a `model` that is in both the token's list and the family's
 allowlist; and the token appears nowhere in what would be forwarded (target, headers, body). The request is
 then counted, and passed through unchanged to the family's one upstream origin: the same method, target and
@@ -323,11 +275,17 @@ body; chunked when the upstream gives no length), its usage read on the way. Acc
 are written before the answer's last bytes, so a client's next request already meets them. An upstream error
 status is passed through as it is.
 
-**Budgets.** A request is refused when the request budget is spent or the usage total reaches the token
-budget. A successful answer that reports no usage (or is cut off) makes the token budget unenforceable, so
-the attempt is refused further requests (`BUDGET_USAGE_UNKNOWN`, fail closed). Concurrent requests of one
-attempt are admitted against the counts at admission, so in-flight requests can overshoot the token budget by
-their own usage (disclosed).
+**No budget.** A grant has no request or token budget (S-03.6): its request count, its usage and its answers
+without usage are counted for the audit and the per-attempt summary as information only, and none of them
+refuses, closes or narrows anything. After a 2xx answer without usage, a stream the upstream cut off
+(`UPSTREAM_STREAM_BROKEN`) or a client gone mid-stream (`CLIENT_GONE`), the grant admits its next request. What
+bounds a grant is its model list, its lifetime (`max_ttl_s`) and its revocation, then the provider account's own
+limits.
+
+**The stop.** The broker's own stop sets a stopping state under its lock first; from then on a request is
+refused `BROKER_STOPPING` (503) at admission, before anything of it is written upstream, so a handler still alive
+after the listeners stop (a keep-alive connection) forwards nothing more. After the stop the audit is closed, so
+such a refusal is not answered: the connection is closed instead.
 
 **Egress.** `connect_upstream` is the one place that opens a connection, to the configured upstream origin of
 the admitted token's family: `https` with the system's trust roots and hostname check, or `http` to a
@@ -427,7 +385,8 @@ Built for S-03.2's guest qualification (the plan in
   The broker's receipts and audit lines go where `serve` writes them; the key is written nowhere.
 - **The token issue command**, `inference_control.py issue` (finding 3(c) of the slice 3 record): one grant from
   the control listener (`POST /v1/grants`) with `--conversation-id`, `--attempt-id` (default: a new random
-  UUID), `--family`, `--model` (repeatable), `--requests`, `--tokens` and `--ttl-s`, its answer checked for one
+  UUID), `--family`, `--model` (repeatable) and `--ttl-s` (the lifetime only: the budget options were retired by
+  S-03.6), its answer checked for one
   token of the broker's shape, fingerprint and attempt. The token and one newline go to standard output and
   nowhere else, for a pipe into `guest.py job-access-probe --attempt-token-stdin`; standard error carries only
   `{"attempt_id", "token_fingerprint"}`. Standard output must be a pipe, checked before the configuration is
@@ -619,7 +578,7 @@ credential provider holding a synthetic key) and has never read a real entry.
 <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
 <tools python> -I -B integrations/inference/inference_qualification.py fake-upstream --family ID --port PORT
 <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID \
-    --model NAME --requests N --tokens N --ttl-s SECONDS | <the command that reads the token>
+    --model NAME --ttl-s SECONDS | <the command that reads the token>
 <synthetic key> | <tools python> -I -B integrations/inference/inference_key_search.py search \
     --expect-fingerprint sha256:<16 hex> --surface LABEL=KIND:PATH [--surface ...]
 <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py discover --provider ID \
@@ -645,19 +604,17 @@ The provider envelope (S-03.5; at start `serve` exits 2): `ENVELOPE_NOT_CONFIGUR
 `ENVELOPE_RECORD_INVALID`, `ENVELOPE_AUTHORIZATION_UNRESOLVED`, `ENVELOPE_REPLAYED`, `MODEL_SELECTION_MISSING`,
 `MODEL_SELECTION_NOT_AUTHORIZED`, `MODEL_SELECTION_RECEIPT_MISMATCH`; at start, in `issue` and at admission:
 `MODEL_NOT_SELECTED` (403);
-at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403),
-`ENVELOPE_CAP_REACHED`, `ENVELOPE_USAGE_UNKNOWN` (429); at admission after the broker's stop: `BROKER_STOPPING`
-(503).
+at start and at admission: `ENVELOPE_NOT_AUTHORIZED`, `ENVELOPE_MISMATCH` (503), `ENVELOPE_EXPIRED` (403); at
+admission once the broker's stop has begun: `BROKER_STOPPING` (503).
 Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL_CONTENT_TYPE` (415),
 `CONTROL_BODY_INVALID` (400), `CONVERSATION_ID_INVALID`, `ATTEMPT_ID_INVALID`, `FAMILY_UNKNOWN`, `MODELS_INVALID`,
-`BUDGET_INVALID`, `TTL_INVALID`, `TRIGGER_UNKNOWN`, `REVOKER_INVALID` (400), `MODEL_NOT_ALLOWLISTED` (403),
+`BUDGET_RETIRED`, `TTL_INVALID`, `TRIGGER_UNKNOWN`, `REVOKER_INVALID` (400), `MODEL_NOT_ALLOWLISTED` (403),
 `FAMILY_NOT_READY`, `ATTEMPT_HAS_GRANT`, `GRANT_ALREADY_REVOKED` (409), `GRANT_UNKNOWN` (404), `JOURNAL_FAILED`,
 `EXPOSURE_FOUND` (500).
 Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`, `TOKEN_EXPIRED`,
 `TOKEN_WRONG_HEADER` (401), `ROUTE_NOT_ALLOWED` (404), `QUERY_NOT_ALLOWED`, `BODY_LENGTH_INVALID`,
 `BODY_NOT_JSON`, `MODEL_MISSING`, `TOKEN_IN_REQUEST` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
-(411), `BODY_TOO_LARGE` (413), `BUDGET_REQUESTS_EXHAUSTED`, `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_USAGE_UNKNOWN`
-(429), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
+(411), `BODY_TOO_LARGE` (413), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
 Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.
 Qualification (`inference_qualification.py`, beside the broker's configuration and key codes):
 `QUALIFICATION_UPSTREAM_REFUSED`, `QUALIFICATION_NO_FAMILY`, `KEY_NOT_SYNTHETIC`, `KEY_NEVER_WRITTEN`,
@@ -670,7 +627,43 @@ Discovery and the reader (`inference_qualification.py`, S-03.3): `DISCOVERY_PORT
 that cannot be read or written exits 1. The real-key search (`inference_real_key_search.py`): `OWNER_ACT_REQUIRED`,
 `KEY_PROVIDER_FAILED`, `KEY_ENTRY_ABSENT` and the key search's `FINGERPRINT_INVALID`, `FINGERPRINT_MISMATCH`,
 `SURFACE_INVALID` (exit 2), `OUTPUT_WITHHELD` (exit 1).
-A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes the connection.
+A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes the connection. Retired by S-03.6
+(no longer answered by anything): `BUDGET_INVALID`, `BUDGET_REQUESTS_EXHAUSTED`, `BUDGET_TOKENS_EXHAUSTED`,
+`BUDGET_USAGE_UNKNOWN`, `ENVELOPE_CAP_REACHED`, `ENVELOPE_USAGE_UNKNOWN`.
+
+## Retired by S-03.6
+
+On the Owner's direction of 2026-11-13 ("Owner direction: reconcile the D1 provider-access requirements before
+live execution", verbatim in `evidence/bootstrap-log.md`, Decisions), applied by
+[decision 0021 amendment 1](../../decisions/0021-provider-envelope-model-selection-and-broker-enforced-cap.md)
+and [decision 0015 amendment 2](../../decisions/0015-inference-broker-placement-provider-credential-custody-and-guest-inference-endpoint.md),
+plan leaf S-03.6 removed the harness's spending enforcement. Spending is bounded by the provider account's own
+limits; the harness enforces none. Removed:
+
+- **The envelope's spending limit**: the `limit` member (`amount`, `currency`, `enforced_by`, `cap`) of the
+  `envelope` block and of the canonical document, and so of its digest. The canonical form is
+  `aieh-provider-envelope/2`; a block that still names one of those keys is refused (`CONFIG_ENVELOPE_INVALID`).
+- **The broker-enforced cumulative cap** and its per-run ledger in the integration store
+  (`inference/envelope/<nonce>/run/<k>` and its `close`, `aieh-inference-envelope-run/1` and
+  `aieh-inference-envelope-close/1`): nothing writes or reads them any more, and receipts an earlier build wrote
+  are left as they are. The start order lost its ledger step; the held `Authorization`, the start receipt and the
+  status lost the limit's enforcement, the carried usage and the run. Removed codes: `ENVELOPE_CAP_REACHED`,
+  `ENVELOPE_USAGE_UNKNOWN`.
+- **The attempt grant's request and token budget**: `budget` in the issue request (now refused,
+  `BUDGET_RETIRED`), in the grant, its receipt (`aieh-inference-grant/2`) and its answers; the `--requests` and
+  `--tokens` options of `inference_control.py issue` and `ControlClient.issue`'s two arguments; the D1 stage's
+  grant declaration's `requests` and `tokens` (`integrations/dispatch/README.md`). Removed codes:
+  `BUDGET_INVALID`, `BUDGET_REQUESTS_EXHAUSTED`, `BUDGET_TOKENS_EXHAUSTED` and `BUDGET_USAGE_UNKNOWN` (the rule
+  that closed a token for good after one answer without usage).
+
+Kept: the start precondition (the governing, confirmed, unexpired provider-envelope receipt over the canonical
+digest, with the manifest binding) before the key and the listeners; the loopback rule; the two model-selection
+authorities and the per-request model check; `expires_at` as a security validity window; the grant's binding to
+its conversation, attempt, family, model list and lifetime, and its revocation; every other refusal; the
+credential-header stripping; egress to the configured origin only; the audit, which still tells an answer passed
+through from the upstream (its upstream status, or `UPSTREAM_STREAM_BROKEN`) from a broker refusal (its stable
+code), with usage recorded as information; the I7 scan; and `BROKER_STOPPING`, now part of the clean stop for
+every family.
 
 ## Not yet verified
 
@@ -696,7 +689,5 @@ A refusal answers `{"aieh_refusal": {"code", "detail", "remedy"}}` and closes th
 - The provider envelope (S-03.5 slice 1) outside a test process: a real envelope manifest, its authorization by
   the Owner through the recorder against a real Gitea, `serve` started on it, and any request through `serve` to
   a non-loopback origin (S-03.3's live step). The authorization recorder admits only the S-01.2.2 fixture
-  repository today. A real model selection recorded on the managed store. The cumulative cap against a real
-  provider: whether it bills an answer outside 2xx (the assumption above), whether it enforces a limit on a
-  dedicated key, and http.client's socket state after a partial send (the failed TLS handshake is observed, above;
-  Linux and macOS are not).
+  repository today. A real model selection recorded on the managed store. The provider account's own limits,
+  which bound spending since S-03.6, and how the provider's refusal of a request beyond them surfaces.

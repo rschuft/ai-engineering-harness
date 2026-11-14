@@ -58,12 +58,16 @@ components:
   #inference_broker:
     #control_port:                # no default; 1024-65535, required to serve
     #inference_port:              # no default; 1024-65535, different from control_port
+    # The declared ports (the OA-12 package; integrations/inference/README.md), for example:
+    # control_port: 18431
+    # inference_port: 18432
     #max_request_bytes: 33554432  # 32 MiB (1 to 256 MiB)
     #max_ttl_s: 86400             # the longest token lifetime, one day (at most 7 days)
     #upstream_timeout_s: 600      # seconds (1 to 3600)
     #families: {}                 # per declared family: provider, upstream (an origin) and models
     #envelope:                    # absent; serve requires it for a family whose upstream is not loopback
     # The provider envelope the Owner authorizes (S-03.5; integrations/inference/README.md): under
-    # envelope, expires_at: "YYYY-MM-DDTHH:MM:SSZ" (quoted); limit: amount (a quoted decimal),
-    # currency, enforced_by (provider or broker) and, with broker only, cap; selection: envelope
-    # or delegation. serve starts such a family only on the Owner's recorded authorization of it.
+    # envelope, exactly expires_at: "YYYY-MM-DDTHH:MM:SSZ" (quoted; a security validity window) and
+    # selection: envelope or delegation. It carries no spending limit (retired by S-03.6): limit,
+    # amount, currency, enforced_by and cap are refused. serve starts such a family only on the
+    # Owner's recorded authorization of it.

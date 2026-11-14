@@ -532,7 +532,7 @@ tasks:
   # integration store and a fake upstream per declared API family on ephemeral 127.0.0.1 ports in the test
   # process; it never touches the real credential store, the managed root or the network beyond loopback.
   inference:test:
-    desc: "Run the inference broker tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/inference/tests -v): the family declarations and components.inference_broker configuration with every refusal; token issuance, family binding, revocation, expiry and budgets with their integration-store receipts; every admission refusal; untranslated pass-through and streaming to a fake upstream per declared family with the synthetic provider key substituted for the attempt token; usage extraction; the audit and the I7 scan; egress to the configured origin only; the credential set command over an in-memory provider; serve in process"
+    desc: "Run the inference broker tests under the python-tools interpreter (<tools python> -I -B -m unittest discover -s integrations/inference/tests -v): the family declarations and components.inference_broker configuration with every refusal; token issuance (no budget: S-03.6), family binding, revocation and expiry with their integration-store receipts; every admission refusal; untranslated pass-through and streaming to a fake upstream per declared family with the synthetic provider key substituted for the attempt token; usage extraction; the audit and the I7 scan; egress to the configured origin only; the credential set command over an in-memory provider; serve in process"
     vars:
       TOOLS_PYTHON:
         sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'

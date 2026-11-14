@@ -288,11 +288,13 @@ provider key: a reported location has each such word as `<redacted>` (`create_se
 the approved profile's one `network.endpoints` entry of class `inference`
 (`acp_qualification.inference_endpoint`); the token only from the broker's issue answer. The
 grant's family is the registry entry's (`acp_qualification.ACP_FAMILY`, `anthropic-messages`),
-its one model the pinned template's `acp_model` (in the broker's model grammar), and its budgets
-and lifetime are declared beside the stage template's pin:
-`stage_create_template.inference_grant` `{requests, tokens, ttl_s}`, each a positive integer,
-bound by the profile digest and required at resolution (`PROFILE_ADMISSION_INVALID`); the broker
-bounds them at issuance. Anything else that cannot be admitted (the registry extract drifted, no
+its one model the pinned template's `acp_model` (in the broker's model grammar), and its lifetime
+is declared beside the stage template's pin: `stage_create_template.inference_grant` exactly
+`{ttl_s}`, a positive integer, bound by the profile digest and required at resolution
+(`PROFILE_ADMISSION_INVALID`); the broker bounds it at issuance (`max_ttl_s`). The grant carries
+no request or token budget (retired by S-03.6, decision 0015 amendment 2): a declaration that still
+names `requests` or `tokens` is refused at resolution, `PROFILE_ADMISSION_INVALID` with the retired
+keys named, never ignored. Anything else that cannot be admitted (the registry extract drifted, no
 single inference endpoint, another ACP server, a model outside the grammar) is
 `INFERENCE_INPUTS_INVALID` at admission, before any token exists.
 
@@ -364,8 +366,9 @@ settled; `end_attempt` still revokes such a grant by its attempt.
 
 **Fingerprints, never the token.** The admitted body's token secret must be the slot: a token
 value there, even the held grant's own, is `SECRET_NOT_FROM_GRANT` at the send.
-`AdmittedCreate.to_json()` carries the slot and `inference_grant` (`inference-grant/v1`: the
-token's fingerprint, conversation, attempt, family, models, budget, expiry), and redacts anything
+`AdmittedCreate.to_json()` carries the slot and `inference_grant` (`inference-grant/v2`: the
+token's fingerprint, conversation, attempt, family, models, expiry; `v1` also carried the retired
+budget), and redacts anything
 token- or provider-key-shaped in the body besides; the `dispatched`, `failed` and `unknown`
 details, `DispatchResult`, the journal, the revocation records and every refusal carry the
 fingerprint only. While the token is held, a refusal's detail and context are rebuilt, with no
@@ -379,7 +382,7 @@ reads none: importing it loads no inference or credential module, and the D1 sta
 (`acp_qualification`, `inference_control`) are loaded on first use.
 
 **Not yet verified:** any live create with secrets, any live broker, guest or model call; the
-checked-in profile pins no stage template yet, so no grant budgets are declared there.
+checked-in profile pins no stage template yet, so no grant lifetime is declared there.
 
 ## The native conversation create (E-01.3.1)
 
