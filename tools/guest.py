@@ -7080,6 +7080,23 @@ def inference_control():
     return _inference_module('aieh_inference_control', 'inference_control.py')
 
 
+def inference_census():
+    """integrations/inference/inference_census.py, the broker's live census (S-03.2: its listeners and connections
+    at the operating system, judged against its configuration and its audit), loaded once."""
+    return _inference_module('aieh_inference_census', 'inference_census.py')
+
+
+def broker_census():
+    """One live census of the configured broker (inference_census.py --once over the managed config.yml, the
+    broker's control listener and its audit file): the aieh-inference-census/1 record. A census it refuses to run
+    (CensusRefused) is Refused('CENSUS'), which the S-03.3 driver treats as a census that did not pass."""
+    census = inference_census()
+    try:
+        return census.once(census.managed_context())
+    except (census.CensusRefused, census.broker.paths.PathsError) as exc:
+        raise Refused('CENSUS', f'the broker\'s live census could not run: {exc}') from None
+
+
 def key_search():
     """integrations/inference/inference_key_search.py, S-03.2's provider-key containment search
     (standard library only; it imports nothing of the broker), loaded once."""
@@ -15414,6 +15431,7 @@ def custody_probe(ctx, name, attempts_fn=None, out_path=None, channels=None, ins
 # it admits and sends the pinned qualification create (integrations/dispatch/acp_qualification.py) through the
 # dispatcher's transport (integrations/dispatch/guest_transport.py), sends one fixed prompt, observes the
 # conversation container while the turn runs and after it (integrations/dispatch/conversation_containment.py),
+# takes the broker's live census (integrations/inference/inference_census.py) before any model call and after it,
 # reads the conversation's events and the sets of containers and conversations, searches for the provider key,
 # revokes the token at attempt end (decision 0015 section 3.3) and deletes the conversation. One record, under
 # ACP_QUALIFICATION_RULE, fixed before any run.
@@ -15492,7 +15510,12 @@ ACP_QUALIFICATION_RULE = (
     'PASS iff every step passes: (1) the opted-in guest holds the forward, the grant of the piped token is live, bound '
     'to the reserved conversation, of the family anthropic-messages, which is ready, with the named model in the '
     'grant and in the family\'s allowlist, the key-search mode matches the broker\'s provider key (synthetic: the '
-    'launcher\'s, by fingerprint), and the outer server holds no conversation and no conversation container; (2) the '
+    'launcher\'s, by fingerprint), and the outer server holds no conversation and no conversation container; '
+    '(1a) once the broker is confirmed serving (1), and before the qualification create and so before any model '
+    'call, the broker\'s live census (integrations/inference/inference_census.py, S-03.2; its own rule copied into '
+    'its record) passes: its listeners exactly the configured two on 127.0.0.1, no UDP endpoint, every other '
+    'connection inbound from loopback or outbound to the configured origin\'s port and a peer its audit recorded; '
+    'UNKNOWN or a census that cannot run is not a pass; (2) the '
     'pinned qualification create is admitted (acp_qualification.check_create) and created through the dispatcher\'s '
     'transport: 2xx, exactly one new container of the declared shape, the outer server listing exactly that '
     'conversation, the answer\'s acp_server claude-code when it names one; (3) the sets of containers and of outer '
@@ -15511,7 +15534,8 @@ ACP_QUALIFICATION_RULE = (
     'new inner conversation a child of this one; (9) the events are read in full and classify the delegation '
     'mechanisms (a) the provider\'s own processes and ACP tool calls, (b) an ACP session fork (never called by the '
     'driver), (c) the inner server\'s children route, (d) the native start_child_conversation tool, which must be '
-    'absent; (10) the broker admitted at least one request of the grant (the base URL honoured); (11) the provider '
+    'absent; (10) the broker admitted at least one request of the grant (the base URL honoured); (10a) after the '
+    'call the broker\'s live census passes again; (11) the provider '
     'key search (mode synthetic or real) finds the key nowhere: inspect\'s P5 search of the guest and the instance '
     'files, and every Agent Server answer and container output of this run in memory, with valid positive controls '
     '(mode off: UNKNOWN); (12) the token revoked at attempt end; (13) the conversation deleted, its container gone '
@@ -15522,7 +15546,14 @@ ACP_QUALIFICATION_RULE = (
     'recorded surface (the attempt token or the management key echoed in an Agent Server answer, a provider-key '
     'shaped value in a process environment, the provider key found by the search); a connection that reached any '
     'network destination other than the broker\'s inference endpoint; a turn waiting for a confirmation '
-    '(waiting_for_confirmation: nothing may confirm on the Owner\'s behalf).')
+    '(waiting_for_confirmation: nothing may confirm on the Owner\'s behalf); the broker\'s live census not passing '
+    '(FAIL, UNKNOWN or not run) before any model call (step 1a: nothing is created and no prompt is sent) or after '
+    'the call (step 10a).')
+ACP_CENSUS_STOPS = {
+    'before': 'the broker\'s live census did not pass before any model call (the run stops before the '
+              'qualification create)',
+    'after': 'the broker\'s live census did not pass after the call',
+}
 
 # Run inside the qualification conversation's container: the inner server's conversations (id and parent only),
 # with the conversation's own key read from /proc/1/environ inside the container (never printed: its occurrences
@@ -15746,7 +15777,7 @@ def acp_delegation(events, provider_during, provider_after, children, transport_
 def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode='off', provider_key=None,
                           provider_key_fingerprint=None, real_key_act=None, out_path=None, channels=None,
                           broker=None, forward=None, inspect_fn=None, host_vantage=None, real_key_reader=None,
-                          wait=None, turn_ceiling_s=ACP_TURN_CEILING_S):
+                          wait=None, turn_ceiling_s=ACP_TURN_CEILING_S, census=None):
     """acp-qualification (plan leaf S-03.3, slice 5; PREPARED, NOT RUN) under ACP_QUALIFICATION_RULE, fixed before
     any run. ``attempt_token`` comes from standard input (the inference_control.py issue pipe), never argv; records
     carry its fingerprint only. ``key_mode``: off (the default: the key search step is UNKNOWN), synthetic (S-03.2's
@@ -15754,7 +15785,8 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
     provider key read through the credential provider only inside the key search step, and only with
     ``real_key_act`` naming the Owner's act that authorizes it). ``channels(record) -> (api, facts)``, ``broker``,
     ``forward``, ``inspect_fn(fingerprint, key)``, ``host_vantage(record, state_pid)``, ``real_key_reader(fp)`` and
-    ``wait(fetch, done, ceiling)`` stand in for the guest, the broker and the clock in tests."""
+    ``wait(fetch, done, ceiling)`` stand in for the guest, the broker and the clock in tests; ``census()`` (the
+    broker's live census record, broker_census) for the operating system's view of the broker."""
     if prompt not in ACP_QUALIFICATION_PROMPTS:
         raise Refused('REFUSED', f'--prompt: one of {sorted(ACP_QUALIFICATION_PROMPTS)}')
     if key_mode not in ACP_KEY_MODES:
@@ -15795,6 +15827,7 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
     forward = forward or ForwardControl(ctx, name, broker)
     real_key_reader = real_key_reader or read_real_provider_key
     wait = wait or wait_until
+    census = census or broker_census
     inspect_fn = inspect_fn or (lambda fp, key: inspect(ctx, name, None, fp, key))
     cid, hex_id = ACP_QUALIFICATION_CONVERSATION_ID, ACP_QUALIFICATION_CONVERSATION_ID.replace('-', '')
     endpoint = inference_endpoint(profile)
@@ -15967,6 +16000,27 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
                   'key_search': key_mode, 'real_key_act': real_key_act}
         memo['ready'] = all(checks.values())
         return ('PASS' if memo['ready'] else 'FAIL'), detail
+
+    def census_step(phase):
+        """The broker's live census (S-03.2) at PHASE (before any model call, or after the call): its verdict is
+        the step's; anything but PASS is a stop (before: the run stops before the create, so before any model
+        call; the key search, the revocation and the teardown still run)."""
+        def step():
+            try:
+                record = census()
+            except Exception as exc:  # noqa: BLE001 - a census that cannot run is not a pass: a stop, never PASS
+                stop(ACP_CENSUS_STOPS[phase], verdict='UNKNOWN', error=str(exc)[:300])
+                return 'UNKNOWN', {'census': None, 'error': getattr(exc, 'code', type(exc).__name__),
+                                   'message': str(exc)[:300]}
+            verdict = record.get('verdict') if isinstance(record, dict) else None
+            verdict = verdict if verdict in ('PASS', 'FAIL', 'UNKNOWN') else 'UNKNOWN'
+            if verdict != 'PASS':
+                stop(ACP_CENSUS_STOPS[phase], verdict=verdict,
+                     violations=record.get('violations') if isinstance(record, dict) else None,
+                     unknown=record.get('unknown') if isinstance(record, dict) else None)
+            memo[f'census_{phase}'] = verdict
+            return verdict, {'census': record}
+        return step
 
     def create_step():
         acp = acp_qualification()
@@ -16173,6 +16227,8 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
 
     run('(1) preconditions: the opted-in guest, the forward, the grant, the family, nothing created yet',
         preconditions)
+    run('(1a) the broker\'s live census before any model call: its listeners and connections at the operating system',
+        census_step('before'), needs=('ready',))
     run('(2) the qualification create, admitted and sent through the dispatcher\'s transport', create_step,
         needs=('ready',))
     try:
@@ -16186,6 +16242,7 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
         run('(8) containment after the turn, the network and the sets', after_step, needs=('sent', 'before'))
         run('(9) the conversation\'s events: the delegation mechanisms (a) to (d)', events_step, needs=('sent',))
         run('(10) the broker admitted the provider\'s requests under the token', broker_step, needs=('sent',))
+        run('(10a) the broker\'s live census after the call', census_step('after'), needs=('sent',))
         run(f'(11) the provider key searched for ({key_mode})', key_step, always=True, needs=('ready',))
     finally:
         run('(12) revoke the attempt token at attempt end (decision 0015 section 3.3)', revoke_step, always=True)

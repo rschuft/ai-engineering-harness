@@ -10,7 +10,9 @@ control listener, the forward session, inspect's P5 record and the guest-root va
 are slice 1's own synthetic trees (integrations/dispatch/tests/test_conversation_containment.py). Shown: the
 decision rule's PASS, FAIL and UNKNOWN (a lost answer is never PASS); a negative control for each stop condition;
 the key search modes (off by default; the real key read only under its act and only inside its step); the record
-never holds the attempt token or the key. D-6, the job contract's admission of the attempt token's name, is tested
+never holds the attempt token or the key; the broker's live census (S-03.2) taken before any model call (step 1a,
+before the create) and after the call (step 10a), a census that does not pass (FAIL, UNKNOWN or not run) a stop,
+before the create when it is step 1a, the key search, the revocation and the teardown still run. D-6, the job contract's admission of the attempt token's name, is tested
 in test_attempt_token_contract.py.
 """
 from pathlib import Path
@@ -229,6 +231,16 @@ def inspect_record(verdict='PASS'):
         {'check': guest.INFERENCE_KEY_SEARCH_CHECK, 'observed': {'verdict': 'not-found'}, 'verdict': verdict}]}]}
 
 
+CENSUS = guest.inference_census()
+
+
+def census_record(verdict):
+    """A census record of VERDICT, of the census module's own form."""
+    return {'format': CENSUS.CENSUS_FORMAT, 'verdict': verdict, 'rule': CENSUS.CENSUS_RULE, 'dns': CENSUS.DNS_NOTE,
+            'violations': ['a UDP endpoint 127.0.0.1:5353'] if verdict == 'FAIL' else [],
+            'unknown': ['the operating system\'s tables could not be read'] if verdict == 'UNKNOWN' else []}
+
+
 class DriverRun(unittest.TestCase):
     """acp_qualification_run against the fakes."""
 
@@ -240,6 +252,15 @@ class DriverRun(unittest.TestCase):
         self.turn_done = False
         self.inspected = []
         self.real_reads = []
+        self.census_verdicts = ['PASS', 'PASS']      # what the fake census answers, call by call
+        self.census_calls = []                       # (the guest calls made before each census, the verdict)
+
+    def census(self):
+        verdict = self.census_verdicts.pop(0)
+        self.census_calls.append((list(self.guest.calls), verdict))
+        if isinstance(verdict, BaseException):
+            raise verdict
+        return census_record(verdict)
 
     def wait(self, fetch, done, ceiling):
         value = fetch()
@@ -267,7 +288,8 @@ class DriverRun(unittest.TestCase):
                     broker=self.broker, forward=types.SimpleNamespace(status=lambda: {'held': True}),
                     inspect_fn=inspect_fn, wait=self.wait, real_key_act=real_key_act,
                     real_key_reader=real_reader or reader,
-                    host_vantage=(lambda rec, pid: host_snapshot()) if host is True else host)
+                    host_vantage=(lambda rec, pid: host_snapshot()) if host is True else host,
+                    census=self.census)
         if key_mode == 'synthetic':
             args.update(provider_key=SYNTHETIC, provider_key_fingerprint=SYNTHETIC_FP)
         args.update(kw)
@@ -297,7 +319,16 @@ class DriverRun(unittest.TestCase):
     def test_the_rule_passes_on_a_guest_that_holds_it(self):
         out = self.run_driver()
         self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
-        self.assertEqual(self.verdicts(out), ['PASS'] * 13)
+        self.assertEqual(self.verdicts(out), ['PASS'] * 15)
+        self.assertEqual([s['step'].split(' ', 1)[0] for s in out['steps']],
+                         ['(1)', '(1a)', '(2)', '(3)', '(4)', '(5)', '(6)', '(7)', '(8)', '(9)', '(10)', '(10a)',
+                          '(11)', '(12)', '(13)'])
+        # the census before any model call (before the create), and again after the call
+        (before, _), (after, _) = self.census_calls
+        self.assertNotIn(('POST', '/api/conversations'), before)
+        self.assertIn(('POST', f'/api/conversations/{CID}/events'), after)
+        self.assertEqual(self.step(out, '1a')['detail']['census']['verdict'], 'PASS')
+        self.assertEqual(self.step(out, '10a')['detail']['census']['rule'], CENSUS.CENSUS_RULE)
         self.assertEqual(out['rule'], guest.ACP_QUALIFICATION_RULE)
         self.assertEqual((out['schema'], out['operation'], out['plan_leaf']),
                          (guest.ACP_QUALIFICATION_SCHEMA, 'acp-qualification', 'S-03.3'))
@@ -337,6 +368,62 @@ class DriverRun(unittest.TestCase):
         # the network view classified the endpoint connection
         kinds = [c['kind'] for c in self.step(out, 5)['detail']['network']['connections']]
         self.assertIn('the inference endpoint', kinds)
+
+    def test_a_census_that_does_not_pass_before_any_model_call_stops_the_run_before_the_create(self):
+        cases = {'FAIL': 'FAIL', 'UNKNOWN': 'UNKNOWN',
+                 'not run': guest.Refused('CENSUS', 'the broker\'s live census could not run'),
+                 'raised': OSError('synthetic')}
+        for name, answer in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self.census_verdicts = [answer]
+                out = self.run_driver()
+                self.assertEqual(out['result'], 'FAIL')
+                step = self.step(out, '1a')
+                self.assertEqual(step['verdict'], answer if isinstance(answer, str) else 'UNKNOWN')
+                self.assertEqual(self.stops(out), [guest.ACP_CENSUS_STOPS['before']])
+                self.assertEqual(out['stop_conditions'][0]['verdict'], step['verdict'])
+                # nothing created, no prompt sent: no model call can have been made
+                self.assertNotIn(('POST', '/api/conversations'), self.guest.calls)
+                self.assertNotIn(('POST', f'/api/conversations/{CID}/events'), self.guest.calls)
+                for number in (2, 3, 4, 5, 6, 7, 8, 9, 10, '10a'):
+                    self.assertEqual(self.step(out, number).get('skipped'), 'a stop condition', number)
+                self.assertEqual(len(self.census_calls), 1)
+                # the key search, the revocation and the teardown run as the stop rule says
+                self.assertEqual(self.step(out, 11)['verdict'], 'PASS')
+                self.assertEqual(self.step(out, 12)['verdict'], 'PASS')
+                self.assertEqual(self.step(out, 13)['skipped'], 'not reached (created)')
+                self.assertEqual(self.broker.grant['state'], 'revoked')
+
+    def test_a_census_that_does_not_pass_after_the_call_fails_the_run(self):
+        for verdict in ('FAIL', 'UNKNOWN'):
+            with self.subTest(verdict):
+                self.setUp()
+                self.census_verdicts = ['PASS', verdict]
+                out = self.run_driver()
+                self.assertEqual((self.step(out, '10a')['verdict'], out['result']), (verdict, 'FAIL'))
+                self.assertEqual(self.stops(out), [guest.ACP_CENSUS_STOPS['after']])
+                self.assertEqual([self.step(out, n)['verdict'] for n in (11, 12, 13)], ['PASS'] * 3)
+                self.assertEqual(self.step(out, '10a')['detail']['census']['violations'],
+                                 census_record(verdict)['violations'])
+
+    def test_the_rule_names_the_census_steps_and_their_stop(self):
+        for text in ('(1a) once the broker is confirmed serving (1), and before the qualification create',
+                     '(10a) after the call the broker\'s live census passes again',
+                     'the broker\'s live census not passing'):
+            self.assertIn(text, guest.ACP_QUALIFICATION_RULE)
+
+    def test_the_default_census_is_the_census_module_s_and_a_refusal_is_refused(self):
+        census = guest.inference_census()
+        with mock.patch.object(census, 'managed_context', return_value='ctx'), \
+                mock.patch.object(census, 'once', side_effect=lambda ctx: census_record('PASS')) as once:
+            self.assertEqual(guest.broker_census()['verdict'], 'PASS')
+        once.assert_called_once_with('ctx')
+        with mock.patch.object(census, 'managed_context', return_value='ctx'), \
+                mock.patch.object(census, 'once', side_effect=census.CensusRefused('CENSUS_BROKER_UNREACHABLE', 'x')):
+            with self.assertRaises(guest.Refused) as caught:
+                guest.broker_census()
+        self.assertIn('CENSUS_BROKER_UNREACHABLE', str(caught.exception))
 
     def test_children_route_is_classified_not_failed(self):
         self.guest.inner_after = self.guest.inner_after + [{'id': CHILD, 'parent_conversation_id': CID}]
@@ -399,7 +486,7 @@ class DriverRun(unittest.TestCase):
                 channels=lambda rec: (self.guest.api, self.guest.facts), broker=self.broker,
                 forward=types.SimpleNamespace(status=lambda: {'held': True}),
                 inspect_fn=lambda fp, key: inspect_record(), wait=self.wait, real_key_reader=lambda fp: REAL,
-                host_vantage=lambda rec, pid: host_snapshot())
+                host_vantage=lambda rec, pid: host_snapshot(), census=self.census)
         self.assertEqual(written, {})
 
     def test_stop_a_process_outside_the_lineage(self):
@@ -961,7 +1048,7 @@ class DriverRun(unittest.TestCase):
         self.guest.host_section = host_section
         out = self.run_driver(host=None)
         self.assertEqual(out['result'], 'PASS', [(s['step'], s['verdict'], s.get('detail')) for s in out['steps']])
-        self.assertEqual(self.verdicts(out), ['PASS'] * 13)
+        self.assertEqual(self.verdicts(out), ['PASS'] * 15)
         for number in (5, 8):
             detail = self.step(out, number)['detail']
             self.assertEqual(detail['host_vantage'], 'guest root')
