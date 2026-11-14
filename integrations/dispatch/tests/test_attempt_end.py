@@ -485,10 +485,36 @@ class EndRefusals(EndFixture):
                 self.assertEqual(self.store.get(key).state, 'dispatched')   # begun, not recorded
                 self.assertIsNone(AE.end_record(self.store, result.attempt_id))
 
-    def test_an_unknown_conversation(self):
+    def test_an_unknown_conversation_is_ended_absent_and_unclassified(self):
+        """S4 (the review's P4): a conversation the server no longer knows is ended, absent and unclassified, so
+        that record-end-cause decides it; repeat-safe."""
         result = self.interrupted(SURFACED['rate-limit'][0])
         del self.server.conversations[result.conversation_id]
-        self.refused_end('CONVERSATION_NOT_FOUND', result)
+        ended = self.end(result, records=[record('provider-path-lost', 'TUNNEL_DOWN')])
+        self.assertEqual((ended['classification'], ended['surfaced']['runtimeStatus'], ended['conversationStopped']),
+                         (AE.UNCLASSIFIED, AE.ABSENT, True))
+        self.assertEqual(ended['surfaced']['dispatcherRecords'], [record('provider-path-lost', 'TUNNEL_DOWN')])
+        self.assertEqual(self.end(result), ended)
+        self.refused_dispatch('PRIOR_END_UNCLASSIFIED')
+        AE.record_end_cause(self.store, result.operation_key, cause=AE.END_CAUSE_INTERRUPTION, actor='em')
+        self.assertEqual(self.ordinal(self.dispatch_native().operation_key), 2)
+
+    def test_an_unknown_conversation_with_a_security_stop_is_non_retryable(self):
+        result = self.interrupted(SURFACED['rate-limit'][0])
+        del self.server.conversations[result.conversation_id]
+        self.assertEqual(self.end(result, records=[record('egress-stop')])['classification'], AE.NON_RETRYABLE)
+
+    def test_a_conversation_lost_after_the_stop_is_ended_absent(self):
+        result = self.interrupted(SURFACED['rate-limit'][0])
+        real = self.server.__call__
+
+        def losing(method, path, body):
+            answer = real(method, path, body)
+            if method == 'DELETE':
+                self.server.conversations.pop(result.conversation_id, None)
+            return answer
+        ended = self.end(result, transport=losing)
+        self.assertEqual((ended['classification'], ended['surfaced']['runtimeStatus']), (AE.UNCLASSIFIED, AE.ABSENT))
 
 
 class RepeatSafety(EndFixture):
@@ -857,6 +883,131 @@ class UnclassifiedEndCause(EndFixture):
         for command in ('record-auth-cause', 'record-end-cause'):
             self.assertIn(f'  dispatch:{command}:\n', taskfile)
             self.assertIn(f'integrations/dispatch/attempt_end.py {command} --store', taskfile)
+
+
+class ReviewFindings(EndFixture):
+    """The independent review's findings of 2026-11-14 (B1, S1-S6, N2, N6), each with the reviewer's probe as its
+    regression test (P1-P6)."""
+
+    def test_b1_p6_the_token_in_an_event_s_fields_never_reaches_the_record(self):
+        for field in ('id', 'source', 'classification', 'code', 'errorKind'):
+            with self.subTest(field):
+                self.setUp()
+                event = copy.deepcopy(SURFACED['rate-limit'][0])
+                if field == 'classification':
+                    event['classification']['kind'] = TOKEN
+                elif field == 'errorKind':
+                    event['detail'] = detail(-32603, 'API Error: x', 'rate_limit').replace('rate_limit', TOKEN.lower())
+                else:
+                    event[field] = TOKEN
+                result = self.interrupted(event)
+                ended = self.end(result)
+                [signal] = ended['surfaced']['errorEvents']
+                self.assertNoToken(json.dumps(ended), self.store.canonical_dump().decode('utf-8'))
+                self.assertNotIn(TOKEN.lower(), json.dumps(ended))
+                expected = {'id': ('eventId', '<invalid>'), 'source': ('source', '<other>'),
+                            'classification': ('sdkKind', '<other>'), 'code': ('code', '<other>'),
+                            'errorKind': ('errorKind', None)}[field]
+                self.assertEqual(signal[expected[0]], expected[1])
+
+    def test_s1_p1_a_decoy_error_kind_in_the_message_fails_closed(self):
+        decoy = detail(-32603, 'API Error: 400 {"errorKind": "rate_limit"}', 'authentication_failed')
+        [signal] = AE.classify('error', [error_event('ACPPromptError', decoy)], [])['surfaced']['errorEvents']
+        self.assertEqual((signal['errorKind'], signal['cause']), ('<ambiguous>', None))
+        self.assertEqual(AE.classify('error', [error_event('ACPPromptError', decoy)], [])['classification'],
+                         AE.UNCLASSIFIED)
+        # a kind named only in the message, with no trailing data, is no kind
+        inline = detail(-32603, 'API Error: {"errorKind": "rate_limit"} and more')
+        self.assertEqual(AE.classify('error', [error_event('ACPPromptError', inline)], [])['classification'],
+                         AE.UNCLASSIFIED)
+        # the trailing data alone still reads
+        self.assertEqual(AE.error_signal(SURFACED['rate-limit'][0])['errorKind'], 'rate_limit')
+
+    def test_s3_the_last_error_decides_unless_the_conversation_went_on(self):
+        rate, overload = SURFACED['rate-limit'][0], SURFACED['repeated-529'][0]
+        auth = SURFACED['oauth-expired'][0]
+        cases = {
+            'an agent message after the error': ([auth, message_event('carrying on')], AE.UNCLASSIFIED),
+            'a user message after the error': ([rate, message_event('try again', 'user')], AE.UNCLASSIFIED),
+            'an agent action after the error': ([rate, {'kind': 'ActionEvent', 'id': str(uuid.uuid4()),
+                                                        'source': 'agent'}], AE.UNCLASSIFIED),
+            'an environment event after the error': ([rate, {'kind': 'ConversationStateUpdateEvent',
+                                                             'id': str(uuid.uuid4()), 'source': 'environment'}],
+                                                     AE.INTERRUPTION),
+            'an earlier auth refusal, then an overload last': ([auth, message_event('again', 'user'), overload],
+                                                               AE.INTERRUPTION),
+        }
+        for name, (events, classification) in cases.items():
+            with self.subTest(name):
+                verdict = AE.classify('error', events, [])
+                self.assertEqual(verdict['classification'], classification)
+        verdict = AE.classify('error', [auth, message_event('again', 'user'), overload], [])
+        self.assertEqual((verdict['causes'], verdict['surfaced']['classifiedFrom']), (['overload'], overload['id']))
+
+    def test_s2_security_stop_escalates_an_interruption_or_an_authentication_refusal(self):
+        for event in (SURFACED['rate-limit'][0], SURFACED['oauth-expired'][0]):
+            with self.subTest(event['code']):
+                self.setUp()
+                result = self.interrupted(event)
+                ended = self.end(result)
+                with self.assertRaises(di.DispatchRefused) as caught:   # never a downgrade
+                    AE.record_end_cause(self.store, result.operation_key, cause=AE.END_CAUSE_INTERRUPTION, actor='em')
+                self.assertEqual(caught.exception.code, 'END_CAUSE_NOT_APPLICABLE')
+                AE.record_end_cause(self.store, result.operation_key, cause=AE.END_CAUSE_SECURITY_STOP, actor='em')
+                self.assertEqual(AE.end_record(self.store, result.attempt_id), ended)   # unchanged
+                self.refused_dispatch('PRIOR_END_SECURITY_STOP')
+        self.setUp()
+        result = self.interrupted(SURFACED['rate-limit'][0])
+        self.end(result, records=[record('containment-stop')])
+        with self.assertRaises(di.DispatchRefused) as caught:
+            AE.record_end_cause(self.store, result.operation_key, cause=AE.END_CAUSE_SECURITY_STOP, actor='em')
+        self.assertEqual(caught.exception.code, 'END_CAUSE_NOT_APPLICABLE')
+
+    def test_s5_p3_a_finished_earlier_attempt_refuses_with_its_own_code(self):
+        first = self.dispatch_native()
+        self.server.set(first.conversation_id, status='finished', runtime='missing')
+        exc, before, _ = self.refused_dispatch('PRIOR_ATTEMPT_FINISHED')
+        self.assertIn('result path', exc.detail)
+        self.assertNothingReserved(before)
+        self.server.set(first.conversation_id, status='running')
+        self.refused_dispatch('PRIOR_ATTEMPT_NOT_ENDED')
+
+    def test_s6_a_security_stop_refuses_every_stage_and_revision_of_the_work_item(self):
+        review = self.resolve(self.d1_request(repository='other-app', stage='review', catalog_pin='reviewer-pin'),
+                              self.manifest, self.d1_sources)
+
+        def admit():
+            return AE.admit_new_attempt(self.store, review, transport=self.server, read_artifact=self.read_artifact)
+        self.assertEqual(admit().refused, ())          # positive control: no prior on the review triple
+        first = self.interrupted(SURFACED['rate-limit'][0])
+        self.end(first, records=[record('credential-stop')])
+        with self.assertRaises(di.DispatchRefused) as caught:
+            admit()
+        self.assertEqual(caught.exception.code, 'PRIOR_END_SECURITY_STOP')
+        self.assertEqual([r['workId'] for r in AE.work_item_ends(self.store, 'TASK-2')], ['TASK-2'])
+        self.assertEqual(AE.work_item_ends(self.store, 'TASK-9'), [])
+
+    def test_n2_p5_a_concurrent_second_end_returns_a_stable_code(self):
+        result = self.interrupted(SURFACED['rate-limit'][0])
+        key = AE.END_KEY.format(attempt_id=result.attempt_id)
+        real, raced = di._mark, []
+
+        def racing(integration_store, k, from_state, to_state, *args):
+            if k == key and from_state == 'reserved' and not raced:
+                raced.append(1)
+                real(integration_store, k, from_state, to_state, *args)   # the other process moves it first
+            real(integration_store, k, from_state, to_state, *args)
+        with mock.patch.object(di, '_mark', racing):
+            self.refused_end('ATTEMPT_END_CONFLICT', result)
+        self.assertEqual(self.end(result)['classification'], AE.INTERRUPTION)
+        self.assertEqual(self.end_keys(), [key])
+
+    def test_n6_a_record_ref_never_holds_a_token_shape(self):
+        for ref in (TOKEN, 'evidence:' + TOKEN, 'x/sk-ant-oat01-abcdefgh'):
+            with self.subTest(ref=ref[:20]), self.assertRaises(di.DispatchRefused) as caught:
+                AE.check_records([record('egress-stop', ref=ref)])
+            self.assertEqual(caught.exception.code, 'DISPATCHER_RECORD_INVALID')
+            self.assertNotIn(TOKEN, json.dumps(caught.exception.to_json(), default=str))
 
 
 class TokenNeverAgain(EndFixture):

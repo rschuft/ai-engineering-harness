@@ -296,11 +296,13 @@ REFUSALS = {
     'DISPATCHER_RECORD_INVALID': 'a dispatcher record given to the end is not {kind, code, ref} of its grammar',
     'CONVERSATION_STILL_RUNNING': 'the conversation still runs: it has not ended, so the end is not recorded as its '
                                   'end (an attempt the dispatcher stops is ended with the trigger attempt-stopped)',
-    'ATTEMPT_NOT_INTERRUPTED': 'the conversation finished and no interruption or security stop surfaced: its result '
+    'ATTEMPT_NOT_INTERRUPTED': 'the conversation finished and the dispatcher recorded no security stop: its result '
                                'is the result path\'s (E-05.4), and it is not ended here',
-    'ATTEMPT_END_CONFLICT': 'an end of the attempt was begun with another trigger or other dispatcher records: '
-                            'the end resumes only as it began',
-    'CONVERSATION_NOT_FOUND': 'the Agent Server does not know the attempt\'s conversation (404)',
+    'ATTEMPT_END_CONFLICT': 'an end of the attempt was begun with another trigger or other dispatcher records, or '
+                            'a concurrent end moved its journal first: the end resumes only as it began, and a '
+                            'repeat returns the one record',
+    'CONVERSATION_NOT_FOUND': 'the Agent Server does not know the conversation (404); the end then records it as '
+                              'absent and unclassified',
     'RUNTIME_NOT_STOPPED': 'the conversation\'s runtime was not stopped, or was not observed stopped (GET runtime '
                            'not missing): no end is recorded, and a repeat resumes the end',
     'CONVERSATION_UNOBSERVED': 'the conversation\'s recorded status or events could not be read whole (no answer, '
@@ -310,10 +312,13 @@ REFUSALS = {
     'PRIOR_CONVERSATION_RUNNING': 'an earlier attempt\'s conversation runtime is not stopped now: no new attempt',
     'PRIOR_CONVERSATION_UNOBSERVED': 'an earlier attempt\'s conversation runtime could not be observed: no new '
                                      'attempt',
-    'PRIOR_END_SECURITY_STOP': 'an earlier attempt ended non-retryable (a containment, credential or unexpected-egress '
-                               'stop): the leaf is stopped as a security stop and no new attempt is admitted',
-    'PRIOR_END_UNCLASSIFIED': 'an earlier attempt ended with no provider interruption surfaced: no new attempt is '
-                              'admitted on it',
+    'PRIOR_END_SECURITY_STOP': 'an attempt of the work item ended non-retryable (a containment, credential or '
+                               'unexpected-egress stop, or the engineering manager\'s security-stop): the leaf is '
+                               'stopped as a security stop and no new attempt is admitted on any design revision or '
+                               'stage of the work item',
+    'PRIOR_END_UNCLASSIFIED': 'an earlier attempt ended unclassified (no provider interruption surfaced, or its '
+                              'conversation was absent) and the engineering manager has not classified it '
+                              '(record-end-cause): no new attempt is admitted on it',
     'PRIOR_AUTH_CAUSE_UNRECORDED': 'an earlier attempt ended on a provider authentication refusal and the engineering '
                                    'manager has not recorded its cause: never an automatic retry',
     'PRIOR_AUTH_TOKEN_NOT_REPLACED': 'the provider refused the native token and no newer native-token entry receipt '
@@ -324,8 +329,12 @@ REFUSALS = {
     'AUTH_CAUSE_NOT_APPLICABLE': 'the attempt has no end record of an authentication refusal: no cause is recorded',
     'AUTH_CAUSE_CONFLICT': 'another cause is already recorded for the attempt\'s authentication refusal',
     'END_CAUSE_INVALID': 'the classification of an unclassified end is not interruption or security-stop',
-    'END_CAUSE_NOT_APPLICABLE': 'the attempt has no end record, or its end is already classified: only an '
-                                'unclassified end is classified by the engineering manager',
+    'END_CAUSE_NOT_APPLICABLE': 'the attempt has no end record the cause applies to: interruption classifies only an '
+                                'unclassified end; security-stop an unclassified end, or escalates an interruption '
+                                'or an authentication refusal (never a non-retryable end, never a downgrade)',
+    'PRIOR_ATTEMPT_FINISHED': 'an earlier attempt on the work item, design revision and stage finished its '
+                              'conversation and has no end record: its result is the result path\'s (E-05.4), and '
+                              'no new attempt is admitted on it here',
     'END_CAUSE_CONFLICT': 'another classification is already recorded for the attempt\'s unclassified end',
 }
 

@@ -13,15 +13,19 @@ confirmed native attempt whose conversation ended (trigger ``conversation-ended`
    ATTEMPT_NOT_CONFIRMED), and not of the brokered profile (ATTEMPT_PROFILE_BROKERED: E-05.6's ``end_attempt``);
 2. an end already recorded is returned as it is, with no call;
 3. on a first end, the conversation's recorded status and events are read: a conversation still ``running`` is not
-   ended as ``conversation-ended`` (CONVERSATION_STILL_RUNNING), and a ``finished`` one with no interruption and no
-   security stop is the result path's (ATTEMPT_NOT_INTERRUPTED); nothing is written then;
+   ended as ``conversation-ended`` (CONVERSATION_STILL_RUNNING), and a ``finished`` one with no security stop of the
+   dispatcher's is the result path's (ATTEMPT_NOT_INTERRUPTED); nothing is written then. A conversation the server
+   no longer knows (404) is ended as absent;
 4. the end journal ``dispatch/attempt/<attempt id>/end`` is reserved, then ``dispatched`` with the trigger and the
    dispatcher's records, before the runtime is stopped (``DELETE .../runtime``) and observed stopped (``GET
-   .../runtime`` answers ``missing``; RUNTIME_NOT_STOPPED otherwise);
+   .../runtime`` answers ``missing``; a 404 is ``absent``; RUNTIME_NOT_STOPPED otherwise);
 5. the conversation's recorded status and events are read again, whole (CONVERSATION_UNOBSERVED), and classified
-   (``classify``) with the dispatcher's own records;
+   (``classify``: the last ConversationErrorEvent, unless the conversation went on after it) with the dispatcher's
+   own records; an absent conversation is unclassified unless a security stop of the dispatcher's makes it
+   non-retryable;
 6. the journal is ``confirmed`` with the end record (``attempt-end/v1``: attempt, conversation, classification, the
-   surfaced codes and statuses, the token's fingerprint only). That is the one end record of the attempt.
+   surfaced codes and statuses, each of a closed set or grammar, the token's fingerprint only). That is the one end
+   record of the attempt; a concurrent end that loses a journal transition is ATTEMPT_END_CONFLICT.
 
 A repeat after a crash resumes the journal where it stopped (after the runtime stopped, it stops it again, which the
 server treats as done, and records); a repeat after the record returns it. The attempt's own receipt, the task's
@@ -29,22 +33,25 @@ Backlog.md and OpenSpec records are not touched, and nothing is handed to the re
 or workspace route.
 
 ``admit_new_attempt(store, resolved, transport=, read_artifact=)`` runs in ``dispatch_inputs.dispatch`` before the
-reservation. Every earlier attempt on the work item, design revision and stage that created a native conversation
-(confirmed, its dispatched transition carrying the native token's fingerprint) must have an end record
-(PRIOR_ATTEMPT_NOT_ENDED); none may have ended non-retryable (PRIOR_END_SECURITY_STOP, the leaf's security stop) or
-unclassified (PRIOR_END_UNCLASSIFIED); each runtime must be observed stopped now (PRIOR_CONVERSATION_RUNNING,
-PRIOR_CONVERSATION_UNOBSERVED); an authentication refusal needs the engineering manager's cause record
-(PRIOR_AUTH_CAUSE_UNRECORDED), and where the provider refused the token, a native-token entry receipt newer than
-that attempt's dispatch whose token is another (PRIOR_AUTH_TOKEN_NOT_REPLACED); the token then read must be that
-receipt's (NATIVE_TOKEN_NOT_REPLACED). The new attempt is the next ordinal, so it has a new conversation id: the
-token is never sent to an existing conversation.
+reservation. An end of the work item (any design revision or stage) that is non-retryable, or that the engineering
+manager escalated to a security stop, refuses every new attempt (PRIOR_END_SECURITY_STOP, the leaf's security stop).
+Every earlier attempt on the work item, design revision and stage that created a native conversation (confirmed, its
+dispatched transition carrying the native token's fingerprint) must have an end record (PRIOR_ATTEMPT_FINISHED when
+its conversation finished, PRIOR_ATTEMPT_NOT_ENDED otherwise); none may have ended unclassified without the
+engineering manager's classification (PRIOR_END_UNCLASSIFIED); each runtime must be observed stopped now
+(PRIOR_CONVERSATION_RUNNING, PRIOR_CONVERSATION_UNOBSERVED); an authentication refusal needs the engineering
+manager's cause record (PRIOR_AUTH_CAUSE_UNRECORDED), and where the provider refused the token, a native-token entry
+receipt newer than that attempt's dispatch whose token is another (PRIOR_AUTH_TOKEN_NOT_REPLACED); the token then
+read must be that receipt's (NATIVE_TOKEN_NOT_REPLACED). The new attempt is the next ordinal, so it has a new
+conversation id: the token is never sent to an existing conversation.
 
 ``record_auth_cause(store, operation_key, cause=, actor=)`` is the engineering manager's cause record, the smallest
 durable form: one integration-store receipt ``dispatch/attempt/<attempt id>/auth-cause`` (``auth-cause/v1``),
 written by the command ``record-auth-cause`` of this module. ``record_end_cause`` (command ``record-end-cause``) is
-the engineering manager's classification of an unclassified end, ``interruption`` or ``security-stop``, as one
-receipt ``dispatch/attempt/<attempt id>/end-cause`` (``end-cause/v1``); the end record never changes, and a new
-attempt after an unclassified end stays PRIOR_END_UNCLASSIFIED until it exists. Fingerprints only, here as
+the engineering manager's classification of an ended attempt as one receipt ``dispatch/attempt/<attempt id>/end-cause``
+(``end-cause/v1``): ``interruption`` for an unclassified end, ``security-stop`` for an unclassified end or as an
+escalation of an interruption or an authentication refusal, never a downgrade; the end record never changes, and a
+new attempt after an unclassified end stays PRIOR_END_UNCLASSIFIED until it exists. Fingerprints only, here as
 everywhere.
 
 Standard library only. It holds no token and reads no credential entry: the entry receipts it reads are the
@@ -119,6 +126,7 @@ CONVERSATION_ROUTE = '/api/conversations/{conversation_id}'
 EVENTS_ROUTE = '/api/conversations/{conversation_id}/events/search'
 RUNTIME_ROUTE = '/api/conversations/{conversation_id}/runtime'
 STOPPED = 'missing'          # ConversationRuntimeStatus.MISSING: no container runs or starts (registry.py runtime_info)
+ABSENT = 'absent'            # the Agent Server no longer knows the conversation (404): nothing of it runs
 EXECUTION_STATUSES = ('idle', 'running', 'paused', 'waiting_for_confirmation', 'finished', 'error', 'stuck',
                       'deleting')   # ConversationExecutionStatus (sdk conversation/state.py)
 MAX_EVENT_PAGES = 200        # 100 events a page (the route's default): 20,000 events, else CONVERSATION_UNOBSERVED
@@ -132,6 +140,18 @@ EVENT_CODE_RE = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,63}')
 AUTH_CODES = frozenset({'ACPAuthRequired', 'LLMAuthenticationError'})
 DETAIL_CODES = frozenset({'ACPPromptError', 'ACPInitError', 'ACPStartupTimeout', 'LLMRateLimitError'})
 ERROR_KIND_RE = re.compile(r'"errorKind":\s*"([a-z_]{1,64})"')
+TRAILING_KIND_RE = re.compile(r': \{"errorKind": "([a-z_]{1,64})"\}\Z')     # json.dumps of the adapter's data, last
+# The closed sets a recorded field is drawn from (anything else is '<other>'; B1): the SDK's SourceType (event/types.py
+# :7), its FailureKind (event/error_classification.py:9-17), the SDK codes of the determination record, and the
+# CLI's assistant error kinds (claude 2.1.220, ``ley`` @252017922 to @252027600).
+EVENT_SOURCES = frozenset({'agent', 'user', 'environment', 'hook'})
+SDK_KINDS = frozenset({'auth', 'quota', 'rate_limit', 'config', 'transient', 'agent_action', 'internal', 'unknown'})
+KNOWN_CODES = frozenset({'ACPAuthRequired', 'ACPPromptError', 'ACPInitError', 'ACPStartupTimeout', 'ACPSpawnError',
+                         'UsagePolicyRefusal', 'LLMAuthenticationError', 'LLMRateLimitError', 'MaxIterationsReached'})
+ERROR_KINDS = frozenset({'authentication_failed', 'oauth_org_not_allowed', 'rate_limit', 'billing_error',
+                         'server_error', 'invalid_request', 'model_not_found', 'unknown', '<ambiguous>'})
+# A later event of these kinds from the agent or the user shows the conversation went on after an error (S3).
+CONTINUATION_KINDS = frozenset({'MessageEvent', 'ActionEvent'})
 CONNECTION_LOST_RE = re.compile(r'Connection to the API was lost \(([A-Za-z_]{1,64})\)')
 UNABLE_TO_CONNECT_RE = re.compile(r'Unable to connect to API \(([A-Za-z_]{1,64})\)')
 STATUS_RE = re.compile(r'\b([45]\d\d)\b')
@@ -219,16 +239,17 @@ def end_cause_record(integration_store, attempt_id: str) -> dict | None:
 
 
 def effective_classification(integration_store, record: dict) -> str | None:
-    """An end record's classification, or for an unclassified end the engineering manager's: interruption or
-    non-retryable by its end-cause record, unclassified while none exists. The end record itself never changes."""
+    """An end record's classification as the engineering manager's end-cause record leaves it: security-stop makes
+    any end non-retryable (an escalation, never a downgrade), interruption classifies an unclassified end; without
+    one, the end record's own. The end record itself never changes."""
     classification = record.get('classification')
-    if classification != UNCLASSIFIED:
-        return classification
     cause = end_cause_record(integration_store, record.get('attemptId'))
-    if cause is None:
-        return UNCLASSIFIED
-    return {END_CAUSE_INTERRUPTION: INTERRUPTION, END_CAUSE_SECURITY_STOP: NON_RETRYABLE}.get(cause.get('cause'),
-                                                                                            UNCLASSIFIED)
+    held = None if cause is None else cause.get('cause')
+    if held == END_CAUSE_SECURITY_STOP:
+        return NON_RETRYABLE
+    if classification == UNCLASSIFIED and held == END_CAUSE_INTERRUPTION:
+        return INTERRUPTION
+    return classification
 
 
 # ---------------------------------------------------------------------------
@@ -243,35 +264,56 @@ def check_records(records) -> list[dict]:
         if not isinstance(record, Mapping) or set(record) != {'kind', 'code', 'ref'} \
                 or record['kind'] not in RECORD_KINDS or not isinstance(record['code'], str) \
                 or di.CODE_RE.fullmatch(record['code']) is None or not isinstance(record['ref'], str) \
-                or RECORD_REF_RE.fullmatch(record['ref']) is None:
+                or RECORD_REF_RE.fullmatch(record['ref']) is None \
+                or di._native_module().PREFIX.search(record['ref']) is not None:   # never a native-token shape
             raise _refused('DISPATCHER_RECORD_INVALID', f'dispatcher record {n} is not {{kind, code, ref}} of its '
                            f'grammar (kinds: {", ".join(RECORD_KINDS)})', index=n)
         out.append({'kind': record['kind'], 'code': record['code'], 'ref': record['ref']})
     return out
 
 
+def _closed(value, allowed) -> str | None:
+    """VALUE when it is one of ALLOWED, None when absent, else '<other>': a recorded field holds nothing the
+    conversation chose (B1: an event's fields are written where the agent's container can write)."""
+    if value is None:
+        return None
+    return value if isinstance(value, str) and value in allowed else '<other>'
+
+
+def _error_kind(detail: str) -> str | None:
+    """The adapter's error kind, read only from the detail's trailing data (``: {"errorKind": "<kind>"}`` at its end,
+    acp_agent.py _acp_error_detail); None when there is none, '<ambiguous>' when the detail names more than one
+    distinct kind anywhere (a decoy in the CLI's message: fail closed)."""
+    named = set(ERROR_KIND_RE.findall(detail))
+    if len(named) > 1:
+        return '<ambiguous>'
+    trailing = TRAILING_KIND_RE.search(detail)
+    return trailing.group(1) if trailing else None
+
+
 def error_signal(event: Mapping) -> dict:
-    """What one ConversationErrorEvent surfaced: its id, source and code, the adapter's error kind and the CLI's
-    connection code found in its detail, the status numbers its detail names (recorded, never classified alone),
-    the SDK's own classification kind, and the cause it is read as (or None). Nothing of the detail's text is kept."""
+    """What one ConversationErrorEvent surfaced: its id (a UUID), source, code, the adapter's error kind (from the
+    detail's trailing data only), the CLI's connection code, the status numbers the detail names (recorded, never
+    classified alone), the SDK's own classification kind, and the cause it is read as (or None). Every recorded
+    field is of a closed set or grammar; nothing of the detail's text is kept."""
     code = event.get('code') if isinstance(event.get('code'), str) else ''
     detail = event.get('detail') if isinstance(event.get('detail'), str) else ''
     sdk = event.get('classification')
-    signal = {'eventId': event.get('id') if isinstance(event.get('id'), str) else None,
-              'source': event.get('source') if isinstance(event.get('source'), str) else None,
-              'code': code if EVENT_CODE_RE.fullmatch(code) else '<invalid>',
-              'errorKind': None, 'connectionCode': None,
-              'statuses': sorted(set(STATUS_RE.findall(detail)))[:8],
-              'sdkKind': sdk.get('kind') if isinstance(sdk, Mapping) and isinstance(sdk.get('kind'), str) else None,
-              'cause': None}
-    kind = ERROR_KIND_RE.search(detail)
-    signal['errorKind'] = kind.group(1) if kind else None
+    event_id = event.get('id')
+    error_kind = _error_kind(detail)
     connection = CONNECTION_LOST_RE.search(detail) or UNABLE_TO_CONNECT_RE.search(detail)
-    signal['connectionCode'] = connection.group(1) if connection else None
+    conn = connection.group(1) if connection else None
+    signal = {'eventId': event_id if isinstance(event_id, str) and di.UUID_RE.fullmatch(event_id) else '<invalid>',
+              'source': _closed(event.get('source'), EVENT_SOURCES) or '<invalid>',
+              'code': _closed(code, KNOWN_CODES) or '<invalid>',
+              'errorKind': _closed(error_kind, ERROR_KINDS),
+              'connectionCode': _closed(conn, STREAM_CUT_CODES | PATH_LOST_CODES),
+              'statuses': sorted(set(STATUS_RE.findall(detail)))[:8],
+              'sdkKind': _closed(sdk.get('kind') if isinstance(sdk, Mapping) else None, SDK_KINDS),
+              'cause': None}
     if code in AUTH_CODES:
         signal['cause'] = AUTHENTICATION
-    elif code in DETAIL_CODES:
-        error_kind, conn = signal['errorKind'], signal['connectionCode']
+    elif code in DETAIL_CODES and error_kind != '<ambiguous>':
         if code == 'LLMRateLimitError':
             signal['cause'] = USAGE_LIMIT
         elif error_kind in AUTH_KINDS:
@@ -288,21 +330,32 @@ def error_signal(event: Mapping) -> dict:
     return signal
 
 
+def _continued(event) -> bool:
+    """Whether EVENT shows the conversation went on: an agent or user message or action."""
+    return isinstance(event, Mapping) and event.get('kind') in CONTINUATION_KINDS \
+        and event.get('source') in ('agent', 'user')
+
+
 def classify(execution_status, events, records) -> dict:
     """The classification of an attempt's end from the conversation's recorded status (EXECUTION_STATUS) and events
     (EVENTS, the event search's items) and the dispatcher's own records (RECORDS, check_records'): a security stop
-    of the dispatcher's is non-retryable whatever the conversation says; else an authentication signal is an
-    authentication refusal (an interruption that needs the Owner); else a usage or rate limit, an overload, a cut
-    stream or a lost path (the conversation's, or the dispatcher's own provider-path record) is an interruption;
-    else unclassified. Only ConversationErrorEvents are read as signals: no agent message, observation or HTTP
-    status alone classifies anything."""
-    signals = [error_signal(e) for e in events if isinstance(e, Mapping) and e.get('kind') == ERROR_EVENT]
+    of the dispatcher's is non-retryable whatever the conversation says; else the conversation's LAST
+    ConversationErrorEvent, when no later agent or user message or action shows the conversation went on, decides:
+    an authentication signal is an authentication refusal (an interruption that needs the Owner), a usage or rate
+    limit, an overload, a cut stream or a lost path an interruption; else the dispatcher's own provider-path record
+    is an interruption; else unclassified. Only ConversationErrorEvents are read as signals: no agent message,
+    observation or HTTP status alone classifies anything."""
+    indexed = [(n, e) for n, e in enumerate(events) if isinstance(e, Mapping) and e.get('kind') == ERROR_EVENT]
+    signals = [error_signal(e) for _, e in indexed]
+    last = None
+    if indexed and not any(_continued(e) for e in events[indexed[-1][0] + 1:]):
+        last = signals[-1]
     security = sorted({NON_RETRYABLE_RECORDS[r['kind']] for r in records if r['kind'] in NON_RETRYABLE_RECORDS})
-    interrupted = [s['cause'] for s in signals if s['cause'] in INTERRUPTION_CAUSES] + \
+    interrupted = ([last['cause']] if last is not None and last['cause'] in INTERRUPTION_CAUSES else []) + \
                   [INTERRUPTION_RECORDS[r['kind']] for r in records if r['kind'] in INTERRUPTION_RECORDS]
     if security:
         classification, causes = NON_RETRYABLE, security
-    elif any(s['cause'] == AUTHENTICATION for s in signals):
+    elif last is not None and last['cause'] == AUTHENTICATION:
         classification, causes = AUTH_REFUSAL, [AUTHENTICATION]
     elif interrupted:
         classification, causes = INTERRUPTION, sorted(set(interrupted))
@@ -312,7 +365,8 @@ def classify(execution_status, events, records) -> dict:
             'retryable': classification in (INTERRUPTION, AUTH_REFUSAL),
             'needsOwner': classification == AUTH_REFUSAL,
             'securityStop': classification == NON_RETRYABLE,
-            'surfaced': {'executionStatus': execution_status, 'errorEvents': signals,
+            'surfaced': {'executionStatus': _closed(execution_status, EXECUTION_STATUSES), 'errorEvents': signals,
+                         'classifiedFrom': None if last is None else last['eventId'],
                          'dispatcherRecords': [dict(r) for r in records]}}
 
 
@@ -392,13 +446,16 @@ def runtime_status(client, conversation_id: str, code: str) -> str | None:
 def stop_runtime(client, conversation_id: str) -> str:
     """Stop the runtime (DELETE .../runtime: the container is stopped and the conversation's state kept;
     docker_runtime/routers.py release_runtime answers 204, also when nothing runs) and observe it stopped (GET
-    .../runtime: ``missing``). RUNTIME_NOT_STOPPED or CONVERSATION_NOT_FOUND otherwise."""
+    .../runtime: ``missing``), or ``absent`` when the server no longer knows the conversation (404: nothing of it
+    runs). RUNTIME_NOT_STOPPED otherwise."""
     status, _ = _answer(client, 'DELETE', RUNTIME_ROUTE, conversation_id, 'RUNTIME_NOT_STOPPED', 'the runtime stop')
     if status == 404:
-        raise _refused('CONVERSATION_NOT_FOUND', f'the Agent Server does not know conversation {conversation_id}')
+        return ABSENT
     if status != 204:
         raise _refused('RUNTIME_NOT_STOPPED', f'the runtime stop answered {status}', status=status)
     observed = runtime_status(client, conversation_id, 'RUNTIME_NOT_STOPPED')
+    if observed is None:
+        return ABSENT
     if observed != STOPPED:
         raise _refused('RUNTIME_NOT_STOPPED', f'the runtime is observed {observed!r}, not {STOPPED!r}',
                        runtime_status=observed)
@@ -430,7 +487,12 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
     begun = {'trigger': trigger, 'dispatcherRecords': records}
     client = _client(resolved, transport)(read_artifact)
     if held is None:
-        execution, events = observe(client, conversation_id)   # read only: nothing is written on a refusal here
+        try:
+            execution, events = observe(client, conversation_id)   # read only: nothing is written on a refusal here
+        except DispatchRefused as refusal:
+            if refusal.code != 'CONVERSATION_NOT_FOUND':
+                raise
+            execution, events = None, []          # S4: ended as absent, unclassified (record-end-cause decides)
         if trigger == CONVERSATION_ENDED and execution == 'running':
             raise _refused('CONVERSATION_STILL_RUNNING', f'conversation {conversation_id} is running: it has not ended',
                            execution_status=execution)
@@ -440,9 +502,9 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
         intent = {'format': END_JOURNAL_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
                   'conversationId': conversation_id}
         integration_store.reserve(key, intent, actor=actor)
-        di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'stop-runtime', begun)
+        _mark_end(integration_store, key, 'reserved', 'dispatched', actor, 'stop-runtime', begun)
     elif held.state == 'reserved':   # a crash between the reservation and its dispatch: nothing was stopped yet
-        di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'stop-runtime', begun)
+        _mark_end(integration_store, key, 'reserved', 'dispatched', actor, 'stop-runtime', begun)
     elif held.state == 'dispatched':
         if _detail(integration_store, key, 'dispatched') != begun:
             raise _refused('ATTEMPT_END_CONFLICT', f'the end of attempt {attempt_id} began with another trigger or '
@@ -450,8 +512,17 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
     else:
         raise _refused('ATTEMPT_END_CONFLICT', f'the end journal of attempt {attempt_id} is {held.state}')
     runtime = stop_runtime(client, conversation_id)
-    execution, events = observe(client, conversation_id)
-    verdict = classify(execution, events, records)
+    try:
+        execution, events = observe(client, conversation_id)
+    except DispatchRefused as refusal:
+        if refusal.code != 'CONVERSATION_NOT_FOUND':
+            raise
+        execution, events, runtime = None, [], ABSENT
+    if runtime == ABSENT:   # S4: nothing to read; only a security stop of the dispatcher's still classifies it
+        verdict = classify(execution, events, [r for r in records if r['kind'] in NON_RETRYABLE_RECORDS])
+        verdict['surfaced']['dispatcherRecords'] = [dict(r) for r in records]
+    else:
+        verdict = classify(execution, events, records)
     identity = integration_store.attempt_identity(operation_key).identity
     record = {'format': END_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
               'conversationId': conversation_id, 'executionRef': f'{di.EXECUTION_REF_PREFIX}{conversation_id}',
@@ -463,8 +534,17 @@ def end_interrupted_attempt(integration_store, operation_key: str, *, transport,
               'surfaced': {**verdict['surfaced'], 'runtimeStatus': runtime},
               'conversationStopped': True, 'resultHandedOn': False,
               'tokenFingerprint': native_fingerprint(integration_store, operation_key)}
-    di._mark(integration_store, key, 'dispatched', 'confirmed', actor, verdict['classification'], record)
+    _mark_end(integration_store, key, 'dispatched', 'confirmed', actor, verdict['classification'], record)
     return _detail(integration_store, key, 'confirmed')
+
+
+def _mark_end(integration_store, key: str, from_state: str, to_state: str, actor: str, reason: str, detail) -> None:
+    """A transition of the end journal; a concurrent end that moved it first is ATTEMPT_END_CONFLICT (N2), and a
+    repeat then resumes or returns the one record."""
+    try:
+        di._mark(integration_store, key, from_state, to_state, actor, reason, detail)
+    except store.IllegalTransition:
+        raise _refused('ATTEMPT_END_CONFLICT', f'another end of the attempt moved its journal first ({key})') from None
 
 
 # ---------------------------------------------------------------------------
@@ -512,21 +592,23 @@ def _write_cause(integration_store, key: str, intent: dict, actor: str, conflict
 
 
 def record_end_cause(integration_store, operation_key: str, *, cause: str, actor: str) -> dict:
-    """The engineering manager's classification of an unclassified end: one receipt
+    """The engineering manager's classification of an ended attempt: one receipt
     ``dispatch/attempt/<attempt id>/end-cause`` (``end-cause/v1``), beside the end record, which never changes. CAUSE
-    is ``interruption`` (a new attempt is admitted as after any interruption's end) or ``security-stop`` (never a new
-    attempt: PRIOR_END_SECURITY_STOP); END_CAUSE_INVALID otherwise. Only for an end record that is unclassified
-    (END_CAUSE_NOT_APPLICABLE for no end record or a classified one); the same cause again returns it, another is
-    END_CAUSE_CONFLICT."""
+    is ``interruption`` (only for an unclassified end: a new attempt is admitted as after any interruption's end) or
+    ``security-stop`` (for an unclassified end, and as an escalation of an interruption or an authentication
+    refusal: never a new attempt on the work item, PRIOR_END_SECURITY_STOP); it never downgrades anything. Otherwise
+    END_CAUSE_INVALID or END_CAUSE_NOT_APPLICABLE; the same cause again returns it, another is END_CAUSE_CONFLICT."""
     if cause not in END_CAUSES:
         raise _refused('END_CAUSE_INVALID', f'the cause must be one of {", ".join(END_CAUSES)}')
     if integration_store.get(operation_key) is None or integration_store.attempt_identity(operation_key) is None:
         raise _refused('RESERVATION_INVALID', f'no dispatch reservation under {operation_key!r}')
     attempt_id = store.attempt_id_for(operation_key)
     ended = end_record(integration_store, attempt_id)
-    if ended is None or ended.get('classification') != UNCLASSIFIED:
-        raise _refused('END_CAUSE_NOT_APPLICABLE', f'attempt {attempt_id} has no unclassified end record'
-                       + ('' if ended is None else f' (it ended {ended.get("classification")})'))
+    applicable = (UNCLASSIFIED,) if cause == END_CAUSE_INTERRUPTION else (UNCLASSIFIED, INTERRUPTION, AUTH_REFUSAL)
+    if ended is None or ended.get('classification') not in applicable:
+        raise _refused('END_CAUSE_NOT_APPLICABLE', f'attempt {attempt_id} has no end record {cause} applies to (an '
+                       'unclassified end; security-stop also escalates an interruption or an authentication refusal)'
+                       + ('' if ended is None else f'; it ended {ended.get("classification")}'))
     key = END_CAUSE_KEY.format(attempt_id=attempt_id)
     intent = {'format': END_CAUSE_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
               'conversationId': store.conversation_id_for(operation_key), 'cause': cause,
@@ -577,10 +659,37 @@ def entry_receipts(integration_store) -> list[tuple[int, str]]:
     return sorted(out)
 
 
+def work_item_ends(integration_store, work_id: str) -> list[dict]:
+    """Every end record of the work item WORK_ID, whatever its design revision and stage (S6)."""
+    out = []
+    for held in integration_store.attempts(['confirmed']):
+        key = held.operation_key
+        if key.startswith('dispatch/attempt/') and key.endswith('/end'):
+            record = _detail(integration_store, key, 'confirmed')
+            if isinstance(record, dict) and record.get('format') == END_FORMAT and record.get('workId') == work_id:
+                out.append(record)
+    return out
+
+
+def _finished(client, conversation_id: str) -> bool:
+    """Whether the conversation's recorded status is ``finished`` (S5); False when it cannot be read."""
+    try:
+        status, body = _answer(client, 'GET', CONVERSATION_ROUTE, conversation_id, 'CONVERSATION_UNOBSERVED',
+                               'the conversation')
+    except DispatchRefused:
+        return False
+    return status == 200 and isinstance(body, Mapping) and body.get('execution_status') == 'finished'
+
+
 def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) -> Admission:
     """The admission rule of a new attempt for the same task (the module docstring), before the reservation. An
     attempt with no earlier native conversation on its triple is admitted with no call."""
     identity = resolved.attempt_identity()
+    for record in work_item_ends(integration_store, identity.work_id):     # S6: the whole work item
+        if effective_classification(integration_store, record) == NON_RETRYABLE:
+            raise _refused('PRIOR_END_SECURITY_STOP', f'attempt {record.get("attemptId")} of work item '
+                           f'{identity.work_id} ended non-retryable: a security stop for every design revision and '
+                           'stage of the work item', attempt_id=record.get('attemptId'))
     prior = []
     for claim in integration_store.claims(identity.work_id, identity.design_revision, identity.stage):
         held = integration_store.get(claim.operation_key)
@@ -591,10 +700,15 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
         prior.append(claim)
     if not prior:
         return Admission()
-    ended = []
+    ended, client = [], None
     for claim in prior:
         record = end_record(integration_store, claim.attempt_id)
         if record is None:
+            client = client or _client(resolved, transport)(read_artifact)
+            if _finished(client, store.conversation_id_for(claim.operation_key)):
+                raise _refused('PRIOR_ATTEMPT_FINISHED', f'attempt {claim.attempt_id} (ordinal '
+                               f'{claim.identity.ordinal}) finished its conversation: its result is the result path\'s '
+                               '(E-05.4), and no new attempt is admitted on it here', attempt_id=claim.attempt_id)
             raise _refused('PRIOR_ATTEMPT_NOT_ENDED', f'attempt {claim.attempt_id} (ordinal {claim.identity.ordinal}) '
                            'has no end record', attempt_id=claim.attempt_id)
         ended.append((claim, record))
@@ -610,7 +724,6 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
             raise _refused('PRIOR_END_UNCLASSIFIED', f'attempt {claim.attempt_id} ended {record.get("classification")} '
                            'and the engineering manager has not classified it (record-end-cause)',
                            attempt_id=claim.attempt_id)
-    client = None
     for claim, record in ended:
         if client is None:
             client = _client(resolved, transport)(read_artifact)
