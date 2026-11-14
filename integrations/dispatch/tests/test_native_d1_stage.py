@@ -33,6 +33,7 @@ built at run time. No broker, guest, provider, model or credential store is used
 """
 from pathlib import Path
 import ast
+import base64
 import contextlib
 import copy
 import dataclasses
@@ -157,6 +158,7 @@ class NativeFixture(d1.D1Fixture):
         for text in texts:
             for needle in (TOKEN, TOKEN[len(NS.PREFIX):]):
                 self.assertNotIn(needle, text)
+            self.assertFalse(cs.native_holds(text, TOKEN), 'a text holds an encoded copy of the token')
 
 
 class Accepts(NativeFixture):
@@ -284,13 +286,53 @@ class Refusals(NativeFixture):
             ('NATIVE_CONFIG_DIR_RELOCATED', 'the isolation missing', drop(('agent_settings',
                                                                            'acp_isolate_data_dir'))),
             ('NATIVE_CONFIG_DIR_RELOCATED', 'CLAUDE_CONFIG_DIR named', put(('tags', 'CLAUDE_CONFIG_DIR'), '/data')),
+            # review B1: a fifth secret, or a seeded configuration directory, through the SDK's other channels
+            ('NATIVE_AGENT_CONTEXT_FORBIDDEN', 'agent_context.secrets NODE_OPTIONS', put(
+                ('agent_settings', 'agent_context'), {'secrets': {'NODE_OPTIONS': '--require=/workspace/x.js'}})),
+            ('NATIVE_AGENT_CONTEXT_FORBIDDEN', 'agent_context.secrets NO_PROXY', put(
+                ('agent_settings', 'agent_context'), {'secrets': {'NO_PROXY': '*'}})),
+            ('NATIVE_AGENT_CONTEXT_FORBIDDEN', 'agent_context.secrets HOME', put(
+                ('agent_settings', 'agent_context'), {'secrets': {'HOME': '/workspace/home'}})),
+            ('NATIVE_AGENT_CONTEXT_FORBIDDEN', 'agent_context.secrets a StaticSecret', put(
+                ('agent_settings', 'agent_context'), {'secrets': {'OH_X': {'kind': 'StaticSecret', 'value': 'v'}}})),
+            ('NATIVE_AGENT_CONTEXT_FORBIDDEN', 'agent_context with skills only', put(
+                ('agent_settings', 'agent_context'), {'skills': []})),
+            ('NATIVE_AGENT_CONTEXT_FORBIDDEN', 'agent_context empty', put(('agent_settings', 'agent_context'), {})),
+            ('NATIVE_FILE_SECRETS_FORBIDDEN', 'acp_file_secrets seeding the configuration directory', put(
+                ('agent_settings', 'acp_file_secrets'), [{'secret_name': 'HTTPS_PROXY', 'filename': '.claude.json',
+                                                         'env_var': 'SEED_PATH', 'subdir': 'claude-code'}])),
+            ('NATIVE_FILE_SECRETS_FORBIDDEN', 'acp_file_secrets writing the token to disk', put(
+                ('agent_settings', 'acp_file_secrets'), [{'secret_name': NAMES[0], 'filename': 't',
+                                                         'env_var': 'T_PATH', 'subdir': 'claude-code'}])),
+            ('NATIVE_FILE_SECRETS_FORBIDDEN', 'acp_file_secrets null', put(('agent_settings', 'acp_file_secrets'), None)),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'an unknown member', put(('agent_settings', 'acp_env'), {})),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'a prompt timeout', put(('agent_settings', 'acp_prompt_timeout'), 5.0)),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'a startup timeout', put(('agent_settings', 'acp_startup_timeout'), 9)),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'verification', put(('agent_settings', 'verification'), {})),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'schema_version', put(('agent_settings', 'schema_version'), 1)),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'a session mode', put(('agent_settings', 'acp_session_mode'),
+                                                                     'bypassPermissions')),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'a model with a space', put(('agent_settings', 'acp_model'), 'a b')),
+            ('NATIVE_AGENT_SETTING_FORBIDDEN', 'no model', drop(('agent_settings', 'acp_model'))),
+            # review S1: encoded copies (the outbound search's own needles)
+            ('NATIVE_TOKEN_OUTSIDE_SECRET', 'base64 of the token in a tag', put(
+                ('tags', 'aieh'), base64.b64encode(TOKEN.encode()).decode())),
+            ('NATIVE_TOKEN_OUTSIDE_SECRET', 'base64url of its body in a tag', put(
+                ('tags', 'aieh'), base64.urlsafe_b64encode(body_of.encode()).decode())),
+            ('NATIVE_TOKEN_OUTSIDE_SECRET', 'base64 at another alignment', put(
+                ('tags', 'aieh'), base64.b64encode(b'u:' + TOKEN.encode()).decode())),
+            ('NATIVE_TOKEN_OUTSIDE_SECRET', 'hex in a tag', put(('tags', 'aieh'), TOKEN.encode().hex())),
+            ('NATIVE_TOKEN_OUTSIDE_SECRET', 'HEX as a tag key', put(('tags', TOKEN.encode().hex().upper()), 'x')),
+            ('NATIVE_TOKEN_OUTSIDE_SECRET', 'base64 as a tag key', put(
+                ('tags', base64.b64encode(TOKEN.encode()).decode()), 'x')),
         ]
 
     def test_every_other_create_is_refused_at_admission_and_at_send(self):
         _, resolved, admitted = self.reserved_native()
         cases = self.cases()
-        self.assertEqual({code for code, _, _ in cases} | {'NATIVE_TOKEN_NOT_HELD', 'NATIVE_TUNNEL_UNDECLARED'},
-                         set(cs.NATIVE_MEANINGS))
+        self.assertEqual({code for code, _, _ in cases} | {'NATIVE_TOKEN_NOT_HELD', 'NATIVE_TUNNEL_UNDECLARED',
+                                                           'NATIVE_BODY_FIELD_FORBIDDEN'},
+                         set(cs.NATIVE_MEANINGS))   # the body field code: SharedCheck (the D1 allowlist comes first)
         for code, name, change in cases:
             with self.subTest(code=code, case=name):
                 body = self.native_body(resolved)
@@ -331,6 +373,12 @@ class Refusals(NativeFixture):
             'NATIVE_MCP_FORBIDDEN': [dict(template=template_with(mcp_config={'mcpServers': {'x': {}}}))],
             'NATIVE_ACP_COMMAND_NOT_PINNED': [dict(template=template_with(acp_command=['claude']))],
             'NATIVE_CONFIG_DIR_RELOCATED': [dict(template=template_with(acp_isolate_data_dir=False))],
+            'NATIVE_AGENT_CONTEXT_FORBIDDEN': [dict(template=template_with(agent_context={
+                'secrets': {'NODE_OPTIONS': '--require=/workspace/x.js', 'SEED': '{}'}}))],
+            'NATIVE_FILE_SECRETS_FORBIDDEN': [dict(template=template_with(acp_file_secrets=[
+                {'secret_name': 'SEED', 'filename': '.claude.json', 'env_var': 'SEED_PATH',
+                 'subdir': 'claude-code'}]))],
+            'NATIVE_AGENT_SETTING_FORBIDDEN': [dict(template=template_with(acp_prompt_timeout=5.0))],
         }
         for code, variants in cases.items():
             for n, variant in enumerate(variants):
@@ -448,6 +496,63 @@ class SharedCheck(NativeFixture):
             cs.check_native_secrets(broken, endpoint=PROXY, refused=lambda code, detail: ValueError(code))
         self.assertEqual(str(caught.exception), 'NATIVE_SWITCH_NOT_DECLARED')
 
+    def test_the_shared_check_is_a_closed_world(self):
+        """Review B1, for E-05.11's callers too (the D1 path's own allowlist refuses top-level fields first): every
+        request field the pinned SDK forwards beyond the run shape, and every agent_settings member outside it."""
+        _, resolved, admitted = self.reserved_native()
+        wire = di._wire_body(admitted.body, di.stage_inference(admitted, resolved=resolved), admitted.inference)
+
+        def code_of(body):
+            try:
+                cs.check_native_secrets(body, endpoint=PROXY, refused=di.DispatchRefused)
+            except di.DispatchRefused as refusal:
+                self.assertNoToken(*secrets_tests.SecretsFixture.texts_of(self, refusal))
+                return refusal.code
+            return 'ADMITTED'
+        self.assertEqual(code_of(wire), 'ADMITTED')
+        for field in ('agent_launch_additions', 'plugins', 'hook_config', 'agent_definitions', 'client_tools',
+                      'tool_module_qualnames', 'agent_profile_id', 'initial_message', 'prompt', 'worktree',
+                      'confirmation_policy', 'max_iterations', 'agent', 'unknown'):
+            with self.subTest(field=field):
+                self.assertEqual(code_of(dict(wire, **{field: None})), 'NATIVE_BODY_FIELD_FORBIDDEN')
+        for member, value in (('acp_prompt_timeout', 1.0), ('verification', None), ('x', 1), ('acp_model', None),
+                              ('acp_session_mode', 'default')):
+            with self.subTest(member=member):
+                body = copy.deepcopy(wire)
+                body['agent_settings'][member] = value
+                self.assertEqual(code_of(body), 'NATIVE_AGENT_SETTING_FORBIDDEN')
+        for member, value in (('agent_context', None), ('acp_file_secrets', [])):   # the admitted absent forms
+            with self.subTest(admitted=member):
+                body = copy.deepcopy(wire)
+                body['agent_settings'][member] = value
+                self.assertEqual(code_of(body), 'ADMITTED')
+        tokenized = copy.deepcopy(wire)   # a field named by an encoded copy of the token: withheld, not echoed
+        tokenized[base64.b64encode(TOKEN.encode()).decode()] = 1
+        self.assertEqual(code_of(tokenized), 'NATIVE_TOKEN_OUTSIDE_SECRET')
+
+    def test_the_native_path_never_loads_the_broker(self):
+        """Review N4: the native check, the read, the send, a refusal's scrubbing and the records run with the
+        broker module and the D1 brokered stage's inference modules unreachable."""
+        def unreachable(*args, **kwargs):
+            raise AssertionError('the native path reached the broker module')
+        server = cc.FakeAgentServer()
+        with mock.patch.object(cs, 'broker', unreachable), mock.patch.object(di, '_inference_modules', unreachable):
+            result = self.run_native(server)
+            _, resolved, admitted = self.reserved_native()
+            record = admitted.to_json()
+            body = self.native_body(resolved)
+            body['tags']['aieh'] = base64.b64encode(TOKEN.encode()).decode()
+            refusal = self.assertDenied('NATIVE_TOKEN_OUTSIDE_SECRET', self.send, self.tampered(admitted, body),
+                                        resolved)
+            body = self.native_body(resolved)
+            body['tags'][TOKEN] = 'x'
+            refusal2 = self.assertDenied('NATIVE_TOKEN_OUTSIDE_SECRET', self.send, self.tampered(admitted, body),
+                                         resolved)
+        self.assertEqual(len(server.creates), 1)
+        self.assertNoToken(json.dumps(record), json.dumps(result.to_json()),
+                           *secrets_tests.SecretsFixture.texts_of(self, refusal),
+                           *secrets_tests.SecretsFixture.texts_of(self, refusal2))
+
     def test_the_native_set_is_declared_once(self):
         """The four names, the spelling and the tunnel class live in the shared module only."""
         for path in sorted((HERE.parent).glob('*.py')):
@@ -495,6 +600,7 @@ class ReadOrder(NativeFixture):
             'NATIVE_TOKEN_MISSING': NS.ObservedProvider({'AIEH model provider': ('anthropic', API_KEY)}),
             'NATIVE_TOKEN_NOT_SHAPED': NS.ObservedProvider({NT.ENTRY: (NT.ENTRY_USER, malformed)}),
             'NATIVE_TOKEN_UNAVAILABLE': NS.ObservedProvider(error=OSError('locked')),
+            'NATIVE_ENTRY_USER_MISMATCH': NS.ObservedProvider({NT.ENTRY: ('someone-else', TOKEN)}),
         }
         for code, provider in cases.items():
             with self.subTest(code):

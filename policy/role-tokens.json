@@ -814,8 +814,7 @@
           "findings": [
             "fd-acp-provider-auth"
           ]
-        }
-     ,
+        },
         {
           "credential": "cred-native-claude-code-token",
           "triggers": [
@@ -1024,6 +1023,7 @@
         "cred-uac-consent",
         "cred-owner-github",
         "cred-llm-provider-key",
+        "cred-native-claude-code-token",
         "op-release-signing-deploy",
         "cred-runner-registration",
         "cap-push-proposal-branch",

@@ -100,6 +100,7 @@ class Read(unittest.TestCase):
             'NATIVE_TOKEN_MISSING': NS.ObservedProvider({'other': ('u', TOKEN)}),
             'NATIVE_TOKEN_UNAVAILABLE': NS.ObservedProvider(error=OSError('the store says ' + TOKEN)),
             'NATIVE_TOKEN_NOT_SHAPED': NS.ObservedProvider({NT.ENTRY: (NT.ENTRY_USER, malformed)}),
+            'NATIVE_ENTRY_USER_MISMATCH': NS.ObservedProvider({NT.ENTRY: ('anthropic', TOKEN)}),   # review N5
         }
         for code, provider in cases.items():
             with self.subTest(code):

@@ -284,6 +284,8 @@ REFUSALS = {
                             'nothing was created',
     'NATIVE_TOKEN_UNAVAILABLE': 'the native profile\'s token entry could not be read: no credential provider was '
                                 'given, or it failed',
+    'NATIVE_ENTRY_USER_MISMATCH': 'the native profile\'s token entry is not of the entry command\'s user: it is '
+                                  'not read as the Owner\'s token',
     'NATIVE_SECRET_NOT_FROM_ENTRY': 'the admitted create\'s CLAUDE_CODE_OAUTH_TOKEN is not the slot the held native '
                                     'token fills at the send: a token value in the admitted body is never sent',
 }
@@ -1734,7 +1736,11 @@ class AdmittedCreate:
                 return {clean(key): clean(value) for key, value in node.items()}
             if isinstance(node, list):
                 return [clean(value) for value in node]
-            return secrets_check.redact(node, held) if isinstance(node, str) else node
+            if not isinstance(node, str):
+                return node
+            if self.inference is None or isinstance(self.inference, InferenceGrant):
+                return secrets_check.redact(node, held)
+            return secrets_check.redact_native(node, held)   # the native profile: broker-free (E-05.9)
         record = {'format': ADMITTED_FORMAT, 'operation_key': self.operation_key,
                   'conversation_id': self.conversation_id, 'route': {'method': self.method, 'path': self.path},
                   'body': clean(self.body), 'mounts': self.mounts,
@@ -1792,22 +1798,26 @@ SCRUBBED_DETAIL = '<withheld: the text held a part of the attempt token>'
 _OUTSIDE_TOKEN_ALPHABET = re.compile(r'[^A-Za-z0-9_-]')
 
 
-def _scrubbed(refusal: DispatchRefused, token: str | None) -> DispatchRefused:
+def _scrubbed(refusal: DispatchRefused, token: str | None, *, native: bool = False) -> DispatchRefused:
     """A new refusal of REFUSAL's code, with no ``__context__`` or ``__cause__`` (the caller raises it outside the
     ``except`` that caught REFUSAL), whose detail and context strings are cleaned: a string that, with every
     character outside the token's alphabet removed, still holds a part of the held TOKEN of
     ``create_secrets.FRAGMENT`` or more characters is replaced whole by SCRUBBED_DETAIL (a token split by dots or
     spaces is caught); in any other, every word that holds an attempt token, a part of TOKEN or a provider key's
     shape is redacted (``create_secrets.redact``, as the shared check redacts its own). A refusal of a body that
-    held the token reaches the store and the caller without it, whichever check refused it."""
+    held the token reaches the store and the caller without it, whichever check refused it. On the native profile
+    (NATIVE, E-05.9) a string that holds an encoded copy of the token is withheld too, and the cleaning is
+    ``create_secrets.redact_native`` (no broker module), also when no token is held."""
     parts = secrets_check.fragments(token)
+    needles = secrets_check.native_needles(token) if native else ()
 
     def clean(value):
         if isinstance(value, str):
             joined = _OUTSIDE_TOKEN_ALPHABET.sub('', value)
-            if any(part in joined for part in parts):
+            if any(part in joined for part in parts) or (native and secrets_check.native_holds(
+                    value, token, needles=needles, parts=parts)):
                 return SCRUBBED_DETAIL
-            return secrets_check.redact(value, token)
+            return secrets_check.redact_native(value, token) if native else secrets_check.redact(value, token)
         if isinstance(value, Mapping):
             return {clean(str(k)): clean(v) for k, v in value.items()}
         if isinstance(value, (list, tuple)):
@@ -1891,7 +1901,7 @@ def _admitted_checks(admitted: AdmittedCreate, *, resolved: ResolvedInputs, admi
             caught = refusal
         if caught is not None:   # raised outside the except: the scrubbed refusal holds no chain to the original
             held = admitted.inference.token() if admitted.inference is not None and admitted.inference.open else None
-            scrubbed, caught = _scrubbed(caught, held), None
+            scrubbed, caught = _scrubbed(caught, held, native=isinstance(inference, StageNative)), None
             raise scrubbed
     expected = _binds_for(admission['mounts']['binds'], conversation_id.replace('-', ''))
     try:

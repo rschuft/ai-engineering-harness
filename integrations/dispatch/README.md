@@ -433,7 +433,8 @@ grammar both state for the provider's credentials (the sources are in `native_to
 **The read.** `dispatch(..., native_credentials=<provider>)`: after `admit` has admitted every other
 input (the tunnel endpoint and the template's agent block included), and only then,
 `native_token.read` asks the provider for that one entry, once (`NATIVE_TOKEN_MISSING`,
-`NATIVE_TOKEN_UNAVAILABLE`, `NATIVE_TOKEN_NOT_SHAPED`; no provider given is
+`NATIVE_TOKEN_UNAVAILABLE`, `NATIVE_TOKEN_NOT_SHAPED`, and `NATIVE_ENTRY_USER_MISMATCH` when the
+entry's user is not the entry command's `claude-code`; no provider given is
 `NATIVE_TOKEN_UNAVAILABLE`); no other entry, no environment variable and no host Claude
 configuration is read. The token is held in memory (`NativeToken`: its `repr` and `record()` carry
 the fingerprint only, it does not pickle) until the transport call; the admitted body holds
@@ -454,20 +455,30 @@ calls `check_secrets`). Its codes and meanings are `create_secrets.NATIVE_MEANIN
 | `secrets_encrypted` is `false` | `SECRETS_ENCRYPTED` |
 | the token has the native shape | `NATIVE_TOKEN_NOT_SHAPED` |
 | the token is the one read from the entry (by fingerprint; dispatcher only) | `NATIVE_TOKEN_NOT_HELD` |
-| the token, its body after `sk-ant-<label>-`, or any run of 8 or more of its body's characters appears nowhere else | `NATIVE_TOKEN_OUTSIDE_SECRET` |
+| the token, its body after `sk-ant-<label>-`, any run of 8 or more of its body's characters, or an encoded copy (the outbound search's own needles, `inference_key_search.needles`: hexadecimal, base64 and base64url at three alignments, UTF-16, of the token and of its body) appears nowhere else | `NATIVE_TOKEN_OUTSIDE_SECRET` |
 | no second authentication method anywhere else: an `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` name, or another provider credential's value | `NATIVE_SECOND_AUTH_METHOD` |
 | `HTTPS_PROXY` is the profile's tunnel endpoint, and no other destination appears | `NATIVE_PROXY_NOT_TUNNEL` |
 | each switch is its declared spelling, `tRuE` (never `1` or `true`) | `NATIVE_SWITCH_NOT_DECLARED` |
 | no MCP configuration (`mcp_config` empty, no other `mcp` key) | `NATIVE_MCP_FORBIDDEN` |
 | the agent block is `acp`, `claude-code`, exactly `["claude-agent-acp"]`, no `acp_args` | `NATIVE_ACP_COMMAND_NOT_PINNED` |
 | the per-conversation configuration directory is kept: `acp_isolate_data_dir` true, nothing naming `CLAUDE_CONFIG_DIR` | `NATIVE_CONFIG_DIR_RELOCATED` |
+| `agent_settings.agent_context` is absent or null (its `secrets` are seeded into the conversation's secret registry and injected into the ACP process's environment; its `skills` are written under the persistence directory) | `NATIVE_AGENT_CONTEXT_FORBIDDEN` |
+| `agent_settings.acp_file_secrets` is absent or empty (a spec writes a secret's value to a file under `<persistence>/acp/<subdir>` and points an environment variable at it) | `NATIVE_FILE_SECRETS_FORBIDDEN` |
+| every other `agent_settings` member is one of the run shape's at its admitted value: `agent_kind` `acp`, `acp_server` `claude-code`, `acp_command`, `acp_args` `[]`, `acp_model` one model name (required), `acp_session_mode` null, `acp_isolate_data_dir` true, `mcp_config` `{}` (the timeouts, `verification`, `schema_version` and any unknown member refused) | `NATIVE_AGENT_SETTING_FORBIDDEN` |
+| the create's top-level fields are the run shape's: the template's fields, `secrets` and `secrets_encrypted` (for E-05.11's callers; the D1 stage's own allowlist refuses first) | `NATIVE_BODY_FIELD_FORBIDDEN` |
 
 The switches' spelling: at the pinned CLI (`claude` 2.1.220, read from the release package
 `@anthropic-ai/claude-code-linux-x64` 2.1.220), `CLAUDE_CODE_PROXY_RESOLVES_HOSTS` is read through
 the CLI's environment parser's bool (`1`, `true`, `yes` or `on`, lower-cased and trimmed) and
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` as any non-empty value (its declared accessor is the same
 bool); `tRuE` is accepted by every reader of both, is neither `1` nor `true` (the SDK masks every
-secret value in agent output by substring), and does not occur in the CLI's own code and text. The
+secret value in agent output by exact, case-sensitive substring: `str.replace` and an unflagged
+`re` pattern at the pin, `conversation/secret_registry.py` lines 321 and 339-341, so `tRuE` masks only `tRuE`), and does not occur in the CLI's own code and text. The
+closed-world rows follow the pinned SDK 1.60.1 (`settings/model.py` `ACPAgentSettings.create_agent`;
+`agent/acp_agent.py` `_start_acp_server`, `_materialize_skills`, `_materialise_file_secrets`): the SDK's
+default `acp_file_secrets` (when absent) name reserved secrets the four admitted names never are, so
+none materialises. The native path loads no broker module: its redaction (`redact_native`,
+`native_location`), its fragments and its encoded forms are broker-free. The
 agent-block half (`check_native_agent`) also runs on the pinned template at `admit`, before any
 token is read. A native template that is the S-03.3 qualification fixture is still
 `STAGE_TEMPLATE_DISPOSABLE`; every other stage still refuses `secrets` (`BODY_FIELD_UNKNOWN`) and
@@ -1078,10 +1089,10 @@ transport called zero times:
 | Class | What it shows |
 |---|---|
 | `Accepts` | a full native dispatch sends exactly the four static secrets (the token, the tunnel endpoint, the two switches), `secrets_encrypted` false, the rest the template; no `ANTHROPIC_*` name; the result and the dispatched transition carry the fingerprint; the provider was asked for the one entry |
-| `Refusals` | every rule of `NATIVE_MEANINGS` on its own fact, at admission and again at `send_create`, no refusal text holding the token; a token not the held one; a token value in the admitted body; refusals of the profile (no, two or another tunnel endpoint) and the template (MCP, another command, a shared data dir) before any read; malformed declarations at resolution |
+| `Refusals` | every rule of `NATIVE_MEANINGS` on its own fact (the review's inputs among them: a fifth secret through `agent_context.secrets`, `acp_file_secrets` seeding the configuration directory or writing the token, encoded copies of the token), at admission and again at `send_create`, no refusal text holding the token; a token not the held one; a token value in the admitted body; refusals of the profile (no, two or another tunnel endpoint) and the template (MCP, another command, a shared data dir) before any read; malformed declarations at resolution |
 | `Mixing` | a broker grant on the native stage and the native token on the brokered one are `ADMISSION_MISMATCH`; the brokered stage refuses the native name (`SECRET_NAMES`) |
 | `OtherStages` | the review stage refuses `secrets` (`BODY_FIELD_UNKNOWN`) and never reads the token; the S-03.3 qualification fixture is `STAGE_TEMPLATE_DISPOSABLE` on the native stage |
-| `SharedCheck` | the dispatcher calls `create_secrets.check_native_secrets` (patched, it refuses with it); a qualification caller gets the same function and codes; no other module of the package declares the set |
+| `SharedCheck` | the dispatcher calls `create_secrets.check_native_secrets` (patched, it refuses with it); a qualification caller gets the same function and codes; the closed world (every forwarding request field, every `agent_settings` member outside the run shape); the native path with the broker module unreachable; no other module of the package declares the set |
 | `ReadOrder` | the order `admit`, `stage_inference`, read, `admit_secrets`, workspace, `send_create`, the attempt reserved and no workspace at the read; a missing, malformed or unreadable entry, or no provider, is a refused attempt |
 | `NoOtherCredential` | negative control: sentinels in other entries, the credential environment names and a host Claude configuration (an audit hook on file opens); only the one entry is read; positive controls see each kind of read |
 | `Custody` | the store, the result, the admitted-create record and captured output and logs carry the fingerprint only, also on a refused, unknown and unanswered create |

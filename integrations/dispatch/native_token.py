@@ -68,6 +68,8 @@ CODES = {
     'NATIVE_READ_BACK_FAILED': 'the entry did not read back as written: run the entry command again with --replace',
     'NATIVE_TOKEN_MISSING': f'the Owner enters the token first (OA-31 (e)): the entry "{ENTRY}" holds none',
     'NATIVE_TOKEN_UNAVAILABLE': 'the credential provider could not be read: run as the account that holds the entry',
+    'NATIVE_ENTRY_USER_MISMATCH': f'the entry is not of user {ENTRY_USER}, the entry command\'s: the Owner enters '
+                                  'the token again with the entry command (--replace)',
 }
 
 
@@ -167,7 +169,9 @@ class NativeToken:
 def read(provider) -> NativeToken:
     """The dispatcher's read (decision 0023 section 2.2): exactly one ``provider.get(ENTRY)``, and no other entry.
     NATIVE_TOKEN_UNAVAILABLE when the provider fails, NATIVE_TOKEN_MISSING when the entry holds nothing, and
-    NATIVE_TOKEN_NOT_SHAPED when it holds a value without the token's shape (named by rule, never the value)."""
+    NATIVE_ENTRY_USER_MISMATCH when its user is not ENTRY_USER (the entry command's: an entry another writer made is
+    not the Owner's token), and NATIVE_TOKEN_NOT_SHAPED when it holds a value without the token's shape (named by
+    rule, never the value)."""
     if provider is None or not callable(getattr(provider, 'get', None)):
         raise NativeTokenError('NATIVE_TOKEN_UNAVAILABLE', 'no credential provider was given')
     try:
@@ -177,8 +181,11 @@ def read(provider) -> NativeToken:
                                refusal=False) from None
     if entry is None:
         raise NativeTokenError('NATIVE_TOKEN_MISSING', f'the entry "{ENTRY}" does not exist')
-    value = entry[1] if isinstance(entry, tuple) and len(entry) == 2 else None
+    user, value = entry if isinstance(entry, tuple) and len(entry) == 2 else (None, None)
     del entry
+    if user != ENTRY_USER:
+        del value
+        raise NativeTokenError('NATIVE_ENTRY_USER_MISMATCH', f'the entry "{ENTRY}" is not of user {ENTRY_USER}')
     rule = token_rule(value)
     if rule is not None:
         del value

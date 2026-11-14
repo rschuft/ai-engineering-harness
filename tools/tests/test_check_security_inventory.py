@@ -177,6 +177,25 @@ class AgentAndOwnerAuthority(unittest.TestCase):
         entry(inv, 'credentials', 'cred-native-claude-code-token')['authority'] = 'owner'
         self.assertIn('AGENT_PRIVILEGED_CREDENTIAL', codes(inv)[0])
 
+    def test_the_native_token_is_readable_by_the_d1_principal_only(self):
+        """Review S2: the exemption covers engineering-agent (the builder role's principal) and the relation
+        readable only; any other agent principal, or an agent holding or managing it, fails."""
+        native = entry(INVENTORY, 'credentials', 'cred-native-claude-code-token')
+        self.assertEqual([p for p in native['readable_by'] if entry(INVENTORY, 'principals', p)['agent_controlled']],
+                         ['engineering-agent'])
+        for name, edit in (
+                ('readable by reviewer-agent', lambda c: c['readable_by'].append('reviewer-agent')),
+                ('readable by the bootstrap agents', lambda c: c['readable_by'].append('bootstrap-host-agents')),
+                ('readable by a CI job', lambda c: c['readable_by'].append('ci-job')),
+                ('held by engineering-agent', lambda c: c.__setitem__('holder', 'engineering-agent')),
+                ('managed by engineering-agent', lambda c: c.__setitem__('manager', 'engineering-agent'))):
+            with self.subTest(name):
+                inv = fresh()
+                edit(entry(inv, 'credentials', 'cred-native-claude-code-token'))
+                found, problems = codes(inv)
+                self.assertIn('AGENT_PROVIDER_CREDENTIAL', found)
+                self.assertTrue(any('cred-native-claude-code-token' in p.where for p in problems))
+
     def test_agent_readable_management_key_fails(self):
         inv = fresh()
         entry(inv, 'credentials', 'cred-agent-server-session-key')['readable_by'].append(

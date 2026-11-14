@@ -13,8 +13,8 @@ This checker enforces the leaf's acceptance mechanically:
   read; an Owner-only operation's principal holds Owner authority, and no agent
   principal is described as holding Owner authority;
 - no provider credential is held, managed or readable by an agent principal, except the native execution profile's
-  token (``cred-native-claude-code-token``, decision 0023 among its sources; plan leaf E-05.9), which a D1 attempt
-  reads by design;
+  token (``cred-native-claude-code-token``, decision 0023 among its sources; plan leaf E-05.9), which only the D1
+  attempt's principal (``engineering-agent``) may read, and no agent principal may hold or manage;
 - a privileged credential that an agent principal can reach because it shares an OS
   identity with the holder carries a finding that names that agent principal
   (decision 0004, Owner clarification 5: such agents are not isolated principals);
@@ -61,6 +61,9 @@ PRIVILEGED_AUTHORITIES = ('owner', 'admin', 'executor', 'management')
 NATIVE_PROVIDER_CREDENTIAL = 'cred-native-claude-code-token'
 NATIVE_PROVIDER_SOURCE = ('decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-'
                           'tunnel.md')
+# The one agent principal that may read it, by the relation readable only: the D1 attempt's (the builder role's
+# principal in policy/role-tokens.json). No agent principal holds or manages it.
+NATIVE_PROVIDER_READER = 'engineering-agent'
 ASSET_KINDS = ('host', 'guest', 'process', 'container', 'directory', 'secret-file',
                'socket', 'listener', 'api', 'store', 'repository', 'service',
                'credential-store', 'privileged-unit')
@@ -449,11 +452,22 @@ class Checker:
                 self.add('AGENT_PRIVILEGED_CREDENTIAL', where,
                          f'{authority} authority is held, managed or readable by agent '
                          f'principal(s) {sorted(set(agents))}')
-            if authority == 'provider' and agents and not native_provider_credential(cid, c):
-                self.add('AGENT_PROVIDER_CREDENTIAL', where,
-                         f'a provider credential is held, managed or readable by agent principal(s) '
-                         f'{sorted(set(agents))}; only the native profile\'s token ({NATIVE_PROVIDER_CREDENTIAL}, '
-                         f'decision 0023) may be')
+            if authority == 'provider' and agents:
+                if not native_provider_credential(cid, c):
+                    self.add('AGENT_PROVIDER_CREDENTIAL', where,
+                             f'a provider credential is held, managed or readable by agent principal(s) '
+                             f'{sorted(set(agents))}; only the native profile\'s token '
+                             f'({NATIVE_PROVIDER_CREDENTIAL}, decision 0023) may be read, by '
+                             f'{NATIVE_PROVIDER_READER} only')
+                else:   # the native token: readable by the D1 attempt's principal only; held and managed by none
+                    custodians = [pid for pid in (c.get('holder'), c.get('manager')) if self.agent(principals, pid)]
+                    readers = c.get('readable_by') if isinstance(c.get('readable_by'), list) else []
+                    others = sorted({pid for pid in readers if self.agent(principals, pid)} - {NATIVE_PROVIDER_READER})
+                    if custodians or others:
+                        self.add('AGENT_PROVIDER_CREDENTIAL', where,
+                                 f'the native profile\'s token may be read by {NATIVE_PROVIDER_READER} only, and '
+                                 f'held or managed by no agent principal: held or managed by {sorted(custodians)}, '
+                                 f'readable by {others}')
             if authority == 'owner' and holder is not None and holder.get('owner_authority') is not True:
                 self.add('AGENT_OWNER_AUTHORITY', where,
                          f'an Owner-authority credential held by {c.get("holder")}, '

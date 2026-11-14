@@ -431,6 +431,8 @@ class AgentGrants(unittest.TestCase):
         only builder, and only while the inventory records it with decision 0023 as its source; every other Owner
         or provider credential stays refused to every agent role."""
         self.assertIn(NATIVE, role(POLICY, 'builder')['grants']['credentials'])
+        for rid in ('planner', 'reviewer', 'ci-job'):   # review N1: every other agent role denies it by name
+            self.assertIn(NATIVE, role(POLICY, rid)['denied'], rid)
         for rid in ('planner', 'reviewer', 'ci-job'):
             with self.subTest(role=rid):
                 pol = fresh()

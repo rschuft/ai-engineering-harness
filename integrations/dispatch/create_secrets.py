@@ -141,15 +141,15 @@ def body_fragments(body: str) -> frozenset:
 
 
 def fragments(token) -> frozenset:
-    """Every run of FRAGMENT characters of an attempt token's body, or of a native token's body after its public
-    prefix (E-05.9); empty for anything else."""
+    """Every run of FRAGMENT characters of a native token's body after its public prefix (E-05.9: no broker module is
+    loaded for it), or of an attempt token's body; empty for anything else."""
     if not isinstance(token, str):
         return frozenset()
+    if native().is_token(token):
+        return body_fragments(native().secret_body(token))
     shapes = broker()
     if shapes.TOKEN_SHAPE.fullmatch(token):
         return body_fragments(token[len(shapes.TOKEN_PREFIX):])
-    if native().is_token(token):
-        return body_fragments(native().secret_body(token))
     return frozenset()
 
 
@@ -160,14 +160,60 @@ def _holds_secret(text: str, parts: frozenset) -> bool:
 
 def redact(text: str, token=None) -> str:
     """TEXT with every word that holds an attempt token, a provider key's shape or a part of TOKEN of FRAGMENT or
-    more characters replaced by REDACTED."""
+    more characters replaced by REDACTED. A native TOKEN is ``redact_native``'s (no broker module)."""
+    if isinstance(token, str) and native().is_token(token):
+        return redact_native(text, token)
     parts = fragments(token)
     return WORD.sub(lambda m: REDACTED if _holds_secret(m.group(), parts) else m.group(), text)
+
+
+# The native token's copies (E-05.9): broker-free. Its encoded forms are S-03.2's key search's own needles
+# (``inference_key_search.needles``: the token and its body after the public prefix, raw, hexadecimal, base64 and
+# base64url at three alignments, UTF-16), reused, not copied; with them the FRAGMENT runs of its body.
+WITHHELD = '<withheld: the text held a copy of the native token>'
+
+
+def key_search():
+    """S-03.2's key search module (standard library only; it imports nothing of the broker), loaded on first use."""
+    return _load('aieh_inference_key_search', REPO / 'integrations' / 'inference' / 'inference_key_search.py')
+
+
+def native_needles(token) -> tuple:
+    """The byte forms of a native TOKEN the search looks for (``inference_key_search.needles`` with the token's
+    public prefix); empty for anything else."""
+    if not isinstance(token, str) or not native().is_token(token):
+        return ()
+    return tuple(key_search().needles(token, native().public_prefix(token)))
+
+
+def native_holds(text: str, token, *, needles=None, parts=None) -> bool:
+    """Whether TEXT holds a native TOKEN raw, a run of FRAGMENT characters of its body, or one of its encoded forms
+    (``native_needles``)."""
+    if not isinstance(token, str) or not native().is_token(token):
+        return False
+    parts = fragments(token) if parts is None else parts
+    needles = native_needles(token) if needles is None else needles
+    data = text.encode('utf-8', 'surrogatepass')
+    return token in text or any(part in text for part in parts) or any(needle in data for needle in needles)
+
+
+def redact_native(text: str, token=None) -> str:
+    """TEXT for a refusal or a record of the native profile, broker-free: WITHHELD whole when it holds a copy of the
+    native TOKEN in any form ``native_holds`` knows (an encoded copy can span the characters a word splits at),
+    else every word with a provider credential's shape REDACTED."""
+    if native_holds(text, token):
+        return WITHHELD
+    return WORD.sub(lambda m: REDACTED if PROVIDER_KEY_SHAPE.search(m.group()) else m.group(), text)
 
 
 def location(where, token=None) -> str:
     """WHERE as a dotted path, redacted (``redact``): a key may hold what a refusal must not repeat."""
     return redact('.'.join(str(part) for part in where), token)
+
+
+def native_location(where, token=None) -> str:
+    """WHERE as a dotted path, ``redact_native``'d (the native profile's: no broker module)."""
+    return redact_native('.'.join(str(part) for part in where), token)
 
 
 def _bound(token: str, binding: Mapping) -> str | None:
@@ -239,7 +285,8 @@ NATIVE_PROXY_NAME = 'HTTPS_PROXY'
 # is read through its environment parser's bool, true for "1", "true", "yes" or "on" after lower-casing and
 # trimming; CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is read as any non-empty value, and its declared accessor is the
 # same bool. "tRuE" is accepted by every reader of both, is neither "1" nor "true", and does not occur in the pinned
-# CLI's own code and text (E-05.9's report gives the source locations).
+# CLI's own code and text (E-05.9's report gives the source locations). The pinned SDK masks case-sensitively
+# (conversation/secret_registry.py: str.replace and an unflagged re pattern), so it masks only "tRuE" itself.
 SWITCH_SPELLING = 'tRuE'
 NATIVE_SWITCHES = {'CLAUDE_CODE_PROXY_RESOLVES_HOSTS': SWITCH_SPELLING,
                    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': SWITCH_SPELLING}
@@ -259,6 +306,32 @@ PINNED_ACP = {'agent_kind': 'acp', 'acp_server': 'claude-code', 'acp_command': [
 ISOLATE_SETTING = 'acp_isolate_data_dir'
 CONFIG_DIR_NAME = 'CLAUDE_CONFIG_DIR'
 MCP_NAME = re.compile(r'mcp', re.IGNORECASE)
+# The closed world (the review's B1): the create's top-level fields are the D1 run shape's (the pinned template's
+# fields and the secrets block); ``agent_settings`` holds only the members of the pinned SDK 1.60.1's ACPAgentSettings
+# that the D1 run shape uses, each at its admitted value or value class. Every other member is refused, and above all
+# those the SDK forwards into the ACP process's environment or its per-conversation directory: ``agent_context``
+# (its ``secrets`` are seeded into the conversation's secret registry and injected into the subprocess environment,
+# its ``skills`` written under the persistence directory; settings/model.py ACPAgentSettings.create_agent,
+# acp_agent.py _start_acp_server and _materialize_skills) must be absent or null, and ``acp_file_secrets`` (files
+# materialised under <persistence>/acp/<subdir> with an env var pointing at them; acp_agent.py
+# _materialise_file_secrets) absent or empty. Absent, the SDK's default specs apply; they name reserved secrets
+# (CODEX_AUTH_JSON, KIMI_CODE_CONFIG_TOML, GOOGLE_APPLICATION_CREDENTIALS_JSON, PI_AUTH_JSON) that the four admitted
+# names never are, so none materialises.
+NATIVE_BODY_FIELDS = ('conversation_id', 'conversation_runtime', 'workspace', 'agent_settings', 'autotitle',
+                      'container', 'tags', 'secrets', 'secrets_encrypted')
+MODEL_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}')   # a model name: one word, no wildcard, no space
+AGENT_SETTING_RULES = {   # member -> (required, the admitted value class)
+    'agent_kind': (True, lambda v: v == 'acp'),
+    'acp_server': (True, lambda v: v == 'claude-code'),
+    'acp_command': (True, lambda v: v == ['claude-agent-acp']),
+    'acp_args': (False, lambda v: v == []),
+    'acp_model': (True, lambda v: isinstance(v, str) and MODEL_NAME.fullmatch(v) is not None),
+    'acp_session_mode': (False, lambda v: v is None),
+    'acp_isolate_data_dir': (True, lambda v: v is True),
+    'mcp_config': (False, lambda v: v == {}),
+    'agent_context': (False, lambda v: v is None),
+    'acp_file_secrets': (False, lambda v: v == []),
+}
 NATIVE_MEANINGS = {
     'NATIVE_SECRETS_MIXED': 'the create mixes the native secret set and the brokered one (ANTHROPIC_API_KEY, '
                             'ANTHROPIC_BASE_URL)',
@@ -283,6 +356,14 @@ NATIVE_MEANINGS = {
                                    '(acp_isolate_data_dir not true, or a CLAUDE_CONFIG_DIR setting)',
     'NATIVE_TUNNEL_UNDECLARED': 'the profile declares no single tunnel endpoint (class provider-tunnel) with the '
                                 'docker0 gateway address 172.17.0.1 and a port',
+    'NATIVE_AGENT_CONTEXT_FORBIDDEN': 'agent_settings.agent_context is not absent or null (its secrets reach the ACP '
+                                      'process environment, its skills the persistence directory)',
+    'NATIVE_FILE_SECRETS_FORBIDDEN': 'agent_settings.acp_file_secrets is not absent or empty (it writes files under '
+                                     'the per-conversation directory and points an environment variable at them)',
+    'NATIVE_AGENT_SETTING_FORBIDDEN': 'agent_settings carries a member outside the pinned run shape, or one at '
+                                      'another value (acp_model not one model name, acp_session_mode not null, a '
+                                      'timeout, verification, schema_version or an unknown member)',
+    'NATIVE_BODY_FIELD_FORBIDDEN': 'the create carries a top-level field outside the D1 run shape',
 }
 
 
@@ -329,18 +410,18 @@ def check_native_secrets(body: dict, *, endpoint: str, refused: Callable[[str, s
     if held is not None and grammar.fingerprint(token) != held:
         raise refused('NATIVE_TOKEN_NOT_HELD', f'{NATIVE_TOKEN_NAME} is not the held token')
     token_at, proxy_at = ('secrets', NATIVE_TOKEN_NAME, 'value'), ('secrets', NATIVE_PROXY_NAME, 'value')
-    secret, parts = grammar.secret_body(token), fragments(token)
+    secret, parts, needles = grammar.secret_body(token), fragments(token), native_needles(token)
     texts = list(strings(body))
-    for where, text in texts:
-        if where != token_at and (token in text or secret in text or any(part in text for part in parts)):
-            raise refused('NATIVE_TOKEN_OUTSIDE_SECRET', f'at {location(where, token)}')
+    for where, text in texts:   # raw, its body, a FRAGMENT run, or an encoded form (the key search's needles)
+        if where != token_at and (secret in text or native_holds(text, token, needles=needles, parts=parts)):
+            raise refused('NATIVE_TOKEN_OUTSIDE_SECRET', f'at {native_location(where, token)}')
     for where, text in texts:
         if where != token_at and (PROVIDER_KEY_SHAPE.search(text) or 'sk-ant' in text
                                   or any(name in text for name in SECOND_AUTH_NAMES)):
-            raise refused('NATIVE_SECOND_AUTH_METHOD', f'at {location(where, token)}')
+            raise refused('NATIVE_SECOND_AUTH_METHOD', f'at {native_location(where, token)}')
     for where, text in texts:
         if where != proxy_at and ('://' in text or text.startswith('//')):
-            raise refused('NATIVE_PROXY_NOT_TUNNEL', f'a destination at {location(where, token)}')
+            raise refused('NATIVE_PROXY_NOT_TUNNEL', f'a destination at {native_location(where, token)}')
     if secrets[NATIVE_PROXY_NAME]['value'] != endpoint:
         raise refused('NATIVE_PROXY_NOT_TUNNEL', f'{NATIVE_PROXY_NAME} must be {endpoint}')
     for name, spelling in NATIVE_SWITCHES.items():
@@ -352,20 +433,40 @@ def check_native_secrets(body: dict, *, endpoint: str, refused: Callable[[str, s
 
 def check_native_agent(body: dict, *, refused: Callable[[str, str], Exception], token=None) -> None:
     """The agent block of a native create BODY (``check_native_secrets`` ends with it; the D1 stage also runs it on
-    its pinned template before the token is read): no MCP configuration anywhere (NATIVE_MCP_FORBIDDEN), the pinned
-    ACP run shape (NATIVE_ACP_COMMAND_NOT_PINNED) and the per-conversation configuration directory kept
-    (NATIVE_CONFIG_DIR_RELOCATED). TOKEN, when given, is redacted from a refusal's location."""
+    its pinned template before the token is read), a closed world: no MCP configuration anywhere
+    (NATIVE_MCP_FORBIDDEN); ``agent_context`` absent or null (NATIVE_AGENT_CONTEXT_FORBIDDEN); ``acp_file_secrets``
+    absent or empty (NATIVE_FILE_SECRETS_FORBIDDEN); the pinned ACP run shape (NATIVE_ACP_COMMAND_NOT_PINNED); the
+    per-conversation configuration directory kept (NATIVE_CONFIG_DIR_RELOCATED); every other ``agent_settings``
+    member one of AGENT_SETTING_RULES at its admitted value (NATIVE_AGENT_SETTING_FORBIDDEN); and no top-level field
+    outside NATIVE_BODY_FIELDS (NATIVE_BODY_FIELD_FORBIDDEN). TOKEN, when given, is withheld from a refusal's
+    location. Broker-free."""
     texts = list(strings(body))
     for where, _ in texts:
         if where and where[-1] == '#key' and MCP_NAME.search(str(where[-2])) \
                 and where[:-1] != ('agent_settings', 'mcp_config'):
-            raise refused('NATIVE_MCP_FORBIDDEN', f'at {location(where[:-1], token)}')
+            raise refused('NATIVE_MCP_FORBIDDEN', f'at {native_location(where[:-1], token)}')
     settings = body.get('agent_settings')
     if isinstance(settings, dict) and settings.get('mcp_config', {}) != {}:
         raise refused('NATIVE_MCP_FORBIDDEN', 'agent_settings.mcp_config must be empty')
+    if isinstance(settings, dict) and settings.get('agent_context') is not None:
+        raise refused('NATIVE_AGENT_CONTEXT_FORBIDDEN', 'agent_settings.agent_context must be absent or null')
+    if isinstance(settings, dict) and settings.get('acp_file_secrets', []) != []:
+        raise refused('NATIVE_FILE_SECRETS_FORBIDDEN', 'agent_settings.acp_file_secrets must be absent or empty')
     if not isinstance(settings, dict) or any(settings.get(k) != v for k, v in PINNED_ACP.items()) \
             or settings.get('acp_args', []) != []:
         raise refused('NATIVE_ACP_COMMAND_NOT_PINNED', 'the agent block must be the pinned claude-agent-acp')
     if settings.get(ISOLATE_SETTING) is not True or any(CONFIG_DIR_NAME in text for _, text in texts):
         raise refused('NATIVE_CONFIG_DIR_RELOCATED', f'{ISOLATE_SETTING} must be true and nothing may set '
                                                      f'{CONFIG_DIR_NAME}')
+    for member, value in settings.items():
+        rule = AGENT_SETTING_RULES.get(member)
+        if rule is None or not rule[1](value):
+            raise refused('NATIVE_AGENT_SETTING_FORBIDDEN', f'agent_settings.{native_location((member,), token)} '
+                                                            'is not admitted at this value')
+    missing = sorted(m for m, (required, _) in AGENT_SETTING_RULES.items() if required and m not in settings)
+    if missing:
+        raise refused('NATIVE_AGENT_SETTING_FORBIDDEN', f'agent_settings lacks {missing}')
+    for field in body:
+        if field not in NATIVE_BODY_FIELDS:
+            raise refused('NATIVE_BODY_FIELD_FORBIDDEN', f'the create may not carry '
+                                                         f'{native_location((field,), token)}')
