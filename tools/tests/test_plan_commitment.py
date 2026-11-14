@@ -183,7 +183,7 @@ class CommittedPlanTests(unittest.TestCase):
         result = pc.report('E-05.5')
         ids = [r['id'] for r in result['leaves']]
         self.assertEqual(ids[-1], 'E-05.5')
-        for ident in ('E-05.1', 'E-05.2', 'E-05.3', 'E-05.4', 'E-01.3.2', 'S-03.3', 'P-04.3'):
+        for ident in ('E-05.1', 'E-05.2', 'E-05.3', 'E-05.4', 'E-01.3.2', 'E-05.11', 'P-04.3'):
             self.assertIn(ident, ids)
         self.assertEqual(len(ids), len(set(ids)))
         position = {ident: n for n, ident in enumerate(ids)}

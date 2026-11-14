@@ -1,6 +1,6 @@
 # 0015 - Inference broker placement, provider-credential custody and the guest `inference` endpoint
 
-Status: Proposed, amended - 2026-11-10. The Owner approved amendment 1 (below) on 2026-11-10 (Owner decision (c) on OA-12, verbatim in `evidence/bootstrap-log.md`, Decisions). That approval, and the Owner's acceptance on the same day of the ACP coding-provider path, its brokered dedicated-key authentication in principle and Claude Code as the first provider to qualify, are **architectural acceptance, not execution authorization**: no key is created or stored, no capacity bought, no host listener, guest forward, guest hardening change, egress or model call happens until its own Owner act is recorded. Amendment 2 (2026-11-13, product manager, applying the Owner's direction of 2026-11-13) retires the harness's spending enforcement and grants nothing. Amendment 3 (2026-11-14, Proposed with decision 0023) scopes this record to the brokered execution profile and grants nothing. The original status follows unchanged as history.
+Status: Proposed, amended - 2026-11-10. The Owner approved amendment 1 (below) on 2026-11-10 (Owner decision (c) on OA-12, verbatim in `evidence/bootstrap-log.md`, Decisions). That approval, and the Owner's acceptance on the same day of the ACP coding-provider path, its brokered dedicated-key authentication in principle and Claude Code as the first provider to qualify, are **architectural acceptance, not execution authorization**: no key is created or stored, no capacity bought, no host listener, guest forward, guest hardening change, egress or model call happens until its own Owner act is recorded. Amendment 2 (2026-11-13, product manager, applying the Owner's direction of 2026-11-13) retires the harness's spending enforcement and grants nothing. Amendment 3 (2026-11-14, effective with decision 0023's acceptance) scopes this record to the brokered execution profile and grants nothing. The original status follows unchanged as history.
 
 Original status: Proposed - 2026-11-10, for plan leaf S-03.1 at `7b93fb3`: an Architect design (gates B and G), reviewed by the Overseer and put to the Owner as Owner action OA-12 ([the authorization request](../evidence/S-03.1-owner-authorization-request.md)). It authorizes nothing: every act it names waits for the Owner's answer to the S-03.1 authorization request, and no model run, credential entry, host listener, guest-to-host path or guest composition change happens before that answer is recorded in `evidence/bootstrap-log.md`. S-03.2 implements it exactly as authorized, or not at all.
 
@@ -185,7 +185,7 @@ until S-03.6 passes; they are no longer requirements.
 The code change is plan leaf S-03.6's (the plan amendment of 2026-11-13). Until it passes, the built budgets and
 `BUDGET_USAGE_UNKNOWN` stay in the code, and no live act relies on them.
 
-## Amendment 3 (2026-11-14, Proposed with decision 0023): the brokered execution profile
+## Amendment 3 (2026-11-14, effective with decision 0023's acceptance the same day): the brokered execution profile
 
 Drafted by the program manager for the product manager, applying the Owner's direction of 2026-11-14 ("Owner
 direction: reconcile D1 for isolated, native Claude Code execution", verbatim in `evidence/bootstrap-log.md`,

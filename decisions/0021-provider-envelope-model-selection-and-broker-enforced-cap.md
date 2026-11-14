@@ -1,6 +1,6 @@
 # 0021 - The provider envelope: the broker's start precondition, the model selection and the broker-enforced cap (the cap retired by amendment 1)
 
-Status: Accepted (engineering manager) - 2026-11-13, at the completion of plan leaf S-03.5, under decision 0018 points 1 and 3.1 (an architectural decision inside committed scope that changes no acceptance criterion, no other leaf's contract and no Owner-approved policy; it narrows the broker's start). It authorizes no reserved act: no provider key, envelope, spending cap, egress or model call. Amended 2026-11-13 (amendment 1, product manager, on the Owner's direction of 2026-11-13): the spending limit and the broker-enforced cap are retired. Amendment 2 (2026-11-14, Proposed with decision 0023) scopes this record to the brokered execution profile. Previously: Proposed - 2026-11-13, for plan leaf S-03.5 (architect, gates C and G; engineering manager's rulings)
+Status: Accepted (engineering manager) - 2026-11-13, at the completion of plan leaf S-03.5, under decision 0018 points 1 and 3.1 (an architectural decision inside committed scope that changes no acceptance criterion, no other leaf's contract and no Owner-approved policy; it narrows the broker's start). It authorizes no reserved act: no provider key, envelope, spending cap, egress or model call. Amended 2026-11-13 (amendment 1, product manager, on the Owner's direction of 2026-11-13): the spending limit and the broker-enforced cap are retired. Amendment 2 (2026-11-14, effective with decision 0023's acceptance) scopes this record to the brokered execution profile. Previously: Proposed - 2026-11-13, for plan leaf S-03.5 (architect, gates C and G; engineering manager's rulings)
 
 **Authority:** plan leaf S-03.5, "Bind the broker's real-provider start to a recorded provider-envelope
 authorization" (its action, artifact and proof unchanged); decision 0012 (the authorization recorder's receipts,
@@ -273,7 +273,7 @@ disagree, this amendment governs.
 The code change is plan leaf S-03.6's. Until it passes, the built `/1` form stays in the code, and the Owner is
 shown no envelope manifest (OA-12 act 3 waits on it).
 
-## Amendment 2 (2026-11-14, Proposed with decision 0023): the brokered execution profile
+## Amendment 2 (2026-11-14, effective with decision 0023's acceptance the same day): the brokered execution profile
 
 Drafted by the program manager for the product manager (a change to the contract between leaves; decision 0018
 point 1), applying the Owner's direction of 2026-11-14 ("Owner direction: reconcile D1 for isolated, native Claude
