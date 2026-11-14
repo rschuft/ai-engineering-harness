@@ -845,15 +845,19 @@ class UnclassifiedEndCause(EndFixture):
         self.assertEqual(caught.exception.code, 'END_CAUSE_INVALID')
         recorded = self.classify_end(first, AE.END_CAUSE_INTERRUPTION)
         self.assertEqual(self.classify_end(first, AE.END_CAUSE_INTERRUPTION), recorded)
-        with self.assertRaises(di.DispatchRefused) as caught:
-            self.classify_end(first, AE.END_CAUSE_SECURITY_STOP)
-        self.assertEqual(caught.exception.code, 'END_CAUSE_CONFLICT')
         key = AE.END_CAUSE_KEY.format(attempt_id=first.attempt_id)
         self.assertEqual([e.to_state for e in self.store.events(key)], ['reserved', 'dispatched', 'confirmed'])
+        # a receipt holding another intent (written by hand) is a conflict, never overwritten
+        self.setUp()
+        other, _ = self.unclassified()
+        self.store.reserve(AE.END_CAUSE_KEY.format(attempt_id=other.attempt_id), {'format': 'x'}, actor='hand')
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.classify_end(other, AE.END_CAUSE_INTERRUPTION)
+        self.assertEqual(caught.exception.code, 'END_CAUSE_CONFLICT')
 
     def test_a_crash_before_the_record_is_resumed(self):
         first, _ = self.unclassified()
-        key = AE.END_CAUSE_KEY.format(attempt_id=first.attempt_id)
+        key = AE.ESCALATION_KEY.format(attempt_id=first.attempt_id)
         real = di._mark
 
         def mark(integration_store, k, from_state, to_state, *args):
@@ -875,9 +879,13 @@ class UnclassifiedEndCause(EndFixture):
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)['classification'], AE.INTERRUPTION)
         self.assertEqual(CauseCommand.run_command(self, *args, '--cause', 'interruption')[0], 0)
-        code, _, err = CauseCommand.run_command(self, *args, '--cause', 'security-stop')
+        code, out, err = CauseCommand.run_command(self, *args, '--cause', 'security-stop')   # an escalation
+        self.assertEqual(code, 0, err)
+        self.assertEqual((json.loads(out)['format'], json.loads(out)['supersedes']), (AE.ESCALATION_FORMAT,
+                                                                                      AE.UNCLASSIFIED))
+        code, _, err = CauseCommand.run_command(self, *args, '--cause', 'interruption')        # never a downgrade
         self.assertEqual(code, 1)
-        self.assertIn('END_CAUSE_CONFLICT', err)
+        self.assertIn('END_CAUSE_NOT_APPLICABLE', err)
         self.assertEqual(CauseCommand.run_command(self, *args, '--cause', 'retry')[0], 2)
         taskfile = (REPO / 'Taskfile.yml').read_text(encoding='utf-8')
         for command in ('record-auth-cause', 'record-end-cause'):
@@ -986,6 +994,53 @@ class ReviewFindings(EndFixture):
         self.assertEqual(caught.exception.code, 'PRIOR_END_SECURITY_STOP')
         self.assertEqual([r['workId'] for r in AE.work_item_ends(self.store, 'TASK-2')], ['TASK-2'])
         self.assertEqual(AE.work_item_ends(self.store, 'TASK-9'), [])
+
+    def test_d1_q2_a_cut_detail_classifies_nothing(self):
+        tail = ': {"errorKind": "rate_limit"}'
+        prefix = '[-32603] API Error: 400 '
+        pad = 'x' * (500 - len(prefix) - len(tail))
+        cut = (prefix + pad + tail + ': {"errorKind": "authentication_failed"}')[:500]   # the reviewer's probe Q2
+        self.assertEqual(len(cut), AE.DETAIL_CUT)
+        [signal] = AE.classify('error', [error_event('ACPPromptError', cut)], [])['surfaced']['errorEvents']
+        self.assertEqual((signal['errorKind'], signal['cause']), (None, None))
+        self.assertEqual(AE.classify('error', [error_event('ACPPromptError', cut)], [])['classification'],
+                         AE.UNCLASSIFIED)
+        longer = detail(-32603, 'API Error: ' + 'y' * 600, 'rate_limit')
+        self.assertEqual(AE.error_signal(error_event('ACPPromptError', longer))['errorKind'], None)
+        short = detail(-32603, 'API Error: ' + 'y' * 400, 'rate_limit')    # under the cut: read
+        self.assertLess(len(short), AE.DETAIL_CUT)
+        self.assertEqual(AE.error_signal(error_event('ACPPromptError', short))['cause'], 'usage-limit')
+
+    def test_d2_q3_an_escalation_supersedes_an_interruption_cause_and_is_never_downgraded(self):
+        # an unclassified end the engineering manager classified as an interruption, then escalates
+        first = self.interrupted()
+        ended = self.end(first)
+        AE.record_end_cause(self.store, first.operation_key, cause=AE.END_CAUSE_INTERRUPTION, actor='em')
+        escalated = AE.record_end_cause(self.store, first.operation_key, cause=AE.END_CAUSE_SECURITY_STOP, actor='em')
+        self.assertEqual((escalated['format'], escalated['classification'], escalated['supersedes']),
+                         (AE.ESCALATION_FORMAT, AE.NON_RETRYABLE, AE.UNCLASSIFIED))
+        self.assertEqual(AE.record_end_cause(self.store, first.operation_key, cause=AE.END_CAUSE_SECURITY_STOP,
+                                             actor='em'), escalated)                  # repeat-safe
+        self.assertEqual(AE.end_record(self.store, first.attempt_id), ended)          # unchanged
+        self.assertEqual(AE.end_cause_record(self.store, first.attempt_id)['cause'], 'interruption')   # kept
+        self.refused_dispatch('PRIOR_END_SECURITY_STOP')
+        with self.assertRaises(di.DispatchRefused) as caught:                         # never a downgrade
+            AE.record_end_cause(self.store, first.operation_key, cause=AE.END_CAUSE_INTERRUPTION, actor='em')
+        self.assertEqual(caught.exception.code, 'END_CAUSE_NOT_APPLICABLE')
+        # an unclassified end escalated first: an interruption cause is then refused
+        self.setUp()
+        second = self.interrupted()
+        self.end(second)
+        AE.record_end_cause(self.store, second.operation_key, cause=AE.END_CAUSE_SECURITY_STOP, actor='em')
+        with self.assertRaises(di.DispatchRefused) as caught:
+            AE.record_end_cause(self.store, second.operation_key, cause=AE.END_CAUSE_INTERRUPTION, actor='em')
+        self.assertEqual(caught.exception.code, 'END_CAUSE_NOT_APPLICABLE')
+        self.assertIsNone(AE.end_cause_record(self.store, second.attempt_id))
+        self.refused_dispatch('PRIOR_END_SECURITY_STOP')
+
+    def test_n_b_a_hook_message_after_the_error_is_not_the_conversation_going_on(self):
+        verdict = AE.classify('error', [SURFACED['rate-limit'][0], message_event('x', 'hook')], [])
+        self.assertEqual(verdict['classification'], AE.INTERRUPTION)
 
     def test_n2_p5_a_concurrent_second_end_returns_a_stable_code(self):
         result = self.interrupted(SURFACED['rate-limit'][0])

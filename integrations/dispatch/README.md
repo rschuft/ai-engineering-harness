@@ -553,13 +553,15 @@ trigger and records it began with, and a concurrent second end that loses a jour
 **The classification** (`classify`), from the conversation's recorded status and events and the dispatcher's
 own records, never from an exit or HTTP status alone: only a `ConversationErrorEvent` is read as a signal
 (no agent message, observation or user text), and only the **last** one, and only when no later agent or user
-`MessageEvent` or `ActionEvent` shows the conversation went on; an Agent Server answer that is not the expected
+`MessageEvent` or `ActionEvent` shows the conversation went on (a later `hook`- or `environment`-sourced event does
+not count as going on); an Agent Server answer that is not the expected
 200 classifies nothing; the SDK's own `classification` object is recorded, not used (it reads every
 `ACPPromptError` as `config`, a rate limit included). The SDK's codes and its detail `[<JSON-RPC code>] <the CLI's
 API error text>: {"errorKind": <the CLI's error kind>}` are the pinned sources' (the determination record). The
 error kind is read only from that trailing data; a detail that names more than one distinct error kind anywhere
-(a decoy in the CLI's message) is `<ambiguous>` and classifies nothing; a detail the SDK cut at 500 characters
-loses its trailing data and classifies nothing (fail closed):
+(a decoy in the CLI's message) is `<ambiguous>` and classifies nothing; a detail of 500 characters or more (the
+SDK's cut: its trailing data may be lost and its end may be the message's decoy) yields no error kind and
+classifies nothing (fail closed):
 
 | Surfaced | Read as | Classification |
 |---|---|---|
@@ -590,8 +592,8 @@ attempt on the work item, design revision and stage that created a native conver
 dispatched transition carrying the native token's fingerprint) must have an end record: an earlier attempt whose
 conversation finished is the result path's (`PRIOR_ATTEMPT_FINISHED`; whether a rework follows a result is
 E-05.4's question, **carried**), any other one is `PRIOR_ATTEMPT_NOT_ENDED`. None may have ended unclassified
-(`PRIOR_END_UNCLASSIFIED`, until the engineering manager's end-cause record classifies it: `interruption` then
-counts as an interruption's end, `security-stop` as `PRIOR_END_SECURITY_STOP`); each one's runtime is observed
+(`PRIOR_END_UNCLASSIFIED`, until the engineering manager classifies it: an `interruption` end-cause then counts
+as an interruption's end, an escalation as `PRIOR_END_SECURITY_STOP`); each one's runtime is observed
 stopped now (`missing`, or the server no longer knows the conversation; else `PRIOR_CONVERSATION_RUNNING` or
 `PRIOR_CONVERSATION_UNOBSERVED`). After an authentication refusal, the engineering manager's cause record is
 required (`PRIOR_AUTH_CAUSE_UNRECORDED`: never an automatic retry), and where its cause is `token-refused`, the
@@ -606,9 +608,10 @@ dispatched again (its record is not `reserved`).
 
 **Disclosed limits.** The admission reads the store, and the Agent Server, before `reserve_attempt` and is not
 atomic with it: a second dispatcher process racing the same triple is held by the store's claim rule (one live
-attempt), not by this check. The cause commands are bound to no principal: the record is the engineering
+attempt), not by this check; and a security stop, escalation or end-cause recorded between the admission and
+`reserve_attempt` is not seen by that dispatch (the next one sees it). The cause commands are bound to no principal: the record is the engineering
 manager's by convention, and any process of the same account could write it (decision 0010 point 1's same-account
-limit; N4). **Carried to E-05.4:** the result path must refuse an attempt that has an end record.
+limit). **Carried to E-05.4:** the result path must refuse an attempt that has an end record.
 
 **The cause records.** The engineering manager's commands (the smallest durable form; `task
 dispatch:record-auth-cause STORE=... OPERATION_KEY=... CAUSE=...` and `task dispatch:record-end-cause ...` wrap
@@ -623,15 +626,18 @@ python -I -B integrations/dispatch/attempt_end.py record-end-cause --store <inte
 its conversation, the cause, `tokenRefused`, the refused token's fingerprint when the cause is `token-refused`,
 the end record's key; `recordedBy` in the confirmed detail). Only for an end record of an authentication refusal
 (`AUTH_CAUSE_NOT_APPLICABLE`); the same cause again returns it, another is `AUTH_CAUSE_CONFLICT`, an unknown one
-`AUTH_CAUSE_INVALID`. `record_end_cause` writes one receipt `dispatch/attempt/<attempt id>/end-cause`
-(`end-cause/v1`: the attempt, its conversation, the cause, the classification it stands for, `interruption` or
-`non-retryable`, and the end record's key; `recordedBy` in the confirmed detail), beside the end record, which
-never changes. `interruption` classifies only an **unclassified** end, so that it never strands the task;
-`security-stop` classifies an unclassified end and also **escalates** an interruption or an authentication refusal
-to a security stop for every later admission on the work item. It never downgrades: an `interruption` cause on a
-classified end, and any cause on a non-retryable end, is `END_CAUSE_NOT_APPLICABLE`, as is no end record. The
-same cause again returns it, another is `END_CAUSE_CONFLICT`, an unknown one `END_CAUSE_INVALID`; a write
-interrupted before its confirmation is resumed by the repeat and counts only once confirmed. Each command exits 0
+`AUTH_CAUSE_INVALID`. `record_end_cause` writes, beside the end record, which never changes:
+`interruption`, one receipt `dispatch/attempt/<attempt id>/end-cause` (`end-cause/v1`: the attempt, its
+conversation, the cause, the classification it stands for, `interruption`, and the end record's key), only for an
+**unclassified** end not escalated, so that no task is stranded; `security-stop`, one escalation receipt
+`dispatch/attempt/<attempt id>/escalation` (`escalation/v1`: the same fields, classification `non-retryable` and
+the classification it `supersedes`), for any end but a non-retryable one, whatever end-cause it holds. The
+escalation is read first: it **supersedes** an `interruption` end-cause and an interruption or authentication-
+refusal end, a security stop for every later admission on the work item. Nothing downgrades: an `interruption`
+cause on a classified or escalated end, and any cause on a non-retryable end, is `END_CAUSE_NOT_APPLICABLE`, as is
+no end record. `recordedBy` is in each confirmed detail. The same cause again returns its record; a receipt that
+holds another intent is `END_CAUSE_CONFLICT`, an unknown cause `END_CAUSE_INVALID`; a write interrupted before its
+confirmation is resumed by the repeat and counts only once confirmed. Each command exits 0
 with the record, 1 on a refusal, 2 on a usage or store error.
 
 **Not yet verified:** any live conversation, runtime stop or provider refusal: what the pinned stack records for
@@ -1080,7 +1086,7 @@ acceptance takes effect when a manifest naming it is promoted.
 | `PRIOR_END_SECURITY_STOP`, `PRIOR_END_UNCLASSIFIED` | an attempt of the work item (any design revision or stage) ended non-retryable or was escalated to a security stop (the leaf's security stop); or an earlier one ended unclassified and the engineering manager has not classified it |
 | `PRIOR_AUTH_CAUSE_UNRECORDED`, `PRIOR_AUTH_TOKEN_NOT_REPLACED`, `NATIVE_TOKEN_NOT_REPLACED` | after an authentication refusal: no cause record; the provider refused the token and no newer entry receipt holds another; the token read is a refused one or not the receipt's |
 | `AUTH_CAUSE_INVALID`, `AUTH_CAUSE_NOT_APPLICABLE`, `AUTH_CAUSE_CONFLICT` | the cause record: an unknown cause; no end record of an authentication refusal; another cause recorded |
-| `END_CAUSE_INVALID`, `END_CAUSE_NOT_APPLICABLE`, `END_CAUSE_CONFLICT` | the end-cause record: neither interruption nor security-stop; no end record the cause applies to (interruption: an unclassified end; security-stop: any end but a non-retryable one); another classification recorded |
+| `END_CAUSE_INVALID`, `END_CAUSE_NOT_APPLICABLE`, `END_CAUSE_CONFLICT` | the end-cause and escalation records: neither interruption nor security-stop; no end record the cause applies to (interruption: an unclassified end not escalated; security-stop: any end but a non-retryable one); a receipt holding another intent |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. Until
 A-01.1 promotes approved catalog pins into the manifest, every request is refused
@@ -1265,7 +1271,7 @@ clause:
 | `NewAttempt` | after an interruption's end: the next ordinal on the same work item, design revision and stage, a new conversation, the token only in its create, the ended conversation never sent a body; refused with nothing reserved and no token read while unended, while the runtime is `available` or `starting` again or unobserved, after each security stop and after an unclassified end; an attempt refused before its create needs no end |
 | `AuthenticationRefusal` | no new attempt until the cause is recorded; `account-not-permitted` admits the same token; `token-refused` refuses until the Owner's entry command (run in process) records a receipt of another token, refuses the same token re-entered, fails the attempt that reads a stale entry, and the admitted create carries the new token; the cause record's rules; the receipt constants are the entry command's |
 | `CauseCommand` | the command's exit codes and record; repeat, conflict, an unknown cause, a missing store |
-| `ReviewFindings` | the independent review's findings, each with its probe: the token as an error event's id, source, SDK kind, code or error kind never reaches the end record or the store (B1, P6); a decoy error kind in the CLI's message fails closed, a kind named only inline is none (S1, P1); the last error decides unless an agent or user message or action follows (S3); `security-stop` escalates an interruption and an authentication refusal, never downgrades, never applies to a non-retryable end (S2); a finished earlier attempt is `PRIOR_ATTEMPT_FINISHED` (S5, P3); a security stop refuses another stage of the work item (S6); a concurrent second end is `ATTEMPT_END_CONFLICT` and the repeat returns the one record (N2, P5); a ref holding a token shape is refused (N6) |
+| `ReviewFindings` | the independent review's findings, each with its probe: the token as an error event's id, source, SDK kind, code or error kind never reaches the end record or the store (B1, P6); a decoy error kind in the CLI's message fails closed, a kind named only inline is none (S1, P1); the last error decides unless an agent or user message or action follows (S3); `security-stop` escalates an interruption and an authentication refusal, never downgrades, never applies to a non-retryable end (S2); a finished earlier attempt is `PRIOR_ATTEMPT_FINISHED` (S5, P3); a security stop refuses another stage of the work item (S6); a concurrent second end is `ATTEMPT_END_CONFLICT` and the repeat returns the one record (N2, P5); a ref holding a token shape is refused (N6); the delta review: a detail of 500 characters or more (the reviewer's padded decoy) classifies nothing (D1, Q2); an escalation supersedes an earlier `interruption` end-cause, is repeat-safe, leaves the end record and the end-cause unchanged and is never downgraded (D2, Q3); a `hook` message after the error is not the conversation going on |
 | `UnclassifiedEndCause` | an unclassified end stays `PRIOR_END_UNCLASSIFIED` until classified; `interruption` admits the next ordinal with a new conversation and leaves the end record and its events unchanged; `security-stop` refuses every new attempt (`PRIOR_END_SECURITY_STOP`); no end record, a classified end (an interruption, an authentication refusal, a security stop) is `END_CAUSE_NOT_APPLICABLE`; repeat, conflict and invalid cause; a write crashed before its confirmation counts only once resumed; the command's exit codes and both Task targets |
 | `TokenNeverAgain` | an ended attempt is never re-dispatched; one create per conversation and the token only in creates; no record, refusal or output carries the token, only its fingerprint |
 | `ClientQuery` (unit) | only the event search takes `page_id`, in its grammar; the four routes the end uses are `dispatcher` `allowed` in the pinned allowlist |

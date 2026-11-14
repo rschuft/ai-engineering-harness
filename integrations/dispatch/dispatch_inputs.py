@@ -330,12 +330,12 @@ REFUSALS = {
     'AUTH_CAUSE_CONFLICT': 'another cause is already recorded for the attempt\'s authentication refusal',
     'END_CAUSE_INVALID': 'the classification of an unclassified end is not interruption or security-stop',
     'END_CAUSE_NOT_APPLICABLE': 'the attempt has no end record the cause applies to: interruption classifies only an '
-                                'unclassified end; security-stop an unclassified end, or escalates an interruption '
-                                'or an authentication refusal (never a non-retryable end, never a downgrade)',
+                                'unclassified end not escalated; security-stop escalates any end but a non-retryable '
+                                'one (nothing downgrades an escalation)',
     'PRIOR_ATTEMPT_FINISHED': 'an earlier attempt on the work item, design revision and stage finished its '
                               'conversation and has no end record: its result is the result path\'s (E-05.4), and '
                               'no new attempt is admitted on it here',
-    'END_CAUSE_CONFLICT': 'another classification is already recorded for the attempt\'s unclassified end',
+    'END_CAUSE_CONFLICT': 'the end-cause or escalation receipt of the attempt holds another intent',
 }
 
 

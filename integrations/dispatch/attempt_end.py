@@ -48,10 +48,11 @@ conversation id: the token is never sent to an existing conversation.
 ``record_auth_cause(store, operation_key, cause=, actor=)`` is the engineering manager's cause record, the smallest
 durable form: one integration-store receipt ``dispatch/attempt/<attempt id>/auth-cause`` (``auth-cause/v1``),
 written by the command ``record-auth-cause`` of this module. ``record_end_cause`` (command ``record-end-cause``) is
-the engineering manager's classification of an ended attempt as one receipt ``dispatch/attempt/<attempt id>/end-cause``
-(``end-cause/v1``): ``interruption`` for an unclassified end, ``security-stop`` for an unclassified end or as an
-escalation of an interruption or an authentication refusal, never a downgrade; the end record never changes, and a
-new attempt after an unclassified end stays PRIOR_END_UNCLASSIFIED until it exists. Fingerprints only, here as
+the engineering manager's classification of an ended attempt: ``interruption`` for an unclassified end, as the receipt
+``dispatch/attempt/<attempt id>/end-cause`` (``end-cause/v1``); ``security-stop`` for any end but a non-retryable one,
+as the escalation receipt ``dispatch/attempt/<attempt id>/escalation`` (``escalation/v1``), read first and superseding
+any interruption; never a downgrade. The end record never changes, and a new attempt after an unclassified end stays
+PRIOR_END_UNCLASSIFIED until the end-cause or the escalation exists. Fingerprints only, here as
 everywhere.
 
 Standard library only. It holds no token and reads no credential entry: the entry receipts it reads are the
@@ -93,6 +94,8 @@ CAUSE_KEY = 'dispatch/attempt/{attempt_id}/auth-cause'
 CAUSE_FORMAT = 'ai-engineering-harness/dispatch/auth-cause/v1'
 END_CAUSE_KEY = 'dispatch/attempt/{attempt_id}/end-cause'
 END_CAUSE_FORMAT = 'ai-engineering-harness/dispatch/end-cause/v1'
+ESCALATION_KEY = 'dispatch/attempt/{attempt_id}/escalation'
+ESCALATION_FORMAT = 'ai-engineering-harness/dispatch/escalation/v1'
 CONVERSATION_ENDED, ATTEMPT_STOPPED = 'conversation-ended', 'attempt-stopped'
 TRIGGERS = (CONVERSATION_ENDED, ATTEMPT_STOPPED)
 
@@ -140,6 +143,8 @@ EVENT_CODE_RE = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,63}')
 AUTH_CODES = frozenset({'ACPAuthRequired', 'LLMAuthenticationError'})
 DETAIL_CODES = frozenset({'ACPPromptError', 'ACPInitError', 'ACPStartupTimeout', 'LLMRateLimitError'})
 ERROR_KIND_RE = re.compile(r'"errorKind":\s*"([a-z_]{1,64})"')
+DETAIL_CUT = 500       # the SDK cuts the detail at 500 characters (acp_agent.py _acp_error_detail): a detail that
+                       # long may have lost its trailing data, and its end may be a decoy (D1): no kind
 TRAILING_KIND_RE = re.compile(r': \{"errorKind": "([a-z_]{1,64})"\}\Z')     # json.dumps of the adapter's data, last
 # The closed sets a recorded field is drawn from (anything else is '<other>'; B1): the SDK's SourceType (event/types.py
 # :7), its FailureKind (event/error_classification.py:9-17), the SDK codes of the determination record, and the
@@ -238,16 +243,21 @@ def end_cause_record(integration_store, attempt_id: str) -> dict | None:
     return _confirmed_record(integration_store, END_CAUSE_KEY.format(attempt_id=attempt_id), END_CAUSE_FORMAT)
 
 
+def escalation_record(integration_store, attempt_id: str) -> dict | None:
+    """The engineering manager's escalation of an end to a security stop (escalation/v1), or None."""
+    return _confirmed_record(integration_store, ESCALATION_KEY.format(attempt_id=attempt_id), ESCALATION_FORMAT)
+
+
 def effective_classification(integration_store, record: dict) -> str | None:
-    """An end record's classification as the engineering manager's end-cause record leaves it: security-stop makes
-    any end non-retryable (an escalation, never a downgrade), interruption classifies an unclassified end; without
-    one, the end record's own. The end record itself never changes."""
+    """An end record's classification as the engineering manager's records leave it, the escalation read first: an
+    escalation makes any end non-retryable (it supersedes an interruption end-cause and an interruption or
+    authentication-refusal end; nothing downgrades it); else an interruption end-cause classifies an unclassified end;
+    else the end record's own. The end record itself never changes."""
+    if escalation_record(integration_store, record.get('attemptId')) is not None:
+        return NON_RETRYABLE
     classification = record.get('classification')
     cause = end_cause_record(integration_store, record.get('attemptId'))
-    held = None if cause is None else cause.get('cause')
-    if held == END_CAUSE_SECURITY_STOP:
-        return NON_RETRYABLE
-    if classification == UNCLASSIFIED and held == END_CAUSE_INTERRUPTION:
+    if classification == UNCLASSIFIED and cause is not None and cause.get('cause') == END_CAUSE_INTERRUPTION:
         return INTERRUPTION
     return classification
 
@@ -283,7 +293,10 @@ def _closed(value, allowed) -> str | None:
 def _error_kind(detail: str) -> str | None:
     """The adapter's error kind, read only from the detail's trailing data (``: {"errorKind": "<kind>"}`` at its end,
     acp_agent.py _acp_error_detail); None when there is none, '<ambiguous>' when the detail names more than one
-    distinct kind anywhere (a decoy in the CLI's message: fail closed)."""
+    distinct kind anywhere (a decoy in the CLI's message: fail closed); None for a detail of DETAIL_CUT characters or
+    more, which the SDK may have cut (its trailing data lost, its end possibly the message's decoy)."""
+    if len(detail) >= DETAIL_CUT:
+        return None
     named = set(ERROR_KIND_RE.findall(detail))
     if len(named) > 1:
         return '<ambiguous>'
@@ -592,12 +605,14 @@ def _write_cause(integration_store, key: str, intent: dict, actor: str, conflict
 
 
 def record_end_cause(integration_store, operation_key: str, *, cause: str, actor: str) -> dict:
-    """The engineering manager's classification of an ended attempt: one receipt
-    ``dispatch/attempt/<attempt id>/end-cause`` (``end-cause/v1``), beside the end record, which never changes. CAUSE
-    is ``interruption`` (only for an unclassified end: a new attempt is admitted as after any interruption's end) or
-    ``security-stop`` (for an unclassified end, and as an escalation of an interruption or an authentication
-    refusal: never a new attempt on the work item, PRIOR_END_SECURITY_STOP); it never downgrades anything. Otherwise
-    END_CAUSE_INVALID or END_CAUSE_NOT_APPLICABLE; the same cause again returns it, another is END_CAUSE_CONFLICT."""
+    """The engineering manager's classification of an ended attempt, beside the end record, which never changes.
+    ``interruption``: one receipt ``dispatch/attempt/<attempt id>/end-cause`` (``end-cause/v1``), only for an
+    unclassified end not escalated (a new attempt is admitted as after any interruption's end). ``security-stop``: one
+    receipt ``dispatch/attempt/<attempt id>/escalation`` (``escalation/v1``) for any end but a non-retryable one,
+    whatever end-cause it holds: it supersedes an interruption end-cause and an interruption or authentication-refusal
+    end, so that no new attempt is admitted on the work item (PRIOR_END_SECURITY_STOP). Nothing downgrades. Otherwise
+    END_CAUSE_INVALID or END_CAUSE_NOT_APPLICABLE; the same cause again returns its record (END_CAUSE_CONFLICT only
+    for a receipt that holds another intent)."""
     if cause not in END_CAUSES:
         raise _refused('END_CAUSE_INVALID', f'the cause must be one of {", ".join(END_CAUSES)}')
     if integration_store.get(operation_key) is None or integration_store.attempt_identity(operation_key) is None:
@@ -606,15 +621,23 @@ def record_end_cause(integration_store, operation_key: str, *, cause: str, actor
     ended = end_record(integration_store, attempt_id)
     applicable = (UNCLASSIFIED,) if cause == END_CAUSE_INTERRUPTION else (UNCLASSIFIED, INTERRUPTION, AUTH_REFUSAL)
     if ended is None or ended.get('classification') not in applicable:
-        raise _refused('END_CAUSE_NOT_APPLICABLE', f'attempt {attempt_id} has no end record {cause} applies to (an '
-                       'unclassified end; security-stop also escalates an interruption or an authentication refusal)'
+        raise _refused('END_CAUSE_NOT_APPLICABLE', f'attempt {attempt_id} has no end record {cause} applies to '
+                       '(interruption: an unclassified end; security-stop: any end but a non-retryable one)'
                        + ('' if ended is None else f'; it ended {ended.get("classification")}'))
-    key = END_CAUSE_KEY.format(attempt_id=attempt_id)
-    intent = {'format': END_CAUSE_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
+    common = {'operationKey': operation_key, 'attemptId': attempt_id,
               'conversationId': store.conversation_id_for(operation_key), 'cause': cause,
-              'classification': INTERRUPTION if cause == END_CAUSE_INTERRUPTION else NON_RETRYABLE,
               'endRecord': END_KEY.format(attempt_id=attempt_id)}
-    _write_cause(integration_store, key, intent, actor, 'END_CAUSE_CONFLICT')
+    if cause == END_CAUSE_SECURITY_STOP:
+        intent = {'format': ESCALATION_FORMAT, **common, 'classification': NON_RETRYABLE,
+                  'supersedes': ended.get('classification')}
+        _write_cause(integration_store, ESCALATION_KEY.format(attempt_id=attempt_id), intent, actor,
+                     'END_CAUSE_CONFLICT')
+        return escalation_record(integration_store, attempt_id)
+    if escalation_record(integration_store, attempt_id) is not None:
+        raise _refused('END_CAUSE_NOT_APPLICABLE', f'attempt {attempt_id} is escalated to a security stop: nothing '
+                       'downgrades it')
+    intent = {'format': END_CAUSE_FORMAT, **common, 'classification': INTERRUPTION}
+    _write_cause(integration_store, END_CAUSE_KEY.format(attempt_id=attempt_id), intent, actor, 'END_CAUSE_CONFLICT')
     return end_cause_record(integration_store, attempt_id)
 
 
