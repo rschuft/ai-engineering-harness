@@ -207,6 +207,9 @@ NOT_FORWARDED = HOP_BY_HOP | frozenset({'host', 'content-length', 'accept-encodi
                                         'x-api-key', 'api-key', 'cookie', 'forwarded', 'x-forwarded-for',
                                         'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip'})
 NOT_RELAYED = HOP_BY_HOP | frozenset({'content-length'})
+# S-03.3 (OA-12 package section 3 point 5): request headers that select the provider account's scope (a workspace or an
+# organization) are never forwarded, whatever follows the prefix: stripped, not refused, and named in the audit.
+ACCOUNT_SCOPE_PREFIXES = ('anthropic-workspace', 'anthropic-organization')
 
 # Every stable code: (HTTP status on a listener, remedy).
 CODES = {
@@ -1176,6 +1179,7 @@ class Admission:
     model: str
     body: bytes
     headers: list
+    stripped: tuple = ()     # the account-scope header names stripped (lower case, sorted, distinct)
 
 
 @dataclasses.dataclass(eq=False)
@@ -1606,10 +1610,26 @@ class Broker:
             raise self._refuse('BODY_LENGTH_INVALID', 'the body ended early', grant)
         return body
 
-    def _forward_headers(self, headers, family: Family) -> list:
+    def _forward_headers(self, headers, family: Family) -> tuple[list, tuple]:
+        """(the headers forwarded, the account-scope header names stripped): never a NOT_FORWARDED header, one the
+        Connection header names, an auth header of any family, or one whose name starts with an
+        ACCOUNT_SCOPE_PREFIXES prefix (the provider account's scope is the key's, never the client's)."""
         named = {v.strip().lower() for value in headers.get_all('connection') or [] for v in value.split(',')}
-        stripped = NOT_FORWARDED | named | {f.auth_header for f in self.config.families.values()}
-        return [(name, value) for name, value in headers.items() if name.lower() not in stripped]
+        dropped = NOT_FORWARDED | named | {f.auth_header for f in self.config.families.values()}
+        forward, scoped = [], set()
+        for name, value in headers.items():
+            lower = name.lower()
+            if lower.startswith(ACCOUNT_SCOPE_PREFIXES):
+                scoped.add(lower)
+            elif lower not in dropped:
+                forward.append((name, value))
+        return forward, tuple(sorted(scoped))
+
+    def stripped_names(self, names: tuple) -> dict:
+        """What an admitted request's audit line records of the account-scope headers stripped from it: their names
+        in OBSERVED_WORD's grammar (sorted, at most OBSERVED_NAMES), the others counted, never a value."""
+        kept = [name for name in names if self._recordable('audit stripped header', name, OBSERVED_WORD)]
+        return {'names': kept[:OBSERVED_NAMES], 'unrecorded': len(names) - len(kept[:OBSERVED_NAMES])}
 
     def admit(self, method: str, target: str, headers, read: Callable, flight: Flight | None = None) -> Admission:
         """Admit one inference request or refuse it with a stable code: the token first, then the route, the
@@ -1647,7 +1667,7 @@ class Broker:
             raise self._refuse('MODEL_NOT_ALLOWED', "not in the token's model list", grant)
         self._selected(family, model, grant)
         self._reach(family, document, grant)
-        forward = self._forward_headers(headers, family)
+        forward, stripped = self._forward_headers(headers, family)
         if token in target or any(token in value for _, value in forward) or token.encode('ascii') in body:
             raise self._refuse('TOKEN_IN_REQUEST', 'the token is in the path, a forwarded header or the body', grant)
         if family.upstream is None:
@@ -1664,7 +1684,7 @@ class Broker:
             if flight is not None:
                 flight.grant = grant
                 self._flights[id(flight)] = flight
-        return Admission(grant, family, method, target, path, model, body, forward)
+        return Admission(grant, family, method, target, path, model, body, forward, stripped)
 
     def _recordable(self, what: str, text: str, shape: re.Pattern) -> bool:
         return shape.fullmatch(text) is not None and TOKEN_PREFIX not in text and self.guard.check(what, text)
@@ -1740,6 +1760,8 @@ class Broker:
         line.update(attempt_id=grant.attempt_id, conversation_id=grant.conversation_id,
                     token_fingerprint=grant.fingerprint, family=family.id, path=admission.path,
                     model=admission.model, request_bytes=len(admission.body))
+        if admission.stripped:
+            line['stripped_headers'] = self.stripped_names(admission.stripped)
         try:
             self._relay(handler, admission, flight)
         finally:

@@ -57,6 +57,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_serve.py` | `serve` end to end in the test process |
 | `tests/test_stop.py` | The stop (S-03.2 fix-forward, before act A2): the stop event, the interrupt handler and the forced exit of a second interrupt, `POST /v1/stop` and `inference_control.py stop`, `BROKER_STOPPING` from the stop's start, the bounded drain (a request cut by the stop audited `BROKER_STOPPED`; an upstream that never answers does not hold the stop); on Windows, `serve` in a process of its own stopped by a real `CTRL_BREAK_EVENT`, by `inference_control.py stop`, and forced by a second one |
 | `tests/test_reach.py` | Provider-side reach refused (S-03.3 fix-forward, before the first paid call): each rule of the `anthropic-messages` checker (`mcp_servers`, `container`, a tool type other than `custom`, a `url` or `file` source and a `container_upload` block anywhere, tool results included) refused `PROVIDER_REACH_REFUSED` with its audit `reach` member and nothing sent upstream; plain model calls and custom tools admitted; a family with no checker refused at start on an upstream that is not loopback (`FAMILY_REACH_UNCHECKED`) |
+| `tests/test_account_scope.py` | Account-scope headers never forwarded (S-03.3 fix-forward): every header whose name starts with `anthropic-workspace` or `anthropic-organization` stripped, not refused, for each family, streamed and not, against the fake upstreams; the audit's `stripped_headers` (names only) |
 | `tests/serve_child.py` | The child process of `test_stop.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -274,8 +275,10 @@ reach](#provider-side-reach)); and the token appears nowhere in what would be fo
 then counted, and passed through unchanged to the family's one upstream origin: the same method, target and
 body; the client's headers except hop-by-hop ones, `Host`, `Content-Length`, `Accept-Encoding` (the broker
 asks for `identity`, so that usage can be read) and every credential-bearing header (`Authorization`,
-`X-Api-Key`, `Api-Key`, `Proxy-Authorization`, `Cookie`, `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`); then the
-family's auth header with the provider key. The answer is streamed back as it arrives (status, headers,
+`X-Api-Key`, `Api-Key`, `Proxy-Authorization`, `Cookie`, `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`) and every
+header that selects the provider account's scope, whose lower-cased name starts with `anthropic-workspace` or
+`anthropic-organization` (S-03.3: stripped, not refused; the audit line names them); then the family's auth
+header with the provider key. The answer is streamed back as it arrives (status, headers,
 body; chunked when the upstream gives no length), its usage read on the way. Accounting and the audit line
 are written before the answer's last bytes, so a client's next request already meets them. An upstream error
 status is passed through as it is.
@@ -354,7 +357,9 @@ One append-only JSON line per request (`aieh-inference-audit/1`) in a new file p
 `request_bytes`, `response_bytes`, `status`, `upstream_status`, `latency_ms`, `usage` and `code` (the refusal
 code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`, `BROKER_STOPPED`: cut by the broker's
 stop); plus `broker-start`, `broker-stop` (`stopped_by`, `requests_cut`, `live_grants_ended`) and
-`handler-error` lines. A request refused `PROVIDER_REACH_REFUSED` adds `reach` (`rule` and `name`). An admitted
+`handler-error` lines. A request refused `PROVIDER_REACH_REFUSED` adds `reach` (`rule` and `name`); an admitted
+request whose account-scope headers were stripped adds `stripped_headers` (`names`, in the bounded name grammar
+below, and the count of the others, `unrecorded`), never a value. An admitted
 request's line has its declared route and admitted model. A refused request's line (the S-03.3 slice plan's D-4, for route and model discovery without a model call against the
 fake upstream) has its path, its query parameter **names** (sorted, at most 16) and, when it presented a
 grant's token, the `model` of its JSON body (read, if the refusal came first, from the body the refusal
