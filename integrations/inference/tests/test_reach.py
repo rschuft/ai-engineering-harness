@@ -9,8 +9,12 @@ The authorized D1 scope is plain model calls: an anthropic-messages request must
 run anything outside the request. Shown here, on the parsed JSON body of every admitted request: a top-level
 mcp_servers or container refused whatever its value; a tool whose type is present and not custom refused (every
 server tool and provider-defined tool type); a source of type url or file and a container_upload block refused
-anywhere in the body, tool results included; custom tools and plain content admitted; the audit line naming the
-rule and the key or type name in the bounded name grammar, never a value; nothing sent upstream. A family with no
+anywhere in the body, tool results included; a tools value that is not a list, or a tools entry that is not an
+object, refused as tools-shape (fail closed); custom tools and plain content admitted; the audit line naming the
+rule and the key or type name in the bounded name grammar, never a value; nothing sent upstream. A body nested too
+deeply for the JSON parser (RecursionError) refused BODY_NOT_JSON over the wire, with nothing forwarded and no
+handler error, and so is a control body (CONTROL_BODY_INVALID); an upstream answer nested so deeply is unknown
+usage, not a handler error. A family with no
 reach checker (the OpenAI families) refused at start when its upstream is not loopback (FAMILY_REACH_UNCHECKED),
 and unchanged on a loopback upstream. Everything is synthetic.
 """
@@ -61,6 +65,15 @@ REFUSED = {
                         'something_new_20270101'),
     'a type that is not a string': (body(tools=[{'type': None, 'name': 'n'}]), 'tool-type', None),
     'a type outside the grammar': (body(tools=[{'type': 'x' * 40, 'name': 'n'}]), 'tool-type', None),
+    # tools whose shape the rule cannot read (fail closed)
+    'tools an object': (body(tools={'type': 'web_search_20250305', 'name': 'web_search'}), 'tools-shape', 'tools'),
+    'tools a string': (body(tools='web_search_20250305'), 'tools-shape', 'tools'),
+    'tools null': (body(tools=None), 'tools-shape', 'tools'),
+    'tools a number': (body(tools=1), 'tools-shape', 'tools'),
+    'a tools entry a string': (body(tools=[CUSTOM_TOOL, 'web_search_20250305']), 'tools-shape', 'tools'),
+    'a tools entry null': (body(tools=[None]), 'tools-shape', 'tools'),
+    'a tools entry a list': (body(tools=[[{'type': 'web_search_20250305', 'name': 'web_search'}]]), 'tools-shape',
+                             'tools'),
     # sources and blocks, anywhere
     'an image by url': (message({'type': 'image', 'source': {'type': 'url', 'url': 'https://img.example.test/a.png'}}),
                         'source-type', 'url'),
@@ -86,6 +99,7 @@ REFUSED = {
 ADMITTED = {
     'plain text': body(),
     'custom tools without a type': body(tools=[CUSTOM_TOOL]),
+    'no tools at all': body(tools=[]),
     'a custom tool with its type': body(tools=[{**CUSTOM_TOOL, 'type': 'custom'}]),
     'an image inline': message({'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png',
                                                              'data': 'iVBORw0KGgo='}}),
@@ -204,6 +218,71 @@ class OverTheWire(unittest.TestCase):
             (None, None)])
         self.assertNotIn('reach', lines[-1])                       # only a reach refusal carries the member
         self.assertNotIn('SYNTHETIC-VALUE-9f3a', rig.audit.path.read_text(encoding='utf-8'))
+
+
+def nested(depth: int) -> bytes:
+    """A JSON object holding one list nested DEPTH deep: valid JSON that json.loads cannot parse without
+    exceeding the interpreter's recursion limit (RecursionError) when DEPTH is large."""
+    return b'{"model": "%s", "messages": ' % S.MODEL_A.encode() + b'[' * depth + b']' * depth + b'}'
+
+
+class TooDeeplyNested(unittest.TestCase):
+    """json.loads raises RecursionError, not ValueError, on a body nested deeper than the interpreter's recursion
+    limit: admission refuses it BODY_NOT_JSON (never a handler error) and forwards nothing."""
+
+    DEPTH = 200_000
+
+    def test_the_parser_raises_recursion_error_on_it(self):
+        with self.assertRaises(RecursionError):
+            json.loads(nested(self.DEPTH))
+        self.assertEqual(json.loads(nested(3))['messages'], [[[]]])
+
+    def test_admission_refuses_it_socket_free(self):
+        rig = S.Rig(S.component({FAMILY: 'http://127.0.0.1:9'}), connect=never)
+        self.addCleanup(rig.close)
+        grant = rig.issue(family=FAMILY)
+        data = nested(self.DEPTH)
+        headers = S.headers(S.auth(FAMILY, grant['token']), ('Content-Type', 'application/json'),
+                            ('Content-Length', str(len(data))))
+        with self.assertRaises(IB.InferenceError) as caught:
+            rig.broker.admit('POST', '/v1/messages', headers, io.BytesIO(data).read)
+        self.assertEqual((caught.exception.code, caught.exception.status), ('BODY_NOT_JSON', 400))
+        self.assertEqual(rig.broker.observed_request('/v1/messages', data)['model'], None)
+
+    def test_over_the_wire_it_is_refused_and_nothing_is_forwarded(self):
+        upstream = S.FakeUpstream(FAMILY)
+        self.addCleanup(upstream.close)
+        rig = S.Rig(S.component({FAMILY: upstream.origin})).start()
+        self.addCleanup(rig.close)
+        grant = rig.issue(family=FAMILY)
+        status, _, data = S.request(rig.inference, 'POST', '/v1/messages', header_pairs=[
+            S.auth(FAMILY, grant['token']), ('Content-Type', 'application/json')], raw_body=nested(self.DEPTH))
+        self.assertEqual((status, json.loads(data)['aieh_refusal']['code']), (400, 'BODY_NOT_JSON'))
+        self.assertEqual(upstream.requests, [])
+        lines = rig.audit_lines()
+        self.assertEqual([line['code'] for line in lines if line.get('event') == 'request'], ['BODY_NOT_JSON'])
+        self.assertEqual([line for line in lines if line.get('event') == 'handler-error'], [])
+        status, _, _ = S.request(rig.inference, 'POST', '/v1/messages', body(), [S.auth(FAMILY, grant['token'])])
+        self.assertEqual(status, 200)                        # the broker serves on
+        self.assertEqual(len(upstream.requests), 1)
+
+    def test_a_control_body_nested_too_deeply_is_refused(self):
+        rig = S.Rig(S.component({FAMILY: 'http://127.0.0.1:9'}), connect=never).start()
+        self.addCleanup(rig.close)
+        data = b'[' * 30_000 + b']' * 30_000          # within the control body limit (64 KiB)
+        self.assertLessEqual(len(data), IB.CONTROL_BODY_LIMIT)
+        status, _, answer = S.request(rig.control, 'POST', '/v1/grants', header_pairs=[
+            ('Content-Type', 'application/json')], raw_body=data)
+        self.assertEqual((status, json.loads(answer)['aieh_refusal']['code']), (400, 'CONTROL_BODY_INVALID'))
+        self.assertEqual([line for line in rig.audit_lines() if line.get('event') == 'handler-error'], [])
+
+    def test_an_upstream_answer_nested_too_deeply_is_unknown_usage(self):
+        for content_type, data in (('application/json', nested(self.DEPTH)),
+                                   ('text/event-stream', b'data: ' + nested(self.DEPTH) + b'\n\n')):
+            with self.subTest(content_type):
+                reader = IB.UsageReader(FAMILY, content_type)
+                reader.feed(data)
+                self.assertEqual(reader.finish(), 'unknown')
 
 
 class AtStart(V.EnvelopeCase):

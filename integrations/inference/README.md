@@ -56,7 +56,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_broker_http.py` | Both listeners against the three fake upstreams: pass-through, key substitution, streaming, no budget (an answer without usage, a cut stream and an upstream error stop nothing), revocation and expiry on the wire, refusals, egress to the configured origin only, exclusive ports, the audit and the I7 scan; the refused-request audit (S-03.3 slice plan D-4): path, query parameter names and model in their bounded grammars, a credential in a path, a name, a query value, a header or the model never recorded |
 | `tests/test_serve.py` | `serve` end to end in the test process |
 | `tests/test_stop.py` | The stop (S-03.2 fix-forward, before act A2): the stop event, the interrupt handler and the forced exit of a second interrupt, `POST /v1/stop` and `inference_control.py stop`, `BROKER_STOPPING` from the stop's start, the bounded drain (a request cut by the stop audited `BROKER_STOPPED`; an upstream that never answers does not hold the stop); on Windows, `serve` in a process of its own stopped by a real `CTRL_BREAK_EVENT`, by `inference_control.py stop`, and forced by a second one |
-| `tests/test_reach.py` | Provider-side reach refused (S-03.3 fix-forward, before the first paid call): each rule of the `anthropic-messages` checker (`mcp_servers`, `container`, a tool type other than `custom`, a `url` or `file` source and a `container_upload` block anywhere, tool results included) refused `PROVIDER_REACH_REFUSED` with its audit `reach` member and nothing sent upstream; plain model calls and custom tools admitted; a family with no checker refused at start on an upstream that is not loopback (`FAMILY_REACH_UNCHECKED`) |
+| `tests/test_reach.py` | Provider-side reach refused (S-03.3 fix-forward, before the first paid call): each rule of the `anthropic-messages` checker (`mcp_servers`, `container`, a tool type other than `custom`, a `tools` that is not a list or an entry that is not an object, a `url` or `file` source and a `container_upload` block anywhere, tool results included) refused `PROVIDER_REACH_REFUSED` with its audit `reach` member and nothing sent upstream; plain model calls and custom tools admitted; a family with no checker refused at start on an upstream that is not loopback (`FAMILY_REACH_UNCHECKED`); a body nested too deeply to parse refused `BODY_NOT_JSON` over the wire (a control body `CONTROL_BODY_INVALID`; an upstream answer unknown usage), never a handler error |
 | `tests/test_account_scope.py` | Account-scope headers never forwarded (S-03.3 fix-forward): every header whose name starts with `anthropic-workspace` or `anthropic-organization` stripped, not refused, for each family, streamed and not, against the fake upstreams; the audit's `stripped_headers` (names only) |
 | `tests/test_query.py` | Exact query-string equality (S-03.3 fix-forward; `pass` retired): `anthropic-messages` declares exactly `beta=true`, admitted and forwarded unchanged; every other form (case, repetition, addition, percent-encoding, `&`, `#`, an empty query) refused `QUERY_NOT_ALLOWED` before anything is sent; the description output; the qualification's fake upstream answering the declared query |
 | `tests/serve_child.py` | The child process of `test_stop.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
@@ -311,6 +311,8 @@ the parsed JSON body of every admitted request; `anthropic-messages` refuses, wi
 - an entry of `tools` whose `type` is present and is not `custom` (rule `tool-type`): every server tool (web
   search, web fetch, code execution) and every provider-defined tool type, known or not, fail closed; Claude
   Code's own tools are custom tools;
+- a `tools` that is present and is not a list, or a `tools` entry that is not an object (rule `tools-shape`, name
+  `tools`): a shape the rule cannot read is refused, never passed on;
 - anywhere in the body (every nested object and list, tool results included), an object whose `source` is an
   object of `type` `url` or `file` (rule `source-type`), and a block whose `type` is `container_upload` (rule
   `block-type`).
@@ -319,6 +321,11 @@ The refused request's audit line carries `reach`: `{"rule", "name"}`, the name b
 audit's bounded name grammar (`null` outside it), never a value. A family with no reach checker (the two OpenAI
 families today) is refused at start when its upstream is not loopback (`FAMILY_REACH_UNCHECKED`); on a loopback
 upstream it is unchanged. The walk is iterative, so a deeply nested body is checked whole.
+
+**A body nested too deeply to parse.** The JSON parser raises `RecursionError`, not a JSON error, on a body nested
+deeper than the interpreter's recursion limit. Admission refuses such a body `BODY_NOT_JSON` (400) like any body
+that is not JSON, with nothing forwarded and no handler error; the control listener refuses one
+`CONTROL_BODY_INVALID`, and an upstream answer nested so deeply is read as unknown usage.
 
 **Egress.** `connect_upstream` is the one place that opens a connection, to the configured upstream origin of
 the admitted token's family: `https` with the system's trust roots and hostname check, or `http` to a

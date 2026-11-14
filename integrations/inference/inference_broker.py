@@ -66,7 +66,8 @@ Provider-side reach (S-03.3, before the first paid call; the OA-12 package secti
 is plain model calls, so a request must not ask the provider to reach or run anything outside the request. A
 family's reach checker (REACH_CHECKERS) reads every admitted request's JSON body; anthropic-messages refuses a
 top-level mcp_servers or container, a tool whose type is present and not custom (every server tool and every
-provider-defined tool type: fail closed), and anywhere in the body a source of type url or file or a
+provider-defined tool type: fail closed), a tools value that is not a list or a tools entry that is not an object
+(tools-shape: fail closed), and anywhere in the body a source of type url or file or a
 container_upload block (PROVIDER_REACH_REFUSED; the audit names the rule and the key or type name, never a value).
 A family with no checker (the OpenAI families today) is refused at start when its upstream is not loopback
 (FAMILY_REACH_UNCHECKED).
@@ -322,7 +323,8 @@ CODES = {
     'BODY_NOT_JSON': (400, 'send the body as one uncompressed JSON object'),
     'MODEL_MISSING': (400, 'send the model as a string field "model"'),
     'MODEL_NOT_ALLOWED': (403, "use a model of the token's list"),
-    'PROVIDER_REACH_REFUSED': (400, 'send a plain model call: no mcp_servers or container, no tool whose type is '
+    'PROVIDER_REACH_REFUSED': (400, 'send a plain model call: no mcp_servers or container, tools as a list of '
+                                    'objects, no tool whose type is '
                                     'not custom (no server tool or provider-defined tool), no content whose source '
                                     'is a url or a file, no container_upload block; the provider is never asked to '
                                     'reach or run anything outside the request'),
@@ -843,14 +845,19 @@ def anthropic_reach(document: dict):
     """(rule, name) of the first thing in an anthropic-messages request body that asks the provider to reach or
     run something outside the request, or None. NAME is the key or the type as the body gives it (the caller
     records it only in the audit's bounded name grammar). The walk is iterative (no recursion limit) and covers
-    every nested object and list, tool results included."""
+    every nested object and list, tool results included. A top-level tools that is not a list, or a tools entry
+    that is not an object, is refused as tools-shape (fail closed: the rule cannot read it)."""
     for key in REACH_KEYS:
         if key in document:
             return 'top-level-key', key
-    tools = document.get('tools')
-    if isinstance(tools, list):
+    if 'tools' in document:
+        tools = document['tools']
+        if not isinstance(tools, list):       # fail closed: a shape the rule cannot read is not passed on
+            return 'tools-shape', 'tools'
         for tool in tools:
-            if isinstance(tool, dict) and 'type' in tool and tool['type'] != 'custom':
+            if not isinstance(tool, dict):
+                return 'tools-shape', 'tools'
+            if 'type' in tool and tool['type'] != 'custom':
                 return 'tool-type', tool['type']
     stack = [document]
     while stack:
@@ -956,7 +963,7 @@ class UsageReader:
     def _event(self, data: bytes) -> None:
         try:
             event = json.loads(data)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return
         if not isinstance(event, dict):
             return
@@ -1681,7 +1688,7 @@ class Broker:
         body = self._read_body(headers, read, grant)
         try:
             document = json.loads(body)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):   # RecursionError: nested too deeply to parse
             raise self._refuse('BODY_NOT_JSON', 'the body is not JSON', grant) from None
         if not isinstance(document, dict):
             raise self._refuse('BODY_NOT_JSON', 'the body is not a JSON object', grant)
@@ -1737,7 +1744,7 @@ class Broker:
         model = None
         try:
             document = json.loads(body) if body else None
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             document = None
         if isinstance(document, dict) and 'model' in document:
             candidate = document['model']
@@ -2142,7 +2149,7 @@ class _ControlHandler(_Handler):
         self.body_consumed = True
         try:
             return json.loads(self.rfile.read(int(length)))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):   # RecursionError: nested too deeply to parse
             raise InferenceError('CONTROL_BODY_INVALID', 'the body is not JSON') from None
 
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_CONNECT = do_TRACE = _serve
