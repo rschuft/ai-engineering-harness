@@ -132,10 +132,10 @@ PATH_LOST_CODES = frozenset({'ECONNREFUSED', 'ConnectionRefused', 'ENOTFOUND', '
                              'EHOSTUNREACH', 'EHOSTDOWN', 'EAI_AGAIN', 'FailedToOpenSocket', 'ERR_PROXY_TUNNEL'})
 AUTH_KINDS = frozenset({'authentication_failed', 'oauth_org_not_allowed'})
 USAGE_KINDS = frozenset({'rate_limit', 'billing_error'})
-# The CLI's own texts (2.1.220): the request timed out (@252038045 tct), the connection slept (lir), no connection.
+# The CLI's own texts (2.1.220): the request timed out (@252038121 tct), the connection slept (lir), no connection.
 STREAM_CUT_TEXTS = ('Request timed out', 'Connection interrupted by system sleep')
 PATH_LOST_TEXTS = ('Unable to connect to API. Check your internet connection',)
-# ... and the provider's overload: repeated 529s (@252038008 P7r) and a 5xx (ley's server-side text, @252026861).
+# ... and the provider's overload: repeated 529s (@252038008 P7r) and a 5xx (ley's server-side text, @252027146).
 OVERLOAD_TEXTS = ('Repeated 529 Overloaded errors', 'This is a server-side issue')
 
 # The native-token entry receipts (integrations/credentials native_token_entry.py SERVICE, credential_provider.py
