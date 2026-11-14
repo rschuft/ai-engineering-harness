@@ -135,6 +135,11 @@ class Spy:
         return call
 
 
+def refused_connect(origin, timeout):
+    """The broker's connector refused: no connection is made at all (connect_upstream raising)."""
+    raise ConnectionRefusedError('the synthetic upstream refused the connection')
+
+
 def _quietly(call, *args):
     try:
         call(*args)
@@ -155,9 +160,10 @@ class Case(V.EnvelopeCase):
         rig.start()
         return rig, rig.issue(family='anthropic-messages', ttl=3600)['token']
 
-    def send(self, rig, token, connection, **kw):
-        """One request through the broker's own pass-through, answered by CONNECTION."""
-        rig.broker._connect = lambda origin, timeout: connection
+    def send(self, rig, token, connection, *, connect=None, **kw):
+        """One request through the broker's own pass-through, answered by CONNECTION (or by CONNECT, which stands
+        in for the broker's connector itself)."""
+        rig.broker._connect = connect or (lambda origin, timeout: connection)
         handler = Handler(rig.broker, token, **kw)
         rig.broker.serve_inference(handler)
         return handler
@@ -277,8 +283,10 @@ class NothingRefusedForUsage(Case):
             getresponse=http.client.RemoteDisconnected('no answer')), code='UPSTREAM_UNREACHABLE', status=502),
         'a connection made and the request cut': dict(connection=lambda: Connection(
             endheaders=ConnectionResetError('reset while sending')), code='UPSTREAM_UNREACHABLE', status=502),
-        'a refused connect': dict(connection=lambda: Connection(endheaders=ConnectionRefusedError('refused')),
-                                  code='UPSTREAM_UNREACHABLE', status=502),
+        'a connection made, then refused while sending': dict(connection=lambda: Connection(
+            endheaders=ConnectionRefusedError('refused')), code='UPSTREAM_UNREACHABLE', status=502),
+        'a refused connect': dict(connection=lambda: None, connect=refused_connect, code='UPSTREAM_UNREACHABLE',
+                                  status=502),
         'an answer outside 2xx': dict(connection=lambda: Connection(Response(
             500, chunks=[b'{"error": {"message": "synthetic"}}'])), code=None, status=500),
     }
@@ -289,7 +297,8 @@ class NothingRefusedForUsage(Case):
         for name, case in self.CASES.items():
             with self.subTest(name):
                 rig, token = self.started(raw)
-                first = self.send(rig, token, case['connection'](), client_gone=case.get('client_gone', False))
+                first = self.send(rig, token, case['connection'](), connect=case.get('connect'),
+                                  client_gone=case.get('client_gone', False))
                 self.assertEqual(first.status(), case['status'])
                 after = Connection(Response())
                 self.assertEqual(self.send(rig, token, after).status(), 200)     # admitted, passed through
@@ -424,9 +433,15 @@ class Stopping(Case):
         self.assertEqual(len(upstream), 1)                                # the second request was never forwarded
 
     def test_a_broker_that_is_not_stopping_admits(self):
-        rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'}), connect=V.refuse)
-        self.addCleanup(rig.close)
+        """The control of the tests above: before its stop the same broker admits the request and forwards it."""
+        raw = V.component()
+        self.governing(raw)
+        rig, token = self.started(raw)
         self.assertFalse(rig.broker._stopping)
+        upstream = Connection(Response())
+        self.assertEqual(self.send(rig, token, upstream).status(), 200)
+        self.assertEqual(upstream.sent[0], ('POST', '/v1/messages'))       # forwarded
+        self.assertEqual(self.request_codes(rig), [None])
 
 
 # ---------------------------------------------------------------- the held authorization (carried over)
