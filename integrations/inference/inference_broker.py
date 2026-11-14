@@ -44,9 +44,17 @@ latency, usage), never a body, a header, the token or the provider key; every li
 passes the I7 no-exposure scan of F-06.3 first, and a line that fails it is withheld.
 
 The provider key is one entry of the harness's credential provider (F-06.3): name "AIEH model provider", user
-the provider id. Only the Owner-run credential-set command writes it, reading the key from standard input only
-(never argv, the environment, a file or config.yml), and it writes an aieh-credential-act/1 receipt with the
-fingerprint only.
+the provider id. Only the Owner-run credential-set and credential-enter commands write it, and both write an
+aieh-credential-act/1 receipt with the fingerprint only. credential-set reads the key from standard input only
+(never argv, the environment, a file or config.yml). credential-enter (S-03.3, the Owner's act 2 of OA-12) is the
+one the Owner runs in his own console window: standard input must be an interactive console (on Windows, its handle
+has a console mode), else it refuses before prompting (KEY_CONSOLE_REQUIRED); the key is pasted once at a hidden
+prompt (getpass: echo off, read from the console itself, never a fallback that echoes); a value that is not
+key-shaped (ENTERED_KEY_RULES: sk-ant-api, then only [A-Za-z0-9_-], 40 to 512 characters; an admin key, an empty
+value and any whitespace refused, never stripped) is refused naming the rule, never the value
+(KEY_NOT_KEY_SHAPED); an existing entry is replaced only with --replace (KEY_ENTRY_EXISTS). The key is held in
+memory only, and the command prints nothing derived from it (no fingerprint, length or prefix): only that it is
+stored under the entry name, and a reminder to clear the clipboard.
 
 The provider envelope (plan leaf S-03.5, slice 1): before it reads the provider key or opens a listener, serve
 refuses any family whose upstream is not loopback (Origin.loopback: an IP literal only) unless the integration
@@ -84,6 +92,7 @@ once with FORCED_EXIT, writing nothing further.
   <tools python> -I -B integrations/inference/inference_broker.py config
   <tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]
   <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   (key on stdin)
+  <tools python> -I -B integrations/inference/inference_broker.py credential-enter --provider ID [--replace]
   <tools python> -I -B integrations/inference/inference_broker.py serve
 
 Exit 0 done, 1 failed, 2 refused (a stable code), 3 forced (serve: a second interrupt during the stop).
@@ -163,6 +172,7 @@ AUDIT_FORMAT = 'aieh-inference-audit/1'
 STATUS_FORMAT = 'aieh-inference-broker-status/1'
 CONFIG_FORMAT = 'aieh-inference-config/1'
 CREDENTIAL_SET_FORMAT = 'aieh-inference-credential-set/1'
+CREDENTIAL_ENTER_FORMAT = 'aieh-inference-credential-enter/1'
 ENVELOPE_REPORT_FORMAT = 'aieh-provider-envelope-report/1'
 LOOPBACK = '127.0.0.1'
 TOKEN_PREFIX = 'aieh-inf-'
@@ -340,6 +350,16 @@ CODES = {
     'KEY_INVALID': (400, 'pipe exactly the key: printable ASCII without spaces, 8 to 4096 characters, '
                          'optionally followed by one newline'),
     'KEY_READ_BACK_FAILED': (500, 'the entry did not read back as written: rerun credential-set'),
+    # credential-enter (S-03.3: the Owner's act 2 of OA-12, in his own console window)
+    'KEY_CONSOLE_REQUIRED': (400, 'run credential-enter in your own console window, at its prompt: standard input '
+                                  'must be an interactive console (not a pipe, a file or a redirection), and the '
+                                  'key is read with echo off from that console only'),
+    'KEY_NOT_KEY_SHAPED': (400, 'paste the dedicated provider key again, exactly as the provider shows it: '
+                                'sk-ant-api followed only by letters, digits, "_" and "-", 40 to 512 characters, '
+                                'no space or line break inside it; an admin key (sk-ant-admin) is never stored'),
+    'KEY_ENTRY_EXISTS': (409, 'the entry "AIEH model provider" exists: run credential-enter --replace to replace '
+                              'it, then restart the broker'),
+    'KEY_ENTRY_CANCELLED': (400, 'the prompt was cancelled and nothing was stored: run credential-enter again'),
 }
 REMEDIES = {code: remedy for code, (_, remedy) in CODES.items()}
 
@@ -2210,6 +2230,137 @@ def credential_set(provider, store, provider_id: str, key: str, *, guard) -> dic
             'fingerprint': after, 'receipt': result}
 
 
+# ---------------------------------------------------------------- the credential enter command (S-03.3)
+
+ENTERED_KEY_PREFIX = 'sk-ant-api'                  # the provider's API key form
+ADMIN_KEY_PREFIX = 'sk-ant-admin'                  # the provider's admin key form: never stored
+ENTERED_KEY_CHARACTERS = re.compile(r'[A-Za-z0-9_-]+')
+# A broad bound, not an exact length (no length is verified for the provider's keys): the whole value.
+ENTERED_KEY_LENGTH = (40, 512)
+# The rules a pasted value must meet, in the order they are checked; a refusal names the first one it fails.
+ENTERED_KEY_RULES = (
+    ('empty', 'the value is empty'),
+    ('whitespace', 'the value holds a space, a tab or a line break (it is not stripped)'),
+    ('admin-key', f'the value is an admin key ({ADMIN_KEY_PREFIX}...), which is never stored'),
+    ('prefix', f'the value does not begin {ENTERED_KEY_PREFIX}'),
+    ('characters', 'the value holds a character other than a letter, a digit, "_" or "-"'),
+    ('length', f'the value is not {ENTERED_KEY_LENGTH[0]} to {ENTERED_KEY_LENGTH[1]} characters long'),
+)
+KEY_PROMPT = 'Paste the dedicated provider key (it is not shown), then press Enter: '
+CLIPBOARD_REMINDER = ('Clear the clipboard now: the key was pasted from it, and it stays there until something else '
+                      'is copied.')
+
+
+def entered_key_rule(value) -> str | None:
+    """The name of the first of ENTERED_KEY_RULES that VALUE fails, or None when it is key-shaped. Nothing of the
+    value is returned."""
+    if not isinstance(value, str) or not value:
+        return 'empty'
+    if any(c.isspace() for c in value):
+        return 'whitespace'
+    if value.startswith(ADMIN_KEY_PREFIX):
+        return 'admin-key'
+    if not value.startswith(ENTERED_KEY_PREFIX):
+        return 'prefix'
+    if not value.isascii() or not ENTERED_KEY_CHARACTERS.fullmatch(value):
+        return 'characters'
+    if not ENTERED_KEY_LENGTH[0] <= len(value) <= ENTERED_KEY_LENGTH[1]:
+        return 'length'
+    return None
+
+
+def stdin_is_console(stream) -> bool:
+    """Whether STREAM (standard input) is an interactive console. On Windows its handle must have a console mode
+    (GetConsoleMode succeeds only on a console handle: a pipe, a file, the null device or a redirection fails), not
+    merely isatty; elsewhere its descriptor must be a terminal."""
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return False
+    if not isinstance(fd, int) or fd < 0:
+        return False
+    if os.name == 'nt':
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        try:
+            handle = msvcrt.get_osfhandle(fd)
+        except OSError:
+            return False
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.GetConsoleMode.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.GetConsoleMode.restype = wintypes.BOOL
+        mode = wintypes.DWORD()
+        return bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    try:
+        return os.isatty(fd)
+    except OSError:
+        return False
+
+
+class Console:
+    """The Owner's console, for credential-enter: interactive() is stdin_is_console(STDIN); read_hidden(prompt)
+    reads one line with echo off through getpass, which reads the console itself on Windows (msvcrt) and the
+    terminal elsewhere. getpass's fallback, which would read standard input with echo, is never taken: its warning
+    is an error here (KEY_CONSOLE_REQUIRED)."""
+
+    def __init__(self, stdin):
+        self.stdin = stdin
+
+    def interactive(self) -> bool:
+        return stdin_is_console(self.stdin)
+
+    def read_hidden(self, prompt: str) -> str:
+        import getpass
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', getpass.GetPassWarning)
+            try:
+                return getpass.getpass(prompt)
+            except getpass.GetPassWarning:
+                raise InferenceError('KEY_CONSOLE_REQUIRED', 'echo cannot be turned off on this input') from None
+
+
+def credential_enter(console, provider, store_factory: Callable, provider_id: str, *, replace: bool,
+                     guard) -> dict:
+    """The Owner's key entry (S-03.3; the Owner's act 2 of OA-12): refuse unless CONSOLE is interactive, and refuse
+    an existing entry without REPLACE, both before prompting; read the key once at a hidden prompt; refuse a value
+    that is not key-shaped (naming the rule only); store it through the custody path of credential-set (PROVIDER,
+    an aieh-credential-act/1 receipt with fingerprints only in the store STORE_FACTORY opens, read back). The report
+    names the entry and the receipt and reminds the Owner to clear the clipboard; nothing in it is derived from the
+    key."""
+    if not isinstance(provider_id, str) or not PROVIDER_ID.fullmatch(provider_id):
+        raise InferenceError('PROVIDER_ID_INVALID', 'not a provider id')
+    if not console.interactive():
+        raise InferenceError('KEY_CONSOLE_REQUIRED', 'standard input is not an interactive console')
+    existing = provider.get(ENTRY)
+    exists = existing is not None
+    del existing
+    if exists and not replace:
+        raise InferenceError('KEY_ENTRY_EXISTS', f'the entry "{ENTRY}" exists and --replace was not given')
+    try:
+        key = console.read_hidden(KEY_PROMPT)
+    except (KeyboardInterrupt, EOFError):
+        raise InferenceError('KEY_ENTRY_CANCELLED', 'the prompt ended before a key was entered') from None
+    rule = entered_key_rule(key)
+    if rule is not None:
+        del key
+        raise InferenceError('KEY_NOT_KEY_SHAPED', f'refused by the rule {rule}: {dict(ENTERED_KEY_RULES)[rule]}; '
+                                                   'nothing was stored')
+    guard.hold(key)
+    store = store_factory()
+    try:
+        stored = credential_set(provider, store, provider_id, key, guard=guard)
+    finally:
+        store.close()
+        del key
+    return {'format': CREDENTIAL_ENTER_FORMAT, 'entry': ENTRY, 'user': provider_id, 'verb': stored['verb'],
+            'stored': True, 'read_back': True,
+            'message': f'The provider key is stored in the credential entry "{ENTRY}" (user {provider_id}).',
+            'reminder': CLIPBOARD_REMINDER,
+            'receipt': {k: stored['receipt'][k] for k in ('operation_key', 'format', 'state')}}
+
+
 # ---------------------------------------------------------------- command line
 
 
@@ -2230,6 +2381,9 @@ class Context:
     # side of the provider-envelope authorizations (envelope_decisions.verifier); None refuses such a start.
     authorization: Callable | None = None
     clock: Callable = time.time  # serve: the broker's clock (the envelope's expiry, at start and at admission)
+    # credential-enter: the console the key is pasted at (interactive(), read_hidden(prompt)); None is the real
+    # console of STDIN (Console). A test passes its own, never a real console.
+    console: object = None
 
 
 def stop_signal_handler(ask: Callable[[str], bool], finished: threading.Event | None = None, *,
@@ -2303,7 +2457,7 @@ def managed_context() -> Context:
                    store=lambda: store_module.open_store(paths.ensure('state', res, 'integration')
                                                          / 'integration.sqlite'),
                    logs=lambda: paths.ensure('logs', res, 'inference'), stdin=sys.stdin, out=sys.stdout,
-                   err=sys.stderr, wait=_wait_for_interrupt, authorization=authorization)
+                   err=sys.stderr, wait=_wait_for_interrupt, authorization=authorization, console=Console(sys.stdin))
 
 
 def _serve(ctx: Context, guard: BrokerGuard) -> dict:
@@ -2363,6 +2517,11 @@ def main(argv=None, context: Context | None = None) -> int:
     cred = sub.add_parser('credential-set', help='store the provider key, read from standard input only, as the '
                                                  'entry "AIEH model provider"; prints its fingerprint')
     cred.add_argument('--provider', required=True, help='the provider id (the entry\'s user name)')
+    enter = sub.add_parser('credential-enter', help='the Owner\'s key entry, in his own console window: paste the '
+                                                    'provider key once at a hidden prompt; it is stored as the entry '
+                                                    '"AIEH model provider"; prints nothing derived from the key')
+    enter.add_argument('--provider', required=True, help='the provider id (the entry\'s user name)')
+    enter.add_argument('--replace', action='store_true', help='replace an existing entry (refused without it)')
     sub.add_parser('serve', help='run the broker on its two loopback listeners until stopped (Ctrl-C, Ctrl-Break, '
                                  'SIGTERM, or inference_control.py stop)')
     args = parser.parse_args(argv)
@@ -2387,6 +2546,12 @@ def main(argv=None, context: Context | None = None) -> int:
             finally:
                 store.close()
             del key
+        elif args.command == 'credential-enter':
+            if not PROVIDER_ID.fullmatch(args.provider):
+                raise InferenceError('PROVIDER_ID_INVALID', 'not a provider id')
+            console = ctx.console if ctx.console is not None else Console(ctx.stdin)
+            report = credential_enter(console, contract.WatchedProvider(ctx.provider(), guard), ctx.store,
+                                      args.provider, replace=args.replace, guard=guard)
         else:
             report = _serve(ctx, guard)
     except paths.PathsError as exc:

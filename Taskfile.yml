@@ -540,6 +540,17 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B -m unittest discover -s integrations/inference/tests -v'
 
+  # The Owner's key entry (S-03.3; the OA-12 package's act 2): run by the Owner in his own console window only.
+  inference:credential-enter:
+    desc: "The Owner's provider-key entry (<tools python> -I -B integrations/inference/inference_broker.py credential-enter --provider ID [--replace]; plan leaf S-03.3, OA-12 act 2), run by the Owner in his own console window: refused unless standard input is an interactive console, and for an existing entry without --replace, before any prompt; the key pasted once at a hidden prompt (echo off), refused naming the rule unless key-shaped (sk-ant-api, [A-Za-z0-9_-], 40 to 512 characters; no admin key, no whitespace), stored as the credential entry \"AIEH model provider\" with a fingerprint-only receipt; prints nothing derived from the key, and a reminder to clear the clipboard; exit 2 on a refusal"
+    interactive: true
+    vars:
+      TOOLS_PYTHON:
+        sh: '{{.PYTHON}} -I -B integrations/paths/tools_install.py --python'
+      PYTHON: '"{{.TOOLS_PYTHON}}"'
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/inference/inference_broker.py credential-enter {{.CLI_ARGS}}'
+
   dispatch:check-manifest:
     desc: Schema-check an approved-input manifest file; admits nothing (python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest MANIFEST)
     requires:

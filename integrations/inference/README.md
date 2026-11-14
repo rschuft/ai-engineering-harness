@@ -48,6 +48,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_usage.py` | The usage extractors over whole and byte-by-byte streams and bodies |
 | `tests/test_grants.py` | Socket-free: issuance and its refusals (a budget refused, `BUDGET_RETIRED`), readiness, revocation and expiry with their receipts, journal failures, every admission refusal, no refusal for a request count, a usage count or unknown usage, refusal responses; a check that every stable code appears in a test |
 | `tests/test_credential_set.py` | `credential-set` over an in-memory provider and a fixture store |
+| `tests/test_credential_enter.py` | `credential-enter` (S-03.3, the Owner's act 2) over an injected console and an in-memory provider: refused unless the console is interactive and for an existing entry without `--replace`, both before any prompt; every rule of the key shape refused by name, never by value; stored through `credential-set`'s custody path; nothing derived from the key in the output; the real console check on a pipe, a file and the null device |
 | `tests/test_egress.py` | The egress code path read from the module's syntax tree; `connect_upstream`; the census of the modules `serve` loads beside the broker (the envelope and its read side): no network module, no connector |
 | `tests/envelope_support.py` | The provider envelope's fixtures (S-03.5): the real authorization recorder over the owner suite's fake Gitea (in memory) writing into a throwaway store, contexts whose provider, audit directory and wait raise if asked, a `Rig` holding a minted authorization, an injected connector; a correctly formed S-03.5 `/1` document and manifest of the same families (S-03.6) |
 | `tests/test_spending_retired.py` | S-03.6's proof (it replaces S-03.5's `test_cap.py`): the cap and its ledger gone from the broker; a bound broker writes and reads no `inference/envelope/` receipt, and S-03.5's ledger receipts in a store are neither read nor changed; after each outcome S-03.5 counted as unknown (a 2xx answer without usage, a cut stream, a client leaving mid-stream, a request written and never answered, a connection cut while sending, a connection refused while sending, a refused connect, an answer outside 2xx, a broker error) the next request is admitted; a client gone mid-stream against a fake upstream; `BROKER_STOPPING` at the stop for a bound and a loopback family, in process and over a keep-alive connection; a hand-built authorization refused at admission (integration) |
@@ -406,6 +407,40 @@ shows the fingerprint, never the key. **Not run** in this slice: the tests use a
 There is one entry, so the broker holds one provider's key at a time; a family whose `provider` is another
 id is not ready. Rotation is at the provider, then this command again and a broker restart.
 
+### The Owner's key entry: `credential-enter` (S-03.3)
+
+```
+<tools python> -I -B integrations/inference/inference_broker.py credential-enter --provider <id> [--replace]
+task inference:credential-enter -- --provider <id> [--replace]
+```
+
+The Owner's act 2 of OA-12 (the package's section 5 item 4, the architect's conditions): in his own console
+window he pastes the dedicated provider key once, at a hidden prompt. `credential-set` stays as it is, for a key
+piped on standard input.
+
+- **A real console only.** Standard input must be an interactive console: on Windows its handle must have a
+  console mode (`GetConsoleMode`), not merely pass `isatty`; elsewhere it must be a terminal. Otherwise it refuses
+  before any prompt (`KEY_CONSOLE_REQUIRED`).
+- **Echo off.** The key is read once through `getpass`, which reads the console itself on Windows. Its fallback,
+  which would read standard input with echo, is refused (`KEY_CONSOLE_REQUIRED`), never taken.
+- **Key-shaped only.** The value must begin `sk-ant-api`, hold only `[A-Za-z0-9_-]` and be 40 to 512 characters
+  long (a broad bound: no exact length is verified for the provider's keys). An admin key (`sk-ant-admin`), an
+  empty value and any whitespace are refused; nothing is stripped. A refusal (`KEY_NOT_KEY_SHAPED`) names the rule
+  it failed (`empty`, `whitespace`, `admin-key`, `prefix`, `characters`, `length`) and asks for the key to be
+  pasted again; it never shows the value or anything derived from it.
+- **An existing entry** is refused unless `--replace` is given (`KEY_ENTRY_EXISTS`, before any prompt); with it the
+  receipt's verb is `rotate`. A cancelled prompt (Ctrl-C or end of input) stores nothing (`KEY_ENTRY_CANCELLED`).
+- **Custody.** The key is held in memory only (no file, environment variable, argument, log or receipt) and
+  stored through `credential-set`'s path: the entry `AIEH model provider` with the provider id as its user, read
+  back, under an `aieh-credential-act/1` receipt in the integration store that records fingerprints only (the
+  harness records only the key's fingerprint, OA-12 A1).
+- **Output.** Nothing derived from the key: no fingerprint, length or prefix. It prints that the key is stored in
+  the entry, the receipt's operation key and state, and a reminder to clear the clipboard. Then restart the broker
+  if it is running, so that it reads the stored key.
+
+**Not run** outside a test process: the tests inject the console reader and use an in-memory credential provider;
+a real console and the real Credential Manager are not touched.
+
 ## The dispatcher's side (`inference_control.py`)
 
 `tools/guest.py` performs the dispatcher's role during bootstrap (decision 0013 point 1) and reaches the
@@ -645,6 +680,7 @@ credential provider holding a synthetic key) and has never read a real entry.
 <tools python> -I -B integrations/inference/inference_broker.py config            # validate and print the configuration
 <tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]   # the live envelope and its manifest
 <tools python> -I -B integrations/inference/inference_broker.py credential-set --provider ID   # key on stdin
+<tools python> -I -B integrations/inference/inference_broker.py credential-enter --provider ID [--replace]   # pasted at a hidden prompt
 <tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until stopped
 <tools python> -I -B integrations/inference/inference_control.py stop             # the stop from any session
 <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
@@ -689,6 +725,8 @@ Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`,
 `BODY_NOT_JSON`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`, `PROVIDER_REACH_REFUSED` (400), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
 (411), `BODY_TOO_LARGE` (413), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
 Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.
+Credential enter: `PROVIDER_ID_INVALID`, `KEY_CONSOLE_REQUIRED`, `KEY_NOT_KEY_SHAPED`, `KEY_ENTRY_CANCELLED`
+(exit 2), `KEY_ENTRY_EXISTS` (exit 2), `KEY_READ_BACK_FAILED` (exit 1).
 Qualification (`inference_qualification.py`, beside the broker's configuration and key codes):
 `QUALIFICATION_UPSTREAM_REFUSED`, `QUALIFICATION_NO_FAMILY`, `KEY_NOT_SYNTHETIC`, `KEY_NEVER_WRITTEN`,
 `FAKE_FAMILY_UNKNOWN`, `FAKE_ADDRESS_REFUSED`, `FAKE_PORT_INVALID`. The `issue` command (beside the dispatcher's
@@ -743,6 +781,8 @@ every family.
 - Everything outside a test process: the broker as a supervised host service (the lifecycle contract), its
   real listeners, the real credential entry, `credential-set` against the Credential Manager, TLS to a real
   provider, any model call (each an Owner act).
+- `credential-enter` in a real console window: the console-mode check on a real console handle, the hidden prompt
+  (`getpass` on the console), a paste from the clipboard and the real Credential Manager (the Owner's act 2).
 - Whether a pinned client (Claude Code) ever sends what the reach checker refuses, and the provider's own
   request shapes beyond its public documentation: the rules are written from the documented shapes, not from
   observed traffic.
