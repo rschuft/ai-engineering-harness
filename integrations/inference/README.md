@@ -62,9 +62,9 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_account_scope.py` | Account-scope headers never forwarded (S-03.3 fix-forward): every header whose name starts with `anthropic-workspace` or `anthropic-organization` stripped, not refused, for each family, streamed and not, against the fake upstreams; the audit's `stripped_headers` (names only) |
 | `tests/test_query.py` | Exact query-string equality (S-03.3 fix-forward; `pass` retired): `anthropic-messages` declares exactly `beta=true`, admitted and forwarded unchanged; every other form (case, repetition, addition, percent-encoding, `&`, `#`, an empty query) refused `QUERY_NOT_ALLOWED` before anything is sent; the description output; the qualification's fake upstream answering the declared query |
 | `tests/test_census.py` | The live census: every verdict branch of its rule on synthetic tables, the four table layouts and a fake `iphlpapi`, the broker's pid in its status and start receipt, the `upstream-connect` line written at connect time, the command's record and exit codes; on Windows a real census of `serve` in a process of its own (PASS idle and with a request in flight, FAIL on an extra listener, connection or UDP socket in the broker's process) |
-| `tests/test_body.py` | Strict bodies (S-03.3, the security review's B1, N4, N6): a key repeated at any depth refused `BODY_DUPLICATE_KEY` on the inference listener with nothing forwarded (the `model` allowlist and the reach rule bypasses) and `CONTROL_BODY_INVALID` on the control listener; a case-folded `mcp_servers` or `container`; a `Content-Length` of non-ASCII digits |
+| `tests/test_body.py` | Strict bodies (S-03.3, the security review's B1, N4, N6): a key repeated at any depth refused `BODY_DUPLICATE_KEY` on the inference listener with nothing forwarded (the `model` allowlist and the reach rule bypasses) and `CONTROL_BODY_INVALID` on the control listener; a case-folded `mcp_servers` or `container`; a `Content-Length` of non-ASCII digits; a body that is not strict UTF-8 without a BOM (`BODY_ENCODING_INVALID`); a header value holding any control character but HTAB (`HEADER_VALUE_INVALID`) |
 | `tests/test_headers.py` | The forwarded-header allowlist per family (S-03.3, the security review's S1): the shipped declarations and the refusal of one that names or covers a never-forwarded or account-scope header; only declared headers reach each fake upstream, every other one stripped and named; `HEADER_VALUE_INVALID` (a folded header), `CONTENT_ENCODING_REFUSED`, `CONTENT_TYPE_REFUSED`, nothing forwarded |
-| `tests/test_reach_allowlist.py` | Provider-side reach by allowlist (S-03.3, the security review's S2): content block types and source types outside the allowlists refused `PROVIDER_REACH_REFUSED` wherever they are read (a replayed `server_tool_use`, server tool results, `mcp_tool_use`, a `web_page` source, unknown types), nothing forwarded; the allowed shapes forwarded |
+| `tests/test_reach_allowlist.py` | Provider-side reach by allowlist (S-03.3, the security review's S2): content block types and source types outside the allowlists refused `PROVIDER_REACH_REFUSED` wherever they are read (a replayed `server_tool_use`, server tool results, `mcp_tool_use`, a `web_page` source, unknown types), nothing forwarded; the allowed shapes forwarded; a tool schema or tool input holding a `source` (opaque to the provider) admitted |
 | `tests/serve_child.py` | The child process of `test_stop.py` and `test_census.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -294,10 +294,12 @@ declared auth header shape; it is one this broker issued, unrevoked and unexpire
 family's auth header; the method and path are in that family's route set (and the query rule holds); the
 broker's own stop has not begun (`BROKER_STOPPING`) and, for a bound family, the envelope holds; the body has one
 `Content-Length` of ASCII digits (no chunked body) within
-`max_request_bytes`, is a JSON object read strictly (a key repeated in any object, at any depth and after escapes
-are decoded, is refused `BODY_DUPLICATE_KEY`: the broker must check the document the provider reads) and names
-a `model` that is in both the token's list and the family's allowlist; no header value holds a CR or LF
-(`HEADER_VALUE_INVALID`), the body is not declared encoded (`Content-Encoding` absent or `identity`, else
+`max_request_bytes`, is strict UTF-8 without a byte order mark (else `BODY_ENCODING_INVALID`: the JSON parser
+alone would also read UTF-16, UTF-32 and a BOM), is a JSON object read strictly (a key repeated in any object, at
+any depth and after escapes are decoded, is refused `BODY_DUPLICATE_KEY`: the broker must check the document the
+provider reads) and names a `model` that is in both the token's list and the family's allowlist; no header value
+holds a control character (0x00 to 0x1F except HTAB, and 0x7F: CR and LF of obsolete line folding included,
+`HEADER_VALUE_INVALID`), the body is not declared encoded (`Content-Encoding` absent or `identity`, else
 `CONTENT_ENCODING_REFUSED`) and its `Content-Type` is one `application/json` with at most a `charset=utf-8`
 parameter, present whenever there is a body (else `CONTENT_TYPE_REFUSED`); the body asks the provider to reach or
 run nothing outside the request ([Provider-side reach](#provider-side-reach)); and the token appears nowhere in
@@ -344,11 +346,13 @@ the parsed JSON body of every admitted request; `anthropic-messages` refuses, wi
   and a source of type `content`; so a replayed `server_tool_use`, any server tool's `*_tool_result`,
   `mcp_tool_use`, `container_upload` and every type not yet known are refused. A content that is neither a
   string nor a list of objects is refused too (rule `content-shape`);
-- anywhere in the body (every nested object and list, tool results and tool inputs included), an object whose
-  `source` is an object whose `type` is not `base64`, `text` or `content` (rule `source-type`: `url`, `file`,
-  `web_page`, a missing type, anything else), and a block whose `type` is `container_upload` (rule
-  `block-type`). Fail closed, disclosed: a tool input or a tool's schema holding a property named `source` whose
-  value is an object is refused unless that object's `type` is one of the three.
+- on an admitted content block, wherever a content block is read (the positions above, nested tool results
+  included), a `source` that is an object whose `type` is not `base64`, `text` or `content` (rule `source-type`:
+  `url`, `file`, `web_page`, a missing type, anything else), and an `image` or `document` whose `source` is not
+  an object. A source is checked only where the provider interprets it: a tool's `input_schema` and a
+  `tool_use`'s `input` are opaque to the provider and are never read (the engineering manager's ruling after the
+  re-review), so a tool schema with a property named `source` and a tool input holding `{"source": {...}}` are
+  admitted. A `search_result`'s `source` is its citation string.
 
 The allowlists are written from the provider's public request shapes. S-03.3's discovery run may show that the
 pinned client (Claude Code) needs another block or source type; adding one is a reviewed change.
@@ -789,7 +793,7 @@ Control: `CONTROL_ROUTE_UNKNOWN` (404), `CONTROL_CALLER_REFUSED` (403), `CONTROL
 `EXPOSURE_FOUND` (500).
 Inference: `TOKEN_MISSING`, `TOKEN_AMBIGUOUS`, `TOKEN_UNKNOWN`, `TOKEN_REVOKED`, `TOKEN_EXPIRED`,
 `TOKEN_WRONG_HEADER` (401), `ROUTE_NOT_ALLOWED` (404), `QUERY_NOT_ALLOWED`, `BODY_LENGTH_INVALID`,
-`BODY_NOT_JSON`, `BODY_DUPLICATE_KEY`, `HEADER_VALUE_INVALID`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`,
+`BODY_NOT_JSON`, `BODY_ENCODING_INVALID`, `BODY_DUPLICATE_KEY`, `HEADER_VALUE_INVALID`, `MODEL_MISSING`, `TOKEN_IN_REQUEST`,
 `PROVIDER_REACH_REFUSED` (400), `CONTENT_ENCODING_REFUSED`, `CONTENT_TYPE_REFUSED` (415), `MODEL_NOT_ALLOWED` (403), `BODY_LENGTH_REQUIRED`
 (411), `BODY_TOO_LARGE` (413), `UPSTREAM_UNREACHABLE` (502), `PROVIDER_KEY_ABSENT`, `UPSTREAM_NOT_CONFIGURED` (503).
 Credential set: `PROVIDER_ID_INVALID`, `KEY_STDIN_TTY`, `KEY_INVALID`, `KEY_READ_BACK_FAILED`.

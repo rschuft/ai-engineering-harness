@@ -7,8 +7,9 @@ Run from the repository root, under the tools interpreter:
 The reach rule refused named things (url and file sources, container_upload): a source of another type (web_page)
 or a replayed server_tool_use block passed. Now, for anthropic-messages, a content block (messages[].content, system
 when it is a list, and the content of a tool_result, a search_result or a source of type content) is admitted only
-with one of CONTENT_BLOCK_TYPES, and a source object, anywhere in the body, only with one of SOURCE_TYPES; everything
-else is PROVIDER_REACH_REFUSED, nothing forwarded. The reviewer's probe bodies (probe_admit.py) are reused as data.
+with one of CONTENT_BLOCK_TYPES, and a block's source only with one of SOURCE_TYPES; everything else is
+PROVIDER_REACH_REFUSED, nothing forwarded. After the re-review a source is checked only where the provider interprets
+it (a content block): a tool's input_schema and a tool_use's input are opaque and admitted. The reviewer's probe bodies (probe_admit.py) are reused as data.
 Everything is synthetic.
 """
 from __future__ import annotations
@@ -71,10 +72,10 @@ REFUSED = {
                       ('source-type', 'file')),
     'a source without a type': (user({'type': 'image', 'source': {'url': 'https://x.invalid/a.png'}}),
                                 ('source-type', None)),
-    # fail closed, disclosed: the whole-body walk reads any object whose "source" is an object, a tool's input too
-    'a source object in a tool input': (assistant({'type': 'tool_use', 'id': 't', 'name': 'Fetch',
-                                                   'input': {'source': {'type': 'url', 'url': 'https://x.invalid'}}}),
-                                        ('source-type', 'url')),
+    'an image whose source is not an object': (user({'type': 'image', 'source': 'https://x.invalid/a.png'}),
+                                               ('source-type', None)),
+    'a url source in a nested tool result': (tool_result({'type': 'tool_result', 'tool_use_id': 't2', 'content': [
+        {'type': 'image', 'source': {'type': 'url', 'url': 'https://x.invalid/a.png'}}]}), ('source-type', 'url')),
 }
 
 ADMITTED = {
@@ -91,6 +92,18 @@ ADMITTED = {
     'a search result': tool_result({'type': 'search_result', 'source': 'https://s.test', 'title': 't',
                                     'content': [{'type': 'text', 'text': 'x'}]}),
     'string contents': {'model': S.MODEL_A, 'system': 's', 'messages': [{'role': 'user', 'content': 'x'}]},
+    # the re-review's ruling: a source is checked only where the provider interprets it (a content block); a tool's
+    # input_schema and a tool_use's input are opaque to the provider and never read
+    'a tool schema with a property named source': {'model': S.MODEL_A, 'tools': [{
+        'name': 'Clone', 'description': 'd', 'input_schema': {'type': 'object', 'properties': {
+            'source': {'type': 'string'}, 'nested': {'type': 'object', 'properties': {'source': {'type': 'url'}}}}}}],
+        'messages': [{'role': 'user', 'content': 'x'}]},
+    'a tool use whose input holds a source': assistant({'type': 'tool_use', 'id': 't', 'name': 'Clone',
+                                                        'input': {'source': {'type': 'git', 'url': 'x'}}}),
+    'a tool use whose input holds a url source': assistant({'type': 'tool_use', 'id': 't', 'name': 'Fetch', 'input': {
+        'source': {'type': 'url', 'url': 'https://x.invalid'}, 'blocks': [{'type': 'container_upload'}]}}),
+    'a search result whose source is its citation string': tool_result({'type': 'search_result', 'source': 'https://s',
+                                                                        'title': 't', 'content': []}),
 }
 
 

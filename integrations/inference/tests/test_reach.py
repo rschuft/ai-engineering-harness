@@ -139,6 +139,7 @@ class TheChecker(unittest.TestCase):
         self.assertIsNone(IB.anthropic_reach(body))
         nested['content'].append({'type': 'image', 'source': {'type': 'url', 'url': 'https://x.test'}})
         self.assertEqual(IB.anthropic_reach(body), ('source-type', 'url'))
+        nested['content'].pop()
         innermost = nested
         while innermost['content'][0].get('type') == 'tool_result':
             innermost = innermost['content'][0]

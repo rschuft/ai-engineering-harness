@@ -10,7 +10,9 @@ could pass the broker's checks as one document and reach the provider as another
 allowlist; "tools" or a type twice past the reach rule). Shown here: a duplicate key at any depth (escapes decoded)
 refused BODY_DUPLICATE_KEY with nothing forwarded, on the inference and the control listener; a top-level key that
 case-folds to mcp_servers or container refused PROVIDER_REACH_REFUSED; a Content-Length of digits other than ASCII
-refused BODY_LENGTH_INVALID. The reviewer's probe bodies (probe_admit.py) are reused as data. Everything is synthetic.
+refused BODY_LENGTH_INVALID. After the re-review: a body that is not strict UTF-8 without a BOM refused
+BODY_ENCODING_INVALID (json.loads alone reads UTF-16, UTF-32 and a BOM), and a header value holding any control
+character but HTAB refused HEADER_VALUE_INVALID. The reviewer's probe bodies (probe_admit.py) are reused as data. Everything is synthetic.
 """
 from __future__ import annotations
 
@@ -113,8 +115,71 @@ class OverTheWire(unittest.TestCase):
                     self.rig.broker.admit('POST', '/v1/messages', headers, io.BytesIO(b'{"model":"x"}' + b' ' * 8).read)
                 self.assertEqual(caught.exception.code, 'BODY_LENGTH_INVALID')
 
+    def raw(self, grant, extra_head: bytes, body: bytes) -> tuple:
+        """One request written byte for byte; (status, refusal code or None)."""
+        connection = socket.create_connection(('127.0.0.1', self.rig.inference), timeout=30)
+        try:
+            connection.sendall(b'POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nx-api-key: ' + grant['token'].encode()
+                               + b'\r\nContent-Type: application/json\r\n' + extra_head
+                               + b'Content-Length: %d\r\nConnection: close\r\n\r\n' % len(body) + body)
+            answer = b''
+            while chunk := connection.recv(65536):
+                answer += chunk
+        finally:
+            connection.close()
+        status = int(answer.split(b' ', 2)[1])
+        return status, json.loads(answer.partition(b'\r\n\r\n')[2])['aieh_refusal']['code'] if status >= 400 else None
+
+    def test_a_body_that_is_not_strict_utf8_without_a_bom_is_refused(self):
+        """The re-review: json.loads reads UTF-16, UTF-32 and a UTF-8 BOM, so such a body was admitted. Now only
+        strict UTF-8 without a byte order mark is read; nothing else is forwarded."""
+        grant = self.rig.issue(family=FAMILY)
+        text = '{"model":"%s","messages":[]}' % M
+        before = len(self.upstream.requests)
+        invalid, not_json = (400, 'BODY_ENCODING_INVALID'), (400, 'BODY_NOT_JSON')
+        for name, body, expected in (
+                ('UTF-16 LE with a BOM', text.encode('utf-16'), invalid),
+                ('UTF-16 BE without a BOM: valid UTF-8 (NUL bytes), then not JSON', text.encode('utf-16-be'),
+                 not_json),
+                ('UTF-32', text.encode('utf-32'), invalid),
+                ('a UTF-8 BOM', b'\xef\xbb\xbf' + text.encode(), invalid),
+                ('a surrogate encoded as bytes', text.encode()[:-2] + b'\xed\xa0\x80"]}', invalid),
+                ('Latin-1', ('{"model":"%s","messages":[{"role":"user","content":"caf\xe9"}]}' % M)
+                 .encode('latin-1'), invalid)):
+            with self.subTest(name):
+                self.assertEqual(self.raw(grant, b'', body), expected)
+        self.assertEqual(self.upstream.requests[before:], [])
+        self.assertEqual(self.raw(grant, b'', text.encode()), (200, None))                     # the control
+        self.assertEqual(self.raw(grant, b'', ('{"model":"%s","messages":[{"role":"user","content":"café"}]}'
+                                               % M).encode('utf-8')), (200, None))
+        with self.assertRaises(IB.BodyEncoding):
+            IB.strict_json(b'\xef\xbb\xbf{}')
+
+    def test_a_header_value_with_a_control_character_is_refused(self):
+        """The re-review: anthropic-beta: a<NUL>b was forwarded. Every control character but HTAB is refused."""
+        grant = self.rig.issue(family=FAMILY)
+        body = ('{"model":"%s","messages":[]}' % M).encode()
+        before = len(self.upstream.requests)
+        for byte in [*range(0x00, 0x09), 0x0b, 0x0c, *range(0x0e, 0x20), 0x7f]:
+            with self.subTest(byte=hex(byte)):
+                status_code = self.raw(grant, b'anthropic-beta: a' + bytes([byte]) + b'b\r\n', body)
+                self.assertEqual(status_code, (400, 'HEADER_VALUE_INVALID'))
+        self.assertEqual(self.upstream.requests[before:], [])
+        self.assertEqual(self.raw(grant, b'anthropic-beta: a\tb\r\n', body), (200, None))       # HTAB is allowed
+
 
 class Control(unittest.TestCase):
+    def test_a_control_body_that_is_not_utf8_is_refused(self):
+        rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'})).start()
+        self.addCleanup(rig.close)
+        text = ('{"conversation_id":"%s","attempt_id":"%s","family":"openai-chat","models":["%s"],"ttl_s":60}'
+                % (S.new_id(), S.new_id(), M))
+        for body in (text.encode('utf-16'), b'\xef\xbb\xbf' + text.encode()):
+            status, _, data = S.request(rig.control, 'POST', '/v1/grants', raw_body=body,
+                                        header_pairs=[('Content-Type', 'application/json')])
+            self.assertEqual((status, json.loads(data)['aieh_refusal']['code']), (400, 'CONTROL_BODY_INVALID'))
+        self.assertEqual(rig.broker.status()['grants']['live'], 0)
+
     def test_a_duplicate_key_in_a_control_body_is_refused(self):
         rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'})).start()
         self.addCleanup(rig.close)

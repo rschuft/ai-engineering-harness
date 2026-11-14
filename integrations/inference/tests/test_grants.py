@@ -432,7 +432,7 @@ class TestAdmission(Fixture):
                 ({'extra': [('Content-Length', '99')]}, 'BODY_LENGTH_INVALID'),
                 ({'extra': [('Content-Length', str(32 * 1024 * 1024 + 1))]}, 'BODY_TOO_LARGE'),
                 ({'raw': b'not json'}, 'BODY_NOT_JSON'),
-                ({'raw': b'\xff\xfe'}, 'BODY_NOT_JSON'),
+                ({'raw': b'\xff\xfe'}, 'BODY_ENCODING_INVALID'),
                 ({'raw': b''}, 'BODY_NOT_JSON'),
                 ({'body': [S.MODEL_A]}, 'BODY_NOT_JSON'),
                 ({'body': {'input': 'x'}}, 'MODEL_MISSING'),

@@ -197,6 +197,7 @@ MODEL_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}')
 WILDCARD = re.compile(r'[*?\[\]]')
 HEADER_NAME = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
 HEADER_PREFIX = re.compile(r'[a-z0-9][a-z0-9-]{0,62}-')     # a declared forwarded-header prefix ends with '-'
+HEADER_CONTROL = re.compile(r'[\x00-\x08\x0a-\x1f\x7f]')     # a control character in a header value (HTAB allowed)
 HOST_NAME = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*')
 ROUTE_PATH = re.compile(r'/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+')
 # A declared whole query string (S-03.3): name=value pairs of plain characters joined by '&', compared byte for byte
@@ -340,10 +341,12 @@ CODES = {
     'BODY_LENGTH_INVALID': (400, 'send one valid Content-Length'),
     'BODY_TOO_LARGE': (413, 'send a body no larger than max_request_bytes'),
     'BODY_NOT_JSON': (400, 'send the body as one uncompressed JSON object'),
-    'HEADER_VALUE_INVALID': (400, 'send no header value holding a CR or LF (no obsolete line folding)'),
+    'HEADER_VALUE_INVALID': (400, 'send no header value holding a control character (only HTAB is allowed; no '
+                                  'CR or LF, so no obsolete line folding)'),
     'CONTENT_ENCODING_REFUSED': (415, 'send the body uncompressed: no Content-Encoding, or identity'),
     'CONTENT_TYPE_REFUSED': (415, 'send the body with one Content-Type: application/json, optionally with '
                                   'charset=utf-8 and no other parameter'),
+    'BODY_ENCODING_INVALID': (400, 'send the body as UTF-8 without a byte order mark (no UTF-16 or UTF-32)'),
     'BODY_DUPLICATE_KEY': (400, 'send each key of a JSON object once, at every depth: a body whose objects repeat a '
                                 'key is read differently by different parsers'),
     'MODEL_MISSING': (400, 'send the model as a string field "model"'),
@@ -904,6 +907,10 @@ def envelope_report(config: BrokerConfig, operation: str | None) -> dict:
 # ---------------------------------------------------------------- strict JSON (S-03.3)
 
 
+class BodyEncoding(ValueError):
+    """A checked body that is not strict UTF-8 without a byte order mark (strict_json)."""
+
+
 class DuplicateKey(ValueError):
     """A JSON object repeats a key (strict_json). Its text names no key."""
 
@@ -920,14 +927,22 @@ def _unique_pairs(pairs) -> dict:
 def strict_json(data):
     """json.loads of DATA, with every object's keys distinct at any depth (after escapes are decoded): DuplicateKey
     otherwise. Every body the broker checks is read this way, so that what it checks is what any parser upstream
-    reads (json.loads alone keeps the last of a repeated key; another parser may keep the first)."""
+    reads (json.loads alone keeps the last of a repeated key; another parser may keep the first). Bytes must be
+    strict UTF-8 with no byte order mark (BodyEncoding otherwise): json.loads alone would also read UTF-16, UTF-32
+    and a BOM, which the broker's checks and a parser upstream may read differently."""
+    if isinstance(data, (bytes, bytearray)):
+        if bytes(data[:3]) == b'\xef\xbb\xbf':
+            raise BodyEncoding('the body starts with a byte order mark')
+        try:
+            data = bytes(data).decode('utf-8', 'strict')
+        except UnicodeDecodeError:
+            raise BodyEncoding('the body is not UTF-8') from None
     return json.loads(data, object_pairs_hook=_unique_pairs)
 
 
 # ---------------------------------------------------------------- provider-side reach (S-03.3)
 
 REACH_KEYS = ('mcp_servers', 'container')       # top-level keys refused whatever their value (and any case-folding)
-REACH_BLOCK_TYPES = ('container_upload',)       # a block that places a file in a provider container: refused anywhere
 # The security review's S2: allowlists, not deny lists. A content block (in messages[].content, in system when it is a
 # list, and in the content of a tool_result, a search_result and a source of type content) is admitted only with one
 # of these types; a source object, anywhere in the body, only with one of these types. Everything else (server tool
@@ -939,8 +954,12 @@ SOURCE_TYPES = ('base64', 'text', 'content')
 
 
 def _blocks(document: dict):
-    """(rule, name) of the first content block outside CONTENT_BLOCK_TYPES, or of a content that is neither a
-    string nor a list of objects, in the block lists of an anthropic-messages body; or None."""
+    """(rule, name) of the first content block outside CONTENT_BLOCK_TYPES, of a content that is neither a string
+    nor a list of objects, or of a block's source outside SOURCE_TYPES, in the block lists of an anthropic-messages
+    body; or None. A source is checked where the provider interprets it, on an admitted content block: an object
+    source of any block, and the source of an image or a document, which must be an object. A tool's input_schema
+    and a tool_use's input are never read: they are opaque to the provider (the engineering manager's ruling after
+    the re-review)."""
     lists = []
     if 'system' in document and not isinstance(document['system'], str):
         lists.append(document['system'])
@@ -962,6 +981,10 @@ def _blocks(document: dict):
                     and not isinstance(block['content'], str):
                 lists.append(block['content'])
             source = block.get('source')
+            if isinstance(source, dict) or (kind in ('image', 'document') and 'source' in block):
+                if not isinstance(source, dict) or not isinstance(source.get('type'), str) \
+                        or source['type'] not in SOURCE_TYPES:
+                    return 'source-type', source.get('type') if isinstance(source, dict) else None
             if isinstance(source, dict) and source.get('type') == 'content' and 'content' in source \
                     and not isinstance(source['content'], str):
                 lists.append(source['content'])
@@ -973,8 +996,8 @@ def anthropic_reach(document: dict):
     run something outside the request, or None. NAME is the key or the type as the body gives it (the caller
     records it only in the audit's bounded name grammar). Fail closed: a top-level mcp_servers or container (any
     case-folding); a tools value that is not a list of objects, or a tool whose type is present and not custom; a
-    content block outside CONTENT_BLOCK_TYPES; anywhere in the body, a source object whose type is outside
-    SOURCE_TYPES and a container_upload block. The walk is iterative (no recursion limit)."""
+    content block outside CONTENT_BLOCK_TYPES (container_upload included) and a block's source outside
+    SOURCE_TYPES, wherever a content block is read (_blocks). The walk is iterative (no recursion limit)."""
     for key in document:
         if isinstance(key, str) and key.casefold() in REACH_KEYS:   # the exact key, or one that case-folds to it
             return 'top-level-key', key
@@ -987,23 +1010,7 @@ def anthropic_reach(document: dict):
                 return 'tools-shape', 'tools'
             if 'type' in tool and tool['type'] != 'custom':
                 return 'tool-type', tool['type']
-    found = _blocks(document)
-    if found is not None:
-        return found
-    stack = [document]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            source = node.get('source')
-            if isinstance(source, dict) and not (isinstance(source.get('type'), str)
-                                                 and source['type'] in SOURCE_TYPES):
-                return 'source-type', source.get('type')
-            if isinstance(node.get('type'), str) and node['type'] in REACH_BLOCK_TYPES:
-                return 'block-type', node['type']
-            stack.extend(reversed(list(node.values())))
-        elif isinstance(node, list):
-            stack.extend(reversed(node))
-    return None
+    return _blocks(document)
 
 
 # The families whose request bodies the broker checks for provider-side reach, by family id. A family absent here
@@ -1839,12 +1846,12 @@ class Broker:
         return forward, tuple(sorted(stripped))
 
     def _header_shape(self, headers, body: bytes, grant: Grant) -> None:
-        """Refused before anything is forwarded (the security review's S1): a header value holding a CR or LF
-        (obsolete line folding included); a Content-Encoding other than absent or identity; a Content-Type other
+        """Refused before anything is forwarded (the security review's S1): a header value holding a control
+        character (0x00 to 0x1F except HTAB, and 0x7F; CR and LF of obsolete line folding included); a Content-Encoding other than absent or identity; a Content-Type other
         than one application/json with at most a charset=utf-8 parameter (case-insensitive), or none on a request
         with a body."""
-        if any('\r' in str(value) or '\n' in str(value) for _, value in headers.items()):
-            raise self._refuse('HEADER_VALUE_INVALID', 'a header value holds a CR or LF', grant)
+        if any(HEADER_CONTROL.search(str(value)) for _, value in headers.items()):
+            raise self._refuse('HEADER_VALUE_INVALID', 'a header value holds a control character', grant)
         encodings = headers.get_all('content-encoding') or []
         if encodings and (len(encodings) != 1 or encodings[0].strip().lower() != 'identity'):
             raise self._refuse('CONTENT_ENCODING_REFUSED', 'the body is declared encoded', grant)
@@ -1892,6 +1899,8 @@ class Broker:
             document = strict_json(body)
         except DuplicateKey:
             raise self._refuse('BODY_DUPLICATE_KEY', 'a JSON object of the body repeats a key', grant) from None
+        except BodyEncoding as exc:
+            raise self._refuse('BODY_ENCODING_INVALID', str(exc), grant) from None
         except (ValueError, UnicodeDecodeError, RecursionError):   # RecursionError: nested too deeply to parse
             raise self._refuse('BODY_NOT_JSON', 'the body is not JSON', grant) from None
         if not isinstance(document, dict):
@@ -2392,6 +2401,8 @@ class _ControlHandler(_Handler):
             return strict_json(self.rfile.read(int(length)))
         except DuplicateKey:
             raise InferenceError('CONTROL_BODY_INVALID', 'a JSON object of the body repeats a key') from None
+        except BodyEncoding:
+            raise InferenceError('CONTROL_BODY_INVALID', 'the body is not UTF-8 without a byte order mark') from None
         except (ValueError, UnicodeDecodeError, RecursionError):   # RecursionError: nested too deeply to parse
             raise InferenceError('CONTROL_BODY_INVALID', 'the body is not JSON') from None
 
