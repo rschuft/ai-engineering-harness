@@ -148,6 +148,16 @@ class StopEvent(Started):
 
 
 class Interrupts(Started):
+    def bounded_wait(self, rig, pending):
+        """IB.wait_for_stop on a thread joined with a ceiling, so that a loop that never begins the stop fails the
+        test instead of hanging the suite (the re-review's R16)."""
+        waiter = threading.Thread(target=IB.wait_for_stop, args=(rig.broker, pending), daemon=True)
+        waiter.start()
+        waiter.join(CEILING_S)
+        if waiter.is_alive():
+            rig.broker.request_stop('test: the wait loop never began the stop')     # ends the stray loop
+            self.fail('wait_for_stop did not begin the stop within the ceiling')
+
     def handler(self, rig, exits):
         pending = IB.StopRequest()
         return pending, IB.stop_signal_handler(pending, lambda: rig.broker._stopping, lambda: rig.broker._stop_done,
@@ -176,7 +186,7 @@ class Interrupts(Started):
                 signal.raise_signal(number)                  # its handler runs before raise_signal returns
                 self.assertEqual(pending.asked, name)
                 self.assertFalse(rig.broker.stop_event.is_set())          # the handler set nothing else
-                IB.wait_for_stop(rig.broker, pending)                     # the main thread begins the stop
+                self.bounded_wait(rig, pending)              # the wait's loop begins the stop
                 self.assertEqual(rig.broker.stop_by, name)
                 self.assertTrue(rig.broker.stop_event.is_set())
                 self.assertIsNot(signal.getsignal(number), before)        # kept during the stop
@@ -206,7 +216,7 @@ class Interrupts(Started):
         written = rig.audit.lines
         handler(signal.SIGINT, None)                                     # before the loop saw the first
         self.assertEqual(exits, [IB.FORCED_EXIT])
-        IB.wait_for_stop(rig.broker, pending)
+        self.bounded_wait(rig, pending)
         self.assertEqual(rig.broker.stop_by, 'SIGINT')
         handler(signal.SIGINT, None)                                     # during the stop
         self.assertEqual(exits, [IB.FORCED_EXIT] * 2)
