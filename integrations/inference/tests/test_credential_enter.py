@@ -143,7 +143,10 @@ class Command(Fixture):
                          ('aieh-credential-act/1', 'confirmed'))
         self.assertIn('I7 no-exposure scan: clean', err)
         self.assertNothingDerived(out + err, KEY)
-        self.assertNotIn(str(len(KEY)), out)
+        # exactly these members: nothing of the key (the receipt's operation key is random, not derived)
+        self.assertEqual(set(report), {'format', 'entry', 'user', 'verb', 'stored', 'read_back', 'message', 'reminder',
+                                       'receipt'})
+        self.assertNotIn(len(KEY), [v for v in report.values() if isinstance(v, int) and not isinstance(v, bool)])
         self.assertNotIn('fingerprint', out)
         # the store: the custody path's receipt (aieh-credential-act/1, fingerprints only), never the key
         store_text = self.store_text()
