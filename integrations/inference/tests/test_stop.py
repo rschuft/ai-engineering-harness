@@ -533,7 +533,8 @@ class InAProcessOfItsOwn(unittest.TestCase):
         worker.join(CEILING_S)
         self.assertNotEqual(seen.get('ended'), 'complete')
         lines = self.audit()
-        self.assertEqual([line['event'] for line in lines], ['broker-start', 'request', 'request', 'broker-stop'])
+        self.assertEqual([line['event'] for line in lines], ['broker-start', 'upstream-connect', 'request',
+                                                             'upstream-connect', 'request', 'broker-stop'])
         self.assertEqual([line['code'] for line in lines if line['event'] == 'request'], [None, 'BROKER_STOPPED'])
         stop = lines[-1]
         self.assertEqual((stop['stopped_by'], stop['requests_cut'], stop['live_grants_ended']),
@@ -565,7 +566,8 @@ class InAProcessOfItsOwn(unittest.TestCase):
         self.ctrl_break(proc)
         self.assertEqual(proc.wait(CEILING_S), IB.FORCED_EXIT, self.err_text)
         self.pumper.join(CEILING_S)
-        self.assertEqual([line['event'] for line in self.audit()], ['broker-start'])   # nothing further written
+        # the in-flight request's connect line, then nothing further written
+        self.assertEqual([line['event'] for line in self.audit()], ['broker-start', 'upstream-connect'])
         self.assertFalse(any('Traceback' in text for text in self.err_text), self.err_text)
 
 

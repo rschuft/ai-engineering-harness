@@ -36,7 +36,10 @@ allowlist. The shipped allowlists are empty, so every issuance is refused until 
 Egress: the broker opens a connection only in connect_upstream, and only to the configured upstream origin of
 the admitted token's family (https with the system's trust roots, or http to a loopback address for a local
 model server). It imports no litellm, fetches no cost map, sends no telemetry and checks for no update; it
-honours no proxy variable.
+honours no proxy variable. At connect time (http.client connects at the first request) the connection writes an
+upstream-connect audit line with its peer address (IP and port) and local address, its origin, family and attempt,
+no secret (S-03.2): the broker's own record, which the live census (inference_census.py) compares with what the
+operating system shows. The status answer and the start receipt name the broker's pid, for the census.
 
 Audit: one append-only JSON line per request in <managed root>/persistent/logs/inference/ (time, attempt and
 conversation id, token fingerprint, family, method, path, model, byte counts, status and upstream status,
@@ -1150,18 +1153,44 @@ class AuditLog:
 _TLS = None
 
 
+class _UpstreamConnection:
+    """The upstream connection's connect hook (S-03.2): once http.client has made the connection (at the first
+    request; building it opens nothing), on_connect, when the pass-through set it, is called with the socket, so
+    that the broker records the peer it reached at connect time."""
+    on_connect = None
+
+    def connect(self):
+        super().connect()
+        if self.on_connect is not None:
+            self.on_connect(self.sock)
+
+
+class _UpstreamHTTPConnection(_UpstreamConnection, http.client.HTTPConnection):
+    pass
+
+
+class _UpstreamHTTPSConnection(_UpstreamConnection, http.client.HTTPSConnection):
+    pass
+
+
 def connect_upstream(origin: Origin, timeout: float) -> http.client.HTTPConnection:
     """The broker's only outbound connection: to ORIGIN, the configured upstream of the admitted token's family.
     https verifies against the system's trust roots; plain http only to a loopback address. http.client reads
-    no proxy variable."""
+    no proxy variable. The connection is made at its first request, and reports its socket to its on_connect."""
     global _TLS
     if origin.scheme == 'https':
         if _TLS is None:
             _TLS = ssl.create_default_context()
-        return http.client.HTTPSConnection(origin.host, origin.port, timeout=timeout, context=_TLS)
+        return _UpstreamHTTPSConnection(origin.host, origin.port, timeout=timeout, context=_TLS)
     if origin.scheme == 'http' and origin.loopback:
-        return http.client.HTTPConnection(origin.host, origin.port, timeout=timeout)
+        return _UpstreamHTTPConnection(origin.host, origin.port, timeout=timeout)
     raise InferenceError('UPSTREAM_NOT_CONFIGURED', f'{origin.text()} is not an admissible upstream')
+
+
+def socket_address(address) -> dict:
+    """{'address', 'port'} of a socket address (getpeername or getsockname): the IP as canonical text, without a
+    scope."""
+    return {'address': ipaddress.ip_address(str(address[0]).split('%', 1)[0]).compressed, 'port': int(address[1])}
 
 
 # ---------------------------------------------------------------- grants
@@ -1525,7 +1554,7 @@ class Broker:
         with self._lock:
             grants = list(self._grants.values())
         bound = {} if self.authorization is None else {'authorization': self.authorization.describe()}
-        return {'format': STATUS_FORMAT, **bound, 'listeners': dict(self.listeners),
+        return {'format': STATUS_FORMAT, **bound, 'pid': os.getpid(), 'listeners': dict(self.listeners),
                 'provider_key': None if self.provider_key is None else {
                     'provider': self.provider_key.provider, 'fingerprint': self.provider_key.fingerprint,
                     'source': self.provider_key.source},
@@ -1868,6 +1897,8 @@ class Broker:
             if cut:
                 connection.close()
                 return                                   # the stop cut it before anything was sent upstream
+            if isinstance(connection, _UpstreamConnection):
+                connection.on_connect = lambda sock: self._connected(sock, admission)
             connection.putrequest(admission.method, admission.target, skip_host=True, skip_accept_encoding=True)
             for name, value in headers:
                 connection.putheader(name, value)
@@ -1926,6 +1957,17 @@ class Broker:
         finally:
             connection.close()
         settle(reader.finish() if code is None else 'unknown', sent, status, status, code)
+
+    def _connected(self, sock, admission: Admission) -> None:
+        """The upstream-connect audit line, at connect time (S-03.2): the peer the connection reached (IP and port)
+        and its local address, with the origin, family and attempt; never a secret. A line that cannot be written
+        leaves the connection unrecorded, which the live census judges FAIL, never PASS."""
+        try:
+            self.audit.write({'event': 'upstream-connect', 'attempt_id': admission.grant.attempt_id,
+                              'family': admission.family.id, 'origin': admission.family.upstream.text(),
+                              'peer': socket_address(sock.getpeername()), 'local': socket_address(sock.getsockname())})
+        except (OSError, ValueError):
+            pass
 
     # -- the listeners
 

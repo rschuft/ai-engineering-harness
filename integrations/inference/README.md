@@ -39,6 +39,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line; the provider envelope's start precondition (S-03.5: `live_envelope`, `authorize`, the held `Authorization`, the `envelope` command) |
 | `inference_envelope.py` | The provider envelope (S-03.5 slice 1; `aieh-provider-envelope/2` since S-03.6): the `envelope` block's check (the retired spending keys refused), the canonical document, its digest and the canonical operation manifest. Standard library only; it opens nothing |
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
+| `inference_census.py` | The broker's live census (S-03.2, before the first provider call): what the running broker's process listens on and is connected to, read from the operating system's per-process TCP and UDP tables (Windows, through `ctypes`; elsewhere UNKNOWN), judged against the configuration and the broker's audit (`upstream-connect` lines) under `CENSUS_RULE`; its command (`--once`) |
 | `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation, and for the qualification one grant (`issue`, slice 4); `127.0.0.1` only), an attempt token's fingerprint (`token_fingerprint`) and the `issue` command (slice 4) |
 | `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`); S-03.3 slice 3 part two: the launcher's discovery mode (`discover`) and the reader of a run's audit (`propose-pin`, `propose_pin`), which writes a proposed family pin and applies nothing |
 | `inference_key_search.py` | The provider-key containment search (S-03.2 slice 5): the synthetic key held in memory, searched for raw and in its encodings over byte surfaces, with positive controls; its command line (`search`). Standard library only; it imports nothing of the broker |
@@ -60,7 +61,8 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_reach.py` | Provider-side reach refused (S-03.3 fix-forward, before the first paid call): each rule of the `anthropic-messages` checker (`mcp_servers`, `container`, a tool type other than `custom`, a `tools` that is not a list or an entry that is not an object, a `url` or `file` source and a `container_upload` block anywhere, tool results included) refused `PROVIDER_REACH_REFUSED` with its audit `reach` member and nothing sent upstream; plain model calls and custom tools admitted; a family with no checker refused at start on an upstream that is not loopback (`FAMILY_REACH_UNCHECKED`); a body nested too deeply to parse refused `BODY_NOT_JSON` over the wire (a control body `CONTROL_BODY_INVALID`; an upstream answer unknown usage), never a handler error |
 | `tests/test_account_scope.py` | Account-scope headers never forwarded (S-03.3 fix-forward): every header whose name starts with `anthropic-workspace` or `anthropic-organization` stripped, not refused, for each family, streamed and not, against the fake upstreams; the audit's `stripped_headers` (names only) |
 | `tests/test_query.py` | Exact query-string equality (S-03.3 fix-forward; `pass` retired): `anthropic-messages` declares exactly `beta=true`, admitted and forwarded unchanged; every other form (case, repetition, addition, percent-encoding, `&`, `#`, an empty query) refused `QUERY_NOT_ALLOWED` before anything is sent; the description output; the qualification's fake upstream answering the declared query |
-| `tests/serve_child.py` | The child process of `test_stop.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
+| `tests/test_census.py` | The live census: every verdict branch of its rule on synthetic tables, the four table layouts and a fake `iphlpapi`, the broker's pid in its status and start receipt, the `upstream-connect` line written at connect time, the command's record and exit codes; on Windows a real census of `serve` in a process of its own (PASS idle and with a request in flight, FAIL on an extra listener, connection or UDP socket in the broker's process) |
+| `tests/serve_child.py` | The child process of `test_stop.py` and `test_census.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
 | `tests/test_key_search.py` | `inference_key_search.py`: its forms (the standard encodings at every alignment, the body, the fragments), a copy across a read boundary, every positive control for keys of 16 to 128 body characters and each control failing when the view it controls is broken, the gzip, SQLite, HTTP, tar, tree and environment views with their incomplete cases, the command line (a pipe only, every refusal without the key, a planted copy found, nothing printed, logged or written) |
@@ -240,7 +242,7 @@ Owner's account can call it (disclosed, decision 0013 point 6).
 | `POST /v1/grants` | `conversation_id`, `attempt_id` (canonical lower-case UUIDs), `family`, `models` (a non-empty subset of the family's allowlist), `ttl_s` (1 to `max_ttl_s`); no `budget` (a body carrying one, of any value, is refused `BUDGET_RETIRED`) | 201: the token (returned once), its fingerprint, the grant and its receipt |
 | `POST /v1/grants/revoke` | `token_fingerprint`, `trigger` (a decision 0007 point 5 trigger: `attempt end`, `suspected exposure`, `definition revocation`, `policy revision`, `expiry`, `owner direction`), `revoker` (1 to 200 printable characters, `valid_revoker`); or, in place of `token_fingerprint`, `conversation_id` and `attempt_id` (E-05.6: the attempt's one grant, for a dispatcher that lost the issue's answer) | 200: the grant, revoked, with its revocation receipt; by conversation and attempt with no grant, 200 `tombstoned` (`aieh-inference-attempt-tombstone/1`: the attempt is tombstoned and its issue is refused from then on, `GRANT_ATTEMPT_REVOKED`); `GRANT_UNKNOWN` when no grant has that fingerprint, or when the attempt's grant ended with an earlier run or is of another conversation; `GRANT_ALREADY_REVOKED` |
 | `GET /v1/grants/<fingerprint>` | | the grant: state, lifetime, counts, usage, receipts |
-| `GET /v1/status` | | listeners, the provider key's fingerprint and source, each family and whether it is ready, grant counts, the audit file |
+| `GET /v1/status` | | the broker's `pid` (for the live census), listeners, the provider key's fingerprint and source, each family and whether it is ready, grant counts, the audit file |
 | `POST /v1/stop` | an empty JSON object `{}` | 202: `aieh-inference-broker-stop/1` (`state` `stopping`, `began`: whether this call began the stop, `stopped_by`); the stop begins before the answer is sent and `serve` is woken after it ([The stop](#the-stop)) |
 
 A token is `aieh-inf-` and 43 random URL-safe characters. The broker keeps only its sha256 digest and its
@@ -332,7 +334,25 @@ that is not JSON, with nothing forwarded and no handler error; the control liste
 the admitted token's family: `https` with the system's trust roots and hostname check, or `http` to a
 loopback address only. It reads no proxy variable. The broker resolves the upstream name on the host; it
 opens nothing else (no cost map, telemetry or update check). This is a code-path control plus disclosure
-(decision 0015 section 5.1), shown by the syntax-tree census in `tests/test_egress.py`.
+(decision 0015 section 5.1), shown by the syntax-tree census in `tests/test_egress.py`. At connect time (http.client
+connects at a request's first byte) the connection writes an `upstream-connect` audit line with the peer it reached
+(IP and port), its local address, the origin, the family and the attempt id: the broker's own record of its
+egress, which the live census compares with the operating system's view.
+
+**The live census (S-03.2; `inference_census.py --once`).** Before the first provider call, and around each live
+step, the census observes at the operating system what the running broker's process (the `pid` of its status
+answer; the start receipt carries it too) listens on and is connected to: on Windows the per-process TCP tables
+(IPv4 and IPv6, `GetExtendedTcpTable` with `TCP_TABLE_OWNER_PID_ALL`) and UDP tables (`GetExtendedUdpTable`) through
+`ctypes`, starting no process. Its rule (`CENSUS_RULE`, fixed in the code and copied into every record): the
+broker's listeners are exactly `127.0.0.1:<control_port>` and `127.0.0.1:<inference_port>` of the configuration
+(a wildcard address, another port, an IPv6 listener or a missing one: FAIL); it owns no UDP endpoint; every other
+TCP connection it owns is inbound on one of those listeners from a loopback address, or outbound to a configured
+origin's port with a remote IP the audit recorded for that origin (else FAIL). Tables that cannot be read (not
+Windows, the API failing) are UNKNOWN, never PASS; so is an outbound connection while the audit cannot be read. The
+record (`aieh-inference-census/1`) states that DNS resolution happens in the system resolver and is not observed,
+and that a census is one moment (the audit is the continuous record). It prints the record and exits 0 PASS, 1
+FAIL or UNKNOWN, 2 refused (`CENSUS_CONFIG_INVALID`, `CENSUS_BROKER_UNREACHABLE`, `CENSUS_STATUS_INVALID`). The
+S-03.3 driver (`tools/guest.py acp-qualification`) runs it before any model call and again after the call.
 
 **Listeners.** Both bind `127.0.0.1` only, without address reuse (on Windows with `SO_EXCLUSIVEADDRUSE`, so
 no other socket can take the port), and do no name lookup. Neither writes a log of its own: the audit is the
@@ -371,7 +391,9 @@ One append-only JSON line per request (`aieh-inference-audit/1`) in a new file p
 `conversation_id`, `token_fingerprint`, `family`, `method`, `path`, `query_names`, `model`, `unrecorded`,
 `request_bytes`, `response_bytes`, `status`, `upstream_status`, `latency_ms`, `usage` and `code` (the refusal
 code, or `CLIENT_GONE`, `UPSTREAM_STREAM_BROKEN`, `BROKER_ERROR`, `BROKER_STOPPED`: cut by the broker's
-stop); plus `broker-start`, `broker-stop` (`stopped_by`, `requests_cut`, `live_grants_ended`) and
+stop); plus `broker-start`, `upstream-connect` (`attempt_id`, `family`, `origin`, `peer` and `local`, each
+`{address, port}`: written when an upstream connection is made), `broker-stop` (`stopped_by`, `requests_cut`,
+`live_grants_ended`) and
 `handler-error` lines. A request refused `PROVIDER_REACH_REFUSED` adds `reach` (`rule` and `name`); an admitted
 request whose account-scope headers were stripped adds `stripped_headers` (`names`, in the bounded name grammar
 below, and the count of the others, `unrecorded`), never a value. An admitted
@@ -683,6 +705,7 @@ credential provider holding a synthetic key) and has never read a real entry.
 <tools python> -I -B integrations/inference/inference_broker.py credential-enter --provider ID [--replace]   # pasted at a hidden prompt
 <tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until stopped
 <tools python> -I -B integrations/inference/inference_control.py stop             # the stop from any session
+<tools python> -I -B integrations/inference/inference_census.py --once            # the broker's live census
 <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
 <tools python> -I -B integrations/inference/inference_qualification.py fake-upstream --family ID --port PORT
 <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID \
@@ -781,6 +804,9 @@ every family.
 - Everything outside a test process: the broker as a supervised host service (the lifecycle contract), its
   real listeners, the real credential entry, `credential-set` against the Credential Manager, TLS to a real
   provider, any model call (each an Owner act).
+- The live census against the broker run by the Owner (act A2) and against a real provider connection over TLS:
+  only an in-test broker on loopback ports with a loopback fake upstream has been censused; Linux and macOS
+  (UNKNOWN by design).
 - `credential-enter` in a real console window: the console-mode check on a real console handle, the hidden prompt
   (`getpass` on the console), a paste from the clipboard and the real Credential Manager (the Owner's act 2).
 - Whether a pinned client (Claude Code) ever sends what the reach checker refuses, and the provider's own

@@ -65,7 +65,7 @@ class TestServe(unittest.TestCase):
         self.assertNotIn(seen['grant']['token'], output)
         (audit,) = (self.tmp / 'logs').glob('audit-*.jsonl')
         events = [json.loads(line)['event'] for line in audit.read_text(encoding='utf-8').splitlines()]
-        self.assertEqual(events, ['broker-start', 'request', 'broker-stop'])
+        self.assertEqual(events, ['broker-start', 'upstream-connect', 'request', 'broker-stop'])
         store = S.STORE.open_store(self.tmp / 'integration.sqlite')
         try:
             starts = [a for a in store.attempts() if a.operation_key.startswith('inference/broker-start/')]

@@ -534,7 +534,8 @@ class LoopbackAsToday(V.EnvelopeCase):
     """Proof rows F2 and F3: with only loopback upstreams no line of the precondition runs."""
 
     START_MEMBERS = {'format', 'service', 'started_at', 'pid', 'listeners', 'audit_file', 'provider_key', 'families'}
-    STATUS_MEMBERS = {'format', 'listeners', 'provider_key', 'families', 'grants', 'audit', 'start_receipt'}
+    STATUS_MEMBERS = {'format', 'pid', 'listeners', 'provider_key', 'families', 'grants', 'audit',
+                      'start_receipt'}
 
     def test_f2_loopback_upstreams_start_issue_and_pass_through_without_a_decision_source(self):
         upstream = S.FakeUpstream('openai-chat')

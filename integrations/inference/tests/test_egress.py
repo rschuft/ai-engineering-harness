@@ -2,7 +2,9 @@
 origin of the admitted token's family and nowhere else. Read from the module's syntax tree: one function opens a
 connection, and the pass-through calls it only with that family's origin; nothing imports litellm or another
 HTTP client, reads a proxy variable or the environment. connect_upstream itself admits only https or a
-loopback http origin, and building its connection opens nothing.
+loopback http origin, and building its connection opens nothing. Its connection classes add one thing to
+http.client's (S-03.2): after http.client's own connect, the socket is reported to on_connect, where the
+pass-through writes the upstream-connect audit line with the peer reached.
 """
 from __future__ import annotations
 
@@ -16,7 +18,8 @@ IB = S.IB
 SOURCE = (S.HERE.parent / 'inference_broker.py').read_text(encoding='utf-8')
 TREE = ast.parse(SOURCE)
 CONNECTORS = {'HTTPConnection', 'HTTPSConnection', 'create_connection', 'urlopen', 'socket', 'connect',
-              'create_default_context', 'getaddrinfo', 'gethostbyname', 'getfqdn'}
+              'create_default_context', 'getaddrinfo', 'gethostbyname', 'getfqdn', '_UpstreamHTTPConnection',
+              '_UpstreamHTTPSConnection'}
 
 
 def enclosing_functions():
@@ -52,8 +55,20 @@ class TestEgressCodePath(unittest.TestCase):
                 name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', None)
                 if name in CONNECTORS:
                     sites.setdefault(owner[id(node)], set()).add(name)
-        self.assertEqual(sites, {'connect_upstream': {'HTTPConnection', 'HTTPSConnection',
-                                                      'create_default_context'}})
+        self.assertEqual(sites, {'connect_upstream': {'_UpstreamHTTPConnection', '_UpstreamHTTPSConnection',
+                                                      'create_default_context'},
+                                 'connect': {'connect'}})
+
+    def test_the_connect_hook_only_calls_http_client_s_own_connect(self):
+        hook = next(n for n in ast.walk(TREE) if isinstance(n, ast.ClassDef) and n.name == '_UpstreamConnection')
+        (method,) = [n for n in hook.body if isinstance(n, ast.FunctionDef)]
+        self.assertEqual(method.name, 'connect')
+        calls = sorted(ast.unparse(n) for n in ast.walk(method) if isinstance(n, ast.Call))
+        self.assertEqual(calls, ['self.on_connect(self.sock)', 'super()', 'super().connect()'])
+        self.assertEqual(IB._UpstreamHTTPConnection.__mro__[1:3], (IB._UpstreamConnection,
+                                                                   IB.http.client.HTTPConnection))
+        self.assertEqual(IB._UpstreamHTTPSConnection.__mro__[1:3], (IB._UpstreamConnection,
+                                                                    IB.http.client.HTTPSConnection))
 
     def test_the_pass_through_connects_only_to_its_family_upstream(self):
         calls = [node for node in ast.walk(TREE) if isinstance(node, ast.Call)
@@ -153,7 +168,9 @@ class TestSelectionActOpensNothing(unittest.TestCase):
 class TestConnectUpstream(unittest.TestCase):
     def test_https_verifies_and_http_is_loopback_only(self):
         tls = IB.connect_upstream(IB.parse_origin('https://api.example.test'), 5)
+        self.assertIsInstance(tls, IB._UpstreamHTTPSConnection)
         self.assertIsInstance(tls, IB.http.client.HTTPSConnection)
+        self.assertIsNone(tls.on_connect)
         self.assertEqual((tls.host, tls.port, tls.sock), ('api.example.test', 443, None))  # nothing opened
         self.assertEqual(tls._context.verify_mode, IB.ssl.CERT_REQUIRED)
         self.assertTrue(tls._context.check_hostname)
@@ -162,7 +179,8 @@ class TestConnectUpstream(unittest.TestCase):
         self.assertIs(tls._context, IB._TLS)
         plain = IB.connect_upstream(IB.parse_origin('http://127.0.0.1:11434'), 5)
         self.assertEqual((type(plain), plain.host, plain.port, plain.sock),
-                         (IB.http.client.HTTPConnection, '127.0.0.1', 11434, None))
+                         (IB._UpstreamHTTPConnection, '127.0.0.1', 11434, None))
+        self.assertIsInstance(plain, IB.http.client.HTTPConnection)
         for origin in (IB.Origin('http', 'api.example.test', 80), IB.Origin('ftp', '127.0.0.1', 21)):
             with self.subTest(origin=origin):
                 with self.assertRaises(IB.InferenceError) as caught:
