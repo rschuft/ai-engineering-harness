@@ -214,6 +214,12 @@ Recorded by the engineering manager at S-03.5's completion ([decision 0021](0021
    does not enforce the limit (`enforced_by: broker`), the broker enforces a cumulative cap in usage tokens and closes
    the envelope when it is reached or when usage is unknown.
 4. Nothing here authorizes a key, an envelope, a cap, egress or a model call: those stay the Owner's (OA-12).
+5. (Engineering manager, 2026-11-13) Plan leaf S-03.6 is PASS ([evidence](../evidence/S-03.6-spending-enforcement-retired.md);
+   `ef82b76`, `1144776`, `9acfc66`), so amendment 2's "until S-03.6 passes" statements are satisfied: the attempt
+   token carries no budget (an issue request carrying one is refused `BUDGET_RETIRED`), `BUDGET_USAGE_UNKNOWN` and the
+   other budget refusals are gone, and no request is refused for its count or its usage; items 1 and 3 above no longer
+   describe the code: the envelope's digest holds no spending limit (`aieh-provider-envelope/2`) and the broker
+   enforces no cumulative cap.
 
 ## Current facts (2026-11-13, E-05.6)
 
