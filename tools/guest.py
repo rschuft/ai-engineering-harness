@@ -7217,12 +7217,45 @@ def provider_tunnel():
     return _inference_module('aieh_provider_tunnel', 'provider_tunnel.py')
 
 
+def configured_broker_ports():
+    """{'control_port', 'inference_port'} as components.inference_broker of the managed config.yml configures them
+    (raw values; absent keys are None), read through the managed root's resolver only: no broker module, no
+    credential. None when no broker is configured."""
+    paths = _inference_module('aieh_paths', 'aieh_paths.py', 'paths')
+    try:
+        raw = paths.resolve().components.get('inference_broker')
+    except paths.PathsError as exc:
+        raise Refused('BROKER_CONFIG', f'config.yml: {exc}') from None
+    if not isinstance(raw, dict):
+        return None
+    return {key: raw.get(key) for key in ('control_port', 'inference_port')}
+
+
+def refuse_port_conflict(tunnel_port, broker_ports):
+    """TUNNEL_PORT_CONFLICT when the profile's tunnel port is one of the broker's configured ports (review NIT h): the
+    two forward targets must never be the same listener."""
+    taken = {name: port for name, port in (broker_ports or {}).items() if port == tunnel_port}
+    if tunnel_port is not None and taken:
+        raise Refused('REFUSED', f'TUNNEL_PORT_CONFLICT: the provider tunnel\'s declared port {tunnel_port} is the '
+                      f'broker\'s configured {", ".join(sorted(taken))}', {'code': 'TUNNEL_PORT_CONFLICT'})
+
+
+def declared_tunnel_port(profile):
+    """The profile's provider-tunnel port, or None when it declares none (or defers it)."""
+    pt = provider_tunnel()
+    try:
+        return pt.declared_endpoint(profile)['host_port']
+    except pt.TunnelError:
+        return None
+
+
 class TunnelAccess:
     """The native profile's forward target as the dispatcher reaches it (E-05.10): the port the profile's one
     provider-tunnel endpoint declares, and whether the tunnel runs there (its run record names a live process on
-    that port). ``run_dir`` stands in for the managed state directory in tests (never the managed one)."""
+    that port, and that process is the one that wrote it). ``run_dir`` and ``broker_ports`` stand in for the
+    managed state directory and config.yml's broker ports in tests (never the managed ones)."""
 
-    def __init__(self, profile, run_dir=_MANAGED):
+    def __init__(self, profile, run_dir=_MANAGED, broker_ports=_MANAGED):
         pt = provider_tunnel()
         try:
             self.port = pt.declared_endpoint(profile)['host_port']
@@ -7231,11 +7264,20 @@ class TunnelAccess:
                           f'({exc.code}): the forward targets the tunnel only for a profile that declares the '
                           'native profile', {'code': exc.code}) from None
         self._run_dir = run_dir
+        self._broker_ports = broker_ports
+
+    def check_ports(self):
+        """TUNNEL_PORT_CONFLICT when a configured broker port is the tunnel's."""
+        ports = configured_broker_ports() if self._broker_ports is _MANAGED else self._broker_ports
+        refuse_port_conflict(self.port, ports)
 
     def run_dir(self):
         if self._run_dir is _MANAGED:
-            paths = provider_tunnel().managed_context()
-            return paths.run_dir()
+            pt = provider_tunnel()
+            try:
+                return pt.managed_context().run_dir()
+            except pt.TunnelError as exc:
+                raise Refused('TUNNEL_NOT_READY', f'the managed state directory: {exc.code}') from None
         return self._run_dir
 
     def ready(self):
@@ -7245,7 +7287,7 @@ class TunnelAccess:
             record = pt.read_run(Path(self.run_dir()))
         except pt.TunnelError as exc:
             raise Refused('TUNNEL_NOT_READY', f'the tunnel\'s run record: {exc.code}') from None
-        if record is None or record.get('port') != self.port or not pt.pid_alive(record['pid']):
+        if record is None or record.get('port') != self.port or pt.process_state(record) != 'running':
             raise Refused('TUNNEL_NOT_READY', f'the provider tunnel is not running on {LOOPBACK}:{self.port} '
                           '(decision 0023 section 4.3: the tunnel first; provider_tunnel.py serve)',
                           {'run_record': record})
@@ -7465,6 +7507,7 @@ def forward_start(ctx, name, idir, record, state, broker_port=None, broker=None,
     if execution_profile == 'native':
         access = tunnel or TunnelAccess(ctx.profile)
         target = native_forward_target(access, broker_port)
+        access.check_ports()
         access.ready()
     else:
         ic = inference_control()
@@ -7473,6 +7516,7 @@ def forward_start(ctx, name, idir, record, state, broker_port=None, broker=None,
             target = ic.forward_target(access.ports, broker_port)
         except ic.ControlError as exc:
             raise Refused('REFUSED', str(exc), {'code': exc.code}) from None
+        refuse_port_conflict(declared_tunnel_port(ctx.profile), access.ports)
         status = access.call('status')
         if ((status.get('listeners') or {}).get('inference') or {}).get('port') != target:
             raise Refused('BROKER_NOT_READY', f'the broker\'s inference listener is not on '
@@ -10704,10 +10748,14 @@ EGRESS_GUARD_FAMILY = 'iptables'
 # name lookup through the container's resolv.conf (kind lookup). With the forward held to the
 # native profile's provider tunnel (E-05.10), kind tunnel: one request to the tunnel through the
 # endpoint, spec['tunnel'][what] = {connect: the CONNECT target or null (null: a plain HTTP GET),
-# sni: the TLS server name or null (none sent)}; a refusal is reported by its status and the
-# tunnel's refusal code, an admitted CONNECT by a TLS handshake with the default trust store (the
-# certificate verified for the server name) and nothing sent after it, a closed connection by its
-# class. spec: base64 JSON {items: [[kind, proto, host, port, what]], timeout, tunnel}.
+# sni: the TLS server name or null (none sent), mode: handshake or no-answer}; a refusal is reported
+# by its status and the tunnel's refusal code; after a 200, mode handshake completes a TLS handshake
+# with the default trust store (the certificate verified for the server name) and sends nothing
+# after it, and mode no-answer sends one ClientHello (built by the ssl module over memory BIOs, no
+# handshake) and counts every byte received until the end of the connection: closed-without-answer
+# only for zero bytes after the 200 and then the end of the stream (review S1: a TLS alert from an
+# origin the tunnel let through is a byte, so never this outcome). spec: base64 JSON {items: [[kind,
+# proto, host, port, what]], timeout, tunnel}.
 JOB_INFERENCE_SWEEP = r'''import base64, errno, json, socket, sys, time
 spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 QUERY = bytes([0x41, 0x49, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 4]) + b'aieh' + bytes([7]) + \
@@ -10795,6 +10843,35 @@ def tunnel(host, port, item):
                 if key.strip().lower() == 'x-aieh-tunnel-refusal':
                     out['refusal'] = value.strip()[:64]
             out['outcome'] = 'refused-%d' % out['status']
+        elif body:
+            out['outcome'] = 'answered-after-hello'
+            out['bytes_after_hello'] = len(body)
+        elif item['mode'] == 'no-answer':
+            ctx = ssl.create_default_context()
+            if item['sni'] is None:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+            obj = ctx.wrap_bio(incoming, outgoing, server_hostname=item['sni'])
+            try:
+                obj.do_handshake()
+            except ssl.SSLWantReadError:
+                pass
+            s.sendall(outgoing.read())
+            got = 0
+            try:
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    got += len(chunk)
+                out['outcome'] = 'closed-without-answer' if got == 0 else 'answered-after-hello'
+            except socket.timeout:
+                out['outcome'] = 'timeout-after-hello'
+            except OSError as exc:
+                out['outcome'] = 'error-after-hello'
+                out['error'] = name(exc)
+            out['bytes_after_hello'] = got
         else:
             ctx = ssl.create_default_context()
             if item['sni'] is None:
@@ -10880,10 +10957,18 @@ TUNNEL_MATRIX = (
      'TUNNEL_TARGET_IP_LITERAL'),
     ('provider tunnel: plain HTTP', None, None, 'refused-405', TUNNEL_NOT_CONNECT),
     ('provider tunnel: mismatched server name', 'api.anthropic.com:443', 'example.com',
-     'closed-in-handshake', None),
-    ('provider tunnel: no server name', 'api.anthropic.com:443', None, 'closed-in-handshake', None),
+     'closed-without-answer', None),
+    ('provider tunnel: no server name', 'api.anthropic.com:443', None, 'closed-without-answer', None),
 )
 TUNNEL_EXPECTED = {what: (outcome, code) for what, _, _, outcome, code in TUNNEL_MATRIX}
+# Outcomes of a refused tunnel row that mean the origin answered it: a stop condition.
+TUNNEL_ANSWERED = ('handshake-complete', 'tls-unverified', 'answered-after-hello')
+
+
+def tunnel_mode(outcome):
+    """The job script's mode for a tunnel row: handshake for the admitted one, no-answer for every other (after a
+    200 it sends one ClientHello and counts what comes back)."""
+    return 'handshake' if outcome == 'handshake-complete' else 'no-answer'
 
 
 def forward_target(session):
@@ -10905,8 +10990,8 @@ def inference_job_spec(profile, native=False):
             'timeout': JOB_CONNECT_S}
     if native:
         spec['items'] += [['tunnel', 'tcp', address, port, what] for what, *_ in TUNNEL_MATRIX]
-        spec['tunnel'] = {what: {'connect': connect, 'sni': sni}
-                          for what, connect, sni, _, _ in TUNNEL_MATRIX}
+        spec['tunnel'] = {what: {'connect': connect, 'sni': sni, 'mode': tunnel_mode(outcome)}
+                          for what, connect, sni, outcome, _ in TUNNEL_MATRIX}
     return spec
 
 
@@ -11004,7 +11089,7 @@ def inference_job_verdict(results, native=False):
             want, code = TUNNEL_EXPECTED[what]
             ok = got == want and r.get('refusal') == code and \
                 (want != 'handshake-complete' or (r.get('tls') or {}).get('verified') is True)
-            if want != 'handshake-complete' and (got in ('handshake-complete', 'tls-unverified') or
+            if want != 'handshake-complete' and (got in TUNNEL_ANSWERED or
                                                  r.get('status') == 200 and want.startswith('refused')):
                 stop.append({'condition': 'the provider tunnel admitted a refused request',
                              'what': what, 'conversation': r.get('conversation')})
@@ -12021,11 +12106,14 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                     'the name lookup returns no address; from every job a CONNECT to '
                     'api.anthropic.com:443 completes a TLS handshake verified for that name and '
                     'nothing is sent after it, while another host, another port and an IP literal '
-                    'are refused 403, plain HTTP 405, each with the tunnel\'s code, and a mismatched '
-                    'or absent server name is closed in the handshake. STOP: an edge or resolver '
-                    'target connects or answers, a name resolves, the guest login is answered other '
-                    'than by the tunnel\'s refusal, or a refused request reaches a handshake or a 200. '
-                    'No forward session held: nothing is run (precondition)')
+                    'are refused 403, plain HTTP 405, each with the tunnel\'s code, and for a '
+                    'mismatched or absent server name the CONNECT is answered 200 and then, after the '
+                    'job\'s one ClientHello, not one byte arrives before the end of the stream '
+                    '(closed-without-answer; any byte, a TLS alert included, is answered-after-hello). '
+                    'STOP: an edge or resolver target connects or answers, a name resolves, the guest '
+                    'login is answered other than by the tunnel\'s refusal, or a refused request '
+                    'reaches a handshake, a 200 or an answer after its ClientHello. No forward session '
+                    'held: nothing is run (precondition)')
         return ok and complete, {
             'decision_rule': rule, 'target': target,
             'spec': spec, 'results': rows, 'complete': complete}
@@ -12860,6 +12948,35 @@ def mountinfo_outcome(check, mounts, own_dests, peer_mounts=None):
     return 'unknown-check', {}
 
 
+NOT_APPLICABLE = 'not-applicable'
+# What each catalogue applicability name means for one guest, read ONLY from the guest's declared creation record
+# (its launch record), never from a probe (the Overseer's ruling S4, E-05.10 review round 1).
+APPLICABILITY_RULES = {
+    'inference-composition': (inference_opted, 'the guest was not created with create --provision --inference: its '
+                                               'launch record declares no inference composition'),
+}
+
+
+def case_applicability(case, record):
+    """(None, None) when the case applies to the guest of launch record RECORD; (NOT_APPLICABLE, why) when its
+    applies_to excludes the guest; ('FAIL', why) for an applicability name the runner does not know. A case without
+    applies_to applies to every guest."""
+    name = case.get('applies_to')
+    if name is None:
+        return None, None
+    rule = APPLICABILITY_RULES.get(name)
+    if rule is None:
+        return 'FAIL', f'applies_to {name!r} is not an applicability the runner knows'
+    applies, why = rule
+    return (None, None) if applies(record) else (NOT_APPLICABLE, why)
+
+
+def composed_for(case, record):
+    """Whether the guest is one the case's applicability names (a not-applicable verdict there is a FAIL)."""
+    rule = APPLICABILITY_RULES.get(case.get('applies_to'))
+    return rule is not None and bool(rule[0](record))
+
+
 def case_for_target(case, target):
     """The case as the run judges it: with the forward held to the provider tunnel (decision 0023,
     E-05.10), a case's native expectations (expected, enforcement) replace its brokered ones."""
@@ -13331,7 +13448,13 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
     for case in order:
         control = verdicts.get(case.get('positive_control')) if case.get('positive_control') else None
         comp = {cid: verdicts.get(cid) for cid in case.get('compensated_by') or []}
-        verdict, reason, stop = containment_verdict(case, observations[case['id']], control, comp)
+        excluded, why = case_applicability(case, record)
+        if excluded == NOT_APPLICABLE and composed_for(case, record):
+            verdict, reason, stop = 'FAIL', f'not applicable on a guest its applicability names: {why}', False
+        elif excluded is not None:
+            verdict, reason, stop = excluded, why, False
+        else:
+            verdict, reason, stop = containment_verdict(case, observations[case['id']], control, comp)
         verdicts[case['id']], reasons[case['id']] = verdict, reason
         if stop:
             stop_conditions.append({'condition': 'a denial probe succeeded', 'case': case['id'],
@@ -13371,11 +13494,13 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
                                      'expected': 'FAIL',
                                      'ok': verdict == 'FAIL' and any(o['outcome'] in checker.SUCCESS_OUTCOMES
                                                                      for o in obs)})
-    totals = {v: sum(1 for x in verdicts.values() if x == v) for v in ('PASS', 'FAIL', 'UNKNOWN')}
+    totals = {v: sum(1 for x in verdicts.values() if x == v) for v in ('PASS', 'FAIL', 'UNKNOWN', NOT_APPLICABLE)}
     by_category = {}
     for case in cases:
-        row = by_category.setdefault(case['category'], {'PASS': 0, 'FAIL': 0, 'UNKNOWN': 0})
+        row = by_category.setdefault(case['category'], {'PASS': 0, 'FAIL': 0, 'UNKNOWN': 0, NOT_APPLICABLE: 0})
         row[verdicts[case['id']]] += 1
+    not_applicable = [{'id': c['id'], 'applies_to': c.get('applies_to'), 'reason': reasons[c['id']]}
+                      for c in cases if verdicts[c['id']] == NOT_APPLICABLE]
     sensitivity_ok = all(r['ok'] for r in sensitivity_rows) if sensitivity else None
     if stop_conditions or totals['FAIL'] or failed or (sensitivity and not sensitivity_ok):
         result = 'FAIL'
@@ -13393,7 +13518,7 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
                          'version': catalogue.get('version')},
            'conversations': conversations, 'principal': principal,
            'started_at': started, 'ended_at': utc_now(), 'seconds': round(time.time() - t0, 1),
-           'result': result, 'totals': totals, 'by_category': by_category,
+           'result': result, 'totals': totals, 'by_category': by_category, 'not_applicable': not_applicable,
            'failed_steps': failed, 'stop_conditions': stop_conditions,
            'snapshots': snapshots, 'docker_inspect': memo.get('docker_inspect'),
            'cases': case_records,

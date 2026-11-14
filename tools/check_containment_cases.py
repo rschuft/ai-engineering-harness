@@ -63,7 +63,7 @@ CATEGORIES = ('file', 'sibling-workspace', 'secret', 'socket', 'egress', 'privil
               'management-api')
 KINDS = ('denial', 'permitted', 'hardening', 'deviation')
 STATUSES = ('executable', 'planned')
-VERDICTS = ('PASS', 'FAIL', 'UNKNOWN')
+VERDICTS = ('PASS', 'FAIL', 'UNKNOWN', 'not-applicable')
 LOCATIONS = ('container-mount-set', 'uid-permissions', 'capabilities', 'no-new-privileges',
              'seccomp', 'apparmor', 'pid-namespace', 'device-cgroup', 'masked-proc',
              'image-content', 'container-guard', 'egress-guard', 'icc', 'slirp-restrict',
@@ -73,6 +73,9 @@ LOCATIONS = ('container-mount-set', 'uid-permissions', 'capabilities', 'no-new-p
 # guests they apply to; every other case applies to every provisioned guest of the profile.
 APPLICABILITY = ('inference-composition',)
 INFERENCE_EXTRACT = ('job-access-probe', 'inference')
+# The outcome classes tools/guest.py's inference_outcome gives an inference case (brokered and native): an inference
+# case's expected outcomes, and its native ones, come from these only.
+INFERENCE_OUTCOMES = ('answered', 'token-refused', 'tunnel-refused', 'ECONNREFUSED', 'not-resolved')
 SNAPSHOT_KEYS = ('docker_inspect', 'container_guard', 'egress_guard', 'daemon', 'pins')
 REQUIREMENTS = ('egress-falsification',)
 SOURCES = ('containment-probe', 'job-access-probe', 'admission-probe')
@@ -351,6 +354,7 @@ class Checker(csi.Checker):
         self.check_control(where, case, kind)
         self.check_probe(where, case.get('probe'), case)
         self.check_profiles(where, case, kind)
+        self.check_inference_outcomes(where, case)
         if kind == 'deviation':
             comp = self.strings(where, case, 'compensated_by', required=True)
             for cid in comp:
@@ -383,6 +387,19 @@ class Checker(csi.Checker):
         self.keys(f'{where}.native', native, NATIVE_KEYS)
         self.check_expected(f'{where}.native', native, kind)
         self.check_enforcement(f'{where}.native', native, kind)
+
+    def check_inference_outcomes(self, where, case):
+        """An inference case expects only outcome classes the runner gives (INFERENCE_OUTCOMES), natively too."""
+        probe = _dict(case.get('probe'))
+        if (probe.get('source'), probe.get('extract')) != INFERENCE_EXTRACT:
+            return
+        for label, block in (('expected', case.get('expected')),
+                             ('native.expected', _dict(case.get('native')).get('expected'))):
+            outcomes = _list(_dict(block).get('outcomes'))
+            unknown = [o for o in outcomes if o not in INFERENCE_OUTCOMES]
+            if unknown:
+                self.add('EXPECTED_INVALID', where, f'{label}: {unknown} are not outcome classes of the inference '
+                         f'runner ({list(INFERENCE_OUTCOMES)})')
 
     def check_expected(self, where, case, kind):
         expected = case.get('expected')

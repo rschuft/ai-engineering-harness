@@ -5592,13 +5592,15 @@ class InferenceSweepFake:
                 g['accept'] += 1
                 want, code = guest.TUNNEL_EXPECTED[what]
                 connect, sni = next((c, s) for w, c, s, _, _ in guest.TUNNEL_MATRIX if w == what)
-                assert spec['tunnel'][what] == {'connect': connect, 'sni': sni}
+                assert spec['tunnel'][what] == {'connect': connect, 'sni': sni, 'mode': guest.tunnel_mode(want)}
                 if self.hit('tunnel_open', what):
                     want, code = 'handshake-complete', None
                 row.update(outcome=want, status=200 if not want.startswith('refused') else int(want[-3:]),
                            refusal=None if self.faults.get('tunnel_uncoded') else code)
                 if want == 'handshake-complete':
                     row['tls'] = {'version': 'TLSv1.3', 'verified': not self.faults.get('tunnel_unverified')}
+                if want == 'closed-without-answer':
+                    row['bytes_after_hello'] = 0
             elif kind == 'lookup':
                 g['reject'] += 2                          # its queries, refused by the guard
                 row['outcome'] = 'resolved' if self.faults.get('resolves') else 'not-resolved'
@@ -5794,7 +5796,7 @@ class ContainmentProbe(TempState):
         self.assertEqual(bad, {})
         self.assertEqual(out['result'], 'PASS', json.dumps(out['steps'], default=str)[:3000])
         executable = [c for c in CATALOGUE['cases'] if c['status'] == 'executable']   # planned: not run
-        self.assertEqual(out['totals'], {'PASS': len(executable), 'FAIL': 0, 'UNKNOWN': 0})
+        self.assertEqual(out['totals'], {'PASS': len(executable), 'FAIL': 0, 'UNKNOWN': 0, guest.NOT_APPLICABLE: 0})
         self.assertEqual(set(out['by_category']), set(guest.load_containment_checker().CATEGORIES))
         self.assertEqual(out['primitives']['admission-probe']['result'], 'PASS')
         self.assertEqual(out['primitives']['job-access-probe']['result'], 'PASS')
@@ -5889,17 +5891,47 @@ class ContainmentProbe(TempState):
         self.assertEqual((edge['target'], edge['guard']), ('tcp 10.0.2.15:8090',
                                                            {'accept': 0, 'reset': 1, 'reject': 0}))
 
-    def test_inference_cases_are_never_pass_without_the_composition(self):
+    def test_inference_cases_are_not_applicable_without_the_composition(self):
+        """The Overseer's ruling S4 (E-05.10 review round 1): on a guest whose launch record declares no inference
+        composition the seven inference cases are not-applicable, counted neither PASS nor FAIL and listed in the
+        summary; they are never PASS, and the run is judged by its other cases."""
         del self.record['inference']
         out, _ = self.run_probe()
         v = self.verdicts(out)
-        self.assertEqual(v['ctl-inference-endpoint'], 'FAIL')
         for cid in INFERENCE_CASES:
-            self.assertNotEqual(v[cid], 'PASS', cid)
-            if cid != 'ctl-inference-endpoint':
-                self.assertEqual(v[cid], 'UNKNOWN', cid)
+            self.assertEqual(v[cid], guest.NOT_APPLICABLE, cid)
         self.assertEqual({c: x for c, x in v.items() if x != 'PASS' and c not in INFERENCE_CASES}, {})
+        self.assertEqual((out['totals']['PASS'], out['totals']['FAIL'], out['totals'][guest.NOT_APPLICABLE]),
+                         (len(v) - 7, 0, 7))
+        self.assertEqual(sorted(x['id'] for x in out['not_applicable']), sorted(INFERENCE_CASES))
+        self.assertIn('create --provision --inference', out['not_applicable'][0]['reason'])
+        self.assertEqual(out['result'], 'PASS')
+
+    def test_applicability_comes_from_the_launch_record_and_never_excuses_a_composed_guest(self):
+        """On a composed guest every inference case is judged (a missing forward is a FAIL, never not-applicable),
+        and a not-applicable verdict there is a FAIL; an unknown applicability is a FAIL."""
+        composed = self.record
+        self.assertEqual(guest.case_applicability({'applies_to': 'inference-composition'}, composed), (None, None))
+        self.assertEqual(guest.case_applicability({}, {}), (None, None))
+        self.assertEqual(guest.case_applicability({'applies_to': 'inference-composition'}, {})[0],
+                         guest.NOT_APPLICABLE)
+        self.assertEqual(guest.case_applicability({'applies_to': 'some-guests'}, composed)[0], 'FAIL')
+        with mock.patch.object(guest, 'case_applicability', return_value=(guest.NOT_APPLICABLE, 'forced')):
+            out, _ = self.run_probe()
+        v = self.verdicts(out)
+        for cid in INFERENCE_CASES:
+            self.assertEqual(v[cid], 'FAIL', cid)
+        reasons = {c['id']: c['reason'] for c in out['cases']}
+        self.assertIn('not applicable on a guest its applicability names', reasons['ctl-inference-endpoint'])
         self.assertEqual(out['result'], 'FAIL')
+
+    def test_the_runners_vocabularies_are_the_checkers(self):
+        checker = guest.load_containment_checker()
+        self.assertIn(guest.NOT_APPLICABLE, checker.VERDICTS)
+        outcomes = set(guest.INFERENCE_EXPECTED.values()) | set(guest.INFERENCE_EXPECTED_NATIVE.values()) | \
+            {guest.EGRESS_REFUSED}
+        self.assertLessEqual(outcomes, set(checker.INFERENCE_OUTCOMES))
+        self.assertEqual(set(guest.APPLICABILITY_RULES), set(checker.APPLICABILITY))
 
     def test_inference_cases_fail_on_their_precondition_without_a_forward(self):
         self.forward = {'held': False, 'path': 'cp/inference-forward.json', 'stale': None}

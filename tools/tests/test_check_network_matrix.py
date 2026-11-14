@@ -112,6 +112,7 @@ class CommittedMatrix(unittest.TestCase):
         self.assertEqual((out['verdict'], out['to']), ('allow', 'external:model-provider'))
         self.assertIn('disclosure', [e['kind'] for e in out['enforcement']])
         self.assertIn('api.anthropic.com:443', out['protocol'])
+        self.assertEqual(job['credentials'], ['cred-native-claude-code-token'])     # carried inside the TLS
         self.assertEqual((guest_own['verdict'], guest_own['findings']), ('disclosed', ['fd-native-guest-provider-reach']))
         for r in (job, out, guest_own):
             self.assertEqual((r['owner_act'], r['status'], r['verify_at']), (True, 'planned', 'E-05.10'), r['id'])
@@ -188,6 +189,15 @@ class Acceptance(unittest.TestCase):
         if where:
             self.assertTrue(any(p.code == code and where in p.where for p in problems),
                             '\n'.join(map(str, problems)))
+
+    def test_an_exposed_path_into_trust_or_to_the_provider_is_an_owner_act(self):
+        """E-05.10 review round 1 (NIT g): owner_act is enforced, not only recorded."""
+        for ident, external in (('nm-job-tunnel', False), ('nm-guest-tunnel', False), ('nm-job-inference', False),
+                                ('nm-ext-tunnel-provider', True), ('nm-ext-broker-provider', True)):
+            m = fresh()
+            rows = m['external_edges'] if external else m['edges']
+            next(r for r in rows if r['id'] == ident)['owner_act'] = False
+            self.assert_code('OWNER_ACT_MISSING', m, where=ident)
 
     def test_a_missing_pair_fails(self):
         m = fresh()

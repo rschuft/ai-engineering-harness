@@ -11,17 +11,20 @@ Per connection, in this order, each refusal answered and logged with a stable re
 
 1. The request head is read, at most HEAD_LIMIT bytes within HEAD_TIMEOUT_S. Only `CONNECT <host>:<port> HTTP/1.x`
    is admitted: every other method (plain HTTP included) is TUNNEL_NOT_CONNECT (405); a head that is not a request
-   (too large, incomplete in time, no version) TUNNEL_REQUEST_MALFORMED (400); a head carrying Proxy-Authorization
-   TUNNEL_PROXY_CREDENTIAL (403: the tunnel takes no credential, not even one offered to it).
-2. The target must be exactly ORIGIN (api.anthropic.com:443): an IP literal is TUNNEL_TARGET_IP_LITERAL, any other
-   host TUNNEL_TARGET_REFUSED, the origin's host on another port TUNNEL_PORT_REFUSED (each 403).
+   (too large, incomplete in time, no version, a bare CR or LF anywhere) TUNNEL_REQUEST_MALFORMED (400); a head
+   carrying Proxy-Authorization TUNNEL_PROXY_CREDENTIAL (403: the tunnel takes no credential, not even one offered
+   to it).
+2. The target must be exactly ORIGIN (api.anthropic.com:443, the port's text exactly 443): an IP literal is
+   TUNNEL_TARGET_IP_LITERAL, any other host TUNNEL_TARGET_REFUSED, the origin's host on another port (or 0443)
+   TUNNEL_PORT_REFUSED (each 403).
 3. The tunnel answers 200 and reads the client's first TLS record itself: one handshake record (content type 22)
    of at most 16 KiB holding exactly one whole ClientHello, within HELLO_TIMEOUT_S. A ClientHello split across
    records is TUNNEL_HELLO_FRAGMENTED; anything that does not parse TUNNEL_HELLO_MALFORMED; an encrypted ClientHello
    extension (ECH, or the ESNI draft) TUNNEL_ECH_REFUSED; no server_name TUNNEL_SNI_ABSENT; a server name other than
    the CONNECT host TUNNEL_SNI_MISMATCH. After the 200 a refusal cannot be an HTTP answer: the connection is closed.
 4. Only then does the tunnel open its own outbound connection: the origin's host name resolved on the host (a
-   resolved address that is not global is refused, TUNNEL_UPSTREAM_REFUSED) and a TCP connection to it on 443
+   resolved address that is not global, or an IPv6 form that embeds or translates an IPv4 address (EMBEDDED_V6), is
+   refused, TUNNEL_UPSTREAM_REFUSED) and a TCP connection to exactly the address it checked on 443
    (TUNNEL_UPSTREAM_FAILED when none can be made). The ClientHello's bytes are sent as received, and from then on
    bytes are spliced both ways, unread, until either side ends or the tunnel stops.
 
@@ -31,16 +34,26 @@ at the port the execution profile declares once (network.endpoints, class provid
 entry gives the guest's HTTPS_PROXY, create_secrets.tunnel_endpoint). Its log (one JSON object per line,
 LOG_FORMAT) carries only the target, the decision and its reason, byte counts, the upstream peer address it
 connected to, and its own start and stop: never a byte of payload, never a header, never the target of a request
-that is not a CONNECT (a URL may carry a credential), never the server name a refused ClientHello presented.
+that is not a CONNECT (a URL may carry a credential), never the server name a refused ClientHello presented. It is
+bounded (_BoundedLog): per refusal reason the first LOG_REFUSAL_LINES (20) refused connection lines of each
+LOG_WINDOW_S (60 s) window are written and the rest counted in one refusals-suppressed line per reason; past
+LOG_CEILING_BYTES (64 MiB) per log file every line is dropped and counted (upstream-connect lines included, so the
+census then fails closed); the tunnel-stop line is always written and carries the totals.
 
 Lifecycle (the broker's pattern): `serve` runs in the foreground of the session that starts it and opens no window
 of its own (a process that starts it from a session with no console passes CREATE_NO_WINDOW,
-integrations/platform/no_window.py). It writes its run record (RUN_FORMAT: pid, address, port, log file) once
-listening and removes it at its stop. The stop is asked by SIGINT, SIGBREAK or SIGTERM where the platform has them
-(the handler sets a flag only; serve's main thread acts on it in slices of STOP_POLL_S), or, from any session, by
-`stop`, which writes the stop request beside the run record and waits on the tunnel's process for at most
-STOP_WAIT_S. At the stop the listener closes, every open connection is cut within one slice (logged
-end: stopped), the tunnel-stop line is written and serve exits 0. It starts no process, so it leaves none behind.
+integrations/platform/no_window.py). It writes its run record (RUN_FORMAT: pid, the process's creation time,
+address, port, log file) once listening and removes it at its stop. A run record is trusted only for the process
+that wrote it (process_state: the pid running with the recorded creation time); a pid that names another process is
+an ended tunnel, and one whose identity cannot be checked (access denied) is unknown, never ended
+(TUNNEL_RUN_RECORD_UNKNOWN). The stop is asked by SIGINT, SIGBREAK or SIGTERM where the platform has them (the
+handler sets a flag only; serve's main thread acts on it in slices of STOP_POLL_S), or, from any session, by `stop`,
+which writes the stop request beside the run record and waits on the tunnel's process for at most STOP_WAIT_S. At
+the stop the listener closes and every open connection's sockets are cut (shut down and closed through detach, so a
+worker blocked in recv or in sendall towards a peer that does not read ends at once); each connection's line
+(end: stopped) is written before the tunnel-stop line, and serve exits 0. The accept loop backs off on an OSError and
+gives up after ACCEPT_ERROR_LIMIT consecutive ones (an accept-failed line; serve then stops and exits 1). It starts
+no process, so it leaves none behind.
 
   <tools python> -I -B integrations/inference/provider_tunnel.py serve --profile PROFILE_DIR
   <tools python> -I -B integrations/inference/provider_tunnel.py stop
@@ -92,6 +105,22 @@ STOP_CUT_CEILING_S = 5.0               # the stop's wait for the connections it 
 STOP_WAIT_S = 15.0                     # stop's wait on the tunnel's process
 MAX_CONNECTIONS = 64
 CHUNK = 65536
+# The accept loop (review NIT f): after an OSError it backs off (doubling from ACCEPT_BACKOFF_S to at most
+# ACCEPT_BACKOFF_MAX_S); ACCEPT_ERROR_LIMIT consecutive errors end it, and serve stops ('accept-failed').
+ACCEPT_BACKOFF_S = 0.05
+ACCEPT_BACKOFF_MAX_S = 1.0
+ACCEPT_ERROR_LIMIT = 20
+# The log's bound (review S3): per refusal reason, the first LOG_REFUSAL_LINES refused connection lines of each
+# LOG_WINDOW_S window are written verbatim and the rest counted (one refusals-suppressed line per reason when the
+# window closes); past LOG_CEILING_BYTES per log file every further line is dropped and counted; the tunnel-stop
+# line is always written and carries the totals.
+LOG_REFUSAL_LINES = 20
+LOG_WINDOW_S = 60.0
+LOG_CEILING_BYTES = 64 * 1024 * 1024
+# IPv6 forms that embed or translate an IPv4 address, refused as resolved origin addresses whatever their
+# is_global (review NIT d): IPv4-compatible, IPv4-mapped, the NAT64 prefixes, 6to4 and Teredo.
+EMBEDDED_V6 = tuple(ipaddress.ip_network(n) for n in ('::/96', '::ffff:0:0/96', '64:ff9b::/96', '64:ff9b:1::/48',
+                                                      '2002::/16', '2001::/32'))
 LOG_FORMAT = 'aieh-provider-tunnel-log/1'
 RUN_FORMAT = 'aieh-provider-tunnel-run/1'
 RUN_NAME = 'provider-tunnel.json'
@@ -135,6 +164,8 @@ CODES = {
     'TUNNEL_STOP_TIMEOUT': 'the tunnel did not end within its stop ceiling: look at its process',
     'TUNNEL_RUN_RECORD_INVALID': 'the run record is not one this tunnel writes: remove it once no tunnel runs',
     'TUNNEL_PATHS_INVALID': 'fix the managed data root (aieh_paths.py check shows the refusal)',
+    'TUNNEL_RUN_RECORD_UNKNOWN': 'the run record names a process whose identity cannot be checked (access denied): '
+                                 'find that process and stop it, or remove the record once no tunnel runs',
 }
 
 
@@ -170,6 +201,8 @@ def declared_endpoint(profile) -> dict:
     if len(entries) != 1:
         raise TunnelError('TUNNEL_PROFILE_INVALID', f'{len(entries)} {ENDPOINT_CLASS} endpoints declared')
     entry = entries[0]
+    if str(entry.get('status', '')).startswith('deferred'):
+        raise TunnelError('TUNNEL_PROFILE_INVALID', f'the {ENDPOINT_CLASS} endpoint is deferred')
     port = entry.get('host_port')
     if entry.get('host_bind') != LOOPBACK or type(port) is not int or not 1024 <= port <= 65535:
         raise TunnelError('TUNNEL_PROFILE_INVALID', f'the {ENDPOINT_CLASS} endpoint needs host_bind {LOOPBACK} and '
@@ -209,6 +242,8 @@ def parse_head(head: bytes) -> str:
     except UnicodeDecodeError:
         raise Refused('TUNNEL_REQUEST_MALFORMED') from None
     lines = text.split('\r\n')
+    if any('\r' in line or '\n' in line for line in lines):
+        raise Refused('TUNNEL_REQUEST_MALFORMED')            # a bare CR or LF: one header could hide another
     words = lines[0].split(' ')
     if len(words) != 3 or not words[0] or not re.fullmatch(r'HTTP/1\.[01]', words[2]):
         raise Refused('TUNNEL_REQUEST_MALFORMED')
@@ -228,12 +263,12 @@ def check_target(target: str) -> None:
     match = AUTHORITY.fullmatch(target)
     if match is None:
         raise Refused('TUNNEL_REQUEST_MALFORMED')
-    host, port = match.group('host'), int(match.group('port'))
+    host, port = match.group('host'), match.group('port')
     if is_ip_literal(host):
         raise Refused('TUNNEL_TARGET_IP_LITERAL')
     if host != ORIGIN_HOST:
         raise Refused('TUNNEL_TARGET_REFUSED')
-    if port != ORIGIN_PORT:
+    if port != str(ORIGIN_PORT):                              # the text exactly: never 0443
         raise Refused('TUNNEL_PORT_REFUSED')
 
 
@@ -353,9 +388,18 @@ def resolve_origin(host: str, port: int) -> list:
                                                        socket.IPPROTO_TCP):
         if family in (socket.AF_INET, socket.AF_INET6) and address[0] not in found:
             found.append(address[0])
-    if any(not ipaddress.ip_address(a.split('%')[0]).is_global for a in found):
+    if any(not origin_address_ok(a) for a in found):
         raise Refused('TUNNEL_UPSTREAM_REFUSED')
     return found
+
+
+def origin_address_ok(text: str) -> bool:
+    """A resolved origin address the tunnel may connect to: global, and never an IPv6 form that embeds or
+    translates an IPv4 address (EMBEDDED_V6)."""
+    address = ipaddress.ip_address(text.split('%')[0])
+    if address.version == 6 and any(address in net for net in EMBEDDED_V6):
+        return False
+    return address.is_global
 
 
 def connect_origin(address: str, port: int, timeout: float) -> socket.socket:
@@ -364,45 +408,121 @@ def connect_origin(address: str, port: int, timeout: float) -> socket.socket:
 
 # ---------------------------------------------------------------- the log
 
-class Log:
-    """The tunnel's log: one JSON object per line, flushed at once. Only the fields its writers pass, which are
-    never payload."""
+class _BoundedLog:
+    """The log's policy (review S3), shared by the file log and the memory log: one JSON object per line, only the
+    fields its writers pass (never payload). Refused connection lines are aggregated per reason: the first
+    REFUSAL_LINES of each WINDOW_S window are written, the rest counted and written as one refusals-suppressed line
+    per reason when the window closes (or at the stop). Past CEILING bytes every line but the tunnel-stop line is
+    dropped and counted. The tunnel-stop line carries the totals."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, refusal_lines: int = LOG_REFUSAL_LINES, window_s: float = LOG_WINDOW_S,
+                 ceiling: int = LOG_CEILING_BYTES, clock: Callable = time.monotonic):
+        self.refusal_lines, self.window_s, self.ceiling, self.clock = refusal_lines, window_s, ceiling, clock
+        self._lock = threading.Lock()
+        self._window_start: float | None = None
+        self._written: dict[str, int] = {}          # reason -> refused lines written in this window
+        self._held: dict[str, int] = {}             # reason -> refused lines counted, not written, in this window
+        self.totals = {'suppressed': {}, 'dropped': 0, 'bytes': 0}
+
+    def write(self, event: str, **fields) -> None:
+        with self._lock:
+            if self._closed():
+                return
+            now = self.clock()
+            if self._window_start is None or now - self._window_start >= self.window_s:
+                self._flush(now)
+            if event == 'connection' and fields.get('decision') == 'refused':
+                reason = str(fields.get('reason'))
+                if self._written.get(reason, 0) >= self.refusal_lines:
+                    self._held[reason] = self._held.get(reason, 0) + 1
+                    self.totals['suppressed'][reason] = self.totals['suppressed'].get(reason, 0) + 1
+                    return
+                self._written[reason] = self._written.get(reason, 0) + 1
+            if event == 'tunnel-stop':
+                self._flush(now)
+                fields = dict(fields, log={'suppressed': dict(self.totals['suppressed']),
+                                           'dropped': self.totals['dropped'], 'refusal_lines': self.refusal_lines,
+                                           'window_s': self.window_s, 'ceiling_bytes': self.ceiling})
+            self._emit(event, fields, force=event == 'tunnel-stop')
+
+    def _flush(self, now: float) -> None:
+        for reason, count in sorted(self._held.items()):
+            self._emit('refusals-suppressed', {'reason': reason, 'count': count, 'window_s': self.window_s})
+        self._held, self._written, self._window_start = {}, {}, now
+
+    def _emit(self, event: str, fields: dict, force: bool = False) -> None:
+        line = json.dumps(dict(fields, format=LOG_FORMAT, event=event, at=now_iso()), sort_keys=True)
+        size = len(line.encode('utf-8')) + 1
+        if not force and self.totals['bytes'] + size > self.ceiling:
+            self.totals['dropped'] += 1
+            return
+        self.totals['bytes'] += size
+        self._out(line)
+
+    def _closed(self) -> bool:
+        return False
+
+    def _out(self, line: str) -> None:
+        raise NotImplementedError
+
+
+class Log(_BoundedLog):
+    """The tunnel's log file (one per serve), flushed line by line."""
+
+    def __init__(self, directory: Path, **bounds):
+        super().__init__(**bounds)
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         self.name = f'tunnel-{stamp}-{secrets.token_hex(4)}.jsonl'
         self.path = Path(directory) / self.name
         self._file = open(self.path, 'x', encoding='utf-8', newline='\n')
-        self._lock = threading.Lock()
 
-    def write(self, event: str, **fields) -> None:
-        line = json.dumps(dict(fields, format=LOG_FORMAT, event=event, at=now_iso()), sort_keys=True)
-        with self._lock:
-            if not self._file.closed:
-                self._file.write(line + '\n')
-                self._file.flush()
+    def _closed(self) -> bool:
+        return self._file.closed
+
+    def _out(self, line: str) -> None:
+        self._file.write(line + '\n')
+        self._file.flush()
 
     def close(self) -> None:
         with self._lock:
             self._file.close()
 
 
-class MemoryLog:
-    """A log kept in memory (tests): the same lines, as objects."""
+class MemoryLog(_BoundedLog):
+    """A log kept in memory (tests): the same lines, as objects, under the same bounds."""
 
-    def __init__(self):
+    def __init__(self, **bounds):
+        super().__init__(**bounds)
         self.lines, self.name = [], 'memory'
-        self._lock = threading.Lock()
 
-    def write(self, event: str, **fields) -> None:
-        with self._lock:
-            self.lines.append(json.loads(json.dumps(dict(fields, format=LOG_FORMAT, event=event, at=now_iso()))))
+    def _out(self, line: str) -> None:
+        self.lines.append(json.loads(line))
 
     def close(self) -> None:
         pass
 
 
 # ---------------------------------------------------------------- the tunnel
+
+def cut(sock) -> None:
+    """End a socket another thread may be blocked on (in recv or sendall): shut it down, then close its handle
+    through detach (on Windows a shutdown alone wakes neither a blocked recv nor a blocked send)."""
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        fd = sock.detach()
+    except OSError:
+        return
+    if fd is not None and fd != -1:
+        try:
+            socket.close(fd)
+        except OSError:
+            pass
+
 
 class Tunnel:
     """The listener and its connections. RESOLVE(host, port) -> [address] and CONNECT(address, port, timeout) ->
@@ -411,14 +531,18 @@ class Tunnel:
 
     def __init__(self, port: int, log, *, resolve: Callable = resolve_origin, connect: Callable = connect_origin,
                  head_timeout_s: float = HEAD_TIMEOUT_S, hello_timeout_s: float = HELLO_TIMEOUT_S,
-                 idle_ceiling_s: float = IDLE_CEILING_S, max_connections: int = MAX_CONNECTIONS):
+                 idle_ceiling_s: float = IDLE_CEILING_S, max_connections: int = MAX_CONNECTIONS,
+                 accept_error_limit: int = ACCEPT_ERROR_LIMIT, accept_backoff_s: float = ACCEPT_BACKOFF_S):
         self.port, self.log = port, log
         self.resolve, self.connect = resolve, connect
         self.head_timeout_s, self.hello_timeout_s = head_timeout_s, hello_timeout_s
         self.idle_ceiling_s, self.max_connections = idle_ceiling_s, max_connections
+        self.accept_error_limit, self.accept_backoff_s = accept_error_limit, accept_backoff_s
         self.stopping = threading.Event()
+        self.failed: str | None = None       # 'accept-failed' when the accept loop gave up (serve then stops)
         self._lock = threading.Lock()
-        self._live: dict[int, threading.Thread] = {}
+        # number -> {'thread', 'socks': [the client's, the origin's], 'state', 'logged'}: what the stop cuts
+        self._conns: dict[int, dict] = {}
         self._count = 0
         self._listener: socket.socket | None = None
         self._acceptor: threading.Thread | None = None
@@ -444,6 +568,7 @@ class Tunnel:
         return self.address
 
     def _accept(self) -> None:
+        errors = 0
         while not self.stopping.is_set():
             try:
                 conn, _ = self._listener.accept()
@@ -452,17 +577,26 @@ class Tunnel:
             except OSError:
                 if self.stopping.is_set():
                     return
+                errors += 1
+                if errors >= self.accept_error_limit:
+                    self.failed = 'accept-failed'
+                    self.log.write('accept-failed', errors=errors)
+                    return
+                self.stopping.wait(min(self.accept_backoff_s * 2 ** (errors - 1), ACCEPT_BACKOFF_MAX_S))
                 continue
+            errors = 0
             with self._lock:
                 if self.stopping.is_set():
                     conn.close()
                     return
                 self._count += 1
-                number, busy = self._count, len(self._live) >= self.max_connections
+                number, busy = self._count, len(self._conns) >= self.max_connections
                 if not busy:
                     worker = threading.Thread(target=self._serve, args=(conn, number),
                                               name=f'provider-tunnel-{number}', daemon=True)
-                    self._live[number] = worker
+                    self._conns[number] = {'thread': worker, 'socks': [conn], 'logged': False,
+                                           'state': {'target': None, 'decision': 'refused', 'reason': None,
+                                                     'end': None, 'up': 0, 'down': 0}}
             if busy:
                 self._answer(conn, 'TUNNEL_BUSY')
                 self.log.write('connection', conn=number, target=None, decision='refused', reason='TUNNEL_BUSY',
@@ -473,29 +607,52 @@ class Tunnel:
 
     def open_connections(self) -> int:
         with self._lock:
-            return len(self._live)
+            return len(self._conns)
 
     def stop(self, by: str = 'stop') -> dict:
-        """Close the listener, cut every open connection within one slice and wait for each to log its end (at most
-        STOP_CUT_CEILING_S); write the tunnel-stop line."""
+        """Close the listener, cut every open connection's sockets (a worker blocked in recv or sendall ends at
+        once), wait for each to log its end (at most STOP_CUT_CEILING_S; one that has not is logged here, end
+        stopped) and write the tunnel-stop line, so that every connection line precedes it."""
         with self._lock:
             self.stopping.set()                  # under the lock: no connection is added after the snapshot
-            live = list(self._live.values())
+            live = dict(self._conns)
         if self._acceptor is not None:
             self._acceptor.join(STOP_CUT_CEILING_S)
         if self._listener is not None:
             self._listener.close()
+        for entry in live.values():
+            for sock in list(entry['socks']):
+                cut(sock)
         deadline = time.monotonic() + STOP_CUT_CEILING_S
-        for worker in live:
-            worker.join(max(0.0, deadline - time.monotonic()))
-        left = self.open_connections()
+        for entry in live.values():
+            entry['thread'].join(max(0.0, deadline - time.monotonic()))
+        for number, entry in sorted(live.items()):
+            if self._claim_log(number, entry):
+                state = dict(entry['state'], end='stopped')
+                self._write_connection(number, state)
+        left = sum(1 for entry in live.values() if entry['thread'].is_alive())
         self.log.write('tunnel-stop', stopped_by=by, connections_cut=len(live), connections_left=left)
         return {'stopped_by': by, 'connections_cut': len(live), 'connections_left': left}
 
     # one connection
 
+    def _claim_log(self, number: int, entry: dict) -> bool:
+        """Whether this caller writes the connection's line (once: its worker, or the stop on its behalf)."""
+        with self._lock:
+            if entry['logged']:
+                return False
+            entry['logged'] = True
+            self._conns.pop(number, None)
+            return True
+
+    def _write_connection(self, number: int, state: dict) -> None:
+        self.log.write('connection', conn=number, target=state['target'], decision=state['decision'],
+                       reason=state['reason'], end=state['end'], bytes_up=state['up'], bytes_down=state['down'])
+
     def _serve(self, conn: socket.socket, number: int) -> None:
-        state = {'target': None, 'decision': 'refused', 'reason': None, 'end': None, 'up': 0, 'down': 0}
+        with self._lock:
+            entry = self._conns[number]
+        state = entry['state']
         upstream = None
         try:
             conn.settimeout(STOP_POLL_S)
@@ -508,7 +665,7 @@ class Tunnel:
             name = server_name(record)
             if name != ORIGIN_HOST:
                 raise Refused('TUNNEL_SNI_MISMATCH')
-            upstream, peer = self._open_origin()
+            upstream, peer = self._open_origin(entry)
             state['decision'] = 'admitted'
             self.log.write('upstream-connect', conn=number, target=ORIGIN, origin=ORIGIN,
                            peer={'address': peer[0], 'port': peer[1]})
@@ -523,7 +680,7 @@ class Tunnel:
             else:
                 state['end'] = 'stopped'
         except OSError:
-            state['end'] = 'error'
+            state['end'] = 'stopped' if self.stopping.is_set() else 'error'
         finally:
             for sock in (upstream, conn):
                 if sock is not None:
@@ -531,10 +688,8 @@ class Tunnel:
                         sock.close()
                     except OSError:
                         pass
-            self.log.write('connection', conn=number, target=state['target'], decision=state['decision'],
-                           reason=state['reason'], end=state['end'], bytes_up=state['up'], bytes_down=state['down'])
-            with self._lock:
-                self._live.pop(number, None)
+            if self._claim_log(number, entry):
+                self._write_connection(number, state)
 
     def _answer(self, conn: socket.socket, code: str) -> None:
         """The HTTP refusal of a refusal before the 200 (a JSON body naming the code); nothing after it."""
@@ -598,7 +753,7 @@ class Tunnel:
             raise Refused('TUNNEL_HELLO_MALFORMED')
         return data
 
-    def _open_origin(self) -> tuple[socket.socket, tuple]:
+    def _open_origin(self, entry: dict) -> tuple[socket.socket, tuple]:
         try:
             addresses = self.resolve(ORIGIN_HOST, ORIGIN_PORT)
         except Refused:
@@ -612,11 +767,17 @@ class Tunnel:
                 sock = self.connect(address, ORIGIN_PORT, CONNECT_TIMEOUT_S)
             except OSError:
                 continue
+            with self._lock:                     # the stop cuts it from now on
+                if self.stopping.is_set():
+                    cut(sock)
+                    raise Refused('TUNNEL_STOPPED')
+                entry['socks'].append(sock)
             return sock, sock.getpeername()[:2]
         raise Refused('TUNNEL_UPSTREAM_FAILED')
 
     def _splice(self, conn: socket.socket, upstream: socket.socket, state: dict) -> str:
-        """Bytes both ways, unread, until both sides end, an error, the idle ceiling or the stop."""
+        """Bytes both ways, unread, until both sides end, an error, the idle ceiling or the stop (which cuts both
+        sockets, so a send blocked on a peer that does not read ends too)."""
         conn.settimeout(SEND_TIMEOUT_S)
         open_from = {conn: upstream, upstream: conn}
         idle_since = time.monotonic()
@@ -662,43 +823,89 @@ def read_run(run_dir: Path) -> dict | None:
     return record
 
 
-def pid_alive(pid: int) -> bool:
-    """Whether a process with this id runs (Windows: an open handle whose exit code is STILL_ACTIVE)."""
-    if os.name == 'nt':
-        handle = _open_process(pid)
-        if not handle:
-            return False
-        try:
-            import ctypes
-            from ctypes import wintypes
-            kernel = ctypes.WinDLL('kernel32')
-            kernel.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
-            code = wintypes.DWORD()
-            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
-        finally:
-            _close(handle)
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+ERROR_ACCESS_DENIED = 5
+STILL_ACTIVE = 259
+CREATED_TOLERANCE_S = 1.0          # the run record's creation time against the process's (FILETIME rounding)
 
 
-def _open_process(pid: int):
+def _kernel():
     import ctypes
     from ctypes import wintypes
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel.OpenProcess.restype = wintypes.HANDLE
     kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-    return kernel.OpenProcess(0x00100000 | 0x1000, False, pid)      # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+    kernel.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    return ctypes, wintypes, kernel
+
+
+def _open_process(pid: int):
+    """(handle or None, the last error): SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION."""
+    ctypes, _, kernel = _kernel()
+    handle = kernel.OpenProcess(0x00100000 | 0x1000, False, pid)
+    return (handle or None), (0 if handle else ctypes.get_last_error())
 
 
 def _close(handle) -> None:
-    import ctypes
-    from ctypes import wintypes
-    kernel = ctypes.WinDLL('kernel32')
-    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
-    kernel.CloseHandle(handle)
+    _kernel()[2].CloseHandle(handle)
+
+
+def process_facts(pid: int) -> tuple[str, float | None]:
+    """('running', its creation time as an epoch) / ('ended', None) / ('unknown', None) of a process id. Windows:
+    access denied is unknown, never ended. Elsewhere: os.kill(pid, 0), and no creation time (not verified)."""
+    if os.name != 'nt':
+        try:
+            os.kill(pid, 0)
+            return 'running', None
+        except ProcessLookupError:
+            return 'ended', None
+        except OSError:
+            return 'unknown', None
+    handle, error = _open_process(pid)
+    if handle is None:
+        return ('unknown' if error == ERROR_ACCESS_DENIED else 'ended'), None
+    try:
+        ctypes, wintypes, kernel = _kernel()
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return 'unknown', None
+        if code.value != STILL_ACTIVE:
+            return 'ended', None
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+            return 'unknown', None
+        ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        return 'running', (ticks - 116444736000000000) / 1e7
+    finally:
+        _close(handle)
+
+
+def process_state(record: dict) -> str:
+    """'running' when the run record's pid runs AND is the process that wrote it (its creation time, review NIT e);
+    'ended' when it has ended or the pid now names another process; 'unknown' when its identity cannot be checked
+    (access denied, or no creation time recorded or readable)."""
+    state, created = process_facts(record['pid'])
+    if state != 'running':
+        return state
+    if os.name != 'nt':
+        return 'running'
+    recorded = record.get('created')
+    if created is None or not isinstance(recorded, (int, float)) or isinstance(recorded, bool):
+        return 'unknown'
+    return 'running' if abs(created - recorded) <= CREATED_TOLERANCE_S else 'ended'
+
+
+def pid_alive(pid: int) -> bool:
+    """Whether a process with this id runs (no identity check: process_state does that)."""
+    return process_facts(pid)[0] == 'running'
+
+
+def own_created() -> float | None:
+    """This process's creation time (Windows), recorded in the run record."""
+    return process_facts(os.getpid())[1] if os.name == 'nt' else None
 
 
 def wait_exit(pid: int, ceiling: float) -> bool:
@@ -708,16 +915,11 @@ def wait_exit(pid: int, ceiling: float) -> bool:
         while pid_alive(pid) and time.monotonic() < deadline:
             threading.Event().wait(STOP_POLL_S)
         return not pid_alive(pid)
-    handle = _open_process(pid)
-    if not handle:
+    handle, _ = _open_process(pid)
+    if handle is None:
         return True
     try:
-        import ctypes
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL('kernel32')
-        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
-        kernel.WaitForSingleObject.restype = wintypes.DWORD
-        return kernel.WaitForSingleObject(handle, int(ceiling * 1000)) == 0
+        return _kernel()[2].WaitForSingleObject(handle, int(ceiling * 1000)) == 0
     finally:
         _close(handle)
 
@@ -799,8 +1001,8 @@ def install_stop_signals(flag: StopFlag) -> Callable:
 
 
 def wait_for_stop(tunnel: Tunnel, run_dir: Path, poll_s: float = STOP_POLL_S) -> str:
-    """serve's wait, in slices of POLL_S: until a stop signal is recorded or the stop request appears beside the
-    run record. Returns what asked."""
+    """serve's wait, in slices of POLL_S: until a stop signal is recorded, the stop request appears beside the
+    run record, or the tunnel's accept loop has given up. Returns what asked."""
     flag = StopFlag()
     restore = install_stop_signals(flag)
     request = Path(run_dir) / STOP_NAME
@@ -811,6 +1013,8 @@ def wait_for_stop(tunnel: Tunnel, run_dir: Path, poll_s: float = STOP_POLL_S) ->
                 return flag.asked
             if request.exists():
                 return 'stop-request'
+            if tunnel is not None and tunnel.failed:
+                return tunnel.failed
             idle.wait(poll_s)
     finally:
         restore()
@@ -820,16 +1024,19 @@ def serve(ctx: Context, port: int) -> dict:
     run_dir = Path(ctx.run_dir())
     current = read_run(run_dir)
     if current is not None:
-        if pid_alive(current['pid']):
+        state = process_state(current)
+        if state == 'running':
             raise TunnelError('TUNNEL_ALREADY_RUNNING', f'pid {current["pid"]} on port {current["port"]}')
+        if state == 'unknown':
+            raise TunnelError('TUNNEL_RUN_RECORD_UNKNOWN', f'pid {current["pid"]}')
         (run_dir / RUN_NAME).unlink(missing_ok=True)              # a stale record of an ended tunnel
     (run_dir / STOP_NAME).unlink(missing_ok=True)                 # a request no tunnel took
     log = Log(Path(ctx.logs()))
     try:
         tunnel = Tunnel(port, log, resolve=ctx.resolve, connect=ctx.connect)
         address = tunnel.start()
-        record = {'format': RUN_FORMAT, 'pid': os.getpid(), 'address': address[0], 'port': address[1],
-                  'origin': ORIGIN, 'log': log.name, 'started_at': now_iso()}
+        record = {'format': RUN_FORMAT, 'pid': os.getpid(), 'created': own_created(), 'address': address[0],
+                  'port': address[1], 'origin': ORIGIN, 'log': log.name, 'started_at': now_iso()}
         try:
             write_new(run_dir / RUN_NAME, record)
         except FileExistsError:
@@ -853,11 +1060,26 @@ def serve(ctx: Context, port: int) -> dict:
         log.close()
 
 
+def running_record(run_dir: Path, *, remove_stale: bool = False) -> dict:
+    """The run record of the running tunnel: TUNNEL_NOT_RUNNING when there is none or its process has ended (a stale
+    record removed when REMOVE_STALE), TUNNEL_RUN_RECORD_UNKNOWN when its process's identity cannot be checked."""
+    record = read_run(run_dir)
+    if record is None:
+        raise TunnelError('TUNNEL_NOT_RUNNING', 'no run record')
+    state = process_state(record)
+    if state == 'unknown':
+        raise TunnelError('TUNNEL_RUN_RECORD_UNKNOWN', f'pid {record["pid"]}')
+    if state == 'ended':
+        if remove_stale:
+            (Path(run_dir) / RUN_NAME).unlink(missing_ok=True)
+        raise TunnelError('TUNNEL_NOT_RUNNING', f'pid {record["pid"]} has ended or is another process'
+                                                + (' (its stale run record removed)' if remove_stale else ''))
+    return record
+
+
 def stop(ctx: Context) -> dict:
     run_dir = Path(ctx.run_dir())
-    record = read_run(run_dir)
-    if record is None or not pid_alive(record['pid']):
-        raise TunnelError('TUNNEL_NOT_RUNNING', 'no running tunnel')
+    record = running_record(run_dir, remove_stale=True)
     try:
         write_new(run_dir / STOP_NAME, {'asked_at': now_iso(), 'pid': record['pid']})
     except FileExistsError:
@@ -894,9 +1116,7 @@ CENSUS_RULE = (
 def census(ctx: Context) -> dict:
     census_module = _load('aieh_inference_census', HERE / 'inference_census.py')
     run_dir = Path(ctx.run_dir())
-    record = read_run(run_dir)
-    if record is None or not pid_alive(record['pid']):
-        raise TunnelError('TUNNEL_NOT_RUNNING', 'no running tunnel')
+    record = running_record(run_dir)
     observed_at = now_iso()
     try:
         endpoints, tables = (ctx.tables or census_module.read_tables)(), {'readable': True}
@@ -952,6 +1172,8 @@ def main(argv=None, context: Context | None = None) -> int:
         err.write(f'provider-tunnel: {exc}\n')
         return 2
     ctx.out.write(json.dumps(result, indent=2, sort_keys=True) + '\n')
+    if args.command == 'serve' and result.get('stopped_by') == 'accept-failed':
+        return 1
     if args.command == 'census':
         ctx.err.write(f'provider-tunnel: census {result["verdict"]}\n')
         return 0 if result['verdict'] == 'PASS' else 1

@@ -821,48 +821,73 @@ the header `X-AIEH-Tunnel-Refusal`, after it by closing the connection, and logg
 
 | Step | Refused | Code |
 |---|---|---|
-| request head (8 KiB, 10 s) | not a request, an HTTP version other than 1.0 or 1.1, too large or incomplete | `TUNNEL_REQUEST_MALFORMED` (400) |
+| request head (8 KiB, 10 s) | not a request, an HTTP version other than 1.0 or 1.1, too large or incomplete, a bare CR or LF anywhere | `TUNNEL_REQUEST_MALFORMED` (400) |
 | method | every method but `CONNECT` (plain HTTP included) | `TUNNEL_NOT_CONNECT` (405) |
 | headers | `Proxy-Authorization` (the tunnel takes no credential) | `TUNNEL_PROXY_CREDENTIAL` (403) |
 | target | an IP literal in any spelling (dotted, numeric, hexadecimal, bracketed IPv6) | `TUNNEL_TARGET_IP_LITERAL` (403) |
 | target | any host but exactly `api.anthropic.com` | `TUNNEL_TARGET_REFUSED` (403) |
-| target | that host on any port but 443 | `TUNNEL_PORT_REFUSED` (403) |
+| target | that host on any port but 443, the port's text exactly `443` (never `0443`) | `TUNNEL_PORT_REFUSED` (403) |
 | capacity | more than 64 open connections | `TUNNEL_BUSY` (503) |
 | ClientHello (one handshake record, 16 KiB, 10 s) | not one whole ClientHello in one handshake record, or bytes before the server's answer | `TUNNEL_HELLO_MALFORMED`, `TUNNEL_HELLO_FRAGMENTED` |
 | ClientHello | an encrypted ClientHello (ECH, or the ESNI draft) | `TUNNEL_ECH_REFUSED` |
 | ClientHello | no `server_name` | `TUNNEL_SNI_ABSENT` |
 | ClientHello | a server name other than the CONNECT host | `TUNNEL_SNI_MISMATCH` |
-| origin | the host's resolution of the origin gives an address that is not global | `TUNNEL_UPSTREAM_REFUSED` |
+| origin | the host's resolution of the origin gives an address that is not global, or an IPv6 form embedding or translating an IPv4 address (IPv4-compatible, IPv4-mapped, the NAT64 prefixes `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4, Teredo) | `TUNNEL_UPSTREAM_REFUSED` |
 | origin | no address resolved or reachable | `TUNNEL_UPSTREAM_FAILED` |
 | stop | the connection was open at the tunnel's stop | `TUNNEL_STOPPED` |
 
 Only after the CONNECT and its ClientHello are admitted does the tunnel open its own outbound connection, to the
-origin's host name resolved on the host, on 443; it sends the ClientHello's bytes as received and then splices
+origin's host name resolved on the host, connecting to exactly the addresses it checked (no second resolution), on
+443; it sends the ClientHello's bytes as received and then splices
 both ways, unread, until either side ends, 900 s pass with no byte, or it stops.
 
 **The log** (`persistent/logs/provider-tunnel/tunnel-<UTC>-<hex>.jsonl`, `aieh-provider-tunnel-log/1`):
 `tunnel-start` (listener, origin, pid), `upstream-connect` (connection number, target, origin, the peer address
-it connected to), `connection` (number, target, decision, reason, end, `bytes_up`, `bytes_down`), `tunnel-stop`
-(by, connections cut). Never payload, a header, the target of a request that is not a CONNECT (a URL may carry a
-credential) or the server name a refused hello presented.
+it connected to), `connection` (number, target, decision, reason, end, `bytes_up`, `bytes_down`),
+`refusals-suppressed` (reason, count, window), `accept-failed` (errors), `tunnel-stop` (by, connections cut, and
+`log`: the suppressed counts per reason, the dropped lines and the bounds). Never payload, a header, the target of a
+request that is not a CONNECT (a URL may carry a credential) or the server name a refused hello presented.
+
+**The log's bound** (disclosed: a guest process can provoke refusals at will while a forward is held). Per refusal
+reason, the first **20** refused connection lines of each **60 s** window are written verbatim; the rest of that
+window are counted and written as one `refusals-suppressed` line per reason when the window closes (or at the stop).
+Admitted connections and their `upstream-connect` lines are never aggregated. Past **64 MiB** per log file (one file
+per `serve`) every further line is dropped and counted, `upstream-connect` lines included, so a census over a later
+connection then fails closed (its peer is unrecorded); the `tunnel-stop` line is always written and carries the
+totals. A flood of refusals therefore costs at most 20 lines per reason per minute plus one count line.
 
 **Lifecycle.** `serve --profile PROFILE_DIR` runs in the foreground of the session that starts it (a process with
 no console starts it with `CREATE_NO_WINDOW`), writes its run record
-(`persistent/state/provider-tunnel/provider-tunnel.json`, `aieh-provider-tunnel-run/1`: pid, address, port, log
-file) once listening, and refuses a second start while a live one is recorded (`TUNNEL_ALREADY_RUNNING`). It stops
-on SIGINT, SIGBREAK or SIGTERM (a flag the main thread acts on in 0.25 s slices) or on `stop`, which writes the
-stop request beside the run record and waits on the tunnel's process handle (15 s ceiling,
-`TUNNEL_STOP_TIMEOUT`); its connections are cut within a slice, the run record removed and `serve` exits 0. It
-starts no process. `census --once` observes the running tunnel at the operating system with
+(`persistent/state/provider-tunnel/provider-tunnel.json`, `aieh-provider-tunnel-run/1`: pid, the process's
+creation time, address, port, log file) once listening, and refuses a second start while a live one is recorded
+(`TUNNEL_ALREADY_RUNNING`). A run record is trusted only for the process that wrote it: its pid running with the
+recorded creation time; a pid reused by another process is an ended tunnel (its stale record replaced at `serve`,
+removed at `stop`), and a process whose identity cannot be checked (access denied) is unknown, never ended
+(`TUNNEL_RUN_RECORD_UNKNOWN`; the record is kept). It stops on SIGINT, SIGBREAK or SIGTERM (a flag the main thread
+acts on in 0.25 s slices) or on `stop`, which writes the stop request beside the run record and waits on the
+tunnel's process handle (15 s ceiling, `TUNNEL_STOP_TIMEOUT`). At the stop every open connection's sockets are cut
+(shut down and closed through detach, so a worker blocked in a read, or in a send to a peer that does not read, ends
+at once), each connection's line is written before the `tunnel-stop` line, the run record is removed and `serve`
+exits 0. The accept loop backs off on an error (doubling from 50 ms to 1 s) and gives up after 20 consecutive ones
+(`accept-failed`; `serve` then stops and exits 1). It starts no process. `census --once` observes the running tunnel at the operating system with
 `inference_census.py`'s tables and decision rule: exactly its listener on `127.0.0.1:<port>`, no UDP endpoint, and
 no connection but inbound ones from loopback and outbound ones to port 443 of a peer its log recorded.
 
 **The forward holder** (`tools/guest.py inference-forward --action start --execution-profile native`) targets the
 tunnel's declared port only for a profile that declares the provider-tunnel endpoint
-(`NATIVE_PROFILE_UNDECLARED`), refuses every other port (`FORWARD_PORT_REFUSED`), and starts only once the
-tunnel's run record names a live process on that port (`TUNNEL_NOT_READY`); the forward's record names the target
-(`ports.tunnel`), one forward at a time (`FORWARD_TARGET_DIFFERS`). The brokered start is unchanged
-(`FORWARD_PORT_REFUSED`, `CONTROL_PORT_REFUSED`, `BROKER_NOT_READY`).
+(`NATIVE_PROFILE_UNDECLARED`; a deferred entry declares nothing), refuses every other port
+(`FORWARD_PORT_REFUSED`), refuses when a broker port configured in `components.inference_broker` is the tunnel's
+(`TUNNEL_PORT_CONFLICT`, also on the brokered start), and starts only once the tunnel's run record names its own,
+live process on that port (`TUNNEL_NOT_READY`); the forward's record names the target (`ports.tunnel`), one forward
+at a time (`FORWARD_TARGET_DIFFERS`). The brokered start is otherwise unchanged (`FORWARD_PORT_REFUSED`,
+`CONTROL_PORT_REFUSED`, `BROKER_NOT_READY`).
+
+**From a job** (the inference sweep's tunnel rows, with the forward held to the tunnel): the admitted CONNECT
+completes a TLS handshake verified for `api.anthropic.com` and sends nothing after it; another host, another port,
+an IP literal and plain HTTP are refused with the tunnel's status and code; a mismatched or absent server name is
+`closed-without-answer` only when, after the 200 and the job's one ClientHello, not one byte arrives before the
+end of the stream (a TLS alert from an origin the tunnel let through is a byte: `answered-after-hello`, a FAIL and a
+stop condition).
 
 **Not yet verified.** Everything live (the Owner's act OA-31 (a)): the tunnel as a host process against the real
 network, the host's resolution of the origin, a TLS handshake with the provider through it, the forward to it from

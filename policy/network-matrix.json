@@ -2117,9 +2117,11 @@
       "from": "td-untrusted-engineering",
       "to": "td-management",
       "verdict": "allow",
-      "protocol": "tcp from the job to the guest inference endpoint 172.17.0.1:8090 (the guest sshd's remote-forward listener on the docker0 gateway), carried by the dispatcher-held SSH session to the provider tunnel on host 127.0.0.1:18433; inside it, CONNECT api.anthropic.com:443 (Claude Code's HTTPS_PROXY) and the job's own TLS session to the provider",
+      "protocol": "tcp from the job to the guest inference endpoint 172.17.0.1:8090 (the guest sshd's remote-forward listener on the docker0 gateway), carried by the dispatcher-held SSH session to the provider tunnel on host 127.0.0.1:18433; inside it, CONNECT api.anthropic.com:443 (Claude Code's HTTPS_PROXY) and the job's own TLS session to the provider; the native token (CLAUDE_CODE_OAUTH_TOKEN) is carried inside that TLS session, never readable by the tunnel",
       "endpoint": "provider-tunnel",
-      "credentials": [],
+      "credentials": [
+        "cred-native-claude-code-token"
+      ],
       "enforcement": [
         {
           "mechanism": "container guard: one ACCEPT for new TCP from docker0 to 172.17.0.1:8090 before its refusals (INPUT, IPv4 only); the egress guard's allowlist stays empty (the guest side of S-03.2's composition, unchanged)",

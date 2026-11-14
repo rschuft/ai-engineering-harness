@@ -231,7 +231,13 @@ class Rules(unittest.TestCase):
                  'ENFORCEMENT_MISSING'),
                 (lambda c: case(c, 'egr-inference-guest-login')['native']['enforcement'][0].update(refs=['nm-none']),
                  'DANGLING_REF'),
-                (lambda c: case(c, 'egr-inference-guest-login')['native'].update(extra=1), 'SCHEMA')):
+                (lambda c: case(c, 'egr-inference-guest-login')['native'].update(extra=1), 'SCHEMA'),
+                # E-05.10 review round 1: outcomes the inference runner never gives
+                (lambda c: case(c, 'egr-inference-guest-login')['native']['expected'].update(
+                    outcomes=['tunnel-maybe']), 'EXPECTED_INVALID'),
+                (lambda c: case(c, 'egr-inference-edge-port')['expected'].update(outcomes=['refused']),
+                 'EXPECTED_INVALID'),
+                (lambda c: c['verdicts'].pop('not-applicable'), 'SCHEMA')):
             c = fresh()
             change(c)
             self.assertIn(code, self.codes(c, readme=None))

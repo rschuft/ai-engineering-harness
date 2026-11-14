@@ -204,7 +204,8 @@ class Listener(unittest.TestCase):
                     {'network': {'endpoints': [dict(entry, host_bind='0.0.0.0')]}},
                     {'network': {'endpoints': [dict(entry, host_port='18433')]}},
                     {'network': {'endpoints': [dict(entry, host_port=80)]}},
-                    {'network': {'endpoints': [dict(entry, origin='api.anthropic.com:80')]}}):
+                    {'network': {'endpoints': [dict(entry, origin='api.anthropic.com:80')]}},
+                    {'network': {'endpoints': [dict(entry, status='deferred: for the test')]}}):      # NIT c
             with self.assertRaises(T.TunnelError) as ctx:
                 T.declared_endpoint(bad)
             self.assertEqual(ctx.exception.code, 'TUNNEL_PROFILE_INVALID')
@@ -282,6 +283,8 @@ class RefusedRequests(unittest.TestCase):
             (b'CONNECT 2690607114:443 HTTP/1.1\r\n\r\n', 'TUNNEL_TARGET_IP_LITERAL', None),
             (b'CONNECT 0xa0.0x4f.0x68.0xa:443 HTTP/1.1\r\n\r\n', 'TUNNEL_TARGET_IP_LITERAL', None),
             (b'CONNECT 127.1:443 HTTP/1.1\r\n\r\n', 'TUNNEL_TARGET_IP_LITERAL', None),
+            (b'CONNECT api.anthropic.com:0443 HTTP/1.1\r\n\r\n', 'TUNNEL_PORT_REFUSED', None),     # review NIT a
+            (b'CONNECT api.anthropic.com:00443 HTTP/1.1\r\n\r\n', 'TUNNEL_PORT_REFUSED', None),
         ]
         for head, code, target in cases:
             line = refused_before_200(self, rig, head, code, 403)
@@ -307,6 +310,10 @@ class RefusedRequests(unittest.TestCase):
         for head in (b'CONNECT api.anthropic.com:443\r\n\r\n', b'CONNECT api.anthropic.com:443 HTTP/2\r\n\r\n',
                      b'CONNECT api.anthropic.com HTTP/1.1\r\n\r\n', b'\x16\x03\x01\x00\x05hello\r\n\r\n',
                      b'CONNECT api.anthropic.com:443 HTTP/1.1\r\nno colon\r\n\r\n',
+                     # review NIT b: a bare LF or CR, which could hide a header from the check
+                     b'CONNECT api.anthropic.com:443 HTTP/1.1\r\nX: a\nProxy-Authorization: Basic Zm9v\r\n\r\n',
+                     b'CONNECT api.anthropic.com:443 HTTP/1.1\r\nX: a\rProxy-Authorization: Basic Zm9v\r\n\r\n',
+                     b'CONNECT api.anthropic.com:443 HTTP/1.1\nHost: x\r\n\r\n',
                      b'CONNECT api.anthropic.com:443 HTTP/1.1\r\nX: ' + b'a' * 9000 + b'\r\n\r\n'):
             refused_before_200(self, rig, head, 'TUNNEL_REQUEST_MALFORMED', 400)
         sock = rig.client()                                    # an incomplete head, never finished
@@ -447,7 +454,10 @@ class Origin(unittest.TestCase):
         with mock.patch.object(T.socket, 'getaddrinfo', return_value=answer('160.79.104.10', '160.79.104.10')) as gai:
             self.assertEqual(T.resolve_origin('api.anthropic.com', 443), ['160.79.104.10'])
         self.assertEqual(gai.call_args[0][:2], ('api.anthropic.com', 443))
-        for bad in ('127.0.0.1', '10.0.2.2', '172.17.0.1', '169.254.1.1', '::1', 'fd00::1'):
+        # review NIT d: the IPv6 forms that embed or translate an IPv4 address, refused whatever they embed
+        for bad in ('127.0.0.1', '10.0.2.2', '172.17.0.1', '169.254.1.1', '::1', 'fd00::1', '::ffff:127.0.0.1',
+                    '::ffff:160.79.104.10', '::7f00:1', '::a04f:680a', '64:ff9b::7f00:1', '64:ff9b::a04f:680a',
+                    '64:ff9b:1::a04f:680a', '2002:7f00:1::', '2002:a04f:680a::', '2001::1', '2001:0:a04f:680a::'):
             with mock.patch.object(T.socket, 'getaddrinfo', return_value=answer('160.79.104.10', bad)), \
                     self.assertRaises(T.Refused) as ctx:
                 T.resolve_origin('api.anthropic.com', 443)
@@ -525,7 +535,7 @@ class NoCredentialNoTls(unittest.TestCase):
         allowed = {'tunnel-start': {'listener', 'origin', 'pid'},
                    'upstream-connect': {'conn', 'target', 'origin', 'peer'},
                    'connection': {'conn', 'target', 'decision', 'reason', 'end', 'bytes_up', 'bytes_down'},
-                   'tunnel-stop': {'stopped_by', 'connections_cut', 'connections_left'}}
+                   'tunnel-stop': {'stopped_by', 'connections_cut', 'connections_left', 'log'}}
         for line in rig.log.lines:
             self.assertEqual(set(line) - {'format', 'event', 'at'}, allowed[line['event']], line)
         self.assertEqual(len(lines), 3)
@@ -571,6 +581,39 @@ class Stop(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / T.STOP_NAME).write_text('{}', encoding='utf-8')
             self.assertEqual(T.wait_for_stop(None, Path(tmp), poll_s=0.01), 'stop-request')
+
+    def test_the_stop_cuts_a_send_blocked_on_a_client_that_does_not_read(self):
+        """Review S2: an origin that floods a client that never reads blocks the worker in sendall; the stop cuts
+        both sockets, the worker ends at once and its connection line precedes the tunnel-stop line."""
+        flood = FloodOrigin()
+        self.addCleanup(flood.close)
+        log = T.MemoryLog()
+        tunnel = T.Tunnel(0, log, resolve=lambda h, p: ['127.0.0.1'],
+                          connect=lambda a, p, t: socket.create_connection((a, flood.port), timeout=t))
+        address = tunnel.start()
+        client = socket.socket()
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        client.connect(address)
+        self.addCleanup(client.close)
+        client.sendall(CONNECT)
+        read_head(client)
+        client.sendall(client_hello())
+        # the origin's own send has stalled: the tunnel no longer reads it, so its worker is blocked sending to the
+        # client that does not read
+        self.assertTrue(flood.blocked.wait(WAIT_S))
+        workers = [t for t in threading.enumerate() if t.name.startswith('provider-tunnel-') and
+                   t.name != 'provider-tunnel-accept']
+        self.assertEqual(len(workers), 1)
+        clock = __import__('time').monotonic()
+        result = tunnel.stop('test')
+        took = __import__('time').monotonic() - clock
+        self.assertLess(took, 3.0, result)
+        self.assertEqual((result['connections_cut'], result['connections_left']), (1, 0))
+        workers[0].join(WAIT_S)
+        self.assertFalse(workers[0].is_alive())
+        events = [(line['event'], line.get('end')) for line in log.lines]
+        self.assertEqual(events[-2:], [('connection', 'stopped'), ('tunnel-stop', None)])
+        self.assertEqual(sum(1 for e, _ in events if e == 'connection'), 1)
 
 
 @unittest.skipUnless(os.name == 'nt', 'the process lifecycle is verified on Windows')
@@ -627,6 +670,184 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(gone.exception.code, 'TUNNEL_NOT_RUNNING')
 
 
+class FloodOrigin:
+    """An origin that, after the first bytes, sends without end; BLOCKED is set once its send stalls."""
+
+    def __init__(self):
+        self.sock = socket.socket()
+        self.sock.bind(('127.0.0.1', 0))
+        self.sock.listen(8)
+        self.port = self.sock.getsockname()[1]
+        self.blocked = threading.Event()
+        self.conns = []
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            conn, _ = self.sock.accept()
+        except OSError:
+            return
+        self.conns.append(conn)
+        try:
+            conn.recv(65536)
+            conn.settimeout(0.5)
+            blob = b'\x17' * 65536
+            while True:
+                try:
+                    conn.sendall(blob)
+                except socket.timeout:
+                    self.blocked.set()
+                    conn.settimeout(None)
+                    conn.sendall(blob)          # blocks until the tunnel's side is cut
+        except OSError:
+            pass
+
+    def close(self):
+        self.sock.close()
+        for conn in self.conns:
+            T.cut(conn)
+
+
+class LogBound(unittest.TestCase):
+    """Review S3: refused lines aggregated per reason per window, a hard size ceiling, totals at the stop."""
+
+    def test_refusals_are_aggregated_per_reason_and_window(self):
+        now = [0.0]
+        log = T.MemoryLog(refusal_lines=3, window_s=60.0, clock=lambda: now[0])
+        for _ in range(10):
+            log.write('connection', conn=1, target=None, decision='refused', reason='TUNNEL_NOT_CONNECT', end=None,
+                      bytes_up=0, bytes_down=0)
+        log.write('connection', conn=2, target=None, decision='refused', reason='TUNNEL_PORT_REFUSED', end=None,
+                  bytes_up=0, bytes_down=0)
+        for _ in range(5):
+            log.write('connection', conn=3, target='api.anthropic.com:443', decision='admitted', reason=None,
+                      end='closed', bytes_up=1, bytes_down=1)
+        now[0] = 61.0                                         # the window closes at the next line
+        log.write('connection', conn=4, target=None, decision='refused', reason='TUNNEL_NOT_CONNECT', end=None,
+                  bytes_up=0, bytes_down=0)
+        log.write('tunnel-stop', stopped_by='test', connections_cut=0, connections_left=0)
+        events = [(line['event'], line.get('reason')) for line in log.lines]
+        self.assertEqual(events.count(('connection', 'TUNNEL_NOT_CONNECT')), 4)       # 3, then 1 in the new window
+        self.assertEqual(events.count(('connection', 'TUNNEL_PORT_REFUSED')), 1)
+        self.assertEqual(events.count(('connection', None)), 5)                      # admitted: never aggregated
+        suppressed = [line for line in log.lines if line['event'] == 'refusals-suppressed']
+        self.assertEqual([(s['reason'], s['count']) for s in suppressed], [('TUNNEL_NOT_CONNECT', 7)])
+        self.assertLess(log.lines.index(suppressed[0]), len(log.lines) - 2)          # written as the window closed
+        stop = log.lines[-1]
+        self.assertEqual(stop['log']['suppressed'], {'TUNNEL_NOT_CONNECT': 7})
+        self.assertEqual((stop['log']['dropped'], stop['log']['refusal_lines'], stop['log']['window_s']), (0, 3, 60.0))
+
+    def test_the_ceiling_drops_and_counts_but_the_stop_line_is_written(self):
+        log = T.MemoryLog(ceiling=600)
+        for n in range(20):
+            log.write('upstream-connect', conn=n, target=T.ORIGIN, origin=T.ORIGIN,
+                      peer={'address': '160.79.104.10', 'port': 443})
+        log.write('tunnel-stop', stopped_by='test', connections_cut=0, connections_left=0)
+        kept = [line for line in log.lines if line['event'] == 'upstream-connect']
+        self.assertTrue(0 < len(kept) < 20)
+        self.assertEqual(log.lines[-1]['event'], 'tunnel-stop')
+        self.assertEqual(log.lines[-1]['log']['dropped'], 20 - len(kept))
+        self.assertLessEqual(sum(len(json.dumps(x)) for x in log.lines[:-1]), 600)
+
+    def test_a_refusal_flood_through_the_tunnel_is_bounded(self):
+        log = T.MemoryLog(refusal_lines=5)
+        tunnel = T.Tunnel(0, log, resolve=lambda h, p: [], connect=lambda *a: None)
+        address = tunnel.start()
+        for _ in range(40):
+            sock = socket.create_connection(address, timeout=WAIT_S)
+            sock.sendall(b'GET / HTTP/1.1\r\n\r\n')
+            read_head(sock)
+            sock.close()
+        for _ in range(int(WAIT_S / 0.05)):
+            if tunnel.open_connections() == 0:
+                break
+            threading.Event().wait(0.05)
+        tunnel.stop('test')
+        refused = [line for line in log.lines if line['event'] == 'connection']
+        self.assertEqual(len(refused), 5)
+        self.assertEqual(log.lines[-1]['log']['suppressed'], {'TUNNEL_NOT_CONNECT': 35})
+
+    def test_the_file_log_applies_the_same_bounds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = T.Log(Path(tmp), refusal_lines=1)
+            for _ in range(3):
+                log.write('connection', conn=1, target=None, decision='refused', reason='TUNNEL_BUSY', end=None,
+                          bytes_up=0, bytes_down=0)
+            log.write('tunnel-stop', stopped_by='test', connections_cut=0, connections_left=0)
+            log.close()
+            lines = [json.loads(x) for x in log.path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual([x['event'] for x in lines], ['connection', 'refusals-suppressed', 'tunnel-stop'])
+        self.assertEqual(lines[1]['count'], 2)
+
+
+class AcceptFailures(unittest.TestCase):
+    """Review NIT f: the accept loop backs off on an OSError and gives up after its limit; serve then stops."""
+
+    def test_persistent_accept_errors_end_the_loop_and_the_wait(self):
+        log = T.MemoryLog()
+        tunnel = T.Tunnel(0, log, accept_error_limit=4, accept_backoff_s=0.01)
+        tunnel.start()
+        real = tunnel._listener
+        calls = []
+
+        class Broken:
+            def accept(self):
+                calls.append(1)
+                raise OSError('the listener failed')
+
+            def close(self):
+                real.close()
+        tunnel._listener = Broken()
+        tunnel._acceptor.join(WAIT_S)
+        self.assertFalse(tunnel._acceptor.is_alive())
+        self.assertEqual((tunnel.failed, len(calls)), ('accept-failed', 4))
+        self.assertIn({'errors': 4}, [{k: v for k, v in x.items() if k == 'errors'} for x in log.lines
+                                      if x['event'] == 'accept-failed'])
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(T.wait_for_stop(tunnel, Path(tmp), poll_s=0.01), 'accept-failed')
+        tunnel.stop('accept-failed')
+
+
+class RunRecordIdentity(unittest.TestCase):
+    """Review NIT e: a run record is trusted only for the process that wrote it (its creation time); access denied
+    is unknown, never ended."""
+
+    def record(self, **change):
+        return dict({'format': T.RUN_FORMAT, 'pid': os.getpid(), 'created': T.own_created(),
+                     'address': '127.0.0.1', 'port': 18433, 'log': 'x'}, **change)
+
+    @unittest.skipUnless(os.name == 'nt', 'process identity is verified on Windows')
+    def test_identity(self):
+        self.assertEqual(T.process_state(self.record()), 'running')
+        self.assertEqual(T.process_state(self.record(created=T.own_created() - 3600)), 'ended')   # a reused pid
+        self.assertEqual(T.process_state(self.record(created=None)), 'unknown')
+        self.assertEqual(T.process_state(self.record(pid=2 ** 31 - 7)), 'ended')
+        with mock.patch.object(T, '_open_process', return_value=(None, T.ERROR_ACCESS_DENIED)):
+            self.assertEqual(T.process_state(self.record()), 'unknown')
+
+    @unittest.skipUnless(os.name == 'nt', 'process identity is verified on Windows')
+    def test_serve_stop_and_census_honour_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            ctx = T.Context(run_dir=lambda: tmp, logs=lambda: tmp, out=mock.Mock(), err=mock.Mock())
+            T.write_new(tmp / T.RUN_NAME, self.record())
+            with self.assertRaises(T.TunnelError) as cm:
+                T.serve(ctx, 0)
+            self.assertEqual(cm.exception.code, 'TUNNEL_ALREADY_RUNNING')
+            with mock.patch.object(T, '_open_process', return_value=(None, T.ERROR_ACCESS_DENIED)):
+                for call in (lambda: T.serve(ctx, 0), lambda: T.stop(ctx), lambda: T.census(ctx)):
+                    with self.assertRaises(T.TunnelError) as cm:
+                        call()
+                    self.assertEqual(cm.exception.code, 'TUNNEL_RUN_RECORD_UNKNOWN')
+            self.assertTrue((tmp / T.RUN_NAME).exists())                   # never removed while unknown
+            (tmp / T.RUN_NAME).unlink()
+            T.write_new(tmp / T.RUN_NAME, self.record(created=T.own_created() - 3600))   # another process now
+            with self.assertRaises(T.TunnelError) as cm:
+                T.stop(ctx)
+            self.assertEqual(cm.exception.code, 'TUNNEL_NOT_RUNNING')
+            self.assertFalse((tmp / T.RUN_NAME).exists())                  # the stale record removed
+
+
 class Census(unittest.TestCase):
     """The census judges the tunnel's sockets by inference_census.py's rule, with its log's upstream peers."""
 
@@ -640,8 +861,8 @@ class Census(unittest.TestCase):
             log.write_text(json.dumps({'event': 'upstream-connect', 'peer': {'address': '160.79.104.10',
                                                                                'port': 443}}) + '\n',
                            encoding='utf-8')
-            T.write_new(tmp / T.RUN_NAME, {'format': T.RUN_FORMAT, 'pid': pid, 'address': '127.0.0.1',
-                                            'port': 18433, 'log': log.name})
+            T.write_new(tmp / T.RUN_NAME, {'format': T.RUN_FORMAT, 'pid': pid, 'created': T.own_created(),
+                                            'address': '127.0.0.1', 'port': 18433, 'log': log.name})
             base = [E('tcp', 4, 'LISTEN', '127.0.0.1', 18433, '0.0.0.0', 0, pid),
                     E('tcp', 4, 'ESTABLISHED', '127.0.0.1', 18433, '127.0.0.1', 50000, pid),
                     E('tcp', 4, 'ESTABLISHED', '10.0.0.5', 50001, '160.79.104.10', 443, pid),

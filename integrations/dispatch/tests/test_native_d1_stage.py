@@ -27,8 +27,8 @@ The proof, clause by clause:
 * No store record, admitted-create record, report or log carries the token, only its fingerprint (``Custody``).
 
 The template is E-05.2's candidate with a synthetic model, pinned by a synthetic profile in a throwaway directory
-that declares the native profile and a tunnel endpoint (no checked-in profile declares either yet: E-05.10 declares
-the tunnel). The Agent Server is the E-01.3.1 fake. The credential provider is in memory; the token is synthetic,
+that declares the native profile and a tunnel endpoint (no checked-in stage template declares the native profile
+yet; since E-05.10 the checked-in strong-windows-qemu-whpx profile declares the tunnel endpoint). The Agent Server is the E-01.3.1 fake. The credential provider is in memory; the token is synthetic,
 built at run time. No broker, guest, provider, model or credential store is used.
 """
 from pathlib import Path

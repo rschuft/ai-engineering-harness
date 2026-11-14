@@ -28,8 +28,9 @@
   },
   "verdicts": {
     "PASS": "the expected outcome was observed and the positive control passed in the same run",
-    "FAIL": "an attempt succeeded, a hardening control is missing or loosened, an observation is missing or outside the expected outcomes, a compensating case did not pass, or the case's precondition was not met (precondition-unmet: the inference cases without a held forward session)",
-    "UNKNOWN": "the positive control did not pass (and nothing succeeded): the probe could not have observed success, so its denial proves nothing"
+    "FAIL": "an attempt succeeded, a hardening control is missing or loosened, an observation is missing or outside the expected outcomes, a compensating case did not pass, or the case's precondition was not met (precondition-unmet: the inference cases on a composed guest without a held forward session)",
+    "UNKNOWN": "the positive control did not pass (and nothing succeeded): the probe could not have observed success, so its denial proves nothing",
+    "not-applicable": "the case's applies_to excludes this guest, read from the guest's declared creation record (its launch record) only, never from a probe: not run, counted neither PASS nor FAIL and listed in the run's not_applicable summary. On a guest its applicability names, a not-applicable verdict is a FAIL"
   },
   "statuses": {
     "executable": "tools/guest.py containment-probe runs it",
@@ -5674,6 +5675,6 @@
     "The reused primitives (admission-probe, job-access-probe) run unchanged; a case names the extractor that reads its observation from their records."
   ],
   "applicability": {
-    "inference-composition": "A guest created with create --provision --inference (the opt-in composition, S-03.2) whose dispatcher holds the inference forward session (inference-forward --action start). The forward's target decides the expectations: held to the broker (the brokered profile, decision 0015), the case's expected and enforcement; held to the provider tunnel (the native profile, decision 0023, inference-forward --execution-profile native), the case's native expectations where it carries them and its own otherwise (the guest side is the same composition). The runner reads the target from the forward's record (job-access-probe's inference step). On any other guest the case is not applicable: it is not observed there, and the runner reports it FAIL with its precondition (never PASS), so a catalogue run on a guest without the composition is read for its other cases."
+    "inference-composition": "A guest whose launch record declares the inference composition (created with create --provision --inference, the opt-in option of S-03.2 slice 2); read from that record only, never from a probe. On such a guest every case of this applicability runs and is judged: without a held forward session it is FAIL with its precondition (never PASS), and a not-applicable verdict there is a FAIL. The held forward's target decides the expectations: held to the broker (the brokered profile, decision 0015), the case's expected and enforcement; held to the provider tunnel (the native profile, decision 0023, inference-forward --execution-profile native), the case's native expectations where it carries them and its own otherwise (the guest side is the same composition); the runner reads the target from the forward's record (job-access-probe's inference step). On every other guest the case is not-applicable: not run, counted neither PASS nor FAIL, listed in the run's summary."
   }
 }

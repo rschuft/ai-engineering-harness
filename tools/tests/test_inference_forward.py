@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -760,12 +761,15 @@ class BrokerAccessAndForwardControl(unittest.TestCase):
         state.assert_called_once_with(PROFILE, Path('inst') / 'abc')
 
 
-def tunnel_run_dir(test, port=18433, pid=None):
-    """A run directory holding a provider-tunnel run record (a live pid: this process's) on PORT."""
+def tunnel_run_dir(test, port=18433, pid=None, created_shift=0.0):
+    """A run directory holding a provider-tunnel run record (a live pid: this process's, with its creation time
+    shifted by CREATED_SHIFT) on PORT."""
     run = Path(tempfile.mkdtemp(prefix='aieh-tunnel-run-'))
     test.addCleanup(guest.remove_tree, run)
     pt = guest.provider_tunnel()
+    created = pt.own_created()
     pt.write_new(run / pt.RUN_NAME, {'format': pt.RUN_FORMAT, 'pid': os.getpid() if pid is None else pid,
+                                     'created': None if created is None else created + created_shift,
                                      'address': '127.0.0.1', 'port': port, 'log': 'x'})
     return run
 
@@ -789,7 +793,8 @@ class NativeForward(ProcessLedger, ForwardBase):
         with mock.patch.dict(os.environ, {'AIEH_TEST_FAKE_SSH': 'hold'}):
             return guest.inference_forward(ctx, name, 'start', port, broker, threaded_spawn(self.threads),
                                            FakeSsh(self.script), execution_profile='native',
-                                           tunnel=tunnel or guest.TunnelAccess(profile, tunnel_run_dir(self)))
+                                           tunnel=tunnel or guest.TunnelAccess(profile, tunnel_run_dir(self),
+                                                                               broker_ports={}))
 
     def test_native_targets_the_tunnels_declared_port(self):
         name, idir = self.instance()
@@ -844,9 +849,10 @@ class NativeForward(ProcessLedger, ForwardBase):
         empty = Path(tempfile.mkdtemp(prefix='aieh-tunnel-run-'))
         self.addCleanup(guest.remove_tree, empty)
         dead = 2 ** 31 - 7                                     # no such process
-        for run in (empty, tunnel_run_dir(self, port=18499), tunnel_run_dir(self, pid=dead)):
+        reused = tunnel_run_dir(self, created_shift=-3600.0)  # this pid, but not the process that wrote it
+        for run in (empty, tunnel_run_dir(self, port=18499), tunnel_run_dir(self, pid=dead), reused):
             with self.assertRaises(guest.Refused) as cm:
-                self.start(name, tunnel=guest.TunnelAccess(PROFILE, run))
+                self.start(name, tunnel=guest.TunnelAccess(PROFILE, run, broker_ports={}))
             self.assertEqual(cm.exception.code, 'TUNNEL_NOT_READY', run)
         self.assertFalse(self.record_path(idir).exists())
         self.assertEqual(self.threads, [])
@@ -871,6 +877,30 @@ class NativeForward(ProcessLedger, ForwardBase):
         self.assertEqual(cm.exception.detail, {'code': 'FORWARD_TARGET_DIFFERS'})
         guest.inference_forward(self.ctx, name, 'stop')
 
+    def test_the_tunnels_port_is_never_a_broker_port(self):
+        """Review NIT h: a configured broker port equal to the tunnel's declared port is refused, natively and
+        brokered; the managed read of config.yml takes the ports only."""
+        name, idir = self.instance()
+        for ports in ({'control_port': 18431, 'inference_port': 18433}, {'control_port': 18433, 'inference_port': 1}):
+            with self.assertRaises(guest.Refused) as cm:
+                self.start(name, tunnel=guest.TunnelAccess(PROFILE, tunnel_run_dir(self), broker_ports=ports))
+            self.assertEqual(cm.exception.detail, {'code': 'TUNNEL_PORT_CONFLICT'})
+        broker = FakeBroker()
+        broker.ports = {'control_port': 18431, 'inference_port': 18433}
+        ctx = types.SimpleNamespace(profile=PROFILE, instance_dir=self.ctx.instance_dir)
+        with self.assertRaises(guest.Refused) as cm:
+            guest.inference_forward(ctx, name, 'start', None, broker, threaded_spawn(self.threads),
+                                    FakeSsh(self.script))
+        self.assertEqual(cm.exception.detail, {'code': 'TUNNEL_PORT_CONFLICT'})
+        self.assertEqual(self.threads, [])
+        resolution = types.SimpleNamespace(components={'inference_broker': {'control_port': 18431,
+                                                                            'inference_port': 18432, 'x': 1}})
+        paths = guest._inference_module('aieh_paths', 'aieh_paths.py', 'paths')
+        with mock.patch.object(paths, 'resolve', return_value=resolution):
+            self.assertEqual(guest.configured_broker_ports(), {'control_port': 18431, 'inference_port': 18432})
+        with mock.patch.object(paths, 'resolve', return_value=types.SimpleNamespace(components={})):
+            self.assertIsNone(guest.configured_broker_ports())
+
 
 class JobScriptAgainstTheTunnel(unittest.TestCase):
     """The sweep's tunnel rows (the job script, run here under this interpreter) against the real tunnel in this
@@ -886,14 +916,7 @@ class JobScriptAgainstTheTunnel(unittest.TestCase):
         address = tunnel.start()
         self.addCleanup(tunnel.stop, 'test')
         rows = [m for m in guest.TUNNEL_MATRIX if m[0] != guest.TUNNEL_ORIGIN_WHAT]
-        spec = {'items': [['tunnel', 'tcp', '127.0.0.1', address[1], what] for what, *_ in rows],
-                'tunnel': {what: {'connect': c, 'sni': s} for what, c, s, _, _ in rows}, 'timeout': 10}
-        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
-        out = subprocess.run([sys.executable, '-I', '-c', guest.JOB_INFERENCE_SWEEP, arg], capture_output=True,
-                             text=True, timeout=120, creationflags=NO_WINDOW)
-        self.assertEqual(out.returncode, 0, out.stderr)
-        line = next(x for x in out.stdout.splitlines() if x.startswith('AIEH-JOB-JSON '))
-        results = json.loads(line[len('AIEH-JOB-JSON '):])['results']
+        results = run_tunnel_rows(address, rows)
         for row in results:
             want, code = guest.TUNNEL_EXPECTED[row['what']]
             self.assertEqual((row['outcome'], row['refusal']), (want, code), row)
@@ -903,6 +926,72 @@ class JobScriptAgainstTheTunnel(unittest.TestCase):
         self.assertIn('TUNNEL_SNI_MISMATCH', reasons)
         self.assertIn('TUNNEL_SNI_ABSENT', reasons)
         self.assertEqual(connects, [])
+        sni_rows = [r for r in results if 'server name' in r['what']]
+        self.assertEqual({(r['outcome'], r['bytes_after_hello']) for r in sni_rows}, {('closed-without-answer', 0)})
+
+    def test_a_server_name_row_answered_by_the_origin_fails(self):
+        """Review S1 (the reviewer's probe): with the tunnel's server-name check defeated and an origin that answers
+        any ClientHello with a TLS alert, the two server-name rows are never closed-without-answer: each FAILs and
+        is a stop condition."""
+        pt = guest.provider_tunnel()
+        origin = AlertOrigin()
+        self.addCleanup(origin.close)
+        tunnel = pt.Tunnel(0, pt.MemoryLog(), resolve=lambda h, p: ['127.0.0.1'],
+                           connect=lambda a, p, t: socket.create_connection((a, origin.port), timeout=t))
+        with mock.patch.object(pt, 'server_name', lambda record: pt.ORIGIN_HOST):     # the defect
+            address = tunnel.start()
+            self.addCleanup(tunnel.stop, 'test')
+            rows = [m for m in guest.TUNNEL_MATRIX if 'server name' in m[0]]
+            results = run_tunnel_rows(address, rows)
+        self.assertEqual(origin.hellos, 2)
+        for row in results:
+            self.assertEqual((row['outcome'], row['bytes_after_hello']), ('answered-after-hello', 7), row)
+            row['conversation'] = 'test'
+        ok, judged, stop = guest.inference_job_verdict(results, native=True)
+        self.assertFalse(ok)
+        self.assertEqual([r['ok'] for r in judged], [False, False])
+        self.assertEqual(len(stop), 2)
+
+
+def run_tunnel_rows(address, rows):
+    """The job script's tunnel rows ROWS (TUNNEL_MATRIX entries) against a tunnel at ADDRESS, in a child process."""
+    spec = {'items': [['tunnel', 'tcp', '127.0.0.1', address[1], what] for what, *_ in rows],
+            'tunnel': {what: {'connect': c, 'sni': s, 'mode': guest.tunnel_mode(o)} for what, c, s, o, _ in rows},
+            'timeout': 10}
+    arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+    out = subprocess.run([sys.executable, '-I', '-c', guest.JOB_INFERENCE_SWEEP, arg], capture_output=True,
+                         text=True, timeout=120, creationflags=NO_WINDOW)
+    assert out.returncode == 0, out.stderr
+    line = next(x for x in out.stdout.splitlines() if x.startswith('AIEH-JOB-JSON '))
+    return json.loads(line[len('AIEH-JOB-JSON '):])['results']
+
+
+class AlertOrigin:
+    """An origin that answers any ClientHello with a TLS fatal alert (unrecognized_name), as a provider front end
+    may for an unknown or absent server name (the reviewer's probe3)."""
+    ALERT = b'\x15\x03\x03\x00\x02\x02\x70'
+
+    def __init__(self):
+        self.sock = socket.socket()
+        self.sock.bind(('127.0.0.1', 0))
+        self.sock.listen(8)
+        self.port = self.sock.getsockname()[1]
+        self.hellos = 0
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                if conn.recv(65536):
+                    self.hellos += 1
+                    conn.sendall(self.ALERT)
+
+    def close(self):
+        self.sock.close()
 
 
 class ForwardCli(ForwardBase):

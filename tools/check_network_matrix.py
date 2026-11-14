@@ -322,6 +322,14 @@ class Checker(csi.Checker):
                 self.add('STATUS_UNSUPPORTED', where, 'decided needs a decision among its sources')
             if not row.get('builds_at'):
                 self.add('STATUS_UNSUPPORTED', where, 'decided needs the leaf that builds it')
+        # an Owner act (decision 0018 point 4.7): every allow or disclosed path from an exposed domain into a
+        # trusted one, and every allow to the model provider (E-05.10 review round 1)
+        if row.get('owner_act') is not True and (
+                verdict in ('allow', 'disclosed') and src in self.domains and dst in self.domains and
+                self.domains[src].get('trust') in EXPOSED and self.domains[dst].get('trust') in TRUSTED or
+                verdict == 'allow' and dst == 'external:model-provider'):
+            self.add('OWNER_ACT_MISSING', where, 'a path from an exposed domain into a trusted one, or to the model '
+                     'provider, is an Owner act (owner_act true)')
         if row.get('owner_act') is True and status == 'observed':
             self.check_owner_approval(where, row.get('owner_approval'))
         elif 'owner_approval' in row and row.get('owner_act') is not True:
