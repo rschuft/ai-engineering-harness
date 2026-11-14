@@ -58,6 +58,7 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `tests/test_stop.py` | The stop (S-03.2 fix-forward, before act A2): the stop event, the interrupt handler and the forced exit of a second interrupt, `POST /v1/stop` and `inference_control.py stop`, `BROKER_STOPPING` from the stop's start, the bounded drain (a request cut by the stop audited `BROKER_STOPPED`; an upstream that never answers does not hold the stop); on Windows, `serve` in a process of its own stopped by a real `CTRL_BREAK_EVENT`, by `inference_control.py stop`, and forced by a second one |
 | `tests/test_reach.py` | Provider-side reach refused (S-03.3 fix-forward, before the first paid call): each rule of the `anthropic-messages` checker (`mcp_servers`, `container`, a tool type other than `custom`, a `url` or `file` source and a `container_upload` block anywhere, tool results included) refused `PROVIDER_REACH_REFUSED` with its audit `reach` member and nothing sent upstream; plain model calls and custom tools admitted; a family with no checker refused at start on an upstream that is not loopback (`FAMILY_REACH_UNCHECKED`) |
 | `tests/test_account_scope.py` | Account-scope headers never forwarded (S-03.3 fix-forward): every header whose name starts with `anthropic-workspace` or `anthropic-organization` stripped, not refused, for each family, streamed and not, against the fake upstreams; the audit's `stripped_headers` (names only) |
+| `tests/test_query.py` | Exact query-string equality (S-03.3 fix-forward; `pass` retired): `anthropic-messages` declares exactly `beta=true`, admitted and forwarded unchanged; every other form (case, repetition, addition, percent-encoding, `&`, `#`, an empty query) refused `QUERY_NOT_ALLOWED` before anything is sent; the description output; the qualification's fake upstream answering the declared query |
 | `tests/serve_child.py` | The child process of `test_stop.py`: the broker's `serve` with its real wait over a loopback-only test context (a fake upstream, an in-memory credential provider, a temporary directory; never the managed context) |
 | `tests/test_control.py` | `inference_control.py`: the ports, the forward target's refusals, the token fingerprint, the client against a real broker on ephemeral ports (status, grant, revocation, issuance, the broker's refusal codes, an unreachable or foreign port), the `issue` command (the token to a pipe only; a terminal, a file or a device refused first) and its only connection, to `127.0.0.1` |
 | `tests/test_qualification.py` | `inference_qualification.py`: the launcher's refusals (upstreams, provider id, key), its end-to-end run with the key substituted and only its fingerprint recorded, `serve` without a flag for it and the credential factory never returning its provider; the fake upstream's refusals, answers and records |
@@ -74,22 +75,28 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 {"id": "anthropic-messages", "status": "provisional",
  "consumer": "Claude Code's ACP adapter ...",
  "routes": [{"method": "POST", "path": "/v1/messages"}],
- "query": "refuse",
+ "query": ["beta=true"],
  "auth": {"header": "x-api-key", "scheme": null},
  "usage": "anthropic-messages"}
 ```
 
 | Family | Consumer | Routes (provisional) | Auth header | Usage from |
 |---|---|---|---|---|
-| `anthropic-messages` | Claude Code's ACP adapter (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`) | `POST /v1/messages` | `x-api-key: <credential>` | `message_start` and the last event carrying `usage` (`message_delta`); or the body's `usage` |
+| `anthropic-messages` | Claude Code's ACP adapter (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`) | `POST /v1/messages`, with no query or exactly `beta=true` | `x-api-key: <credential>` | `message_start` and the last event carrying `usage` (`message_delta`); or the body's `usage` |
 | `openai-responses` | Codex's ACP adapter in API-key mode | `POST /v1/responses` | `Authorization: Bearer <credential>` | the last event's `response.usage` (`response.completed`); or the body's `usage` |
 | `openai-chat` | a native direct-LLM agent; a local model server as the degenerate upstream | `POST /v1/chat/completions` | `Authorization: Bearer <credential>` | the last chunk with a non-null `usage`; or the body's `usage` |
 
 - `routes`: the exact method and path pairs admitted. A path is matched as a string: no normalization, no
   prefix, no trailing slash, no percent-decoding. Every set is **provisional**: it is pinned from observed
   traffic at the plan leaf that first runs the family, and the extractors with it.
-- `query`: `refuse` (a request target with a query is refused) or `pass` (passed unchanged). All three ship
-  `refuse`.
+- `query`: `refuse` (a request target with a query is refused), or an exact, finite list of whole query strings
+  (name=value pairs of `[A-Za-z0-9._~-]` joined by `&`, at most 256 characters each; S-03.3 retired `pass`). The
+  request target's raw query, the bytes after its first `?`, is admitted only when it is byte-equal to one of
+  them: no parsing, no decoding, no reordering, no case folding. A target with no `?` is admitted as before; one
+  ending in a bare `?` (an empty query) is refused, and so is every other form (`beta=TRUE`,
+  `beta=true&beta=true`, `beta=true&x=1`, `beta=%74rue`, a trailing `&`, a `#`): `QUERY_NOT_ALLOWED`. An admitted
+  query is forwarded unchanged. `anthropic-messages` ships exactly `["beta=true"]` (the OA-12 package, row P:
+  only the form observed at S-03.3's discovery run is pinned); the two OpenAI families ship `refuse`.
 - `auth`: the header that carries the credential, read inbound (the attempt token) and written outbound (the
   provider key), with its scheme (`null` or `Bearer`).
 - `usage`: the extractor (`anthropic-messages`, `openai-responses` or `openai-chat`). Counts are `input`
@@ -453,7 +460,8 @@ Built for S-03.2's guest qualification (the plan in
   refused, `FAKE_ADDRESS_REFUSED`, before anything binds), a port from 1024 to 65535 (`FAKE_PORT_INVALID`),
   bound exclusively. A request on a declared route of the family gets one fixed answer that is not a model's:
   the family's JSON shape with the text `aieh fake upstream: a fixed answer, not a model` and the usage counts
-  1 and 1, which the broker's extractor reads. Another route answers 404, a body without a valid length 411.
+  1 and 1, which the broker's extractor reads (with no query, or one the family declares exactly, as the broker
+  admits it). Another route answers 404, a body without a valid length 411.
   One JSON line (`aieh-inference-fake-upstream/1`) per request goes to standard output before its answer:
   `method`, `path` (a declared route only), `header_names` and `credential_fingerprints` (the fingerprint of
   each value of the family's auth header, its scheme word removed); never a header value or a body. `start`
@@ -567,8 +575,9 @@ process: the discovery run is the slice plan's step 6a, under the Owner's acts A
 - **Flags** (each with its family and route where it has one): `MODEL_NOT_TOP_LEVEL` (requests without a top-level
   `model`: the broker's per-request check reads that field only, S-03.5's F7, so the route is not declared without
   its own check), `MODEL_UNRECORDED`, `PATH_UNRECORDED`, `QUERY_NAMES_UNRECORDED`, `QUERY_OBSERVED` (a query string
-  where the family's rule is `refuse`: the declarations hold `refuse` or `pass` only, so admitting it is a decision
-  of its own), `ROUTE_NOT_DECLARABLE`, `UNATTRIBUTED_REQUESTS`, `AUDIT_LINES_WITHHELD`, `AUDIT_LINES_UNREADABLE`,
+  where the family's rule is `refuse`, on a route the family does not declare, or refused `QUERY_NOT_ALLOWED`: the
+  audit holds the names only and the declarations exact whole query strings, so admitting it is a decision of its
+  own), `ROUTE_NOT_DECLARABLE`, `UNATTRIBUTED_REQUESTS`, `AUDIT_LINES_WITHHELD`, `AUDIT_LINES_UNREADABLE`,
   `BROKER_UNRECORDED`, `READER_DROPPED` and `NO_GRANT_REQUESTS`; from a discovery run's key paths (S-03.5's F7,
   the engineering manager's option (b)): `MODEL_KEY_ELSEWHERE` (a key path other than the top-level `model` whose
   last segment contains `model`, any case; the flag lists the paths, never the values: a model named there is not

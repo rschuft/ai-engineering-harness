@@ -37,7 +37,7 @@ class TestShippedDeclarations(unittest.TestCase):
         self.assertEqual(list(families), ['anthropic-messages', 'openai-responses', 'openai-chat'])
         self.assertEqual({f.status for f in families.values()}, {'provisional'})
         self.assertEqual({(f.id, f.auth_header, f.auth_scheme, f.usage, f.query) for f in families.values()},
-                         {('anthropic-messages', 'x-api-key', None, 'anthropic-messages', 'refuse'),
+                         {('anthropic-messages', 'x-api-key', None, 'anthropic-messages', frozenset({'beta=true'})),
                           ('openai-responses', 'authorization', 'Bearer', 'openai-responses', 'refuse'),
                           ('openai-chat', 'authorization', 'Bearer', 'openai-chat', 'refuse')})
         self.assertEqual({f.id: sorted(f.routes) for f in families.values()},
@@ -113,6 +113,19 @@ class TestDeclarationRefusals(unittest.TestCase):
             'route key': fam(routes=[{'method': 'POST', 'path': '/v1/messages', 'query': True}]),
             'duplicate route': fam(routes=[{'method': 'POST', 'path': '/v1/x'}, {'method': 'POST', 'path': '/v1/x'}]),
             'query': fam(query='allow'),
+            'query pass (retired by S-03.3)': fam(query='pass'),
+            'query empty list': fam(query=[]),
+            'query empty string': fam(query=['']),
+            'query duplicate': fam(query=['beta=true', 'beta=true']),
+            'query not a string': fam(query=[1]),
+            'query a mapping': fam(query={'beta': 'true'}),
+            'query with a leading ?': fam(query=['?beta=true']),
+            'query with a fragment': fam(query=['beta=true#x']),
+            'query percent-encoded': fam(query=['beta=%74rue']),
+            'query a bare name': fam(query=['beta']),
+            'query a trailing &': fam(query=['beta=true&']),
+            'query a space': fam(query=['beta= true']),
+            'query too long': fam(query=['a=' + 'b' * 300]),
             'auth scheme': fam(auth={'header': 'authorization', 'scheme': 'Basic'}),
             'auth header': fam(auth={'header': 'X-Api-Key', 'scheme': None}),
             'auth keys': fam(auth={'header': 'x-api-key'}),

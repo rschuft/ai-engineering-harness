@@ -27,7 +27,8 @@ the model provider's key. It serves two listeners, both bound to 127.0.0.1 only:
 
 The families are declared in families.json beside this module (format aieh-inference-families/1): each has an
 id, its exact method and path set (provisional until pinned from observed traffic, amendment 1 point 3), its
-query rule, the auth header shape it reads and forwards, and its usage extractor. The Owner's settings live in
+query rule (refuse, or an exact finite set of whole query strings: S-03.3 retired pass), the auth header shape it
+reads and forwards, and its usage extractor. The Owner's settings live in
 components.inference_broker of the managed config.yml (decision 0009; no secret: the loader refuses
 secret-shaped keys): the two listener ports, and per family the provider id, the upstream origin and the model
 allowlist. The shipped allowlists are empty, so every issuance is refused until the Owner names models.
@@ -183,6 +184,10 @@ WILDCARD = re.compile(r'[*?\[\]]')
 HEADER_NAME = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
 HOST_NAME = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*')
 ROUTE_PATH = re.compile(r'/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+')
+# A declared whole query string (S-03.3): name=value pairs of plain characters joined by '&', compared byte for byte
+# with the request target's raw query (no parsing, decoding, reordering or case folding).
+QUERY_STRING = re.compile(r'[A-Za-z0-9._~-]+=[A-Za-z0-9._~-]*(?:&[A-Za-z0-9._~-]+=[A-Za-z0-9._~-]*)*')
+QUERY_STRING_LIMIT = 256
 METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'CONNECT', 'TRACE')
 USAGE_KINDS = ('anthropic-messages', 'openai-responses', 'openai-chat')
 MIB = 1024 * 1024
@@ -307,7 +312,10 @@ CODES = {
     'TOKEN_EXPIRED': (401, 'the token is expired: the attempt needs a new grant'),
     'TOKEN_WRONG_HEADER': (401, "send the token in its family's auth header shape"),
     'ROUTE_NOT_ALLOWED': (404, "use only the method and path set of the token's family"),
-    'QUERY_NOT_ALLOWED': (400, "send no query string: the token's family admits none"),
+    'QUERY_NOT_ALLOWED': (400, "send no query string, or exactly one of the whole query strings the token's "
+                               'family declares in families.json (anthropic-messages: beta=true), byte for byte: '
+                               'no other order, case, encoding, repetition, addition or fragment, and no empty '
+                               'query'),
     'BODY_LENGTH_REQUIRED': (411, 'send the body with a Content-Length, not chunked'),
     'BODY_LENGTH_INVALID': (400, 'send one valid Content-Length'),
     'BODY_TOO_LARGE': (413, 'send a body no larger than max_request_bytes'),
@@ -413,7 +421,7 @@ class Family:
     id: str
     status: str
     routes: frozenset
-    query: str
+    query: str | frozenset     # 'refuse', or the exact whole query strings admitted
     auth_header: str
     auth_scheme: str | None
     usage: str
@@ -423,10 +431,19 @@ class Family:
 
     def describe(self) -> dict:
         return {'id': self.id, 'status': self.status,
-                'routes': [{'method': m, 'path': p} for m, p in sorted(self.routes)], 'query': self.query,
+                'routes': [{'method': m, 'path': p} for m, p in sorted(self.routes)], 'query': self.query_rule(),
                 'auth': {'header': self.auth_header, 'scheme': self.auth_scheme}, 'usage': self.usage,
                 'provider': self.provider, 'upstream': None if self.upstream is None else self.upstream.text(),
                 'models': list(self.models)}
+
+    def query_rule(self):
+        """The query rule as declared: 'refuse', or the sorted list of the whole query strings admitted."""
+        return self.query if self.query == 'refuse' else sorted(self.query)
+
+    def admits_query(self, query: str) -> bool:
+        """Whether the raw query of a request target (the text after its first '?') is admitted: only when the
+        family declares a set and QUERY is byte-equal to one of its members."""
+        return self.query != 'refuse' and query in self.query
 
 
 @dataclasses.dataclass(frozen=True)
@@ -487,8 +504,16 @@ def load_declarations(path: Path = FAMILIES_PATH) -> dict:
             routes.add((route['method'], route['path']))
         if len(routes) != len(entry['routes']):
             raise bad(f'{where}.routes has a duplicate')
-        if entry['query'] not in ('refuse', 'pass'):
-            raise bad(f'{where}.query is refuse or pass')
+        query = entry['query']
+        if isinstance(query, list):
+            if not query or len(set(map(str, query))) != len(query) or not all(
+                    isinstance(q, str) and len(q) <= QUERY_STRING_LIMIT and QUERY_STRING.fullmatch(q)
+                    for q in query):
+                raise bad(f'{where}.query is refuse or a non-empty list of distinct whole query strings '
+                          '(name=value pairs of plain characters joined by &)')
+            query = frozenset(query)
+        elif query != 'refuse':
+            raise bad(f'{where}.query is refuse or a list of whole query strings (pass is retired)')
         auth = entry['auth']
         _exact_keys(auth, ('header', 'scheme'), (), 'DECLARATION_INVALID', f'{where}.auth')
         if not isinstance(auth['header'], str) or not HEADER_NAME.fullmatch(auth['header']) \
@@ -496,7 +521,7 @@ def load_declarations(path: Path = FAMILIES_PATH) -> dict:
             raise bad(f'{where}.auth is a lower-case header name and the scheme null or Bearer')
         if entry['usage'] not in USAGE_KINDS:
             raise bad(f'{where}.usage must be one of {list(USAGE_KINDS)}')
-        families[entry['id']] = Family(entry['id'], entry['status'], frozenset(routes), entry['query'],
+        families[entry['id']] = Family(entry['id'], entry['status'], frozenset(routes), query,
                                        auth['header'], auth['scheme'], entry['usage'])
     return families
 
@@ -1645,11 +1670,11 @@ class Broker:
         family = self.config.families[grant.family]
         if (family.auth_header, family.auth_scheme) not in carriers:
             raise self._refuse('TOKEN_WRONG_HEADER', f'the {family.id} family reads {family.auth_header}', grant)
-        path, has_query, _ = target.partition('?')
+        path, has_query, query = target.partition('?')
         if (method, path) not in family.routes:
             raise self._refuse('ROUTE_NOT_ALLOWED', f'not a {family.id} route', grant)
-        if has_query and family.query != 'pass':
-            raise self._refuse('QUERY_NOT_ALLOWED', f'the {family.id} family admits no query', grant)
+        if has_query and not family.admits_query(query):
+            raise self._refuse('QUERY_NOT_ALLOWED', f'the query is not one the {family.id} family declares', grant)
         with self._lock:
             self._not_stopping(grant)
             self._envelope(family, grant)

@@ -1,6 +1,6 @@
 {
   "format": "aieh-inference-families/1",
-  "description": "The inference broker's declared API families (decision 0015 as amended, amendment 1 points 1 and 3). Each family is passed through untranslated to its one upstream origin. Its routes are the exact method and path pairs admitted; the auth shape is the header that carries the credential, inbound (the attempt token) and outbound (the provider key); usage names the extractor that reads the provider's usage counts. Every route set is provisional: it is pinned from observed traffic at the plan leaf that first runs the family. No upstream, provider or model is declared here: the Owner sets them in components.inference_broker of config.yml, and the model allowlists ship empty (no wildcard; model names are verified, never assumed).",
+  "description": "The inference broker's declared API families (decision 0015 as amended, amendment 1 points 1 and 3). Each family is passed through untranslated to its one upstream origin. Its routes are the exact method and path pairs admitted; its query is refuse (a request target with a query is refused) or the exact whole query strings admitted, each compared byte for byte with the target's raw query (S-03.3); the auth shape is the header that carries the credential, inbound (the attempt token) and outbound (the provider key); usage names the extractor that reads the provider's usage counts. Every route set is provisional: it is pinned from observed traffic at the plan leaf that first runs the family. No upstream, provider or model is declared here: the Owner sets them in components.inference_broker of config.yml, and the model allowlists ship empty (no wildcard; model names are verified, never assumed).",
   "families": [
     {
       "id": "anthropic-messages",
@@ -9,7 +9,7 @@
       "routes": [
         {"method": "POST", "path": "/v1/messages"}
       ],
-      "query": "refuse",
+      "query": ["beta=true"],
       "auth": {"header": "x-api-key", "scheme": null},
       "usage": "anthropic-messages"
     },

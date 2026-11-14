@@ -100,7 +100,7 @@ class Reader(unittest.TestCase):
                        {'method': 'POST', 'path': '/v1/messages/count_tokens'},
                        {'method': 'GET', 'path': '/v1/models'}],
             'models': [MAIN, SECONDARY]})
-        self.assertEqual(family['declared'], {'status': 'provisional', 'query': 'refuse',
+        self.assertEqual(family['declared'], {'status': 'provisional', 'query': ['beta=true'],
                                               'routes': [{'method': 'POST', 'path': '/v1/messages'}]})
         self.assertEqual(family['compared'], {'declared_not_observed': [], 'observed_not_declared': [
             {'method': 'POST', 'path': '/v1/messages/count_tokens'}, {'method': 'GET', 'path': '/v1/models'}]})
@@ -505,7 +505,7 @@ class Discovery(unittest.TestCase):
             key = [('x-api-key', token)]
             for method, target, body in (
                     ('POST', '/v1/messages', {'model': MAIN, 'messages': [S.PROMPT_MARKER]}),
-                    ('POST', '/v1/messages?beta=true', {'model': MAIN, 'messages': [S.PROMPT_MARKER]}),
+                    ('POST', '/v1/messages?beta=TRUE', {'model': MAIN, 'messages': [S.PROMPT_MARKER]}),
                     ('POST', '/v1/messages', {'model': SECONDARY, 'messages': [S.PROMPT_MARKER]}),
                     ('POST', '/v1/messages/count_tokens?beta=true', {'model': MAIN}),
                     ('GET', '/v1/models', None)):

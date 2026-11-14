@@ -418,7 +418,7 @@ class TestAdmission(Fixture):
             with self.subTest(method=method, target=target):
                 self.assertEqual(self.refused(grant, family='anthropic-messages', method=method, target=target),
                                  'ROUTE_NOT_ALLOWED')
-        self.assertEqual(self.refused(grant, family='anthropic-messages', target='/v1/messages?beta=true'),
+        self.assertEqual(self.refused(grant, family='anthropic-messages', target='/v1/messages?beta=TRUE'),
                          'QUERY_NOT_ALLOWED')
         self.assertEqual(self.broker._by_fingerprint[grant['token_fingerprint']].refused, 11)
 
@@ -471,22 +471,26 @@ class TestAdmission(Fixture):
         self.assertFalse(hasattr(IB, 'BUDGET_LIMITS'))
 
 
-class TestQueryPassFamily(Fixture):
-    """A declaration may admit a query (query: pass); the token may then not travel in it."""
+class TestQuerySetFamily(Fixture):
+    """A declaration may admit exact whole query strings (S-03.3 retired pass); the token can then not travel in a
+    query, which would not be one of them."""
 
     @classmethod
     def setUpClass(cls):
         declarations = IB.load_declarations()
-        declarations['openai-chat'] = IB.dataclasses.replace(declarations['openai-chat'], query='pass')
+        declarations['openai-chat'] = IB.dataclasses.replace(declarations['openai-chat'],
+                                                             query=frozenset({'api-version=1'}))
         cls.rig = S.Rig(S.component({'openai-chat': 'http://127.0.0.1:9'}), connect=never, db=SHARED['db'])
         cls.rig.broker.config = IB.load_config(S.component({'openai-chat': 'http://127.0.0.1:9'}), declarations,
                                                allow_ephemeral=True)
         cls.broker = cls.rig.broker
 
-    def test_a_passed_query_never_carries_the_token(self):
+    def test_an_admitted_query_never_carries_the_token(self):
         grant = self.issue()
         self.assertEqual(self.admit(grant, target='/v1/chat/completions?api-version=1').path, '/v1/chat/completions')
-        self.assertEqual(self.refused(grant, target='/v1/chat/completions?key=' + grant['token']), 'TOKEN_IN_REQUEST')
+        self.assertEqual(self.refused(grant, target='/v1/chat/completions?key=' + grant['token']), 'QUERY_NOT_ALLOWED')
+        self.assertEqual(self.refused(grant, target='/v1/chat/completions?api-version=1&key=' + grant['token']),
+                         'QUERY_NOT_ALLOWED')
 
     def test_an_upstream_or_key_lost_after_issue_refuses_before_any_connection(self):
         grant = self.issue()

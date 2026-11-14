@@ -20,7 +20,8 @@ clause.md section 5). Neither is a production path. Running either is part of th
   The broker's receipts and audit lines go where serve writes them (the managed integration store and logs);
   the key is written nowhere.
 - fake-upstream: one declared family's fake provider on a loopback IPv4 address (127.0.0.1 by default) and the
-  given port, and no other address. A request on one of the family's declared routes is answered with one fixed,
+  given port, and no other address. A request on one of the family's declared routes (with no query, or one the
+  family declares exactly) is answered with one fixed,
   well-formed answer that is not a model's (the family's JSON shape with the usage counts 1 and 1, which the
   broker's usage extractor reads); anything else is answered 404, a body without a length 411. It writes one JSON
   line per request to standard output: the method, the path (a declared route only), the header names, and the
@@ -363,10 +364,13 @@ class _FakeHandler(http.server.BaseHTTPRequestHandler):
     def _serve(self):
         fake = self.server.fake
         family = fake.family
-        route = (self.command, self.path) in family.routes
+        # A declared route, with no query or with one the family declares exactly (S-03.3: as the broker admits it);
+        # the record holds the path only.
+        path, has_query, query = self.path.partition('?')
+        route = (self.command, path) in family.routes and (not has_query or family.admits_query(query))
         entry = {'event': 'request', 'family': family.id,
                  'method': self.command if self.command in broker.METHODS else 'other',
-                 'path': self.path if route else None, 'header_names': [name.lower() for name in self.headers.keys()],
+                 'path': path if route else None, 'header_names': [name.lower() for name in self.headers.keys()],
                  'credential_fingerprints': credential_fingerprints(self.headers, family)}
         length = self.headers.get('content-length') or '0'
         if self.headers.get('transfer-encoding') is not None or not length.isdigit() \
@@ -637,11 +641,13 @@ def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, s
             if route['model_unrecorded']:
                 flags.append(_flag('MODEL_UNRECORDED', f'{route["model_unrecorded"]} request(s) whose model is outside '
                                    'the audit\'s grammar or was not recorded: it cannot be proposed', **where))
-            if route['with_query'] and declared.query != 'pass':
+            if route['with_query'] and (declared.query == 'refuse' or (method, path) not in declared.routes
+                                        or route['codes'].get('QUERY_NOT_ALLOWED')):
                 flags.append(_flag('QUERY_OBSERVED', f'{route["with_query"]} request(s) with a query string, names '
-                                   f'{sorted(route["query_names"])}; the family\'s query rule is {declared.query!r} '
-                                   'and the declarations hold refuse or pass only, so admitting them is a decision '
-                                   'of its own', **where))
+                                   f'{sorted(route["query_names"])}; the family\'s query rule is '
+                                   f'{declared.query_rule()!r} (refuse, or exact whole query strings) and the '
+                                   'audit holds the names only, so admitting them is a decision of its own',
+                                   **where))
         if family['unrecorded']['query_names']:
             flags.append(_flag('QUERY_NAMES_UNRECORDED', f'{family["unrecorded"]["query_names"]} query parameter '
                                'name(s) outside the audit\'s grammar were counted, not recorded', family=family_id))
@@ -650,7 +656,7 @@ def propose_pin(records, declarations: dict, *, attempt_id: str | None = None, s
         observed = {(r['method'], r['path']) for r in proposed_routes}
         out_families.append({
             'family': family_id,
-            'declared': {'status': declared.status, 'query': declared.query,
+            'declared': {'status': declared.status, 'query': declared.query_rule(),
                          'routes': [{'method': m, 'path': p} for m, p in sorted(declared.routes)]},
             'proposed': {'routes': proposed_routes, 'models': [m['model'] for m in models]},
             'compared': {'declared_not_observed': [{'method': m, 'path': p} for m, p in sorted(declared.routes)
