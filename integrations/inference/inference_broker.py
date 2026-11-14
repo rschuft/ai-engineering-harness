@@ -948,6 +948,7 @@ REACH_KEYS = ('mcp_servers', 'container')       # top-level keys refused whateve
 # of these types; a source object, anywhere in the body, only with one of these types. Everything else (server tool
 # use and results, mcp_tool_use, container_upload, a url or file source, a type not yet known) is refused. S-03.3's
 # discovery run may show the pinned client needs another type: adding one is a reviewed change.
+SHAPED_KEYS = ('messages', 'system', 'tools')   # top-level keys whose case variants are refused (they imitate them)
 CONTENT_BLOCK_TYPES = ('text', 'image', 'document', 'tool_use', 'tool_result', 'thinking', 'redacted_thinking',
                        'search_result')
 SOURCE_TYPES = ('base64', 'text', 'content')
@@ -995,12 +996,26 @@ def anthropic_reach(document: dict):
     """(rule, name) of the first thing in an anthropic-messages request body that asks the provider to reach or
     run something outside the request, or None. NAME is the key or the type as the body gives it (the caller
     records it only in the audit's bounded name grammar). Fail closed: a top-level mcp_servers or container (any
-    case-folding); a tools value that is not a list of objects, or a tool whose type is present and not custom; a
-    content block outside CONTENT_BLOCK_TYPES (container_upload included) and a block's source outside
-    SOURCE_TYPES, wherever a content block is read (_blocks). The walk is iterative (no recursion limit)."""
+    case-folding); a top-level key that case-folds to messages, system or tools without being exactly it; messages
+    that is not a list of objects, system that is neither a string nor a list of objects; a tools value that is not
+    a list of objects, or a tool whose type is present and not custom; a content block outside CONTENT_BLOCK_TYPES
+    (container_upload included) and a block's source outside SOURCE_TYPES, wherever a content block is read
+    (_blocks); and, anywhere else in the body, a source object outside SOURCE_TYPES (_sources: every subtree but the
+    two opaque to the provider). The walks are iterative (no recursion limit)."""
     for key in document:
-        if isinstance(key, str) and key.casefold() in REACH_KEYS:   # the exact key, or one that case-folds to it
+        if not isinstance(key, str):
+            continue
+        folded = key.casefold()
+        if folded in REACH_KEYS:                       # the exact key, or one that case-folds to it
             return 'top-level-key', key
+        if folded in SHAPED_KEYS and key != folded:    # a case variant beside (or instead of) the key it imitates
+            return 'top-level-key', key
+    if 'messages' in document and not (isinstance(document['messages'], list)
+                                       and all(isinstance(m, dict) for m in document['messages'])):
+        return 'messages-shape', 'messages'
+    if 'system' in document and not (isinstance(document['system'], str) or (
+            isinstance(document['system'], list) and all(isinstance(b, dict) for b in document['system']))):
+        return 'system-shape', 'system'
     if 'tools' in document:
         tools = document['tools']
         if not isinstance(tools, list):       # fail closed: a shape the rule cannot read is not passed on
@@ -1010,7 +1025,33 @@ def anthropic_reach(document: dict):
                 return 'tools-shape', 'tools'
             if 'type' in tool and tool['type'] != 'custom':
                 return 'tool-type', tool['type']
-    return _blocks(document)
+    return _blocks(document) or _sources(document)
+
+
+def _sources(document: dict):
+    """('source-type', type) of the first object, anywhere in the body, whose source is an object of a type outside
+    SOURCE_TYPES; or None. Two subtrees are opaque to the provider and skipped, exactly: each tools[i].input_schema
+    and each tool_use block's input (the engineering manager's ruling after the reviewer's delta check). Every
+    other subtree is walked, an unknown top-level key's included."""
+    opaque = set()
+    tools = document.get('tools')
+    for tool in tools if isinstance(tools, list) else ():
+        if isinstance(tool, dict) and 'input_schema' in tool:
+            opaque.add(id(tool['input_schema']))
+    stack = [document]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            source = node.get('source')
+            if isinstance(source, dict) and not (isinstance(source.get('type'), str)
+                                                 and source['type'] in SOURCE_TYPES):
+                return 'source-type', source.get('type')
+            skip = node.get('input') if node.get('type') == 'tool_use' and 'input' in node else None
+            stack.extend(value for value in reversed(list(node.values()))
+                         if id(value) not in opaque and (skip is None or value is not skip))
+        elif isinstance(node, list):
+            stack.extend(value for value in reversed(node) if id(value) not in opaque)
+    return None
 
 
 # The families whose request bodies the broker checks for provider-side reach, by family id. A family absent here

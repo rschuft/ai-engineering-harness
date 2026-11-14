@@ -278,7 +278,7 @@ class TestLaunch(unittest.TestCase):
             client = IC.ControlClient(broker.listeners['control']['port'])
             seen['grant'] = client.issue(S.new_id(), S.new_id(), 'anthropic-messages', [S.MODEL_A], 60)
             seen['answer'] = S.request(broker.listeners['inference']['port'], 'POST', '/v1/messages',
-                                       {'model': S.MODEL_A, 'messages': [S.PROMPT_MARKER]},
+                                       {'model': S.MODEL_A, 'messages': [{'role': 'user', 'content': S.PROMPT_MARKER}]},
                                        [('x-api-key', seen['grant']['token'])])
         stdin = Stdin((SYNTHETIC + '\n').encode())
         ctx = context(None, stdin, component=component, store=lambda: S.STORE.open_store(self.tmp / 'i.sqlite'),

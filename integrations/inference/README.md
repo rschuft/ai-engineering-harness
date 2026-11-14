@@ -334,7 +334,10 @@ request must not ask the provider to reach or run anything outside the request. 
 the parsed JSON body of every admitted request; `anthropic-messages` refuses, with `PROVIDER_REACH_REFUSED` (400):
 
 - a top-level `mcp_servers` or `container` key, or one that case-folds to either, present at all, whatever its
-  value (rule `top-level-key`);
+  value (rule `top-level-key`); and a top-level key that case-folds to `messages`, `system` or `tools` without
+  being exactly it (`Messages`, `System`, `Tools`: rule `top-level-key`, name the key);
+- a `messages` that is present and is not a list of objects (rule `messages-shape`), and a `system` that is
+  present and is neither a string nor a list of objects (rule `system-shape`);
 - an entry of `tools` whose `type` is present and is not `custom` (rule `tool-type`): every server tool (web
   search, web fetch, code execution) and every provider-defined tool type, known or not, fail closed; Claude
   Code's own tools are custom tools;
@@ -349,10 +352,13 @@ the parsed JSON body of every admitted request; `anthropic-messages` refuses, wi
 - on an admitted content block, wherever a content block is read (the positions above, nested tool results
   included), a `source` that is an object whose `type` is not `base64`, `text` or `content` (rule `source-type`:
   `url`, `file`, `web_page`, a missing type, anything else), and an `image` or `document` whose `source` is not
-  an object. A source is checked only where the provider interprets it: a tool's `input_schema` and a
-  `tool_use`'s `input` are opaque to the provider and are never read (the engineering manager's ruling after the
-  re-review), so a tool schema with a property named `source` and a tool input holding `{"source": {...}}` are
-  admitted. A `search_result`'s `source` is its citation string.
+  an object;
+- anywhere else in the body (a whole-body walk, an unknown top-level key's subtree included), an object whose
+  `source` is an object of a type outside `base64`, `text`, `content` (rule `source-type`). The walk skips exactly
+  two subtrees, opaque to the provider: each `tools[i].input_schema` and each `tool_use` block's `input` (the
+  engineering manager's rulings after the re-review and the reviewer's delta check). So a tool schema with a
+  property named `source` and a tool input holding `{"source": {...}}` are admitted; a `source` beside them, in the
+  same tool or block, is not. A `search_result`'s `source` is its citation string.
 
 The allowlists are written from the provider's public request shapes. S-03.3's discovery run may show that the
 pinned client (Claude Code) needs another block or source type; adding one is a reviewed change.

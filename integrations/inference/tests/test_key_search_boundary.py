@@ -148,7 +148,7 @@ class Boundary(unittest.TestCase):
     def infer(self, port, family, token, model=S.MODEL_A, path=None, header=None, **extra):
         headers = [] if token is None else [header or S.auth(family, token)]
         request, answer = exchange(port, 'POST', path or S.ROUTE[family],
-                                   {'model': model, 'messages': [S.PROMPT_MARKER], **extra}, headers)
+                                   {'model': model, 'messages': [{'role': 'user', 'content': S.PROMPT_MARKER}], **extra}, headers)
         self.forward.append((request, answer))
         return status_of(answer), answer
 

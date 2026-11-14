@@ -24,6 +24,9 @@ IB = S.IB
 FAMILY = 'anthropic-messages'
 
 
+URL_IMAGE = {'type': 'image', 'source': {'type': 'url', 'url': 'https://e.invalid/a.png'}}
+
+
 def user(*blocks) -> dict:
     return {'model': S.MODEL_A, 'messages': [{'role': 'user', 'content': list(blocks)}]}
 
@@ -74,7 +77,30 @@ REFUSED = {
                                 ('source-type', None)),
     'an image whose source is not an object': (user({'type': 'image', 'source': 'https://x.invalid/a.png'}),
                                                ('source-type', None)),
-    'a url source in a nested tool result': (tool_result({'type': 'tool_result', 'tool_use_id': 't2', 'content': [
+    # the reviewer's delta check (probe_admit3.py): shapes the position-only check admitted and forwarded
+    'a case-variant Messages beside messages': ({'model': S.MODEL_A, 'messages': [], 'Messages': [
+        {'role': 'user', 'content': [URL_IMAGE]}]}, ('top-level-key', 'Messages')),
+    'a case-variant System list': ({'model': S.MODEL_A, 'System': [URL_IMAGE], 'messages': []},
+                                   ('top-level-key', 'System')),
+    'a case-variant Tools list': ({'model': S.MODEL_A, 'Tools': [{'type': 'web_search_20250305', 'name': 'w'}],
+                                   'messages': []}, ('top-level-key', 'Tools')),
+    'messages as an object': ({'model': S.MODEL_A, 'messages': {'0': {'role': 'user', 'content': [URL_IMAGE]}}},
+                              ('messages-shape', 'messages')),
+    'a message given as a list': ({'model': S.MODEL_A, 'messages': [[{'role': 'user', 'content': [URL_IMAGE]}]]},
+                                  ('messages-shape', 'messages')),
+    'a url image under an unknown top-level key': ({'model': S.MODEL_A, 'messages': [], 'extra': [URL_IMAGE]},
+                                                   ('source-type', 'url')),
+    'system as an object': ({'model': S.MODEL_A, 'system': {'type': 'text', 'text': 's'}, 'messages': []},
+                            ('system-shape', 'system')),
+    'a system list holding a string': ({'model': S.MODEL_A, 'system': ['s'], 'messages': []},
+                                       ('system-shape', 'system')),
+    'a url source beside a tool, outside its input_schema': ({'model': S.MODEL_A, 'tools': [
+        {'name': 't', 'input_schema': {'type': 'object'}, 'extra': {'source': {'type': 'url', 'url': 'x'}}}],
+        'messages': []}, ('source-type', 'url')),
+    'a url source in a tool_use, outside its input': (assistant({'type': 'tool_use', 'id': 't', 'name': 'x',
+                                                                'input': {}, 'cache_control': {'source': {
+                                                                    'type': 'url'}}}), ('source-type', 'url')),
+    'a url source in a nested tool result':(tool_result({'type': 'tool_result', 'tool_use_id': 't2', 'content': [
         {'type': 'image', 'source': {'type': 'url', 'url': 'https://x.invalid/a.png'}}]}), ('source-type', 'url')),
 }
 

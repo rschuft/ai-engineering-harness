@@ -504,9 +504,9 @@ class Discovery(unittest.TestCase):
             inference = broker.listeners['inference']['port']
             key = [('x-api-key', token)]
             for method, target, body in (
-                    ('POST', '/v1/messages', {'model': MAIN, 'messages': [S.PROMPT_MARKER]}),
-                    ('POST', '/v1/messages?beta=TRUE', {'model': MAIN, 'messages': [S.PROMPT_MARKER]}),
-                    ('POST', '/v1/messages', {'model': SECONDARY, 'messages': [S.PROMPT_MARKER]}),
+                    ('POST', '/v1/messages', {'model': MAIN, 'messages': [{'role': 'user', 'content': S.PROMPT_MARKER}]}),
+                    ('POST', '/v1/messages?beta=TRUE', {'model': MAIN, 'messages': [{'role': 'user', 'content': S.PROMPT_MARKER}]}),
+                    ('POST', '/v1/messages', {'model': SECONDARY, 'messages': [{'role': 'user', 'content': S.PROMPT_MARKER}]}),
                     ('POST', '/v1/messages/count_tokens?beta=true', {'model': MAIN}),
                     ('GET', '/v1/models', None)):
                 seen.setdefault('status', []).append(S.request(inference, method, target, body, key)[0])
@@ -534,7 +534,7 @@ class Discovery(unittest.TestCase):
             'provider': PROVIDER_ID, 'families': ['anthropic-messages'], 'provider_key_fingerprint': fingerprint,
             'upstream': {'anthropic-messages': {
                 'requests': 1, 'routes': {'POST /v1/messages 200': 1}, 'credential_is_the_synthetic_key': True,
-                'key_paths': {'POST /v1/messages': {'requests': 1, 'paths': ['messages', 'model'],
+                'key_paths': {'POST /v1/messages': {'requests': 1, 'paths': ['messages', 'messages[].content', 'messages[].role', 'model'],
                                                     'truncated': False, 'names_unrecorded': 0,
                                                     'bodies': {'json': 1}}}}}})
         self.assertIn('only admitted requests reach', proposal['not_shown'][0])
