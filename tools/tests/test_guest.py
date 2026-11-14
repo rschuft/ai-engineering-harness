@@ -5515,7 +5515,98 @@ def _containment_of(command):
             json.loads(zlib.decompress(base64.b64decode(m.group(2))).decode('utf-8')))
 
 
-class FakeContainmentGuest(FakeJobGuest):
+class InferenceSweepFake:
+    """The inference sweep of an opted-in guest (decision 0015), mixed into a FakeJobGuest: one
+    attempt per run; the endpoint answers 401 and the container guard's ACCEPT counts it; each edge
+    and the resolver are refused and counted by the guard's rule for their protocol (the reset for
+    TCP, the ICMP reject for UDP); the lookup's queries are refused and counted; the guest login is
+    refused 401 TOKEN_MISSING. Faults (True, or a list of sweep 'what's it applies to):
+    endpoint_open (200), endpoint_unaccepted (the ACCEPT does not count the endpoint), no_forward
+    (the endpoint and the guest login refused), edge_open (True: the port edge connects or
+    answers), admitted (the ACCEPT counts an edge, the kernel refuses it), uncounted (no rule
+    counts a refusal), wrong_rule (the other refusal rule counts it), resolves, login_admitted,
+    login_uncoded (401 without TOKEN_MISSING)."""
+
+    guard = None
+
+    def counters(self):
+        if self.guard is None:
+            self.guard = {'accept': 2, 'reset': 0, 'reject': 0}
+        return self.guard
+
+    def hit(self, fault, what, default=None):
+        value = self.faults.get(fault)
+        if value is True and default is not None:
+            return what == default
+        return value is True or (isinstance(value, (list, tuple, set)) and what in value)
+
+    def facts(self):
+        report = super().facts()
+        g = self.counters()
+        rows = report['admission']['iptables']
+        rows.insert(1, {'packets': g['accept'], 'bytes': 120, 'target': 'ACCEPT'})
+        rows[3] = dict(rows[3], packets=rows[3]['packets'] + g['reset'])
+        rows[4] = dict(rows[4], packets=rows[4]['packets'] + g['reject'])
+        return report
+
+    def run(self, argv, input_text=None, timeout=None, user='agent'):
+        # the guest login's request to the endpoint without a token (outside every container)
+        if argv[:2] == ['python3', '-'] and input_text == guest.JOB_INFERENCE_TOKEN:
+            spec = json.loads(base64.b64decode(argv[2]).decode('utf-8'))
+            self.login_specs = getattr(self, 'login_specs', []) + [spec]
+            status = 200 if self.faults.get('login_admitted') else 401
+            data = {'outcome': 'answered', 'status': status,
+                    'refusal': None if status == 200 or self.faults.get('login_uncoded')
+                    else 'TOKEN_MISSING',
+                    'answer_b64': base64.b64encode(b'HTTP/1.1 %d x\r\nContent-Length: 0\r\n\r\n'
+                                                   % status).decode()}
+            if self.faults.get('no_forward'):
+                data = {'outcome': 'ECONNREFUSED', 'status': None, 'refusal': None}
+            return subprocess.CompletedProcess(argv, 0, guest.JOB_MARKER + json.dumps(data) + '\n',
+                                               '')
+        return super().run(argv, input_text, timeout, user)
+
+    def container_output(self, cid, command):
+        script, arg = _script_of(command)
+        if script != guest.JOB_INFERENCE_SWEEP:
+            return super().container_output(cid, command)
+        spec = json.loads(base64.b64decode(arg).decode('utf-8'))
+        self.inference_specs = getattr(self, 'inference_specs', []) + [spec]
+        g = self.counters()
+        results = []
+        for kind, proto, host, port, what in spec['items']:
+            row = {'proto': proto, 'host': host, 'port': port, 'what': what}
+            if kind == 'endpoint':
+                if not self.faults.get('endpoint_unaccepted'):
+                    g['accept'] += 1
+                row.update({'outcome': 'ECONNREFUSED', 'status': None} if self.faults.get('no_forward')
+                           else {'outcome': 'answered',
+                                 'status': 200 if self.faults.get('endpoint_open') else 401})
+            elif kind == 'lookup':
+                g['reject'] += 2                          # its queries, refused by the guard
+                row['outcome'] = 'resolved' if self.faults.get('resolves') else 'not-resolved'
+            elif self.hit('edge_open', what, 'inference allow edge (port)'):
+                g['accept'] += 1
+                row['outcome'] = 'connected' if proto == 'tcp' else 'answered 12 bytes'
+            else:
+                row['outcome'] = 'ECONNREFUSED'
+                rule = 'reset' if proto == 'tcp' else 'reject'
+                if self.hit('admitted', what):
+                    g['accept'] += 1                      # the allow admits it, nothing listens
+                elif self.hit('wrong_rule', what):
+                    g['reject' if rule == 'reset' else 'reset'] += 1
+                elif not self.hit('uncounted', what):
+                    g[rule] += 1
+            results.append(row)
+        return guest.JOB_MARKER + json.dumps({'results': results}) + '\n'
+
+
+INFERENCE_CASES = ('ctl-inference-endpoint', 'egr-inference-edge-port', 'egr-inference-edge-udp',
+                   'egr-inference-edge-address', 'egr-resolver-docker0', 'egr-name-lookup',
+                   'egr-inference-guest-login')
+
+
+class FakeContainmentGuest(InferenceSweepFake, FakeJobGuest):
     """FakeJobGuest with the containment probe's own container script, answering each
     operation with the outcome a hardened job gives (the S-01.3.2 observations and the
     kernel's behaviour under cap-drop ALL, no_new_privs, seccomp and AppArmor). ``faults``
@@ -5637,7 +5728,8 @@ class FakeContainmentGuest(FakeJobGuest):
 class ContainmentProbe(TempState):
     """containment_probe (S-02.1) against FakeContainmentGuest, with admission-probe and
     job-access-probe run unchanged against the same fake: verdicts, controls, the no-silent-
-    downgrade rules, the sensitivity proof per category; no guest."""
+    downgrade rules, the sensitivity proof per category; no guest. The guest is the one the full
+    catalogue needs: created with --egress-falsification and --inference, its forward held."""
 
     def setUp(self):
         super().setUp()
@@ -5649,8 +5741,13 @@ class ContainmentProbe(TempState):
                        'ports': {'ssh': 40001, 'qmp': 40002},
                        'profile_revision': {'kind': 'git-revision', 'head': 'c' * 40},
                        'profile': {'sha256': 'd' * 64}, 'inputs': {'seed': {'sha256': 'e' * 64}}}
+        self.record['inference'] = inference_record(self.record)['inference']
         patcher = mock.patch.object(guest, 'running_instance',
                                     lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.forward = {'held': True, 'path': 'cp/inference-forward.json', 'stale': None}
+        patcher = mock.patch.object(guest, 'forward_state', lambda profile, idir: self.forward)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -5760,6 +5857,71 @@ class ContainmentProbe(TempState):
         self.assertEqual(case['classification'], ['not-available'])
         self.assertEqual(self.verdicts(out)['egr-network-none'], 'FAIL')   # compensation broke
         self.assertEqual(out['result'], 'FAIL')
+
+    # ---- the inference cases (decision 0015, S-03.2): executable on an opted-in guest
+
+    def test_inference_cases_run_and_pass_on_the_opted_in_guest(self):
+        out, fake = self.run_probe()
+        cases = {c['id']: c for c in out['cases'] if c['id'] in INFERENCE_CASES}
+        self.assertEqual(sorted(cases), sorted(INFERENCE_CASES))
+        for cid, case in cases.items():
+            self.assertEqual(case['verdict'], 'PASS', (cid, case['reason']))
+            want = 1 if cid == 'egr-inference-guest-login' else 2 * (2 if cid == 'egr-resolver-docker0' else 1)
+            self.assertEqual(len(case['observations']), want, cid)
+        edge = cases['egr-inference-edge-address']['observations'][0]
+        self.assertEqual((edge['target'], edge['guard']), ('tcp 10.0.2.15:8090',
+                                                           {'accept': 0, 'reset': 1, 'reject': 0}))
+
+    def test_inference_cases_are_never_pass_without_the_composition(self):
+        del self.record['inference']
+        out, _ = self.run_probe()
+        v = self.verdicts(out)
+        self.assertEqual(v['ctl-inference-endpoint'], 'FAIL')
+        for cid in INFERENCE_CASES:
+            self.assertNotEqual(v[cid], 'PASS', cid)
+            if cid != 'ctl-inference-endpoint':
+                self.assertEqual(v[cid], 'UNKNOWN', cid)
+        self.assertEqual({c: x for c, x in v.items() if x != 'PASS' and c not in INFERENCE_CASES}, {})
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_inference_cases_fail_on_their_precondition_without_a_forward(self):
+        self.forward = {'held': False, 'path': 'cp/inference-forward.json', 'stale': None}
+        out, fake = self.run_probe()
+        for case in out['cases']:
+            if case['id'] in INFERENCE_CASES:
+                self.assertEqual(case['verdict'], 'FAIL', case['id'])
+                self.assertEqual(case['reason'], 'precondition not met: ' + guest.INFERENCE_PRECONDITION)
+                self.assertEqual(case['classification'], [guest.CONTAINMENT_PRECONDITION])
+            else:
+                self.assertEqual(case['verdict'], 'PASS', case['id'])
+        self.assertEqual(getattr(fake, 'inference_specs', []), [])
+        self.assertEqual(out['result'], 'FAIL')
+
+    def test_sensitivity_inference_each_case_fails_on_the_wrong_observation(self):
+        port, udp, address = ('inference allow edge (port)', 'inference allow edge (udp)',
+                              'inference allow edge (address)')
+        resolver = 'container resolver (docker0)'
+        for case_id, faults, got in (
+                ('ctl-inference-endpoint', {'endpoint_open': True}, 'answered-200'),
+                ('ctl-inference-endpoint', {'endpoint_unaccepted': True}, 'answered-not-through-allow'),
+                ('ctl-inference-endpoint', {'no_forward': True}, 'ECONNREFUSED'),
+                ('egr-inference-edge-port', {'edge_open': True}, 'connected'),
+                ('egr-inference-edge-port', {'admitted': [port]}, 'admitted-by-allow'),
+                ('egr-inference-edge-port', {'uncounted': [port]}, 'refused-not-by-guard'),
+                ('egr-inference-edge-port', {'wrong_rule': [port]}, 'refused-not-by-guard'),
+                ('egr-inference-edge-udp', {'edge_open': [udp]}, 'answered'),
+                ('egr-inference-edge-udp', {'uncounted': [udp]}, 'refused-not-by-guard'),
+                ('egr-inference-edge-udp', {'wrong_rule': [udp]}, 'refused-not-by-guard'),
+                ('egr-inference-edge-address', {'admitted': [address]}, 'admitted-by-allow'),
+                ('egr-inference-edge-address', {'uncounted': [address]}, 'refused-not-by-guard'),
+                ('egr-resolver-docker0', {'uncounted': [resolver]}, 'refused-not-by-guard'),
+                ('egr-resolver-docker0', {'edge_open': [resolver]}, 'connected'),
+                ('egr-name-lookup', {'resolves': True}, 'resolved'),
+                ('egr-inference-guest-login', {'login_admitted': True}, 'answered-200'),
+                ('egr-inference-guest-login', {'login_uncoded': True}, 'answered-401')):
+            with self.subTest(case=case_id, faults=faults):
+                out, case = self.assert_case_fails(case_id, **faults)
+                self.assertIn(got, case['classification'])
 
     def test_unsearched_gitea_fingerprint_fails(self):
         with mock.patch.object(guest, 'load_containment_catalogue') as load:
@@ -6220,7 +6382,19 @@ class InferenceInspect(unittest.TestCase):
             ['answered-200', 'ECONNREFUSED'])
         self.assertEqual([o['outcome'] for o in guest.extract_job(
             record, 'inference', {'what': 'inference allow edge (udp)'}, {})],
-            ['answered 12 bytes'])
+            ['answered'])                       # an answer is a success class: a stop, never PASS
+        chain = rows[:5] + [{'packets': 1, 'target': 'REJECT'}]
+        report = {'admission': {'iptables': [r for r in chain if isinstance(r, dict)]}}
+        self.assertEqual(guest.container_guard_rows(report), {'accept': 4, 'reset': 2, 'reject': 1})
+        for bad in (rows, [r for r in rows if isinstance(r, dict)][1:],
+                    [dict(r, packets='1') for r in report['admission']['iptables']]):
+            self.assertIsNone(guest.container_guard_rows({'admission': {'iptables': bad}}))
+        self.assertIsNone(guest.container_guard_rows({}))
+        before = {'accept': 4, 'reset': 2, 'reject': 1}
+        self.assertEqual(guest.guard_window(before, dict(before, reset=3)),
+                         {'accept': 0, 'reset': 1, 'reject': 0})
+        for after in (None, dict(before, reset=1), {'accept': 4}, dict(before, reset=None)):
+            self.assertIsNone(guest.guard_window(before, after))          # nothing attributed
 
     def test_create_passes_the_option_to_the_manifest(self):
         class Built(Exception):
@@ -6405,57 +6579,8 @@ class ProviderKeySearch(TempState):
             self.assertFalse(guest.key_search().Search(key).holds(err.getvalue()))
 
 
-class FakeInferenceJobGuest(FakeJobGuest):
-    """FakeJobGuest of an instance with the inference composition: the job sweep's endpoint
-    answers 401, its edges and the resolver are refused and counted by the container guard."""
-    inference_rejects = 0
-
-    def facts(self):
-        report = super().facts()
-        rows = report['admission']['iptables']
-        rows.insert(1, {'packets': 2, 'bytes': 120, 'target': 'ACCEPT'})
-        rows[3] = dict(rows[3], packets=rows[3]['packets'] + self.inference_rejects)
-        return report
-
-    def run(self, argv, input_text=None, timeout=None, user='agent'):
-        # the guest login's request to the endpoint without a token (outside every container)
-        if argv[:2] == ['python3', '-'] and input_text == guest.JOB_INFERENCE_TOKEN:
-            spec = json.loads(base64.b64decode(argv[2]).decode('utf-8'))
-            self.login_specs = getattr(self, 'login_specs', []) + [spec]
-            status = 200 if self.faults.get('login_admitted') else 401
-            data = {'outcome': 'answered', 'status': status,
-                    'refusal': None if status == 200 else 'TOKEN_MISSING',
-                    'answer_b64': base64.b64encode(b'HTTP/1.1 %d x\r\nContent-Length: 0\r\n\r\n'
-                                                   % status).decode()}
-            if self.faults.get('no_forward'):
-                data = {'outcome': 'ECONNREFUSED', 'status': None, 'refusal': None}
-            return subprocess.CompletedProcess(argv, 0, guest.JOB_MARKER + json.dumps(data) + '\n',
-                                               '')
-        return super().run(argv, input_text, timeout, user)
-
-    def container_output(self, cid, command):
-        script, arg = _script_of(command)
-        if script != guest.JOB_INFERENCE_SWEEP:
-            return super().container_output(cid, command)
-        spec = json.loads(base64.b64decode(arg).decode('utf-8'))
-        self.inference_specs = getattr(self, 'inference_specs', []) + [spec]
-        host, port = spec['endpoint']
-        status = 200 if self.faults.get('endpoint_open') else 401
-        results = [{'proto': 'tcp', 'host': host, 'port': port, 'what': guest.INFERENCE_ENDPOINT_WHAT,
-                    'outcome': 'ECONNREFUSED' if self.faults.get('no_forward') else 'answered',
-                    'status': None if self.faults.get('no_forward') else status}]
-        for proto, h, p, what in spec['targets']:
-            outcome = 'ECONNREFUSED'
-            if self.faults.get('edge_open') and p == port + 1:
-                outcome = 'connected'
-            if outcome == 'ECONNREFUSED' and not self.faults.get('uncounted'):
-                self.inference_rejects += 1
-            results.append({'proto': proto, 'host': h, 'port': p, 'what': what,
-                            'outcome': outcome})
-        results.append({'proto': 'dns', 'host': spec['name'], 'port': None,
-                        'what': guest.INFERENCE_LOOKUP_WHAT,
-                        'outcome': 'resolved' if self.faults.get('resolves') else 'not-resolved'})
-        return guest.JOB_MARKER + json.dumps({'results': results}) + '\n'
+class FakeInferenceJobGuest(InferenceSweepFake, FakeJobGuest):
+    """FakeJobGuest of an instance with the inference composition (InferenceSweepFake)."""
 
 
 class InferenceJobSweep(TempState):
@@ -6471,6 +6596,10 @@ class InferenceJobSweep(TempState):
                        'ports': {'ssh': 40001, 'qmp': 40002}}
         patcher = mock.patch.object(guest, 'running_instance',
                                     lambda ctx, name: (self.idir, self.record))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.forward = {'held': True, 'path': 'inst/inference-forward.json', 'stale': None}
+        patcher = mock.patch.object(guest, 'forward_state', lambda profile, idir: self.forward)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -6491,12 +6620,25 @@ class InferenceJobSweep(TempState):
         out, step, fake = self.run_inference()
         self.assertTrue(step['ok'], json.dumps(step, default=str)[:2000])
         self.assertEqual(out['result'], 'PASS')
-        spec = fake.inference_specs[0]
-        self.assertEqual(spec['endpoint'], ['172.17.0.1', 8090])
-        self.assertEqual(spec['targets'], INF['job_sweep']['edges'])
-        self.assertEqual(len(step['detail']['results']), 2 * (len(spec['targets']) + 2) + 1)
-        self.assertEqual(step['detail']['counters']['refused'], 2 * len(spec['targets']))
-        self.assertTrue(step['detail']['counters']['incremented'])
+        # one attempt per run, in the declared order, for each job
+        items = guest.inference_job_spec(PROFILE)['items']
+        self.assertEqual(items[0], ['endpoint', 'tcp', '172.17.0.1', 8090, guest.INFERENCE_ENDPOINT_WHAT])
+        self.assertEqual([i[1:] for i in items[1:-1]], INF['job_sweep']['edges'])
+        self.assertEqual(items[-1][0], 'lookup')
+        self.assertEqual([s['items'] for s in fake.inference_specs], [[i] for i in items] * 2)
+        rows = step['detail']['results']
+        self.assertEqual(len(rows), 2 * len(items) + 1)
+        # every attempt but the lookup and the guest login carries its own counter window, and
+        # each refusal is counted by its protocol's rule alone
+        for row in rows:
+            if row['what'] in (guest.INFERENCE_LOOKUP_WHAT, guest.INFERENCE_GUEST_WHAT):
+                self.assertNotIn('guard', row)
+                continue
+            delta = guest.guard_window(row['guard']['before'], row['guard']['after'])
+            want = {'accept': 1, 'reset': 0, 'reject': 0} if row['what'] == guest.INFERENCE_ENDPOINT_WHAT \
+                else {'accept': 0, 'reset': int(row['proto'] == 'tcp'), 'reject': int(row['proto'] == 'udp')}
+            self.assertEqual(delta, want, row)
+            self.assertTrue(row['ok'], row)
         # the guest login's request: no token, the endpoint and no container
         login, = fake.login_specs
         self.assertEqual((login['endpoint'], login['method'], login['path'], login['with_token'],
@@ -6512,37 +6654,90 @@ class InferenceJobSweep(TempState):
 
     def test_each_fault_fails_or_stops(self):
         self.record['inference'] = inference_record(self.record)['inference']
-        for fault, stops in (('endpoint_open', False), ('no_forward', False), ('edge_open', True),
-                             ('resolves', True), ('uncounted', False), ('login_admitted', True)):
+        for fault, stops in (('endpoint_open', False), ('endpoint_unaccepted', False),
+                             ('no_forward', False), ('edge_open', True), ('resolves', True),
+                             ('uncounted', False), ('admitted', False), ('wrong_rule', False),
+                             ('login_admitted', True), ('login_uncoded', False)):
             out, step, _ = self.run_inference(**{fault: True})
             self.assertFalse(step['ok'], fault)
             self.assertEqual(out['result'], 'FAIL', fault)
             self.assertEqual(bool(out['stop_conditions']), stops, fault)
+        # one uncounted refusal among the others is enough
+        out, step, _ = self.run_inference(uncounted=['inference allow edge (address)'])
+        self.assertFalse(step['ok'])
+        bad = [r for r in step['detail']['results'] if not r['ok']]
+        self.assertEqual({(r['what'], r['observed']) for r in bad},
+                         {('inference allow edge (address)', 'refused-not-by-guard')})
+        self.assertEqual(len(bad), 2)                                     # once per job
+
+    def test_no_forward_held_is_a_precondition_and_nothing_runs(self):
+        self.record['inference'] = inference_record(self.record)['inference']
+        self.forward = {'held': False, 'path': 'inst/inference-forward.json',
+                        'stale': 'its ssh process is gone'}
+        out, step, fake = self.run_inference()
+        self.assertFalse(step['ok'])
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertEqual(step['detail']['precondition'], guest.INFERENCE_PRECONDITION)
+        self.assertEqual(step['detail']['forward'], {'path': 'inst/inference-forward.json',
+                                                     'stale': 'its ssh process is gone'})
+        self.assertEqual((step['detail']['results'], getattr(fake, 'inference_specs', []),
+                          getattr(fake, 'login_specs', [])), ([], [], []))
+        record = {'steps': out['steps']}
+        for what in (guest.INFERENCE_ENDPOINT_WHAT, guest.INFERENCE_GUEST_WHAT, 'name lookup'):
+            got = guest.extract_job(record, 'inference', {'what': what}, {})
+            self.assertEqual([o['outcome'] for o in got], [guest.CONTAINMENT_PRECONDITION])
+            self.assertEqual(got[0]['reason'], guest.INFERENCE_PRECONDITION)
 
     def test_verdict_and_script(self):
         compile(guest.JOB_INFERENCE_SWEEP, 'sweep', 'exec')
-        rows = [{'what': guest.INFERENCE_ENDPOINT_WHAT, 'outcome': 'answered', 'status': 401},
-                {'what': 'inference allow edge (udp)', 'outcome': 'ECONNREFUSED'},
+        base = {'accept': 5, 'reset': 7, 'reject': 3}
+
+        def window(**rise):
+            return {'before': base, 'after': {k: v + rise.get(k, 0) for k, v in base.items()}}
+        rows = [{'what': guest.INFERENCE_ENDPOINT_WHAT, 'outcome': 'answered', 'status': 401,
+                 'guard': window(accept=1)},
+                {'what': 'inference allow edge (udp)', 'proto': 'udp', 'outcome': 'ECONNREFUSED',
+                 'guard': window(reject=1)},
+                {'what': 'inference allow edge (port)', 'proto': 'tcp', 'outcome': 'ECONNREFUSED',
+                 'guard': window(reset=1)},
                 {'what': guest.INFERENCE_LOOKUP_WHAT, 'outcome': 'not-resolved'}]
-        self.assertTrue(guest.inference_job_verdict(rows, 10, 11)[0])
-        self.assertFalse(guest.inference_job_verdict(rows, 10, 10)[0])        # not counted
-        self.assertFalse(guest.inference_job_verdict(rows, None, 11)[0])
-        self.assertFalse(guest.inference_job_verdict([], 0, 0)[0])
+        self.assertTrue(guest.inference_job_verdict(rows)[0])
+        self.assertFalse(guest.inference_job_verdict([])[0])
+        # the edge's observation by its counter window: the expected class only when the rule of
+        # its protocol counted it and the ACCEPT did not
+        for guard, got in ((window(), 'refused-not-by-guard'), (window(reset=1), 'refused-not-by-guard'),
+                           (window(reject=1, accept=1), 'admitted-by-allow'),
+                           (window(reject=2), 'ECONNREFUSED'), (None, 'refused-not-attributed'),
+                           ({'before': base, 'after': None}, 'refused-not-attributed'),
+                           ({'before': base, 'after': dict(base, reject=0)}, 'refused-not-attributed')):
+            row = dict(rows[1], guard=guard)
+            self.assertEqual(guest.inference_outcome(row), got, guard)
+            ok, checked, stop = guest.inference_job_verdict([rows[0], row, rows[2], rows[3]])
+            self.assertEqual(ok, got == 'ECONNREFUSED', guard)
+            self.assertEqual(checked[1]['observed'], got)
+            self.assertEqual(stop, [])
+        self.assertEqual(guest.inference_outcome(dict(rows[2], proto='icmp')), 'refused-not-by-guard')
         for change, stops in (({'outcome': 'timeout'}, False), ({'outcome': 'ENETUNREACH'}, False),
-                              ({'outcome': 'answered 40 bytes'}, True)):
-            bad = [rows[0], dict(rows[1], **change), rows[2]]
-            ok, _, stop, _ = guest.inference_job_verdict(bad, 10, 11)
+                              ({'outcome': 'answered 40 bytes'}, True), ({'outcome': 'connected'}, True)):
+            bad = [rows[0], dict(rows[1], **change)] + rows[2:]
+            ok, _, stop = guest.inference_job_verdict(bad)
             self.assertFalse(ok, change)
             self.assertEqual(bool(stop), stops, change)
-        ok, _, stop, _ = guest.inference_job_verdict([dict(rows[0], status=200)] + rows[1:], 10, 11)
-        self.assertFalse(ok)
-        self.assertEqual(stop, [])
+        # the endpoint: 401 through the ACCEPT only
+        for change, got in (({'status': 200}, 'answered-200'), ({'guard': window()}, 'answered-not-through-allow'),
+                            ({'guard': None}, 'answered-not-attributed'),
+                            ({'outcome': 'ECONNREFUSED', 'status': None}, 'ECONNREFUSED')):
+            ok, checked, stop = guest.inference_job_verdict([dict(rows[0], **change)] + rows[1:])
+            self.assertFalse(ok, change)
+            self.assertEqual((checked[0]['observed'], stop), (got, []), change)
+        ok, _, stop = guest.inference_job_verdict(rows[:3] + [dict(rows[3], outcome='resolved')])
+        self.assertEqual((ok, len(stop)), (False, 1))
         login = {'what': guest.INFERENCE_GUEST_WHAT, 'outcome': 'answered', 'status': 401,
                  'refusal': 'TOKEN_MISSING'}
-        self.assertTrue(guest.inference_job_verdict(rows + [login], 10, 11)[0])
+        self.assertTrue(guest.inference_job_verdict(rows + [login])[0])
         for change, stops in (({'refusal': None}, False), ({'status': 200, 'refusal': None}, True),
                               ({'outcome': 'ECONNREFUSED', 'status': None}, False)):
-            ok, _, stop, _ = guest.inference_job_verdict(rows + [dict(login, **change)], 10, 11)
+            ok, _, stop = guest.inference_job_verdict(rows + [dict(login, **change)])
             self.assertFalse(ok, change)
             self.assertEqual(bool(stop), stops, change)
         record = {'steps': [{'step': guest.INFERENCE_JOB_STEP, 'detail': {'results': [
@@ -6728,8 +6923,7 @@ class InferenceTokenStep(TempState):
                 ({'not_live': True}, {}, False),
                 ({'not_ready': True}, {}, False),
                 ({'conversation': 'another'}, {}, False),
-                ({'family_absent': True}, {}, False),
-                ({'no_forward_held': True}, {}, False)):
+                ({'family_absent': True}, {}, False)):
             with self.subTest(plane=plane_faults, faults=faults):
                 out, steps, plane, _ = self.run_probe(plane_faults, **faults)
                 step = steps[guest.INFERENCE_TOKEN_STEP]
@@ -6739,11 +6933,20 @@ class InferenceTokenStep(TempState):
                 self.assertTrue(plane.revoked or plane_faults.get('not_live'))
                 self.assertTrue(steps[guest.INFERENCE_REVOKE_STEP]['ok'])
                 detail = step['detail']
-                if plane_faults.get('no_forward_held'):
-                    self.assertIn('no forward session is held', detail['error'])
                 if plane_faults.get('family_absent') or plane_faults.get('not_ready'):
                     self.assertIn('its family ready', detail['error'])
                     self.assertEqual(detail['family'] is None, bool(plane_faults.get('family_absent')))
+        # no forward held: the inference sweep before it fails on its precondition, so the token
+        # step does not start; the token is still revoked at the end
+        out, steps, plane, _ = self.run_probe({'no_forward_held': True})
+        self.assertEqual(steps[guest.INFERENCE_JOB_STEP]['detail']['precondition'],
+                         guest.INFERENCE_PRECONDITION)
+        self.assertIn('skipped', steps[guest.INFERENCE_TOKEN_STEP])
+        self.assertEqual(out['result'], 'FAIL')
+        self.assertTrue(plane.revoked and steps[guest.INFERENCE_REVOKE_STEP]['ok'])
+        # the token step's own check, reached when the forward is lost after the sweep
+        plane = TokenPlane('cid', no_forward_held=True)
+        self.assertFalse(plane.status()['held'])
 
     def test_a_leak_is_redacted_from_the_record(self):
         out, steps, _, _ = self.run_probe(leak=True)

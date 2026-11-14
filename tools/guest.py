@@ -10625,10 +10625,12 @@ EGRESS_TOPOLOGY = frozenset({'timeout', 'ENETUNREACH', 'EHOSTUNREACH'})
 EGRESS_GUARD_FAMILY = 'iptables'
 
 # Run inside a conversation container of an instance with the inference composition (decision
-# 0015 section 4.5): the inference endpoint without a token (one TCP connect and GET /, the
-# status line only), the allow's edges and the container resolver (one TCP connect or one UDP
-# datagram each, errno named), and one name lookup through the container's resolv.conf. spec:
-# base64 JSON {endpoint: [host, port], targets: [[proto, host, port, what]], name, timeout}.
+# 0015 section 4.5), one item per run (the runner reads the container guard's counters around
+# each, so every refusal is attributed to its own attempt): the inference endpoint without a
+# token (kind endpoint: one TCP connect and GET /, the status line only), an edge of the allow or
+# the container resolver (kind connect: one TCP connect or one UDP datagram, errno named), or one
+# name lookup through the container's resolv.conf (kind lookup). spec: base64 JSON
+# {items: [[kind, proto, host, port, what]], timeout}.
 JOB_INFERENCE_SWEEP = r'''import base64, errno, json, socket, sys, time
 spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 QUERY = bytes([0x41, 0x49, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 4]) + b'aieh' + bytes([7]) + \
@@ -10687,13 +10689,15 @@ def lookup(host):
         out = {'outcome': 'not-resolved', 'error': str(exc)[:200]}
     out['seconds'] = round(time.monotonic() - t0, 2)
     return out
-host, port = spec['endpoint']
-results = [dict(endpoint(host, port), proto='tcp', host=host, port=port,
-                what='inference endpoint (no token)')]
-for proto, h, p, what in spec['targets']:
-    results.append(dict(attempt(proto, h, p), proto=proto, host=h, port=p, what=what))
-results.append(dict(lookup(spec['name']), proto='dns', host=spec['name'], port=None,
-                    what='name lookup'))
+results = []
+for kind, proto, host, port, what in spec['items']:
+    if kind == 'endpoint':
+        got = endpoint(host, port)
+    elif kind == 'lookup':
+        got = lookup(host)
+    else:
+        got = attempt(proto, host, port)
+    results.append(dict(got, proto=proto, host=host, port=port, what=what))
 print('AIEH-JOB-JSON ' + json.dumps({'results': results}, sort_keys=True))
 '''
 INFERENCE_ENDPOINT_WHAT = 'inference endpoint (no token)'
@@ -10707,13 +10711,32 @@ INFERENCE_JOB_STEP = 'inference endpoint, its edges and the resolver from inside
                      '(decision 0015)'
 
 
+# The forward the inference cases need (decision 0015 section 4.4): without a held session the
+# endpoint has no listener, so the sweep is not run and every inference case is FAIL with this
+# precondition, never PASS and never a silent UNKNOWN.
+INFERENCE_PRECONDITION = ('no forward session is held for the instance (tools/guest.py inference-forward '
+                          '--action start first): the inference endpoint has no listener, so the sweep '
+                          'was not run')
+# The container guard's IPv4 chain on an opted-in guest, as iptables -L lists it (the
+# composition's one ACCEPT between the RETURN and the LOG), and the refusal rule that answers each
+# protocol: TCP with the reset, anything else with the ICMP reject.
+CONTAINER_GUARD_INFERENCE_CHAIN = ('RETURN', 'ACCEPT', 'LOG', 'REJECT', 'REJECT')
+INFERENCE_REFUSAL_RULE = {'tcp': 'reset', 'udp': 'reject'}
+# The outcome class each sweep row must show; every other row (an edge of the allow or the
+# container resolver) must be ECONNREFUSED attributed to the guard
+INFERENCE_EXPECTED = {INFERENCE_ENDPOINT_WHAT: 'answered', INFERENCE_GUEST_WHAT: 'token-refused',
+                      INFERENCE_LOOKUP_WHAT: 'not-resolved'}
+
+
 def inference_job_spec(profile):
-    """The predeclared inference sweep of a job (network.inference_composition.job_sweep)."""
+    """The predeclared inference sweep of a job (network.inference_composition.job_sweep): the
+    endpoint, the allow's edges and the resolver, and the name lookup, as items in that order."""
     address, port = inference_endpoint(profile)
     sweep = inference_config(profile).get('job_sweep') or {}
-    return {'endpoint': [address, port],
-            'targets': [list(e) for e in sweep.get('edges') or []],
-            'name': INFERENCE_LOOKUP_NAME, 'timeout': JOB_CONNECT_S}
+    return {'items': [['endpoint', 'tcp', address, port, INFERENCE_ENDPOINT_WHAT]] +
+                     [['connect'] + list(e) for e in sweep.get('edges') or []] +
+                     [['lookup', 'dns', INFERENCE_LOOKUP_NAME, None, INFERENCE_LOOKUP_WHAT]],
+            'timeout': JOB_CONNECT_S}
 
 
 def container_guard_rejects(report):
@@ -10726,43 +10749,91 @@ def container_guard_rejects(report):
                if isinstance(r, dict) and r.get('target') == 'REJECT')
 
 
-def inference_job_verdict(results, before, after):
-    """(ok, rows, stop, counters) of the inference sweep, by the rule fixed before observation:
-    the endpoint answers 401 without a token (reachability and admission); every edge and
-    resolver target is refused (ECONNREFUSED: the container guard's reset or ICMP reject); the
-    name lookup returns no address; the guard's IPv4 REJECT counters rise by at least the
-    refused attempts. A connection or an answer from an edge, or a resolved name, is a stop
+def container_guard_rows(report):
+    """The container guard's IPv4 counters that attribute one inference sweep attempt, from on-demand
+    facts: {'accept', 'reset', 'reject'} (the composition's ACCEPT, the TCP reset and the ICMP
+    reject), or None unless the chain is exactly CONTAINER_GUARD_INFERENCE_CHAIN."""
+    adm = report.get('admission') if isinstance(report.get('admission'), dict) else {}
+    rows = adm.get('iptables')
+    if not isinstance(rows, list) or not all(isinstance(r, dict) and isinstance(r.get('packets'), int)
+                                             for r in rows) or \
+            tuple(r.get('target') for r in rows) != CONTAINER_GUARD_INFERENCE_CHAIN:
+        return None
+    return {'accept': rows[1]['packets'], 'reset': rows[3]['packets'], 'reject': rows[4]['packets']}
+
+
+def guard_window(before, after):
+    """Each counter's rise across one attempt's window, or None when either read is missing or a
+    counter fell (the chain was reinstalled: nothing can be attributed)."""
+    if not isinstance(before, dict) or not isinstance(after, dict) or set(before) != set(after) or \
+            not all(isinstance(v, int) for v in list(before.values()) + list(after.values())):
+        return None
+    delta = {k: after[k] - before[k] for k in before}
+    return delta if all(v >= 0 for v in delta.values()) else None
+
+
+def inference_outcome(row):
+    """The outcome class of one inference sweep row, as the containment cases name it. The endpoint
+    is 'answered' only with the broker's 401 and the guard's ACCEPT counting the connection; the
+    guest login is 'token-refused' only with 401 TOKEN_MISSING; an edge or resolver target is
+    ECONNREFUSED only when the refusal rule of its protocol counted it in its own window and the
+    ACCEPT did not, so a refusal the guard did not make (refused-not-by-guard), one the allow
+    admitted (admitted-by-allow) or one that cannot be attributed (refused-not-attributed) is
+    never the expected outcome."""
+    what, outcome, status = row.get('what'), _norm_net(row.get('outcome')), row.get('status')
+    window = row.get('guard') if isinstance(row.get('guard'), dict) else {}
+    guard = guard_window(window.get('before'), window.get('after'))
+    if what == INFERENCE_LOOKUP_WHAT:
+        return outcome
+    if what == INFERENCE_GUEST_WHAT:
+        if outcome != 'answered':
+            return outcome
+        return 'token-refused' if status == 401 and row.get('refusal') == 'TOKEN_MISSING' \
+            else f'answered-{status}'
+    if what == INFERENCE_ENDPOINT_WHAT:
+        if outcome != 'answered':
+            return outcome
+        if status != 401:
+            return f'answered-{status}'
+        if guard is None:
+            return 'answered-not-attributed'
+        return 'answered' if guard['accept'] >= 1 else 'answered-not-through-allow'
+    if outcome != EGRESS_REFUSED:
+        return outcome
+    if guard is None:
+        return 'refused-not-attributed'
+    if guard['accept'] > 0:
+        return 'admitted-by-allow'
+    rule = INFERENCE_REFUSAL_RULE.get(row.get('proto'))
+    return EGRESS_REFUSED if rule is not None and guard[rule] >= 1 else 'refused-not-by-guard'
+
+
+def inference_job_verdict(results):
+    """(ok, rows, stop) of the inference sweep, by the rule fixed before observation: the endpoint
+    answers 401 without a token through the guard's ACCEPT (reachability and admission); every edge
+    and resolver target is refused (ECONNREFUSED) by the container guard's reset or ICMP reject,
+    counted in the attempt's own window and not by the ACCEPT; the name lookup returns no address;
+    the guest login is refused 401 TOKEN_MISSING (inference_outcome). A connection or an answer
+    from an edge, a resolved name, or the guest login admitted without a token is a stop
     condition."""
-    rows, stop, refused = [], [], 0
+    rows, stop = [], []
     for r in results:
-        what, outcome = r.get('what'), r.get('outcome')
-        if what == INFERENCE_ENDPOINT_WHAT:
-            ok = outcome == 'answered' and r.get('status') == 401
-        elif what == INFERENCE_GUEST_WHAT:
-            ok = outcome == 'answered' and r.get('status') == 401 and \
-                r.get('refusal') == 'TOKEN_MISSING'
-            if outcome == 'answered' and r.get('status') != 401:
+        what, got = r.get('what'), inference_outcome(r)
+        if what == INFERENCE_GUEST_WHAT:
+            if got.startswith('answered-') and r.get('status') != 401:
                 stop.append({'condition': 'the inference endpoint admitted the guest login without '
                                           'a token', 'status': r.get('status')})
         elif what == INFERENCE_LOOKUP_WHAT:
-            ok = outcome == 'not-resolved'
-            if outcome == 'resolved':
+            if got == 'resolved':
                 stop.append({'condition': 'a name resolved from a job', 'target': r.get('host'),
                              'conversation': r.get('conversation')})
-        else:
-            ok = outcome == EGRESS_REFUSED
-            refused += 1 if ok else 0
-            if outcome == 'connected' or str(outcome).startswith('answered'):
-                stop.append({'condition': 'an edge of the inference allow was reached from a '
-                                          'job', 'target': f"{r.get('proto')} {r.get('host')}:"
-                                                           f"{r.get('port')}",
-                             'conversation': r.get('conversation')})
-        rows.append(dict(r, ok=ok))
-    counters = {'before': before, 'after': after, 'refused': refused}
-    counters['incremented'] = isinstance(before, int) and isinstance(after, int) and \
-        after - before >= refused
-    ok = bool(rows) and all(r['ok'] for r in rows) and counters['incremented'] and not stop
-    return ok, rows, stop, counters
+        elif what != INFERENCE_ENDPOINT_WHAT and got in ('connected', 'answered'):
+            stop.append({'condition': 'an edge of the inference allow was reached from a job',
+                         'target': f"{r.get('proto')} {r.get('host')}:{r.get('port')}",
+                         'conversation': r.get('conversation')})
+        rows.append(dict(r, observed=got, ok=got == INFERENCE_EXPECTED.get(what, EGRESS_REFUSED)))
+    ok = bool(rows) and all(r['ok'] for r in rows) and not stop
+    return ok, rows, stop
 
 
 # Run inside the conversation container of the token's conversation (decision 0015 sections 3.3 and
@@ -11702,38 +11773,52 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
         inside each job the endpoint without a token, the allow's edges, the resolver and a
         name lookup, the container guard's IPv4 refusal counters read before and after; and
         once from the guest's own login (outside every container) the endpoint without a
-        token, answered by the broker's token admission alone."""
+        token, answered by the broker's token admission alone. Each job's attempts run one at a
+        time with the container guard's counters read around each (inference_outcome attributes
+        every refusal to its own attempt). Without a held forward session nothing is run: the
+        step fails with INFERENCE_PRECONDITION."""
+        held = forward.status() if forward is not None else forward_state(profile, idir)
+        if not held.get('held'):
+            return False, {'precondition': INFERENCE_PRECONDITION, 'results': [],
+                           'forward': {k: held.get(k) for k in ('path', 'stale')}}
         spec = inference_job_spec(profile)
-        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
-        before = container_guard_rejects(facts())
         results = []
         for cid in conversations:
-            data = _job_json(in_container(cid, container_python(JOB_INFERENCE_SWEEP, arg), 300))
-            results += [dict(r, conversation=cid) for r in data.get('results') or []]
-        after = container_guard_rejects(facts())
+            before = container_guard_rows(facts())
+            for item in spec['items']:
+                arg = base64.b64encode(json.dumps(dict(spec, items=[item])).encode('utf-8')).decode('ascii')
+                data = _job_json(in_container(cid, container_python(JOB_INFERENCE_SWEEP, arg), 300))
+                rows = [dict(r, conversation=cid) for r in data.get('results') or []]
+                if item[0] != 'lookup':
+                    after = container_guard_rows(facts())
+                    rows = [dict(r, guard={'before': before, 'after': after}) for r in rows]
+                    before = after
+                results += rows
         login_spec = dict(inference_token_spec(profile, {'routes': [{'method': 'GET', 'path': '/'}],
                                                          'auth': {'header': 'authorization',
                                                                   'scheme': None}}, None, False),
                           body={})
-        address, port = spec['endpoint']
+        address, port = inference_endpoint(profile)
         login = keep_answer('guest login, no token', _job_json(ssh.run(
             ['python3', '-', base64.b64encode(json.dumps(login_spec).encode('utf-8')).decode('ascii')],
             input_text=JOB_INFERENCE_TOKEN, timeout=120).stdout))
         results.append({'proto': 'tcp', 'host': address, 'port': port, 'what': INFERENCE_GUEST_WHAT,
                         'outcome': login.get('outcome'), 'status': login.get('status'),
                         'refusal': login.get('refusal'), 'conversation': 'guest login (agent)'})
-        ok, rows, stop, counters = inference_job_verdict(results, before, after)
+        ok, rows, stop = inference_job_verdict(results)
         stop_conditions.extend(stop)
-        complete = len(results) == (len(spec['targets']) + 2) * len(conversations) + 1
+        complete = len(results) == len(spec['items']) * len(conversations) + 1
         return ok and complete, {
-            'decision_rule': 'PASS: the endpoint answers 401 without a token from every job and '
-                             'from the guest login (TOKEN_MISSING: the token is the only admission '
-                             'control there), every edge and resolver target is refused '
-                             '(ECONNREFUSED) with the container guard\'s IPv4 REJECT counters up '
-                             'by at least the refused attempts, and the name lookup returns no '
-                             'address; STOP: an edge or resolver target connects or answers, a '
-                             'name resolves, or the guest login is admitted without a token',
-            'spec': spec, 'results': rows, 'counters': counters, 'complete': complete}
+            'decision_rule': 'PASS: the endpoint answers 401 without a token from every job, its '
+                             'connection counted by the container guard\'s ACCEPT, and from the '
+                             'guest login (TOKEN_MISSING: the token is the only admission control '
+                             'there); every edge and resolver target is refused (ECONNREFUSED) and '
+                             'counted in its own window by the guard\'s reset (TCP) or ICMP reject '
+                             '(UDP) and not by the ACCEPT; the name lookup returns no address. '
+                             'STOP: an edge or resolver target connects or answers, a name '
+                             'resolves, or the guest login is admitted without a token. No forward '
+                             'session held: nothing is run (precondition)',
+            'spec': spec, 'results': rows, 'complete': complete}
 
     def attempt_token_step():
         """Decision 0015 sections 3.3 and 4.4 from inside the token's own job, by the rule of
@@ -12328,17 +12413,15 @@ def extract_job(record, extract, args, context):
                                     path=row.get('path')))
     elif extract == 'inference':
         d = detail_of('inference')
+        if isinstance(d, dict) and d.get('precondition'):
+            out.append(_obs('guest', CONTAINMENT_PRECONDITION, reason=d['precondition']))
         for row in (d or {}).get('results') or []:
             if row.get('what') != args['what']:
                 continue
-            got = row.get('outcome')
-            if row.get('what') == INFERENCE_ENDPOINT_WHAT and got == 'answered':
-                got = 'answered' if row.get('status') == 401 else f"answered-{row.get('status')}"
-            elif row.get('what') == INFERENCE_GUEST_WHAT and got == 'answered':
-                got = 'token-refused' if row.get('status') == 401 and \
-                    row.get('refusal') == 'TOKEN_MISSING' else f"answered-{row.get('status')}"
-            out.append(_obs(row.get('conversation'), got,
-                            target=f"{row.get('proto')} {row.get('host')}:{row.get('port')}"))
+            window = row.get('guard') if isinstance(row.get('guard'), dict) else {}
+            out.append(_obs(row.get('conversation'), inference_outcome(row),
+                            target=f"{row.get('proto')} {row.get('host')}:{row.get('port')}",
+                            guard=guard_window(window.get('before'), window.get('after'))))
     elif extract == 'tcp':
         d = detail_of('tcp')
         for cid, c in ((d or {}).get('containers') or {}).items():
@@ -12515,6 +12598,9 @@ def extract_admission(record, extract, args, context):
 
 
 CONTAINMENT_EXTRACTORS = {'job-access-probe': extract_job, 'admission-probe': extract_admission}
+# The observation of a case whose precondition the run did not meet (the inference cases without a
+# held forward session): never an expected outcome, always a FAIL with its reason
+CONTAINMENT_PRECONDITION = 'precondition-unmet'
 CONTAINMENT_EXTRACT_NAMES = {
     'job-access-probe': ('socket', 'sockets-found', 'tcp', 'routes', 'tokens', 'credential-files',
                          'token-control', 'env', 'inspected', 'controls', 'egress', 'egress-route',
@@ -12566,7 +12652,11 @@ def mountinfo_outcome(check, mounts, own_dests, peer_mounts=None):
 def containment_verdict(case, observations, control_verdict, compensating=None):
     """(verdict, reason, stop) of one case under the catalogue's rule for its kind. A success
     outcome of a denial is a FAIL and a stop condition; a denial whose positive control did
-    not pass is UNKNOWN, never PASS; a missing observation is a FAIL, never skipped."""
+    not pass is UNKNOWN, never PASS; a missing observation is a FAIL, never skipped; a case whose
+    precondition was not met (CONTAINMENT_PRECONDITION) is a FAIL that says so, whatever its kind."""
+    unmet = [o for o in observations if o.get('outcome') == CONTAINMENT_PRECONDITION]
+    if unmet:
+        return 'FAIL', f"precondition not met: {unmet[0].get('reason')}", False
     checker = load_containment_checker()
     success_set = checker.SUCCESS_OUTCOMES
     kind = case.get('kind')

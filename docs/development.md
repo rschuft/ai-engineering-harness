@@ -1051,15 +1051,20 @@ defaults them.
   --provider-key-stdin --provider-key-fingerprint FP` (the token, then the key, on standard
   input) searches every answer the job and the guest login received from the endpoint,
   returned whole up to 64 KiB and never recorded. The key never travels to the guest. `job-access-probe` on an
-  opted-in guest adds the inference sweep from both jobs: the endpoint must answer 401
-  without a token, the allow's edges (`172.17.0.1:8091`, UDP to the endpoint,
-  `10.0.2.15:8090`) and the resolver (`172.17.0.1:53`) must be refused with the
-  container guard's IPv4 REJECT counters rising, and a name lookup must fail; an edge
-  that answers or a name that resolves is a stop condition; once from the guest's own
+  opted-in guest adds the inference sweep from both jobs, one attempt per run with the
+  container guard's IPv4 counters read around each: the endpoint must answer 401
+  without a token with the guard's ACCEPT counting the connection; the allow's edges
+  (`172.17.0.1:8091`, UDP to the endpoint, `10.0.2.15:8090`) and the resolver
+  (`172.17.0.1:53`) must be refused and counted by the guard's reset (TCP) or ICMP reject
+  (UDP), not by the ACCEPT; a name lookup must fail; an edge that answers or a name that
+  resolves is a stop condition; once from the guest's own
   login (outside every container) the endpoint must refuse a request without a token
   (401 `TOKEN_MISSING`: while a forward is held the token is the only admission control
-  for the guest's own processes, `nm-guest-inference`). The containment catalogue
-  declares the matching cases as `planned`.
+  for the guest's own processes, `nm-guest-inference`). Without a held forward session
+  the sweep does not run and the step fails on that precondition. The containment
+  catalogue's matching cases are `executable` (S-03.2); like the token step, the sweep
+  is skipped after an earlier failed step, so a guest without `--egress-falsification`
+  (whose route-present step fails) does not reach it.
   **The forward session (S-03.2 slice 3, offline only):** `inference-forward --action
   start|status|stop` holds `ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port>`
   for an opted-in instance with `ssh_client_options`, the per-instance key, the hostfwd

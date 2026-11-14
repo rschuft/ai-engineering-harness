@@ -2,8 +2,8 @@
   "schema": "ai-engineering-harness/security/containment-cases/v1",
   "plan_leaf": "S-02.1",
   "title": "Containment cases and the expected-denial matrix of the job environment",
-  "version": "3",
-  "as_of": "2026-11-11",
+  "version": "4",
+  "as_of": "2026-11-14",
   "inventory": "security/inventory.json",
   "properties": "profiles/properties.json",
   "matrix": "policy/network-matrix.json",
@@ -28,7 +28,7 @@
   },
   "verdicts": {
     "PASS": "the expected outcome was observed and the positive control passed in the same run",
-    "FAIL": "an attempt succeeded, a hardening control is missing or loosened, an observation is missing or outside the expected outcomes, or a compensating case did not pass",
+    "FAIL": "an attempt succeeded, a hardening control is missing or loosened, an observation is missing or outside the expected outcomes, a compensating case did not pass, or the case's precondition was not met (precondition-unmet: the inference cases without a held forward session)",
     "UNKNOWN": "the positive control did not pass (and nothing succeeded): the probe could not have observed success, so its denial proves nothing"
   },
   "statuses": {
@@ -422,7 +422,7 @@
         "user": "the job default user: the server uid:gid (999:989), no supplementary group",
         "root_attempt": false
       },
-      "attempt": "one TCP connect from each job to the inference endpoint 172.17.0.1:8090 (the sshd remote forward to the host-side broker) and GET / without an Authorization header (job-access-probe's inference sweep, 4 s ceiling)",
+      "attempt": "one TCP connect from each job to the inference endpoint 172.17.0.1:8090 (the sshd remote forward to the host-side broker) and GET / without an Authorization header (job-access-probe's inference sweep, 4 s ceiling; each attempt is a run of its own, with the container guard's IPv4 counters read before and after it)",
       "probe": {
         "source": "job-access-probe",
         "extract": "inference",
@@ -434,22 +434,21 @@
         "outcomes": [
           "answered"
         ],
-        "rule": "answered: the broker's 401 (reachability through the container guard's one ACCEPT and the forward, and admission by token); any other status or no answer is not the control"
+        "rule": "answered: the broker's 401 with the container guard's ACCEPT counting the connection in its window (reachability through the one ACCEPT and the forward, and admission by token); any other status (answered-<status>), a 401 the ACCEPT did not count (answered-not-through-allow, answered-not-attributed) or no answer is not the control"
       },
       "enforcement": [],
       "assets": [
         "endpoint-inference"
       ],
       "positive_control": null,
-      "verdict_rule": "PASS when every job's observation is answered with 401; FAIL otherwise.",
+      "verdict_rule": "PASS when every job's observation is answered (401 through the ACCEPT); FAIL otherwise.",
       "carried": [],
-      "status": "planned",
+      "status": "executable",
       "depends_on": [
         "container_guard",
         "pins"
       ],
-      "verify_at": "S-03.2",
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
     },
     {
       "id": "ctl-trusted-side",
@@ -3842,7 +3841,7 @@
         "user": "the job default user: the server uid:gid (999:989), no supplementary group",
         "root_attempt": false
       },
-      "attempt": "one TCP connect from each job to 172.17.0.1:8091, the port beside the inference endpoint (job-access-probe's inference sweep, 4 s ceiling)",
+      "attempt": "one TCP connect from each job to 172.17.0.1:8091, the port beside the inference endpoint (job-access-probe's inference sweep, 4 s ceiling; each attempt is a run of its own, with the container guard's IPv4 counters read before and after it)",
       "probe": {
         "source": "job-access-probe",
         "extract": "inference",
@@ -3854,7 +3853,7 @@
         "outcomes": [
           "ECONNREFUSED"
         ],
-        "rule": "ECONNREFUSED: the container guard's reset (the allow names one port)"
+        "rule": "ECONNREFUSED: the container guard's reset, counted by its tcp-reset rule in the attempt's window and not by the ACCEPT (the allow names one port). A refusal the guard did not count (refused-not-by-guard, refused-not-attributed) or one the ACCEPT counted (admitted-by-allow) is not the expected outcome"
       },
       "enforcement": [
         {
@@ -3873,14 +3872,13 @@
       "positive_control": "ctl-inference-endpoint",
       "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
       "carried": [],
-      "status": "planned",
+      "status": "executable",
       "depends_on": [
         "docker_inspect",
         "container_guard",
         "pins"
       ],
-      "verify_at": "S-03.2",
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
     },
     {
       "id": "egr-inference-edge-udp",
@@ -3892,7 +3890,7 @@
         "user": "the job default user: the server uid:gid (999:989), no supplementary group",
         "root_attempt": false
       },
-      "attempt": "one UDP datagram from each job to 172.17.0.1:8090 (job-access-probe's inference sweep, 4 s ceiling)",
+      "attempt": "one UDP datagram from each job to 172.17.0.1:8090 (job-access-probe's inference sweep, 4 s ceiling; each attempt is a run of its own, with the container guard's IPv4 counters read before and after it)",
       "probe": {
         "source": "job-access-probe",
         "extract": "inference",
@@ -3904,7 +3902,7 @@
         "outcomes": [
           "ECONNREFUSED"
         ],
-        "rule": "ECONNREFUSED: the container guard's ICMP reject (the allow is TCP only)"
+        "rule": "ECONNREFUSED: the container guard's ICMP reject, counted by its REJECT rule for non-TCP traffic in the attempt's window and not by the ACCEPT (the allow is TCP only). A refusal the guard did not count or one the ACCEPT counted is not the expected outcome"
       },
       "enforcement": [
         {
@@ -3923,14 +3921,13 @@
       "positive_control": "ctl-inference-endpoint",
       "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
       "carried": [],
-      "status": "planned",
+      "status": "executable",
       "depends_on": [
         "docker_inspect",
         "container_guard",
         "pins"
       ],
-      "verify_at": "S-03.2",
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
     },
     {
       "id": "egr-inference-edge-address",
@@ -3942,7 +3939,7 @@
         "user": "the job default user: the server uid:gid (999:989), no supplementary group",
         "root_attempt": false
       },
-      "attempt": "one TCP connect from each job to the guest's uplink address 10.0.2.15:8090 (job-access-probe's inference sweep, 4 s ceiling)",
+      "attempt": "one TCP connect from each job to the guest's uplink address 10.0.2.15:8090 (job-access-probe's inference sweep, 4 s ceiling; each attempt is a run of its own, with the container guard's IPv4 counters read before and after it)",
       "probe": {
         "source": "job-access-probe",
         "extract": "inference",
@@ -3954,7 +3951,7 @@
         "outcomes": [
           "ECONNREFUSED"
         ],
-        "rule": "ECONNREFUSED: the container guard's reset (the allow names 172.17.0.1/32)"
+        "rule": "ECONNREFUSED: the container guard's reset, counted by its tcp-reset rule in the attempt's window and not by the ACCEPT (the allow names 172.17.0.1/32; nothing listens on 10.0.2.15:8090, so only the counters tell the guard's refusal from the kernel's)"
       },
       "enforcement": [
         {
@@ -3973,14 +3970,13 @@
       "positive_control": "ctl-inference-endpoint",
       "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
       "carried": [],
-      "status": "planned",
+      "status": "executable",
       "depends_on": [
         "docker_inspect",
         "container_guard",
         "pins"
       ],
-      "verify_at": "S-03.2",
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
     },
     {
       "id": "egr-resolver-docker0",
@@ -3992,7 +3988,7 @@
         "user": "the job default user: the server uid:gid (999:989), no supplementary group",
         "root_attempt": false
       },
-      "attempt": "one TCP connect and one UDP DNS query from each job to 172.17.0.1:53, the resolver that daemon.json's dns names in the opted-in guest (job-access-probe's inference sweep, 4 s ceiling)",
+      "attempt": "one TCP connect and one UDP DNS query from each job to 172.17.0.1:53, the resolver that daemon.json's dns names in the opted-in guest (job-access-probe's inference sweep, 4 s ceiling; each attempt is a run of its own, with the container guard's IPv4 counters read before and after it)",
       "probe": {
         "source": "job-access-probe",
         "extract": "inference",
@@ -4004,7 +4000,7 @@
         "outcomes": [
           "ECONNREFUSED"
         ],
-        "rule": "ECONNREFUSED: the container guard's reset or ICMP reject, counted (a policy denial, decision 0015 section 7.1)"
+        "rule": "ECONNREFUSED: the container guard's reset (TCP) or ICMP reject (UDP), counted by that rule in the attempt's window and not by the ACCEPT (a policy denial, decision 0015 section 7.1)"
       },
       "enforcement": [
         {
@@ -4022,14 +4018,13 @@
       "positive_control": "ctl-inference-endpoint",
       "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
       "carried": [],
-      "status": "planned",
+      "status": "executable",
       "depends_on": [
         "docker_inspect",
         "container_guard",
         "pins"
       ],
-      "verify_at": "S-03.2",
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
     },
     {
       "id": "egr-name-lookup",
@@ -4041,7 +4036,7 @@
         "user": "the job default user: the server uid:gid (999:989), no supplementary group",
         "root_attempt": false
       },
-      "attempt": "one getaddrinfo of deb.debian.org from each job through its resolv.conf (job-access-probe's inference sweep, 4 s ceiling)",
+      "attempt": "one getaddrinfo of deb.debian.org from each job through its resolv.conf (job-access-probe's inference sweep, 4 s ceiling; its own run, after the attempts above)",
       "probe": {
         "source": "job-access-probe",
         "extract": "inference",
@@ -4053,7 +4048,7 @@
         "outcomes": [
           "not-resolved"
         ],
-        "rule": "not-resolved: no address (the resolver is refused; no resolver is reachable)"
+        "rule": "not-resolved: no address (the resolver is refused; no resolver is reachable); resolved is a success and a stop condition"
       },
       "enforcement": [
         {
@@ -4085,14 +4080,13 @@
       "positive_control": "ctl-inference-endpoint",
       "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
       "carried": [],
-      "status": "planned",
+      "status": "executable",
       "depends_on": [
         "docker_inspect",
         "container_guard",
         "pins"
       ],
-      "verify_at": "S-03.2",
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
     },
     {
       "id": "egr-inference-guest-login",
@@ -4116,7 +4110,7 @@
         "outcomes": [
           "token-refused"
         ],
-        "rule": "token-refused: the broker's 401 with TOKEN_MISSING. Nothing in the guest refuses this connection (the container guard filters docker0 only): the attempt token is the only admission control for the guest's own processes while a forward is held (fd-guest-inference-reach)"
+        "rule": "token-refused: the broker's 401 with TOKEN_MISSING. Nothing in the guest refuses this connection (the container guard filters docker0 only): the attempt token is the only admission control for the guest's own processes while a forward is held (fd-guest-inference-reach). A 2xx is a success and a stop condition; a 401 without TOKEN_MISSING (answered-401) or no answer is not the expected outcome"
       },
       "enforcement": [
         {
@@ -4138,12 +4132,11 @@
       "carried": [
         "fd-guest-inference-reach"
       ],
-      "status": "planned",
+      "status": "executable",
       "depends_on": [
         "pins"
       ],
-      "verify_at": "S-03.2",
-      "notes": "The path S-03.2 slice 2 found (nm-guest-inference, disclosed), declared at slice 3: on a guest created with create --provision --inference only, with the dispatcher's forward session held (inference-forward start), run by job-access-probe's inference sweep at the guest qualification."
+      "notes": "The path S-03.2 slice 2 found (nm-guest-inference, disclosed), declared at slice 3: on a guest created with create --provision --inference only, with the dispatcher's forward session held (inference-forward start), run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
     },
     {
       "id": "priv-sudo",
