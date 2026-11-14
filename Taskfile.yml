@@ -575,6 +575,22 @@ tasks:
     cmds:
       - '{{.PYTHON}} -I -B integrations/dispatch/dispatch_inputs.py manifest-path'
 
+  # The engineering manager's cause records of an ended attempt (plan leaf E-05.8; integrations/dispatch/README.md):
+  # each writes one integration-store receipt and never changes the end record.
+  dispatch:record-auth-cause:
+    desc: Record the cause of an ended attempt's authentication refusal (token-refused, account-not-permitted or provider-fault) in the integration store (python -I -B integrations/dispatch/attempt_end.py record-auth-cause --store STORE --operation-key OPERATION_KEY --cause CAUSE)
+    requires:
+      vars: [STORE, OPERATION_KEY, CAUSE]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/dispatch/attempt_end.py record-auth-cause --store "{{.STORE}}" --operation-key "{{.OPERATION_KEY}}" --cause "{{.CAUSE}}"'
+
+  dispatch:record-end-cause:
+    desc: Classify an ended attempt's unclassified end as interruption or security-stop in the integration store (python -I -B integrations/dispatch/attempt_end.py record-end-cause --store STORE --operation-key OPERATION_KEY --cause CAUSE)
+    requires:
+      vars: [STORE, OPERATION_KEY, CAUSE]
+    cmds:
+      - '{{.PYTHON}} -I -B integrations/dispatch/attempt_end.py record-end-cause --store "{{.STORE}}" --operation-key "{{.OPERATION_KEY}}" --cause "{{.CAUSE}}"'
+
   # Host-loopback Gitea (plan leaf F-06.1; decisions 0007 and 0009): the pinned Windows binary
   # as an asset, its state under the managed data root, run inside a supervising managed
   # environment whose kill-on-close Job Object ends Gitea with it (integrations/gitea/README.md).

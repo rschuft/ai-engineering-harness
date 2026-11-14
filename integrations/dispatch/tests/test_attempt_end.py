@@ -754,6 +754,111 @@ class CauseCommand(EndFixture):
         self.assertNotIn(TOKEN, out + err)
 
 
+class UnclassifiedEndCause(EndFixture):
+    """The engineering manager's classification of an unclassified end (``record-end-cause``): a separate receipt,
+    the end record unchanged; interruption admits a new attempt, security-stop never does."""
+
+    def unclassified(self):
+        first = self.interrupted()
+        self.assertEqual(self.end(first)['classification'], AE.UNCLASSIFIED)
+        return first, AE.end_record(self.store, first.attempt_id)
+
+    def classify_end(self, result, cause):
+        return AE.record_end_cause(self.store, result.operation_key, cause=cause, actor='engineering-manager')
+
+    def test_an_interruption_cause_admits_a_new_attempt_and_leaves_the_end_record_unchanged(self):
+        first, ended = self.unclassified()
+        end_key = AE.END_KEY.format(attempt_id=first.attempt_id)
+        events = self.store.events(end_key)
+        _, before, reads = self.refused_dispatch('PRIOR_END_UNCLASSIFIED')
+        self.assertNothingReserved(before)
+        self.assertEqual(self.provider.reads, reads)
+        recorded = self.classify_end(first, AE.END_CAUSE_INTERRUPTION)
+        self.assertEqual({k: recorded[k] for k in ('format', 'attemptId', 'cause', 'classification', 'endRecord',
+                                                   'recordedBy')},
+                         {'format': AE.END_CAUSE_FORMAT, 'attemptId': first.attempt_id, 'cause': 'interruption',
+                          'classification': AE.INTERRUPTION, 'endRecord': end_key, 'recordedBy': 'engineering-manager'})
+        self.assertEqual((AE.end_record(self.store, first.attempt_id), self.store.events(end_key)), (ended, events))
+        second = self.dispatch_native()
+        self.assertEqual(self.ordinal(second.operation_key), 2)
+        self.assertNotEqual(second.conversation_id, first.conversation_id)
+
+    def test_a_security_stop_cause_refuses_every_new_attempt(self):
+        first, _ = self.unclassified()
+        self.classify_end(first, AE.END_CAUSE_SECURITY_STOP)
+        for _ in range(2):
+            _, before, reads = self.refused_dispatch('PRIOR_END_SECURITY_STOP')
+            self.assertNothingReserved(before)
+            self.assertEqual(self.provider.reads, reads)
+
+    def test_only_an_unclassified_end_is_classified(self):
+        unended = self.dispatch_native()
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.classify_end(unended, AE.END_CAUSE_INTERRUPTION)
+        self.assertEqual(caught.exception.code, 'END_CAUSE_NOT_APPLICABLE')
+        for events in ((SURFACED['rate-limit'][0],), (SURFACED['oauth-expired'][0],)):
+            with self.subTest(events[0]['code']):
+                self.setUp()
+                result = self.interrupted(*events)
+                self.end(result)
+                with self.assertRaises(di.DispatchRefused) as caught:
+                    self.classify_end(result, AE.END_CAUSE_INTERRUPTION)
+                self.assertEqual(caught.exception.code, 'END_CAUSE_NOT_APPLICABLE')
+                self.assertIsNone(self.store.get(AE.END_CAUSE_KEY.format(attempt_id=result.attempt_id)))
+        self.setUp()
+        result = self.interrupted(SURFACED['rate-limit'][0])
+        self.end(result, records=[record('egress-stop')])
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.classify_end(result, AE.END_CAUSE_INTERRUPTION)   # a security stop is never re-classified
+        self.assertEqual(caught.exception.code, 'END_CAUSE_NOT_APPLICABLE')
+
+    def test_repeat_safe_conflicting_and_invalid(self):
+        first, _ = self.unclassified()
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.classify_end(first, 'retry')
+        self.assertEqual(caught.exception.code, 'END_CAUSE_INVALID')
+        recorded = self.classify_end(first, AE.END_CAUSE_INTERRUPTION)
+        self.assertEqual(self.classify_end(first, AE.END_CAUSE_INTERRUPTION), recorded)
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.classify_end(first, AE.END_CAUSE_SECURITY_STOP)
+        self.assertEqual(caught.exception.code, 'END_CAUSE_CONFLICT')
+        key = AE.END_CAUSE_KEY.format(attempt_id=first.attempt_id)
+        self.assertEqual([e.to_state for e in self.store.events(key)], ['reserved', 'dispatched', 'confirmed'])
+
+    def test_a_crash_before_the_record_is_resumed(self):
+        first, _ = self.unclassified()
+        key = AE.END_CAUSE_KEY.format(attempt_id=first.attempt_id)
+        real = di._mark
+
+        def mark(integration_store, k, from_state, to_state, *args):
+            if k == key and to_state == 'confirmed':
+                raise Crash()
+            real(integration_store, k, from_state, to_state, *args)
+        with mock.patch.object(di, '_mark', mark), self.assertRaises(Crash):
+            self.classify_end(first, AE.END_CAUSE_SECURITY_STOP)
+        self.assertEqual(self.store.get(key).state, 'dispatched')
+        self.refused_dispatch('PRIOR_END_UNCLASSIFIED')            # not classified until the record exists
+        self.assertEqual(self.classify_end(first, AE.END_CAUSE_SECURITY_STOP)['cause'], 'security-stop')
+        self.refused_dispatch('PRIOR_END_SECURITY_STOP')
+
+    def test_the_command_and_its_task_target(self):
+        first, _ = self.unclassified()
+        args = ('record-end-cause', '--store', str(self.case / 'integration.sqlite'),
+                '--operation-key', first.operation_key)
+        code, out, err = CauseCommand.run_command(self, *args, '--cause', 'interruption')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)['classification'], AE.INTERRUPTION)
+        self.assertEqual(CauseCommand.run_command(self, *args, '--cause', 'interruption')[0], 0)
+        code, _, err = CauseCommand.run_command(self, *args, '--cause', 'security-stop')
+        self.assertEqual(code, 1)
+        self.assertIn('END_CAUSE_CONFLICT', err)
+        self.assertEqual(CauseCommand.run_command(self, *args, '--cause', 'retry')[0], 2)
+        taskfile = (REPO / 'Taskfile.yml').read_text(encoding='utf-8')
+        for command in ('record-auth-cause', 'record-end-cause'):
+            self.assertIn(f'  dispatch:{command}:\n', taskfile)
+            self.assertIn(f'integrations/dispatch/attempt_end.py {command} --store', taskfile)
+
+
 class TokenNeverAgain(EndFixture):
     def test_the_ended_attempt_is_never_dispatched_again(self):
         first = self.interrupted(SURFACED['rate-limit'][0])

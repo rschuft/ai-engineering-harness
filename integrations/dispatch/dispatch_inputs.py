@@ -323,6 +323,10 @@ REFUSALS = {
     'AUTH_CAUSE_INVALID': 'the cause is not one of the recorded causes of an authentication refusal',
     'AUTH_CAUSE_NOT_APPLICABLE': 'the attempt has no end record of an authentication refusal: no cause is recorded',
     'AUTH_CAUSE_CONFLICT': 'another cause is already recorded for the attempt\'s authentication refusal',
+    'END_CAUSE_INVALID': 'the classification of an unclassified end is not interruption or security-stop',
+    'END_CAUSE_NOT_APPLICABLE': 'the attempt has no end record, or its end is already classified: only an '
+                                'unclassified end is classified by the engineering manager',
+    'END_CAUSE_CONFLICT': 'another classification is already recorded for the attempt\'s unclassified end',
 }
 
 

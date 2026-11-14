@@ -41,7 +41,11 @@ token is never sent to an existing conversation.
 
 ``record_auth_cause(store, operation_key, cause=, actor=)`` is the engineering manager's cause record, the smallest
 durable form: one integration-store receipt ``dispatch/attempt/<attempt id>/auth-cause`` (``auth-cause/v1``),
-written by the command ``record-auth-cause`` of this module. Fingerprints only, here as everywhere.
+written by the command ``record-auth-cause`` of this module. ``record_end_cause`` (command ``record-end-cause``) is
+the engineering manager's classification of an unclassified end, ``interruption`` or ``security-stop``, as one
+receipt ``dispatch/attempt/<attempt id>/end-cause`` (``end-cause/v1``); the end record never changes, and a new
+attempt after an unclassified end stays PRIOR_END_UNCLASSIFIED until it exists. Fingerprints only, here as
+everywhere.
 
 Standard library only. It holds no token and reads no credential entry: the entry receipts it reads are the
 credential command's integration-store receipts (``aieh-credential-act/1``), fingerprints only.
@@ -80,6 +84,8 @@ END_JOURNAL_FORMAT = 'ai-engineering-harness/dispatch/attempt-end-journal/v1'
 END_FORMAT = 'ai-engineering-harness/dispatch/attempt-end/v1'
 CAUSE_KEY = 'dispatch/attempt/{attempt_id}/auth-cause'
 CAUSE_FORMAT = 'ai-engineering-harness/dispatch/auth-cause/v1'
+END_CAUSE_KEY = 'dispatch/attempt/{attempt_id}/end-cause'
+END_CAUSE_FORMAT = 'ai-engineering-harness/dispatch/end-cause/v1'
 CONVERSATION_ENDED, ATTEMPT_STOPPED = 'conversation-ended', 'attempt-stopped'
 TRIGGERS = (CONVERSATION_ENDED, ATTEMPT_STOPPED)
 
@@ -103,6 +109,10 @@ RECORD_REF_RE = re.compile(r'[A-Za-z0-9._:/@#-]{1,256}')
 # The engineering manager's causes of an authentication refusal; only token-refused needs a new token entered.
 TOKEN_REFUSED = 'token-refused'
 AUTH_CAUSES = (TOKEN_REFUSED, 'account-not-permitted', 'provider-fault')
+# The engineering manager's classification of an unclassified end: an interruption (a new attempt as after any
+# interruption's end) or a security stop (no new attempt, ever: PRIOR_END_SECURITY_STOP).
+END_CAUSE_INTERRUPTION, END_CAUSE_SECURITY_STOP = 'interruption', 'security-stop'
+END_CAUSES = (END_CAUSE_INTERRUPTION, END_CAUSE_SECURITY_STOP)
 
 # The Agent Server 1.60.1 routes the end reads and calls (all `dispatcher: allowed` in the pinned allowlist).
 CONVERSATION_ROUTE = '/api/conversations/{conversation_id}'
@@ -190,13 +200,35 @@ def end_record(integration_store, attempt_id: str) -> dict | None:
     return record if isinstance(record, dict) and record.get('format') == END_FORMAT else None
 
 
-def cause_record(integration_store, attempt_id: str) -> dict | None:
-    key = CAUSE_KEY.format(attempt_id=attempt_id)
+def _confirmed_record(integration_store, key: str, form: str) -> dict | None:
     held = integration_store.get(key)
     if held is None or held.state != 'confirmed':
         return None
     record = _detail(integration_store, key, 'confirmed')
-    return record if isinstance(record, dict) and record.get('format') == CAUSE_FORMAT else None
+    return record if isinstance(record, dict) and record.get('format') == form else None
+
+
+def cause_record(integration_store, attempt_id: str) -> dict | None:
+    """The engineering manager's cause record of an authentication refusal (auth-cause/v1), or None."""
+    return _confirmed_record(integration_store, CAUSE_KEY.format(attempt_id=attempt_id), CAUSE_FORMAT)
+
+
+def end_cause_record(integration_store, attempt_id: str) -> dict | None:
+    """The engineering manager's classification of an unclassified end (end-cause/v1), or None."""
+    return _confirmed_record(integration_store, END_CAUSE_KEY.format(attempt_id=attempt_id), END_CAUSE_FORMAT)
+
+
+def effective_classification(integration_store, record: dict) -> str | None:
+    """An end record's classification, or for an unclassified end the engineering manager's: interruption or
+    non-retryable by its end-cause record, unclassified while none exists. The end record itself never changes."""
+    classification = record.get('classification')
+    if classification != UNCLASSIFIED:
+        return classification
+    cause = end_cause_record(integration_store, record.get('attemptId'))
+    if cause is None:
+        return UNCLASSIFIED
+    return {END_CAUSE_INTERRUPTION: INTERRUPTION, END_CAUSE_SECURITY_STOP: NON_RETRYABLE}.get(cause.get('cause'),
+                                                                                            UNCLASSIFIED)
 
 
 # ---------------------------------------------------------------------------
@@ -459,18 +491,49 @@ def record_auth_cause(integration_store, operation_key: str, *, cause: str, acto
               'tokenRefused': cause == TOKEN_REFUSED,
               'refusedFingerprint': ended.get('tokenFingerprint') if cause == TOKEN_REFUSED else None,
               'endRecord': END_KEY.format(attempt_id=attempt_id)}
-    record = {**intent, 'recordedBy': actor}
+    _write_cause(integration_store, key, intent, actor, 'AUTH_CAUSE_CONFLICT')
+    return cause_record(integration_store, attempt_id)
+
+
+def _write_cause(integration_store, key: str, intent: dict, actor: str, conflict: str) -> None:
+    """One cause receipt: reserved with INTENT, dispatched, confirmed with INTENT and ``recordedBy``; a resumed or
+    repeated write with the same intent completes or returns it, another intent is CONFLICT."""
     try:
         integration_store.reserve(key, intent, actor=actor)
     except store.ConflictingReservation:
-        raise _refused('AUTH_CAUSE_CONFLICT', f'another cause is recorded for attempt {attempt_id}') from None
+        raise _refused(conflict, f'another cause is recorded under {key}') from None
     held = integration_store.get(key)
     if held.state == 'reserved':
         di._mark(integration_store, key, 'reserved', 'dispatched', actor, 'record', None)
         held = integration_store.get(key)
     if held.state == 'dispatched':
-        di._mark(integration_store, key, 'dispatched', 'confirmed', actor, cause, record)
-    return cause_record(integration_store, attempt_id)
+        di._mark(integration_store, key, 'dispatched', 'confirmed', actor, intent['cause'],
+                 {**intent, 'recordedBy': actor})
+
+
+def record_end_cause(integration_store, operation_key: str, *, cause: str, actor: str) -> dict:
+    """The engineering manager's classification of an unclassified end: one receipt
+    ``dispatch/attempt/<attempt id>/end-cause`` (``end-cause/v1``), beside the end record, which never changes. CAUSE
+    is ``interruption`` (a new attempt is admitted as after any interruption's end) or ``security-stop`` (never a new
+    attempt: PRIOR_END_SECURITY_STOP); END_CAUSE_INVALID otherwise. Only for an end record that is unclassified
+    (END_CAUSE_NOT_APPLICABLE for no end record or a classified one); the same cause again returns it, another is
+    END_CAUSE_CONFLICT."""
+    if cause not in END_CAUSES:
+        raise _refused('END_CAUSE_INVALID', f'the cause must be one of {", ".join(END_CAUSES)}')
+    if integration_store.get(operation_key) is None or integration_store.attempt_identity(operation_key) is None:
+        raise _refused('RESERVATION_INVALID', f'no dispatch reservation under {operation_key!r}')
+    attempt_id = store.attempt_id_for(operation_key)
+    ended = end_record(integration_store, attempt_id)
+    if ended is None or ended.get('classification') != UNCLASSIFIED:
+        raise _refused('END_CAUSE_NOT_APPLICABLE', f'attempt {attempt_id} has no unclassified end record'
+                       + ('' if ended is None else f' (it ended {ended.get("classification")})'))
+    key = END_CAUSE_KEY.format(attempt_id=attempt_id)
+    intent = {'format': END_CAUSE_FORMAT, 'operationKey': operation_key, 'attemptId': attempt_id,
+              'conversationId': store.conversation_id_for(operation_key), 'cause': cause,
+              'classification': INTERRUPTION if cause == END_CAUSE_INTERRUPTION else NON_RETRYABLE,
+              'endRecord': END_KEY.format(attempt_id=attempt_id)}
+    _write_cause(integration_store, key, intent, actor, 'END_CAUSE_CONFLICT')
+    return end_cause_record(integration_store, attempt_id)
 
 
 # ---------------------------------------------------------------------------
@@ -535,14 +598,17 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
             raise _refused('PRIOR_ATTEMPT_NOT_ENDED', f'attempt {claim.attempt_id} (ordinal {claim.identity.ordinal}) '
                            'has no end record', attempt_id=claim.attempt_id)
         ended.append((claim, record))
+    effective = {claim.operation_key: effective_classification(integration_store, record) for claim, record in ended}
     for claim, record in ended:
-        if record.get('classification') == NON_RETRYABLE:
+        if effective[claim.operation_key] == NON_RETRYABLE:
             raise _refused('PRIOR_END_SECURITY_STOP', f'attempt {claim.attempt_id} ended non-retryable '
-                           f'({", ".join(record.get("causes") or [])}): a security stop', attempt_id=claim.attempt_id)
+                           f'({", ".join(record.get("causes") or ["security-stop, recorded by the engineering manager"])}): a '
+                           'security stop', attempt_id=claim.attempt_id)
     for claim, record in ended:
-        if record.get('classification') not in (INTERRUPTION, AUTH_REFUSAL) or record.get('conversationStopped') \
-                is not True:
-            raise _refused('PRIOR_END_UNCLASSIFIED', f'attempt {claim.attempt_id} ended {record.get("classification")}',
+        if effective[claim.operation_key] not in (INTERRUPTION, AUTH_REFUSAL) \
+                or record.get('conversationStopped') is not True:
+            raise _refused('PRIOR_END_UNCLASSIFIED', f'attempt {claim.attempt_id} ended {record.get("classification")} '
+                           'and the engineering manager has not classified it (record-end-cause)',
                            attempt_id=claim.attempt_id)
     client = None
     for claim, record in ended:
@@ -578,22 +644,29 @@ def admit_new_attempt(integration_store, resolved, *, transport, read_artifact) 
 # Command line: the engineering manager's cause record
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='The engineering manager\'s cause record of an authentication '
-                                                 'refusal (plan leaf E-05.8).')
+    parser = argparse.ArgumentParser(description='The engineering manager\'s cause records of an ended attempt: an '
+                                                 'authentication refusal\'s cause, an unclassified end\'s '
+                                                 'classification (plan leaf E-05.8).')
     sub = parser.add_subparsers(dest='command', required=True)
     record = sub.add_parser('record-auth-cause', help='record the cause of an attempt\'s authentication refusal')
     record.add_argument('--store', required=True, help='the integration store (integration.sqlite)')
     record.add_argument('--operation-key', required=True, help='the ended attempt\'s operation key')
     record.add_argument('--cause', required=True, choices=AUTH_CAUSES)
     record.add_argument('--actor', default='engineering-manager')
+    end = sub.add_parser('record-end-cause', help='classify an attempt\'s unclassified end')
+    end.add_argument('--store', required=True, help='the integration store (integration.sqlite)')
+    end.add_argument('--operation-key', required=True, help='the ended attempt\'s operation key')
+    end.add_argument('--cause', required=True, choices=END_CAUSES)
+    end.add_argument('--actor', default='engineering-manager')
     args = parser.parse_args(argv)
+    write = record_auth_cause if args.command == 'record-auth-cause' else record_end_cause
     path = Path(args.store)
     if not path.is_file():
         print(f'REFUSED STORE_MISSING: {path} is not a file', file=sys.stderr)
         return 2
     opened = store.open_store(path)
     try:
-        result = record_auth_cause(opened, args.operation_key, cause=args.cause, actor=args.actor)
+        result = write(opened, args.operation_key, cause=args.cause, actor=args.actor)
     except DispatchRefused as exc:
         print(f'REFUSED {exc.code}: {exc.detail}', file=sys.stderr)
         return 1

@@ -556,7 +556,7 @@ text>: {"errorKind": <the CLI's error kind>}` are the pinned sources' (the deter
 | the same codes, error kind `server_error`, text `Repeated 529 Overloaded errors` or `This is a server-side issue` (a 5xx) | overload | interruption |
 | error kind `server_error`, `Connection to the API was lost (<code>)` or `Unable to connect to API (<code>)` with a code of the CLI's dropped set (`ECONNRESET`, `EPIPE`, `ConnectionClosed`, `ETIMEDOUT`, `ECONNABORTED`, `ERR_SOCKET_CLOSED`, `StreamSuspended`), or `Request timed out` | stream-cut | interruption |
 | error kind `server_error` with a code of the CLI's never-opened set (`ECONNREFUSED`, `ConnectionRefused`, `ENOTFOUND`, `ENETUNREACH`, `ENETDOWN`, `EHOSTUNREACH`, `EHOSTDOWN`, `EAI_AGAIN`, `FailedToOpenSocket`, `ERR_PROXY_TUNNEL`), or `Unable to connect to API. Check your internet connection`; a dispatcher record `provider-path-lost` | path-lost | interruption |
-| anything else: an error status with no error event, the SDK's idle timeout (an agent message only), the adapter's process exit, `invalid_request`, `model_not_found`, an SSL failure, `UsagePolicyRefusal`, a status number with no error kind | none | **unclassified**: no new attempt here |
+| anything else: an error status with no error event, the SDK's idle timeout (an agent message only), the adapter's process exit, `invalid_request`, `model_not_found`, an SSL failure, `UsagePolicyRefusal`, a status number with no error kind | none | **unclassified**: no new attempt until the engineering manager classifies the end (`record-end-cause`, below) |
 
 A security stop outranks an authentication refusal, which outranks the other interruptions.
 
@@ -564,7 +564,8 @@ A security stop outranks an authentication refusal, which outranks the other int
 work item, design revision and stage that created a native conversation (`confirmed`, its dispatched transition
 carrying the native token's fingerprint) must have an end record (`PRIOR_ATTEMPT_NOT_ENDED`); none may have ended
 non-retryable (`PRIOR_END_SECURITY_STOP`: the leaf stops as a security stop) or unclassified
-(`PRIOR_END_UNCLASSIFIED`); each one's runtime is observed stopped now (`missing`, or the server no longer knows the
+(`PRIOR_END_UNCLASSIFIED`, until the engineering manager's end-cause record classifies it: `interruption` then
+counts as an interruption's end, `security-stop` as `PRIOR_END_SECURITY_STOP`); each one's runtime is observed stopped now (`missing`, or the server no longer knows the
 conversation; else `PRIOR_CONVERSATION_RUNNING` or `PRIOR_CONVERSATION_UNOBSERVED`). After an authentication
 refusal, the engineering manager's cause record is required (`PRIOR_AUTH_CAUSE_UNRECORDED`: never an automatic
 retry), and where its cause is `token-refused`, the newest native-token entry receipt (the Owner's entry
@@ -577,17 +578,28 @@ The new attempt is the next ordinal (E-01.1.1), so its conversation id is new: t
 again to an existing conversation or attempt, and an ended attempt is never dispatched again (its record is not
 `reserved`).
 
-**The cause record.** The engineering manager's command (the smallest durable form):
+**The cause records.** The engineering manager's commands (the smallest durable form; `task
+dispatch:record-auth-cause STORE=... OPERATION_KEY=... CAUSE=...` and `task dispatch:record-end-cause ...` wrap
+them):
 
 ```
 python -I -B integrations/dispatch/attempt_end.py record-auth-cause --store <integration.sqlite> --operation-key <key> --cause token-refused|account-not-permitted|provider-fault
+python -I -B integrations/dispatch/attempt_end.py record-end-cause --store <integration.sqlite> --operation-key <key> --cause interruption|security-stop
 ```
 
 `record_auth_cause` writes one receipt `dispatch/attempt/<attempt id>/auth-cause` (`auth-cause/v1`: the attempt,
 its conversation, the cause, `tokenRefused`, the refused token's fingerprint when the cause is `token-refused`,
 the end record's key; `recordedBy` in the confirmed detail). Only for an end record of an authentication refusal
 (`AUTH_CAUSE_NOT_APPLICABLE`); the same cause again returns it, another is `AUTH_CAUSE_CONFLICT`, an unknown one
-`AUTH_CAUSE_INVALID`. Exit 0 with the record, 1 on a refusal, 2 on a usage or store error.
+`AUTH_CAUSE_INVALID`. `record_end_cause` classifies an **unclassified** end, so that it never strands the task:
+one receipt `dispatch/attempt/<attempt id>/end-cause` (`end-cause/v1`: the attempt, its conversation, the cause,
+the classification it stands for, `interruption` or `non-retryable`, and the end record's key; `recordedBy` in
+the confirmed detail), beside the end record, which never changes. Only for an end record that is unclassified (no
+end record, or a classified one, interruption, authentication refusal or non-retryable, is
+`END_CAUSE_NOT_APPLICABLE`: a security stop is never re-classified); the same cause again returns it, another is
+`END_CAUSE_CONFLICT`, an unknown one `END_CAUSE_INVALID`; a write interrupted before its confirmation is resumed
+by the repeat and counts only once confirmed. Each command exits 0 with the record, 1 on a refusal, 2 on a usage or
+store error.
 
 **Not yet verified:** any live conversation, runtime stop or provider refusal: what the pinned stack records for
 each interruption is read from its sources, never observed (the determination record's unknowns); the end and
@@ -1034,6 +1046,7 @@ acceptance takes effect when a manifest naming it is promoted.
 | `PRIOR_END_SECURITY_STOP`, `PRIOR_END_UNCLASSIFIED` | an earlier attempt ended non-retryable (the leaf's security stop), or with no provider interruption surfaced |
 | `PRIOR_AUTH_CAUSE_UNRECORDED`, `PRIOR_AUTH_TOKEN_NOT_REPLACED`, `NATIVE_TOKEN_NOT_REPLACED` | after an authentication refusal: no cause record; the provider refused the token and no newer entry receipt holds another; the token read is a refused one or not the receipt's |
 | `AUTH_CAUSE_INVALID`, `AUTH_CAUSE_NOT_APPLICABLE`, `AUTH_CAUSE_CONFLICT` | the cause record: an unknown cause; no end record of an authentication refusal; another cause recorded |
+| `END_CAUSE_INVALID`, `END_CAUSE_NOT_APPLICABLE`, `END_CAUSE_CONFLICT` | the end-cause record: neither interruption nor security-stop; no end record, or one already classified; another classification recorded |
 
 **No approved catalog means no dispatch.** `agent_manifest_digest` is required. Until
 A-01.1 promotes approved catalog pins into the manifest, every request is refused
@@ -1048,6 +1061,8 @@ Run from the repository root (`python3` outside Windows):
 python -I -B -m unittest discover -s integrations/dispatch/tests -v                         # task dispatch:test
 python -I -B integrations/dispatch/dispatch_inputs.py check-manifest --manifest FILE        # task dispatch:check-manifest
 python -I -B integrations/dispatch/dispatch_inputs.py manifest-path                         # task dispatch:manifest-path
+python -I -B integrations/dispatch/attempt_end.py record-auth-cause --store S --operation-key K --cause C   # task dispatch:record-auth-cause
+python -I -B integrations/dispatch/attempt_end.py record-end-cause --store S --operation-key K --cause C    # task dispatch:record-end-cause
 ```
 
 `check-manifest` schema-checks a file and prints a `manifest-check/v1` JSON report; exit 0
@@ -1216,6 +1231,7 @@ clause:
 | `NewAttempt` | after an interruption's end: the next ordinal on the same work item, design revision and stage, a new conversation, the token only in its create, the ended conversation never sent a body; refused with nothing reserved and no token read while unended, while the runtime is `available` or `starting` again or unobserved, after each security stop and after an unclassified end; an attempt refused before its create needs no end |
 | `AuthenticationRefusal` | no new attempt until the cause is recorded; `account-not-permitted` admits the same token; `token-refused` refuses until the Owner's entry command (run in process) records a receipt of another token, refuses the same token re-entered, fails the attempt that reads a stale entry, and the admitted create carries the new token; the cause record's rules; the receipt constants are the entry command's |
 | `CauseCommand` | the command's exit codes and record; repeat, conflict, an unknown cause, a missing store |
+| `UnclassifiedEndCause` | an unclassified end stays `PRIOR_END_UNCLASSIFIED` until classified; `interruption` admits the next ordinal with a new conversation and leaves the end record and its events unchanged; `security-stop` refuses every new attempt (`PRIOR_END_SECURITY_STOP`); no end record, a classified end (an interruption, an authentication refusal, a security stop) is `END_CAUSE_NOT_APPLICABLE`; repeat, conflict and invalid cause; a write crashed before its confirmation counts only once resumed; the command's exit codes and both Task targets |
 | `TokenNeverAgain` | an ended attempt is never re-dispatched; one create per conversation and the token only in creates; no record, refusal or output carries the token, only its fingerprint |
 | `ClientQuery` (unit) | only the event search takes `page_id`, in its grammar; the four routes the end uses are `dispatcher` `allowed` in the pinned allowlist |
 
