@@ -471,9 +471,9 @@ class TestAdmission(Fixture):
         self.assertFalse(hasattr(IB, 'BUDGET_LIMITS'))
 
 
-class TestQuerySetFamily(Fixture):
-    """A declaration may admit exact whole query strings (S-03.3 retired pass); the token can then not travel in a
-    query, which would not be one of them."""
+class TestQueryPassFamily(Fixture):
+    """A declaration may admit exact whole query strings (S-03.3 retired pass; the class and test names, recorded in
+    the test set, are kept); the token can then not travel in a query, which would not be one of them."""
 
     @classmethod
     def setUpClass(cls):
@@ -485,7 +485,7 @@ class TestQuerySetFamily(Fixture):
                                                allow_ephemeral=True)
         cls.broker = cls.rig.broker
 
-    def test_an_admitted_query_never_carries_the_token(self):
+    def test_a_passed_query_never_carries_the_token(self):
         grant = self.issue()
         self.assertEqual(self.admit(grant, target='/v1/chat/completions?api-version=1').path, '/v1/chat/completions')
         self.assertEqual(self.refused(grant, target='/v1/chat/completions?key=' + grant['token']), 'QUERY_NOT_ALLOWED')
