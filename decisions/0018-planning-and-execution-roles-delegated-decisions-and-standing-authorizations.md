@@ -2,7 +2,9 @@
 
 Status: Accepted (Owner) - 2026-11-12, revision 4, in the Owner's words "I accept decision 0018 revision 4 as
 presented" (verbatim in `evidence/bootstrap-log.md`, Decisions, "Owner acceptance: decision 0018 revision 4, and
-OA-28 item 5 with item 3"). Its history: Proposed - 2026-11-12, revision 4. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
+OA-28 item 5 with item 3"); revision 5 (2026-11-13) was applied by the product manager on the Owner's direction of
+2026-11-13 (verbatim in the log's Decisions, "Owner direction: reconcile the D1 provider-access requirements before
+live execution"; point 4.8), its changes listed under "Revisions". Its history: Proposed - 2026-11-12, revision 4. Drafted by the Overseer on the Owner's direction of 2026-11-12 (verbatim
 in `evidence/bootstrap-log.md`, Decisions, "Owner direction: the five-role operating model"); revised by the product
 manager on the Owner's direction of the same day (Decisions, "Owner direction: decisions on the product manager's
 first planning assessment", item 1), and refined again on the Owner's direction "finalize decision 0018 revision 2"
@@ -123,15 +125,16 @@ The Owner's direction for revision 2, item 1, verbatim:
    with the reasoning recorded and the program manager's challenge. Routine publication within existing
    permissions: fast-forward checkpoint pushes of verified work to this repository's existing origin and branch,
    never a force push, a new remote, a tag or a release. Technical model selection inside a model-access
-   envelope the Owner has explicitly authorized: the provider, the spending limits and the permitted external
-   effects (the egress origin and what may be sent to it). Inside it, the engineering manager, for the leaf that
+   envelope the Owner has explicitly authorized: the provider and the permitted external effects (the egress origin
+   and what may be sent to it). The envelope carries no spending limit: spending is bounded by the provider
+   account's own limits (revision 5). Inside it, the engineering manager, for the leaf that
    makes the paid call, selects the exact model identifiers, any secondary model included, verifies them against
    current provider information, and records them with their intended uses and expected cost characteristics;
    each such record is presented to the Owner before the first paid operation under it, and the broker admits only
    the recorded identifiers. Where a leaf's acceptance criteria require the Owner's approval of model identifiers,
    this applies to that leaf only once those criteria are amended through the integrity process to state it (for
    S-03.3, OA-28 item 5); until then that approval is required, and a presentation never stands in for it. A
-   provider, origin, limit or model outside the envelope is an Owner decision per act. And:
+   provider, origin or model outside the envelope is an Owner decision per act. And:
    1. **Architectural decisions.** A decision record is accepted by the lead accountable for its scope under
       point 1, after the architect's consultation where a gate earned one. Accepting it authorizes none of the
       reserved acts (point 4) it names: each is presented separately, and the design does not wait for them. A
@@ -163,7 +166,8 @@ The Owner's direction for revision 2, item 1, verbatim:
 
 4. **Reserved to the Owner, per act.**
    1. Entering, rotating or exposing an Owner or provider credential.
-   2. Creating or raising a spending cap or budget.
+   2. Creating or raising a spending cap or budget. None is required (revision 5): the harness enforces no
+      spending limit.
    3. Each recorder decision outside point 3's delegation: every authorization of a consequential effect, the
       protected merge (decision 0012) included; the acceptance of an objective as the Owner's intent (decision
       0008), for which the Owner's own recorded statement suffices and no separate approval is asked; every design
@@ -210,8 +214,8 @@ The Owner's direction for revision 2, item 1, verbatim:
    record. `AGENTS.md` is unchanged for every contributor; for the five roles, a delegation of point 3 is the
    user's approval that `AGENTS.md` requires for that act (a push, a credential use, a change to an
    integrity-tracked file), and nothing more. Delegation changes who decides, never a mechanism: the recorder's
-   challenge, the guest boundary, the network matrix's `owner_act` edges, the provider-side and broker spending
-   limits, Gitea's protection and the publication gate stay in force, and an act a mechanism refuses is not
+   challenge, the guest boundary, the network matrix's `owner_act` edges, the provider account's own limits,
+   Gitea's protection and the publication gate stay in force, and an act a mechanism refuses is not
    authorized by this record. Every consequential effect outside point 3 still needs the Owner's explicit
    authorization, per act or standing.
 
@@ -236,7 +240,7 @@ The Owner's direction for revision 2, item 1, verbatim:
 
 ## Not decided here
 
-The provider, its egress origin, the spending cap and the key; the D1 standing authorization and any manifest
+The provider, its egress origin and the key; the D1 standing authorization and any manifest
 envelope it carries (presented separately, item by item); the recorder decisions D1 needs that point 3 does not
 delegate.
 
@@ -272,6 +276,21 @@ amended through the integrity process (OA-28 item 5). Consequences add that reco
 says so). The engineering manager is named as the one who selects (point 1's row). Nothing else changed beyond the
 Status line and the annotation of revision 3.
 
+Revision 5 (product manager, 2026-11-13, applying the Owner's direction of 2026-11-13, "Owner direction: reconcile
+the D1 provider-access requirements before live execution", verbatim in the log's Decisions, which retires
+"Harness-enforced spending limits", "Per-attempt inference budgets", "Budget exhaustion as an authorization
+failure" and "Requirements for the Owner to choose spending caps or enforcement mechanisms", and reads
+"Reconcile decisions 0015, 0018 and 0021" and "avoid redundant confirmations of decisions already covered by
+accepted intent"). This revision is the product manager's application of those words; it was not presented for a
+separate acceptance.
+Changed: point 3, where the model-access envelope is the provider and the permitted external effects, with no
+spending limit, and "limit" is dropped from what lies outside it; point 4.2 notes that no cap or budget is
+required; point 8 names the provider account's own limits in place of "the provider-side and broker spending
+limits"; "Not decided here" drops the spending cap. Unchanged: every other delegation and reserved act, the items
+that are never standing, credential custody (point 4.1), the recorder decisions (point 4.3), the widening of policy
+(point 4.7), and points 1, 2, 5, 6 and 7. The Status line keeps its form `Status: Accepted (Owner) -`, which the
+recorders check.
+
 ## Current facts
 
 - 2026-11-12: Accepted by the Owner (revision 4). Consequences applied the same day: `security/inventory.json`
@@ -279,3 +298,6 @@ Status line and the annotation of revision 3.
   points to point 7; the plan amendment of 2026-11-12 (OA-28 items 1 to 5) reconciles S-03.3 with point 3, adds
   S-03.5 and makes E-05.1 depend on P-04.3. The Owner's acceptance authorizes no provider credential, spending,
   external egress, first model call or other reserved live effect.
+- 2026-11-13: Revision 5 applied (above). Decisions 0015 (amendment 2) and 0021 (amendment 1) and the plan are
+  reconciled with it the same day; it authorizes no provider credential, egress or model call (OA-12 stays
+  unanswered).

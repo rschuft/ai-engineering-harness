@@ -1,6 +1,6 @@
-# 0021 - The provider envelope: the broker's start precondition, the model selection and the broker-enforced cap
+# 0021 - The provider envelope: the broker's start precondition, the model selection and the broker-enforced cap (the cap retired by amendment 1)
 
-Status: Accepted (engineering manager) - 2026-11-13, at the completion of plan leaf S-03.5, under decision 0018 points 1 and 3.1 (an architectural decision inside committed scope that changes no acceptance criterion, no other leaf's contract and no Owner-approved policy; it narrows the broker's start). It authorizes no reserved act: no provider key, envelope, spending cap, egress or model call. Previously: Proposed - 2026-11-13, for plan leaf S-03.5 (architect, gates C and G; engineering manager's rulings)
+Status: Accepted (engineering manager) - 2026-11-13, at the completion of plan leaf S-03.5, under decision 0018 points 1 and 3.1 (an architectural decision inside committed scope that changes no acceptance criterion, no other leaf's contract and no Owner-approved policy; it narrows the broker's start). It authorizes no reserved act: no provider key, envelope, spending cap, egress or model call. Amended 2026-11-13 (amendment 1, product manager, on the Owner's direction of 2026-11-13): the spending limit and the broker-enforced cap are retired. Previously: Proposed - 2026-11-13, for plan leaf S-03.5 (architect, gates C and G; engineering manager's rulings)
 
 **Authority:** plan leaf S-03.5, "Bind the broker's real-provider start to a recorded provider-envelope
 authorization" (its action, artifact and proof unchanged); decision 0012 (the authorization recorder's receipts,
@@ -243,6 +243,35 @@ not an OS-enforced boundary.
   unchanged.
 - A broker-enforced cap closes the envelope on any unknown outcome, including one transient TLS failure, until a new
   authorization.
+
+## Amendment 1 (2026-11-13): the envelope without a spending limit
+
+By the product manager (a change to the contract between leaves and to S-03.5's criteria; decision 0018 point 1),
+applying the Owner's direction of 2026-11-13 ("Owner direction: reconcile the D1 provider-access requirements before live execution", verbatim in `evidence/bootstrap-log.md`, Decisions) and decision 0018 revision 5. The text above stays as written; where it and this amendment
+disagree, this amendment governs.
+
+1. **The canonical form is `aieh-provider-envelope/2`** (section 1): exactly `format`, `provider`, `origin`,
+   `expires_at` and `selection`. `limit` is removed from the document, from the `config.yml` block and from the
+   digest. A block that still carries `limit` is refused (`CONFIG_ENVELOPE_INVALID`), never ignored. As section 1
+   states, receipts under `/1` stop verifying; none was recorded for a real provider.
+2. **Section 6 is retired.** No cumulative cap, no `enforced_by`, no per-run ledger (`inference/envelope/...`), and
+   no `ENVELOPE_CAP_REACHED` or `ENVELOPE_USAGE_UNKNOWN`, at a request or at a start. Section 3's start order loses
+   its ledger step. Section 4's minted object loses the limit's enforcement, the carried usage and the run. Section
+   7's disclosures about the cap, and the Consequences item on a closed envelope, lapse with it. Spending is bounded
+   by the provider account's own limits.
+3. **Kept unchanged:** the operation kind, the canonical JSON and digest rule, the manifest binding and
+   `inference_broker.py envelope`; which authorization governs a start (section 2); the start precondition before
+   the key and the listeners, and the loopback rule (section 3); the minted object, the expiry and supersession
+   (section 4); the two selection authorities and the per-request model check (section 5); the threat model
+   (section 8), less the limit; and `expires_at` as a security validity window (decision 0012 point 7), not a
+   spending term.
+4. **Section 9:** item 1 stands (the package of 2026-11-13 presents `2027-01-31T23:59:59Z`); item 4 lapses (there is
+   no `enforced_by`); items 3 and 5 stand as disclosures.
+5. **`BROKER_STOPPING`** was introduced so that a run's close counted its whole usage. Whether the broker keeps it as
+   part of its clean stop is the engineering manager's decision inside S-03.6.
+
+The code change is plan leaf S-03.6's. Until it passes, the built `/1` form stays in the code, and the Owner is
+shown no envelope manifest (OA-12 act 3 waits on it).
 
 ## Evidence
 

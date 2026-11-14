@@ -1,6 +1,6 @@
 # 0015 - Inference broker placement, provider-credential custody and the guest `inference` endpoint
 
-Status: Proposed, amended - 2026-11-10. The Owner approved amendment 1 (below) on 2026-11-10 (Owner decision (c) on OA-12, verbatim in `evidence/bootstrap-log.md`, Decisions). That approval, and the Owner's acceptance on the same day of the ACP coding-provider path, its brokered dedicated-key authentication in principle and Claude Code as the first provider to qualify, are **architectural acceptance, not execution authorization**: no key is created or stored, no capacity bought, no host listener, guest forward, guest hardening change, egress or model call happens until its own Owner act is recorded. The original status follows unchanged as history.
+Status: Proposed, amended - 2026-11-10. The Owner approved amendment 1 (below) on 2026-11-10 (Owner decision (c) on OA-12, verbatim in `evidence/bootstrap-log.md`, Decisions). That approval, and the Owner's acceptance on the same day of the ACP coding-provider path, its brokered dedicated-key authentication in principle and Claude Code as the first provider to qualify, are **architectural acceptance, not execution authorization**: no key is created or stored, no capacity bought, no host listener, guest forward, guest hardening change, egress or model call happens until its own Owner act is recorded. Amendment 2 (2026-11-13, product manager, applying the Owner's direction of 2026-11-13) retires the harness's spending enforcement and grants nothing. The original status follows unchanged as history.
 
 Original status: Proposed - 2026-11-10, for plan leaf S-03.1 at `7b93fb3`: an Architect design (gates B and G), reviewed by the Overseer and put to the Owner as Owner action OA-12 ([the authorization request](../evidence/S-03.1-owner-authorization-request.md)). It authorizes nothing: every act it names waits for the Owner's answer to the S-03.1 authorization request, and no model run, credential entry, host listener, guest-to-host path or guest composition change happens before that answer is recorded in `evidence/bootstrap-log.md`. S-03.2 implements it exactly as authorized, or not at all.
 
@@ -143,6 +143,47 @@ Still open, each its own Owner act or presentation (bootstrap log, OA-12): the e
 listeners, the guest forward and hardening change, external egress, the first model call, and the image
 adapter check (whether the pinned image contains the Claude Code and Codex ACP adapters; a derived image, if
 needed, is presented before adoption; no runtime `npx` fallback).
+
+## Amendment 2 (2026-11-13): no harness spending enforcement
+
+By the product manager, applying the Owner's direction of 2026-11-13 ("Owner direction: reconcile the D1 provider-access requirements before live execution", verbatim in `evidence/bootstrap-log.md`, Decisions), which retires "Harness-enforced spending limits", "Per-attempt
+inference budgets", "Budget exhaustion as an authorization failure" and "Requirements for the Owner to choose
+spending caps or enforcement mechanisms", and keeps "Anthropic API access through the inference broker",
+"Provider credential custody", "Approved network destinations", "Guest isolation and containment" and
+"Security-relevant authorization and evidence". The text above, amendment 1 and the Current facts below stay as
+written; where they and this amendment disagree, this amendment governs. The Current facts of 2026-11-13 (items 1
+and 3: the spending limit in the digest, the token budgets and the cumulative cap) describe the code as built,
+until S-03.6 passes; they are no longer requirements.
+
+1. **The attempt token carries no budget** (sections 3.1 and 3.3; amendment 1 item 1). It stays bound to one
+   API family, its reserved conversation and attempt, its model list and its expiry, and is revoked as section
+   3.3 states. "Budget (requests and tokens)" is retired as a limit; the never-built per-day budget is retired.
+   No request is refused for its count or its usage.
+2. **An unknown usage closes nothing.** An answer without readable usage, or one cut off by the upstream or the
+   client, is audited with its usage `unknown` (section 6.1) and changes no grant: the rule that closed an
+   attempt's token for good after one such answer (`BUDGET_USAGE_UNKNOWN`) is retired.
+3. **Spending is bounded by the provider account's own limits** (section 2.2; section 6.3). The key stays a
+   dedicated harness key, revocable by the Owner at the provider; a spend cap set at the provider is the Owner's
+   option, not a requirement of this record. The broker does no cost accounting and enforces no cumulative cap
+   (decision 0021 amendment 1).
+4. **A provider refusal is an interruption, not an authorization failure.** A provider answer refusing for
+   authentication, credit or spending limits, rate or overload, and a lost upstream, are passed through
+   unchanged and audited with the upstream status, distinguishable from the broker's own refusals, which carry
+   the broker's stable codes. They are not containment or credential stops. What happens to the attempt (its
+   end, the revocation of its token, its durable records, and a later new attempt with a new conversation and a
+   new token) is the dispatcher's, under plan leaf E-05.8. After a provider authentication refusal, a new attempt
+   waits until the engineering manager has recorded its cause, since a revoked key is an early end of the Owner's
+   authorization; a containment, credential or unexpected-egress stop is never an interruption. No token is granted again to an existing conversation
+   or attempt; native resumption is a deferral of the plan, reconsidered on its own evidence.
+5. **What bounds a leaked attempt token** (section 3.3) is its model list, its lifetime (the broker's `max_ttl_s`)
+   and its revocation, then the provider account's own limits, which the Owner accepted; no longer a budget.
+6. **Kept:** the custody of section 2, the per-attempt identity and revocation of section 3, the endpoint and its
+   inspection (section 4), the one egress origin (section 5), the audit (section 6: usage counts stay recorded as
+   evidence, never as a limit), section 8's threat model except "exceeding budgets (prevented at the broker)",
+   which is retired, and every boundary of amendment 1 item 7.
+
+The code change is plan leaf S-03.6's (the plan amendment of 2026-11-13). Until it passes, the built budgets and
+`BUDGET_USAGE_UNKNOWN` stay in the code, and no live act relies on them.
 
 ## Evidence
 - Plan leaves S-03, S-03.1, S-03.2; the Owner's decisions of 2026-11-07 and the guest-run authorization extension (bootstrap log).

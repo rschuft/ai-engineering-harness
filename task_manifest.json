@@ -1,5 +1,5 @@
 {
-  "task_count": 177,
+  "task_count": 179,
   "tasks": [
     {
       "id": "F-01.1",
@@ -619,7 +619,7 @@
         "S-01.2.2"
       ],
       "path": "task_prompts/E-05.7.md",
-      "sha256": "eb011a6750a80edfe90bcfad9d3fcaf3bc20d048de20de813ab48e42c09ea34e"
+      "sha256": "99d7cd6fe2eb90b9be2c315117dd109a6adbfee273b2864c246494b356656c84"
     },
     {
       "id": "E-01.1.1",
@@ -685,7 +685,39 @@
         "P-04.3"
       ],
       "path": "task_prompts/S-03.5.md",
-      "sha256": "690651cc4a1c9392251653eb16fdb1f9fce8a24eb65c5ab1b8bc2b04536203d0"
+      "sha256": "06bcafb69e98df50ad8b15fef3be6958739e3a9ecdd954583c0e35c8183b252c"
+    },
+    {
+      "id": "E-01.3.1",
+      "title": "Implement typed native conversation-create request",
+      "phase": 1,
+      "deps": [
+        "E-01.2.2"
+      ],
+      "path": "task_prompts/E-01.3.1.md",
+      "sha256": "05b36783235c3982dfd414183937b01b3cfcdec342d6d48a4077b90646f2a5c5"
+    },
+    {
+      "id": "E-05.6",
+      "title": "Admit the D1 stage's create secrets: the attempt's inference token and endpoint",
+      "phase": 1,
+      "deps": [
+        "E-01.2.2",
+        "E-01.3.1"
+      ],
+      "path": "task_prompts/E-05.6.md",
+      "sha256": "7762bbbb059ac8ac59e29a4707eaa3f7e91b2775fabf0ae823312e2ba0344c47"
+    },
+    {
+      "id": "S-03.6",
+      "title": "Retire the harness's spending enforcement from the broker, the provider envelope and the D1 grant",
+      "phase": 0,
+      "deps": [
+        "S-03.5",
+        "E-05.6"
+      ],
+      "path": "task_prompts/S-03.6.md",
+      "sha256": "a297e98603e693a5471697a309f6a44ba11b5ea273a0a48325859a3fa6f753bc"
     },
     {
       "id": "S-03.3",
@@ -695,10 +727,11 @@
         "S-03.2",
         "F-04.2",
         "S-03.5",
-        "E-05.7"
+        "E-05.7",
+        "S-03.6"
       ],
       "path": "task_prompts/S-03.3.md",
-      "sha256": "074887b98c1cb4da3f1110ca9ff4415bad8a35805bbe7f1083af4162d4bce28e"
+      "sha256": "4ba761a4c628faee736e56d623c56d8cff7efac054394cf3d626d81102faa8c5"
     },
     {
       "id": "F-09.5",
@@ -710,16 +743,6 @@
       ],
       "path": "task_prompts/F-09.5.md",
       "sha256": "4c421991e19f7c6104ee0ce748da51862d22c747eca2df062600a21da48dad3c"
-    },
-    {
-      "id": "E-01.3.1",
-      "title": "Implement typed native conversation-create request",
-      "phase": 1,
-      "deps": [
-        "E-01.2.2"
-      ],
-      "path": "task_prompts/E-01.3.1.md",
-      "sha256": "05b36783235c3982dfd414183937b01b3cfcdec342d6d48a4077b90646f2a5c5"
     },
     {
       "id": "E-01.3.3",
@@ -862,7 +885,7 @@
         "P-04.3"
       ],
       "path": "task_prompts/E-05.1.md",
-      "sha256": "667883666443d9040bccc006221e04197079826ba82d0b488bcaed2e21a21175"
+      "sha256": "4d73b3a7733888d7f3ab4e1a75352c380d1278438f2bbbc041e9395789f5f008"
     },
     {
       "id": "E-05.2",
@@ -873,7 +896,7 @@
         "S-03.3"
       ],
       "path": "task_prompts/E-05.2.md",
-      "sha256": "80e0ac7ed42716602edb13c9f03a16b28b73771e5ebe2f93229b62c24ccd0b78"
+      "sha256": "f66d2046593b0e8214aef89e046063400281d961d094ecd3093b4e56107ce953"
     },
     {
       "id": "E-05.3",
@@ -884,7 +907,7 @@
         "E-05.2"
       ],
       "path": "task_prompts/E-05.3.md",
-      "sha256": "1907d14ba4fb2fbe787c9aba87eb27b5c6a646345c8990af7c6ff7b7f4d3ebf9"
+      "sha256": "3a9b6ec81cd2da3c64400b0c9efb0d9d0d6b37bb757731480e5995045e65482a"
     },
     {
       "id": "E-05.4",
@@ -895,18 +918,18 @@
         "F-10.6"
       ],
       "path": "task_prompts/E-05.4.md",
-      "sha256": "878fabb05ee1863f7e188a3a3e51faeb1bc3ba8179fc07e3e7c2366e0b2cef65"
+      "sha256": "1f67d6775f01d4a83056adda38c068c177a9495af4f08d38efcb32a591c9c6ea"
     },
     {
-      "id": "E-05.6",
-      "title": "Admit the D1 stage's create secrets: the attempt's inference token and endpoint",
+      "id": "E-05.8",
+      "title": "End a provider-interrupted D1 attempt cleanly and admit a new attempt for the same task",
       "phase": 1,
       "deps": [
-        "E-01.2.2",
-        "E-01.3.1"
+        "S-03.6",
+        "E-05.6"
       ],
-      "path": "task_prompts/E-05.6.md",
-      "sha256": "4d19ae93e8c2523fe2cc2fcd55219a0d839e7b22e3e6a10ffec8dcfd8806fdf4"
+      "path": "task_prompts/E-05.8.md",
+      "sha256": "e9733eac7bc32df4a6b024c9949ee3d85806b6a6902c457099442fb333cbb33b"
     },
     {
       "id": "E-05.5",
@@ -919,10 +942,11 @@
         "E-05.2",
         "E-05.3",
         "E-05.4",
-        "E-05.6"
+        "E-05.6",
+        "E-05.8"
       ],
       "path": "task_prompts/E-05.5.md",
-      "sha256": "6ddea84d4efed116ef28c9d92079a9cb3d70d3b6c134318e45fd3a5489725d14"
+      "sha256": "41f5f28d04a571213d0ce9b77599fc63ba181bbf75cd6eeb5f27c79915edaa90"
     },
     {
       "id": "P-05.1",
