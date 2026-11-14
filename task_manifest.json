@@ -1,5 +1,5 @@
 {
-  "task_count": 179,
+  "task_count": 182,
   "tasks": [
     {
       "id": "F-01.1",
@@ -619,7 +619,7 @@
         "S-01.2.2"
       ],
       "path": "task_prompts/E-05.7.md",
-      "sha256": "99d7cd6fe2eb90b9be2c315117dd109a6adbfee273b2864c246494b356656c84"
+      "sha256": "e75e694ae1fbc5c7b8bf2ed6b2b92e36c15a01cb68badd8fe32418f35825730f"
     },
     {
       "id": "E-01.1.1",
@@ -706,7 +706,7 @@
         "E-01.3.1"
       ],
       "path": "task_prompts/E-05.6.md",
-      "sha256": "7762bbbb059ac8ac59e29a4707eaa3f7e91b2775fabf0ae823312e2ba0344c47"
+      "sha256": "1e4d74ee368be682a56ff4a82debb5f7e53e13fa5b4e1536200c3bd5cf3bcc03"
     },
     {
       "id": "S-03.6",
@@ -885,7 +885,40 @@
         "P-04.3"
       ],
       "path": "task_prompts/E-05.1.md",
-      "sha256": "4d73b3a7733888d7f3ab4e1a75352c380d1278438f2bbbc041e9395789f5f008"
+      "sha256": "ce78fb6925fd24d53a0dd62daea19aa264f96aa2e22e17459f1a6ec9ee17868d"
+    },
+    {
+      "id": "E-05.9",
+      "title": "Hold the native Claude Code token in host custody and admit the D1 stage's native create secrets",
+      "phase": 1,
+      "deps": [
+        "E-01.2.2",
+        "E-01.3.1",
+        "F-06.3"
+      ],
+      "path": "task_prompts/E-05.9.md",
+      "sha256": "8d6c77400c83f1b507903fa30bdbccb3c8e2ea6ac5076608e94bf7a326f86576"
+    },
+    {
+      "id": "E-05.10",
+      "title": "Qualify native provider access through a host CONNECT-only tunnel, with no credential",
+      "phase": 1,
+      "deps": [
+        "S-02.2"
+      ],
+      "path": "task_prompts/E-05.10.md",
+      "sha256": "282135c9976e468dc992dad97e7786b3b4c9abbfa4f4964ac7b4ddeaa13f17f1"
+    },
+    {
+      "id": "E-05.11",
+      "title": "Qualify native Claude Code in the execution container: the first authenticated turn, containment, and no persisted or leaked token",
+      "phase": 1,
+      "deps": [
+        "E-05.9",
+        "E-05.10"
+      ],
+      "path": "task_prompts/E-05.11.md",
+      "sha256": "9fe445f19d8287f9cab68f58dce10f9273a2747ecbd75cce9151735e499b6e68"
     },
     {
       "id": "E-05.2",
@@ -893,10 +926,10 @@
       "phase": 1,
       "deps": [
         "E-01.2.2",
-        "S-03.3"
+        "E-05.11"
       ],
       "path": "task_prompts/E-05.2.md",
-      "sha256": "f66d2046593b0e8214aef89e046063400281d961d094ecd3093b4e56107ce953"
+      "sha256": "d646658f738db14bad17083cb9bba8e56684c077b5f840ad3a7655fbf246282d"
     },
     {
       "id": "E-05.3",
@@ -907,7 +940,7 @@
         "E-05.2"
       ],
       "path": "task_prompts/E-05.3.md",
-      "sha256": "3a9b6ec81cd2da3c64400b0c9efb0d9d0d6b37bb757731480e5995045e65482a"
+      "sha256": "74d34b585244d512305cae022850c9321f4943ce111c1a16005c7eb039fbd7eb"
     },
     {
       "id": "E-05.4",
@@ -918,18 +951,17 @@
         "F-10.6"
       ],
       "path": "task_prompts/E-05.4.md",
-      "sha256": "1f67d6775f01d4a83056adda38c068c177a9495af4f08d38efcb32a591c9c6ea"
+      "sha256": "172a5aec8a6a77807b303c61a695afcb40a74438df61523f77dc4009865b9d88"
     },
     {
       "id": "E-05.8",
       "title": "End a provider-interrupted D1 attempt cleanly and admit a new attempt for the same task",
       "phase": 1,
       "deps": [
-        "S-03.6",
-        "E-05.6"
+        "E-01.3.1"
       ],
       "path": "task_prompts/E-05.8.md",
-      "sha256": "e9733eac7bc32df4a6b024c9949ee3d85806b6a6902c457099442fb333cbb33b"
+      "sha256": "339de0c2fad74d4f603fc87a2c611ff1bd638d06e7d51bf9ac014308ed5d9596"
     },
     {
       "id": "E-05.5",
@@ -937,16 +969,16 @@
       "phase": 1,
       "deps": [
         "E-01.3.2",
-        "S-03.3",
+        "E-05.11",
         "E-05.1",
         "E-05.2",
         "E-05.3",
         "E-05.4",
-        "E-05.6",
+        "E-05.9",
         "E-05.8"
       ],
       "path": "task_prompts/E-05.5.md",
-      "sha256": "41f5f28d04a571213d0ce9b77599fc63ba181bbf75cd6eeb5f27c79915edaa90"
+      "sha256": "9090c3533a3ad73062871e437933a3c0551cec7e33af28b0481bca1f0a9fa33b"
     },
     {
       "id": "P-05.1",

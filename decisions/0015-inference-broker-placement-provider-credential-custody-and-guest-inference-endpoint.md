@@ -1,6 +1,6 @@
 # 0015 - Inference broker placement, provider-credential custody and the guest `inference` endpoint
 
-Status: Proposed, amended - 2026-11-10. The Owner approved amendment 1 (below) on 2026-11-10 (Owner decision (c) on OA-12, verbatim in `evidence/bootstrap-log.md`, Decisions). That approval, and the Owner's acceptance on the same day of the ACP coding-provider path, its brokered dedicated-key authentication in principle and Claude Code as the first provider to qualify, are **architectural acceptance, not execution authorization**: no key is created or stored, no capacity bought, no host listener, guest forward, guest hardening change, egress or model call happens until its own Owner act is recorded. Amendment 2 (2026-11-13, product manager, applying the Owner's direction of 2026-11-13) retires the harness's spending enforcement and grants nothing. The original status follows unchanged as history.
+Status: Proposed, amended - 2026-11-10. The Owner approved amendment 1 (below) on 2026-11-10 (Owner decision (c) on OA-12, verbatim in `evidence/bootstrap-log.md`, Decisions). That approval, and the Owner's acceptance on the same day of the ACP coding-provider path, its brokered dedicated-key authentication in principle and Claude Code as the first provider to qualify, are **architectural acceptance, not execution authorization**: no key is created or stored, no capacity bought, no host listener, guest forward, guest hardening change, egress or model call happens until its own Owner act is recorded. Amendment 2 (2026-11-13, product manager, applying the Owner's direction of 2026-11-13) retires the harness's spending enforcement and grants nothing. Amendment 3 (2026-11-14, Proposed with decision 0023) scopes this record to the brokered execution profile and grants nothing. The original status follows unchanged as history.
 
 Original status: Proposed - 2026-11-10, for plan leaf S-03.1 at `7b93fb3`: an Architect design (gates B and G), reviewed by the Overseer and put to the Owner as Owner action OA-12 ([the authorization request](../evidence/S-03.1-owner-authorization-request.md)). It authorizes nothing: every act it names waits for the Owner's answer to the S-03.1 authorization request, and no model run, credential entry, host listener, guest-to-host path or guest composition change happens before that answer is recorded in `evidence/bootstrap-log.md`. S-03.2 implements it exactly as authorized, or not at all.
 
@@ -184,6 +184,34 @@ until S-03.6 passes; they are no longer requirements.
 
 The code change is plan leaf S-03.6's (the plan amendment of 2026-11-13). Until it passes, the built budgets and
 `BUDGET_USAGE_UNKNOWN` stay in the code, and no live act relies on them.
+
+## Amendment 3 (2026-11-14, Proposed with decision 0023): the brokered execution profile
+
+Drafted by the program manager for the product manager, applying the Owner's direction of 2026-11-14 ("Owner
+direction: reconcile D1 for isolated, native Claude Code execution", verbatim in `evidence/bootstrap-log.md`,
+Decisions), which reads in part "Reconcile ... Decisions 0015 and 0021.", "Do not intermediate subscription
+credentials through our inference broker." and "The inference broker remains an optional execution profile, not a
+mandatory dependency for native Claude Code execution.". It takes effect when [decision
+0023](0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md) is accepted; until
+then the text above governs unchanged. The text above, amendments 1 and 2 and the Current facts stay as written;
+where they and this amendment disagree, this amendment governs.
+
+1. **Scope.** This record governs the brokered execution profile. The native profile, on which D1 runs, is decision
+   0023's: there, no broker holds a credential, no attempt token is issued or revoked, and the guest's forward ends
+   at a host tunnel that holds no credential. Nothing built or qualified under this record is changed or
+   withdrawn, and it is not a prerequisite of the native profile.
+2. **Amendment 1 item 6** (subscription authentication not qualified for this sandboxed path at the pinned
+   versions) stands for the brokered path. For the native profile, subscription authentication by the provider's
+   long-lived token is qualified, or not, at the pins by plan leaf E-05.11 on its own evidence, as item 6 itself
+   anticipated; until then it is not qualified.
+3. **Amendment 1 item 7's boundaries apply to every profile.** The provider's adapter and CLI run inside the
+   qualified execution container within its limits; ACP permission modes are no boundary; no inherited MCP server,
+   unexpected tool, arbitrary ACP command or unapproved destination enters an attempt; no Owner credential enters an
+   attempt except, on the native profile, the native token that decision 0023 admits on the Owner's direction ("Permit
+   the isolated Claude Code process to access its own authentication credential.") and under the Owner's acts
+   (OA-31). The harness still builds no orchestration layer of its own.
+4. **Unchanged:** every section above for the brokered profile, the recorded Owner act 3 of OA-12 and its receipt,
+   and the pause of acts 1 and 2.
 
 ## Evidence
 - Plan leaves S-03, S-03.1, S-03.2; the Owner's decisions of 2026-11-07 and the guest-run authorization extension (bootstrap log).
