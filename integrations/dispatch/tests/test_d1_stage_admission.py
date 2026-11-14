@@ -65,7 +65,7 @@ DEFAULT = object()
 S = _load('broker_support', base.REPO / 'integrations' / 'inference' / 'tests' / 'broker_support.py')
 FAMILY = 'anthropic-messages'
 TEST_MODEL, OTHER_MODEL = S.MODEL_A, S.MODEL_B
-GRANT = {'requests': 10, 'tokens': 1000, 'ttl_s': 600}
+GRANT = {'ttl_s': 600}           # the grant's lifetime only: S-03.6 retired its request and token budget
 ENDPOINT = 'http://172.17.0.1:8090'
 INFERENCE_ENDPOINT = {'class': 'inference', 'guest_address': '172.17.0.1', 'guest_port': 8090}
 REVOKER = 'E-05.6 test dispatcher'
@@ -101,7 +101,7 @@ class D1Fixture(adm.AdmissionFixture):
 
     def approve_d1(self, template=TEST_TEMPLATE_BYTES, pin=DEFAULT, change=None):
         """Write strong-d1-profile (F-04.2 fixture, route allowlist, the stage template TEMPLATE at D1_PATH
-        and the declaration pinning it, or PIN, with the grant's budgets unless PIN names its own; the guest
+        and the declaration pinning it, or PIN, with the grant's lifetime unless PIN names its own; the guest
         inference endpoint; CHANGE applied to the declaration) and return a manifest approving its exact
         bytes."""
         directory = self.profiles / D1
@@ -153,7 +153,7 @@ class D1Fixture(adm.AdmissionFixture):
         key = resolved.attempt_identity().operation_key
         answer = self.control(rig).issue(conversation_id or store_mod.conversation_id_for(key),
                                          attempt_id or store_mod.attempt_id_for(key), FAMILY, [model],
-                                         GRANT['requests'], GRANT['tokens'], GRANT['ttl_s'])
+                                         GRANT['ttl_s'])
         return di.InferenceGrant.from_answer(answer)
 
     def secreted(self, resolved, admitted, grant=None):

@@ -6,9 +6,10 @@ the model provider's key. It serves two listeners, both bound to 127.0.0.1 only:
 
 - the control listener (issue, revoke, status; never forwarded; same-account only, disclosed under decision
   0013 point 6): it issues one random attempt token per attempt, bound to the attempt and its conversation, to
-  one declared API family, to a model list, to a budget of requests and of usage tokens and to an expiry. The
-  token is returned once and kept only as its sha256 digest; the grant is journaled by the token's fingerprint
-  in the integration store (operation key inference/attempt/<attempt id>/grant, format aieh-inference-grant/1).
+  one declared API family, to a model list and to a lifetime (within max_ttl_s), with no request or token budget
+  (retired by S-03.6: an issue request carrying one is refused BUDGET_RETIRED). The token is returned once and
+  kept only as its sha256 digest; the grant is journaled by the token's fingerprint in the integration store
+  (operation key inference/attempt/<attempt id>/grant, format aieh-inference-grant/2).
   Revocation is immediate (the next request answers 401) and leaves a receipt with the per-attempt summary
   (inference/attempt/<attempt id>/revocation, format aieh-inference-revocation/1): fingerprint, attempt,
   trigger, revoker, requests, usage, refusals. Never the effects store. A grant is revoked by its fingerprint,
@@ -18,10 +19,11 @@ the model provider's key. It serves two listeners, both bound to 127.0.0.1 only:
   revocation's lookup and tombstone run one at a time.
 - the inference listener (the only forward target): a request is admitted only with a valid, unrevoked,
   unexpired token in its family's auth header, a method and path in that family's declared route set, a
-  `model` in both the token's list and the family's allowlist, and budget left. It is then passed through
-  untranslated to that family's one upstream origin, with the provider key in the family's auth header in
-  place of the token (the token never leaves the host toward the upstream), and the answer is streamed back
-  as it arrives. Every refusal answers with a stable code (CODES).
+  `model` in both the token's list and the family's allowlist. It is then passed through untranslated to that
+  family's one upstream origin, with the provider key in the family's auth header in place of the token (the
+  token never leaves the host toward the upstream), and the answer is streamed back as it arrives. Every refusal
+  answers with a stable code (CODES). Usage is read and counted for the audit and the per-attempt summary as
+  information only: no request is refused for a request count, a usage count or an answer without usage.
 
 The families are declared in families.json beside this module (format aieh-inference-families/1): each has an
 id, its exact method and path set (provisional until pinned from observed traffic, amendment 1 point 3), its
@@ -48,17 +50,16 @@ fingerprint only.
 The provider envelope (plan leaf S-03.5, slice 1): before it reads the provider key or opens a listener, serve
 refuses any family whose upstream is not loopback (Origin.loopback: an IP literal only) unless the integration
 store holds the governing, confirmed, unexpired authorization recorder receipt (decision 0012) of operation kind
-provider-envelope whose target is the canonical digest of the live envelope (inference_envelope.py: the provider
-id, the one upstream origin, the spending limit, its enforcement, the expiry and the model selection, projected
+provider-envelope whose target is the canonical digest of the live envelope (inference_envelope.py,
+aieh-provider-envelope/2: the provider id, the one upstream origin, the expiry and the model selection, projected
 from this snapshot and components.inference_broker.envelope), and whose manifest is the canonical manifest of that
 envelope. The read side is integrations/owner/envelope_decisions.py, handed to serve as Context.authorization.
 The broker holds the authorization it was given (authorize: an object minted in this process) and refuses, at
 admission, a request of a bound family whose provider or upstream is not the held one or whose envelope has
 expired. A configuration whose upstreams are all loopback starts as before, and reads no authorization.
-With a broker-enforced cap (limit.enforced_by broker), the usage of the bound families is metered in usage
-tokens for the life of the governing receipt: a run receipt inference/envelope/<nonce>/run/<k> before serving and
-its close receipt at the broker's own stop; ENVELOPE_CAP_REACHED and ENVELOPE_USAGE_UNKNOWN close the envelope
-for good (read_ledger, envelope_usage, Meter).
+The envelope carries no spending limit and the broker enforces no cumulative cap: S-03.6 retired the cap, its
+per-run ledger in the integration store and their refusals (decision 0021 amendment 1); spending is bounded by
+the provider account's own limits. Once the broker's own stop begins, a new request is refused BROKER_STOPPING.
 
   <tools python> -I -B integrations/inference/inference_broker.py config
   <tools python> -I -B integrations/inference/inference_broker.py envelope [--operation ID]
@@ -121,7 +122,7 @@ DECLARATION_FORMAT = 'aieh-inference-families/1'
 COMPONENT = 'inference_broker'
 ENTRY = 'AIEH model provider'
 SERVICE = 'inference-broker'
-GRANT_FORMAT = 'aieh-inference-grant/1'
+GRANT_FORMAT = 'aieh-inference-grant/2'      # /1 carried the request and token budget S-03.6 retired
 REVOCATION_FORMAT = 'aieh-inference-revocation/1'
 # E-05.6: a revocation by conversation and attempt that finds no grant leaves this tombstone under the attempt's
 # grant receipt key, so that no grant of that attempt is ever registered after it (Broker.revoke).
@@ -132,8 +133,6 @@ STATUS_FORMAT = 'aieh-inference-broker-status/1'
 CONFIG_FORMAT = 'aieh-inference-config/1'
 CREDENTIAL_SET_FORMAT = 'aieh-inference-credential-set/1'
 ENVELOPE_REPORT_FORMAT = 'aieh-provider-envelope-report/1'
-ENVELOPE_RUN_FORMAT = 'aieh-inference-envelope-run/1'
-ENVELOPE_CLOSE_FORMAT = 'aieh-inference-envelope-close/1'
 LOOPBACK = '127.0.0.1'
 TOKEN_PREFIX = 'aieh-inf-'
 TOKEN_SHAPE = re.compile(r'aieh-inf-[A-Za-z0-9_-]{43}')
@@ -160,7 +159,6 @@ USAGE_KINDS = ('anthropic-messages', 'openai-responses', 'openai-chat')
 MIB = 1024 * 1024
 DEFAULTS = {'max_request_bytes': 32 * MIB, 'max_ttl_s': 86400, 'upstream_timeout_s': 600}
 LIMITS = {'max_request_bytes': (1, 256 * MIB), 'max_ttl_s': (1, 7 * 86400), 'upstream_timeout_s': (1, 3600)}
-BUDGET_LIMITS = {'requests': 1_000_000, 'tokens': 10_000_000_000}
 CONTROL_BODY_LIMIT = 64 * 1024
 DRAIN_LIMIT = MIB
 # The refused-request audit (D-4 of the S-03.3 slice plan, an Overseer ruling): a path segment or a query parameter name is
@@ -201,8 +199,8 @@ CODES = {
     'CONFIG_MODEL_INVALID': (500, 'list exact, verified model identifiers: no wildcard, no duplicate'),
     'CONFIG_INCOMPLETE': (500, 'set control_port and inference_port in components.inference_broker of config.yml'),
     'CONFIG_ENVELOPE_INVALID': (500, 'give components.inference_broker.envelope exactly as the inference broker '
-                                     'README shows it: expires_at and limit.amount quoted, limit.cap with '
-                                     'enforced_by broker only'),
+                                     'README shows it: expires_at quoted and selection, nothing else (the limit, '
+                                     'amount, currency, enforced_by and cap are retired)'),
     # the provider envelope (S-03.5): a family whose upstream is not loopback
     'ENVELOPE_NOT_CONFIGURED': (500, 'a family has an upstream that is not loopback: add the envelope block to '
                                      'components.inference_broker and have the Owner authorize it'),
@@ -235,15 +233,9 @@ CODES = {
                                               '(selection_recorder.py delegate)'),
     'MODEL_NOT_SELECTED': (403, 'use only a model the held selection selects; configure no other model for a '
                                 'family whose upstream is not loopback'),
-    'BROKER_STOPPING': (503, 'the broker is stopping and its run of the envelope is closed: start the broker again '
-                             '(a request admitted before the stop leaves the envelope closed until a new '
-                             'authorization)'),
-    'ENVELOPE_CAP_REACHED': (429, 'the cumulative usage under the envelope\'s cap has reached it: the envelope is '
-                                  'closed for good; have the Owner authorize a new envelope'),
-    'ENVELOPE_USAGE_UNKNOWN': (429, 'the cumulative usage under the envelope\'s cap cannot be established (an answer '
-                                    'without readable usage, a cut stream, a request without an answer, a broker '
-                                    'error, or a run without its close): fail closed for good; have the Owner '
-                                    'authorize a new envelope'),
+    # the broker's own stop
+    'BROKER_STOPPING': (503, 'the broker is stopping: no new request is admitted; send it again once the broker '
+                             'has been started again'),
     # the control listener
     'CONTROL_ROUTE_UNKNOWN': (404, 'use POST /v1/grants, POST /v1/grants/revoke, GET /v1/grants/<fingerprint> or '
                                    'GET /v1/status'),
@@ -259,7 +251,8 @@ CODES = {
     'MODELS_INVALID': (400, 'give a non-empty list of distinct model identifiers'),
     'MODEL_NOT_ALLOWLISTED': (403, "name only models of the family's allowlist in config.yml; the Owner verifies "
                                    'and approves every identifier'),
-    'BUDGET_INVALID': (400, 'give budget.requests and budget.tokens as positive integers within the limits'),
+    'BUDGET_RETIRED': (400, 'send no budget: a grant has no request or token budget (retired by S-03.6); give the '
+                            'lifetime as ttl_s'),
     'TTL_INVALID': (400, 'give ttl_s as a positive integer no larger than max_ttl_s'),
     'ATTEMPT_HAS_GRANT': (409, 'an attempt has one token for its whole life: start a new attempt'),
     'GRANT_ATTEMPT_REVOKED': (409, 'the attempt was revoked by its conversation and attempt before a grant was '
@@ -280,10 +273,6 @@ CODES = {
     'TOKEN_WRONG_HEADER': (401, "send the token in its family's auth header shape"),
     'ROUTE_NOT_ALLOWED': (404, "use only the method and path set of the token's family"),
     'QUERY_NOT_ALLOWED': (400, "send no query string: the token's family admits none"),
-    'BUDGET_REQUESTS_EXHAUSTED': (429, "the attempt's request budget is spent"),
-    'BUDGET_TOKENS_EXHAUSTED': (429, "the attempt's usage-token budget is spent"),
-    'BUDGET_USAGE_UNKNOWN': (429, 'a successful answer reported no usage, so the token budget cannot be enforced: '
-                                  'the attempt is refused further requests (fail closed)'),
     'BODY_LENGTH_REQUIRED': (411, 'send the body with a Content-Length, not chunked'),
     'BODY_LENGTH_INVALID': (400, 'send one valid Content-Length'),
     'BODY_TOO_LARGE': (413, 'send a body no larger than max_request_bytes'),
@@ -617,8 +606,8 @@ def live_envelope(config: BrokerConfig) -> tuple[dict, str]:
 @dataclasses.dataclass(frozen=True)
 class Authorization:
     """The provider-envelope authorization the broker holds: the governing receipt, the envelope's digest and
-    manifest digest, its expiry, the bound provider and origin, the selected models per bound family and the
-    limit's enforcement. Only authorize() makes one the broker accepts."""
+    manifest digest, its expiry, the bound provider and origin, and the selected models per bound family. Only
+    authorize() makes one the broker accepts."""
     receipt: str
     operation: str
     decision: str
@@ -630,11 +619,7 @@ class Authorization:
     origin: Origin
     selection: str
     models: tuple       # ((family, (model, ...)), ...)
-    enforced_by: str
-    cap: int | None
     selection_record: dict | None = None    # a delegated selection: {record, point, receipt, decision}
-    carried: int | None = None              # enforced_by broker: the closed runs' usage under this receipt
-    run: int | None = None                  # enforced_by broker: this run's position in the receipt's ledger
 
     def describe(self) -> dict:
         """The start receipt's and the status answer's authorization member."""
@@ -642,9 +627,7 @@ class Authorization:
         if self.selection_record is not None:
             selection.update(self.selection_record)
         return {'receipt': self.receipt, 'operation': self.operation, 'decision': self.decision,
-                'digest': self.digest, 'expires_at': self.expires_at, 'selection': selection,
-                'limit': {'enforced_by': self.enforced_by, 'cap': self.cap,
-                          **({} if self.run is None else {'carried': self.carried, 'run': self.run})}}
+                'digest': self.digest, 'expires_at': self.expires_at, 'selection': selection}
 
     def selects(self, family: str, model: str) -> bool:
         """Whether the held selection selects MODEL for FAMILY."""
@@ -672,8 +655,8 @@ def authorize(config: BrokerConfig, decisions: Callable | None, store_factory: C
     the live envelope and its digest; the governing provider-envelope receipt from DECISIONS (a callable
     ``decisions(store) -> source``: envelope_decisions.verifier, whose source is called as ``verify(target,
     manifest_digest, now)`` and, for a delegated selection, asked ``source.selection(receipt)``) over the store
-    STORE_FACTORY opens (closed again; nothing is written); the model selection; the limit's enforcement. Returns
-    the Authorization the Broker holds, or raises the stable code."""
+    STORE_FACTORY opens (closed again; nothing is written); the model selection. Returns the Authorization the
+    Broker holds, or raises the stable code."""
     document, digest = live_envelope(config)
     if decisions is None:
         raise InferenceError('ENVELOPE_NOT_AUTHORIZED', 'no decision source was given: a family whose upstream is '
@@ -759,112 +742,15 @@ def _authorize(config: BrokerConfig, decisions: Callable, store, document: dict,
     if not any(f.models for f in bound):
         raise InferenceError('MODEL_SELECTION_MISSING', f'the {by} selection leaves no family whose upstream is not '
                                                         'loopback with a selected model')
-    limit = document['limit']
-    carried = run = None
-    if limit['enforced_by'] == 'broker':
-        carried, run = read_ledger(store, view['receipt'], limit['cap'])
     (provider,), (origin,) = {f.provider for f in bound}, {f.upstream for f in bound}
     record = None if chosen is None else {'record': chosen['record'], 'point': chosen['point'],
                                           'receipt': chosen['receipt'], 'decision': chosen['decisionId']}
     held = Authorization(view['receipt'], view['operation'], view['decisionId'], digest, view['digest'],
                          document['expires_at'], expires.timestamp(), provider, origin, by,
                          tuple((f.id, tuple(sorted(f.models))) for f in sorted(bound, key=lambda f: f.id)),
-                         limit['enforced_by'], limit['cap'], record, carried, run)
+                         record)
     _MINTED[id(held)] = held
     return held
-
-
-def ledger_keys(receipt: str, run: int) -> tuple[str, str]:
-    """(the run receipt's key, its close receipt's key) of run RUN under the authorization receipt RECEIPT
-    (``owner-authorization/v1/<nonce>``): the ledger is the receipt's own, so a new authorization starts at zero."""
-    base = f'inference/envelope/{receipt.rsplit("/", 1)[-1]}/run/{run}'
-    return base, f'{base}/close'
-
-
-def _usage_unknown(detail: str) -> InferenceError:
-    return InferenceError('ENVELOPE_USAGE_UNKNOWN', detail)
-
-
-def read_ledger(store, receipt: str, cap: int) -> tuple[int, int]:
-    """(the usage the closed runs under RECEIPT carry, the next run's position), walked from run 1 by direct
-    lookups. A run receipt that is not confirmed never served (it is the last step before the listeners serve)
-    and counts zero. A confirmed run must be the broker's, with a confirmed close receipt of the broker's that
-    records no unknown usage and nothing in flight; otherwise ENVELOPE_USAGE_UNKNOWN (a crash, a kill, a lost close
-    write, a broker still serving, an unknown answer). Carried usage at the cap is ENVELOPE_CAP_REACHED."""
-    def actor(key):
-        events = store.events(key)
-        return events[0].actor if events else None
-    carried, run = 0, 1
-    while (held := store.get(ledger_keys(receipt, run)[0])) is not None:
-        key, close_key = ledger_keys(receipt, run)
-        if held.state == 'confirmed':
-            if actor(key) != SERVICE:
-                raise _usage_unknown(f'{key} was not reserved by the broker ({SERVICE})')
-            closed = store.get(close_key)
-            if closed is None:
-                raise _usage_unknown(f'run {run} under {receipt} has no close receipt: a crash, a kill, a lost close '
-                                     'write or a broker still serving; its usage is unknown')
-            try:
-                intent = json.loads(closed.intent_json)
-            except (TypeError, ValueError):
-                intent = None
-            counts = [intent.get(name) if isinstance(intent, dict) else None
-                      for name in ('usage', 'unknown', 'in_flight')]
-            if closed.state != 'confirmed' or actor(close_key) != SERVICE or not isinstance(intent, dict) \
-                    or intent.get('format') != ENVELOPE_CLOSE_FORMAT or intent.get('run') != run \
-                    or not all(type(n) is int and n >= 0 for n in counts):
-                raise _usage_unknown(f'{close_key} is not a confirmed close receipt of the broker')
-            usage, unknown, in_flight = counts
-            if unknown or in_flight:
-                raise _usage_unknown(f'run {run} under {receipt} closed with {unknown} answer(s) of unknown usage and '
-                                     f'{in_flight} request(s) in flight')
-            carried += usage
-        run += 1
-    if carried >= cap:
-        raise InferenceError('ENVELOPE_CAP_REACHED', f'the runs under {receipt} carry {carried} usage tokens; the cap '
-                                                     f'is {cap}')
-    return carried, run
-
-
-UNKNOWN_USAGE = None
-
-
-def envelope_usage(usage, upstream_status, code, written: bool):
-    """What one admitted request adds to the envelope's cumulative usage: the usage report's total; zero when
-    nothing of it was written upstream, or for a complete answer outside 2xx (an assumption about the provider's
-    billing, disclosed: S-03.2's rule, to verify at OA-12's presentation); UNKNOWN_USAGE (None) for a 2xx answer
-    without readable usage, any answer cut off by either side, a request written and never answered, and a broker
-    error after admission."""
-    if isinstance(usage, dict):
-        return usage['total']
-    if code == 'BROKER_ERROR':
-        return UNKNOWN_USAGE
-    if upstream_status is None:
-        return UNKNOWN_USAGE if written else 0
-    if 200 <= upstream_status < 300 or code is not None:
-        return UNKNOWN_USAGE
-    return 0
-
-
-@dataclasses.dataclass
-class Meter:
-    """A broker-enforced cap's cumulative usage for one run: the cap, what the closed runs carry, this run's
-    position and its counts. Usage tokens, never money (decision 0015 section 6.3)."""
-    cap: int
-    carried: int
-    run: int
-    receipt: str
-    usage: int = 0
-    requests: int = 0
-    unknown: int = 0
-    in_flight: int = 0
-    opened: dict | None = None   # the run receipt, once written
-    stopping: bool = False       # set by the broker's stop, under its lock, before the close counts are read
-
-    def describe(self) -> dict:
-        return {'cap': self.cap, 'carried': self.carried, 'run': self.run, 'usage': self.usage,
-                'requests': self.requests, 'unknown': self.unknown, 'in_flight': self.in_flight,
-                'total': self.carried + self.usage, 'run_receipt': self.opened}
 
 
 def envelope_report(config: BrokerConfig, operation: str | None) -> dict:
@@ -1141,15 +1027,15 @@ def connect_upstream(origin: Origin, timeout: float) -> http.client.HTTPConnecti
 
 @dataclasses.dataclass
 class Grant:
-    """One attempt's inference access. The token itself is never kept: only its sha256 digest and fingerprint."""
+    """One attempt's inference access, bound to its conversation and attempt, its family, its model list and its
+    lifetime. The token itself is never kept: only its sha256 digest and fingerprint. The counts and the usage are
+    information for the audit and the per-attempt summary; none of them refuses a request (S-03.6)."""
     digest: str
     fingerprint: str
     conversation_id: str
     attempt_id: str
     family: str
     models: tuple
-    max_requests: int
-    max_tokens: int
     issued_at: float
     expires_at: float
     requests: int = 0
@@ -1173,7 +1059,6 @@ class Grant:
     def describe(self) -> dict:
         return {'token_fingerprint': self.fingerprint, 'attempt_id': self.attempt_id,
                 'conversation_id': self.conversation_id, 'family': self.family, 'models': list(self.models),
-                'budget': {'requests': self.max_requests, 'tokens': self.max_tokens},
                 'issued_at': now_iso(self.issued_at), 'expires_at': now_iso(self.expires_at),
                 'state': 'live' if self.revocation is None else 'revoked',
                 'revocation': None if self.revocation is None else {
@@ -1204,7 +1089,6 @@ class Admission:
     model: str
     body: bytes
     headers: list
-    written: bool = False    # the request was written upstream (recorded before the answer is read)
 
 
 def _uuid(value, code: str, what: str) -> str:
@@ -1265,9 +1149,6 @@ class Broker:
             audit, guard
         self.clock, self._connect = clock, connect or connect_upstream
         self.authorization = authorization   # authorize()'s, for the families whose upstream is not loopback
-        self.meter = None if authorization is None or authorization.enforced_by != 'broker' \
-            or authorization.run is None else Meter(authorization.cap, authorization.carried, authorization.run,
-                                                    authorization.receipt)
         if provider_key is not None:
             guard.hold(provider_key.key)
         self._lock = threading.RLock()
@@ -1285,6 +1166,7 @@ class Broker:
         self.listeners: dict = {}
         self.start_receipt = None
         self._stopped = False
+        self._stopping = False   # set by stop(), under _lock, first: from then on no request is admitted
 
     # -- readiness
 
@@ -1303,9 +1185,13 @@ class Broker:
     # -- control: issue, revoke, status
 
     def issue(self, body) -> dict:
-        """One attempt token, journaled before it is returned: aieh-inference-grant/1."""
+        """One attempt token, journaled before it is returned: aieh-inference-grant/2. A request that still
+        carries a budget (any value) is refused BUDGET_RETIRED: a grant has no request or token budget."""
         self.housekeeping()
-        _exact_keys(body, ('conversation_id', 'attempt_id', 'family', 'models', 'budget', 'ttl_s'), (),
+        if isinstance(body, dict) and 'budget' in body:
+            raise InferenceError('BUDGET_RETIRED', 'the issue request carries a budget: a grant is bound to its '
+                                                   'conversation, attempt, family, models and lifetime only')
+        _exact_keys(body, ('conversation_id', 'attempt_id', 'family', 'models', 'ttl_s'), (),
                     'CONTROL_BODY_INVALID', 'the issue request')
         conversation = _uuid(body['conversation_id'], 'CONVERSATION_ID_INVALID', 'conversation_id')
         attempt = _uuid(body['attempt_id'], 'ATTEMPT_ID_INVALID', 'attempt_id')
@@ -1319,11 +1205,6 @@ class Broker:
         if refused:
             raise InferenceError('MODEL_NOT_ALLOWLISTED', f'{len(refused)} of the models are not in the '
                                                           f'{family.id} allowlist ({len(family.models)} allowed)')
-        budget = body['budget']
-        _exact_keys(budget, ('requests', 'tokens'), (), 'BUDGET_INVALID', 'budget')
-        for name, high in BUDGET_LIMITS.items():
-            if type(budget[name]) is not int or not 1 <= budget[name] <= high:
-                raise InferenceError('BUDGET_INVALID', f'budget.{name} must be an integer from 1 to {high}')
         ttl = body['ttl_s']
         if type(ttl) is not int or not 1 <= ttl <= self.config.max_ttl_s:
             raise InferenceError('TTL_INVALID', f'ttl_s must be an integer from 1 to {self.config.max_ttl_s}')
@@ -1336,10 +1217,9 @@ class Broker:
         self.guard.hold(token)
         issued = self.clock()
         grant = Grant(digest(token), contract.fingerprint(token), conversation, attempt, family.id, models,
-                      budget['requests'], budget['tokens'], issued, issued + ttl)
+                      issued, issued + ttl)
         intent = {'format': GRANT_FORMAT, 'issuer': SERVICE, 'attempt_id': attempt, 'conversation_id': conversation,
                   'token_fingerprint': grant.fingerprint, 'family': family.id, 'models': list(models),
-                  'budget': {'requests': grant.max_requests, 'tokens': grant.max_tokens},
                   'issued_at': now_iso(issued), 'expires_at': now_iso(grant.expires_at),
                   'upstream': family.upstream.text()}
         # One grant per attempt, durably: the journal refuses a second grant receipt under the attempt's key, and a
@@ -1464,9 +1344,6 @@ class Broker:
         with self._lock:
             grants = list(self._grants.values())
         bound = {} if self.authorization is None else {'authorization': self.authorization.describe()}
-        if self.meter is not None:
-            with self._lock:
-                bound['authorization']['meter'] = self.meter.describe()
         return {'format': STATUS_FORMAT, **bound, 'listeners': dict(self.listeners),
                 'provider_key': None if self.provider_key is None else {
                     'provider': self.provider_key.provider, 'fingerprint': self.provider_key.fingerprint,
@@ -1508,17 +1385,15 @@ class Broker:
                 grant.refused += 1
         return InferenceError(code, detail, grant=grant)
 
-    def _budget(self, grant: Grant) -> None:
-        if grant.requests >= grant.max_requests:
-            raise self._refuse('BUDGET_REQUESTS_EXHAUSTED', f'{grant.requests} of {grant.max_requests}', grant)
-        if grant.unknown_usage:
-            raise self._refuse('BUDGET_USAGE_UNKNOWN', f'{grant.unknown_usage} answer(s) reported no usage', grant)
-        if grant.total_tokens >= grant.max_tokens:
-            raise self._refuse('BUDGET_TOKENS_EXHAUSTED', f'{grant.total_tokens} of {grant.max_tokens}', grant)
+    def _not_stopping(self, grant: Grant) -> None:
+        """Under the lock: once the broker's own stop has begun, no request is admitted (BROKER_STOPPING), before
+        anything of it is written upstream."""
+        if self._stopping:
+            raise self._refuse('BROKER_STOPPING', 'the broker\'s stop has begun', grant)
 
     def _envelope(self, family: Family, grant: Grant) -> None:
         """A family whose upstream is not loopback is served only under the held authorization, for its provider
-        and origin, and until its expiry (checked where the budget is; an answer already streaming completes)."""
+        and origin, and until its expiry (checked at admission; an answer already streaming completes)."""
         if family.upstream is None or family.upstream.loopback:
             return
         held = self.authorization
@@ -1531,23 +1406,6 @@ class Broker:
         if self.clock() >= held.expires:
             raise self._refuse('ENVELOPE_EXPIRED', f'the authorization {held.receipt} expired at {held.expires_at}',
                                grant)
-        meter = self.meter
-        if meter is not None:
-            if meter.stopping:
-                raise self._refuse('BROKER_STOPPING', 'the broker is stopping: its run of the envelope is closed',
-                                   grant)
-            if meter.unknown:
-                raise self._refuse('ENVELOPE_USAGE_UNKNOWN', f'{meter.unknown} answer(s) of this run have unknown '
-                                                             'usage: the envelope is closed', grant)
-            if meter.carried + meter.usage >= meter.cap:
-                raise self._refuse('ENVELOPE_CAP_REACHED', f'{meter.carried + meter.usage} of {meter.cap} usage '
-                                                           'tokens', grant)
-
-    def _metered(self, family: Family):
-        """The meter of a broker-enforced cap, for a family whose upstream is not loopback; else None."""
-        if self.meter is None or family.upstream is None or family.upstream.loopback:
-            return None
-        return self.meter
 
     def _selected(self, family: Family, model: str, grant: Grant | None) -> None:
         """A model of a family whose upstream is not loopback is issued and admitted only when the held selection
@@ -1599,8 +1457,8 @@ class Broker:
 
     def admit(self, method: str, target: str, headers, read: Callable) -> Admission:
         """Admit one inference request or refuse it with a stable code: the token first, then the route, the
-        budget, the body and its model, then the token's absence from what is forwarded. The request is counted
-        against the budget atomically at the end."""
+        broker's stop and the envelope, the body and its model, then the token's absence from what is forwarded.
+        The request is counted (information only) atomically at the end."""
         token, carriers = self._presented(headers)
         with self._lock:
             grant = self._grants.get(digest(token)) if TOKEN_SHAPE.fullmatch(token) else None
@@ -1616,8 +1474,8 @@ class Broker:
         if has_query and family.query != 'pass':
             raise self._refuse('QUERY_NOT_ALLOWED', f'the {family.id} family admits no query', grant)
         with self._lock:
+            self._not_stopping(grant)
             self._envelope(family, grant)
-            self._budget(grant)
         body = self._read_body(headers, read, grant)
         try:
             document = json.loads(body)
@@ -1640,13 +1498,10 @@ class Broker:
             raise self._refuse('PROVIDER_KEY_ABSENT', family.id, grant)
         with self._lock:
             self._live(grant)
+            self._not_stopping(grant)
             self._envelope(family, grant)
-            self._budget(grant)
             grant.requests += 1
             grant.in_flight += 1
-            if (meter := self._metered(family)) is not None:
-                meter.requests += 1
-                meter.in_flight += 1
             grant.bytes_in += len(body)
         return Admission(grant, family, method, target, path, model, body, forward)
 
@@ -1728,7 +1583,8 @@ class Broker:
         settled = []
 
         def settle(usage, sent: int, status, upstream_status, code) -> None:
-            """Account the answer against the grant and write its audit line, once."""
+            """Count the answer in the grant's summary (information only: nothing here refuses, closes or narrows
+            a grant) and write its audit line, once."""
             if settled:
                 return
             settled.append(True)
@@ -1741,13 +1597,6 @@ class Broker:
                     grant.total_tokens += usage['total']
                 elif upstream_status is not None and 200 <= upstream_status < 300:
                     grant.unknown_usage += 1
-                if (meter := self._metered(family)) is not None:
-                    meter.in_flight -= 1
-                    counted = envelope_usage(usage, upstream_status, code, admission.written)
-                    if counted is UNKNOWN_USAGE:
-                        meter.unknown += 1
-                    else:
-                        meter.usage += counted
             audit(status=status, upstream_status=upstream_status, response_bytes=sent, usage=usage, code=code)
         try:
             self._relay(handler, admission, settle)
@@ -1771,13 +1620,9 @@ class Broker:
             for name, value in headers:
                 connection.putheader(name, value)
             connection.endheaders(admission.body)
-            admission.written = True
             response = connection.getresponse()
         except (OSError, http.client.HTTPException, ValueError, InferenceError) as exc:
             if connection is not None:
-                # A connection that was made may have carried part of the request (counted as unknown, never as
-                # zero); http.client clears it on close, so it is read here.
-                admission.written = admission.written or getattr(connection, 'sock', None) is not None
                 connection.close()
             error = InferenceError('UPSTREAM_UNREACHABLE', type(exc).__name__, grant=admission.grant)
             settle('unknown', 0, error.status, None, error.code)
@@ -1856,8 +1701,6 @@ class Broker:
             self.start_receipt = self.journal.record(f'inference/broker-start/{stamp}-{secrets.token_hex(4)}',
                                                      intent, {'state': 'started'}, conflict='JOURNAL_FAILED')
             self.audit.write({'event': 'broker-start', 'receipt': self.start_receipt['operation_key']})
-            if self.meter is not None and bound:
-                self._open_run(stamp)
         except BaseException:
             self._close_servers()
             raise
@@ -1871,52 +1714,23 @@ class Broker:
             server.server_close()
         self._servers.clear()
 
-    def _open_run(self, stamp: str) -> None:
-        """The run receipt of a broker-enforced cap: written and read back as the last step before serving."""
-        meter = self.meter
-        key, _ = ledger_keys(meter.receipt, meter.run)
-        intent = {'format': ENVELOPE_RUN_FORMAT, 'service': SERVICE, 'receipt': meter.receipt,
-                  'digest': self.authorization.digest, 'run': meter.run, 'cap': meter.cap, 'carried': meter.carried,
-                  'started_at': stamp, 'pid': os.getpid(), 'start_receipt': self.start_receipt['operation_key']}
-        meter.opened = self.journal.record(key, intent, {'state': 'open'}, conflict='JOURNAL_FAILED')
-
-    def _close_run(self) -> None:
-        """The close receipt of this run, at the broker's own stop: its usage, requests, unknown answers and the
-        requests still in flight. A close that cannot be written leaves the run without one (the next start then
-        refuses ENVELOPE_USAGE_UNKNOWN)."""
-        meter = self.meter
-        _, key = ledger_keys(meter.receipt, meter.run)
-        with self._lock:
-            counts = {'usage': meter.usage, 'requests': meter.requests, 'unknown': meter.unknown,
-                      'in_flight': meter.in_flight}
-        intent = {'format': ENVELOPE_CLOSE_FORMAT, 'service': SERVICE, 'receipt': meter.receipt, 'run': meter.run,
-                  **counts, 'closed_at': now_iso(self.clock())}
-        try:
-            self.journal.record(key, intent, {'state': 'closed'}, conflict='JOURNAL_FAILED')
-        except InferenceError as exc:
-            self.audit.write({'event': 'envelope-close-failed', 'code': exc.code, 'run': meter.run})
-
     def stop(self) -> None:
         """Stop both listeners, write the pending receipts, and close the journal and the audit. Live grants
         end with the process (an audit line counts them)."""
         if self._stopped:
             return
         self._stopped = True
-        if self.meter is not None:
-            with self._lock:
-                # From here no request of a metered family is admitted (BROKER_STOPPING), before anything of it is
-                # written upstream: the close receipt's counts are then the run's whole usage, and a request
-                # admitted before is counted in flight (the next start refuses ENVELOPE_USAGE_UNKNOWN).
-                self.meter.stopping = True
-        stoppers =[threading.Thread(target=server.shutdown) for server in self._servers]
+        with self._lock:
+            # From here no request is admitted (BROKER_STOPPING), before anything of it is written upstream: a
+            # handler still alive after the listeners stop (a keep-alive connection) forwards nothing more.
+            self._stopping = True
+        stoppers = [threading.Thread(target=server.shutdown) for server in self._servers]
         for stopper in stoppers:
             stopper.start()
         for stopper in stoppers:
             stopper.join()
         self._close_servers()
         try:
-            if self.meter is not None and self.meter.opened is not None:
-                self._close_run()
             self.housekeeping()
             with self._lock:
                 live = [g.fingerprint for g in self._grants.values() if g.revocation is None]

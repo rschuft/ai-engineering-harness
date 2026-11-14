@@ -20,7 +20,10 @@ one grant and write its token to standard output only, which must be a pipe (int
 never kept; standard error carries only the grant's attempt id and the token's fingerprint.
 
   <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID
-      --model NAME --requests N --tokens N --ttl-s SECONDS [--attempt-id UUID] | <the command that reads it>
+      --model NAME --ttl-s SECONDS [--attempt-id UUID] | <the command that reads it>
+
+A grant carries its lifetime only, never a request or token budget (retired by S-03.6; the broker refuses an
+issue request that carries one, BUDGET_RETIRED).
 
 It connects to 127.0.0.1 only, to the port it is given, and nowhere else; it reads no environment, no proxy
 variable and no credential. Standard library only. Exit 0 done, 2 refused (a stable code).
@@ -180,13 +183,11 @@ class ControlClient:
         return self.call('POST', '/v1/grants/revoke', {'conversation_id': conversation_id, 'attempt_id': attempt_id,
                                                        'trigger': trigger, 'revoker': revoker})
 
-    def issue(self, conversation_id: str, attempt_id: str, family: str, models: list, requests: int, tokens: int,
-              ttl_s: int) -> dict:
-        """One grant (POST /v1/grants, the fields as the control API takes them): the broker's answer, its token
-        checked for the broker's shape, its fingerprint and its attempt."""
+    def issue(self, conversation_id: str, attempt_id: str, family: str, models: list, ttl_s: int) -> dict:
+        """One grant (POST /v1/grants, the fields as the control API takes them: no budget, the lifetime only):
+        the broker's answer, its token checked for the broker's shape, its fingerprint and its attempt."""
         answer = self.call('POST', '/v1/grants', {'conversation_id': conversation_id, 'attempt_id': attempt_id,
-                                                  'family': family, 'models': list(models),
-                                                  'budget': {'requests': requests, 'tokens': tokens}, 'ttl_s': ttl_s})
+                                                  'family': family, 'models': list(models), 'ttl_s': ttl_s})
         token = answer.get('token')
         if not isinstance(token, str) or not broker.TOKEN_SHAPE.fullmatch(token) \
                 or answer.get('token_fingerprint') != broker.contract.fingerprint(token) \
@@ -236,8 +237,6 @@ def main(argv=None, context: Context | None = None) -> int:
     issue.add_argument('--family', required=True, help='a declared family id')
     issue.add_argument('--model', action='append', required=True, dest='models',
                        help="a model of the family's allowlist (repeatable)")
-    issue.add_argument('--requests', type=int, required=True, help='the request budget')
-    issue.add_argument('--tokens', type=int, required=True, help='the usage-token budget')
     issue.add_argument('--ttl-s', type=int, required=True, help='the lifetime in seconds')
     args = parser.parse_args(argv)
     ctx = context or Context(component=managed_component, out=sys.stdout, err=sys.stderr)
@@ -245,8 +244,7 @@ def main(argv=None, context: Context | None = None) -> int:
         token_pipe(ctx.out)
         ports = dispatcher_ports(ctx.component())
         grant = ControlClient(ports['control_port']).issue(
-            args.conversation_id, args.attempt_id or str(uuid.uuid4()), args.family, args.models, args.requests,
-            args.tokens, args.ttl_s)
+            args.conversation_id, args.attempt_id or str(uuid.uuid4()), args.family, args.models, args.ttl_s)
     except (ControlError, broker.paths.PathsError) as exc:
         ctx.err.write(f'inference-control: {exc}\n')
         return 2

@@ -203,7 +203,7 @@ class FakeGuest:
 class FakeBroker:
     def __init__(self, source=guest.ACP_SYNTHETIC_SOURCE, fingerprint=SYNTHETIC_FP):
         self.grant = {'state': 'live', 'family': FAMILY, 'models': [MODEL, 'model-small'], 'conversation_id': CID,
-                      'attempt_id': 'a' * 8, 'budget': {'requests': 20, 'tokens': 20000}, 'requests': 2,
+                      'attempt_id': 'a' * 8, 'requests': 2,
                       'refused': 0, 'usage': {'input': 10}}
         self.family = {'id': FAMILY, 'status': 'provisional', 'ready': True, 'upstream': 'http://127.0.0.1:9',
                        'models': [MODEL, 'model-small']}

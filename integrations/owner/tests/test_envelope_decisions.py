@@ -44,7 +44,7 @@ def tearDownModule():
 
 def envelope_manifest(operation, target, **changes):
     data = {'operation': operation, 'kind': ED.OPERATION_KIND, 'target': target, 'expiresAt': su.EXPIRES,
-            'envelope': {'format': 'aieh-provider-envelope/1', 'stand-in': True}, **changes}
+            'envelope': {'format': 'aieh-provider-envelope/2', 'stand-in': True}, **changes}
     return (json.dumps(data, indent=2) + '\n').encode('utf-8')
 
 

@@ -1,4 +1,6 @@
-"""The proof of plan leaf S-03.5, slice 1: the provider envelope and the broker's start precondition.
+"""The proof of plan leaf S-03.5, slice 1: the provider envelope and the broker's start precondition, under the
+canonical format aieh-provider-envelope/2 of plan leaf S-03.6 (the spending limit retired, decision 0021
+amendment 1).
 
 Run from the repository root, under the tools interpreter:
 
@@ -17,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import datetime
+import hashlib
 import io
 import json
 import threading
@@ -33,18 +36,21 @@ except ImportError:  # the tools set provides it; the suite runs under the tools
     yaml = None
 
 # The canonical manifest of envelope_support.component() under V.OPERATION, and its two digests, as constants:
-# a change of the canonical form changes them, and is a new format.
-GOLDEN_DIGEST = 'sha256:e56f90cb18907ce68474b96e93a139845068c6b5083e6281233a43a84215ff61'
-GOLDEN_MANIFEST_DIGEST = 'sha256:6a26b733d924fcfa3409089bd0930cd5bb4107604feb1d2b514aee7a297e2cd7'
+# a change of the canonical form changes them, and is a new format (aieh-provider-envelope/2, S-03.6).
+GOLDEN_DIGEST = 'sha256:e5e77a3b0d218e9a139e614ee03ba78e5c62dbc869017d529f6cd07fb52fd184'
+GOLDEN_MANIFEST_DIGEST = 'sha256:fc64cada721481cf78fdce071ed6c2df972257611dae2e7a85ddbdb19037c7ed'
 GOLDEN_MANIFEST = (
     '{\n  "operation": "op-envelope-0001",\n  "kind": "provider-envelope",\n'
-    '  "target": "sha256:e56f90cb18907ce68474b96e93a139845068c6b5083e6281233a43a84215ff61",\n'
-    '  "expiresAt": "2026-12-01T00:00:00Z",\n  "envelope": {\n    "format": "aieh-provider-envelope/1",\n'
-    '    "provider": "synthetic-provider",\n    "origin": "https://api.provider.test:443",\n    "limit": {\n'
-    '      "amount": "25.00",\n      "currency": "USD",\n      "enforced_by": "provider",\n      "cap": null\n'
-    '    },\n    "expires_at": "2026-12-01T00:00:00Z",\n    "selection": {\n      "by": "envelope",\n'
+    '  "target": "sha256:e5e77a3b0d218e9a139e614ee03ba78e5c62dbc869017d529f6cd07fb52fd184",\n'
+    '  "expiresAt": "2026-12-01T00:00:00Z",\n  "envelope": {\n    "format": "aieh-provider-envelope/2",\n'
+    '    "provider": "synthetic-provider",\n    "origin": "https://api.provider.test:443",\n'
+    '    "expires_at": "2026-12-01T00:00:00Z",\n    "selection": {\n      "by": "envelope",\n'
     '      "models": {\n        "anthropic-messages": [\n          "syn-model-a"\n        ]\n      }\n    }\n'
     '  }\n}\n')
+# The same envelope's canonical digest and manifest digest under S-03.5's aieh-provider-envelope/1 (the golden
+# constants S-03.5 recorded): envelope_support.document_v1 reproduces that format exactly.
+GOLDEN_V1_DIGEST = 'sha256:e56f90cb18907ce68474b96e93a139845068c6b5083e6281233a43a84215ff61'
+GOLDEN_V1_MANIFEST_DIGEST = 'sha256:6a26b733d924fcfa3409089bd0930cd5bb4107604feb1d2b514aee7a297e2cd7'
 ORIGIN_TEXT = 'https://api.provider.test:443'
 
 
@@ -65,11 +71,8 @@ class TheBlock(unittest.TestCase):
         return caught.exception.detail
 
     def test_the_block_is_checked_and_normalized(self):
-        self.assertEqual(config(V.component()).envelope,
-                         {'expires_at': V.EXPIRES, 'selection': 'envelope',
-                          'limit': {'amount': '25.00', 'currency': 'USD', 'enforced_by': 'provider', 'cap': None}})
-        broker = V.block(limit=V.limit(enforced_by='broker', cap=1000))
-        self.assertEqual(config(V.component(envelope=broker)).envelope['limit']['cap'], 1000)
+        self.assertEqual(config(V.component()).envelope, {'expires_at': V.EXPIRES, 'selection': 'envelope'})
+        self.assertEqual(E.BLOCK_FIELDS, ('expires_at', 'selection'))
         self.assertIsNone(config(V.component(envelope=None)).envelope)
         self.assertIsNone(config({'envelope': None}).envelope)
 
@@ -81,48 +84,56 @@ class TheBlock(unittest.TestCase):
             'an expiry that is no time': V.block(expires_at='2026-12-01'),
             'an impossible expiry': V.block(expires_at='2026-02-30T00:00:00Z'),
             'an expiry read as a time': V.block(expires_at=datetime.datetime(2026, 12, 1, tzinfo=V.UTC)),
-            'a limit that is not a mapping': V.block(limit='25.00 USD'),
-            'an unknown limit key': V.block(limit=V.limit(ceiling=5)),
-            'an amount read as a number': V.block(limit=V.limit(amount=25.0)),
-            'an amount read as an integer': V.block(limit=V.limit(amount=25)),
-            'a zero amount': V.block(limit=V.limit(amount='0.00')),
-            'a negative amount': V.block(limit=V.limit(amount='-1')),
-            'an exponent': V.block(limit=V.limit(amount='1e3')),
-            'a currency in lower case': V.block(limit=V.limit(currency='usd')),
-            'an unknown enforcer': V.block(limit=V.limit(enforced_by='nobody')),
-            'broker without a cap': V.block(limit=V.limit(enforced_by='broker')),
-            'broker with a boolean cap': V.block(limit=V.limit(enforced_by='broker', cap=True)),
-            'broker with a zero cap': V.block(limit=V.limit(enforced_by='broker', cap=0)),
-            'provider with a cap': V.block(limit=V.limit(cap=5)),
             'an unknown selection': V.block(selection='owner'),
         }
         for name, envelope in cases.items():
             with self.subTest(name):
                 self.refused(envelope)
         self.assertIn('quote it', self.refused(cases['an expiry read as a time']))
-        self.assertIn('quote it', self.refused(cases['an amount read as a number']))
+
+    def test_the_retired_spending_keys_are_refused_never_ignored(self):
+        """S-03.6: the block refuses limit (S-03.5's whole member, or any value) and each of its former members
+        amount, currency, enforced_by and cap, beside the designed keys or alone, by name."""
+        cases = {
+            'the /1 limit': V.block(limit=dict(V.RETIRED_LIMIT)),
+            'a broker-enforced /1 limit': V.block(limit=dict(V.RETIRED_LIMIT, enforced_by='broker', cap=1000)),
+            'a null limit': V.block(limit=None),
+            'an amount': V.block(amount='25.00'),
+            'a currency': V.block(currency='USD'),
+            'an enforcement': V.block(enforced_by='provider'),
+            'a cap': V.block(cap=1000),
+            'every one': V.block(limit={}, amount='1', currency='USD', enforced_by='broker', cap=1),
+            'a limit without the designed keys': {'limit': dict(V.RETIRED_LIMIT)},
+        }
+        self.assertEqual(E.RETIRED_FIELDS, ('limit', 'amount', 'currency', 'enforced_by', 'cap'))
+        for name, envelope in cases.items():
+            with self.subTest(name):
+                detail = self.refused(envelope)
+                self.assertIn('retired', detail)
+                for key in E.RETIRED_FIELDS:
+                    self.assertEqual(f"'{key}'" in detail, key in envelope)
 
     @unittest.skipIf(yaml is None, 'PyYAML is not importable: run task tools:install')
     def test_the_designed_keys_pass_the_secret_rule_and_unquoted_values_are_refused(self):
         """The decision 0009 loader and the broker accept every designed key (none is secret-shaped); YAML reads
         an unquoted timestamp and decimal as a datetime and a float, which are refused, never normalized."""
         text = ('version: 1\ncomponents:\n  inference_broker:\n    envelope:\n      expires_at: {expires}\n'
-                '      limit:\n        amount: {amount}\n        currency: USD\n        enforced_by: broker\n'
-                '        cap: 1000000\n      selection: delegation\n')
+                '{limit}      selection: delegation\n')
+        limit = ('      limit:\n        amount: "25.00"\n        currency: USD\n        enforced_by: broker\n'
+                 '        cap: 1000000\n')
 
-        def component(expires, amount):
-            _, _, components = IB.paths.validate_config(yaml.safe_load(text.format(expires=expires, amount=amount)))
+        def component(expires, limit=''):
+            _, _, components = IB.paths.validate_config(yaml.safe_load(text.format(expires=expires, limit=limit)))
             return components[IB.COMPONENT]
-        self.assertEqual(config(component(f'"{V.EXPIRES}"', '"25.00"')).envelope,
-                         {'expires_at': V.EXPIRES, 'selection': 'delegation',
-                          'limit': {'amount': '25.00', 'currency': 'USD', 'enforced_by': 'broker', 'cap': 1000000}})
-        for name, expires, amount in (('an unquoted timestamp', V.EXPIRES, '"25.00"'),
-                                      ('an unquoted decimal', f'"{V.EXPIRES}"', '25.00')):
+        self.assertEqual(config(component(f'"{V.EXPIRES}"')).envelope,
+                         {'expires_at': V.EXPIRES, 'selection': 'delegation'})
+        for name, expires, extra, expected in (('an unquoted timestamp', V.EXPIRES, '', 'quote it'),
+                                               ('a /1 block with its limit', f'"{V.EXPIRES}"', limit, 'retired')):
             with self.subTest(name):
                 with self.assertRaises(IB.InferenceError) as caught:
-                    config(component(expires, amount))
+                    config(component(expires, extra))
                 self.assertEqual(caught.exception.code, 'CONFIG_ENVELOPE_INVALID')
-                self.assertIn('quote it', caught.exception.detail)
+                self.assertIn(expected, caught.exception.detail)
 
     def test_the_loader_never_requires_the_block(self):
         """Trap 7: a non-loopback family loads without an envelope (the launcher's and the dispatcher's callers
@@ -139,7 +150,9 @@ class TheDocument(unittest.TestCase):
     def test_the_golden_document_digest_and_manifest(self):
         document, digest = IB.live_envelope(config(V.component()))
         self.assertEqual(tuple(document), E.DOCUMENT_FIELDS)
-        self.assertEqual(tuple(document['limit']), E.LIMIT_FIELDS)
+        self.assertEqual(E.DOCUMENT_FIELDS, ('format', 'provider', 'origin', 'expires_at', 'selection'))
+        self.assertEqual(document['format'], 'aieh-provider-envelope/2')
+        self.assertFalse(set(json.dumps(document).split('"')) & set(E.RETIRED_FIELDS))   # no spending member
         self.assertEqual(digest, GOLDEN_DIGEST)
         text = E.manifest_text(document, V.OPERATION)
         self.assertEqual(text, GOLDEN_MANIFEST)
@@ -155,7 +168,19 @@ class TheDocument(unittest.TestCase):
         sample = {**document, 'z': [1, None, 'xé'], 'a': {'b': 2}}
         self.assertEqual(E.canonical_json(sample), storecore.canonical_json(sample))
 
-    def test_the_selection_and_the_limit_are_inside_the_digest(self):
+    def test_the_v1_fixture_is_s_03_5s_format_and_its_digest_is_not_the_live_one(self):
+        """envelope_support.document_v1 reproduces S-03.5's /1 golden digest and manifest digest exactly (a
+        correctly formed /1 document of the same families), and neither is the /2 envelope's."""
+        raw = V.component()
+        v1 = V.document_v1(raw)
+        self.assertEqual(tuple(v1), ('format', 'provider', 'origin', 'limit', 'expires_at', 'selection'))
+        self.assertEqual(E.digest(v1), GOLDEN_V1_DIGEST)
+        blob = V.manifest_bytes_v1(raw)
+        self.assertEqual('sha256:' + hashlib.sha256(blob).hexdigest(), GOLDEN_V1_MANIFEST_DIGEST)
+        self.assertNotIn(GOLDEN_V1_DIGEST, (GOLDEN_DIGEST, IB.live_envelope(config(raw))[1]))
+        self.assertNotEqual(blob, V.manifest_bytes(raw))
+
+    def test_the_selection_and_the_expiry_are_inside_the_digest(self):
         base = IB.live_envelope(config(V.component(models=(S.MODEL_A, S.MODEL_B))))
         document, digest = base
         self.assertEqual(document['selection'], {'by': 'envelope', 'models': {'anthropic-messages': [S.MODEL_A,
@@ -165,9 +190,6 @@ class TheDocument(unittest.TestCase):
         delegated = IB.live_envelope(config(V.component(envelope=V.block(selection='delegation'))))[0]
         self.assertEqual(delegated['selection'], {'by': 'delegation', 'record': 'decision:0018', 'point': '3'})
         others = [V.component(models=(S.MODEL_A,)), V.component(envelope=V.block(selection='delegation')),
-                  V.component(envelope=V.block(limit=V.limit(amount='25.01'))),
-                  V.component(envelope=V.block(limit=V.limit(currency='EUR'))),
-                  V.component(envelope=V.block(limit=V.limit(enforced_by='broker', cap=10))),
                   V.component(envelope=V.block(expires_at='2026-12-02T00:00:00Z')),
                   V.component(origin=V.OTHER_ORIGIN), V.component(provider=S.OTHER_PROVIDER)]
         digests = {IB.live_envelope(config(raw))[1] for raw in others}
@@ -227,7 +249,7 @@ class TheEnvelopeCommand(unittest.TestCase):
         loopback = V.component(origin='http://127.0.0.1:9')
         for raw, code in ((V.component(envelope=None), 'ENVELOPE_NOT_CONFIGURED'),
                           (loopback, 'ENVELOPE_FAMILIES_UNBOUND'),
-                          (V.component(envelope=V.block(limit='x')), 'CONFIG_ENVELOPE_INVALID')):
+                          (V.component(envelope=V.block(limit=dict(V.RETIRED_LIMIT))), 'CONFIG_ENVELOPE_INVALID')):
             with self.subTest(code=code):
                 exit_code, ctx = self.run_command(raw)
                 self.assertEqual(exit_code, 2)
@@ -241,8 +263,8 @@ class TheEnvelopeCommand(unittest.TestCase):
 
 
 class StartRefusals(V.EnvelopeCase):
-    """Proof rows A1 to A11 and the slice-1 refusals of the selection and the cap: serve refuses before it reads
-    the provider key or opens a listener."""
+    """Proof rows A1 to A11 and the slice-1 refusals of the selection: serve refuses before it reads the provider
+    key or opens a listener."""
 
     def test_a1_a_non_loopback_family_without_an_envelope_block(self):
         self.assertStartRefused(V.component(envelope=None), 'ENVELOPE_NOT_CONFIGURED', decisions=V.refuse)
@@ -280,7 +302,7 @@ class StartRefusals(V.EnvelopeCase):
 
     def test_a5_a_superseded_authorization_put_back_is_a_replay(self):
         first = V.component()
-        second = V.component(envelope=V.block(limit=V.limit(amount='30.00')))
+        second = V.component(envelope=V.block(expires_at='2026-12-02T00:00:00Z'))
         self.confirmed(first, 'op-envelope-0001')
         self.confirmed(second, 'op-envelope-0002')
         self.assertStartRefused(first, 'ENVELOPE_REPLAYED')
@@ -289,11 +311,10 @@ class StartRefusals(V.EnvelopeCase):
         self.confirmed(V.component())
         self.assertStartRefused(V.component(origin=V.OTHER_ORIGIN), 'ENVELOPE_MISMATCH')
 
-    def test_a7_another_limit_enforcement_cap_or_expiry(self):
+    def test_a7_another_expiry(self):
         self.confirmed(V.component())
-        for name, envelope in (('amount', V.block(limit=V.limit(amount='25.01'))),
-                               ('enforced_by and cap', V.block(limit=V.limit(enforced_by='broker', cap=1000))),
-                               ('expires_at', V.block(expires_at='2026-11-30T23:00:00Z'))):
+        for name, envelope in (('an earlier expires_at', V.block(expires_at='2026-11-30T23:00:00Z')),
+                               ('a later expires_at', V.block(expires_at='2026-12-02T00:00:00Z'))):
             with self.subTest(name):
                 self.assertStartRefused(V.component(envelope=envelope), 'ENVELOPE_MISMATCH')
 
@@ -305,6 +326,23 @@ class StartRefusals(V.EnvelopeCase):
                 self.assertStartRefused(V.component(models=models), 'ENVELOPE_MISMATCH')
         self.assertStartRefused(V.component(models=(S.MODEL_A, S.MODEL_B),
                                             envelope=V.block(selection='delegation')), 'ENVELOPE_MISMATCH')
+
+    def test_a_receipt_over_a_v1_document_does_not_authorize_a_start(self):
+        """S-03.6: a confirmed receipt of the real recorder over the canonical manifest of a correctly formed /1
+        document of the same families (S-03.5's format, with its limit) names a digest no live envelope has: alone
+        it is a mismatch; recorded after a /2 authorization it governs, and the /2 digest is then a replay."""
+        raw = V.component()
+        result = self.recorder.authorize(V.manifest_bytes_v1(raw), V.OPERATION)
+        self.assertEqual(result['receipt']['state'], 'confirmed')
+        self.assertEqual((result['decision']['subject']['target'], result['decision']['subject']['digest']),
+                         (GOLDEN_V1_DIGEST, GOLDEN_V1_MANIFEST_DIGEST))
+        self.assertStartRefused(raw, 'ENVELOPE_MISMATCH')
+        self.confirmed(raw, 'op-envelope-0002')                                  # the /2 envelope authorized
+        code, ctx = self.serve(raw, lambda broker: None)
+        self.assertEqual(code, 0, ctx.err.getvalue())
+        self.assertEqual(self.recorder.authorize(V.manifest_bytes_v1(raw, 'op-envelope-0003'), 'op-envelope-0003')[
+            'receipt']['state'], 'confirmed')                                    # a later /1 receipt governs
+        self.assertStartRefused(raw, 'ENVELOPE_REPLAYED')
 
     def test_a8_the_governing_target_is_another_envelopes(self):
         raw = V.component()
@@ -319,7 +357,7 @@ class StartRefusals(V.EnvelopeCase):
         raw = V.component()
         canonical = V.manifest_bytes(raw)
         data = json.loads(canonical)
-        data['envelope']['limit']['amount'] = '99.00'                      # the member the Owner read
+        data['envelope']['origin'] = 'https://api.other-provider.test:443'   # the member the Owner read
         altered = (json.dumps(data, indent=2) + '\n').encode()
         cases = (('the envelope member', altered), ('the bytes', canonical.replace(b'\n', b'\r\n')),
                  ('the indentation', (json.dumps(json.loads(canonical), indent=4) + '\n').encode()))
@@ -407,23 +445,6 @@ class StartRefusals(V.EnvelopeCase):
         self.confirmed(raw)
         self.assertStartRefused(raw, 'MODEL_SELECTION_MISSING')
 
-    def test_a_cap_the_broker_enforces_fails_closed_while_its_usage_is_unknown(self):
-        """Slice 3 (the ledger): a prior run of the broker under this authorization with a run receipt and no close
-        receipt (a crash, a kill, a lost close write) leaves its usage unknown: refused at start
-        (ENVELOPE_USAGE_UNKNOWN), before the key or a listener. The run receipt is written by the broker's own
-        journal, as a start writes it."""
-        raw = V.component(envelope=V.block(limit=V.limit(enforced_by='broker', cap=1000)))
-        receipt = self.confirmed(raw)['receipt']['operation_key']
-        run_key, close_key = IB.ledger_keys(receipt, 1)
-        journal = IB.Journal(lambda: S.STORE.open_store(self.db), IB.BrokerGuard())
-        try:
-            journal.record(run_key, {'format': IB.ENVELOPE_RUN_FORMAT, 'service': IB.SERVICE, 'receipt': receipt,
-                                     'run': 1}, {'state': 'open'}, conflict='JOURNAL_FAILED')
-        finally:
-            journal.close()
-        detail = self.assertStartRefused(raw, 'ENVELOPE_USAGE_UNKNOWN').err.getvalue()
-        self.assertIn('no close receipt', detail)
-
 
 # ---------------------------------------------------------------- serve: started (integration)
 
@@ -455,8 +476,7 @@ class Started(V.EnvelopeCase):
         expected = {'receipt': result['receipt']['operation_key'], 'operation': V.OPERATION,
                     'decision': result['decision']['decisionId'], 'digest': GOLDEN_DIGEST,
                     'expires_at': V.EXPIRES, 'selection': {'by': 'envelope', 'models': {
-                        'anthropic-messages': [S.MODEL_A]}},
-                    'limit': {'enforced_by': 'provider', 'cap': None}}
+                        'anthropic-messages': [S.MODEL_A]}}}
         self.assertEqual(seen['status']['authorization'], expected)
         self.assertEqual(json.loads(ctx.out.getvalue())['authorization'], expected)
         (start,) = self.start_receipts()
@@ -524,7 +544,7 @@ class LoopbackAsToday(V.EnvelopeCase):
 
         def wait(broker):
             grant = broker.issue({'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': 'openai-chat',
-                                  'models': [S.MODEL_A], 'budget': {'requests': 2, 'tokens': 100}, 'ttl_s': 60})
+                                  'models': [S.MODEL_A], 'ttl_s': 60})
             seen['answer'] = S.request(broker.listeners['inference']['port'], 'POST', '/v1/chat/completions',
                                        {'model': S.MODEL_A}, [S.auth('openai-chat', grant['token'])])
             seen['status'] = broker.status()

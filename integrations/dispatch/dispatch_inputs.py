@@ -1034,14 +1034,16 @@ ACP_AGENT_KIND = 'acp'
 DISPOSABLE_TAG_SUFFIX = '-disposable'
 # E-05.6: the D1 stage's create secrets. Only the D1 stage's create carries the two secret fields; the pinned
 # template carries none (admit_secrets adds them). The token's value stands in the admitted body as TOKEN_SLOT, and
-# is put in its place, in memory only, by the check immediately before the transport. The grant's budgets and
-# lifetime are declared beside the stage template's pin (GRANT_KEY: requests, tokens, ttl_s), bound by the profile
-# digest; the family and the model come from the pinned template's ACP block.
+# is put in its place, in memory only, by the check immediately before the transport. The grant's lifetime is
+# declared beside the stage template's pin (GRANT_KEY: ttl_s), bound by the profile digest; the family and the
+# model come from the pinned template's ACP block. S-03.6 retired the grant's request and token budget: a
+# declaration that still names one (RETIRED_GRANT_FIELDS) is refused, never ignored.
 SECRET_FIELDS = secrets_check.SECRET_FIELDS
 TOKEN_SLOT = '{attempt_token}'
 GRANT_KEY = 'inference_grant'
-GRANT_FIELDS = ('requests', 'tokens', 'ttl_s')
-GRANT_FORMAT = 'ai-engineering-harness/dispatch/inference-grant/v1'
+GRANT_FIELDS = ('ttl_s',)
+RETIRED_GRANT_FIELDS = ('requests', 'tokens')
+GRANT_FORMAT = 'ai-engineering-harness/dispatch/inference-grant/v2'   # v1 carried the retired budget
 REVOCATION_FORMAT = 'ai-engineering-harness/dispatch/inference-revocation/v1'
 REVOCATION_TRIGGER = 'attempt end'     # decision 0007 point 5 (the broker's TRIGGERS): a refused attempt ends too
 REVOCATION_KEY = 'dispatch/attempt/{attempt_id}/inference-revocation/{n}'
@@ -1171,10 +1173,10 @@ def check_admission_policy(policy, profile: str) -> None:
 
 def _check_stage_create_template(pin, fixture, profile: str) -> dict:
     """The profile's D1 stage template declaration, normalized to ``{stage, path, sha256, inference_grant}``
-    (E-05.2, E-05.6); refused when malformed (``PROFILE_ADMISSION_INVALID``: the grant's ``requests``, ``tokens``
-    and ``ttl_s`` are required positive integers, the broker bounds them at issuance) or when it pins the profile's
-    F-04.2 fixture, by path or by sha256 (``STAGE_TEMPLATE_DISPOSABLE``). Other keys of the declaration are
-    descriptive and ignored."""
+    (E-05.2, E-05.6); refused when malformed (``PROFILE_ADMISSION_INVALID``: the grant declares exactly ``ttl_s``,
+    a positive integer the broker bounds at issuance; a grant that still declares the retired ``requests`` or
+    ``tokens`` budget is refused by name, S-03.6) or when it pins the profile's F-04.2 fixture, by path or by
+    sha256 (``STAGE_TEMPLATE_DISPOSABLE``). Other keys of the declaration are descriptive and ignored."""
     if not isinstance(pin, dict) or pin.get('stage') not in STAGES or not isinstance(pin.get('path'), str) \
             or not ARTIFACT_PATH_RE.fullmatch(pin['path']) or not pin['path'].startswith(f'profiles/{profile}/') \
             or not isinstance(pin.get('sha256'), str) or not SHA256_RE.fullmatch(pin['sha256']):
@@ -1184,6 +1186,11 @@ def _check_stage_create_template(pin, fixture, profile: str) -> dict:
         raise DispatchRefused('STAGE_TEMPLATE_DISPOSABLE', f'{profile}: the {pin["stage"]} stage\'s create template '
                               'is the profile\'s F-04.2 disposable fixture', profile=profile, stage=pin['stage'])
     grant = pin.get(GRANT_KEY)
+    retired = sorted(name for name in RETIRED_GRANT_FIELDS if isinstance(grant, dict) and name in grant)
+    if retired:
+        raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: agent_server.{STAGE_TEMPLATE_KEY}.{GRANT_KEY} '
+                              f'declares {retired}: the grant\'s request and token budget is retired (S-03.6); '
+                              f'declare exactly {list(GRANT_FIELDS)}', profile=profile)
     if not isinstance(grant, dict) or set(grant) != set(GRANT_FIELDS) \
             or not all(_positive_int(grant[name]) for name in GRANT_FIELDS):
         raise DispatchRefused('PROFILE_ADMISSION_INVALID', f'{profile}: agent_server.{STAGE_TEMPLATE_KEY}.{GRANT_KEY} '
@@ -1443,12 +1450,11 @@ class InferenceGrant:
     token is held in memory only, from the issue to the create's transport call, and is never shown: ``repr`` and
     ``record()`` carry its fingerprint; ``token()`` is the only way to it until ``drop()``."""
 
-    __slots__ = ('fingerprint', 'conversation_id', 'attempt_id', 'family', 'models', 'budget', 'expires_at',
-                 '_token')
+    __slots__ = ('fingerprint', 'conversation_id', 'attempt_id', 'family', 'models', 'expires_at', '_token')
 
-    def __init__(self, *, token, fingerprint, conversation_id, attempt_id, family, models, budget, expires_at):
+    def __init__(self, *, token, fingerprint, conversation_id, attempt_id, family, models, expires_at):
         self.fingerprint, self.conversation_id, self.attempt_id = fingerprint, conversation_id, attempt_id
-        self.family, self.models, self.budget, self.expires_at = family, models, budget, expires_at
+        self.family, self.models, self.expires_at = family, models, expires_at
         self._token = token
 
     @classmethod
@@ -1463,11 +1469,9 @@ class InferenceGrant:
         def text(name):
             value = answer.get(name)
             return value if isinstance(value, str) else None
-        budget = answer.get('budget')
         return cls(token=token, fingerprint=answer['token_fingerprint'], conversation_id=text('conversation_id'),
                    attempt_id=text('attempt_id'), family=text('family'),
                    models=[m for m in answer.get('models') or [] if isinstance(m, str)],
-                   budget=_json_value(budget) if isinstance(budget, Mapping) else None,
                    expires_at=text('expires_at'))
 
     def __repr__(self):
@@ -1500,7 +1504,7 @@ class InferenceGrant:
         """What a record may carry: the grant's identity by the token's fingerprint, never the token."""
         return {'format': GRANT_FORMAT, 'tokenFingerprint': self.fingerprint, 'conversationId': self.conversation_id,
                 'attemptId': self.attempt_id, 'family': self.family, 'models': list(self.models),
-                'budget': self.budget, 'expiresAt': self.expires_at}
+                'expiresAt': self.expires_at}
 
 
 @dataclass(frozen=True)
@@ -1530,14 +1534,12 @@ class InferenceAccess:
 class StageInference:
     """The D1 stage's inference inputs, from trusted, digest-bound sources only (E-05.6): the pinned ACP registry
     entry's two secret names (the token's, the endpoint's), the profile's guest inference endpoint, the broker
-    family of the registry entry, the model of the pinned template's ACP block, and the grant's budgets and
-    lifetime declared beside the stage template's pin."""
+    family of the registry entry, the model of the pinned template's ACP block, and the grant's lifetime declared
+    beside the stage template's pin (no budget: S-03.6)."""
     names: tuple
     endpoint: str
     family: str
     models: tuple
-    requests: int
-    tokens: int
     ttl_s: int
 
     def secrets(self, grant: InferenceGrant | None, operation_key: str) -> dict:
@@ -1578,7 +1580,7 @@ def _stage_inference(declared: dict, staged: dict, template: dict, stage: str) -
         raise invalid('the template\'s acp_model is not one model name of the broker\'s grammar')
     grant = staged[GRANT_KEY]
     return StageInference(names=tuple(names), endpoint=endpoint, family=qualification.ACP_FAMILY, models=(model,),
-                          requests=grant['requests'], tokens=grant['tokens'], ttl_s=grant['ttl_s'])
+                          ttl_s=grant['ttl_s'])
 
 
 @dataclass(frozen=True)
@@ -2246,11 +2248,11 @@ def _code_of(exc) -> str:
 
 def _issue(inference: InferenceAccess, resolved: ResolvedInputs, staged: StageInference) -> InferenceGrant:
     """The D1 stage's attempt token from the broker's control listener (decision 0015 section 3.2, E-05.6), for
-    the reserved conversation and attempt, of the stage's family and model, with its budgets and lifetime. Raises
-    what the control call raises; ``_GrantCustody.issue`` journals the call and decides what its failure means."""
+    the reserved conversation and attempt, of the stage's family and model, with its lifetime. Raises what the
+    control call raises; ``_GrantCustody.issue`` journals the call and decides what its failure means."""
     key = _operation_key(resolved)
     answer = inference.control.issue(store.conversation_id_for(key), store.attempt_id_for(key), staged.family,
-                                     list(staged.models), staged.requests, staged.tokens, staged.ttl_s)
+                                     list(staged.models), staged.ttl_s)
     return InferenceGrant.from_answer(answer)
 
 

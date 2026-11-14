@@ -136,7 +136,8 @@ class FakeUpstream:
     """One declared family's fake provider on 127.0.0.1:<ephemeral>. Behaviour by the request body:
     stream true answers SSE (chunked, one write per event), else JSON with a Content-Length; model
     'syn-no-usage' answers without usage; 'syn-error' answers 500; 'syn-gated' streams its first event, then
-    waits for the test's release (no sleep) before the rest."""
+    waits for the test's release (no sleep) before the rest; 'syn-cut' streams its first event and then closes
+    the connection without the rest of the stream (the upstream cuts it off)."""
 
     def __init__(self, family: str):
         self.family = family
@@ -190,6 +191,9 @@ class FakeUpstream:
                     self.wfile.flush()
                     if gated:
                         upstream.release.wait(30)  # a bound against a hang, released by the test
+                    if model == 'syn-cut':
+                        self.close_connection = True   # no terminating chunk: the stream is cut off
+                        return
                 if upstream.family != 'anthropic-messages':
                     data = b'data: [DONE]\n\n'
                     self.wfile.write(b'%x\r\n%s\r\n' % (len(data), data))
@@ -212,7 +216,7 @@ class FakeUpstream:
 # ---------------------------------------------------------------- brokers
 
 
-def component(upstreams: dict, *, models=(MODEL_A, MODEL_B, 'syn-no-usage', 'syn-error', 'syn-gated'),
+def component(upstreams: dict, *, models=(MODEL_A, MODEL_B, 'syn-no-usage', 'syn-error', 'syn-gated', 'syn-cut'),
               provider=PROVIDER, **settings) -> dict:
     """components.inference_broker for the fake upstreams {family: origin}: ephemeral ports."""
     raw = {'control_port': 0, 'inference_port': 0, **settings, 'families': {}}
@@ -256,9 +260,9 @@ class Rig:
             self.audit.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def issue(self, family='openai-chat', models=(MODEL_A,), requests=10, tokens=1000, ttl=600, **overrides):
+    def issue(self, family='openai-chat', models=(MODEL_A,), ttl=600, **overrides):
         body = {'conversation_id': new_id(), 'attempt_id': new_id(), 'family': family, 'models': list(models),
-                'budget': {'requests': requests, 'tokens': tokens}, 'ttl_s': ttl, **overrides}
+                'ttl_s': ttl, **overrides}
         return self.broker.issue(body)
 
     def audit_lines(self) -> list:

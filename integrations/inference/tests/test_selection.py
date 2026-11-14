@@ -138,7 +138,7 @@ class AtStart(SelectionCase):
     def test_c5_a_selection_under_an_earlier_envelope(self):
         first = delegated()
         self.select(self.receipt(first, 'op-envelope-0001'), S.MODEL_A)
-        second = delegated(limit=V.limit(amount='30.00'))
+        second = delegated(expires_at='2026-12-02T00:00:00Z')        # another envelope: a later expiry
         self.receipt(second, 'op-envelope-0002')
         self.assertStartRefused(second, 'MODEL_SELECTION_RECEIPT_MISMATCH')
 
@@ -215,7 +215,7 @@ class PerRequest(SelectionCase):
         self.assertEqual((status, json.loads(body)['aieh_refusal']['code']), (403, 'MODEL_NOT_SELECTED'))
         status, refusal = S.control(rig, 'POST', '/v1/grants', {
             'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': 'anthropic-messages',
-            'models': [S.MODEL_B], 'budget': {'requests': 1, 'tokens': 10}, 'ttl_s': 60})
+            'models': [S.MODEL_B], 'ttl_s': 60})
         self.assertEqual((status, refusal['aieh_refusal']['code']), (403, 'MODEL_NOT_SELECTED'))
         self.assertEqual(len(upstream.requests), 0)
         status, _, _ = send(S.MODEL_A)                                         # a selected model passes

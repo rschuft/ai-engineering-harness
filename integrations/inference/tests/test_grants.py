@@ -1,6 +1,7 @@
 """The broker's decisions without a socket (decision 0015 sections 3 and 5 as amended): issuance and its
-refusals, family binding, revocation and expiry with their integration-store receipts, budgets, and every
-admission refusal, on a Broker whose listeners are never started (connect is a spy that must not be reached).
+refusals, family binding, revocation and expiry with their integration-store receipts, the absence of any
+request or token budget (S-03.6), and every admission refusal, on a Broker whose listeners are never started
+(connect is a spy that must not be reached).
 """
 from __future__ import annotations
 
@@ -76,16 +77,22 @@ class Fixture(unittest.TestCase):
 
 class TestIssue(Fixture):
     def test_a_grant_is_journaled_by_fingerprint_and_the_token_is_kept_only_hashed(self):
-        grant = self.issue(family='anthropic-messages', models=(S.MODEL_A, S.MODEL_B), requests=3, tokens=50, ttl=60)
+        grant = self.issue(family='anthropic-messages', models=(S.MODEL_A, S.MODEL_B), ttl=60)
         token = grant['token']
         self.assertRegex(token, r'^aieh-inf-[A-Za-z0-9_-]{43}$')
         self.assertEqual(grant['token_fingerprint'], IB.contract.fingerprint(token))
-        self.assertEqual((grant['family'], grant['models'], grant['budget'], grant['state']),
-                         ('anthropic-messages', [S.MODEL_A, S.MODEL_B], {'requests': 3, 'tokens': 50}, 'live'))
+        self.assertEqual((grant['family'], grant['models'], grant['state']),
+                         ('anthropic-messages', [S.MODEL_A, S.MODEL_B], 'live'))
+        lifetime = (IB.datetime.datetime.fromisoformat(grant['expires_at'])
+                    - IB.datetime.datetime.fromisoformat(grant['issued_at'])).total_seconds()
+        self.assertEqual(lifetime, 60)
+        self.assertNotIn('budget', grant)                       # S-03.6: bound to its lifetime, no budget
         self.assertEqual(grant['grant_receipt']['events'], ['reserved', 'dispatched', 'confirmed'])
         record, events = self.rig.store_records(f'inference/attempt/{grant["attempt_id"]}/grant')
         intent = json.loads(record.intent_json)
-        self.assertEqual(intent['format'], 'aieh-inference-grant/1')
+        self.assertEqual(intent['format'], 'aieh-inference-grant/2')
+        self.assertEqual(sorted(intent), ['attempt_id', 'conversation_id', 'expires_at', 'family', 'format',
+                                          'issued_at', 'issuer', 'models', 'token_fingerprint', 'upstream'])
         self.assertEqual(intent['token_fingerprint'], grant['token_fingerprint'])
         self.assertEqual(intent['upstream'], 'http://127.0.0.1:9')
         self.assertNotIn(token, record.intent_json + ''.join(e.detail_json or '' for e in events))
@@ -96,7 +103,7 @@ class TestIssue(Fixture):
 
     def test_each_issue_refusal(self):
         base = {'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': 'openai-chat',
-                'models': [S.MODEL_A], 'budget': {'requests': 1, 'tokens': 1}, 'ttl_s': 1}
+                'models': [S.MODEL_A], 'ttl_s': 1}
 
         def variant(**changes):
             body = {**base, 'attempt_id': S.new_id(), **changes}
@@ -105,7 +112,7 @@ class TestIssue(Fixture):
             ('CONTROL_BODY_INVALID', ['not', 'a', 'mapping']),
             ('CONTROL_BODY_INVALID', 5),
             ('CONTROL_BODY_INVALID', None),
-            ('BUDGET_INVALID', variant(budget=5)),
+            ('BUDGET_RETIRED', variant(budget=5)),
             ('MODELS_INVALID', variant(models='syn')),
             ('CONTROL_BODY_INVALID', variant(ttl_s=...)),
             ('CONTROL_BODY_INVALID', variant(note='x')),
@@ -120,12 +127,14 @@ class TestIssue(Fixture):
             ('MODELS_INVALID', variant(models=['syn-*'])),
             ('MODELS_INVALID', variant(models=S.MODEL_A)),
             ('MODEL_NOT_ALLOWLISTED', variant(models=[S.MODEL_A, S.MODEL_C])),
-            ('BUDGET_INVALID', variant(budget={'requests': 0, 'tokens': 1})),
-            ('BUDGET_INVALID', variant(budget={'requests': True, 'tokens': 1})),
-            ('BUDGET_INVALID', variant(budget={'requests': 1})),
-            ('BUDGET_INVALID', variant(budget={'requests': 1, 'tokens': 1, 'cost': 1})),
-            ('BUDGET_INVALID', variant(budget={'requests': 1, 'tokens': 10 ** 11})),
-            ('BUDGET_INVALID', variant(budget=[1, 1])),
+            # S-03.6: an issue request carrying a budget, of any value, is refused by its own stable code
+            ('BUDGET_RETIRED', variant(budget={'requests': 10, 'tokens': 1000})),
+            ('BUDGET_RETIRED', variant(budget={'requests': 0, 'tokens': 1})),
+            ('BUDGET_RETIRED', variant(budget={})),
+            ('BUDGET_RETIRED', variant(budget=None)),
+            ('BUDGET_RETIRED', variant(budget=[1, 1])),
+            ('BUDGET_RETIRED', variant(budget={'requests': 1}, ttl_s=...)),
+            ('BUDGET_RETIRED', {'budget': {'requests': 1, 'tokens': 1}}),
             ('TTL_INVALID', variant(ttl_s=0)),
             ('TTL_INVALID', variant(ttl_s=86401)),
             ('TTL_INVALID', variant(ttl_s=1.5)),
@@ -440,21 +449,26 @@ class TestAdmission(Fixture):
         self.assertEqual(self.code(self.broker.admit, 'POST', '/v1/chat/completions', no_length, io.BytesIO().read),
                          'BODY_LENGTH_REQUIRED')
 
-    def test_request_and_token_budgets(self):
-        grant = self.issue(requests=2, tokens=100)
+    def test_no_request_count_usage_count_or_unknown_usage_refuses(self):
+        """S-03.6: a grant has no request or token budget. Its counts and usage are information only: a grant
+        admits its next request at any request count, any usage-token count and any number of answers without
+        usage (BUDGET_REQUESTS_EXHAUSTED, BUDGET_TOKENS_EXHAUSTED and BUDGET_USAGE_UNKNOWN are retired)."""
+        grant = self.issue()
         held = self.broker._by_fingerprint[grant['token_fingerprint']]
-        self.admit(grant)
-        self.admit(grant)
-        self.assertEqual(self.refused(grant), 'BUDGET_REQUESTS_EXHAUSTED')
-        tokens = self.issue(requests=100, tokens=100)
-        spent = self.broker._by_fingerprint[tokens['token_fingerprint']]
-        self.admit(tokens)
-        spent.total_tokens = 100
-        self.assertEqual(self.refused(tokens), 'BUDGET_TOKENS_EXHAUSTED')
-        unknown = self.issue(requests=100, tokens=100)
-        self.broker._by_fingerprint[unknown['token_fingerprint']].unknown_usage = 1
-        self.assertEqual(self.refused(unknown), 'BUDGET_USAGE_UNKNOWN')
-        self.assertEqual((held.requests, held.refused), (2, 1))
+        for _ in range(25):
+            self.admit(grant)
+        held.total_tokens = held.input_tokens = 10 ** 12
+        held.unknown_usage = 7
+        admitted = self.admit(grant)
+        self.assertEqual(admitted.grant, held)
+        self.assertEqual((held.requests, held.refused, held.unknown_usage), (26, 0, 7))
+        summary = self.broker.grant_status(grant['token_fingerprint'])
+        self.assertEqual((summary['requests'], summary['usage']['unknown_responses']), (26, 7))
+        self.assertNotIn('budget', summary)
+        for code in ('BUDGET_INVALID', 'BUDGET_REQUESTS_EXHAUSTED', 'BUDGET_TOKENS_EXHAUSTED', 'BUDGET_USAGE_UNKNOWN',
+                     'ENVELOPE_CAP_REACHED', 'ENVELOPE_USAGE_UNKNOWN'):
+            self.assertNotIn(code, IB.CODES)
+        self.assertFalse(hasattr(IB, 'BUDGET_LIMITS'))
 
 
 class TestQueryPassFamily(Fixture):
@@ -641,7 +655,7 @@ class TestRevocationByAttempt(unittest.TestCase):
 
     def body(self, conversation, attempt):
         return {'conversation_id': conversation, 'attempt_id': attempt, 'family': 'openai-chat',
-                'models': [S.MODEL_A], 'budget': {'requests': 1, 'tokens': 1}, 'ttl_s': 60}
+                'models': [S.MODEL_A], 'ttl_s': 60}
 
     def code(self, call, *args) -> str:
         with self.assertRaises(IB.InferenceError) as caught:

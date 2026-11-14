@@ -47,7 +47,7 @@ class TestServe(unittest.TestCase):
             rig = type('Ports', (), {'control': broker.listeners['control']['port']})
             status, grant = S.control(rig, 'POST', '/v1/grants', {
                 'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': 'anthropic-messages',
-                'models': [S.MODEL_A], 'budget': {'requests': 2, 'tokens': 100}, 'ttl_s': 60})
+                'models': [S.MODEL_A], 'ttl_s': 60})
             seen['grant'] = grant
             seen['answer'] = S.request(broker.listeners['inference']['port'], 'POST', '/v1/messages',
                                        {'model': S.MODEL_A, 'stream': True}, [('x-api-key', grant['token'])])

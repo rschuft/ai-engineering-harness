@@ -42,12 +42,30 @@ AT_EXPIRY = datetime.datetime(2026, 12, 1, 0, 0, 0, tzinfo=UTC).timestamp()
 OPERATION = 'op-envelope-0001'
 
 
-def limit(**changes) -> dict:
-    return {'amount': '25.00', 'currency': 'USD', 'enforced_by': 'provider', **changes}
-
-
 def block(**changes) -> dict:
-    return {'expires_at': EXPIRES, 'limit': limit(), 'selection': 'envelope', **changes}
+    """The envelope block of aieh-provider-envelope/2: the expiry and the selection, nothing else."""
+    return {'expires_at': EXPIRES, 'selection': 'envelope', **changes}
+
+
+# The spending limit of aieh-provider-envelope/1 (retired by S-03.6): the block's limit member as S-03.5 built it,
+# for the tests that show it refused and that a receipt over a /1 document authorizes no start.
+RETIRED_LIMIT = {'amount': '25.00', 'currency': 'USD', 'enforced_by': 'provider', 'cap': None}
+
+
+def document_v1(raw: dict) -> dict:
+    """The canonical document S-03.5's aieh-provider-envelope/1 made of RAW's envelope (the /2 document with the
+    retired limit in its place, in /1's member order), correctly formed, for a /1 receipt."""
+    document, _ = IB.live_envelope(IB.load_config(raw, allow_ephemeral=True))
+    return {'format': 'aieh-provider-envelope/1', 'provider': document['provider'], 'origin': document['origin'],
+            'limit': dict(RETIRED_LIMIT), 'expires_at': document['expires_at'], 'selection': document['selection']}
+
+
+def manifest_bytes_v1(raw: dict, operation: str = OPERATION) -> bytes:
+    """The canonical /1 manifest of RAW's envelope under OPERATION, as S-03.5's envelope command printed it."""
+    document = document_v1(raw)
+    manifest = {'operation': operation, 'kind': E.KIND, 'target': E.digest(document),
+                'expiresAt': document['expires_at'], 'envelope': document}
+    return (json.dumps(manifest, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
 
 
 def component(origin=ORIGIN, models=(S.MODEL_A,), envelope='default', family='anthropic-messages', provider=S.PROVIDER,

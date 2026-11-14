@@ -128,20 +128,21 @@ class TestControlClient(unittest.TestCase):
 
     def issue_argv(self, *extra, model=S.MODEL_A):
         return ['issue', '--conversation-id', S.new_id(), '--family', 'openai-chat', '--model', model,
-                '--requests', '2', '--tokens', '100', '--ttl-s', '60', *extra]
+                '--ttl-s', '60', *extra]
 
     def ports(self):
         return {'control_port': self.rig.control, 'inference_port': self.rig.inference}
 
     def test_issue_returns_one_checked_grant(self):
         conversation, attempt = S.new_id(), S.new_id()
-        grant = self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A, S.MODEL_B], 3, 50, 60)
-        self.assertEqual((grant['conversation_id'], grant['attempt_id'], grant['models'], grant['budget']),
-                         (conversation, attempt, [S.MODEL_A, S.MODEL_B], {'requests': 3, 'tokens': 50}))
+        grant = self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A, S.MODEL_B], 60)
+        self.assertEqual((grant['conversation_id'], grant['attempt_id'], grant['models']),
+                         (conversation, attempt, [S.MODEL_A, S.MODEL_B]))
+        self.assertNotIn('budget', grant)                         # S-03.6: the grant carries no budget
         self.assertEqual(IC.token_fingerprint(grant['token']), grant['token_fingerprint'])
         self.assertEqual(self.client.grant(grant['token_fingerprint'])['state'], 'live')
         with self.assertRaises(IC.ControlError) as caught:
-            self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A], 3, 50, 60)
+            self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A], 60)
         self.assertEqual(caught.exception.code, 'ATTEMPT_HAS_GRANT')
         token = IB.TOKEN_PREFIX + 'B' * 43
         good = {'token': token, 'token_fingerprint': IB.contract.fingerprint(token), 'attempt_id': attempt}
@@ -150,14 +151,14 @@ class TestControlClient(unittest.TestCase):
             with self.subTest(answer=sorted(answer.items())[1:]):
                 with mock.patch.object(IC.ControlClient, 'call', return_value=answer):
                     with self.assertRaises(IC.ControlError) as caught:
-                        self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A], 3, 50, 60)
+                        self.client.issue(conversation, attempt, 'openai-chat', [S.MODEL_A], 60)
                 self.assertEqual(caught.exception.code, 'CONTROL_ANSWER_INVALID')
                 self.assertNotIn(token, str(caught.exception))
         with mock.patch.object(IC.ControlClient, 'call', return_value=good) as call:
-            self.assertIs(self.client.issue(conversation, attempt, 'openai-chat', (S.MODEL_A,), 3, 50, 60), good)
+            self.assertIs(self.client.issue(conversation, attempt, 'openai-chat', (S.MODEL_A,), 60), good)
         call.assert_called_once_with('POST', '/v1/grants', {
             'conversation_id': conversation, 'attempt_id': attempt, 'family': 'openai-chat', 'models': [S.MODEL_A],
-            'budget': {'requests': 3, 'tokens': 50}, 'ttl_s': 60})
+            'ttl_s': 60})
 
     def test_the_issue_command_writes_the_token_to_a_pipe_only(self):
         class Pipe(io.TextIOWrapper):
@@ -235,6 +236,14 @@ class TestControlClient(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
             IC.main([], IC.Context(component=self.ports, out=io.StringIO(), err=io.StringIO()))
         self.assertEqual(caught.exception.code, 2)
+        # S-03.6: the budget options no longer exist; the lifetime is the grant's only limit.
+        for retired in (['--requests', '2'], ['--tokens', '100'], ['--requests', '2', '--tokens', '100']):
+            with self.subTest(retired=retired):
+                with contextlib.redirect_stderr(io.StringIO()) as usage, self.assertRaises(SystemExit) as caught:
+                    IC.main(full + retired, IC.Context(component=self.ports, out=io.StringIO(),
+                                                       err=io.StringIO()))
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn('unrecognized arguments', usage.getvalue())
 
     def test_refusals_carry_the_broker_code(self):
         with self.assertRaises(IC.ControlError) as caught:

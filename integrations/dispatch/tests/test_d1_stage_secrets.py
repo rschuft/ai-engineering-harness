@@ -34,6 +34,7 @@ import base64
 import contextlib
 import copy
 import dataclasses
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -339,9 +340,13 @@ class Accepts(SecretsFixture):
         fingerprint = ic.token_fingerprint(token)
         state = self.grant_state(fingerprint)
         self.assertEqual((state['state'], state['conversation_id'], state['attempt_id'], state['family'],
-                          state['models'], state['budget']),
+                          state['models']),
                          ('live', attempt.conversation_id, store_mod.attempt_id_for(key), 'anthropic-messages',
-                          [d1.TEST_MODEL], {'requests': d1.GRANT['requests'], 'tokens': d1.GRANT['tokens']}))
+                          [d1.TEST_MODEL]))
+        self.assertNotIn('budget', state)                  # S-03.6: bound to its lifetime, no budget
+        lifetime = (datetime.datetime.fromisoformat(state['expires_at'])
+                    - datetime.datetime.fromisoformat(state['issued_at'])).total_seconds()
+        self.assertEqual(lifetime, d1.GRANT['ttl_s'])
         self.assertEqual(self.detail(key, 'dispatched')['inferenceGrant']['tokenFingerprint'], fingerprint)
         self.assertEqual(result.to_json()['inference_grant']['tokenFingerprint'], fingerprint)
         self.assertEqual(spy.issued, [token])
@@ -353,8 +358,8 @@ class Accepts(SecretsFixture):
         self.assertEqual(staged.names, tuple(aq.registry_secret_names()))
         self.assertEqual(staged.names, (TOKEN_NAME, ENDPOINT_NAME))
         self.assertEqual(staged.endpoint, aq.inference_endpoint(json.loads(pre.profile_bytes)))
-        self.assertEqual((staged.family, staged.models, staged.requests, staged.tokens, staged.ttl_s),
-                         ('anthropic-messages', (d1.TEST_MODEL,), 10, 1000, 600))
+        self.assertEqual((staged.family, staged.models, staged.ttl_s), ('anthropic-messages', (d1.TEST_MODEL,), 600))
+        self.assertFalse(hasattr(staged, 'requests') or hasattr(staged, 'tokens'))
         # The checked-in profile's endpoint is the same address (the synthetic profile mirrors it).
         real = json.loads((base.REPO / 'profiles' / 'strong-windows-qemu-whpx' / 'profile.json').read_bytes())
         self.assertEqual(aq.inference_endpoint(real), ENDPOINT)
@@ -521,8 +526,7 @@ class Refusals(SecretsFixture):
         good = self.issue_for(resolved)
         wrong['the token another grant\'s'] = di.InferenceGrant(
             token=wrong['another attempt'].token(), fingerprint=good.fingerprint, conversation_id=good.conversation_id,
-            attempt_id=good.attempt_id, family=good.family, models=good.models, budget=good.budget,
-            expires_at=good.expires_at)
+            attempt_id=good.attempt_id, family=good.family, models=good.models, expires_at=good.expires_at)
         self.assertEqual((good.conversation_id, good.attempt_id),
                          (store_mod.conversation_id_for(key), store_mod.attempt_id_for(key)))
         for name, grant in wrong.items():
@@ -637,14 +641,20 @@ class Refusals(SecretsFixture):
         good = dict(d1.GRANT)
         cases = {
             'missing': dict(change=without),
-            'not an object': dict(grant=[10, 1000, 600]),
-            'a key missing': dict(grant={k: v for k, v in good.items() if k != 'ttl_s'}),
+            'not an object': dict(grant=[600]),
+            'empty': dict(grant={}),
             'a key more': dict(grant=dict(good, cost=1)),
-            'zero requests': dict(grant=dict(good, requests=0)),
-            'negative tokens': dict(grant=dict(good, tokens=-1)),
-            'a boolean': dict(grant=dict(good, requests=True)),
+            'a zero lifetime': dict(grant=dict(good, ttl_s=0)),
+            'a negative lifetime': dict(grant=dict(good, ttl_s=-1)),
+            'a boolean': dict(grant=dict(good, ttl_s=True)),
             'a float': dict(grant=dict(good, ttl_s=600.0)),
-            'a string': dict(grant=dict(good, tokens='1000')),
+            'a string': dict(grant=dict(good, ttl_s='600')),
+            # S-03.6: a declaration that still carries the retired budget is refused, never ignored
+            'the retired budget (E-05.6\'s declaration)': dict(grant=dict(good, requests=10, tokens=1000),
+                                                              retired=True),
+            'a retired requests': dict(grant=dict(good, requests=10), retired=True),
+            'a retired tokens': dict(grant=dict(good, tokens=1000), retired=True),
+            'the retired budget alone': dict(grant={'requests': 10, 'tokens': 1000}, retired=True),
         }
         for name, case in cases.items():
             with self.subTest(name):
@@ -652,7 +662,9 @@ class Refusals(SecretsFixture):
                 if 'grant' in case:
                     pin[di.GRANT_KEY] = case['grant']
                 manifest = self.approve_d1(pin=pin, change=case.get('change'))
-                self.assertRefused('PROFILE_ADMISSION_INVALID', self.d1_request(), manifest, self.d1_sources)
+                refusal = self.assertRefused('PROFILE_ADMISSION_INVALID', self.d1_request(), manifest,
+                                             self.d1_sources)
+                self.assertEqual('retired' in refusal.detail, case.get('retired', False), refusal.detail)
                 self.assertRefused('PROFILE_ADMISSION_INVALID', self.d1_request(
                     repository='other-app', stage='review', catalog_pin='reviewer-pin'), manifest, self.d1_sources)
 
@@ -1038,7 +1050,7 @@ class GrantJournal(SecretsFixture):
         grant; GRANT_ALREADY_REVOKED once revoked; a mixed body stays CONTROL_BODY_INVALID."""
         control = self.control()
         conversation, attempt = str(uuid.uuid4()), str(uuid.uuid4())
-        answer = control.issue(conversation, attempt, 'anthropic-messages', [d1.TEST_MODEL], 1, 1, 60)
+        answer = control.issue(conversation, attempt, 'anthropic-messages', [d1.TEST_MODEL], 60)
         with self.assertRaises(ic.ControlError) as caught:
             control.revoke_attempt(str(uuid.uuid4()), attempt, 'attempt end', REVOKER)
         self.assertEqual(caught.exception.code, 'GRANT_UNKNOWN')
@@ -1046,7 +1058,7 @@ class GrantJournal(SecretsFixture):
         tombstone = control.revoke_attempt(conversation, other, 'attempt end', REVOKER)
         self.assertEqual((tombstone['state'], tombstone['attempt_id']), ('tombstoned', other))
         with self.assertRaises(ic.ControlError) as caught:
-            control.issue(conversation, other, 'anthropic-messages', [d1.TEST_MODEL], 1, 1, 60)
+            control.issue(conversation, other, 'anthropic-messages', [d1.TEST_MODEL], 60)
         self.assertEqual(caught.exception.code, 'GRANT_ATTEMPT_REVOKED')
         revoked = control.revoke_attempt(conversation, attempt, 'attempt end', REVOKER)
         self.assertEqual((revoked['state'], revoked['token_fingerprint']), ('revoked', answer['token_fingerprint']))
@@ -1136,7 +1148,7 @@ class GrantJournal(SecretsFixture):
         def invalid(*args):
             real(*args)   # ours is issued
             answer = self.control().issue(str(uuid.uuid4()), str(uuid.uuid4()), 'anthropic-messages',
-                                          [d1.TEST_MODEL], 1, 1, 600)
+                                          [d1.TEST_MODEL], 600)
             other.update(answer)
             raise ic.ControlError('CONTROL_ANSWER_INVALID', 'synthetic', fingerprint=answer['token_fingerprint'],
                                   conversation_id=answer['conversation_id'], attempt_id=answer['attempt_id'])

@@ -499,7 +499,7 @@ class Discovery(unittest.TestCase):
 
         def wait(broker):
             grant = IC.ControlClient(broker.listeners['control']['port']).issue(
-                S.new_id(), S.new_id(), 'anthropic-messages', [MAIN], 10, 1000, 60)
+                S.new_id(), S.new_id(), 'anthropic-messages', [MAIN], 60)
             seen['token'] = token = grant['token']
             inference = broker.listeners['inference']['port']
             key = [('x-api-key', token)]
@@ -556,7 +556,7 @@ class Discovery(unittest.TestCase):
 
         def wait(broker):
             grant = IC.ControlClient(broker.listeners['control']['port']).issue(
-                S.new_id(), S.new_id(), 'anthropic-messages', [MAIN], 10, 1000, 60)
+                S.new_id(), S.new_id(), 'anthropic-messages', [MAIN], 60)
             body = {'model': MAIN, 'messages': [{'role': 'user', 'content': S.PROMPT_MARKER}],
                     'metadata': {'fallback_model': hidden}}
             self.assertEqual(S.request(broker.listeners['inference']['port'], 'POST', '/v1/messages', body,

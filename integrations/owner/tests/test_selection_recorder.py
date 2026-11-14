@@ -52,7 +52,7 @@ def selection(**changes):
 
 def envelope_manifest(operation, *, kind='provider-envelope', expires=ENVELOPE_EXPIRES):
     data = {'operation': operation, 'kind': kind, 'target': 'sha256:' + '1' * 64, 'expiresAt': expires,
-            'envelope': {'format': 'aieh-provider-envelope/1', 'stand-in': 'SYNTHETIC'}}
+            'envelope': {'format': 'aieh-provider-envelope/2', 'stand-in': 'SYNTHETIC'}}
     return (json.dumps(data, indent=2) + '\n').encode('utf-8')
 
 

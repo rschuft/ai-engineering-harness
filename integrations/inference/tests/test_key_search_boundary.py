@@ -155,7 +155,7 @@ class Boundary(unittest.TestCase):
     def grant(self, port, family, models):
         answer = self.call(port, 'POST', '/v1/grants', {
             'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': family, 'models': models,
-            'budget': {'requests': 10, 'tokens': 1000}, 'ttl_s': 600})
+            'ttl_s': 600})
         self.assertEqual(status_of(answer), 201)
         return json_of(answer)
 

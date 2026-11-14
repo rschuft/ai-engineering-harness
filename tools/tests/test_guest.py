@@ -6582,7 +6582,7 @@ class TokenPlane:
             self.revoked = True
         state = 'revoked' if self.revoked or self.faults.get('not_live') else 'live'
         return {'token_fingerprint': TOKEN_FP, 'state': state, 'family': 'anthropic-messages',
-                'models': ['syn-model-a'], 'budget': {'requests': 5, 'tokens': 100},
+                'models': ['syn-model-a'],
                 'conversation_id': self.faults.get('conversation', self.conversation),
                 'attempt_id': '0' * 8, 'expires_at': 'later', 'requests': self.requests,
                 'revocation': {'trigger': 'attempt end'} if self.revoked else None}

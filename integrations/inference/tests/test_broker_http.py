@@ -1,8 +1,9 @@
 """The broker on its two loopback listeners against a fake upstream per declared family (decision 0015 as
 amended): the control listener, untranslated pass-through with the provider key substituted for the attempt
-token, incremental streaming and usage, revocation and expiry over the wire, refusals with stable codes,
-egress to the configured origin only, and the audit's content. One broker and three fake upstreams per module,
-all on ephemeral 127.0.0.1 ports in this process; synthetic key, tokens and models.
+token, incremental streaming and usage (information only: no budget, S-03.6), revocation and expiry over the
+wire, refusals with stable codes, egress to the configured origin only, and the audit's content. One broker and
+three fake upstreams per module, all on ephemeral 127.0.0.1 ports in this process; synthetic key, tokens and
+models.
 """
 from __future__ import annotations
 
@@ -40,9 +41,9 @@ def tearDownModule():
         upstream.close()
 
 
-def issue(family='openai-chat', models=(S.MODEL_A,), requests=20, tokens=10_000, ttl=600):
+def issue(family='openai-chat', models=(S.MODEL_A,), ttl=600):
     body = {'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': family, 'models': list(models),
-            'budget': {'requests': requests, 'tokens': tokens}, 'ttl_s': ttl}
+            'ttl_s': ttl}
     status, answer = S.control(RIG, 'POST', '/v1/grants', body)
     assert status == 201, answer
     TOKENS.append(answer['token'])
@@ -81,7 +82,7 @@ class TestControlListener(unittest.TestCase):
 
     def test_each_control_refusal(self):
         good = {'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': 'openai-chat',
-                'models': [S.MODEL_C], 'budget': {'requests': 1, 'tokens': 1}, 'ttl_s': 1}
+                'models': [S.MODEL_C], 'ttl_s': 1}
         for (method, path, body, kwargs), expected in (
                 (('GET', '/v1/grants', None, {}), (404, 'CONTROL_ROUTE_UNKNOWN')),
                 (('DELETE', '/v1/status', None, {}), (404, 'CONTROL_ROUTE_UNKNOWN')),
@@ -91,6 +92,8 @@ class TestControlListener(unittest.TestCase):
                  (403, 'CONTROL_CALLER_REFUSED')),
                 (('POST', '/v1/grants', good, {'content_type': 'text/plain'}), (415, 'CONTROL_CONTENT_TYPE')),
                 (('POST', '/v1/grants', good, {}), (403, 'MODEL_NOT_ALLOWLISTED')),
+                (('POST', '/v1/grants', {**good, 'models': [S.MODEL_A], 'budget': {'requests': 1, 'tokens': 1}}, {}),
+                 (400, 'BUDGET_RETIRED')),
                 (('POST', '/v1/grants', [1], {}), (400, 'CONTROL_BODY_INVALID')),
                 (('POST', '/v1/grants', {'x': 'y' * 70000}, {}), (400, 'CONTROL_BODY_INVALID'))):
             with self.subTest(method=method, path=path, expected=expected):
@@ -173,26 +176,52 @@ class TestPassThrough(unittest.TestCase):
         self.assertIn(b'message_stop', rest)
         self.assertEqual(RIG.broker.grant_status(grant['token_fingerprint'])['usage']['total'], 18)
 
-    def test_an_answer_without_usage_stops_the_attempt_and_an_upstream_error_does_not(self):
-        grant = issue(family='openai-chat', models=('syn-no-usage', 'syn-error', S.MODEL_A))
+    def test_an_answer_without_usage_a_cut_stream_and_an_upstream_error_stop_nothing(self):
+        """S-03.6, against the fake upstream: after an upstream 500, a streamed 2xx answer without usage and a
+        stream the upstream cuts off, the grant admits its next request; the audit tells each answer passed through
+        from the upstream (its upstream status, or UPSTREAM_STREAM_BROKEN) from a broker refusal."""
+        grant = issue(family='openai-chat', models=('syn-no-usage', 'syn-error', 'syn-cut', S.MODEL_A))
         status, _, data = infer(grant, 'openai-chat', model='syn-error')
         self.assertEqual((status, json.loads(data)['error']['message']), (500, 'synthetic upstream error'))
+        self.assertEqual(infer(grant, 'openai-chat')[0], 200)
         status, _, _ = infer(grant, 'openai-chat', model='syn-no-usage', stream=True)
         self.assertEqual(status, 200)
-        status, _, data = infer(grant, 'openai-chat')
-        self.assertEqual((status, refusal(data)), (429, 'BUDGET_USAGE_UNKNOWN'))
+        self.assertEqual(infer(grant, 'openai-chat')[0], 200)                 # admitted: no BUDGET_USAGE_UNKNOWN
+        connection = http.client.HTTPConnection('127.0.0.1', RIG.inference, timeout=30)
+        try:
+            body = json.dumps({'model': 'syn-cut', 'stream': True}).encode()
+            connection.request('POST', '/v1/chat/completions', body, {'Authorization': f'Bearer {grant["token"]}',
+                                                                      'Content-Type': 'application/json'})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            with self.assertRaises(http.client.IncompleteRead):               # the broker passes the cut on
+                response.read()
+        finally:
+            connection.close()
+        self.assertEqual(infer(grant, 'openai-chat')[0], 200)                 # admitted after the cut stream
         answer = RIG.broker.grant_status(grant['token_fingerprint'])
-        self.assertEqual((answer['requests'], answer['refused'], answer['usage']['unknown_responses']), (2, 1, 1))
+        self.assertEqual((answer['state'], answer['requests'], answer['refused'], answer['in_flight'],
+                          answer['usage']['unknown_responses'], answer['usage']['total']),
+                         ('live', 6, 0, 0, 2, 3 * 18))
+        lines = [(line['status'], line['upstream_status'], line['code'], line['usage'] == 'unknown')
+                 for line in RIG.audit_lines() if line.get('token_fingerprint') == grant['token_fingerprint']]
+        self.assertEqual(lines, [(500, 500, None, True), (200, 200, None, False), (200, 200, None, True),
+                                 (200, 200, None, False), (200, 200, 'UPSTREAM_STREAM_BROKEN', True),
+                                 (200, 200, None, False)])
 
-    def test_budgets_over_the_wire(self):
-        grant = issue(family='openai-responses', requests=1)
-        self.assertEqual(infer(grant, 'openai-responses')[0], 200)
-        status, _, data = infer(grant, 'openai-responses')
-        self.assertEqual((status, refusal(data)), (429, 'BUDGET_REQUESTS_EXHAUSTED'))
-        grant = issue(family='openai-responses', tokens=18)
-        self.assertEqual(infer(grant, 'openai-responses')[0], 200)
-        status, _, data = infer(grant, 'openai-responses')
-        self.assertEqual((status, refusal(data)), (429, 'BUDGET_TOKENS_EXHAUSTED'))
+    def test_no_budget_over_the_wire(self):
+        """S-03.6: an issue request carrying a budget is refused BUDGET_RETIRED; a grant serves any number of
+        requests and usage tokens (no BUDGET_REQUESTS_EXHAUSTED or BUDGET_TOKENS_EXHAUSTED)."""
+        body = {'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': 'openai-responses',
+                'models': [S.MODEL_A], 'ttl_s': 600, 'budget': {'requests': 1, 'tokens': 18}}
+        status, answer = S.control(RIG, 'POST', '/v1/grants', body)
+        self.assertEqual((status, answer['aieh_refusal']['code']), (400, 'BUDGET_RETIRED'))
+        self.assertNotIn(body['attempt_id'], [g.attempt_id for g in RIG.broker._grants.values()])
+        grant = issue(family='openai-responses')
+        for _ in range(5):
+            self.assertEqual(infer(grant, 'openai-responses')[0], 200)
+        answer = RIG.broker.grant_status(grant['token_fingerprint'])
+        self.assertEqual((answer['requests'], answer['refused'], answer['usage']['total']), (5, 0, 5 * 18))
 
 
 class TestRefusalsOnTheWire(unittest.TestCase):
@@ -265,7 +294,7 @@ class TestRefusalsOnTheWire(unittest.TestCase):
             for family in ('openai-chat', 'openai-responses'):
                 with self.subTest(family=family):
                     body = {'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': family,
-                            'models': [S.MODEL_A], 'budget': {'requests': 5, 'tokens': 100}, 'ttl_s': 60}
+                            'models': [S.MODEL_A], 'ttl_s': 60}
                     status, grant = S.control(rig, 'POST', '/v1/grants', body)
                     status, _, data = S.request(rig.inference, 'POST', S.ROUTE[family], {'model': S.MODEL_A},
                                                 [S.auth(family, grant['token'])])
@@ -302,7 +331,7 @@ class TestRefusalsOnTheWire(unittest.TestCase):
 
     def test_a_control_body_over_its_limit_is_refused_even_when_valid(self):
         body = {'conversation_id': S.new_id(), 'attempt_id': S.new_id(), 'family': 'openai-chat',
-                'models': [S.MODEL_A], 'budget': {'requests': 1, 'tokens': 1}, 'ttl_s': 1}
+                'models': [S.MODEL_A], 'ttl_s': 1}
         padded = json.dumps(body).encode() + b' ' * IB.CONTROL_BODY_LIMIT
         status, _, data = S.request(RIG.control, 'POST', '/v1/grants', raw_body=padded,
                                     header_pairs=[('Content-Type', 'application/json')])

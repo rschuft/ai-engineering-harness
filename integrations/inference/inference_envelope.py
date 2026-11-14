@@ -1,5 +1,6 @@
-"""The provider envelope (plan leaf S-03.5, slice 1): what the Owner authorizes before the inference broker may
-start a family whose upstream is not loopback, as one canonical document, its digest and its operation manifest.
+"""The provider envelope (plan leaf S-03.5, slice 1; its spending limit retired by S-03.6, decision 0021
+amendment 1): what the Owner authorizes before the inference broker may start a family whose upstream is not
+loopback, as one canonical document, its digest and its operation manifest.
 
 The live envelope is a projection of the one configuration snapshot ``serve`` serves, never a second copy: the
 provider id, the one upstream origin and (when the envelope selects them) the model identifiers come from the
@@ -7,34 +8,25 @@ families the broker will use (``inference_broker.live_envelope``); only what has
 ``components.inference_broker.envelope`` of config.yml, checked here (``check_block``):
 
     envelope:
-      expires_at: "2026-12-31T00:00:00Z"   # a quoted string, YYYY-MM-DDTHH:MM:SSZ (UTC)
-      limit:
-        amount: "25.00"                    # a quoted decimal: the Owner-authorized spending limit
-        currency: USD                      # three upper-case letters
-        enforced_by: provider              # provider | broker
-        cap: 1000000                       # with broker only: the cumulative usage-token cap (an integer)
+      expires_at: "2026-12-31T00:00:00Z"   # a quoted string, YYYY-MM-DDTHH:MM:SSZ (UTC): a security validity window
       selection: envelope                  # envelope | delegation
 
-An unquoted timestamp or decimal (which YAML reads as a datetime or a float) is refused, never normalized, so
-the canonical document holds strings, integers and null only.
-
-``limit.cap`` (with ``enforced_by: broker`` only) counts usage tokens, never money (decision 0015 section 6.3):
-the broker meters the usage the provider reports for the life of the governing authorization and fails closed
-when the cap is reached or a usage is unknown (inference_broker.read_ledger, envelope_usage). A complete answer
-outside 2xx counts zero: an assumption about the provider's billing, disclosed, to verify at OA-12's
-presentation; a cut 2xx answer is unknown.
+An unquoted timestamp (which YAML reads as a datetime) is refused, never normalized, so the canonical document
+holds strings only. The envelope carries no spending limit: ``limit`` and its former members (``amount``,
+``currency``, ``enforced_by``, ``cap``) are refused (``CONFIG_ENVELOPE_INVALID``), never ignored (S-03.6, on the
+Owner's direction of 2026-11-13: spending is bounded by the provider account's own limits).
 
 The canonical document (``FORMAT``), exactly these members, in this order: ``format``, ``provider``,
-``origin`` (``https://<host>:<port>``), ``limit`` (``amount``, ``currency``, ``enforced_by``, ``cap``: an integer
-or null), ``expires_at`` and ``selection`` (``{"by": "envelope", "models": {<family>: [<ids, sorted>]}}`` or
-``{"by": "delegation", "record": "decision:0018", "point": "3"}``). Its digest (``digest``), which the Owner's
-authorization names as its target, is ``sha256:`` and the sha256 of the document as canonical JSON by the
-integration store's own rule (storecore.canonical_json: sorted keys, no whitespace, UTF-8, no NaN; repeated here,
-a test asserts them equal). The operation manifest ``operations/<operation>.json`` (``manifest_text``) is a pure
-function of the document and the operation id: ``operation``, ``kind`` (``provider-envelope``), ``target`` (the
-digest), ``expiresAt`` (the envelope's expiry) and ``envelope`` (the document), as JSON with a two-space indent,
-UTF-8 kept, one final LF. A change of either form is a new format (``/2``): receipts recorded under ``/1`` then
-stop verifying.
+``origin`` (``https://<host>:<port>``), ``expires_at`` and ``selection`` (``{"by": "envelope", "models":
+{<family>: [<ids, sorted>]}}`` or ``{"by": "delegation", "record": "decision:0018", "point": "3"}``). Its digest
+(``digest``), which the Owner's authorization names as its target, is ``sha256:`` and the sha256 of the document
+as canonical JSON by the integration store's own rule (storecore.canonical_json: sorted keys, no whitespace,
+UTF-8, no NaN; repeated here, a test asserts them equal). The operation manifest ``operations/<operation>.json``
+(``manifest_text``) is a pure function of the document and the operation id: ``operation``, ``kind``
+(``provider-envelope``), ``target`` (the digest), ``expiresAt`` (the envelope's expiry) and ``envelope`` (the
+document), as JSON with a two-space indent, UTF-8 kept, one final LF. A change of either form is a new format:
+``/2`` dropped ``/1``'s ``limit``, so a receipt recorded over a ``/1`` document names a digest no live envelope
+has, and authorizes no start.
 
 Standard library only. It opens nothing: no file, store, credential or connection.
 """
@@ -45,19 +37,17 @@ import hashlib
 import json
 import re
 
-FORMAT = 'aieh-provider-envelope/1'
+FORMAT = 'aieh-provider-envelope/2'
 KIND = 'provider-envelope'           # the manifest's kind: the receipt's subject.operationKind
-BLOCK_FIELDS = ('expires_at', 'limit', 'selection')
-LIMIT_FIELDS = ('amount', 'currency', 'enforced_by', 'cap')
-DOCUMENT_FIELDS = ('format', 'provider', 'origin', 'limit', 'expires_at', 'selection')
+BLOCK_FIELDS = ('expires_at', 'selection')
+# The spending limit of aieh-provider-envelope/1 and its members, retired by S-03.6 (decision 0021 amendment 1):
+# a block that still names one is refused, never ignored.
+RETIRED_FIELDS = ('limit', 'amount', 'currency', 'enforced_by', 'cap')
+DOCUMENT_FIELDS = ('format', 'provider', 'origin', 'expires_at', 'selection')
 MANIFEST_FIELDS = ('operation', 'kind', 'target', 'expiresAt', 'envelope')
-ENFORCERS = ('provider', 'broker')
 SELECTIONS = ('envelope', 'delegation')
 DELEGATION = {'by': 'delegation', 'record': 'decision:0018', 'point': '3'}
 TIMESTAMP = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
-AMOUNT = re.compile(r'(?:0|[1-9][0-9]{0,15})(?:\.[0-9]{1,6})?')
-CURRENCY = re.compile(r'[A-Z]{3}')
-CAP_MAX = 10 ** 15
 # owner_decision.OPERATION, repeated (this module imports nothing of the owner recorders; a test asserts equal).
 OPERATION = re.compile(r'[a-z0-9][a-z0-9-]{0,127}')
 INVALID = 'CONFIG_ENVELOPE_INVALID'
@@ -103,38 +93,23 @@ def parse_expiry(text: str) -> datetime.datetime | None:
 
 
 def check_block(raw) -> dict | None:
-    """components.inference_broker.envelope, checked (CONFIG_ENVELOPE_INVALID), as {expires_at, limit: {amount,
-    currency, enforced_by, cap}, selection}; None when it is absent or null."""
+    """components.inference_broker.envelope, checked (CONFIG_ENVELOPE_INVALID), as {expires_at, selection}; None
+    when it is absent or null. A retired spending key (RETIRED_FIELDS) is refused by name."""
     if raw is None:
         return None
+    if isinstance(raw, dict):
+        retired = sorted(str(k) for k in raw if k in RETIRED_FIELDS)
+        if retired:
+            raise _invalid(f'{retired} retired with the spending limit (S-03.6, decision 0021 amendment 1): the '
+                           'envelope carries no limit, amount, currency, enforcement or cap; remove them')
     _exact(raw, BLOCK_FIELDS, (), 'the block')
     expires = _quoted(raw['expires_at'], 'a "YYYY-MM-DDTHH:MM:SSZ" string', 'expires_at')
     if parse_expiry(expires) is None:
         raise _invalid('expires_at must be a UTC time, YYYY-MM-DDTHH:MM:SSZ')
-    limit = raw['limit']
-    _exact(limit, LIMIT_FIELDS[:3], LIMIT_FIELDS[3:], 'limit')
-    amount = _quoted(limit['amount'], 'a decimal string such as "25.00"', 'limit.amount')
-    if not AMOUNT.fullmatch(amount) or not amount.strip('0.'):
-        raise _invalid('limit.amount must be a positive decimal: digits, optionally a point and 1 to 6 digits')
-    currency = limit['currency']
-    if not isinstance(currency, str) or not CURRENCY.fullmatch(currency):
-        raise _invalid('limit.currency must be a currency code: three upper-case letters')
-    enforced_by = limit['enforced_by']
-    if enforced_by not in ENFORCERS:
-        raise _invalid(f'limit.enforced_by must be one of {list(ENFORCERS)}')
-    cap = limit.get('cap')
-    if enforced_by == 'broker':
-        if type(cap) is not int or not 1 <= cap <= CAP_MAX:
-            raise _invalid(f'limit.cap is required with enforced_by broker: an integer from 1 to {CAP_MAX} (usage '
-                           'tokens, not money)')
-    elif cap is not None:
-        raise _invalid('limit.cap is for enforced_by broker only: with provider, leave it out')
     selection = raw['selection']
     if selection not in SELECTIONS:
         raise _invalid(f'selection must be one of {list(SELECTIONS)}')
-    return {'expires_at': expires, 'limit': {'amount': amount, 'currency': currency, 'enforced_by': enforced_by,
-                                             'cap': cap},
-            'selection': selection}
+    return {'expires_at': expires, 'selection': selection}
 
 
 def document(block: dict, provider: str, origin: str, models: dict) -> dict:
@@ -144,9 +119,7 @@ def document(block: dict, provider: str, origin: str, models: dict) -> dict:
         selection = {'by': 'envelope', 'models': {family: sorted(models[family]) for family in sorted(models)}}
     else:
         selection = dict(DELEGATION)
-    limit = block['limit']
-    return {'format': FORMAT, 'provider': provider, 'origin': origin,
-            'limit': {name: limit[name] for name in LIMIT_FIELDS}, 'expires_at': block['expires_at'],
+    return {'format': FORMAT, 'provider': provider, 'origin': origin, 'expires_at': block['expires_at'],
             'selection': selection}
 
 

@@ -11726,7 +11726,7 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
                        if isinstance(f, dict) and f.get('id') == grant.get('family')), None)
         detail = {'token_fingerprint': token_fp,
                   'grant': {k: grant.get(k) for k in ('state', 'family', 'models', 'conversation_id',
-                                                      'attempt_id', 'budget', 'expires_at')},
+                                                      'attempt_id', 'expires_at')},
                   'family': None if family is None else {k: family.get(k) for k in (
                       'id', 'status', 'routes', 'auth', 'ready', 'upstream')},
                   'decision_rule': 'PASS: with the token the upstream answers (2xx, no broker '
@@ -15960,7 +15960,7 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
                 bool(key.get('fingerprint')) and key.get('source') not in (None, ACP_SYNTHETIC_SOURCE)
         detail = {'checks': checks, 'token_fingerprint': token_fp,
                   'grant': {k: grant.get(k) for k in ('state', 'family', 'models', 'conversation_id', 'attempt_id',
-                                                      'budget', 'expires_at')},
+                                                      'expires_at')},
                   'family': {k: family.get(k) for k in ('id', 'status', 'ready', 'upstream', 'models', 'routes',
                                                         'query')},
                   'provider_key': {k: key.get(k) for k in ('fingerprint', 'source', 'provider')},
@@ -16117,7 +16117,7 @@ def acp_qualification_run(ctx, name, attempt_token, prompt, acp_model, key_mode=
 
     def broker_step():
         grant = broker.call('grant', token_fp)
-        detail = {k: grant.get(k) for k in ('state', 'requests', 'refused', 'usage', 'budget')}
+        detail = {k: grant.get(k) for k in ('state', 'requests', 'refused', 'usage')}
         requests = grant.get('requests')
         if isinstance(requests, bool) or not isinstance(requests, int):
             return 'UNKNOWN', detail
