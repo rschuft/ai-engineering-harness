@@ -298,6 +298,24 @@ keys named, never ignored. Anything else that cannot be admitted (the registry e
 single inference endpoint, another ACP server, a model outside the grammar) is
 `INFERENCE_INPUTS_INVALID` at admission, before any token exists.
 
+**The grant's model list: the authorization-bound selection (S-03.3).** With an API key, Claude Code sends its
+background calls to its own default small model, which the pinned OpenHands ACP settings cannot name (a third
+secret name would change E-05.6's proof). So the grant's list is not the template's model alone whenever the broker
+serves the ACP family under the Owner's provider envelope: immediately before the issue (and before its journal),
+the dispatcher reads the broker's control status, and when it holds a provider-envelope authorization whose
+selection names the ACP family (`authorization.selection.models["anthropic-messages"]`, the member the broker's
+`Authorization.describe` writes), the grant is issued with exactly that selection's models, in its order: the
+primary and the secondary the engineering manager selected. The template's `acp_model` must be among them, else
+`INFERENCE_MODEL_NOT_SELECTED` and nothing is issued. When the broker holds no such authorization (a loopback
+family, or an authorization that binds other families only), the list stays the template's one model. A status
+that is not answered, or whose authorization member cannot be read (no selection, a list that is empty, has a
+duplicate or a name outside the broker's grammar), is `INFERENCE_GRANT_UNAVAILABLE`. The list comes from the
+authorization-bound selection, not from the profile digest: the selection is the engineering manager's
+model-selection record on the governing envelope receipt (decision 0018 point 3), which changes within the envelope
+without a new profile, and which the broker already holds and enforces; the profile and the stage template carry
+no model list, and the grant declaration (`inference_grant`, `{ttl_s}`) gains no field. The broker's own issue
+check (each model allowlisted and selected) is unchanged and remains the enforcement.
+
 **The pinned template carries no secrets** (a template that does is `BODY_FIELD_UNKNOWN`):
 `admit` admits every input but the secrets, and `admit_secrets(admitted, resolved=, workspaces=,
 grant=)` adds the block, the token's value as the slot `{attempt_token}`. The grant

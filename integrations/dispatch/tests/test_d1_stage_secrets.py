@@ -21,6 +21,10 @@ The proof, clause by clause:
   shown by the grant's state (``Revocation``).
 * No store record, admitted-create record, report or log carries the token, only its fingerprint (``Custody``).
 * The dispatcher reads no provider credential, shown by a negative control (``NoProviderCredential``).
+* S-03.3: the grant's model list is exactly the broker's held selection for the ACP family when the broker holds a
+  provider-envelope authorization (its status answer's ``authorization.selection.models``, the member the broker's
+  own ``Authorization.describe`` writes), the template's model refused unless it is among them, and the template's
+  one model otherwise; a status that is not answered or not readable issues nothing (``HeldSelection``).
 
 The broker is the real one (integrations/inference/inference_broker.py), in process, its control and inference
 listeners on 127.0.0.1 with ephemeral ports, a synthetic provider key and an upstream that is never contacted
@@ -81,11 +85,18 @@ REVOKER = d1.REVOKER
 class SpyControl:
     """The broker's ControlClient, observed: every issue and revoke is recorded (the issued tokens are kept by the
     test, for the custody search only). ISSUE_ARGS may alter an issue's arguments, ON_ISSUE runs after it, and a
-    revoke raises REVOKE_ERROR when one is set."""
+    revoke raises REVOKE_ERROR when one is set. The status is the broker's own, counted in STATUSES; STATUS_CHANGE,
+    when set, changes the answer (S-03.3: the held authorization a loopback broker cannot hold)."""
 
-    def __init__(self, control, *, issue_args=None, on_issue=None, revoke_error=None):
+    def __init__(self, control, *, issue_args=None, on_issue=None, revoke_error=None, status_change=None):
         self.control, self.issue_args, self.on_issue, self.revoke_error = control, issue_args, on_issue, revoke_error
-        self.issued, self.revoked, self.events = [], [], []
+        self.status_change = status_change
+        self.issued, self.revoked, self.events, self.statuses = [], [], [], 0
+
+    def status(self):
+        self.statuses += 1
+        answer = self.control.status()
+        return answer if self.status_change is None else self.status_change(answer)
 
     def issue(self, *args):
         args = list(args) if self.issue_args is None else self.issue_args(list(args))
@@ -739,6 +750,112 @@ class Issuance(SecretsFixture):
     def latest_failed(self):
         return max(self.store.attempts(['failed']),
                    key=lambda r: self.store.attempt_identity(r.operation_key).identity.ordinal)
+
+
+def held_authorization(models: dict) -> dict:
+    """The status answer's authorization member of a broker holding a provider-envelope authorization whose
+    selection is MODELS ({family: [model, ...]}), as the broker's own Authorization.describe writes it."""
+    held = S.IB.Authorization(
+        receipt='owner-authorization/v1/' + '0' * 32, operation='aieh-s033-envelope', decision=str(uuid.uuid4()),
+        digest='sha256:' + '1' * 64, manifest_digest='sha256:' + '2' * 64, expires_at='2027-01-31T23:59:59Z',
+        expires=0.0, provider='anthropic', origin=S.IB.parse_origin('https://api.example.test'),
+        selection='delegation', models=tuple((family, tuple(ids)) for family, ids in models.items()),
+        selection_record={'record': 'decision:0018', 'point': '3', 'receipt': 'model-selection/v1/1',
+                          'decision': str(uuid.uuid4())})
+    return held.describe()
+
+
+class HeldSelection(SecretsFixture):
+    """S-03.3 (the engineering manager's ruling): under a provider-envelope authorization for the ACP family the
+    grant carries exactly the held selection's models, so that Claude Code's background calls to its secondary model
+    are admitted; the broker's issue check stays the enforcement. The broker here is loopback (it can hold no
+    authorization), so its status answer gains the member a bound broker writes; the issue is the real broker's."""
+
+    FAMILY = aq.ACP_FAMILY
+
+    def with_authorization(self, models):
+        def change(answer):
+            return dict(answer, authorization=held_authorization(models))
+        return change
+
+    def issued_models(self, spy):
+        (token,) = spy.issued
+        return self.grant_state(ic.token_fingerprint(token))['models']
+
+    def test_the_status_member_is_where_the_broker_writes_the_selection(self):
+        member = held_authorization({self.FAMILY: [d1.TEST_MODEL, d1.OTHER_MODEL]})
+        self.assertEqual(member['selection']['models'], {self.FAMILY: [d1.TEST_MODEL, d1.OTHER_MODEL]})
+
+    def test_without_an_authorization_the_grant_carries_the_template_s_model(self):
+        spy = self.spy()
+        self.run_dispatch(cc.FakeAgentServer(), spy)
+        self.assertNotIn('authorization', self.control().status())
+        self.assertEqual((spy.statuses, self.issued_models(spy)), (1, [d1.TEST_MODEL]))
+
+    def test_under_an_authorization_the_grant_carries_exactly_the_selection(self):
+        selected = [d1.TEST_MODEL, d1.OTHER_MODEL]       # the primary (the template's) and a secondary
+        seen = []
+        spy = self.spy(status_change=self.with_authorization({self.FAMILY: selected}),
+                       issue_args=lambda args: seen.append(list(args[3])) or args)
+        result = self.run_dispatch(cc.FakeAgentServer(), spy)
+        self.assertEqual(seen, [selected])                                 # asked for exactly the selection
+        self.assertEqual(self.issued_models(spy), selected)                # and issued exactly it
+        key = self.only(['confirmed']).operation_key
+        self.assertEqual(self.detail(key, 'dispatched')['inferenceGrant']['models'], selected)
+        self.assertEqual(result.to_json()['inference_grant']['models'], selected)
+
+    def test_the_selection_s_order_is_kept(self):
+        selected = [d1.OTHER_MODEL, d1.TEST_MODEL]
+        spy = self.spy(status_change=self.with_authorization({self.FAMILY: selected}))
+        self.run_dispatch(cc.FakeAgentServer(), spy)
+        self.assertEqual(self.issued_models(spy), selected)
+
+    def test_a_template_model_outside_the_selection_is_refused_before_any_issue(self):
+        spy = self.spy(status_change=self.with_authorization({self.FAMILY: [d1.OTHER_MODEL]}))
+        server = cc.FakeAgentServer()
+        with self.assertRaises(di.DispatchRefused) as caught:
+            self.run_dispatch(server, spy)
+        refusal = caught.exception
+        self.assertEqual((refusal.code, refusal.context['family'], refusal.context['selected']),
+                         ('INFERENCE_MODEL_NOT_SELECTED', self.FAMILY, [d1.OTHER_MODEL]))
+        self.assertIn('INFERENCE_MODEL_NOT_SELECTED', di.REFUSALS)
+        attempt = self.only(['failed'])
+        self.assertEqual(self.detail(attempt.operation_key, 'failed')['code'], 'INFERENCE_MODEL_NOT_SELECTED')
+        self.assertIsNone(self.store.get(f'dispatch/attempt/{store_mod.attempt_id_for(attempt.operation_key)}'
+                                         '/inference-grant'))             # nothing journaled: nothing was asked
+        self.assertEqual((spy.events, spy.issued, server.calls), ([], [], []))
+        self.assertNoGrant()
+
+    def test_an_authorization_of_other_families_leaves_the_template_s_model(self):
+        spy = self.spy(status_change=self.with_authorization({'openai-chat': [d1.OTHER_MODEL]}))
+        self.run_dispatch(cc.FakeAgentServer(), spy)
+        self.assertEqual(self.issued_models(spy), [d1.TEST_MODEL])
+
+    def test_a_status_not_answered_or_not_readable_issues_nothing(self):
+        def unanswered(answer):
+            raise ic.ControlError('CONTROL_UNREACHABLE', 'synthetic')
+        cases = {
+            'not answered': (unanswered, 'CONTROL_UNREACHABLE'),
+            'not an object': (lambda answer: ['status'], None),
+            'an authorization without a selection': (lambda answer: dict(answer, authorization={'receipt': 'r'}),
+                                                     None),
+            'a selection whose models are not a mapping': (
+                lambda answer: dict(answer, authorization={'selection': {'models': [d1.TEST_MODEL]}}), None),
+            'the family\'s models not a list': (self.with_authorization({self.FAMILY: d1.TEST_MODEL}), None),
+            'an empty list': (self.with_authorization({self.FAMILY: []}), None),
+            'a duplicate': (self.with_authorization({self.FAMILY: [d1.TEST_MODEL, d1.TEST_MODEL]}), None),
+            'a wildcard': (self.with_authorization({self.FAMILY: [d1.TEST_MODEL, 'syn-*']}), None),
+            'a model outside the grammar': (self.with_authorization({self.FAMILY: [d1.TEST_MODEL, 'a b']}), None),
+        }
+        for name, (change, broker_code) in cases.items():
+            with self.subTest(name):
+                spy = self.spy(status_change=change)
+                with self.assertRaises(di.DispatchRefused) as caught:
+                    self.run_dispatch(cc.FakeAgentServer(), spy)
+                self.assertEqual(caught.exception.code, 'INFERENCE_GRANT_UNAVAILABLE', caught.exception.detail)
+                self.assertEqual(caught.exception.context.get('broker_code'), broker_code)
+                self.assertEqual((spy.events, spy.issued), ([], []))
+                self.assertNoGrant()
 
 
 class Revocation(SecretsFixture):

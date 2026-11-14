@@ -257,7 +257,11 @@ REFUSALS = {
                                 'registry entry\'s, its model is not one name of the broker\'s grammar, or the profile '
                                 'declares no single guest inference endpoint',
     'INFERENCE_GRANT_UNAVAILABLE': 'the D1 stage\'s attempt token was not issued: no broker control listener was '
-                                   'given, or the broker refused or did not answer the issue',
+                                   'given, the broker\'s status (read for its held selection) was not answered or '
+                                   'not readable, or the broker refused or did not answer the issue',
+    'INFERENCE_MODEL_NOT_SELECTED': 'the D1 stage\'s pinned template names an acp_model that is not among the models '
+                                    'of the ACP family\'s selection the broker holds under its provider-envelope '
+                                    'authorization: nothing was issued',
     'INFERENCE_REVOKER_INVALID': 'the dispatcher\'s revoker is not a revoker the broker takes (1 to 200 printable '
                                  'characters)',
     'SECRET_NOT_FROM_GRANT': 'the admitted create\'s token secret is not the slot the held grant\'s token fills at '
@@ -1535,7 +1539,8 @@ class StageInference:
     """The D1 stage's inference inputs, from trusted, digest-bound sources only (E-05.6): the pinned ACP registry
     entry's two secret names (the token's, the endpoint's), the profile's guest inference endpoint, the broker
     family of the registry entry, the model of the pinned template's ACP block, and the grant's lifetime declared
-    beside the stage template's pin (no budget: S-03.6)."""
+    beside the stage template's pin (no budget: S-03.6). ``models`` is the template's model; at the issue it
+    becomes the broker's held selection for the family when the broker holds one (``_grant_models``, S-03.3)."""
     names: tuple
     endpoint: str
     family: str
@@ -2246,6 +2251,49 @@ def _code_of(exc) -> str:
     return code if isinstance(code, str) and CODE_RE.fullmatch(code) else type(exc).__name__
 
 
+def _grant_models(inference: InferenceAccess, staged: StageInference, stage: str) -> StageInference:
+    """The model list the D1 stage's grant is issued with (S-03.3; the engineering manager's ruling on the OA-12
+    package's section 5 item 6). When the broker holds a provider-envelope authorization whose selection names the
+    ACP family (its control status answer, ``authorization.selection.models[<family>]``), the list is exactly that
+    selection's models: the primary model and the secondary one Claude Code sends its background calls to, which
+    the pinned ACP settings cannot name. The template's ``acp_model`` must be among them
+    (INFERENCE_MODEL_NOT_SELECTED). Without such an authorization (a loopback family) the list stays the template's
+    one model. The broker's own issue check (allowlisted and selected) is unchanged and remains the enforcement;
+    the grant declaration carries no model field. A status that is not answered, or whose authorization member
+    cannot be read, is INFERENCE_GRANT_UNAVAILABLE: nothing is issued."""
+    def unavailable(detail, **context):
+        return DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the {stage} stage: {detail}', stage=stage, **context)
+    try:
+        status = inference.control.status()
+    except Exception as exc:  # fail closed: whatever the status call raises, nothing is issued
+        code = _code_of(exc)
+        raise unavailable(f'the broker\'s control listener did not answer its status ({code})',
+                          broker_code=code) from None
+    if not isinstance(status, Mapping):
+        raise unavailable('the broker\'s status answer is not an object')
+    authorization = status.get('authorization')
+    if authorization is None:
+        return staged                       # no provider-envelope authorization: the template's one model
+    selection = authorization.get('selection') if isinstance(authorization, Mapping) else None
+    models = selection.get('models') if isinstance(selection, Mapping) else None
+    if not isinstance(models, Mapping):
+        raise unavailable('the broker\'s held authorization carries no readable selection')
+    held = models.get(staged.family)
+    if held is None:
+        return staged                       # the authorization binds other families: the ACP family is not bound
+    grammar = secrets_check.broker()
+    if not isinstance(held, list) or not held or len(set(map(str, held))) != len(held) or not all(
+            isinstance(m, str) and grammar.MODEL_NAME.fullmatch(m) and not grammar.WILDCARD.search(m)
+            for m in held):
+        raise unavailable(f'the broker\'s held selection for {staged.family} is not a list of distinct model names')
+    (model,) = staged.models
+    if model not in held:
+        raise DispatchRefused('INFERENCE_MODEL_NOT_SELECTED', f'the {stage} stage: the template\'s acp_model is not '
+                              f'in the held selection of {staged.family}', stage=stage, family=staged.family,
+                              selected=list(held))
+    return dataclasses.replace(staged, models=tuple(held))
+
+
 def _issue(inference: InferenceAccess, resolved: ResolvedInputs, staged: StageInference) -> InferenceGrant:
     """The D1 stage's attempt token from the broker's control listener (decision 0015 section 3.2, E-05.6), for
     the reserved conversation and attempt, of the stage's family and model, with its lifetime. Raises what the
@@ -2387,6 +2435,7 @@ class _GrantCustody:
         if not isinstance(self.inference, InferenceAccess):
             raise DispatchRefused('INFERENCE_GRANT_UNAVAILABLE', f'the {resolved.stage} stage carries the attempt\'s '
                                   'inference token, and no broker control listener was given')
+        staged = _grant_models(self.inference, staged, resolved.stage)   # a read only: refused before the journal
         intent = {'format': GRANT_JOURNAL_FORMAT, 'operationKey': self.key, 'attemptId': self.attempt_id,
                   'conversationId': store.conversation_id_for(self.key), 'family': staged.family,
                   'revoker': self.inference.revoker}
