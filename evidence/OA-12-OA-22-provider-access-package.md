@@ -1,5 +1,13 @@
 # Authorization package: provider access for D1 (OA-12 with OA-22 (a), (b), (c), (e))
 
+**Correction note (2026-11-14), after act 3 at `c5f1357`:** four statements below are fixed in place, each marked
+"corrected 2026-11-14": who reads the provider key (section 3, item 1); what S-03.3's qualification sends (row
+A6); the command of act 2, since Task is not installed on the Owner's host (row A1 names the same `task` form,
+kept as presented: read it as that direct command); and which `config.yml` section 7 means. The first two were
+disclosed to the Owner with act 3's challenge and accepted by the Owner on 2026-11-14
+([authorization](bootstrap-log.md#owner-authorization-d1-provider-envelope-2026-11-14)). The rest of the page is
+as presented.
+
 Updated 2026-11-13 by the engineering manager after S-03.6 (PASS) and the pre-live broker fixes, at `008b7d6`
 ([verdict](bootstrap-log.md#s-03-6-verdict-2026-11-13)). The acts of section 1 and its one decision are unchanged
 in substance.
@@ -18,13 +26,13 @@ Prepared 2026-11-13 by the engineering manager, at `27b0f40`, under the Owner's 
 | A3 = OA-22 (b), (c) | **One guest-to-host path** | For each disposable guest created for inference, the existing SSH management channel carries one remote forward: the guest's `172.17.0.1:8090` to the host's `127.0.0.1:18432`. It adds no new host listening port, no QEMU change and no `guestfwd`. It exists only while the harness holds the session. It serves two edges: `nm-job-inference` (containers) and `nm-guest-inference` (the guest's own processes: disclosed, with the token as the only control). |
 | A4 = OA-22 (e) | **Guest hardening change** | It applies only to disposable guests created with `--inference`. The guest's sshd allows remote forwarding to `172.17.0.1:8090` only (`AllowTcpForwarding remote`, `GatewayPorts clientspecified`, `PermitListen 172.17.0.1:8090`; local forwarding stays refused). The container guard gets one ACCEPT, docker0 to `172.17.0.1:8090/tcp`. Moby is pinned to `bip 172.17.0.1/16` and `dns 172.17.0.1`, so a container's DNS lookup is refused by policy. The egress allowlist stays empty. The full containment catalogue is re-run, and every case must pass. |
 | A5 | **Host egress** | The broker's outbound connections go to that one origin only, plus the host's DNS lookup of `api.anthropic.com`. The broker sends no telemetry and makes no price or update checks. |
-| A6 + D1 | **Model calls** | The first call (S-03.3: one disposable guest, one conversation, a fixed one-word prompt, no repository content), then D1's own calls through the broker (E-05.5's contained coding conversation, which works only on the demo repository named under OA-25). OA-22 (g) is folded into this approval (planning, 2026-11-13, [planning pass](bootstrap-log.md#planning-pass-2026-11-13b)), so D1 needs no further model-call decision. |
+| A6 + D1 | **Model calls** | The first call (S-03.3: one disposable guest, one conversation, a fixed one-word prompt and a second fixed prompt asking for one sub-agent step, no repository content; the second disclosed to and accepted by the Owner on 2026-11-14, [authorization](bootstrap-log.md#owner-authorization-d1-provider-envelope-2026-11-14); corrected 2026-11-14), then D1's own calls through the broker (E-05.5's contained coding conversation, which works only on the demo repository named under OA-25). OA-22 (g) is folded into this approval (planning, 2026-11-13, [planning pass](bootstrap-log.md#planning-pass-2026-11-13b)), so D1 needs no further model-call decision. |
 
 **Validity:** the authorization's `expires_at` is set to `2027-01-31T23:59:59Z`. This is a security validity window, set by the engineering manager, not a spending term. An earlier end is a stopped broker, a revoked key or a superseding authorization.
 
 **Your acts after approval (three):**
 1. Create the key at the provider.
-2. Run the one key-entry command, `task inference:credential-enter -- --provider anthropic`, in your own console window, and paste the key at its hidden prompt (nothing is shown; it refuses a value that is not key-shaped, and reminds you to clear the clipboard).
+2. Run the one key-entry command in your own console window, from the checkout: `<tools python> -I -B integrations\inference\inference_broker.py credential-enter --provider anthropic` (corrected 2026-11-14: Task is not installed on the host; this is the direct command `task inference:credential-enter -- --provider anthropic` wraps, and `<tools python>` is the interpreter that `python -I -B integrations/paths/tools_install.py --python` prints), and paste the key at its hidden prompt (nothing is shown; it refuses a value that is not key-shaped, and reminds you to clear the clipboard).
 3. Reply once to the authorization recorder's challenge, by naming its operation id, when the exact envelope manifest is shown to you.
 
 Act 3 is the protected-merge record that the broker checks before it ever reads the key (decisions 0012 and 0021). It is answered on the canonical manifest of the envelope format `aieh-provider-envelope/2` (provider, origin, `expires_at` and the model selection; no spending limit), which S-03.6 built; section 7 previews it. Before act 3 the engineering manager prints that manifest (`inference_broker.py envelope --operation <id>`), proposes it as `operations/<id>.json` on the authorization repository (`aieh-authorization/authorizations`, decision 0022) and prepares the recorder's challenge (`authorization_recorder.py prepare`); the challenge then shows you the exact manifest.
@@ -60,7 +68,7 @@ The account's own limits are the only spending stop (section 4).
 ## 3. What is mechanically enforced, and what is assumed
 
 **Enforced in code** (offline tests now; live evidence comes at S-03.2 and S-03.3):
-1. The provider key is read only by the broker, and only after the start precondition passes. It never enters a guest, a record or a log (searched raw and encoded, with a positive control).
+1. The provider key is read by the broker, only after the start precondition passes, and by the real-key containment search of S-03.3 (D-5: in memory, as the same account, counts only, never printed or written), disclosed to and accepted by the Owner on 2026-11-14 ([authorization](bootstrap-log.md#owner-authorization-d1-provider-envelope-2026-11-14); corrected 2026-11-14). It never enters a guest, a record or a log (searched raw and encoded, with a positive control).
 2. The broker refuses to start toward the provider unless the integration store holds your confirmed, unexpired authorization receipt for exactly this provider, origin and manifest.
 3. Every request needs a live per-attempt token, bound to one conversation and attempt, with a model list and an expiry. The dispatcher revokes it at the attempt's end and on any failure. Unknown or revoked tokens are refused.
 4. Only the selected models and the pinned route are accepted. Every query except the pinned one is refused, and credential headers are stripped.
@@ -136,7 +144,8 @@ Reconciled by planning on 2026-11-13: [planning pass `planning-pass-2026-11-13b`
 
 What the recorder's challenge will show you at act 3, built offline on 2026-11-13 at `008b7d6` by the broker's own
 `envelope` command (`inference_broker.py envelope --operation d1-provider-envelope`) over a scratch configuration
-(never the managed root or its `config.yml`) holding the intended envelope: provider `anthropic`, the
+(never the managed root, nor the checkout's gitignored `config.yml`, the broker's live configuration, which is not
+a file in the managed root; corrected 2026-11-14) holding the intended envelope: provider `anthropic`, the
 `anthropic-messages` family with upstream `https://api.anthropic.com` and the selected models, `expires_at:
 "2027-01-31T23:59:59Z"`, `selection: delegation`, listeners 18431 and 18432.
 
