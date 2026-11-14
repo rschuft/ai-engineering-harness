@@ -694,6 +694,15 @@ class AuthenticationRefusal(EndFixture):
         self.assertEqual(body['secrets']['CLAUDE_CODE_OAUTH_TOKEN']['value'], NEW_TOKEN)
         self.assertEqual(second.native_token['tokenFingerprint'], NT.fingerprint(NEW_TOKEN))
 
+    def test_an_entry_receipt_older_than_the_refused_dispatch_does_not_replace_it(self):
+        self.enter(NEW_TOKEN)              # entered before the attempt; the entry then held the refused token
+        first = self.ended_on_auth()
+        self.cause(first, AE.TOKEN_REFUSED)
+        self.refused_dispatch('PRIOR_AUTH_TOKEN_NOT_REPLACED',
+                              provider=NS.ObservedProvider({NT.ENTRY: (NT.ENTRY_USER, NEW_TOKEN)}))
+        fresh = self.enter(NEW_TOKEN)      # entered again after the refusal: a newer receipt of another token
+        self.assertEqual(self.ordinal(self.dispatch_native(fresh).operation_key), 2)
+
     def test_the_cause_record_s_rules(self):
         first = self.interrupted(SURFACED['rate-limit'][0])
         self.end(first)
