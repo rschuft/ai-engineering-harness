@@ -286,6 +286,27 @@
       "findings": ["fd-acp-provider-auth"]
     },
     {
+      "id": "provider-tunnel",
+      "name": "Provider tunnel (the native profile)",
+      "kind": "trusted-service",
+      "domain": "td-management",
+      "agent_controlled": false,
+      "owner_authority": false,
+      "independently_isolated": true,
+      "identity": {
+        "planned": "The host-side CONNECT-only tunnel of decision 0023 section 4.2 (integrations/inference/provider_tunnel.py serve), on 127.0.0.1 only and as the Owner's account during bootstrap: it holds no credential, key or certificate, terminates no TLS, reads no environment, configuration or credential store, and starts no process. It admits only CONNECT api.anthropic.com:443 with a TLS ClientHello naming that host and connects only to that origin's host-resolved global addresses on 443. Containers reach it only through the guest inference endpoint, the sshd remote forward on the docker0 gateway that the dispatcher holds for the native profile.",
+        "observed": null
+      },
+      "status": "planned",
+      "sources": [
+        "decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md",
+        "integrations/inference/README.md",
+        "profiles/README.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "findings": ["fd-native-guest-provider-reach", "fd-bootstrap-shared-identity"]
+    },
+    {
       "id": "privileged-executor",
       "name": "Privileged effect executor",
       "kind": "executor",
@@ -1418,7 +1439,7 @@
       "name": "Inference forward session",
       "kind": "process",
       "custodian": "management-dispatcher",
-      "location": "The host's ssh client that holds the remote forward (ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port>) over the management hostfwd with the per-instance key while attempts run, recorded beside the launch record ({instance_dir}/inference-forward.json) while held and re-established after a loss or a guest restart (decision 0015 sections 4.1, 4.3 and 4.4). During bootstrap tools/guest.py performs the dispatcher's role (S-03.2 slice 3).",
+      "location": "The host's ssh client that holds the remote forward (ssh -N -R 172.17.0.1:8090:127.0.0.1:<broker inference port>) over the management hostfwd with the per-instance key while attempts run, recorded beside the launch record ({instance_dir}/inference-forward.json) while held and re-established after a loss or a guest restart (decision 0015 sections 4.1, 4.3 and 4.4). For the native profile (decision 0023 section 4.3, E-05.10) the same forward targets the provider tunnel instead (-R 172.17.0.1:8090:127.0.0.1:18433, the profile's provider-tunnel endpoint), only for a profile that declares it; one forward at a time. During bootstrap tools/guest.py performs the dispatcher's role (S-03.2 slice 3).",
       "credentials": ["cred-guest-ssh-key"],
       "status": "planned",
       "sources": [
@@ -1426,6 +1447,20 @@
         "profiles/strong-windows-qemu-whpx/profile.json"
       ],
       "findings": ["fd-bootstrap-shared-identity"]
+    },
+    {
+      "id": "listener-provider-tunnel",
+      "name": "Provider tunnel's listener (the native profile)",
+      "kind": "listener",
+      "custodian": "provider-tunnel",
+      "location": "Host 127.0.0.1:18433, the host_port of the profile's one provider-tunnel endpoint (declared once), the native profile's target of the guest inference endpoint's remote forward: CONNECT api.anthropic.com:443 only, with the TLS server name checked and the session spliced unread (decision 0023 section 4.2). Reachable by any local process (decision 0013 point 6); it holds no credential, and the native token crosses it only inside the guest's end-to-end TLS. Its log records each target, decision and byte count, never payload.",
+      "status": "planned",
+      "sources": [
+        "decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md",
+        "integrations/inference/README.md",
+        "profiles/strong-windows-qemu-whpx/profile.json"
+      ],
+      "findings": ["fd-host-loopback-exposure", "fd-native-guest-provider-reach"]
     },
     {
       "id": "endpoint-provision",
@@ -2328,6 +2363,18 @@
         "integrations/dispatch/README.md"
       ],
       "carried_to": ["E-05.11", "E-05.5"]
+    },
+    {
+      "id": "fd-native-guest-provider-reach",
+      "kind": "limit",
+      "title": "While a forward to the provider tunnel is held, the guest's own processes reach the provider's origin",
+      "detail": "Decision 0023 section 6.2: the guest inference endpoint (172.17.0.1:8090) is a listener of the guest's sshd while the dispatcher holds the forward session; on the native profile it ends at the provider tunnel. The container guard filters traffic from docker0 only, so any process of the guest itself (the operator login agent, root, the guest services), not only the attempt's container, can open a TLS connection to api.anthropic.com:443 through the tunnel while a forward is held. The tunnel holds no credential, so this reaches the provider only with a credential the process holds (the native token is readable by guest root and the attempt's processes: fd-native-token-residuals). The tunnel's allowlist and server-name check are enforced in its own code on the host, as the broker's egress was (decision 0013 point 6), and it cannot refuse provider-side tools, MCP servers or URL sources inside the end-to-end TLS (decision 0023 section 6.1). Disclosed, not prevented: nm-guest-tunnel and the containment case egr-inference-guest-login's native expectations observe it at E-05.10's live qualification.",
+      "refs": ["listener-provider-tunnel", "provider-tunnel", "guest-login-agent", "guest-root", "guest-service-openhands", "cred-native-claude-code-token"],
+      "citations": [
+        "decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md",
+        "policy/network-matrix.json"
+      ],
+      "carried_to": ["E-05.10"]
     }
   ]
 }

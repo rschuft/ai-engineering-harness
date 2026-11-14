@@ -5525,7 +5525,11 @@ class InferenceSweepFake:
     (the endpoint and the guest login refused), edge_open (True: the port edge connects or
     answers), admitted (the ACCEPT counts an edge, the kernel refuses it), uncounted (no rule
     counts a refusal), wrong_rule (the other refusal rule counts it), resolves, login_admitted,
-    login_uncoded (401 without TOKEN_MISSING)."""
+    login_uncoded (401 without TOKEN_MISSING). native (E-05.10): the forward ends at the provider
+    tunnel, so the endpoint and the guest login are answered by its 405 TUNNEL_NOT_CONNECT and each
+    tunnel row by its TUNNEL_MATRIX outcome; tunnel_open (the whats a refused request is carried to a
+    handshake for), tunnel_unverified (the admitted handshake not verified), tunnel_uncoded (the
+    refusals carry no code)."""
 
     guard = None
 
@@ -5554,10 +5558,11 @@ class InferenceSweepFake:
         if argv[:2] == ['python3', '-'] and input_text == guest.JOB_INFERENCE_TOKEN:
             spec = json.loads(base64.b64decode(argv[2]).decode('utf-8'))
             self.login_specs = getattr(self, 'login_specs', []) + [spec]
-            status = 200 if self.faults.get('login_admitted') else 401
+            refused = 405 if self.faults.get('native') else 401
+            status = 200 if self.faults.get('login_admitted') else refused
             data = {'outcome': 'answered', 'status': status,
                     'refusal': None if status == 200 or self.faults.get('login_uncoded')
-                    else 'TOKEN_MISSING',
+                    else ('TUNNEL_NOT_CONNECT' if self.faults.get('native') else 'TOKEN_MISSING'),
                     'answer_b64': base64.b64encode(b'HTTP/1.1 %d x\r\nContent-Length: 0\r\n\r\n'
                                                    % status).decode()}
             if self.faults.get('no_forward'):
@@ -5581,7 +5586,19 @@ class InferenceSweepFake:
                     g['accept'] += 1
                 row.update({'outcome': 'ECONNREFUSED', 'status': None} if self.faults.get('no_forward')
                            else {'outcome': 'answered',
-                                 'status': 200 if self.faults.get('endpoint_open') else 401})
+                                 'status': 200 if self.faults.get('endpoint_open') else
+                                 405 if self.faults.get('native') else 401})
+            elif kind == 'tunnel':
+                g['accept'] += 1
+                want, code = guest.TUNNEL_EXPECTED[what]
+                connect, sni = next((c, s) for w, c, s, _, _ in guest.TUNNEL_MATRIX if w == what)
+                assert spec['tunnel'][what] == {'connect': connect, 'sni': sni}
+                if self.hit('tunnel_open', what):
+                    want, code = 'handshake-complete', None
+                row.update(outcome=want, status=200 if not want.startswith('refused') else int(want[-3:]),
+                           refusal=None if self.faults.get('tunnel_uncoded') else code)
+                if want == 'handshake-complete':
+                    row['tls'] = {'version': 'TLSv1.3', 'verified': not self.faults.get('tunnel_unverified')}
             elif kind == 'lookup':
                 g['reject'] += 2                          # its queries, refused by the guard
                 row['outcome'] = 'resolved' if self.faults.get('resolves') else 'not-resolved'
@@ -5923,6 +5940,50 @@ class ContainmentProbe(TempState):
                 out, case = self.assert_case_fails(case_id, **faults)
                 self.assertIn(got, case['classification'])
 
+    # ---- the native profile (decision 0023, E-05.10): the forward held to the provider tunnel
+
+    def held_to_the_tunnel(self):
+        self.forward = dict(self.forward, session={'ports': dict(NATIVE_PORTS)})
+
+    def test_native_inference_cases_pass_with_their_native_expectations(self):
+        self.held_to_the_tunnel()
+        out, fake = self.run_probe(native=True)
+        cases = {c['id']: c for c in out['cases'] if c['id'] in INFERENCE_CASES}
+        for cid, case in cases.items():
+            self.assertEqual(case['verdict'], 'PASS', (cid, case['reason']))
+        login = cases['egr-inference-guest-login']
+        self.assertEqual((login['expected'], login['classification']), (['tunnel-refused'], ['tunnel-refused']))
+        self.assertEqual([e['location'] for e in login['enforcement']], ['tunnel-admission'])
+        self.assertEqual(cases['ctl-inference-endpoint']['classification'], ['answered'])
+        self.assertEqual(cases['egr-inference-edge-port']['expected'], ['ECONNREFUSED'])   # its own
+        self.assertEqual(out['result'], 'PASS', [(c['id'], c['reason']) for c in out['cases']
+                                                 if c['verdict'] != 'PASS'])
+        # the tunnel's rows ran from every job, and the tunnel's answers are not the broker's
+        tunnel_items = [i for s in fake.inference_specs for i in s['items'] if i[0] == 'tunnel']
+        self.assertEqual(len(tunnel_items), 2 * len(guest.TUNNEL_MATRIX))
+
+    def test_native_observations_never_pass_by_the_brokered_expectations(self):
+        out, _ = self.run_probe(native=True)                 # the record says the broker: 405 is not its answer
+        v = self.verdicts(out)
+        self.assertEqual(v['ctl-inference-endpoint'], 'FAIL')
+        self.assertNotEqual(v['egr-inference-guest-login'], 'PASS')
+        self.held_to_the_tunnel()
+        out, _ = self.run_probe()                            # held to the tunnel, answered by a broker
+        v = self.verdicts(out)
+        self.assertEqual(v['ctl-inference-endpoint'], 'FAIL')
+        self.assertNotEqual(v['egr-inference-guest-login'], 'PASS')
+
+    def test_native_sensitivity(self):
+        self.held_to_the_tunnel()
+        for case_id, faults, got in (
+                ('ctl-inference-endpoint', {'endpoint_open': True}, 'answered-200'),
+                ('ctl-inference-endpoint', {'endpoint_unaccepted': True}, 'answered-not-through-allow'),
+                ('egr-inference-guest-login', {'login_admitted': True}, 'answered-200'),
+                ('egr-inference-guest-login', {'login_uncoded': True}, 'answered-405')):
+            with self.subTest(case=case_id, faults=faults):
+                out, case = self.assert_case_fails(case_id, native=True, **faults)
+                self.assertIn(got, case['classification'])
+
     def test_unsearched_gitea_fingerprint_fails(self):
         with mock.patch.object(guest, 'load_containment_catalogue') as load:
             cat = copy.deepcopy(CATALOGUE)
@@ -6097,6 +6158,11 @@ INF_ENDPOINT = '172.17.0.1:8090'
 INF_LINE = (f'LISTEN 0      128       {INF_ENDPOINT}      0.0.0.0:*'
             ' users:(("sshd-session",pid=2100,fd=9))')
 PROVIDER_FP = 'sha256:' + hashlib.sha256(b'sk-test-0123456789abcdefghijklmnopqrstuv').hexdigest()[:16]
+
+
+NATIVE_PORTS = {'endpoint': {'address': '172.17.0.1', 'port': 8090},
+                'tunnel': {'address': '127.0.0.1', 'port': 18433},
+                'hostfwd': {'address': '127.0.0.1', 'port': 40001}}
 
 
 def inference_record(base_record):
@@ -6654,6 +6720,47 @@ class InferenceJobSweep(TempState):
         self.assertEqual([o['outcome'] for o in got], ['ECONNREFUSED'] * 2)
         got = guest.extract_job(record, 'inference', {'what': guest.INFERENCE_GUEST_WHAT}, {})
         self.assertEqual([o['outcome'] for o in got], ['token-refused'])
+
+    def test_native_sweep_runs_the_tunnels_admission_from_every_job(self):
+        """E-05.10: with the forward held to the provider tunnel, the sweep adds the tunnel's rows (an
+        admitted CONNECT to a verified handshake; another host, another port, an IP literal and plain
+        HTTP refused with the tunnel's code; a mismatched or absent server name closed), and judges
+        the endpoint and the guest login by the tunnel's 405."""
+        self.record['inference'] = inference_record(self.record)['inference']
+        self.forward = dict(self.forward, session={'ports': dict(NATIVE_PORTS)})
+        out, step, fake = self.run_inference(native=True)
+        self.assertTrue(step['ok'], json.dumps(step, default=str)[:3000])
+        self.assertEqual((out['result'], out['stop_conditions']), ('PASS', []))
+        self.assertEqual(step['detail']['target'], guest.TUNNEL_TARGET)
+        self.assertIn('provider tunnel', step['detail']['decision_rule'])
+        items = guest.inference_job_spec(PROFILE, native=True)['items']
+        self.assertEqual(items[:-len(guest.TUNNEL_MATRIX)], guest.inference_job_spec(PROFILE)['items'])
+        self.assertEqual([i[0] for i in items[-len(guest.TUNNEL_MATRIX):]], ['tunnel'] * len(guest.TUNNEL_MATRIX))
+        self.assertEqual({i[2:4] == ['172.17.0.1', 8090] for i in items if i[0] == 'tunnel'}, {True})
+        rows = [r for r in step['detail']['results'] if r['what'] in guest.TUNNEL_EXPECTED]
+        self.assertEqual(len(rows), 2 * len(guest.TUNNEL_MATRIX))
+        self.assertEqual({r['what']: r['observed'] for r in rows},
+                         {w: o for w, _, _, o, _ in guest.TUNNEL_MATRIX})
+        record = {'steps': out['steps']}
+        got = guest.extract_job(record, 'inference', {'what': guest.INFERENCE_GUEST_WHAT}, {})
+        self.assertEqual([o['outcome'] for o in got], ['tunnel-refused'])
+        got = guest.extract_job(record, 'inference', {'what': guest.INFERENCE_ENDPOINT_WHAT}, {})
+        self.assertEqual({o['outcome'] for o in got}, {'answered'})
+        # the brokered sweep is as before: no tunnel row, no tunnel spec
+        self.assertNotIn('tunnel', guest.inference_job_spec(PROFILE))
+
+    def test_native_tunnel_faults_fail_or_stop(self):
+        self.record['inference'] = inference_record(self.record)['inference']
+        self.forward = dict(self.forward, session={'ports': dict(NATIVE_PORTS)})
+        another = 'provider tunnel: CONNECT another host'
+        for faults, stops in (({'tunnel_open': [another]}, True),
+                              ({'tunnel_open': ['provider tunnel: mismatched server name']}, True),
+                              ({'tunnel_unverified': True}, False), ({'tunnel_uncoded': True}, False),
+                              ({'login_admitted': True}, True), ({'endpoint_open': True}, False)):
+            out, step, _ = self.run_inference(native=True, **faults)
+            self.assertFalse(step['ok'], faults)
+            self.assertEqual(out['result'], 'FAIL', faults)
+            self.assertEqual(bool(out['stop_conditions']), stops, faults)
 
     def test_each_fault_fails_or_stops(self):
         self.record['inference'] = inference_record(self.record)['inference']

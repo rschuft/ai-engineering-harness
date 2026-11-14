@@ -24,6 +24,10 @@ and tested offline only ([below](#route-and-model-discovery-s-033-slice-3-part-t
 [below](#the-real-key-containment-search-s-033-slice-4)): the discovery mode of the qualification launcher with the
 reader that turns a run's audit into a proposed family pin, and the real-key mode of the containment search.
 
+Plan leaf E-05.10 ("Qualify native provider access through a host CONNECT-only tunnel, with no credential") adds
+the native execution profile's provider tunnel beside the broker ([below](#the-provider-tunnel-e-0510)): built and
+tested offline only; its live qualification waits on the Owner's act OA-31 (a).
+
 The broker is the host-side process of the trusted management domain (inventory principal
 `inference-broker`) that alone holds the model provider's key and alone issues inference access. Standard
 library only, under the tools interpreter; it imports no litellm and no other HTTP client.
@@ -39,6 +43,9 @@ act (decision 0015, "Owner acts"; OA-12). No model identifier is assumed: the sh
 | `inference_broker.py` | The broker (`Broker`: issue, revoke, status, admission, the pass-through), its two loopback listeners, the configuration loader, the usage extractors, the integration-store journal, the audit log, the credential set command and the command line; the provider envelope's start precondition (S-03.5: `live_envelope`, `authorize`, the held `Authorization`, the `envelope` command) |
 | `inference_envelope.py` | The provider envelope (S-03.5 slice 1; `aieh-provider-envelope/2` since S-03.6): the `envelope` block's check (the retired spending keys refused), the canonical document, its digest and the canonical operation manifest. Standard library only; it opens nothing |
 | `families.json` | The declared API families (`aieh-inference-families/1`) |
+| `provider_tunnel.py` | The native profile's provider tunnel (E-05.10; decision 0023 section 4): a CONNECT-only tunnel on `127.0.0.1` at the profile's declared port that admits exactly `api.anthropic.com:443` with a TLS ClientHello naming that host, holds no credential, terminates no TLS, logs targets, decisions and byte counts only; `serve`, `stop` and `census` ([below](#the-provider-tunnel-e-0510)) |
+| `tests/test_provider_tunnel.py` | E-05.10's tunnel offline: the loopback-only listener and its declared port; the admitted CONNECT spliced byte for byte to a fake origin through the outbound seam, called with the origin only; every refusal before the 200 (other hosts, ports, IP literals in each spelling, every request that is not a CONNECT, malformed heads, an offered credential) and after it (an absent, other or encrypted server name, a fragmented or malformed hello, a timeout) with its logged reason and no outbound connection; a real TLS stack's ClientHello; the log's fields and the absence of payload; no TLS, credential or broker module loaded; the stop; `serve`, the census and `stop` in a process of its own |
+| `tests/tunnel_child.py` | The child process of the lifecycle test: `serve` over a test context (temporary run and log directories, an ephemeral port) |
 | `inference_census.py` | The broker's live census (S-03.2, before the first provider call): what the running broker's process listens on and is connected to, read from the operating system's per-process TCP and UDP tables (Windows, through `ctypes`; elsewhere UNKNOWN), judged against the configuration and the broker's audit (`upstream-connect` lines) under `CENSUS_RULE`; its command (`--once`) |
 | `inference_control.py` | The dispatcher's side (S-03.2 slice 3): the two listener ports read through the broker's own loader (`dispatcher_ports`), the forward target (`forward_target`: the inference listener only), the control client (`ControlClient`: status, a grant by fingerprint, revocation, and for the qualification one grant (`issue`, slice 4); `127.0.0.1` only), an attempt token's fingerprint (`token_fingerprint`) and the `issue` command (slice 4) |
 | `inference_qualification.py` | The qualification-only commands (S-03.2 slice 4): the qualification launcher (`broker`: the broker's own `serve` with a synthetic key from standard input, loopback `http` upstreams only) and the fake upstream (`fake-upstream`); S-03.3 slice 3 part two: the launcher's discovery mode (`discover`) and the reader of a run's audit (`propose-pin`, `propose_pin`), which writes a proposed family pin and applies nothing |
@@ -760,6 +767,9 @@ credential provider holding a synthetic key) and has never read a real entry.
 <tools python> -I -B integrations/inference/inference_broker.py serve             # both listeners until stopped
 <tools python> -I -B integrations/inference/inference_control.py stop             # the stop from any session
 <tools python> -I -B integrations/inference/inference_census.py --once            # the broker's live census
+<tools python> -I -B integrations/inference/provider_tunnel.py serve --profile PROFILE_DIR   # the native tunnel
+<tools python> -I -B integrations/inference/provider_tunnel.py stop               # its stop from any session
+<tools python> -I -B integrations/inference/provider_tunnel.py census --once      # its live census
 <synthetic key> | <tools python> -I -B integrations/inference/inference_qualification.py broker --provider ID
 <tools python> -I -B integrations/inference/inference_qualification.py fake-upstream --family ID --port PORT
 <tools python> -I -B integrations/inference/inference_control.py issue --conversation-id UUID --family ID \
@@ -779,6 +789,85 @@ its stop. `serve` and `credential-set` act on the
 managed root, its `config.yml` and the real credential provider: Owner acts, not run in this slice. The
 qualification launcher acts on the managed root and its `config.yml` too (never on a credential provider); it,
 the fake upstream and `issue` are part of the Owner's act A2 and have not run outside a test process.
+
+## The provider tunnel (E-05.10)
+
+The native execution profile ([decision 0023](../../decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md)
+sections 4 to 6) runs the unmodified Claude Code with its own provider credential and no broker. Its one path out
+of the conversation container is S-03.2's guest inference endpoint, unchanged on the guest side (one sshd
+`PermitListen`, one container-guard ACCEPT, an empty egress-guard allowlist, DNS refused;
+`tools/tests/test_tunnel_guest_side.py` pins the seed's and the declared rules' digests at S-03.2's composition),
+whose forward ends here instead of at the broker. Claude Code's `HTTPS_PROXY` is the endpoint
+(`http://172.17.0.1:8090`, E-05.9's admission).
+
+**Adopt or own.** An established proxy would be adopted if one met every clause at a pin on this Windows host's
+loopback: CONNECT only, an exact host:port allowlist, IP literals refused, the tunnelled ClientHello's server name
+checked without terminating TLS, no credential, and target, decision and byte-count logging only. A documentation
+survey found none: Squid can peek at the SNI and splice, but its `ssl_bump` port must be configured with a
+certificate and key even when it never bumps, and it has no maintained native Windows release; mitmproxy's
+passthrough reads the SNI but generates and holds a CA key; Envoy's `tls_inspector` and HAProxy's `req.ssl_sni`
+read the SNI of direct TLS, not inside a CONNECT, and have no supported Windows build; nginx needs a third-party
+CONNECT module and its `ssl_preread` has the same limit; Tinyproxy, Privoxy and Caddy's `forwardproxy` filter the
+CONNECT target but never read the ClientHello. So the tunnel is owned, minimal and standard library only
+(`provider_tunnel.py`, under 1,000 lines with its commands and census), the choice recorded here and in E-05.10's record.
+
+**One declaration.** The execution profile's one `network.endpoints` entry of class `provider-tunnel` (profiles
+P7) declares both sides: `guest_address` and `guest_port` (the inference endpoint's, the `HTTPS_PROXY` E-05.9's
+admission compares) and `host_bind` `127.0.0.1` with `host_port` 18433, beside the broker's example ports 18431
+and 18432 (the tunnel listens there; the forward holder targets it), and its `origin`, `api.anthropic.com:443`.
+
+**Admission** (each refusal answered, before the 200 as an HTTP status with a JSON body `aieh_refusal.code` and
+the header `X-AIEH-Tunnel-Refusal`, after it by closing the connection, and logged with its reason):
+
+| Step | Refused | Code |
+|---|---|---|
+| request head (8 KiB, 10 s) | not a request, an HTTP version other than 1.0 or 1.1, too large or incomplete | `TUNNEL_REQUEST_MALFORMED` (400) |
+| method | every method but `CONNECT` (plain HTTP included) | `TUNNEL_NOT_CONNECT` (405) |
+| headers | `Proxy-Authorization` (the tunnel takes no credential) | `TUNNEL_PROXY_CREDENTIAL` (403) |
+| target | an IP literal in any spelling (dotted, numeric, hexadecimal, bracketed IPv6) | `TUNNEL_TARGET_IP_LITERAL` (403) |
+| target | any host but exactly `api.anthropic.com` | `TUNNEL_TARGET_REFUSED` (403) |
+| target | that host on any port but 443 | `TUNNEL_PORT_REFUSED` (403) |
+| capacity | more than 64 open connections | `TUNNEL_BUSY` (503) |
+| ClientHello (one handshake record, 16 KiB, 10 s) | not one whole ClientHello in one handshake record, or bytes before the server's answer | `TUNNEL_HELLO_MALFORMED`, `TUNNEL_HELLO_FRAGMENTED` |
+| ClientHello | an encrypted ClientHello (ECH, or the ESNI draft) | `TUNNEL_ECH_REFUSED` |
+| ClientHello | no `server_name` | `TUNNEL_SNI_ABSENT` |
+| ClientHello | a server name other than the CONNECT host | `TUNNEL_SNI_MISMATCH` |
+| origin | the host's resolution of the origin gives an address that is not global | `TUNNEL_UPSTREAM_REFUSED` |
+| origin | no address resolved or reachable | `TUNNEL_UPSTREAM_FAILED` |
+| stop | the connection was open at the tunnel's stop | `TUNNEL_STOPPED` |
+
+Only after the CONNECT and its ClientHello are admitted does the tunnel open its own outbound connection, to the
+origin's host name resolved on the host, on 443; it sends the ClientHello's bytes as received and then splices
+both ways, unread, until either side ends, 900 s pass with no byte, or it stops.
+
+**The log** (`persistent/logs/provider-tunnel/tunnel-<UTC>-<hex>.jsonl`, `aieh-provider-tunnel-log/1`):
+`tunnel-start` (listener, origin, pid), `upstream-connect` (connection number, target, origin, the peer address
+it connected to), `connection` (number, target, decision, reason, end, `bytes_up`, `bytes_down`), `tunnel-stop`
+(by, connections cut). Never payload, a header, the target of a request that is not a CONNECT (a URL may carry a
+credential) or the server name a refused hello presented.
+
+**Lifecycle.** `serve --profile PROFILE_DIR` runs in the foreground of the session that starts it (a process with
+no console starts it with `CREATE_NO_WINDOW`), writes its run record
+(`persistent/state/provider-tunnel/provider-tunnel.json`, `aieh-provider-tunnel-run/1`: pid, address, port, log
+file) once listening, and refuses a second start while a live one is recorded (`TUNNEL_ALREADY_RUNNING`). It stops
+on SIGINT, SIGBREAK or SIGTERM (a flag the main thread acts on in 0.25 s slices) or on `stop`, which writes the
+stop request beside the run record and waits on the tunnel's process handle (15 s ceiling,
+`TUNNEL_STOP_TIMEOUT`); its connections are cut within a slice, the run record removed and `serve` exits 0. It
+starts no process. `census --once` observes the running tunnel at the operating system with
+`inference_census.py`'s tables and decision rule: exactly its listener on `127.0.0.1:<port>`, no UDP endpoint, and
+no connection but inbound ones from loopback and outbound ones to port 443 of a peer its log recorded.
+
+**The forward holder** (`tools/guest.py inference-forward --action start --execution-profile native`) targets the
+tunnel's declared port only for a profile that declares the provider-tunnel endpoint
+(`NATIVE_PROFILE_UNDECLARED`), refuses every other port (`FORWARD_PORT_REFUSED`), and starts only once the
+tunnel's run record names a live process on that port (`TUNNEL_NOT_READY`); the forward's record names the target
+(`ports.tunnel`), one forward at a time (`FORWARD_TARGET_DIFFERS`). The brokered start is unchanged
+(`FORWARD_PORT_REFUSED`, `CONTROL_PORT_REFUSED`, `BROKER_NOT_READY`).
+
+**Not yet verified.** Everything live (the Owner's act OA-31 (a)): the tunnel as a host process against the real
+network, the host's resolution of the origin, a TLS handshake with the provider through it, the forward to it from
+a guest, its census over a real connection, Claude Code's own CONNECT and ClientHello (whether it sends ECH, or a
+ClientHello split over records, is not observed), the stop from a real console window, and Linux and macOS.
 
 ## Stable codes
 

@@ -413,9 +413,11 @@ and no broker is involved. E-05.6's brokered profile stays as built.
 both, or another value, is `PROFILE_ADMISSION_INVALID` at resolution). The profile declares its
 tunnel endpoint as one `network.endpoints` entry of class `provider-tunnel` with `guest_address`
 `172.17.0.1` and a `guest_port` (`create_secrets.tunnel_endpoint`; otherwise
-`NATIVE_TUNNEL_UNDECLARED`). That is the field E-05.10 fills: no checked-in profile declares it
-yet (the class is E-05.10's to add to `profiles/properties.json` and P7), so the native stage is
-refused there until then.
+`NATIVE_TUNNEL_UNDECLARED`). E-05.10 fills it: `strong-windows-qemu-whpx` declares the entry
+(class `provider-tunnel` in `profiles/properties.json` and P7), `172.17.0.1:8090` on the guest
+side (the inference endpoint's listener, so `HTTPS_PROXY` is `http://172.17.0.1:8090`) and the
+tunnel's `host_port` on the host side
+([provider tunnel](../inference/README.md#the-provider-tunnel-e-0510)); the other profiles defer it.
 
 **The token's custody.** One credential-provider entry (F-06.3), `AIEH Claude Code native token`,
 user `claude-code` ([`native_token.py`](native_token.py)), written only by the Owner's entry

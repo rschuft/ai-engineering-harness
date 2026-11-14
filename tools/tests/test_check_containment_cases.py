@@ -204,6 +204,38 @@ class Rules(unittest.TestCase):
         case(c, 'priv-no-new-privs')['expected']['outcomes'] = ['ok']
         self.assertIn('EXPECTED_INVALID', self.codes(c, readme=None))
 
+    def test_applicability_and_native_expectations(self):
+        """E-05.10: every inference case states the guests it applies to; native expectations belong to
+        an inference case and are checked as its own are."""
+        inference = [x for x in CATALOGUE['cases']
+                     if (x['probe']['source'], x['probe'].get('extract')) == ('job-access-probe', 'inference')]
+        self.assertEqual(len(inference), 7)
+        self.assertEqual({x['applies_to'] for x in inference}, {'inference-composition'})
+        self.assertEqual(sorted(x['id'] for x in inference if 'native' in x),
+                         ['ctl-inference-endpoint', 'egr-inference-guest-login'])
+        self.assertEqual(case(fresh(), 'egr-inference-guest-login')['native']['expected']['outcomes'],
+                         ['tunnel-refused'])
+        for change, code in (
+                (lambda c: case(c, 'egr-name-lookup').pop('applies_to'), 'APPLICABILITY'),
+                (lambda c: case(c, 'egr-name-lookup').update(applies_to='every-guest'), 'APPLICABILITY'),
+                (lambda c: case(c, 'file-shadow').update(applies_to='inference-composition'), 'APPLICABILITY'),
+                (lambda c: c.pop('applicability'), 'SCHEMA'),
+                (lambda c: case(c, 'file-shadow').update(native={'expected': {'outcomes': ['EACCES'], 'rule': 'x'},
+                                                                 'enforcement': []}), 'NATIVE_INVALID'),
+                (lambda c: case(c, 'ctl-inference-endpoint').update(native='answered'), 'NATIVE_INVALID'),
+                (lambda c: case(c, 'egr-inference-guest-login')['native']['expected'].update(outcomes=['answered']),
+                 'EXPECTED_INVALID'),
+                (lambda c: case(c, 'egr-inference-guest-login')['native'].update(enforcement=[]),
+                 'ENFORCEMENT_MISSING'),
+                (lambda c: case(c, 'egr-inference-guest-login')['native']['enforcement'][0].update(location='hope'),
+                 'ENFORCEMENT_MISSING'),
+                (lambda c: case(c, 'egr-inference-guest-login')['native']['enforcement'][0].update(refs=['nm-none']),
+                 'DANGLING_REF'),
+                (lambda c: case(c, 'egr-inference-guest-login')['native'].update(extra=1), 'SCHEMA')):
+            c = fresh()
+            change(c)
+            self.assertIn(code, self.codes(c, readme=None))
+
     def test_deviation_needs_compensating_cases(self):
         c = fresh()
         case(c, 'egr-network-none')['compensated_by'] = []

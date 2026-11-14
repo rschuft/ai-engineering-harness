@@ -225,7 +225,7 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
 ### P7 Network posture
 - **Shape:** NAT or a managed bridge, never bridged onto the Owner's LAN. Inbound
   traffic arrives only through explicit forwards bound to host `127.0.0.1`.
-- **Endpoint classes.** Guest→host is denied by default, except for four endpoint
+- **Endpoint classes.** Guest→host is denied by default, except for five endpoint
   classes, which each profile enumerates with address, port and protocol:
   - `management`: the provider's control channel and SSH over the loopback forward;
   - `exchange`: repository exchange (`profiles P4`);
@@ -240,6 +240,19 @@ leaves exercise. Values marked "observed only" are read and recorded, never writ
     guard's ACCEPT, `bip` and `dns` in `daemon.json`) is opt-in per guest
     (`network.inference_composition`, `create --provision --inference`) and planned:
     applying it is the Owner's guest hardening act;
+  - `provider-tunnel`: the native execution profile's provider access (amended
+    2026-11-14, decision 0023 section 4; plan leaf E-05.10; planned). It declares no new
+    guest listener: its guest side is the `inference` endpoint's address and port, byte
+    for byte (the same sshd forward, container-guard ACCEPT, empty egress allowlist and
+    refused DNS), and Claude Code's `HTTPS_PROXY` is `http://<guest_address>:<guest_port>`.
+    Its host side is a CONNECT-only tunnel on `127.0.0.1` at the entry's `host_port`
+    (declared once; `integrations/inference/provider_tunnel.py`), which the forward
+    holder targets instead of the broker when it starts the forward for the native
+    profile (`inference-forward --execution-profile native`). The tunnel admits exactly
+    the entry's `origin`, `api.anthropic.com:443`, checks the TLS ClientHello's server
+    name without terminating TLS, holds no credential, and refuses IP literals, plain
+    HTTP and every other host and port. Its egress is the Owner's act OA-31 (a); while a
+    forward to it is held, the guest's own processes reach it too (disclosed);
   - `provision`: package and image sources needed while provisioning. This class may be
     phase-limited and closed after provisioning.
 - **Egress allowlist.** It is enforced **outside the guest**, and every profile names its

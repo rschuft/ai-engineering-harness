@@ -58,6 +58,17 @@ class CommittedInventory(unittest.TestCase):
         found, problems = codes(fresh())
         self.assertEqual(problems, [], '\n'.join(map(str, problems)))
 
+    def test_the_provider_tunnel_is_named(self):
+        """E-05.10: the native profile's tunnel, its principal and its listener, holding no credential."""
+        tunnel = entry(INVENTORY, 'principals', 'provider-tunnel')
+        listener = entry(INVENTORY, 'assets', 'listener-provider-tunnel')
+        self.assertEqual((tunnel['domain'], tunnel['agent_controlled'], tunnel['status']),
+                         ('td-management', False, 'planned'))
+        self.assertEqual((listener['custodian'], listener.get('credentials', [])), ('provider-tunnel', []))
+        self.assertIn('127.0.0.1:18433', listener['location'])
+        self.assertFalse([c['id'] for c in INVENTORY['credentials']
+                          if 'provider-tunnel' in [c['holder'], c['manager']] + c.get('readable_by', [])])
+
     def test_every_privileged_operation_has_one_existing_principal(self):
         principals = {p['id'] for p in INVENTORY['principals']}
         self.assertTrue(INVENTORY['operations'])

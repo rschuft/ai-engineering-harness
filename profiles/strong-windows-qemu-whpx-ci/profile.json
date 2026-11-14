@@ -900,6 +900,13 @@
         "host_port": null
       },
       {
+        "class": "provider-tunnel",
+        "status": "deferred: no provider access in the CI guest (decision 0016: a job reaches nothing; decision 0023 declares the tunnel for the execution guest only)",
+        "protocol": "tcp",
+        "host_bind": "127.0.0.1",
+        "host_port": null
+      },
+      {
         "class": "provision",
         "status": "deferred: no allowlisting proxy exists yet, and enabling a guestfwd in this profile needs separate Owner authorization (decision 0003); phase-limited",
         "mechanism": "guestfwd=tcp:<guest address>:<port>-tcp:127.0.0.1:<proxy port> to a host-side allowlisting proxy (the mechanism qualified by F-03.3.2)",

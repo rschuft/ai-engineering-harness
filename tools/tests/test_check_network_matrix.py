@@ -92,13 +92,29 @@ class CommittedMatrix(unittest.TestCase):
         for r in MATRIX['edges']:
             if r['verdict'] == 'allow' and trust[r['from']] in ('untrusted', 'contained') and \
                     trust[r['to']] in ('trusted', 'trusted-computing-base'):
-                self.assertEqual(r['endpoint'], 'inference', r['id'])
+                # the brokered profile's endpoint class, or the native profile's tunnel (decision 0023, E-05.10)
+                self.assertIn(r['endpoint'], ('inference', 'provider-tunnel'), r['id'])
                 self.assertFalse(set(r['credentials']) & privileged, r['id'])
         # an untrusted job reaches no management API, engine, Gitea or host service
         for ident in ('nm-job-management-api', 'nm-job-engine', 'nm-job-gitea', 'nm-job-host',
                       'nm-job-guest-listeners', 'nm-job-peer', 'nm-ext-job-egress',
                       'nm-review-management-api', 'nm-review-gitea'):
             self.assertEqual(edge(MATRIX, ident)['verdict'], 'deny', ident)
+
+    def test_the_native_path_is_classified(self):
+        """E-05.10 (decision 0023 section 4.4): a job to the tunnel through the forward, the tunnel to the
+        provider's one origin with the guest-originated TLS disclosed, and the guest's own processes reaching
+        the tunnel while a forward is held, each an Owner act (OA-31 (a))."""
+        job, guest_own = edge(MATRIX, 'nm-job-tunnel'), edge(MATRIX, 'nm-guest-tunnel')
+        out = next(r for r in MATRIX['external_edges'] if r['id'] == 'nm-ext-tunnel-provider')
+        self.assertEqual((job['verdict'], job['endpoint'], job['profile_endpoints']),
+                         ('allow', 'provider-tunnel', ['strong-windows-qemu-whpx:provider-tunnel:18433']))
+        self.assertEqual((out['verdict'], out['to']), ('allow', 'external:model-provider'))
+        self.assertIn('disclosure', [e['kind'] for e in out['enforcement']])
+        self.assertIn('api.anthropic.com:443', out['protocol'])
+        self.assertEqual((guest_own['verdict'], guest_own['findings']), ('disclosed', ['fd-native-guest-provider-reach']))
+        for r in (job, out, guest_own):
+            self.assertEqual((r['owner_act'], r['status'], r['verify_at']), (True, 'planned', 'E-05.10'), r['id'])
 
     def test_required_workflows_are_allowed(self):
         for ident in ('nm-owner-guest-ssh', 'nm-owner-guest-exchange', 'nm-owner-guest-qmp',

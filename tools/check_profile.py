@@ -439,6 +439,49 @@ def check_network(report, profile, properties, root=REPO):
         report.fail(f'network: endpoint classes not enumerated: {sorted(missing)}')
     check_enforcement_point(report, profile, root)
     check_inference(report, profile, root)
+    check_provider_tunnel(report, profile)
+
+
+# decision 0023 section 4 (E-05.10): the native profile's provider tunnel, declared once
+TUNNEL_ORIGIN = 'api.anthropic.com:443'
+
+
+def check_provider_tunnel(report, profile):
+    """decision 0023 sections 4.1 and 4.2: a provider-tunnel endpoint that is not deferred names
+    no guest listener of its own (its guest address and port are the inference endpoint's, the
+    same sshd remote forward), and declares the tunnel's host side once: 127.0.0.1, an integer
+    port and the one origin."""
+    endpoints = (profile.get('network') or {}).get('endpoints') or []
+    entries = [e for e in endpoints if isinstance(e, dict) and e.get('class') == 'provider-tunnel']
+    if len(entries) != 1:
+        if len(entries) > 1:
+            report.fail('network.endpoints: one provider-tunnel endpoint at most')
+        return                                  # check_network reports the endpoint classes
+    entry, label = entries[0], 'network.endpoints provider-tunnel'
+    status = str(entry.get('status', ''))
+    if status.startswith('deferred'):
+        return
+    if status.split(':', 1)[0] not in INFERENCE_STATUSES:
+        report.fail(f'{label}: status must start with one of {list(INFERENCE_STATUSES)} or '
+                    'deferred')
+    inference = [e for e in endpoints if isinstance(e, dict) and e.get('class') == 'inference']
+    if len(inference) != 1 or str(inference[0].get('status', '')).startswith('deferred'):
+        report.fail(f'{label}: needs the inference endpoint it shares (decision 0023 section 4.1)')
+        return
+    if (entry.get('guest_address'), entry.get('guest_port'), entry.get('mechanism')) != \
+            (inference[0].get('guest_address'), inference[0].get('guest_port'), INFERENCE_MECHANISM):
+        report.fail(f'{label}: guest_address, guest_port and mechanism must be the inference '
+                    'endpoint\'s (the guest side is unchanged, decision 0023 section 4.1)')
+    port = entry.get('host_port')
+    if entry.get('host_bind') != LOOPBACK or isinstance(port, bool) or not isinstance(port, int) \
+            or not 1024 <= port <= 65535:
+        report.fail(f'{label}: host_bind {LOOPBACK} and an integer host_port from 1024 to 65535 '
+                    '(declared once: the tunnel listens there and the forward targets it)')
+    if entry.get('origin') != TUNNEL_ORIGIN:
+        report.fail(f'{label}: origin must be {TUNNEL_ORIGIN} (decision 0023 section 4.2)')
+    if entry.get('direction') != 'guest-to-host' or not str(entry.get('forward_owner', '')).strip():
+        report.fail(f'{label}: direction guest-to-host and the forward\'s owner (forward_owner) '
+                    'required')
 
 
 # decision 0015 (S-03.2): the guest inference endpoint and its opt-in composition

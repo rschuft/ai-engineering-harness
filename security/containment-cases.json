@@ -2,7 +2,7 @@
   "schema": "ai-engineering-harness/security/containment-cases/v1",
   "plan_leaf": "S-02.1",
   "title": "Containment cases and the expected-denial matrix of the job environment",
-  "version": "4",
+  "version": "5",
   "as_of": "2026-11-14",
   "inventory": "security/inventory.json",
   "properties": "profiles/properties.json",
@@ -54,7 +54,8 @@
     "agent-server-key": "the Agent Server's session-key admission",
     "key-check": "the seeded ExecStartPre key check: no valid key, no server",
     "launch-no-share": "launch.argv carries no host share; host_shares is empty (profiles P3)",
-    "broker-token-admission": "the host-side inference broker admits only a live per-attempt token in its family's auth header (decision 0015 section 3): the only control between the guest's own processes and the inference endpoint while a forward session is held"
+    "broker-token-admission": "the host-side inference broker admits only a live per-attempt token in its family's auth header (decision 0015 section 3): the only control between the guest's own processes and the inference endpoint while a forward session is held",
+    "tunnel-admission": "the host-side provider tunnel of the native profile (decision 0023 section 4.2) admits only CONNECT api.anthropic.com:443 with a TLS ClientHello naming that host, and answers every other request with its refusal: the only control between the guest's own processes and the endpoint while a forward to the tunnel is held"
   },
   "snapshot_keys": {
     "docker_inspect": "sha256 of each job container's normalized docker inspect (image, user, AppArmor, the declared HostConfig values, binds with the conversation id replaced) and the number of distinct digests",
@@ -448,7 +449,17 @@
         "container_guard",
         "pins"
       ],
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS). E-05.10 (decision 0023): with the forward held to the provider tunnel (the native profile) the same request is answered by the tunnel's refusal of a request that is not a CONNECT (its native expectations); the job's CONNECT to the provider's origin is the inference sweep's tunnel rows, not a catalogue case.",
+      "applies_to": "inference-composition",
+      "native": {
+        "expected": {
+          "outcomes": [
+            "answered"
+          ],
+          "rule": "answered (native profile: the forward held to the provider tunnel): the tunnel's 405 TUNNEL_NOT_CONNECT to GET / with the container guard's ACCEPT counting the connection in its window (reachability through the one ACCEPT and the forward to the tunnel). Any other status (answered-<status>), a 405 the ACCEPT did not count (answered-not-through-allow, answered-not-attributed) or no answer is not the control"
+        },
+        "enforcement": []
+      }
     },
     {
       "id": "ctl-trusted-side",
@@ -3878,7 +3889,8 @@
         "container_guard",
         "pins"
       ],
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS).",
+      "applies_to": "inference-composition"
     },
     {
       "id": "egr-inference-edge-udp",
@@ -3927,7 +3939,8 @@
         "container_guard",
         "pins"
       ],
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS).",
+      "applies_to": "inference-composition"
     },
     {
       "id": "egr-inference-edge-address",
@@ -3976,7 +3989,8 @@
         "container_guard",
         "pins"
       ],
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS).",
+      "applies_to": "inference-composition"
     },
     {
       "id": "egr-resolver-docker0",
@@ -4024,7 +4038,8 @@
         "container_guard",
         "pins"
       ],
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS).",
+      "applies_to": "inference-composition"
     },
     {
       "id": "egr-name-lookup",
@@ -4086,7 +4101,8 @@
         "container_guard",
         "pins"
       ],
-      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
+      "notes": "Decision 0015 section 4.5, on a guest created with create --provision --inference only (the opt-in composition, the Owner's guest hardening act A4): declared at S-03.2 slice 2, run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS).",
+      "applies_to": "inference-composition"
     },
     {
       "id": "egr-inference-guest-login",
@@ -4130,13 +4146,33 @@
       "positive_control": "ctl-inference-endpoint",
       "verdict_rule": "PASS when every observation is one of the expected outcomes and the positive control passed in the same run; FAIL when any observation is a success outcome (a stop condition), is missing, or is outside the expected outcomes; UNKNOWN when the positive control did not pass and nothing succeeded.",
       "carried": [
-        "fd-guest-inference-reach"
+        "fd-guest-inference-reach",
+        "fd-native-guest-provider-reach"
       ],
       "status": "executable",
       "depends_on": [
         "pins"
       ],
-      "notes": "The path S-03.2 slice 2 found (nm-guest-inference, disclosed), declared at slice 3: on a guest created with create --provision --inference only, with the dispatcher's forward session held (inference-forward start), run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS)."
+      "notes": "The path S-03.2 slice 2 found (nm-guest-inference, disclosed), declared at slice 3: on a guest created with create --provision --inference only, with the dispatcher's forward session held (inference-forward start), run by job-access-probe's inference sweep at the guest qualification. Made executable at S-03.2 (2026-11-14, fix-forward before the guest qualification): run by job-access-probe's inference sweep on a guest created with create --provision --inference with the dispatcher's forward session held (inference-forward start); the full catalogue also needs --egress-falsification (egr-offlink-route-present, and job-access-probe skips later steps after a failed one). Without a held forward session the sweep is not run and the case is FAIL (precondition not met); on a guest without the composition it is not observed (never PASS). E-05.10 (decision 0023): with the forward held to the provider tunnel (the native profile) the tunnel answers in place of the broker (its native expectations), and the disclosed reach is nm-guest-tunnel.",
+      "applies_to": "inference-composition",
+      "native": {
+        "expected": {
+          "outcomes": [
+            "tunnel-refused"
+          ],
+          "rule": "tunnel-refused (native profile: the forward held to the provider tunnel): the tunnel's 405 with TUNNEL_NOT_CONNECT to the guest login's GET / (no CONNECT). Nothing in the guest refuses this connection (the container guard filters docker0 only): the tunnel's admission is the only control for the guest's own processes while a forward to it is held, and their CONNECT to api.anthropic.com:443 is admitted (disclosed, fd-native-guest-provider-reach; it reaches the provider only with a credential the process holds). Any other answer (answered-<status>) is a stop condition; no answer is not the expected outcome"
+        },
+        "enforcement": [
+          {
+            "location": "tunnel-admission",
+            "refs": [
+              "nm-guest-tunnel",
+              "listener-provider-tunnel",
+              "fd-native-guest-provider-reach"
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "priv-sudo",
@@ -5628,11 +5664,16 @@
     "evidence/S-01.3.2-job-daemon-and-management-access.md",
     "evidence/S-01.4-network-matrix.md",
     "evidence/S-01.2.2-segregated-credentials.md",
-    "profiles/strong-windows-qemu-whpx/profile.json"
+    "profiles/strong-windows-qemu-whpx/profile.json",
+    "decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md",
+    "AI_Engineering_Implementation_Project_Plan_Overseer_Prompts_2026-10-31.json#E-05.10"
   ],
   "notes": [
     "Every attempt is non-destructive by construction: reads, listings, stats, access(2) checks, connects that send at most an HTTP GET to the container's own loopback, sockets created and closed, namespace calls in a forked child that exits at once, an empty module image, and writes only in the probe's own scratch directories, which the runner removes. The checker refuses anything else.",
     "Synthetic canary workspaces only: each canary is generated inside the job at run time; no repository content enters a guest.",
     "The reused primitives (admission-probe, job-access-probe) run unchanged; a case names the extractor that reads its observation from their records."
-  ]
+  ],
+  "applicability": {
+    "inference-composition": "A guest created with create --provision --inference (the opt-in composition, S-03.2) whose dispatcher holds the inference forward session (inference-forward --action start). The forward's target decides the expectations: held to the broker (the brokered profile, decision 0015), the case's expected and enforcement; held to the provider tunnel (the native profile, decision 0023, inference-forward --execution-profile native), the case's native expectations where it carries them and its own otherwise (the guest side is the same composition). The runner reads the target from the forward's record (job-access-probe's inference step). On any other guest the case is not applicable: it is not observed there, and the runner reports it FAIL with its precondition (never PASS), so a catalogue run on a guest without the composition is read for its other cases."
+  }
 }

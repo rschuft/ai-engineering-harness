@@ -761,6 +761,23 @@
         "enforcement": "the container guard's one ACCEPT (INPUT, IPv4) before its refusals; sshd PermitListen binds nothing else; the egress guard's allowlist stays empty"
       },
       {
+        "class": "provider-tunnel",
+        "status": "planned: declared for the native execution profile (decision 0023 section 4; plan leaf E-05.10); not active until the Owner's act OA-31 (a) and E-05.10's live qualification observe it",
+        "purpose": "the native profile's provider access: Claude Code in a conversation container reaches the provider's one origin through a host loopback CONNECT-only tunnel that holds no credential and terminates no TLS (decision 0023 sections 3 and 4.2); its HTTPS_PROXY is http://<guest_address>:<guest_port> (E-05.9's admission compares it with this entry)",
+        "direction": "guest-to-host",
+        "mechanism": "ssh-remote-forward",
+        "mechanism_detail": "the inference endpoint's guest listener and forward, unchanged on the guest side (decision 0023 section 4.1): the dispatcher holds ssh -N -R 172.17.0.1:8090:127.0.0.1:<host_port> over the management hostfwd when it starts the forward for the native profile (tools/guest.py inference-forward --execution-profile native), so each container connection reaches the tunnel instead of the broker. One forward at a time: the broker or the tunnel, never both.",
+        "forward_owner": "management-dispatcher (bootstrap: tools/guest.py under the Owner's account performs its role, decision 0013 point 1)",
+        "protocol": "tcp",
+        "guest_address": "172.17.0.1",
+        "guest_port": 8090,
+        "host_bind": "127.0.0.1",
+        "host_port": 18433,
+        "host_port_source": "this entry, declared once: the tunnel listens there (integrations/inference/provider_tunnel.py serve --profile) and the forward holder targets it for the native profile; beside the broker's example ports 18431 and 18432",
+        "origin": "api.anthropic.com:443",
+        "enforcement": "guest side: the inference endpoint's (the container guard's one ACCEPT, sshd PermitListen, the egress guard's empty allowlist, DNS refused); host side: the tunnel admits only CONNECT api.anthropic.com:443 with a TLS ClientHello whose server name is that host, refuses IP literals, plain HTTP and every other host and port, and connects only to the origin's host-resolved global addresses on 443 (a control in its own code, decision 0023 section 6)"
+      },
+      {
         "class": "provision",
         "status": "deferred: no allowlisting proxy exists yet, and enabling a guestfwd in this profile needs separate Owner authorization (decision 0003); phase-limited",
         "mechanism": "guestfwd=tcp:<guest address>:<port>-tcp:127.0.0.1:<proxy port> to a host-side allowlisting proxy (the mechanism qualified by F-03.3.2)",

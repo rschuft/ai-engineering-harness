@@ -192,6 +192,11 @@
         "host_bind": null
       },
       {
+        "class": "provider-tunnel",
+        "status": "deferred: the native profile's tunnel is declared for strong-windows-qemu-whpx only (decision 0023; plan leaf E-05.10)",
+        "host_bind": null
+      },
+      {
         "class": "provision",
         "status": "deferred to F-03.3.2; phase-limited",
         "mechanism": "bridge ACL allow to an allowlisting proxy",

@@ -760,6 +760,151 @@ class BrokerAccessAndForwardControl(unittest.TestCase):
         state.assert_called_once_with(PROFILE, Path('inst') / 'abc')
 
 
+def tunnel_run_dir(test, port=18433, pid=None):
+    """A run directory holding a provider-tunnel run record (a live pid: this process's) on PORT."""
+    run = Path(tempfile.mkdtemp(prefix='aieh-tunnel-run-'))
+    test.addCleanup(guest.remove_tree, run)
+    pt = guest.provider_tunnel()
+    pt.write_new(run / pt.RUN_NAME, {'format': pt.RUN_FORMAT, 'pid': os.getpid() if pid is None else pid,
+                                     'address': '127.0.0.1', 'port': port, 'log': 'x'})
+    return run
+
+
+class NativeForward(ProcessLedger, ForwardBase):
+    """E-05.10 (decision 0023 section 4.3): the forward holder targets the provider tunnel's port only for a
+    profile that declares the native profile (its provider-tunnel endpoint), started with --execution-profile
+    native; every other port is still FORWARD_PORT_REFUSED, and the brokered start is unchanged."""
+    category = 'integration'
+
+    def setUp(self):
+        self.threads = []
+        self.addCleanup(lambda: [t.join(30) for t, _ in self.threads])
+        self.ledger()
+        patcher = mock.patch.object(guest, 'running_process', return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def start(self, name, profile=PROFILE, port=None, tunnel=None, broker=None):
+        ctx = types.SimpleNamespace(profile=profile, instance_dir=self.ctx.instance_dir)
+        with mock.patch.dict(os.environ, {'AIEH_TEST_FAKE_SSH': 'hold'}):
+            return guest.inference_forward(ctx, name, 'start', port, broker, threaded_spawn(self.threads),
+                                           FakeSsh(self.script), execution_profile='native',
+                                           tunnel=tunnel or guest.TunnelAccess(profile, tunnel_run_dir(self)))
+
+    def test_native_targets_the_tunnels_declared_port(self):
+        name, idir = self.instance()
+        broker = FakeBroker()
+        with mock.patch.object(guest, 'BrokerAccess', side_effect=AssertionError('the broker is not read')):
+            out = self.start(name, broker=broker)
+        self.assertEqual((out['result'], out['existing']), ('held', False))
+        session = out['session']
+        self.assertEqual(sorted(session), sorted(SESSION['fields']))
+        self.assertEqual(session['ports'], {'endpoint': {'address': '172.17.0.1', 'port': 8090},
+                                            'tunnel': {'address': '127.0.0.1', 'port': 18433},
+                                            'hostfwd': {'address': '127.0.0.1', 'port': 40001}})
+        self.assertEqual(session['argv'][-3:], ['-R', '172.17.0.1:8090:127.0.0.1:18433', 'agent@127.0.0.1'])
+        self.assertEqual(guest.forward_target(session), guest.TUNNEL_TARGET)
+        self.assertEqual(broker.calls, [])                    # the broker is never asked
+        again = self.start(name, port=18433)
+        self.assertEqual((again['result'], again['existing']), ('held', True))
+        with self.assertRaises(guest.Refused) as cm:          # one forward at a time
+            guest.inference_forward(self.ctx, name, 'start', broker=FakeBroker())
+        self.assertEqual(cm.exception.detail, {'code': 'FORWARD_TARGET_DIFFERS'})
+        self.assertEqual(guest.inference_forward(self.ctx, name, 'stop')['result'], 'stopped')
+
+    def test_native_refuses_every_other_port(self):
+        name, idir = self.instance()
+        for port in (18432, 18431, 8090, 443, 18434):
+            with self.assertRaises(guest.Refused) as cm:
+                self.start(name, port=port)
+            self.assertEqual(cm.exception.detail, {'code': 'FORWARD_PORT_REFUSED'}, port)
+        self.assertFalse(self.record_path(idir).exists())
+        self.assertEqual(self.threads, [])
+
+    def test_native_only_for_a_profile_that_declares_it(self):
+        name, idir = self.instance()
+        undeclared = json.loads(json.dumps(PROFILE))
+        undeclared['network']['endpoints'] = [e for e in undeclared['network']['endpoints']
+                                              if e['class'] != 'provider-tunnel']
+        ci = json.loads((REPO / 'profiles' / 'strong-windows-qemu-whpx-ci' / 'profile.json').read_text(
+            encoding='utf-8'))
+        for profile in (undeclared, dict(PROFILE, network=dict(PROFILE['network'], endpoints=ci['network']['endpoints']))):
+            with self.assertRaises(guest.Refused) as cm:
+                guest.inference_forward(types.SimpleNamespace(profile=profile, instance_dir=self.ctx.instance_dir),
+                                        name, 'start', execution_profile='native',
+                                        spawn=threaded_spawn(self.threads), ssh=FakeSsh(self.script))
+            self.assertEqual(cm.exception.code, 'NATIVE_PROFILE_UNDECLARED')
+        with self.assertRaises(guest.Refused) as cm:
+            guest.inference_forward(self.ctx, name, 'start', execution_profile='other')
+        self.assertIn('--execution-profile must be one of', str(cm.exception))
+        self.assertEqual(self.threads, [])
+
+    def test_native_needs_the_tunnel_running_first(self):
+        name, idir = self.instance()
+        empty = Path(tempfile.mkdtemp(prefix='aieh-tunnel-run-'))
+        self.addCleanup(guest.remove_tree, empty)
+        dead = 2 ** 31 - 7                                     # no such process
+        for run in (empty, tunnel_run_dir(self, port=18499), tunnel_run_dir(self, pid=dead)):
+            with self.assertRaises(guest.Refused) as cm:
+                self.start(name, tunnel=guest.TunnelAccess(PROFILE, run))
+            self.assertEqual(cm.exception.code, 'TUNNEL_NOT_READY', run)
+        self.assertFalse(self.record_path(idir).exists())
+        self.assertEqual(self.threads, [])
+
+    def test_brokered_is_unchanged_and_refuses_the_tunnels_port(self):
+        name, idir = self.instance()
+        ctx = types.SimpleNamespace(profile=PROFILE, instance_dir=self.ctx.instance_dir)
+        with self.assertRaises(guest.Refused) as cm:
+            guest.inference_forward(ctx, name, 'start', 18433, FakeBroker(), threaded_spawn(self.threads),
+                                    FakeSsh(self.script))
+        self.assertEqual(cm.exception.detail, {'code': 'FORWARD_PORT_REFUSED'})
+        with self.assertRaises(guest.Refused) as cm:
+            guest.inference_forward(ctx, name, 'start', None, FakeBroker(inference=19999),
+                                    threaded_spawn(self.threads), FakeSsh(self.script))
+        self.assertEqual(cm.exception.code, 'BROKER_NOT_READY')
+        out = guest.inference_forward(ctx, name, 'start', None, FakeBroker(), threaded_spawn(self.threads),
+                                      FakeSsh(self.script))
+        self.assertIn('broker', out['session']['ports'])
+        self.assertEqual(guest.forward_target(out['session']), 'broker')
+        with self.assertRaises(guest.Refused) as cm:          # one forward at a time
+            self.start(name)
+        self.assertEqual(cm.exception.detail, {'code': 'FORWARD_TARGET_DIFFERS'})
+        guest.inference_forward(self.ctx, name, 'stop')
+
+
+class JobScriptAgainstTheTunnel(unittest.TestCase):
+    """The sweep's tunnel rows (the job script, run here under this interpreter) against the real tunnel in this
+    process, through 127.0.0.1: every refused row gives the outcome and the code TUNNEL_MATRIX expects, from a real
+    TLS stack's ClientHello where one is sent. The admitted row needs the provider's certificate: live only."""
+    category = 'integration'
+
+    def test_refused_rows(self):
+        pt = guest.provider_tunnel()
+        connects = []
+        tunnel = pt.Tunnel(0, pt.MemoryLog(), resolve=lambda h, p: connects.append((h, p)) or [],
+                           connect=lambda *a: (_ for _ in ()).throw(AssertionError('no outbound connection')))
+        address = tunnel.start()
+        self.addCleanup(tunnel.stop, 'test')
+        rows = [m for m in guest.TUNNEL_MATRIX if m[0] != guest.TUNNEL_ORIGIN_WHAT]
+        spec = {'items': [['tunnel', 'tcp', '127.0.0.1', address[1], what] for what, *_ in rows],
+                'tunnel': {what: {'connect': c, 'sni': s} for what, c, s, _, _ in rows}, 'timeout': 10}
+        arg = base64.b64encode(json.dumps(spec).encode('utf-8')).decode('ascii')
+        out = subprocess.run([sys.executable, '-I', '-c', guest.JOB_INFERENCE_SWEEP, arg], capture_output=True,
+                             text=True, timeout=120, creationflags=NO_WINDOW)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        line = next(x for x in out.stdout.splitlines() if x.startswith('AIEH-JOB-JSON '))
+        results = json.loads(line[len('AIEH-JOB-JSON '):])['results']
+        for row in results:
+            want, code = guest.TUNNEL_EXPECTED[row['what']]
+            self.assertEqual((row['outcome'], row['refusal']), (want, code), row)
+        self.assertEqual(len(results), len(rows))
+        # the mismatched and the absent server name reached the hello check (Python's own ClientHello)
+        reasons = sorted(x['reason'] for x in tunnel.log.lines if x['event'] == 'connection')
+        self.assertIn('TUNNEL_SNI_MISMATCH', reasons)
+        self.assertIn('TUNNEL_SNI_ABSENT', reasons)
+        self.assertEqual(connects, [])
+
+
 class ForwardCli(ForwardBase):
     """The command line reaches inference_forward and the holder."""
 
@@ -771,6 +916,14 @@ class ForwardCli(ForwardBase):
                              '--broker-port', '18432'])
         self.assertEqual(rc, 0)
         self.assertEqual(fn.call_args[0][1:], ('inst-x', 'start', 18432))
+        self.assertEqual(fn.call_args[1], {'execution_profile': 'brokered'})
+        with mock.patch.object(guest, 'inference_forward', return_value={'result': 'held'}) as fn, \
+                mock.patch('sys.stdout', new_callable=io.StringIO):
+            rc = guest.main(['inference-forward', '--profile', str(PROFILE_DIR), '--state-dir',
+                             str(self.state), '--name', 'inst-x', '--action', 'start',
+                             '--execution-profile', 'native'])
+        self.assertEqual((rc, fn.call_args[0][1:], fn.call_args[1]),
+                         (0, ('inst-x', 'start', None), {'execution_profile': 'native'}))
         with mock.patch.object(guest, 'forward_hold', return_value=0) as fn:
             self.assertEqual(guest.main(['inference-forward-hold', '--spec', 'abc']), 0)
         fn.assert_called_once_with('abc')

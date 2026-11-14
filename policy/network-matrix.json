@@ -67,7 +67,8 @@
     "listener-inference-broker": "endpoint",
     "api-inference-control": "management",
     "inference-forward-session": "management",
-    "endpoint-provision": "endpoint"
+    "endpoint-provision": "endpoint",
+    "listener-provider-tunnel": "endpoint"
   },
   "edges": [
     {
@@ -1708,6 +1709,45 @@
       "notes": "Found at S-03.2 slice 2 and recorded at slice 3; decision 0015 does not name this path. nm-guest-management stays the deny of every other path from the guest's own processes to the host (SLIRP restrict=on)."
     },
     {
+      "id": "nm-guest-tunnel",
+      "name": "The guest's own processes to the provider tunnel through the guest inference endpoint, while a forward to it is held (the native profile)",
+      "from": "td-guest-control",
+      "to": "td-management",
+      "verdict": "disclosed",
+      "protocol": "tcp from a guest process outside every container (the operator login agent, root, a guest service) to the guest inference endpoint 172.17.0.1:8090, the guest sshd's remote-forward listener, carried by the dispatcher-held SSH session to the provider tunnel on host 127.0.0.1:18433 (decision 0023 section 4)",
+      "endpoint": "listener-provider-tunnel",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "none in the guest: the container guard filters traffic from docker0 only and the listener is the guest's own sshd, so any guest process connects while the dispatcher holds a forward to the tunnel (SLIRP's restrict=on, the enforcement of nm-guest-management, is not crossed: the session is the management channel's own)",
+          "kind": "disclosure",
+          "where": "guest"
+        },
+        {
+          "mechanism": "the tunnel admits only CONNECT api.anthropic.com:443 with a TLS ClientHello naming that host and refuses every other request (plain HTTP, other hosts and ports, IP literals, an absent or other server name); it holds no credential, so an admitted guest process reaches the provider only with a credential it holds itself; the listener exists only while a forward session to the tunnel is held",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md",
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "integrations/inference/provider_tunnel.py"
+      ],
+      "builds_at": "E-05.10",
+      "verify_at": "E-05.10",
+      "owner_act": true,
+      "findings": [
+        "fd-native-guest-provider-reach"
+      ],
+      "inspection": [
+        "planned: E-05.10 (guest.py job-access-probe on a guest created with create --provision --inference, the forward held to the tunnel: the inference sweep's request from the guest login without a CONNECT; the containment case egr-inference-guest-login with its native expectations)"
+      ],
+      "notes": "Decision 0023 section 6 names this reach as a residual. nm-guest-inference is the same path to the broker on the brokered profile; one forward is held at a time."
+    },
+    {
       "id": "nm-guest-privileged-effect",
       "name": "The guest's own processes to the executor",
       "from": "td-guest-control",
@@ -2069,6 +2109,54 @@
       "notes": "Designed at S-03.1 and decided in decision 0015 section 4, which refines the guestfwd shape and S-01.4 ruling R5: no guestfwd and no egress-guard allowlist entry. The guest composition is opt-in per guest (create --provision --inference, declared at S-03.2 slice 2, network.inference_composition) and applying it is the Owner's guest hardening act; planned until a guest observes it.",
       "profile_endpoints": [
         "strong-windows-qemu-whpx:inference:{broker_inference_port}"
+      ]
+    },
+    {
+      "id": "nm-job-tunnel",
+      "name": "A job to the provider tunnel through the guest inference endpoint (the native profile's only permitted path out of a container)",
+      "from": "td-untrusted-engineering",
+      "to": "td-management",
+      "verdict": "allow",
+      "protocol": "tcp from the job to the guest inference endpoint 172.17.0.1:8090 (the guest sshd's remote-forward listener on the docker0 gateway), carried by the dispatcher-held SSH session to the provider tunnel on host 127.0.0.1:18433; inside it, CONNECT api.anthropic.com:443 (Claude Code's HTTPS_PROXY) and the job's own TLS session to the provider",
+      "endpoint": "provider-tunnel",
+      "credentials": [],
+      "enforcement": [
+        {
+          "mechanism": "container guard: one ACCEPT for new TCP from docker0 to 172.17.0.1:8090 before its refusals (INPUT, IPv4 only); the egress guard's allowlist stays empty (the guest side of S-03.2's composition, unchanged)",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "sshd: AllowTcpForwarding remote, GatewayPorts clientspecified and PermitListen 172.17.0.1:8090 only (local forwarding refused); the listener exists only while the dispatcher holds the forward session, started for the native profile only for a profile that declares the provider-tunnel endpoint",
+          "kind": "prevention",
+          "where": "guest"
+        },
+        {
+          "mechanism": "the provider tunnel admits only CONNECT api.anthropic.com:443 whose TLS ClientHello names that host (no ECH), and refuses IP literals, plain HTTP and every other host and port; it holds no credential and terminates no TLS",
+          "kind": "prevention",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md",
+        "profiles/strong-windows-qemu-whpx/profile.json",
+        "profiles/README.md",
+        "integrations/inference/provider_tunnel.py"
+      ],
+      "builds_at": "E-05.10",
+      "verify_at": "E-05.10",
+      "owner_act": true,
+      "findings": [
+        "fd-native-token-residuals"
+      ],
+      "inspection": [
+        "planned: E-05.10 (guest.py job-access-probe on a guest created with create --provision --inference, the forward held to the tunnel: the inference sweep with its tunnel rows from every job; the containment cases ctl-inference-endpoint (native), egr-inference-*, egr-resolver-docker0 and egr-name-lookup; provider_tunnel.py census)"
+      ],
+      "notes": "Decision 0023 section 4: the forward's new target and the tunnel's listener are the Owner's act OA-31 (a). The guest side is nm-job-inference's, unchanged; one forward is held at a time.",
+      "profile_endpoints": [
+        "strong-windows-qemu-whpx:provider-tunnel:18433"
       ]
     },
     {
@@ -3793,6 +3881,45 @@
       ],
       "inspection": [
         "planned: S-03.3"
+      ]
+    },
+    {
+      "id": "nm-ext-tunnel-provider",
+      "name": "The provider tunnel to the model provider's one origin (the native profile, guest-originated TLS)",
+      "from": "td-management",
+      "to": "external:model-provider",
+      "verdict": "allow",
+      "protocol": "tcp from the host to api.anthropic.com:443 (the name resolved on the host, its global addresses only), carrying the job's own TLS session end to end",
+      "endpoint": "external:model-provider",
+      "credentials": [
+        "cred-native-claude-code-token"
+      ],
+      "enforcement": [
+        {
+          "mechanism": "egress allowlist: exactly one origin, api.anthropic.com:443, connected to only after the CONNECT and its ClientHello's server name are admitted; no other destination. A control in the tunnel's own code, evidenced by its census (provider_tunnel.py census: its listener and connections at the operating system against its log's upstream peers), not an OS-enforced boundary (decision 0023 section 6)",
+          "kind": "prevention",
+          "where": "host"
+        },
+        {
+          "mechanism": "the TLS session is the guest's (Claude Code's), end to end: the tunnel holds no key or certificate, decrypts nothing and sees neither the token nor the requests; what is sent inside it (prompts, completions, provider-side tools) is the agent's, under the subscription's terms (decision 0023 section 6)",
+          "kind": "disclosure",
+          "where": "host"
+        }
+      ],
+      "status": "planned",
+      "evidence": [],
+      "sources": [
+        "decisions/0023-native-claude-code-execution-profile-native-authentication-and-provider-tunnel.md",
+        "integrations/inference/provider_tunnel.py"
+      ],
+      "builds_at": "E-05.10",
+      "verify_at": "E-05.10",
+      "owner_act": true,
+      "findings": [
+        "fd-native-token-residuals"
+      ],
+      "inspection": [
+        "planned: E-05.10 (provider_tunnel.py census --once during the live qualification; the job's TLS handshake through the tunnel)"
       ]
     },
     {

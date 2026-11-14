@@ -68,7 +68,11 @@ LOCATIONS = ('container-mount-set', 'uid-permissions', 'capabilities', 'no-new-p
              'seccomp', 'apparmor', 'pid-namespace', 'device-cgroup', 'masked-proc',
              'image-content', 'container-guard', 'egress-guard', 'icc', 'slirp-restrict',
              'guest-routing', 'agent-server-key', 'key-check', 'launch-no-share',
-             'broker-token-admission')
+             'broker-token-admission', 'tunnel-admission')
+# Per-guest applicability (E-05.10): the inference cases (job-access-probe's inference extract) state the
+# guests they apply to; every other case applies to every provisioned guest of the profile.
+APPLICABILITY = ('inference-composition',)
+INFERENCE_EXTRACT = ('job-access-probe', 'inference')
 SNAPSHOT_KEYS = ('docker_inspect', 'container_guard', 'egress_guard', 'daemon', 'pins')
 REQUIREMENTS = ('egress-falsification',)
 SOURCES = ('containment-probe', 'job-access-probe', 'admission-probe')
@@ -142,10 +146,12 @@ CASE_ID = re.compile(r'^[a-z][a-z0-9]*(-[a-z0-9]+)*$')
 TOP_KEYS = {'schema', 'plan_leaf', 'title', 'version', 'as_of', 'inventory', 'properties',
             'matrix', 'profile', 'readme', 'checker', 'runner', 'categories', 'kinds',
             'verdicts', 'statuses', 'enforcement_locations', 'snapshot_keys', 'scratch',
-            'fingerprints', 'cases', 'mutations', 'sources', 'notes'}
+            'fingerprints', 'cases', 'mutations', 'sources', 'notes', 'applicability'}
 CASE_KEYS = {'id', 'category', 'kind', 'name', 'principal', 'attempt', 'probe', 'expected',
              'enforcement', 'assets', 'positive_control', 'verdict_rule', 'carried', 'status',
-             'depends_on', 'requires', 'compensated_by', 'verify_at', 'notes'}
+             'depends_on', 'requires', 'compensated_by', 'verify_at', 'notes', 'native',
+             'applies_to'}
+NATIVE_KEYS = {'expected', 'enforcement'}
 PRINCIPAL_KEYS = {'id', 'user', 'root_attempt'}
 PROBE_KEYS = {'source', 'op', 'extract', 'args'}
 EXPECTED_KEYS = {'outcomes', 'rule'}
@@ -229,7 +235,7 @@ class Checker(csi.Checker):
             self.add('SCHEMA', 'version', 'the catalogue carries a version string')
         for key, want in (('categories', CATEGORIES), ('kinds', KINDS), ('statuses', STATUSES),
                           ('verdicts', VERDICTS), ('enforcement_locations', LOCATIONS),
-                          ('snapshot_keys', SNAPSHOT_KEYS)):
+                          ('snapshot_keys', SNAPSHOT_KEYS), ('applicability', APPLICABILITY)):
             got = _dict(c.get(key))
             if sorted(got) != sorted(want) or not all(isinstance(v, str) and v.strip()
                                                       for v in got.values()):
@@ -344,6 +350,7 @@ class Checker(csi.Checker):
         self.check_enforcement(where, case, kind)
         self.check_control(where, case, kind)
         self.check_probe(where, case.get('probe'), case)
+        self.check_profiles(where, case, kind)
         if kind == 'deviation':
             comp = self.strings(where, case, 'compensated_by', required=True)
             for cid in comp:
@@ -353,6 +360,29 @@ class Checker(csi.Checker):
                              'hardening case')
         elif 'compensated_by' in case:
             self.add('SCHEMA', where, 'compensated_by belongs to a deviation')
+
+    def check_profiles(self, where, case, kind):
+        """E-05.10: an inference case states the guests it applies to (applies_to) and may carry the
+        native profile's expectations (native: expected and enforcement, checked as the case's own
+        are), which the runner applies when the forward is held to the provider tunnel."""
+        probe = _dict(case.get('probe'))
+        inference = (probe.get('source'), probe.get('extract')) == INFERENCE_EXTRACT
+        applies = case.get('applies_to')
+        if inference and applies not in APPLICABILITY:
+            self.add('APPLICABILITY', where, f'an inference case states the guests it applies to '
+                     f'(applies_to one of {APPLICABILITY})')
+        elif not inference and 'applies_to' in case:
+            self.add('APPLICABILITY', where, 'applies_to belongs to an inference case')
+        if 'native' not in case:
+            return
+        native = case.get('native')
+        if not inference or not isinstance(native, dict):
+            self.add('NATIVE_INVALID', where, 'native expectations belong to an inference case, '
+                     'as an object')
+            return
+        self.keys(f'{where}.native', native, NATIVE_KEYS)
+        self.check_expected(f'{where}.native', native, kind)
+        self.check_enforcement(f'{where}.native', native, kind)
 
     def check_expected(self, where, case, kind):
         expected = case.get('expected')
@@ -583,6 +613,15 @@ def _cell(value):
     return str(value).replace('|', '\\|').replace('\n', ' ')
 
 
+def expected_text(case):
+    """A case's expected outcomes, and its native ones when it carries them."""
+    text = ', '.join(str(o) for o in _list(_dict(case.get('expected')).get('outcomes')))
+    native = _dict(case.get('native'))
+    if native:
+        text += '; native: ' + ', '.join(str(o) for o in _list(_dict(native.get('expected')).get('outcomes')))
+    return text
+
+
 def _ids(values):
     values = [str(v) for v in _list(values)]
     return ', '.join(f'`{v}`' for v in values) if values else '-'
@@ -627,18 +666,25 @@ def render(catalogue):
             req = f" Requires {', '.join(str(r) for r in _list(x.get('requires')))}."                 if x.get('requires') else ''
             comp = f" Compensated by {_ids(x.get('compensated_by'))}." \
                 if x.get('compensated_by') else ''
+            native = _dict(x.get('native'))
+            if native:
+                enforcement += '; native: ' + ('; '.join(
+                    f"{e.get('location')} ({', '.join(str(r) for r in _list(e.get('refs')))})"
+                    for e in _list(native.get('enforcement')) if isinstance(e, dict)) or '-')
+            applies = f" Applies to: {x.get('applies_to')}." if x.get('applies_to') else ''
             out.append(
                 f"| `{x.get('id')}` | {c} | {x.get('kind')} | {who} | "
-                f"{_cell(_str(x.get('attempt')))}{req}{comp} | {_cell(probe_text(x.get('probe')))} | "
-                f"{_cell(', '.join(str(o) for o in _list(_dict(x.get('expected')).get('outcomes'))))} | "
+                f"{_cell(_str(x.get('attempt')))}{req}{comp}{applies} | {_cell(probe_text(x.get('probe')))} | "
+                f"{_cell(expected_text(x))} | "
                 f"{_cell(enforcement)} | `{x.get('positive_control')}` | {_ids(x.get('carried'))} |")
     out += ['', '### Positive controls', '',
             '| Control | Category | Attempt | Probe | Expected |', '|---|---|---|---|---|']
     for x in cases:
         if x.get('kind') == 'permitted':
-            out.append(f"| `{x.get('id')}` | {x.get('category')} | {_cell(_str(x.get('attempt')))} | "
+            applies = f" Applies to: {x.get('applies_to')}." if x.get('applies_to') else ''
+            out.append(f"| `{x.get('id')}` | {x.get('category')} | {_cell(_str(x.get('attempt')))}{applies} | "
                        f"{_cell(probe_text(x.get('probe')))} | "
-                       f"{_cell(', '.join(str(o) for o in _list(_dict(x.get('expected')).get('outcomes'))))} |")
+                       f"{_cell(expected_text(x))} |")
     out += ['', '### Live sensitivity mutations (`containment-probe --sensitivity`)', '',
             '| Mutation | Case | Pointed at | Note |', '|---|---|---|---|']
     for m in _list(cat.get('mutations')):

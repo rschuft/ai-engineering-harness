@@ -7072,6 +7072,10 @@ FORWARD_STOP_WAIT_S = 30       # ceiling for ssh, then its holder, to exit after
 FORWARD_KEEP_LINES = 40        # ssh's non-debug stderr lines the holder keeps for its log
 FORWARD_LOG = 'inference-forward.log'
 _MANAGED = object()
+# The forward's host-side target, by the execution profile the forward is started for (decision 0023 section 4.3,
+# E-05.10): brokered (decision 0015: the broker's inference listener, the default and unchanged) or native (the
+# provider tunnel, at the profile's one provider-tunnel endpoint's host_port). The guest side is the same.
+EXECUTION_PROFILES = ('brokered', 'native')
 
 
 def inference_control():
@@ -7205,6 +7209,56 @@ class BrokerAccess:
         except ic.ControlError as exc:
             raise Refused('BROKER', f'the broker\'s control listener: {exc}',
                           {'code': exc.code, 'status': exc.status}) from None
+
+
+def provider_tunnel():
+    """integrations/inference/provider_tunnel.py, the native profile's tunnel (standard library only; it loads no
+    broker or credential module), loaded once."""
+    return _inference_module('aieh_provider_tunnel', 'provider_tunnel.py')
+
+
+class TunnelAccess:
+    """The native profile's forward target as the dispatcher reaches it (E-05.10): the port the profile's one
+    provider-tunnel endpoint declares, and whether the tunnel runs there (its run record names a live process on
+    that port). ``run_dir`` stands in for the managed state directory in tests (never the managed one)."""
+
+    def __init__(self, profile, run_dir=_MANAGED):
+        pt = provider_tunnel()
+        try:
+            self.port = pt.declared_endpoint(profile)['host_port']
+        except pt.TunnelError as exc:
+            raise Refused('NATIVE_PROFILE_UNDECLARED', f'the profile declares no usable provider-tunnel endpoint '
+                          f'({exc.code}): the forward targets the tunnel only for a profile that declares the '
+                          'native profile', {'code': exc.code}) from None
+        self._run_dir = run_dir
+
+    def run_dir(self):
+        if self._run_dir is _MANAGED:
+            paths = provider_tunnel().managed_context()
+            return paths.run_dir()
+        return self._run_dir
+
+    def ready(self):
+        """The tunnel's run record when it names a live process on the declared port; TUNNEL_NOT_READY otherwise."""
+        pt = provider_tunnel()
+        try:
+            record = pt.read_run(Path(self.run_dir()))
+        except pt.TunnelError as exc:
+            raise Refused('TUNNEL_NOT_READY', f'the tunnel\'s run record: {exc.code}') from None
+        if record is None or record.get('port') != self.port or not pt.pid_alive(record['pid']):
+            raise Refused('TUNNEL_NOT_READY', f'the provider tunnel is not running on {LOOPBACK}:{self.port} '
+                          '(decision 0023 section 4.3: the tunnel first; provider_tunnel.py serve)',
+                          {'run_record': record})
+        return record
+
+
+def native_forward_target(tunnel, port=None):
+    """The port a native forward may target: the tunnel's declared one. A given PORT must be exactly it; every
+    other port, the broker's included, is FORWARD_PORT_REFUSED."""
+    if port is not None and port != tunnel.port:
+        raise Refused('REFUSED', f'FORWARD_PORT_REFUSED: {port} is not the provider tunnel\'s declared port',
+                      {'code': 'FORWARD_PORT_REFUSED'})
+    return tunnel.port
 
 
 def forward_config(profile):
@@ -7396,21 +7450,34 @@ def read_line_within(stream, ceiling):
 
 
 def forward_start(ctx, name, idir, record, state, broker_port=None, broker=None, spawn=None,
-                  ssh=None):
-    """Hold the forward session of one opted-in instance (idempotent)."""
+                  ssh=None, execution_profile='brokered', tunnel=None):
+    """Hold the forward session of one opted-in instance (idempotent). Brokered (the default): to the broker's
+    inference listener, which must report it first. Native (E-05.10): to the provider tunnel, only for a profile
+    that declares it (its provider-tunnel endpoint), which must run there first. A held session is returned
+    as it is only when it targets what this start asks for; one held to the other target is refused (one
+    forward at a time: stop it first)."""
+    wanted = 'tunnel' if execution_profile == 'native' else 'broker'
     if state['held']:
+        if wanted not in ((state['session'] or {}).get('ports') or {}):
+            raise Refused('REFUSED', f'FORWARD_TARGET_DIFFERS: the held forward does not target the '
+                          f'{wanted}: stop it first', {'code': 'FORWARD_TARGET_DIFFERS'})
         return {'result': 'held', 'existing': True, 'session': state['session']}
-    ic = inference_control()
-    access = broker or BrokerAccess()
-    try:
-        target = ic.forward_target(access.ports, broker_port)
-    except ic.ControlError as exc:
-        raise Refused('REFUSED', str(exc), {'code': exc.code}) from None
-    status = access.call('status')
-    if ((status.get('listeners') or {}).get('inference') or {}).get('port') != target:
-        raise Refused('BROKER_NOT_READY', f'the broker\'s inference listener is not on '
-                      f'{LOOPBACK}:{target} (decision 0015 section 4.4: the broker first)',
-                      {'listeners': status.get('listeners')})
+    if execution_profile == 'native':
+        access = tunnel or TunnelAccess(ctx.profile)
+        target = native_forward_target(access, broker_port)
+        access.ready()
+    else:
+        ic = inference_control()
+        access = broker or BrokerAccess()
+        try:
+            target = ic.forward_target(access.ports, broker_port)
+        except ic.ControlError as exc:
+            raise Refused('REFUSED', str(exc), {'code': exc.code}) from None
+        status = access.call('status')
+        if ((status.get('listeners') or {}).get('inference') or {}).get('port') != target:
+            raise Refused('BROKER_NOT_READY', f'the broker\'s inference listener is not on '
+                          f'{LOOPBACK}:{target} (decision 0015 section 4.4: the broker first)',
+                          {'listeners': status.get('listeners')})
     if not running_process(idir, record['binary']):
         raise Refused('NOT_RUNNING', f'{name} is not running')
     replaced = remove_stale_forward(ctx.profile, idir, state)
@@ -7422,7 +7489,7 @@ def forward_start(ctx, name, idir, record, state, broker_port=None, broker=None,
             'log': str(idir / FORWARD_LOG), 'instance': name, 'listen': f'{address}:{port}',
             'connect': f'{LOOPBACK}:{target}', 'ceiling': ceiling,
             'ports': {'endpoint': {'address': address, 'port': port},
-                      'broker': {'address': LOOPBACK, 'port': target},
+                      wanted: {'address': LOOPBACK, 'port': target},
                       'hostfwd': {'address': LOOPBACK, 'port': record['ports']['ssh']}}}
     holder = (spawn or forward_spawn)(spec, idir.parent)
     line = read_line_within(holder.stdout, ceiling + FORWARD_MARGIN_S)
@@ -7484,12 +7551,17 @@ def forward_stop(profile, idir, state):
             'record_removed_by': removed_by}
 
 
-def inference_forward(ctx, name, action, broker_port=None, broker=None, spawn=None, ssh=None):
+def inference_forward(ctx, name, action, broker_port=None, broker=None, spawn=None, ssh=None,
+                      execution_profile='brokered', tunnel=None):
     """inference-forward --action start|status|stop (decision 0015 sections 4.1, 4.3 and 4.4) for an
-    instance created with create --provision --inference; refused for any other. ``broker``,
-    ``spawn`` and ``ssh`` stand in for the broker, the holder and the channel in tests."""
+    instance created with create --provision --inference; refused for any other. start targets the
+    broker (brokered, the default) or, for --execution-profile native, the provider tunnel (decision
+    0023 section 4.3, E-05.10). ``broker``, ``tunnel``, ``spawn`` and ``ssh`` stand in for the broker,
+    the tunnel, the holder and the channel in tests."""
     if action not in FORWARD_ACTIONS:
         raise Refused('REFUSED', f'--action must be one of {", ".join(FORWARD_ACTIONS)}')
+    if execution_profile not in EXECUTION_PROFILES:
+        raise Refused('REFUSED', f'--execution-profile must be one of {", ".join(EXECUTION_PROFILES)}')
     idir = ctx.instance_dir(name)
     if not idir.is_dir():
         raise Refused('REFUSED', f'{name}: no such instance')
@@ -7509,7 +7581,7 @@ def inference_forward(ctx, name, action, broker_port=None, broker=None, spawn=No
         result.update(forward_stop(ctx.profile, idir, state))
     else:
         result.update(forward_start(ctx, name, idir, record, state, broker_port, broker, spawn,
-                                    ssh))
+                                    ssh, execution_profile, tunnel))
     result['record'] = write_record(idir, FORWARD_OPERATION, result)
     if result['result'] == 'still-running':
         raise Refused('STOP_FAILED', f'{name}: the forward\'s ssh process still runs', result)
@@ -10629,8 +10701,13 @@ EGRESS_GUARD_FAMILY = 'iptables'
 # each, so every refusal is attributed to its own attempt): the inference endpoint without a
 # token (kind endpoint: one TCP connect and GET /, the status line only), an edge of the allow or
 # the container resolver (kind connect: one TCP connect or one UDP datagram, errno named), or one
-# name lookup through the container's resolv.conf (kind lookup). spec: base64 JSON
-# {items: [[kind, proto, host, port, what]], timeout}.
+# name lookup through the container's resolv.conf (kind lookup). With the forward held to the
+# native profile's provider tunnel (E-05.10), kind tunnel: one request to the tunnel through the
+# endpoint, spec['tunnel'][what] = {connect: the CONNECT target or null (null: a plain HTTP GET),
+# sni: the TLS server name or null (none sent)}; a refusal is reported by its status and the
+# tunnel's refusal code, an admitted CONNECT by a TLS handshake with the default trust store (the
+# certificate verified for the server name) and nothing sent after it, a closed connection by its
+# class. spec: base64 JSON {items: [[kind, proto, host, port, what]], timeout, tunnel}.
 JOB_INFERENCE_SWEEP = r'''import base64, errno, json, socket, sys, time
 spec = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 QUERY = bytes([0x41, 0x49, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 4]) + b'aieh' + bytes([7]) + \
@@ -10689,12 +10766,67 @@ def lookup(host):
         out = {'outcome': 'not-resolved', 'error': str(exc)[:200]}
     out['seconds'] = round(time.monotonic() - t0, 2)
     return out
+def tunnel(host, port, item):
+    import ssl
+    t0 = time.monotonic()
+    out = {'status': None, 'refusal': None}
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(spec['timeout'])
+    try:
+        s.connect((host, port))
+        if item['connect'] is None:
+            s.sendall(b'GET http://api.anthropic.com/ HTTP/1.1\r\nHost: api.anthropic.com\r\nConnection: close\r\n\r\n')
+        else:
+            s.sendall(('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (item['connect'], item['connect'])).encode('ascii'))
+        data = b''
+        while b'\r\n\r\n' not in data and len(data) < 8192:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        top, _, body = data.partition(b'\r\n\r\n')
+        line = top.split(b'\r\n', 1)[0].decode('latin-1').split(' ')
+        out['status'] = int(line[1]) if len(line) > 1 and line[1].isdigit() else None
+        if out['status'] is None:
+            out['outcome'] = 'closed-before-answer' if not data else 'answered-other'
+        elif out['status'] != 200:
+            for h in top.split(b'\r\n')[1:]:
+                key, _, value = h.decode('latin-1').partition(':')
+                if key.strip().lower() == 'x-aieh-tunnel-refusal':
+                    out['refusal'] = value.strip()[:64]
+            out['outcome'] = 'refused-%d' % out['status']
+        else:
+            ctx = ssl.create_default_context()
+            if item['sni'] is None:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            try:
+                tls = ctx.wrap_socket(s, server_hostname=item['sni'])
+                out['outcome'] = 'handshake-complete'
+                out['tls'] = {'version': tls.version(), 'verified': ctx.verify_mode == ssl.CERT_REQUIRED}
+                tls.close()
+            except ssl.SSLCertVerificationError as exc:
+                out['outcome'] = 'tls-unverified'
+                out['error'] = str(exc.verify_message)[:120]
+            except (ssl.SSLError, ConnectionError, socket.timeout, OSError) as exc:
+                out['outcome'] = 'closed-in-handshake'
+                out['error'] = type(exc).__name__
+    except socket.timeout:
+        out['outcome'] = 'timeout'
+    except OSError as exc:
+        out['outcome'] = name(exc)
+    finally:
+        s.close()
+    out['seconds'] = round(time.monotonic() - t0, 2)
+    return out
 results = []
 for kind, proto, host, port, what in spec['items']:
     if kind == 'endpoint':
         got = endpoint(host, port)
     elif kind == 'lookup':
         got = lookup(host)
+    elif kind == 'tunnel':
+        got = tunnel(host, port, spec['tunnel'][what])
     else:
         got = attempt(proto, host, port)
     results.append(dict(got, proto=proto, host=host, port=port, what=what))
@@ -10726,17 +10858,56 @@ INFERENCE_REFUSAL_RULE = {'tcp': 'reset', 'udp': 'reject'}
 # container resolver) must be ECONNREFUSED attributed to the guard
 INFERENCE_EXPECTED = {INFERENCE_ENDPOINT_WHAT: 'answered', INFERENCE_GUEST_WHAT: 'token-refused',
                       INFERENCE_LOOKUP_WHAT: 'not-resolved'}
+# The native profile (decision 0023, E-05.10): the forward ends at the provider tunnel, which answers
+# a request that is not a CONNECT (the endpoint's GET /, the guest login's) 405 TUNNEL_NOT_CONNECT.
+TUNNEL_TARGET = 'provider-tunnel'
+TUNNEL_NOT_CONNECT_STATUS = 405
+TUNNEL_NOT_CONNECT = 'TUNNEL_NOT_CONNECT'
+INFERENCE_EXPECTED_NATIVE = {INFERENCE_ENDPOINT_WHAT: 'answered', INFERENCE_GUEST_WHAT: 'tunnel-refused',
+                             INFERENCE_LOOKUP_WHAT: 'not-resolved'}
+# The tunnel's admission from inside a job, through the endpoint (E-05.10's live proof): what, the
+# CONNECT target (None: plain HTTP), the TLS server name (None: none sent), the expected outcome
+# and the tunnel's refusal code. The IP literal is a documentation address (RFC 5737): the tunnel
+# refuses it by its form, so nothing is ever sent towards it.
+TUNNEL_ORIGIN_WHAT = 'provider tunnel: CONNECT api.anthropic.com:443, TLS handshake'
+TUNNEL_MATRIX = (
+    (TUNNEL_ORIGIN_WHAT, 'api.anthropic.com:443', 'api.anthropic.com', 'handshake-complete', None),
+    ('provider tunnel: CONNECT another host', 'example.com:443', None, 'refused-403',
+     'TUNNEL_TARGET_REFUSED'),
+    ('provider tunnel: CONNECT another port', 'api.anthropic.com:80', None, 'refused-403',
+     'TUNNEL_PORT_REFUSED'),
+    ('provider tunnel: CONNECT an IP literal', '192.0.2.10:443', None, 'refused-403',
+     'TUNNEL_TARGET_IP_LITERAL'),
+    ('provider tunnel: plain HTTP', None, None, 'refused-405', TUNNEL_NOT_CONNECT),
+    ('provider tunnel: mismatched server name', 'api.anthropic.com:443', 'example.com',
+     'closed-in-handshake', None),
+    ('provider tunnel: no server name', 'api.anthropic.com:443', None, 'closed-in-handshake', None),
+)
+TUNNEL_EXPECTED = {what: (outcome, code) for what, _, _, outcome, code in TUNNEL_MATRIX}
 
 
-def inference_job_spec(profile):
+def forward_target(session):
+    """The held forward's host target from its record: TUNNEL_TARGET for a native forward, else
+    'broker' (a record without a tunnel port is the brokered profile's, as before E-05.10)."""
+    ports = (session or {}).get('ports') if isinstance(session, dict) else None
+    return TUNNEL_TARGET if isinstance(ports, dict) and 'tunnel' in ports else 'broker'
+
+
+def inference_job_spec(profile, native=False):
     """The predeclared inference sweep of a job (network.inference_composition.job_sweep): the
-    endpoint, the allow's edges and the resolver, and the name lookup, as items in that order."""
+    endpoint, the allow's edges and the resolver, and the name lookup, as items in that order; with
+    the forward held to the provider tunnel (NATIVE), then the tunnel's admission (TUNNEL_MATRIX)."""
     address, port = inference_endpoint(profile)
     sweep = inference_config(profile).get('job_sweep') or {}
-    return {'items': [['endpoint', 'tcp', address, port, INFERENCE_ENDPOINT_WHAT]] +
+    spec = {'items': [['endpoint', 'tcp', address, port, INFERENCE_ENDPOINT_WHAT]] +
                      [['connect'] + list(e) for e in sweep.get('edges') or []] +
                      [['lookup', 'dns', INFERENCE_LOOKUP_NAME, None, INFERENCE_LOOKUP_WHAT]],
             'timeout': JOB_CONNECT_S}
+    if native:
+        spec['items'] += [['tunnel', 'tcp', address, port, what] for what, *_ in TUNNEL_MATRIX]
+        spec['tunnel'] = {what: {'connect': connect, 'sni': sni}
+                          for what, connect, sni, _, _ in TUNNEL_MATRIX}
+    return spec
 
 
 def container_guard_rejects(report):
@@ -10772,28 +10943,34 @@ def guard_window(before, after):
     return delta if all(v >= 0 for v in delta.values()) else None
 
 
-def inference_outcome(row):
+def inference_outcome(row, native=False):
     """The outcome class of one inference sweep row, as the containment cases name it. The endpoint
-    is 'answered' only with the broker's 401 and the guard's ACCEPT counting the connection; the
-    guest login is 'token-refused' only with 401 TOKEN_MISSING; an edge or resolver target is
+    is 'answered' only with the broker's 401 (NATIVE: the tunnel's 405) and the guard's ACCEPT
+    counting the connection; the guest login is 'token-refused' only with 401 TOKEN_MISSING
+    (NATIVE: 'tunnel-refused' only with 405 TUNNEL_NOT_CONNECT); an edge or resolver target is
     ECONNREFUSED only when the refusal rule of its protocol counted it in its own window and the
     ACCEPT did not, so a refusal the guard did not make (refused-not-by-guard), one the allow
     admitted (admitted-by-allow) or one that cannot be attributed (refused-not-attributed) is
-    never the expected outcome."""
+    never the expected outcome. A tunnel row is its outcome, with the refusal code it carried."""
     what, outcome, status = row.get('what'), _norm_net(row.get('outcome')), row.get('status')
     window = row.get('guard') if isinstance(row.get('guard'), dict) else {}
     guard = guard_window(window.get('before'), window.get('after'))
     if what == INFERENCE_LOOKUP_WHAT:
         return outcome
+    if what in TUNNEL_EXPECTED:
+        return str(row.get('outcome'))
     if what == INFERENCE_GUEST_WHAT:
         if outcome != 'answered':
             return outcome
+        if native:
+            return 'tunnel-refused' if status == TUNNEL_NOT_CONNECT_STATUS and \
+                row.get('refusal') == TUNNEL_NOT_CONNECT else f'answered-{status}'
         return 'token-refused' if status == 401 and row.get('refusal') == 'TOKEN_MISSING' \
             else f'answered-{status}'
     if what == INFERENCE_ENDPOINT_WHAT:
         if outcome != 'answered':
             return outcome
-        if status != 401:
+        if status != (TUNNEL_NOT_CONNECT_STATUS if native else 401):
             return f'answered-{status}'
         if guard is None:
             return 'answered-not-attributed'
@@ -10808,21 +10985,37 @@ def inference_outcome(row):
     return EGRESS_REFUSED if rule is not None and guard[rule] >= 1 else 'refused-not-by-guard'
 
 
-def inference_job_verdict(results):
+def inference_job_verdict(results, native=False):
     """(ok, rows, stop) of the inference sweep, by the rule fixed before observation: the endpoint
-    answers 401 without a token through the guard's ACCEPT (reachability and admission); every edge
-    and resolver target is refused (ECONNREFUSED) by the container guard's reset or ICMP reject,
-    counted in the attempt's own window and not by the ACCEPT; the name lookup returns no address;
-    the guest login is refused 401 TOKEN_MISSING (inference_outcome). A connection or an answer
-    from an edge, a resolved name, or the guest login admitted without a token is a stop
+    answers 401 without a token (NATIVE: the tunnel's 405 to a request that is not a CONNECT)
+    through the guard's ACCEPT (reachability and admission); every edge and resolver target is
+    refused (ECONNREFUSED) by the container guard's reset or ICMP reject, counted in the attempt's
+    own window and not by the ACCEPT; the name lookup returns no address; the guest login is
+    refused 401 TOKEN_MISSING (NATIVE: 405 TUNNEL_NOT_CONNECT) (inference_outcome); NATIVE: each
+    tunnel row is its TUNNEL_MATRIX outcome and refusal code. A connection or an answer from an
+    edge, a resolved name, the guest login admitted (NATIVE: answered other than the tunnel's
+    refusal), or a refused tunnel target answered 200 or carried to a handshake is a stop
     condition."""
     rows, stop = [], []
+    expected_map = INFERENCE_EXPECTED_NATIVE if native else INFERENCE_EXPECTED
     for r in results:
-        what, got = r.get('what'), inference_outcome(r)
+        what, got = r.get('what'), inference_outcome(r, native)
+        if what in TUNNEL_EXPECTED:
+            want, code = TUNNEL_EXPECTED[what]
+            ok = got == want and r.get('refusal') == code and \
+                (want != 'handshake-complete' or (r.get('tls') or {}).get('verified') is True)
+            if want != 'handshake-complete' and (got in ('handshake-complete', 'tls-unverified') or
+                                                 r.get('status') == 200 and want.startswith('refused')):
+                stop.append({'condition': 'the provider tunnel admitted a refused request',
+                             'what': what, 'conversation': r.get('conversation')})
+            rows.append(dict(r, observed=got, ok=ok))
+            continue
         if what == INFERENCE_GUEST_WHAT:
-            if got.startswith('answered-') and r.get('status') != 401:
+            refusal_status = TUNNEL_NOT_CONNECT_STATUS if native else 401
+            if got.startswith('answered-') and r.get('status') != refusal_status:
                 stop.append({'condition': 'the inference endpoint admitted the guest login without '
-                                          'a token', 'status': r.get('status')})
+                                          'a token' if not native else 'the provider tunnel answered '
+                                          'the guest login\'s plain request', 'status': r.get('status')})
         elif what == INFERENCE_LOOKUP_WHAT:
             if got == 'resolved':
                 stop.append({'condition': 'a name resolved from a job', 'target': r.get('host'),
@@ -10831,7 +11024,7 @@ def inference_job_verdict(results):
             stop.append({'condition': 'an edge of the inference allow was reached from a job',
                          'target': f"{r.get('proto')} {r.get('host')}:{r.get('port')}",
                          'conversation': r.get('conversation')})
-        rows.append(dict(r, observed=got, ok=got == INFERENCE_EXPECTED.get(what, EGRESS_REFUSED)))
+        rows.append(dict(r, observed=got, ok=got == expected_map.get(what, EGRESS_REFUSED)))
     ok = bool(rows) and all(r['ok'] for r in rows) and not stop
     return ok, rows, stop
 
@@ -11781,7 +11974,9 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
         if not held.get('held'):
             return False, {'precondition': INFERENCE_PRECONDITION, 'results': [],
                            'forward': {k: held.get(k) for k in ('path', 'stale')}}
-        spec = inference_job_spec(profile)
+        target = forward_target(held.get('session'))
+        native = target == TUNNEL_TARGET
+        spec = inference_job_spec(profile, native)
         results = []
         for cid in conversations:
             before = container_guard_rows(facts())
@@ -11805,19 +12000,34 @@ def job_access_probe(ctx, name, out_path=None, token_fingerprints=None, channels
         results.append({'proto': 'tcp', 'host': address, 'port': port, 'what': INFERENCE_GUEST_WHAT,
                         'outcome': login.get('outcome'), 'status': login.get('status'),
                         'refusal': login.get('refusal'), 'conversation': 'guest login (agent)'})
-        ok, rows, stop = inference_job_verdict(results)
+        ok, rows, stop = inference_job_verdict(results, native)
         stop_conditions.extend(stop)
         complete = len(results) == len(spec['items']) * len(conversations) + 1
+        rule = ('PASS: the endpoint answers 401 without a token from every job, its '
+                'connection counted by the container guard\'s ACCEPT, and from the '
+                'guest login (TOKEN_MISSING: the token is the only admission control '
+                'there); every edge and resolver target is refused (ECONNREFUSED) and '
+                'counted in its own window by the guard\'s reset (TCP) or ICMP reject '
+                '(UDP) and not by the ACCEPT; the name lookup returns no address. '
+                'STOP: an edge or resolver target connects or answers, a name '
+                'resolves, or the guest login is admitted without a token. No forward '
+                'session held: nothing is run (precondition)')
+        if native:
+            rule = ('PASS (the forward held to the provider tunnel, decision 0023): the endpoint '
+                    'answers the tunnel\'s 405 to GET / from every job, its connection counted by '
+                    'the container guard\'s ACCEPT, and from the guest login 405 TUNNEL_NOT_CONNECT; '
+                    'every edge and resolver target is refused (ECONNREFUSED) and counted in its own '
+                    'window by the guard\'s reset (TCP) or ICMP reject (UDP) and not by the ACCEPT; '
+                    'the name lookup returns no address; from every job a CONNECT to '
+                    'api.anthropic.com:443 completes a TLS handshake verified for that name and '
+                    'nothing is sent after it, while another host, another port and an IP literal '
+                    'are refused 403, plain HTTP 405, each with the tunnel\'s code, and a mismatched '
+                    'or absent server name is closed in the handshake. STOP: an edge or resolver '
+                    'target connects or answers, a name resolves, the guest login is answered other '
+                    'than by the tunnel\'s refusal, or a refused request reaches a handshake or a 200. '
+                    'No forward session held: nothing is run (precondition)')
         return ok and complete, {
-            'decision_rule': 'PASS: the endpoint answers 401 without a token from every job, its '
-                             'connection counted by the container guard\'s ACCEPT, and from the '
-                             'guest login (TOKEN_MISSING: the token is the only admission control '
-                             'there); every edge and resolver target is refused (ECONNREFUSED) and '
-                             'counted in its own window by the guard\'s reset (TCP) or ICMP reject '
-                             '(UDP) and not by the ACCEPT; the name lookup returns no address. '
-                             'STOP: an edge or resolver target connects or answers, a name '
-                             'resolves, or the guest login is admitted without a token. No forward '
-                             'session held: nothing is run (precondition)',
+            'decision_rule': rule, 'target': target,
             'spec': spec, 'results': rows, 'complete': complete}
 
     def attempt_token_step():
@@ -12415,11 +12625,12 @@ def extract_job(record, extract, args, context):
         d = detail_of('inference')
         if isinstance(d, dict) and d.get('precondition'):
             out.append(_obs('guest', CONTAINMENT_PRECONDITION, reason=d['precondition']))
+        native = isinstance(d, dict) and d.get('target') == TUNNEL_TARGET
         for row in (d or {}).get('results') or []:
             if row.get('what') != args['what']:
                 continue
             window = row.get('guard') if isinstance(row.get('guard'), dict) else {}
-            out.append(_obs(row.get('conversation'), inference_outcome(row),
+            out.append(_obs(row.get('conversation'), inference_outcome(row, native),
                             target=f"{row.get('proto')} {row.get('host')}:{row.get('port')}",
                             guard=guard_window(window.get('before'), window.get('after'))))
     elif extract == 'tcp':
@@ -12647,6 +12858,22 @@ def mountinfo_outcome(check, mounts, own_dests, peer_mounts=None):
             return 'shared-with-peer', {'shared': shared, 'nested': nested}
         return 'none-shared', {'compared': [len(mine), len(theirs)]}
     return 'unknown-check', {}
+
+
+def case_for_target(case, target):
+    """The case as the run judges it: with the forward held to the provider tunnel (decision 0023,
+    E-05.10), a case's native expectations (expected, enforcement) replace its brokered ones."""
+    native = case.get('native') if isinstance(case.get('native'), dict) else None
+    if target != TUNNEL_TARGET or native is None:
+        return case
+    return dict(case, expected=native['expected'], enforcement=native['enforcement'])
+
+
+def inference_target_of(record):
+    """The inference step's forward target in a job-access-probe record (None: not run)."""
+    step = _step_of(record or {}, JOB_STEPS['inference']) if record else None
+    detail = (step or {}).get('detail') if step else None
+    return detail.get('target') if isinstance(detail, dict) else None
 
 
 def containment_verdict(case, observations, control_verdict, compensating=None):
@@ -13095,6 +13322,8 @@ def containment_probe(ctx, name, out_path=None, token_fingerprints=None, sensiti
             rec = memo['primitives'].get(source)
             observations[case['id']] = CONTAINMENT_EXTRACTORS[source](
                 rec, probe.get('extract'), probe.get('args') or {}, context) if rec else []
+    target = inference_target_of(memo['primitives'].get('job-access-probe'))
+    cases = [case_for_target(c, target) for c in cases]
     verdicts, reasons = {}, {}
     order = [c for c in cases if c['kind'] == 'permitted'] + \
         [c for c in cases if c['kind'] in ('denial', 'hardening')] + \
@@ -16637,7 +16866,12 @@ def main(argv=None):
                                 'forward of the instance\'s inference endpoint')
             p.add_argument('--broker-port', type=int,
                            help='start: must be components.inference_broker.inference_port (the '
-                                'control port and any other are refused)')
+                                'control port and any other are refused); with --execution-profile '
+                                'native, the provider tunnel\'s declared port')
+            p.add_argument('--execution-profile', choices=EXECUTION_PROFILES, default='brokered',
+                           help='start: the forward\'s host target: the broker (brokered, decision '
+                                '0015) or the provider tunnel (native, decision 0023 section 4.3; '
+                                'only for a profile that declares its provider-tunnel endpoint)')
         if op == 'exchange-push':
             p.add_argument('--repo', required=True, help='the repository to read the branch from')
             p.add_argument('--ref', required=True, help='one local branch')
@@ -16755,7 +16989,8 @@ def main(argv=None):
             result = job_access_probe(ctx, args.name, args.out, args.token_fingerprint,
                                       attempt_token=token, provider_key=key)
         elif op == 'inference-forward':
-            result = inference_forward(ctx, args.name, args.action, args.broker_port)
+            result = inference_forward(ctx, args.name, args.action, args.broker_port,
+                                       execution_profile=args.execution_profile)
         elif op == 'acp-qualification':
             if not args.attempt_token_stdin:
                 raise Refused('REFUSED', 'acp-qualification needs --attempt-token-stdin (the token from the '

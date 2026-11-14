@@ -508,6 +508,35 @@ class Negative(unittest.TestCase):
         self.assertFails(self.qemu, 'guestfwd rule count stays zero')
         self.assertFails(self.qemu, 'active guestfwd endpoint(s) are declared')
 
+    def test_provider_tunnel_endpoint(self):
+        """decision 0023 (E-05.10): the tunnel endpoint shares the inference endpoint's guest side
+        and declares its host side once."""
+        entry = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'provider-tunnel')
+        self.assertEqual((entry['guest_address'], entry['guest_port'], entry['host_bind'],
+                          entry['host_port'], entry['origin']),
+                         ('172.17.0.1', 8090, '127.0.0.1', 18433, 'api.anthropic.com:443'))
+        self.assertEqual(self.errors(self.qemu), [])
+        for key, value, fragment in (
+                ('guest_port', 8091, 'must be the inference endpoint\'s'),
+                ('guest_address', '172.17.0.2', 'must be the inference endpoint\'s'),
+                ('mechanism', 'guestfwd', 'must be the inference endpoint\'s'),
+                ('host_bind', '0.0.0.0', 'host_bind 127.0.0.1'),
+                ('host_port', '18433', 'host_bind 127.0.0.1'),
+                ('host_port', 80, 'host_bind 127.0.0.1'),
+                ('origin', 'api.anthropic.com:80', 'origin must be'),
+                ('status', 'enabled', 'status must start with'),
+                ('forward_owner', '', 'forward_owner')):
+            saved = entry[key]
+            entry[key] = value
+            self.assertFails(self.qemu, fragment)
+            entry[key] = saved
+        self.qemu['network']['endpoints'].append(dict(entry))
+        self.assertFails(self.qemu, 'one provider-tunnel endpoint at most')
+        self.qemu['network']['endpoints'].pop()
+        self.qemu['network']['endpoints'] = [e for e in self.qemu['network']['endpoints']
+                                             if e['class'] != 'provider-tunnel']
+        self.assertFails(self.qemu, "endpoint classes not enumerated: ['provider-tunnel']")
+
     def test_inference_composition_declarations(self):
         entry, comp = self.inference()
         self.assertEqual(self.errors(self.qemu), [])
@@ -551,6 +580,10 @@ class Negative(unittest.TestCase):
         self.qemu['network']['inference_composition'] = comp
         self.assertFails(self.qemu, 'declared while the inference endpoint is deferred')
         del self.qemu['network']['inference_composition']
+        # the native profile's tunnel shares the inference endpoint's guest side (E-05.10): deferred with it
+        self.assertFails(self.qemu, 'needs the inference endpoint it shares')
+        tunnel = next(e for e in self.qemu['network']['endpoints'] if e['class'] == 'provider-tunnel')
+        tunnel['status'] = 'deferred: for the test'
         self.assertNotIn('inference', ' '.join(self.errors(self.qemu)))
 
     def test_attempt_token_environment_d6(self):
