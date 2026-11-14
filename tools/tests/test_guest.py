@@ -6386,8 +6386,11 @@ class InferenceInspect(unittest.TestCase):
         chain = rows[:5] + [{'packets': 1, 'target': 'REJECT'}]
         report = {'admission': {'iptables': [r for r in chain if isinstance(r, dict)]}}
         self.assertEqual(guest.container_guard_rows(report), {'accept': 4, 'reset': 2, 'reject': 1})
+        chain = report['admission']['iptables']
         for bad in (rows, [r for r in rows if isinstance(r, dict)][1:],
-                    [dict(r, packets='1') for r in report['admission']['iptables']]):
+                    [dict(r, packets='1') for r in chain],
+                    [chain[0], chain[2], chain[1], chain[3], chain[4]],      # the allow after the LOG
+                    chain[:1] + chain[2:] + [chain[4]]):                     # no allow, a third refusal
             self.assertIsNone(guest.container_guard_rows({'admission': {'iptables': bad}}))
         self.assertIsNone(guest.container_guard_rows({}))
         before = {'accept': 4, 'reset': 2, 'reject': 1}
